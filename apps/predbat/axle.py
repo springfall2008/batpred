@@ -1,6 +1,6 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2025 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # Axle Energy Virtual Power Plant (VPP) API library
@@ -307,6 +307,8 @@ class AxleAPI(ComponentBase):
             except Exception as e:
                 self.log(f"Warn: AxleAPI: Exception during fetch: {e}")
                 self.failures_total += 1
+        elif (seconds % 60) == 0:  # Every minute, update state to reflect if event is active or not
+            self.publish_axle_event()
 
         return True
 

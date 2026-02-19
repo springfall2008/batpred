@@ -1,6 +1,6 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2024 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
@@ -69,8 +69,10 @@ class HAHistory(ComponentBase):
         """
         Get history data for an entity
         """
+        result = None
+
         if self.history_data.get(entity_id, None) and self.history_entities.get(entity_id, 0) >= days:
-            return [self.history_data[entity_id]]
+            result = [self.history_data[entity_id]]
         else:
             ha_interface = self.base.components.get_component("ha")
             if not ha_interface:
@@ -84,8 +86,9 @@ class HAHistory(ComponentBase):
                 history_data = history_data[0]
                 if tracked:
                     self.update_entity(entity_id, history_data)
-                return [history_data]
-        return None
+                result = [history_data]
+
+        return result
 
     def prune_history(self, now):
         """
@@ -128,17 +131,22 @@ class HAHistory(ComponentBase):
                 entry.pop(entry_attr, None)
 
         current_history_data = self.history_data.get(entity_id, None)
-        last_updated = current_history_data[-1].get("last_updated", None) if current_history_data and len(current_history_data) > 0 else None
-        count_added = 0
+        if current_history_data and len(current_history_data) > 0:
+            first_updated = current_history_data[0].get("last_updated", None)
+            last_updated = current_history_data[-1].get("last_updated", None)
+        else:
+            first_updated = None
+            last_updated = None
+
         if last_updated:
             # Find the last timestamp in the previous history data, data is always in order from oldest to newest
+            first_timestamp = str2time(first_updated)
             last_timestamp = str2time(last_updated)
             # Scan new data, using the timestamp only add new entries
             add_all = False
             for entry in new_history_data:
                 if add_all:
                     self.history_data[entity_id].append(entry)
-                    count_added += 1
                 else:
                     this_updated = entry.get("last_updated", None)
                     if this_updated:
@@ -146,9 +154,11 @@ class HAHistory(ComponentBase):
                         if entry_time > last_timestamp:
                             self.history_data[entity_id].append(entry)
                             add_all = True  # Remaining entries are all newer
-                            count_added += 1
+                        elif entry_time < first_timestamp:
+                            self.history_data[entity_id].append(entry)
+
+            self.history_data[entity_id].sort(key=lambda x: x.get("last_updated"))
         else:
-            count_added += len(new_history_data)
             self.history_data[entity_id] = new_history_data
 
         # Update last success timestamp
@@ -606,6 +616,8 @@ class HAInterface(ComponentBase):
         Update state for entity_id from the SQLLite database
         """
         self.db_mirror_list[entity_id.lower()] = True
+        if not self.db_enable:
+            return
         item = self.db_manager.get_state_db(entity_id)
         if item:
             self.update_state_item(item, entity_id, nodb=True)
@@ -637,7 +649,7 @@ class HAInterface(ComponentBase):
         if "state" in item:
             state = item["state"]
             self.state_data[entity_id] = {"state": state, "attributes": attributes, "last_changed": last_changed}
-            if not nodb and ((self.db_mirror_ha and (entity_id in self.db_mirror_list)) or self.db_primary):
+            if not nodb and self.db_enable and ((self.db_mirror_ha and (entity_id in self.db_mirror_list)) or self.db_primary):
                 # Instead of appending to a local mirror_updates list, call the database manager to schedule the update
                 if last_changed:
                     try:
@@ -787,7 +799,7 @@ class HAInterface(ComponentBase):
         """
         self.db_mirror_list[entity_id] = True
 
-        if self.db_mirror_ha or self.db_primary:
+        if self.db_enable and (self.db_mirror_ha or self.db_primary):
             item = self.db_manager.set_state_db(entity_id, state, attributes)
             # Locally cache state until DB update happens
             self.update_state_item(item, entity_id, nodb=True)
@@ -808,7 +820,13 @@ class HAInterface(ComponentBase):
         data = {}
         for key in kwargs:
             data[key] = kwargs[key]
-        domain, service = service.split("/")
+        if "/" in service:
+            domain, service = service.split("/")
+        elif "." in service:
+            domain, service = service.split(".")
+        else:
+            domain = ""
+
         if self.websocket_active:
             return self.call_service_websocket_command(domain, service, data)
         else:

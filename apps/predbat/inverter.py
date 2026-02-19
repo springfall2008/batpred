@@ -1,6 +1,6 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2024 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
@@ -1101,14 +1101,15 @@ class Inverter:
         else:
             self.soc_percent = calc_percent_limit(self.soc_kw, self.soc_max)
 
-        if self.rest_data and ("Power" in self.rest_data):
+        if self.rest_data and ("Power" in self.rest_data) and not self.base.get_arg("givtcp_rest_power_ignore", default=False, index=self.id):
             pdetails = self.rest_data["Power"]
             if "Power" in pdetails:
                 ppdetails = pdetails["Power"]
+                # self.log("DEBUG: Power details from REST: {}".format(ppdetails))
                 self.battery_power = float(ppdetails.get("Battery_Power", 0.0))
                 self.pv_power = float(ppdetails.get("PV_Power", 0.0))
-                self.load_power = float(ppdetails.get("Load_Power", 0.0))
                 self.grid_power = float(ppdetails.get("Grid_Power", 0.0))
+                self.load_power = float(ppdetails.get("Load_Power", 0.0))
                 if self.rest_v3:
                     self.battery_voltage = float(ppdetails.get("Battery_Voltage", 0.0))
                 else:

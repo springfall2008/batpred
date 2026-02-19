@@ -1,6 +1,6 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2024 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
@@ -873,6 +873,8 @@ def test_inverter_update(
     dummy_rest.rest_data["Power"]["Power"]["Battery_Power"] = expect_battery_power
     dummy_rest.rest_data["Power"]["Power"]["PV_Power"] = expect_pv_power
     dummy_rest.rest_data["Power"]["Power"]["Load_Power"] = expect_load_power
+    # Calculate Grid_Power from energy balance: Grid = Load - PV - Battery
+    dummy_rest.rest_data["Power"]["Power"]["Grid_Power"] = expect_load_power - expect_pv_power - expect_battery_power
     dummy_rest.rest_data["Invertor_Details"] = {}
     dummy_rest.rest_data["Invertor_Details"]["Battery_Capacity_kWh"] = expect_battery_capacity
     dummy_rest.rest_data["raw"] = {}

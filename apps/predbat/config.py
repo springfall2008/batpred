@@ -1,6 +1,6 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2024 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
@@ -773,7 +773,6 @@ CONFIG_ITEMS = [
         "name": "calculate_inday_adjustment",
         "friendly_name": "Calculate in-day adjustment",
         "type": "switch",
-        "enable": "expert_mode",
         "default": True,
     },
     {
@@ -2101,4 +2100,5 @@ APPS_SCHEMA = {
     "forecast_solar_max_age": {"type": "float"},
     "enable_coarse_fine_levels": {"type": "boolean"},
     "load_power_fill_enable": {"type": "boolean"},
+    "load_ml_enable": {"type": "boolean"},
 }

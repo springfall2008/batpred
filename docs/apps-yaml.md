@@ -1087,6 +1087,10 @@ If you get a bunch of inverter information back then it's working!
 
 Note that Predbat will still retrieve inverter information via REST, this configuration only applies to how Predbat controls the inverter.
 
+- **givtcp_rest_power_ignore** - Optional, defaults to False. When set to True for a given inverter, Predbat will use the configured sensor entities
+(load_power, pv_power, grid_power, battery_power) instead of reading power values from the GivTCP REST API.
+This can be useful if you want to use alternative sensors or if the REST API power readings are unreliable. Set this to False (or omit) to use REST API power readings (default behavior).
+
 ### Service API
 
 Some inverters have the Service API enabled, this allows the configuration to call an arbitrary Home Assistant service to start/stop charging and discharging

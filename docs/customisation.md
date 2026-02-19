@@ -339,7 +339,7 @@ NB: this can lead to higher costs and to some export if solar generation is bett
 not yet published, best used for variable rate tariffs such as Agile export where the rates are not published until 4pm.
 If you set this to a negative value then Predbat will assume unpublished export rates are lower by the given amount.
 
-**switch.predbat_calculate_inday_adjustment** (_expert mode_) Set to On by default. When turned on, will calculate the difference between today's actual load and today's predicated load and adjust the rest of the day's usage prediction accordingly.
+**switch.predbat_calculate_inday_adjustment** Set to On by default. When turned on, will calculate the difference between today's actual load and today's predicated load and adjust the rest of the day's usage prediction accordingly.
 A scale factor can be set with **input_number.predbat_metric_inday_adjust_damping** (_expert mode_) (default 0.95) to either scale up or down the impact of the in-day adjustment (lower numbers scale down its impact).
 The in-day adjustment factor can be seen in **predbat.load_inday_adjustment** and charted with the [In-Day Adjustment chart](creating-charts.md).
 

@@ -1,6 +1,6 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2025 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
@@ -33,6 +33,7 @@ class MockBase:
         self.prefix = "predbat"
         self.local_tz = pytz.timezone("Europe/London")
         self.now_utc = datetime(2025, 6, 15, 12, 0, 0, tzinfo=pytz.utc)
+        self.now_utc_exact = datetime(2025, 6, 15, 12, 0, 0, tzinfo=pytz.utc)
         self.midnight_utc = datetime(2025, 6, 15, 0, 0, 0, tzinfo=pytz.utc)
         self.minutes_now = 12 * 60  # 12:00
         self.forecast_days = 4
@@ -156,6 +157,10 @@ class TestSolarAPI:
         """Clean up temp directory"""
         if self.mock_base.config_root and os.path.exists(self.mock_base.config_root):
             shutil.rmtree(self.mock_base.config_root)
+
+    def patch_now_utc_exact(self):
+        """Return a context manager that patches now_utc_exact to use mock_base value"""
+        return patch.object(type(self.solar), "now_utc_exact", new_callable=lambda: property(lambda self: self.base.now_utc_exact))
 
     def set_mock_response(self, url_substring, response, status_code=200):
         """Set a mock HTTP response for URLs containing the substring"""
@@ -1383,6 +1388,223 @@ def test_fetch_pv_forecast_ha_sensors(my_predbat):
 
 
 # ============================================================================
+# Run Function Tests
+# ============================================================================
+
+
+def test_run_at_plan_interval(my_predbat):
+    """
+    Test SolarAPI.run() calls fetch_pv_forecast when seconds matches plan_interval_minutes.
+    """
+    print("  - test_run_at_plan_interval")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        # Setup: plan_interval_minutes = 5, so should fetch at seconds % (5*60) == 0
+        test_api.mock_base.plan_interval_minutes = 5
+        test_api.solar.last_fetched_timestamp = None
+
+        # Patch now_utc_exact to return a fixed value from mock_base
+        with test_api.patch_now_utc_exact():
+            # Mock fetch_pv_forecast to track if it was called
+            fetch_called = []
+
+            async def mock_fetch_pv_forecast():
+                fetch_called.append(True)
+
+            test_api.solar.fetch_pv_forecast = mock_fetch_pv_forecast
+
+            # Test 1: seconds = 300 (5 minutes) should trigger fetch
+            result = run_async(test_api.solar.run(seconds=300, first=False))
+            if not result:
+                print(f"ERROR: run() returned False, expected True")
+                failed = True
+            if len(fetch_called) != 1:
+                print(f"ERROR: fetch_pv_forecast should be called at seconds=300, call count: {len(fetch_called)}")
+                failed = True
+
+            # Test 2: seconds = 150 (2.5 minutes) should NOT trigger fetch
+            # Set a recent timestamp so fetch_age is small
+            from datetime import timedelta
+
+            test_api.solar.last_fetched_timestamp = test_api.mock_base.now_utc_exact - timedelta(minutes=1)
+            fetch_called.clear()
+            result = run_async(test_api.solar.run(seconds=150, first=False))
+            if not result:
+                print(f"ERROR: run() returned False, expected True")
+                failed = True
+            if len(fetch_called) != 0:
+                print(f"ERROR: fetch_pv_forecast should NOT be called at seconds=150, call count: {len(fetch_called)}")
+                failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_run_new_day_trigger(my_predbat):
+    """
+    Test SolarAPI.run() fetches data when it's a new day.
+    """
+    print("  - test_run_new_day_trigger")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        # Setup: plan_interval_minutes = 5
+        test_api.mock_base.plan_interval_minutes = 5
+
+        with test_api.patch_now_utc_exact():
+            # Mock fetch_pv_forecast to track if it was called
+            fetch_called = []
+
+            async def mock_fetch_pv_forecast():
+                fetch_called.append(True)
+
+            test_api.solar.fetch_pv_forecast = mock_fetch_pv_forecast
+
+            # Set last_fetched_timestamp to yesterday
+            from datetime import timedelta
+
+            test_api.solar.last_fetched_timestamp = test_api.mock_base.now_utc_exact - timedelta(days=1)
+
+            # Test: seconds not at interval (e.g., 150), but new day should trigger fetch
+            result = run_async(test_api.solar.run(seconds=150, first=False))
+            if not result:
+                print(f"ERROR: run() returned False, expected True")
+                failed = True
+            if len(fetch_called) != 1:
+                print(f"ERROR: fetch_pv_forecast should be called on new day, call count: {len(fetch_called)}")
+                failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_run_data_older_than_60_minutes(my_predbat):
+    """
+    Test SolarAPI.run() fetches data when last fetch was over 60 minutes ago.
+    """
+    print("  - test_run_data_older_than_60_minutes")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        # Setup: plan_interval_minutes = 5
+        test_api.mock_base.plan_interval_minutes = 5
+
+        with test_api.patch_now_utc_exact():
+            # Mock fetch_pv_forecast to track if it was called
+            fetch_called = []
+
+            async def mock_fetch_pv_forecast():
+                fetch_called.append(True)
+
+            test_api.solar.fetch_pv_forecast = mock_fetch_pv_forecast
+
+            # Set last_fetched_timestamp to 61 minutes ago (same day)
+            from datetime import timedelta
+
+            test_api.solar.last_fetched_timestamp = test_api.mock_base.now_utc_exact - timedelta(minutes=61)
+
+            # Test: seconds not at interval (e.g., 150), but data older than 60 min should trigger fetch
+            result = run_async(test_api.solar.run(seconds=150, first=False))
+            if not result:
+                print(f"ERROR: run() returned False, expected True")
+                failed = True
+            if len(fetch_called) != 1:
+                print(f"ERROR: fetch_pv_forecast should be called when data > 60 min old, call count: {len(fetch_called)}")
+                failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_run_no_fetch_when_recent(my_predbat):
+    """
+    Test SolarAPI.run() does NOT fetch when data is recent and not at interval.
+    """
+    print("  - test_run_no_fetch_when_recent")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        # Setup: plan_interval_minutes = 5
+        test_api.mock_base.plan_interval_minutes = 5
+
+        with test_api.patch_now_utc_exact():
+            # Mock fetch_pv_forecast to track if it was called
+            fetch_called = []
+
+            async def mock_fetch_pv_forecast():
+                fetch_called.append(True)
+
+            test_api.solar.fetch_pv_forecast = mock_fetch_pv_forecast
+
+            # Set last_fetched_timestamp to 30 minutes ago (same day, within 60 min)
+            from datetime import timedelta
+
+            test_api.solar.last_fetched_timestamp = test_api.mock_base.now_utc_exact - timedelta(minutes=30)
+
+            # Test: seconds not at interval (e.g., 150), data is recent, should NOT trigger fetch
+            result = run_async(test_api.solar.run(seconds=150, first=False))
+            if not result:
+                print(f"ERROR: run() returned False, expected True")
+                failed = True
+            if len(fetch_called) != 0:
+                print(f"ERROR: fetch_pv_forecast should NOT be called when data is recent, call count: {len(fetch_called)}")
+                failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_run_first_fetch_when_no_timestamp(my_predbat):
+    """
+    Test SolarAPI.run() fetches data when last_fetched_timestamp is None.
+    """
+    print("  - test_run_first_fetch_when_no_timestamp")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        # Setup: plan_interval_minutes = 5
+        test_api.mock_base.plan_interval_minutes = 5
+        test_api.solar.last_fetched_timestamp = None
+
+        with test_api.patch_now_utc_exact():
+            # Mock fetch_pv_forecast to track if it was called
+            fetch_called = []
+
+            async def mock_fetch_pv_forecast():
+                fetch_called.append(True)
+
+            test_api.solar.fetch_pv_forecast = mock_fetch_pv_forecast
+
+            # Test: seconds not at interval (e.g., 150), but no timestamp, should trigger fetch (fetch_age > 60)
+            result = run_async(test_api.solar.run(seconds=150, first=False))
+            if not result:
+                print(f"ERROR: run() returned False, expected True")
+                failed = True
+            if len(fetch_called) != 1:
+                print(f"ERROR: fetch_pv_forecast should be called when last_fetched_timestamp is None, call count: {len(fetch_called)}")
+                failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+# ============================================================================
 # Main Test Runner
 # ============================================================================
 
@@ -1424,6 +1646,13 @@ def run_solcast_tests(my_predbat):
 
     # Pack and store tests
     failed |= test_pack_and_store_forecast(my_predbat)
+
+    # Run function tests
+    failed |= test_run_at_plan_interval(my_predbat)
+    failed |= test_run_new_day_trigger(my_predbat)
+    failed |= test_run_data_older_than_60_minutes(my_predbat)
+    failed |= test_run_no_fetch_when_recent(my_predbat)
+    failed |= test_run_first_fetch_when_no_timestamp(my_predbat)
 
     # Integration tests (one per mode)
     failed |= test_fetch_pv_forecast_solcast_direct(my_predbat)

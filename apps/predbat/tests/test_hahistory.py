@@ -1,6 +1,6 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2025 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
@@ -13,6 +13,9 @@ from datetime import datetime, timedelta
 from ha import HAHistory
 from utils import str2time
 from tests.test_infra import run_async
+
+
+FIVE_MINUTE_ENTRIES_PER_DAY = 1440 // 5
 
 
 class MockComponents:
@@ -45,6 +48,10 @@ class MockHAInterface:
             # Filter by from_time if provided
             if from_time:
                 history = [entry for entry in history if str2time(entry.get("last_updated", "")) > from_time]
+            # Else filter by days
+            else:
+                num_entries = days * FIVE_MINUTE_ENTRIES_PER_DAY
+                history = history[-num_entries:]
             return [history] if history else None
         return None
 
@@ -213,8 +220,11 @@ def test_hahistory_get_history_fetch_and_cache(my_predbat=None):
 
     # Create mock history data
     entity_id = "sensor.battery"
-    mock_history = create_mock_history(entity_id, days=30)
+    mock_history = create_mock_history(entity_id, days=60)
     mock_ha.add_mock_history(entity_id, mock_history)
+
+    length_30_days_history = 30 * FIVE_MINUTE_ENTRIES_PER_DAY
+    length_60_days_history = 60 * FIVE_MINUTE_ENTRIES_PER_DAY
 
     # Test 1: Fetch history (tracked=True, should cache)
     result = ha_history.get_history(entity_id, days=30, tracked=True)
@@ -225,7 +235,7 @@ def test_hahistory_get_history_fetch_and_cache(my_predbat=None):
     elif len(result) != 1:
         print("ERROR: Should return list with one element")
         failed += 1
-    elif len(result[0]) != len(mock_history):
+    elif len(result[0]) != length_30_days_history:
         print(f"ERROR: Expected {len(mock_history)} entries, got {len(result[0])}")
         failed += 1
     else:
@@ -272,6 +282,21 @@ def test_hahistory_get_history_fetch_and_cache(my_predbat=None):
         failed += 1
     else:
         print("✓ Entity tracking updated to 60 days")
+
+    # Test 4: Request more days again - cache should have them populated
+    result4 = ha_history.get_history(entity_id, days=60, tracked=True)
+    if len(result4[0]) != length_60_days_history:
+        print("ERROR: Cache did not correctly return 60 days")
+        failed += 1
+    else:
+        print("✓ Cache correctly populated with longer history")
+
+    sorted_result4 = sorted(result4[0], key=lambda x: x["last_updated"])
+    if sorted_result4 != result4[0]:
+        print("ERROR: Cache population did not correctly order entries when adding longer history")
+        failed += 1
+    else:
+        print("✓ Cache order correct after adding longer history")
 
     return failed
 

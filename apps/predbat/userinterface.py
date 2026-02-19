@@ -1,6 +1,6 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2024 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
@@ -1162,9 +1162,26 @@ class UserInterface:
         elif "[" in value:
             value = value.replace("[", "")
             value = value.replace("]", "")
-            if value in values_list:
+            # For manual rates, remove any override for the same time slot regardless of rate value
+            if manual_rate and "=" in value:
+                time_part = value.split("=")[0]
+                old_count = len(values_list)
+                values_list = [v for v in values_list if not v.startswith(time_part + "=")]
+                if len(values_list) < old_count:
+                    self.log(f"Cleared rate override for {time_part}")
+            elif value in values_list:
+                # For non-rate overrides, remove exact match
                 values_list.remove(value)
         else:
+            # For manual rates, remove any existing override for the same time slot before adding new one
+            if manual_rate and "=" in value:
+                time_part = value.split("=")[0]
+                # Remove any existing entries with the same time
+                old_count = len(values_list)
+                values_list = [v for v in values_list if not v.startswith(time_part + "=")]
+                if len(values_list) < old_count:
+                    self.log(f"Removed existing rate override for {time_part} before adding new value")
+
             if value not in values_list:
                 values_list.append(value)
                 exclude_list.append(value)
@@ -1309,7 +1326,7 @@ class UserInterface:
         # Deconstruct the value into a list of minutes
         item = self.config_index.get(config_item)
         if item is None:
-            return []
+            return rate_overrides_minutes
 
         if new_value:
             values = new_value

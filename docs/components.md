@@ -21,6 +21,8 @@ This document provides a comprehensive overview of all Predbat components, their
     - [Solis Cloud API (Solis)](#solis-cloud-api-solis)
     - [Alert Feed (alert_feed)](#alert-feed-alert_feed)
     - [Carbon Intensity API (carbon)](#carbon-intensity-api-carbon)
+    - [Temperature API (temperature)](#temperature-api-temperature)
+    - [ML Load Prediction (load_ml)](#ml-load-prediction-load_ml)
 - [Managing Components](#managing-components)
     - [Checking Component Status](#checking-component-status)
     - [Restarting Components](#restarting-components)
@@ -614,6 +616,152 @@ Note: To use the carbon data in Predbat you also have to turn on **switch.predba
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `postcode` | String | Yes | - | `carbon_postcode` | Your UK postcode for regional carbon intensity data |
 | `automatic` | Boolean | No | False | `carbon_automatic` | Set to `true` to automatically point Predbat to the carbon data |
+
+---
+
+### Temperature API (temperature)
+
+**Can be restarted:** Yes
+
+#### What it does (temperature)
+
+Fetches temperature forecasts from the Open-Meteo API to provide accurate temperature predictions for the next 48+ hours.
+This temperature data is used by the ML Load Prediction component to improve load forecasting accuracy, especially for homes with electric heating or air conditioning systems.
+
+#### When to enable (temperature)
+
+- You are using ML Load Prediction and want improved accuracy
+- Your energy consumption is significantly affected by temperature (heating/cooling)
+- You want temperature forecasts available for other automations
+
+#### How it works (temperature)
+
+- Fetches temperature data from Open-Meteo API every hour
+- Uses your location coordinates (from `temperature_latitude`/`temperature_longitude` or defaults to `zone.home`)
+- Provides current temperature and hourly forecasts
+- Publishes data to `sensor.predbat_temperature` with forecasts in the `results` attribute
+- Automatically retries on API failures with exponential backoff
+
+**Important**: This component is **recommended** when using ML Load Prediction, as temperature data cam improve prediction accuracy for households with electric/heat-pump heating.
+
+#### Configuration Options (temperature)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `temperature_enable` | Boolean | Yes | False | `temperature_enable` | Set to `true` to enable temperature forecasts |
+| `temperature_url` | String | No | Open-Meteo API URL | `temperature_url` | API URL with LATITUDE/LONGITUDE placeholders |
+| `temperature_latitude` | Float | No | Uses zone.home | `temperature_latitude` | Latitude for temperature forecast location |
+| `temperature_longitude` | Float | No | Uses zone.home | `temperature_longitude` | Longitude for temperature forecast location |
+
+#### Configuration example (temperature)
+
+```yaml
+predbat:
+  # Enable temperature forecasts (recommended for ML load prediction)
+  temperature_enable: true
+
+  # Optional: specify location (defaults to zone.home)
+  # temperature_latitude: 51.5074
+  # temperature_longitude: -0.1278
+```
+
+#### Accessing temperature data (temperature)
+
+Temperature data is published to:
+
+- `sensor.predbat_temperature` - Current temperature with forecast in `results` attribute
+
+The `results` attribute contains a dictionary of timestamp strings (ISO format with timezone) to temperature values in °C.
+
+---
+
+### ML Load Prediction (load_ml)
+
+**Can be restarted:** Yes
+
+#### What it does (load_ml)
+
+Uses a neural network to predict your household energy consumption for the next 48 hours based on historical patterns, time-of-day, day-of-week, and optionally temperature and PV generation data.
+This provides more accurate load predictions than simple averaging, especially for households with variable usage patterns.
+
+#### When to enable (load_ml)
+
+- You want more accurate load predictions than historical averages
+- Your energy consumption has regular daily/weekly patterns
+- You have at least 1 day of historical load data (7+ days recommended)
+- You want Predbat to automatically adapt to changing consumption patterns
+
+#### How it works (load_ml)
+
+- Fetches historical load data from your configured `load_today` sensor
+- Optionally incorporates PV generation and temperature forecast data
+- Trains a multi-layer neural network on your historical patterns
+- Makes autoregressive predictions for 48 hours ahead in 5-minute intervals
+- Fine-tunes periodically (every 2 hours) to adapt to changing patterns
+- Validates predictions and falls back gracefully if accuracy is poor
+- Publishes predictions to `sensor.predbat_load_ml_forecast`
+
+**Important**: For best results, enable the Temperature component (`temperature_enable: true`) as temperature data significantly improves prediction accuracy.
+
+For a detailed explanation of how the neural network works and comprehensive configuration guidance, see the [ML Load Prediction documentation](load-ml.md).
+
+#### Configuration Options (load_ml)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `load_ml_enable` | Boolean | Yes | False | `load_ml_enable` | Set to `True` to enable ML load prediction |
+| `load_ml_source` | Boolean | Yes | False | `load_ml_source` | Set to `True` to use the ML load prediction in Predbat |
+
+Note: load_today, pv_today and car_charging_energy apps.yaml configuration items are also used, but these should already be set in Predbat.
+
+#### Configuration example (load_ml)
+
+```yaml
+predbat:
+  # Enable ML load prediction
+  load_ml_enable: True
+  # Use the data in Predbat, can be false while exploring the predictions but not using them
+  load_ml_source: True
+
+  # Optional but recommended: enable temperature forecasts
+  temperature_enable: true  
+```
+
+#### Understanding model status (load_ml)
+
+The ML component tracks several status indicators:
+
+- **not_initialized**: Model has not been created yet
+- **training**: Model is currently training on historical data
+- **active**: Model is trained and making predictions
+- **validation_failed**: Predictions are disabled due to high validation error
+- **stale**: Model hasn't been trained in 48+ hours and needs retraining
+
+Check Predbat logs for training progress and validation metrics:
+
+```text
+ML Component: Starting initial training
+ML Predictor: Training complete, final val_mae=0.3245 kWh
+ML Component: Model status: active
+```
+
+#### Accessing predictions (load_ml)
+
+ML load predictions are published to:
+
+- `sensor.predbat_load_ml_forecast` - Contains 48-hour prediction in `results` attribute
+
+Predbat automatically uses these predictions when making battery charge/discharge decisions.
+
+#### For more information (load_ml)
+
+See the comprehensive [ML Load Prediction documentation](load-ml.md) for:
+
+- Detailed explanation of neural network architecture
+- Training process and parameters
+- Expected accuracy metrics
+- Troubleshooting guide
+- Advanced configuration options
 
 ---
 

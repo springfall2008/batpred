@@ -1,6 +1,6 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2024 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
@@ -55,13 +55,22 @@ class SolarAPI(ComponentBase):
         self.forecast_solar_failures_total = 0
         self.solcast_last_success_timestamp = None
         self.forecast_solar_last_success_timestamp = None
+        self.last_fetched_timestamp = None
         self.forecast_days = 4
 
     async def run(self, seconds, first):
         """
         Run the Solar API
         """
+        fetch_age = 9999
+        same_day = False
+        if self.last_fetched_timestamp:
+            fetch_age = (self.now_utc_exact - self.last_fetched_timestamp).total_seconds() / 60
+            same_day = self.last_fetched_timestamp.date() == self.now_utc_exact.date()
+
         if seconds % (self.plan_interval_minutes * 60) == 0:  # Every plan_interval_minutes
+            await self.fetch_pv_forecast()
+        elif not same_day or (fetch_age > 60):  # If data is older than 60 minutes or it's a new day, fetch new data
             await self.fetch_pv_forecast()
         return True
 
@@ -796,7 +805,16 @@ class SolarAPI(ComponentBase):
         self.dashboard_item(
             "sensor." + self.prefix + "_pv_forecast_raw",
             state=current_pv_power,
-            attributes={"friendly_name": "PV Forecast minute data", "icon": "mdi:solar-power", "forecast": pv_forecast_pack, "forecast10": pv_forecast_pack10, "unit_of_measurement": "kW", "device_class": "power", "state_class": "measurement"},
+            attributes={
+                "friendly_name": "PV Forecast minute data",
+                "icon": "mdi:solar-power",
+                "relative_time": self.midnight_utc.strftime(TIME_FORMAT),
+                "forecast": pv_forecast_pack,
+                "forecast10": pv_forecast_pack10,
+                "unit_of_measurement": "kW",
+                "device_class": "power",
+                "state_class": "measurement",
+            },
         )
 
     async def fetch_pv_forecast(self):
@@ -879,5 +897,7 @@ class SolarAPI(ComponentBase):
             self.publish_pv_stats(pv_forecast_data, divide_by / 30.0, 30)
             self.pack_and_store_forecast(pv_forecast_minute, pv_forecast_minute10)
             self.update_success_timestamp()
+            self.last_fetched_timestamp = self.now_utc_exact
         else:
             self.log("Warn: No solar data has been configured.")
+            self.last_fetched_timestamp = self.now_utc_exact

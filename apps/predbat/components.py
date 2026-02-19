@@ -1,6 +1,6 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2025 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
@@ -14,6 +14,7 @@ from gecloud import GECloudDirect, GECloudData
 from ohme import OhmeAPI
 from octopus import OctopusAPI
 from carbon import CarbonAPI
+from temperature import TemperatureAPI
 from axle import AxleAPI
 from solax import SolaxAPI
 from solis import SolisAPI
@@ -23,6 +24,7 @@ from ha import HAInterface, HAHistory
 from db_manager import DatabaseManager
 from fox import FoxAPI
 from web_mcp import PredbatMCPServer
+from load_ml_component import LoadMLComponent
 from datetime import datetime, timezone, timedelta
 import asyncio
 import os
@@ -33,12 +35,11 @@ COMPONENT_LIST = {
         "class": DatabaseManager,
         "name": "Database Manager",
         "args": {
-            "db_enable": {"required": True, "config": "db_enable"},
+            "db_enable": {"required_true": True, "config": "db_enable"},
             "db_days": {"required": False, "config": "db_days", "default": 30},
         },
         "can_restart": False,
         "phase": 0,
-        "new": True,
     },
     "ha": {
         "class": HAInterface,
@@ -53,7 +54,7 @@ COMPONENT_LIST = {
         "can_restart": False,
         "phase": 0,
     },
-    "ha_history": {"class": HAHistory, "name": "Home Assistant History", "args": {}, "can_restart": False, "phase": 0, "new": True},
+    "ha_history": {"class": HAHistory, "name": "Home Assistant History", "args": {}, "can_restart": False, "phase": 0},
     "web": {
         "class": WebInterface,
         "name": "Web Interface",
@@ -220,6 +221,17 @@ COMPONENT_LIST = {
         },
         "phase": 1,
     },
+    "temperature": {
+        "class": TemperatureAPI,
+        "name": "External Temperature API",
+        "args": {
+            "temperature_enable": {"required_true": True, "config": "temperature_enable", "default": False},
+            "temperature_latitude": {"required": False, "config": "temperature_latitude", "default": None},
+            "temperature_longitude": {"required": False, "config": "temperature_longitude", "default": None},
+            "temperature_url": {"required": False, "config": "temperature_url", "default": "https://api.open-meteo.com/v1/forecast?latitude=LATITUDE&longitude=LONGITUDE&hourly=temperature_2m&current=temperature_2m&past_days=7"},
+        },
+        "phase": 1,
+    },
     "axle": {
         "class": AxleAPI,
         "name": "Axle Energy",
@@ -261,6 +273,17 @@ COMPONENT_LIST = {
             "automatic": {"required": False, "config": "solis_automatic", "default": False},
             "base_url": {"required": False, "config": "solis_base_url", "default": "https://www.soliscloud.com:13333"},
             "control_enable": {"required": False, "config": "solis_control_enable", "default": True},
+        },
+        "phase": 1,
+        "can_restart": True,
+    },
+    "load_ml": {
+        "class": LoadMLComponent,
+        "name": "ML Load Forecaster",
+        "event_filter": "predbat_load_ml_",
+        "args": {
+            "load_ml_enable": {"required_true": True, "config": "load_ml_enable", "default": False},
+            "load_ml_source": {"required": False, "config": "load_ml_source", "default": False},
         },
         "phase": 1,
         "can_restart": True,
