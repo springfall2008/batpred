@@ -81,7 +81,7 @@ class LoadPredictor:
     - Placeholder for future exogenous features (temperature, solar)
     """
 
-    def __init__(self, log_func=None, learning_rate=0.001, max_load_kw=23.0):
+    def __init__(self, log_func=None, learning_rate=0.001, max_load_kw=23.0, weight_decay=0.01):
         """
         Initialize the load predictor.
 
@@ -89,10 +89,12 @@ class LoadPredictor:
             log_func: Logging function (defaults to print)
             learning_rate: Learning rate for Adam optimizer
             max_load_kw: Maximum load in kW for clipping predictions
+            weight_decay: L2 regularization coefficient for AdamW (0.0 disables)
         """
         self.log = log_func if log_func else print
         self.learning_rate = learning_rate
         self.max_load_kw = max_load_kw
+        self.weight_decay = weight_decay
 
         # Model weights (initialized on first train)
         self.weights = None
@@ -120,7 +122,7 @@ class LoadPredictor:
         self.model_initialized = False
 
     def _initialize_weights(self):
-        """Initialize network weights using Xavier initialization"""
+        """Initialize network weights using He initialization (optimal for ReLU)"""
         np.random.seed(42)  # For reproducibility
 
         layer_sizes = [TOTAL_FEATURES] + HIDDEN_SIZES + [OUTPUT_STEPS]
@@ -136,8 +138,8 @@ class LoadPredictor:
             fan_in = layer_sizes[i]
             fan_out = layer_sizes[i + 1]
 
-            # Xavier initialization
-            std = np.sqrt(2.0 / (fan_in + fan_out))
+            # He initialization (optimal for ReLU activations)
+            std = np.sqrt(2.0 / fan_in)
             w = np.random.randn(fan_in, fan_out).astype(np.float32) * std
             b = np.zeros(fan_out, dtype=np.float32)
 
@@ -220,7 +222,7 @@ class LoadPredictor:
 
     def _adam_update(self, weight_grads, bias_grads, beta1=0.9, beta2=0.999, epsilon=1e-8):
         """
-        Update weights using Adam optimizer.
+        Update weights using Adam optimizer with optional weight decay (AdamW).
 
         Args:
             weight_grads: Gradients for weights
@@ -240,8 +242,12 @@ class LoadPredictor:
             m_hat = self.m_weights[i] / (1 - beta1**self.adam_t)
             v_hat = self.v_weights[i] / (1 - beta2**self.adam_t)
 
-            # Update weights
+            # Update weights with Adam step
             self.weights[i] -= self.learning_rate * m_hat / (np.sqrt(v_hat) + epsilon)
+
+            # Apply weight decay (AdamW-style L2 regularization)
+            if self.weight_decay > 0:
+                self.weights[i] *= (1 - self.learning_rate * self.weight_decay)
 
             # Update momentum for biases
             self.m_biases[i] = beta1 * self.m_biases[i] + (1 - beta1) * bias_grads[i]
@@ -251,7 +257,7 @@ class LoadPredictor:
             m_hat = self.m_biases[i] / (1 - beta1**self.adam_t)
             v_hat = self.v_biases[i] / (1 - beta2**self.adam_t)
 
-            # Update biases
+            # Update biases (no weight decay on biases)
             self.biases[i] -= self.learning_rate * m_hat / (np.sqrt(v_hat) + epsilon)
 
     def _create_time_features(self, minute_of_day, day_of_week):
