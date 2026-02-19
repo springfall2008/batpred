@@ -11,6 +11,15 @@
 # Helper functions for web pages
 
 
+"""Web UI component generators for CSS and JavaScript.
+
+Contains functions that generate CSS stylesheets and JavaScript code for
+all web dashboard UI components including charts (ApexCharts), entity
+selectors, form controls, code editors (CodeMirror), modals, and responsive
+navigation menus.
+"""
+
+
 def get_restart_button_js():
     # Add JavaScript for restart functionality
     text = """

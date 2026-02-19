@@ -8,6 +8,16 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+
+"""Base inverter abstraction layer.
+
+Provides the unified Inverter class that abstracts control of different
+inverter brands (GivEnergy, Fox ESS, Solis, SolaX, etc.) behind a common
+interface. Handles charge/discharge rate control, window programming,
+target SoC setting, and reserve management via both REST API and Home
+Assistant entity writes with polling validation.
+"""
+
 import os
 import time
 import pytz
@@ -21,6 +31,14 @@ TIME_FORMAT_HMS = "%H:%M:%S"
 
 
 class Inverter:
+    """Unified inverter control abstraction for multiple brands.
+
+    Provides a common interface for controlling GivEnergy, Fox ESS, Solis,
+    SolaX, and other inverter brands. Handles charge/discharge rate control,
+    window programming, target SoC setting, and reserve management via both
+    REST API and Home Assistant entity writes with polling validation.
+    """
+
     def self_test(self, minutes_now):
         self.base.log(f"======= INVERTER CONTROL SELF TEST START - REST={self.rest_api} ========")
         self.adjust_battery_target(99, False)

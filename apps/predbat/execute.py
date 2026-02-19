@@ -1,3 +1,9 @@
+"""Execution module for applying optimised charge/discharge plans to inverters.
+
+Handles the translation of PredBat's optimised plan into concrete inverter
+control actions. Manages charge window programming, discharge/export scheduling,
+reserve level adjustments, and multi-inverter balancing.
+"""
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
 # Copyright Trefor Southwell 2026 - All Rights Reserved
@@ -20,6 +26,13 @@ Execute Predbat plan
 
 
 class Execute:
+    """Execution mixin for applying optimised plans to physical inverters.
+
+    Translates the best charge/discharge plan into concrete inverter
+    control actions including window programming, rate setting, reserve
+    adjustment, and multi-inverter balancing.
+    """
+
     def execute_plan(self):
         status_extra = ""  # extra status text added to Predbat notifications
         status_hold_car = ""  # car hold status text

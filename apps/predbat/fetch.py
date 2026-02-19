@@ -9,6 +9,15 @@
 # pylint: disable=attribute-defined-outside-init
 # pyright: reportAttributeAccessIssue=false
 
+
+"""Data fetching module for energy rates, consumption, and forecasts.
+
+Orchestrates loading of import/export energy rates from multiple sources
+(Octopus, Energi Data Service, manual config), historical load and PV data,
+battery temperature, and other sensor inputs. Converts all data to per-minute
+dictionaries for use by the prediction engine.
+"""
+
 from datetime import datetime, timedelta
 from utils import minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative
 from const import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_CONTROL_SOC, PREDBAT_MODE_CONTROL_CHARGEDISCHARGE, PREDBAT_MODE_CONTROL_CHARGE, PREDBAT_MODE_MONITOR
@@ -17,6 +26,13 @@ from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
 
 
 class Fetch:
+    """Data fetching mixin for loading energy rates, consumption, and forecasts.
+
+    Orchestrates loading of import/export rates from multiple sources,
+    historical load/PV data, battery temperature, car charging energy,
+    and other sensor inputs. Converts all data to per-minute dictionaries.
+    """
+
     def get_cloud_factor(self, minutes_now, pv_data, pv_data10):
         """
         Work out approximated cloud factor

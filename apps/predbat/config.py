@@ -8,6 +8,16 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+
+"""Configuration item definitions for all PredBat settings.
+
+Defines CONFIG_ITEMS - the master list of all user-configurable settings
+including their types (switch, input_number, select), defaults, ranges,
+units, icons, conditional visibility rules, and dependencies. Covers
+battery parameters, rate thresholds, car charging, metrics, notifications,
+and calculation options.
+"""
+
 from predbat import THIS_VERSION
 from const import OPTIONS_TIME, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_CONTROL_CHARGEDISCHARGE
 

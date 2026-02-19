@@ -8,6 +8,14 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+
+"""Output and sensor publishing module.
+
+Publishes prediction results, plans, rates, status, and metrics as Home
+Assistant entities. Generates HTML plan visualisations, car charging
+schedules, rate window sensors, and financial metric summaries.
+"""
+
 import math
 from datetime import datetime, timedelta
 from config import THIS_VERSION
@@ -17,6 +25,13 @@ from prediction import Prediction
 
 
 class Output:
+    """Output and sensor publishing mixin.
+
+    Publishes prediction results, plans, rates, status, and metrics as
+    Home Assistant entities. Generates HTML plan visualisations, car
+    charging schedules, and financial metric summaries.
+    """
+
     def publish_car_plan(self):
         """
         Publish the car charging plan

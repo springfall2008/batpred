@@ -8,6 +8,14 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+
+"""Solar forecast integration with Solcast and Forecast.Solar APIs.
+
+Fetches PV generation forecasts from multiple sources with HTTP caching,
+multi-site aggregation, and request tracking. Supports both free and
+personal API tiers.
+"""
+
 import hashlib
 import json
 import os

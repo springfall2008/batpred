@@ -9,6 +9,14 @@
 # pylint: disable=attribute-defined-outside-init
 
 
+"""Component registry and lifecycle manager.
+
+Defines COMPONENT_LIST mapping all available components to their classes
+and configuration requirements, and provides the Components class for
+initialising, starting, stopping, and restarting components in the correct
+phase order. Routes HA events to components based on entity prefix filtering.
+"""
+
 from solcast import SolarAPI
 from gecloud import GECloudDirect, GECloudData
 from ohme import OhmeAPI
@@ -293,6 +301,13 @@ COMPONENT_LIST = {
 
 
 class Components:
+    """Central component registry and lifecycle manager.
+
+    Initialises, starts, stops, and restarts components in correct phase
+    order. Routes HA events (select, switch, number) to components based
+    on entity prefix filtering.
+    """
+
     def __init__(self, base):
         self.components = {}
         self.component_tasks = {}

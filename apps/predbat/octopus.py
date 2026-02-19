@@ -4,6 +4,15 @@
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 
+
+"""Octopus Energy API integration.
+
+Provides both REST and GraphQL API access to Octopus Energy for fetching
+tariff rates, intelligent dispatch schedules, saving sessions, and account
+data. Implements file-based caching with stale-while-revalidate strategy
+for multi-pod deployments.
+"""
+
 import asyncio
 import requests
 import re
@@ -285,6 +294,12 @@ intelligent_settings_mutation_schedule = """{{
 
 
 class OctopusEnergyApiClient:
+    """Low-level async HTTP client for Octopus Energy REST and GraphQL APIs.
+
+    Handles authentication, session management, rate fetching, intelligent
+    dispatch queries, and saving session management.
+    """
+
     def __init__(self, api_key, log, timeout_in_seconds=20):
         if api_key is None:
             raise Exception("Octopus API KEY is not set")
@@ -312,6 +327,13 @@ class OctopusEnergyApiClient:
 
 
 class OctopusAPI(ComponentBase):
+    """Octopus Energy integration component.
+
+    Manages tariff discovery, rate caching, intelligent device tracking,
+    saving sessions, and account data via both REST and GraphQL APIs.
+    Publishes rate sensors and handles Octopus-specific features.
+    """
+
     def initialize(self, key, account_id, automatic):
         """Initialize the Octopus API component"""
         self.api_key = key
@@ -1563,6 +1585,13 @@ class OctopusAPI(ComponentBase):
 
 
 class Octopus:
+    """High-level Octopus rate loading mixin used by the Fetch class.
+
+    Provides methods for downloading rates from URLs, loading intelligent
+    dispatch slots, applying free/saving sessions, and converting Octopus
+    rate data to per-minute dictionaries.
+    """
+
     def octopus_free_line(self, res, free_sessions):
         """
         Parse a line from the octopus free data

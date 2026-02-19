@@ -4,6 +4,15 @@
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 
+
+"""Plugin discovery, loading, and hook management system.
+
+Provides dynamic plugin discovery from filesystem, class instantiation via
+multiple detection strategies (class name, attribute marker, module function),
+and a hook system for plugins to register callbacks on lifecycle events
+(on_init, on_update, on_shutdown, on_web_start).
+"""
+
 import importlib
 import importlib.util
 import inspect
