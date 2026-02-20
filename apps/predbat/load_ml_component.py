@@ -409,8 +409,20 @@ class LoadMLComponent(ComponentBase):
             self.api_started = True
             return True
 
+        # Determine if training is needed
+        is_initial = not self.initial_training_done
+
         # Fetch fresh load data periodically (every 15 minutes)
         should_fetch = first or ((seconds % PREDICTION_INTERVAL_SECONDS) == 0)
+        should_train = first or ((seconds % RETRAIN_INTERVAL_SECONDS) == 0)
+
+        if is_initial:
+            # Initial run, need to fetch data and train model before we can provide predictions
+            should_train = True
+            should_fetch = True
+        elif should_train:
+            # Training requires fetching
+            should_fetch = True
 
         if should_fetch:
             async with self.data_lock:
@@ -442,19 +454,9 @@ class LoadMLComponent(ComponentBase):
                 self.log("ML Component: Insufficient data ({:.1f} days, need {})".format(self.load_data_age_days, self.ml_min_days))
             return True
 
-        # Determine if training is needed
-        should_train = False
-        is_initial = False
-
-        if not self.initial_training_done:
-            # First training
-            should_train = True
-            is_initial = True
+        if is_initial:
             self.log("ML Component: Starting initial training")
-        elif seconds % RETRAIN_INTERVAL_SECONDS == 0:
-            # Periodic fine-tuning every 2 hours
-            should_train = True
-            is_initial = False
+        elif should_train:
             self.log("ML Component: Starting fine-tune training (2h interval)")
 
         if should_train:
@@ -618,4 +620,3 @@ class LoadMLComponent(ComponentBase):
             },
             app="load_ml",
         )
-
