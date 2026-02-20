@@ -101,14 +101,14 @@ To prevent drift in long-range predictions, the model blends autoregressive pred
 - Uses 100 epochs with early stopping (patience=5)
 - Batch size: 128 samples
 - AdamW optimizer with learning rate 0.001 and weight decay 0.01
-- Sample weighting: exponential time decay over 7 days (recent data weighted more)
+- Sample weighting: exponential time decay (recent data weighted more)
 - Validates on the last 24 hours of data
 - Saves model to disk: `predbat_ml_model.npz`
 
 **Regularization:**
 
 - **Weight Decay**: L2 penalty (0.01) applied to network weights to prevent overfitting
-- **Early Stopping**: Training halts if validation error doesn't improve for 5 consecutive epochs
+- **Early Stopping**: Training halts if validation error doesn't improve for 5 consecutive epochs, selecting the best results so far.
 - **Time-Weighted Samples**: Recent data has higher importance (7-day exponential decay constant)
     - Today's data: 100% weight
     - N days old: 37% weight (e^-1)
