@@ -501,7 +501,7 @@ class LoadMLComponent(ComponentBase):
                     export_rates=self.export_rates_data,
                     is_initial=is_initial,
                     epochs=epochs,
-                    time_decay_days=max(self.ml_time_decay_days, self.load_data_age_days),
+                    time_decay_days=min(self.ml_time_decay_days, self.load_data_age_days),
                 )
 
                 if val_mae is not None:
