@@ -72,7 +72,7 @@ class LoadMLComponent(ComponentBase):
         self.ml_epochs_update = 20
         self.ml_min_days = 1
         self.ml_validation_threshold = 2.0
-        self.ml_time_decay_days = 7
+        self.ml_time_decay_days = 30
         self.ml_max_load_kw = 50.0
         self.ml_max_model_age_hours = 48
         self.ml_weight_decay = 0.01
@@ -501,7 +501,7 @@ class LoadMLComponent(ComponentBase):
                     export_rates=self.export_rates_data,
                     is_initial=is_initial,
                     epochs=epochs,
-                    time_decay_days=self.ml_time_decay_days,
+                    time_decay_days=max(self.ml_time_decay_days, self.load_data_age_days),
                 )
 
                 if val_mae is not None:
