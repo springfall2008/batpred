@@ -8,6 +8,15 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+
+"""Home Assistant communication interface.
+
+Provides the HAInterface class for direct WebSocket and REST API communication
+with Home Assistant. Manages state caching, entity synchronisation, service
+calls, history retrieval, and optional SQLite database mirroring. Also includes
+HAHistory for automatic entity history tracking and pruning.
+"""
+
 import os
 from datetime import timedelta, datetime
 import asyncio
@@ -54,6 +63,7 @@ class HAHistory(ComponentBase):
     def initialize(self):
         self.history_entities = {}
         self.history_data = {}
+        self.history_lock = threading.Lock()
 
     def add_entity(self, entity_id, days):
         """
@@ -71,9 +81,11 @@ class HAHistory(ComponentBase):
         """
         result = None
 
-        if self.history_data.get(entity_id, None) and self.history_entities.get(entity_id, 0) >= days:
-            result = [self.history_data[entity_id]]
-        else:
+        with self.history_lock:
+            if self.history_data.get(entity_id, None) and self.history_entities.get(entity_id, 0) >= days:
+                result = [self.history_data[entity_id]]
+
+        if result is None:
             ha_interface = self.base.components.get_component("ha")
             if not ha_interface:
                 self.log("Error: HAHistory: No HAInterface available, cannot fetch history")
@@ -94,23 +106,25 @@ class HAHistory(ComponentBase):
         """
         Prune history data older than required
         """
-        for entity_id in list(self.history_data.keys()):
-            max_days = self.history_entities.get(entity_id, 30)
-            cutoff_time = now - timedelta(days=max_days)
-            new_history = []
-            keep_all = False
-            for entry in self.history_data[entity_id]:
-                if keep_all:
-                    new_history.append(entry)
-                else:
-                    last_updated = entry.get("last_updated", None)
-                    if last_updated:
-                        entry_time = str2time(last_updated)
-                        if entry_time >= cutoff_time:
-                            new_history.append(entry)
-                            # Keep remaining entries now as they are in order
-                            keep_all = True
-            self.history_data[entity_id] = new_history
+        with self.history_lock:
+            for entity_id in list(self.history_data.keys()):
+                max_days = self.history_entities.get(entity_id, 30)
+                cutoff_time = now - timedelta(days=max_days)
+                new_history = []
+                keep_all = False
+                for entry in self.history_data[entity_id]:
+                    if keep_all:
+                        new_history.append(entry)
+                    else:
+                        last_updated = entry.get("last_updated", None)
+                        if last_updated:
+                            entry_time = str2time(last_updated)
+                            if entry_time >= cutoff_time:
+                                new_history.append(entry)
+                                # Keep remaining entries now as they are in order
+                                keep_all = True
+                        # Note: Entries without last_updated are dropped
+                self.history_data[entity_id] = new_history
 
     def update_entity(self, entity_id, new_history_data):
         """
@@ -130,36 +144,37 @@ class HAHistory(ComponentBase):
             for entry_attr in FILTER_ENTRIES:
                 entry.pop(entry_attr, None)
 
-        current_history_data = self.history_data.get(entity_id, None)
-        if current_history_data and len(current_history_data) > 0:
-            first_updated = current_history_data[0].get("last_updated", None)
-            last_updated = current_history_data[-1].get("last_updated", None)
-        else:
-            first_updated = None
-            last_updated = None
+        with self.history_lock:
+            current_history_data = self.history_data.get(entity_id, None)
+            if current_history_data and len(current_history_data) > 0:
+                first_updated = current_history_data[0].get("last_updated", None)
+                last_updated = current_history_data[-1].get("last_updated", None)
+            else:
+                first_updated = None
+                last_updated = None
 
-        if last_updated:
-            # Find the last timestamp in the previous history data, data is always in order from oldest to newest
-            first_timestamp = str2time(first_updated)
-            last_timestamp = str2time(last_updated)
-            # Scan new data, using the timestamp only add new entries
-            add_all = False
-            for entry in new_history_data:
-                if add_all:
-                    self.history_data[entity_id].append(entry)
-                else:
-                    this_updated = entry.get("last_updated", None)
-                    if this_updated:
-                        entry_time = str2time(this_updated)
-                        if entry_time > last_timestamp:
-                            self.history_data[entity_id].append(entry)
-                            add_all = True  # Remaining entries are all newer
-                        elif entry_time < first_timestamp:
-                            self.history_data[entity_id].append(entry)
+            if last_updated:
+                # Find the last timestamp in the previous history data, data is always in order from oldest to newest
+                first_timestamp = str2time(first_updated)
+                last_timestamp = str2time(last_updated)
+                # Scan new data, using the timestamp only add new entries
+                add_all = False
+                for entry in new_history_data:
+                    if add_all:
+                        self.history_data[entity_id].append(entry)
+                    else:
+                        this_updated = entry.get("last_updated", None)
+                        if this_updated:
+                            entry_time = str2time(this_updated)
+                            if entry_time > last_timestamp:
+                                self.history_data[entity_id].append(entry)
+                                add_all = True  # Remaining entries are all newer
+                            elif entry_time < first_timestamp:
+                                self.history_data[entity_id].append(entry)
 
-            self.history_data[entity_id].sort(key=lambda x: x.get("last_updated"))
-        else:
-            self.history_data[entity_id] = new_history_data
+                self.history_data[entity_id].sort(key=lambda x: x.get("last_updated"))
+            else:
+                self.history_data[entity_id] = new_history_data
 
         # Update last success timestamp
         self.update_success_timestamp()
@@ -193,8 +208,9 @@ class HAHistory(ComponentBase):
 
         if first or (seconds % (60 * 60) == 0):
             # Prune history data every hour
-            self.log("Info: HAHistory: Pruning history data")
+            self.log("Info: HAHistory: Pruning history data started.")
             self.prune_history(datetime.now(self.local_tz))
+            self.log("Info: HAHistory: Pruning history data completed.")
         return True
 
 

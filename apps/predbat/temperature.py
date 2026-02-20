@@ -8,6 +8,13 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+
+"""Weather forecast and temperature data from Open-Meteo API.
+
+Fetches hourly temperature forecasts for battery temperature prediction
+and adjustment curve calculations.
+"""
+
 import aiohttp
 import asyncio
 from datetime import datetime
@@ -16,6 +23,11 @@ from component_base import ComponentBase
 
 
 class TemperatureAPI(ComponentBase):
+    """Weather forecast component using Open-Meteo API.
+
+    Fetches hourly temperature forecasts for battery temperature prediction
+    and charge/discharge rate adjustment calculations.
+    """
     def initialize(self, temperature_enable, temperature_latitude, temperature_longitude, temperature_url):
         """Initialize the Temperature API component"""
         self.temperature_enable = temperature_enable

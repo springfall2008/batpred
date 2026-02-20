@@ -10,6 +10,14 @@
 #
 # This code creates a web server and serves up the Predbat web pages
 
+
+"""Built-in web dashboard server.
+
+Provides the PredBat web interface using aiohttp, serving dashboard pages,
+configuration editors, entity browsers, plan visualisations, and REST API
+endpoints. Includes 50+ HTTP routes for monitoring and control.
+"""
+
 from aiohttp import web
 import asyncio
 import os
@@ -70,6 +78,13 @@ ROOT_YAML_KEY = "pred_bat"
 
 
 class WebInterface(ComponentBase):
+    """Built-in web dashboard server using aiohttp.
+
+    Serves the PredBat dashboard with 50+ HTTP routes for monitoring,
+    configuration, entity browsing, plan visualisation, and REST API
+    endpoints. Supports plugin endpoint registration.
+    """
+
     def initialize(self, web_port):
         self.default_page = "./dash"
         self.web_port = web_port

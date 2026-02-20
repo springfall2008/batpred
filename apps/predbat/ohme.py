@@ -7,6 +7,14 @@
 # Credits to: https://github.com/dan-r/ohmepy for the original code.
 # -----------------------------------------------------------------------------
 
+
+"""Ohme EV charger integration.
+
+Provides monitoring and control of Ohme EV chargers including charge
+session tracking, mode control (smart/max/paused), and integration with
+Octopus Intelligent dispatch for coordinated EV charging.
+"""
+
 import asyncio
 import json
 from enum import Enum

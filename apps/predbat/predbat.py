@@ -8,6 +8,15 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+
+"""Main PredBat orchestrator module.
+
+Entry point for the battery prediction and optimisation system. The PredBat class
+uses multiple inheritance to combine Home Assistant interface, data fetching,
+planning, execution, output publishing, and user interface capabilities into a
+single orchestrator that runs the main prediction/optimisation loop every 5 minutes.
+"""
+
 import copy
 import os
 import sys
@@ -79,8 +88,12 @@ from plugin_system import PluginSystem
 
 
 class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Output, UserInterface):
-    """
-    The battery prediction class itself
+    """Main PredBat orchestrator combining all subsystems via multiple inheritance.
+
+    Inherits from Hass (HA interface), Octopus (rate loading), Energidataservice,
+    Fetch (data loading), Plan (optimisation), Execute (inverter control),
+    Output (sensor publishing), and UserInterface (config management).
+    Runs the main prediction/optimisation loop every 5 minutes via update_pred().
     """
 
     def download_predbat_releases_url(self, url):

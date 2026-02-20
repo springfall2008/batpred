@@ -8,6 +8,15 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+
+"""Minute-by-minute battery simulation engine.
+
+Implements the core prediction model that simulates energy flows (PV generation,
+load consumption, battery charge/discharge, grid import/export) for each minute
+of the forecast period. Used by the optimiser to evaluate different charge/discharge
+plans and select the one with the lowest cost metric.
+"""
+
 from datetime import timedelta
 from const import PREDICT_STEP, RUN_EVERY, TIME_FORMAT
 from utils import remove_intersecting_windows, get_charge_rate_curve_cached, get_discharge_rate_curve_cached, find_charge_rate, calc_percent_limit, in_iboost_slot, in_car_slot, charge_curve_to_tuple

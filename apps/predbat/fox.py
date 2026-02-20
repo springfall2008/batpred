@@ -6,6 +6,14 @@
 # Fox API Library
 # -----------------------------------------------------------------------------
 
+
+"""Fox ESS Cloud API integration.
+
+Cloud API client for Fox ESS inverters with scheduler-based charge/discharge
+control. Manages work mode scheduling (SelfUse, ForceCharge, ForceDischarge,
+Feedin), real-time monitoring, and device settings via the Fox ESS Cloud API.
+"""
+
 import asyncio
 from datetime import datetime, timedelta, timezone
 import time

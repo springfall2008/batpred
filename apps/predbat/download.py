@@ -8,6 +8,13 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+
+"""PredBat self-update utilities.
+
+Downloads PredBat source files from GitHub releases, validates installed
+file integrity via SHA1 hashing, and manages the update/rollback process.
+"""
+
 import os
 import requests
 import yaml

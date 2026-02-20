@@ -8,6 +8,14 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+
+"""Weather alert system integration with Meteoalarm.
+
+Fetches CAP 1.2 XML weather alerts, filters by location using point-in-polygon
+testing, and determines battery keep percentages during severe weather events
+to ensure energy availability.
+"""
+
 import aiohttp
 import re
 from datetime import datetime
@@ -17,6 +25,12 @@ from component_base import ComponentBase
 
 
 class AlertFeed(ComponentBase):
+    """Weather alert system integration with Meteoalarm.
+
+    Fetches CAP 1.2 XML alerts, filters by location via point-in-polygon
+    testing, and determines battery keep percentages during severe weather.
+    """
+
     def initialize(self, alert_config):
         """Initialize the AlertFeed component"""
         self.alert_cache = {}

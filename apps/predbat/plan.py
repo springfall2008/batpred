@@ -8,6 +8,15 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+
+"""Plan optimisation engine for charge/discharge scheduling.
+
+Implements the search algorithm that finds optimal charge and discharge windows
+by exploring combinations of price thresholds, window sizes, and SoC targets.
+Uses multi-threaded prediction runs to evaluate thousands of scenarios and select
+the plan that minimises the overall cost metric.
+"""
+
 import copy
 import traceback
 from datetime import datetime, timedelta
@@ -50,6 +59,13 @@ class DummyThread:
 
 
 class Plan:
+    """Plan optimisation mixin for finding optimal charge/discharge windows.
+
+    Implements the search algorithm that explores price thresholds,
+    window combinations, and SoC targets using multi-threaded prediction
+    runs to minimise the overall cost metric.
+    """
+
     def dynamic_load(self):
         """
         Adjust load prediction based on current load
