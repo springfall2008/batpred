@@ -31,7 +31,6 @@ OUTPUT_STEPS = 1  # Single step output (autoregressive)
 PREDICT_HORIZON = 576  # 48 hours of predictions (576 * 5 min)
 HIDDEN_SIZES = [512, 256, 128, 64]  # Deeper network with more capacity
 BATCH_SIZE = 128  # Smaller batches for better gradient estimates
-FINETUNE_HOURS = 24  # Hours of data for fine-tuning
 STEP_MINUTES = 5  # Minutes per step
 
 # Feature constants
@@ -163,6 +162,26 @@ class LoadPredictor:
 
         self.adam_t = 0
         self.model_initialized = True
+
+    def _reset_adam_optimizer(self):
+        """
+        Reset Adam optimizer momentum to zero.
+
+        Used when starting fine-tuning to prevent accumulated momentum
+        from previous training sessions causing overfitting on small
+        fine-tuning datasets.
+        """
+        if not self.model_initialized:
+            return
+
+        for i in range(len(self.weights)):
+            self.m_weights[i] = np.zeros_like(self.weights[i])
+            self.v_weights[i] = np.zeros_like(self.weights[i])
+            self.m_biases[i] = np.zeros_like(self.biases[i])
+            self.v_biases[i] = np.zeros_like(self.biases[i])
+
+        self.adam_t = 0
+        self.log("ML Predictor: Reset Adam optimizer state for fine-tuning")
 
     def _forward(self, X):
         """
@@ -439,7 +458,7 @@ class LoadPredictor:
 
         max_minute = max(energy_per_step.keys())
 
-        # Use the entire data set for both training and fine tuning
+        # Use all data for training
         start_minute = 0
         end_minute = max_minute
 
@@ -758,9 +777,24 @@ class LoadPredictor:
         if not self.model_initialized or (is_initial and self.weights is None):
             self._initialize_weights()
 
-        # Training loop
-        best_val_loss = float("inf")
+        # Reset Adam optimizer state for fine-tuning to prevent accumulated
+        # momentum from causing overfitting on small fine-tuning datasets
+        if not is_initial and self.model_initialized:
+            self._reset_adam_optimizer()
+
+        # Compute baseline validation before training (shows loaded model performance)
+        baseline_mae = None
+        if not is_initial:
+            baseline_pred, _, _ = self._forward(X_val_norm)
+            baseline_pred_denorm = self._denormalize_predictions(baseline_pred)
+            baseline_mae = np.mean(np.abs(y_val - baseline_pred_denorm))
+            self.log("ML Predictor: Baseline (pre-finetune) val_mae={:.4f} kWh".format(baseline_mae))
+
+        # Training loop - use baseline as initial best for fine-tuning
+        best_val_loss = baseline_mae if baseline_mae is not None else float("inf")
         patience_counter = 0
+        best_weights = None
+        best_biases = None
 
         for epoch in range(epochs):
             # Shuffle training data
@@ -802,16 +836,25 @@ class LoadPredictor:
 
             self.log("ML Predictor: Epoch {}/{}: train_loss={:.4f} val_mae={:.4f} kWh".format(epoch + 1, epochs, epoch_loss, val_mae))
 
-            # Early stopping check
+            # Early stopping check with weight checkpointing
             if val_mae < best_val_loss:
                 best_val_loss = val_mae
                 patience_counter = 0
+                # Checkpoint best weights
+                best_weights = [w.copy() for w in self.weights]
+                best_biases = [b.copy() for b in self.biases]
             else:
                 patience_counter += 1
 
             if patience_counter >= patience:
                 self.log("ML Predictor: Early stopping at epoch {}".format(epoch + 1))
                 break
+
+        # Restore best weights after early stopping
+        if best_weights is not None and best_biases is not None:
+            self.weights = best_weights
+            self.biases = best_biases
+            self.log("ML Predictor: Restored best weights from epoch with val_mae={:.4f} kWh".format(best_val_loss))
 
         self.training_timestamp = datetime.now(timezone.utc)
         self.validation_mae = best_val_loss

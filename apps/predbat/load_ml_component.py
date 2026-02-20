@@ -72,7 +72,7 @@ class LoadMLComponent(ComponentBase):
         self.ml_epochs_update = 20
         self.ml_min_days = 1
         self.ml_validation_threshold = 2.0
-        self.ml_time_decay_days = 7
+        self.ml_time_decay_days = 30
         self.ml_max_load_kw = 50.0
         self.ml_max_model_age_hours = 48
         self.ml_weight_decay = 0.01
@@ -409,8 +409,20 @@ class LoadMLComponent(ComponentBase):
             self.api_started = True
             return True
 
+        # Determine if training is needed
+        is_initial = not self.initial_training_done
+
         # Fetch fresh load data periodically (every 15 minutes)
         should_fetch = first or ((seconds % PREDICTION_INTERVAL_SECONDS) == 0)
+        should_train = first or ((seconds % RETRAIN_INTERVAL_SECONDS) == 0)
+
+        if is_initial:
+            # Initial run, need to fetch data and train model before we can provide predictions
+            should_train = True
+            should_fetch = True
+        elif should_train:
+            # Training requires fetching
+            should_fetch = True
 
         if should_fetch:
             async with self.data_lock:
@@ -442,19 +454,9 @@ class LoadMLComponent(ComponentBase):
                 self.log("ML Component: Insufficient data ({:.1f} days, need {})".format(self.load_data_age_days, self.ml_min_days))
             return True
 
-        # Determine if training is needed
-        should_train = False
-        is_initial = False
-
-        if not self.initial_training_done:
-            # First training
-            should_train = True
-            is_initial = True
+        if is_initial:
             self.log("ML Component: Starting initial training")
-        elif seconds % RETRAIN_INTERVAL_SECONDS == 0:
-            # Periodic fine-tuning every 2 hours
-            should_train = True
-            is_initial = False
+        elif should_train:
             self.log("ML Component: Starting fine-tune training (2h interval)")
 
         if should_train:
@@ -501,7 +503,7 @@ class LoadMLComponent(ComponentBase):
                     export_rates=self.export_rates_data,
                     is_initial=is_initial,
                     epochs=epochs,
-                    time_decay_days=self.ml_time_decay_days,
+                    time_decay_days=min(self.ml_time_decay_days, self.load_data_age_days),
                 )
 
                 if val_mae is not None:
@@ -618,18 +620,3 @@ class LoadMLComponent(ComponentBase):
             },
             app="load_ml",
         )
-
-    def last_updated_time(self):
-        """Return last successful update time for component health check."""
-        return self.last_success_timestamp
-
-    def is_alive(self):
-        """Check if component is alive and functioning."""
-        if not self.ml_enable:
-            return True
-
-        if self.last_success_timestamp is None:
-            return False
-
-        age = datetime.now(timezone.utc) - self.last_success_timestamp
-        return age < timedelta(minutes=10)

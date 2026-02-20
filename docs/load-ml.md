@@ -48,7 +48,7 @@ The ML Load Predictor uses a deep multi-layer perceptron (MLP) with the followin
 - **He Initialization**: Weights initialized using He/Kaiming method (`std = sqrt(2/fan_in)`), optimized for ReLU activations
 - **AdamW Optimizer**: Adam optimization with weight decay (L2 regularization, default 0.01) to prevent overfitting
 - **Early Stopping**: Training halts if validation error stops improving (patience=5 epochs)
-- **Weighted Samples**: Recent data weighted more heavily (exponential decay over 7 days)
+- **Weighted Samples**: Recent data weighted more heavily (exponential decay over history period)
 
 ### Input Features
 
@@ -101,26 +101,24 @@ To prevent drift in long-range predictions, the model blends autoregressive pred
 - Uses 100 epochs with early stopping (patience=5)
 - Batch size: 128 samples
 - AdamW optimizer with learning rate 0.001 and weight decay 0.01
-- Sample weighting: exponential time decay over 7 days (recent data weighted more)
+- Sample weighting: exponential time decay (recent data weighted more)
 - Validates on the last 24 hours of data
 - Saves model to disk: `predbat_ml_model.npz`
 
 **Regularization:**
 
 - **Weight Decay**: L2 penalty (0.01) applied to network weights to prevent overfitting
-- **Early Stopping**: Training halts if validation error doesn't improve for 5 consecutive epochs
+- **Early Stopping**: Training halts if validation error doesn't improve for 5 consecutive epochs, selecting the best results so far.
 - **Time-Weighted Samples**: Recent data has higher importance (7-day exponential decay constant)
     - Today's data: 100% weight
-    - 7 days old: 37% weight (e^-1)
-    - 14 days old: 14% weight (e^-2)
-    - 21 days old: 5% weight (e^-3)
+    - N days old: 37% weight (e^-1)
 
 **Fine-tuning:**
 
 - Runs every 2 hours if enabled
 - Uses full available dataset (same as initial training, up to 28 days)
 - Uses 3 epochs to quickly adapt to recent changes
-- Applies same time-weighted sampling (7-day decay) to prioritize recent data
+- Applies same time-weighted sampling to prioritize recent data
 - Preserves learned patterns while adapting to new ones
 - Same regularization techniques applied as initial training
 
@@ -129,7 +127,7 @@ To prevent drift in long-range predictions, the model blends autoregressive pred
 Although fine-tuning uses up to 20 epochs (vs 100 for initial training), it still uses the full dataset with time-weighted sampling. This approach:
 
 - **Prevents catastrophic forgetting**: Using only recent data would cause the model to gradually forget older patterns
-- **Balances adaptation**: Time weighting (7-day decay) ensures recent changes are prioritized while maintaining long-term pattern knowledge
+- **Balances adaptation**: Time weighting ensures recent changes are prioritized while maintaining long-term pattern knowledge
 - **Handles seasonal patterns**: 28 days of history helps capture weekly cycles and early seasonal trends
 - **Provides stability**: The model learns from a broader context, making predictions more robust
 
