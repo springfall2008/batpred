@@ -1402,11 +1402,15 @@ Add the following automations to `automations.yaml` (or configure via the UI):
   mode: single
 ```
 
-*Note:* Some Sigenergy Predbat users have reported that their installation has some of the entity that Predbat requires with different names so you may need to adapt the script and apps.yaml (or rename your entities) to match:
+*Note:* Some Sigenergy Predbat users have reported that their Sigenergy modbus integration has created some of the entities that Predbat requires with different names
+so you may need to adapt the above automations and `apps.yaml` (or rename your entities) to match:
 
 - sensor.sigen_inverter_ess_rated_discharging_power is instead named sensor.sigen_inverter_ess_rated_discharge_power
 - sensor.sigen_inverter_ess_rated_charging_power is sensor.sigen_inverter_ess_rated_charge_power
 - sensor.sigen_plant_daily_consumed_energy is sensor.sigen_plant_daily_load_consumption
+
+*Important:* Depending upon your electricity supply, you may need to change where **number.sigen_plant_grid_import_limitation** is set to 100 in the first integration to any lower import limit that your electricity supplier may have imposed,
+e.g. 18kW roughly corresponds to an 80A supply.
 
 ## Sofar Inverters
 
