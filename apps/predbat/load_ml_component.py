@@ -618,4 +618,3 @@ class LoadMLComponent(ComponentBase):
             },
             app="load_ml",
         )
-
