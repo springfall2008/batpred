@@ -619,17 +619,3 @@ class LoadMLComponent(ComponentBase):
             app="load_ml",
         )
 
-    def last_updated_time(self):
-        """Return last successful update time for component health check."""
-        return self.last_success_timestamp
-
-    def is_alive(self):
-        """Check if component is alive and functioning."""
-        if not self.ml_enable:
-            return True
-
-        if self.last_success_timestamp is None:
-            return False
-
-        age = datetime.now(timezone.utc) - self.last_success_timestamp
-        return age < timedelta(minutes=10)
