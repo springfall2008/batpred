@@ -1789,7 +1789,7 @@ class Fetch:
             self.car_charging_plan_smart[car_n] = self.get_arg("car_charging_plan_smart", False)
             self.car_charging_plan_max_price[car_n] = self.get_arg("car_charging_plan_max_price", 0.0)
             self.car_charging_plan_time[car_n] = self.get_arg("car_charging_plan_time", "07:00:00")
-            self.car_charging_battery_size[car_n] = float(self.get_arg("car_charging_battery_size", 100.0, index=car_n))
+            self.car_charging_battery_size[car_n] = dp2(float(self.get_arg("car_charging_battery_size", 100.0, index=car_n)))
             car_postfix = "" if car_n == 0 else "_" + str(car_n)
             self.car_charging_rate[car_n] = float(self.get_arg("car_charging_rate" + car_postfix))
             self.car_charging_limit[car_n] = dp3((float(self.get_arg("car_charging_limit", 100.0, index=car_n)) * self.car_charging_battery_size[car_n]) / 100.0)
@@ -1806,8 +1806,8 @@ class Fetch:
                     self.car_charging_plan_max_price,
                     self.currency_symbols[1],
                     self.car_charging_plan_time,
-                    dp1(self.car_charging_battery_size),
-                    dp1(self.car_charging_limit),
+                    self.car_charging_battery_size,
+                    self.car_charging_limit,
                     self.car_charging_rate,
                     self.car_charging_exclusive,
                 )
