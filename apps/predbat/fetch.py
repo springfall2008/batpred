@@ -524,7 +524,7 @@ class Fetch:
         else:
             return max(data.get(index + 1, 0) - data.get(index, 0), 0)
 
-    def minute_data_import_export(self, max_days_previous, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, required=True):
+    def minute_data_import_export(self, max_days_previous, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True):
         """
         Download one or more entities for import/export data
         """
@@ -546,7 +546,7 @@ class Fetch:
                 continue
 
             try:
-                history = self.get_history_wrapper(entity_id=entity_id, days=max_days_previous, required=required)
+                history = self.get_history_wrapper(entity_id=entity_id, days=max_days_previous)
             except (ValueError, TypeError) as exc:
                 self.log("Warn: No history data found for {} : {}".format(entity_id, exc))
                 history = []
