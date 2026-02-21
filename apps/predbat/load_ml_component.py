@@ -201,7 +201,6 @@ class LoadMLComponent(ComponentBase):
         max_minute = (max_minute // step) * step  # Align to step intervals
 
         for minute in range(0, max_minute + step, step):
-
             # Calculate load delta
             load_delta = self.get_from_incrementing(load_cumulative, minute, step, backwards=True)
             load_deltas[minute] = max(0, load_delta)
