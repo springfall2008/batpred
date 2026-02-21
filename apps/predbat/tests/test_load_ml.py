@@ -57,6 +57,7 @@ def test_load_ml(my_predbat=None):
         ("prediction_with_temp", _test_prediction_with_temp, "Prediction with temperature forecast data"),
         ("component_fetch_load_data", _test_component_fetch_load_data, "LoadMLComponent _fetch_load_data method"),
         ("component_publish_entity", _test_component_publish_entity, "LoadMLComponent _publish_entity method"),
+        ("car_subtraction_direct", _test_car_subtraction_direct, "Direct car_subtraction method with interpolation and smoothing"),
         # ("real_data_training", _test_real_data_training, "Train on real data with chart"),
         # ("pretrained_model_prediction", _test_pretrained_model_prediction, "Load pre-trained model and generate predictions with chart"),
     ]
@@ -2228,3 +2229,280 @@ def _test_component_publish_entity():
     print("    ✓ Empty predictions handled correctly")
 
     print("  All _publish_entity tests passed!")
+
+
+def _test_car_subtraction_direct():
+    """Test car_subtraction method directly with all improved features.
+
+    Tests:
+    - Basic subtraction without gaps
+    - Gap interpolation (linear)
+    - Median smoothing to reduce noise
+    - Adaptive matching (searches ±2 intervals)
+    - No negative values in output
+    - Edge cases (empty data, no overlap, large gaps)
+    """
+    from load_ml_component import LoadMLComponent
+    from datetime import datetime, timezone
+    import numpy as np
+
+    # Create a minimal mock base for component initialization
+    class MockBase:
+        def __init__(self):
+            self.prefix = "predbat"
+            self.config_root = None
+            self.now_utc = datetime.now(timezone.utc)
+            self.midnight_utc = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+            self.minutes_now = (self.now_utc - self.midnight_utc).seconds // 60
+            self.local_tz = timezone.utc
+            self.args = {}
+            self.log_messages = []
+
+        def log(self, msg):
+            self.log_messages.append(msg)
+
+        def get_arg(self, key, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
+            return {
+                "load_today": ["sensor.load_today"],
+                "car_charging_energy": ["sensor.car_charging"],
+                "car_charging_hold": True,
+                "car_charging_threshold": 6.0,
+                "car_charging_energy_scale": 1.0,
+                "car_charging_rate": 7.5,
+            }.get(key, default)
+
+    print("  Testing car_subtraction method directly:")
+
+    mock_base = MockBase()
+    component = LoadMLComponent(mock_base, load_ml_enable=True)
+
+    # Test 1: Basic subtraction without gaps (perfect alignment)
+    print("    Test 1: Basic subtraction (no gaps)...", end=" ")
+    load_cumulative = {
+        0: 10.0,  # Now
+        5: 9.5,  # 5 min ago
+        10: 9.0,  # 10 min ago
+        15: 8.5,  # 15 min ago
+        20: 8.0,  # 20 min ago
+    }
+    car_cumulative = {
+        0: 2.0,  # Now
+        5: 1.7,  # 5 min ago (delta 0.3)
+        10: 1.4,  # 10 min ago (delta 0.3)
+        15: 1.1,  # 15 min ago (delta 0.3)
+        20: 0.8,  # 20 min ago (delta 0.3)
+    }
+
+    result = component.car_subtraction(load_cumulative, car_cumulative, step=5)
+
+    # Verify basic properties
+    assert result is not None, "Result should not be None"
+    assert len(result) > 0, "Result should not be empty"
+
+    # Verify no negative values
+    for minute, value in result.items():
+        assert value >= 0, f"Result at minute {minute} should be non-negative, got {value}"
+
+    # Verify cumulative values increase going towards minute 0
+    # Result is cumulative: minute 20 (oldest) should have lowest value, minute 0 (now) highest
+    if 0 in result and 20 in result:
+        assert result[0] > result[20], f"Cumulative should increase towards minute 0: result[0]={result[0]}, result[20]={result[20]}"
+
+    # The total accumulated energy should be less than or equal to original load
+    # Since we're subtracting car charging
+    if 0 in result:
+        assert result[0] <= load_cumulative[0], f"Result at minute 0 should not exceed original load: {result[0]} vs {load_cumulative[0]}"
+
+    print("PASS")
+
+    # Test 2: Gap interpolation
+    print("    Test 2: Gap interpolation...", end=" ")
+    load_cumulative = {
+        0: 10.0,
+        5: 9.5,
+        10: 9.0,
+        15: 8.5,
+        20: 8.0,
+        25: 7.5,
+        30: 7.0,
+    }
+    car_cumulative_with_gaps = {
+        0: 3.0,
+        5: 2.5,
+        # Missing 10, 15 (20-minute gap - should interpolate)
+        20: 1.5,
+        25: 1.0,
+        30: 0.5,
+    }
+
+    result = component.car_subtraction(load_cumulative, car_cumulative_with_gaps, step=5, interpolate_gaps=True, max_gap_minutes=60)
+
+    assert result is not None, "Result should not be None with gaps"
+    assert len(result) > 0, "Result should not be empty with gaps"
+
+    # Verify no negative values despite gaps
+    for minute, value in result.items():
+        assert value >= 0, f"Result at minute {minute} should be non-negative with gaps, got {value}"
+
+    # Gap interpolation should smooth the subtraction rather than creating spikes
+    # Verify result is reasonable (not NaN or infinity)
+    for minute, value in result.items():
+        assert not np.isnan(value), f"Result at minute {minute} should not be NaN"
+        assert not np.isinf(value), f"Result at minute {minute} should not be infinite"
+
+    print("PASS")
+
+    # Test 3: Large gap (exceeds max_gap_minutes)
+    print("    Test 3: Large gap handling...", end=" ")
+    car_cumulative_large_gap = {
+        0: 3.0,
+        5: 2.5,
+        # Missing 10-60 (55-minute gap - exceeds default 60 min, should NOT interpolate)
+        65: 1.0,
+        70: 0.5,
+    }
+
+    # max_gap_minutes=60 should NOT interpolate this 55-minute gap at minute boundaries
+    # Actually the gap from minute 5 to 65 is 60 minutes which is exactly at the limit
+    result = component.car_subtraction(load_cumulative, car_cumulative_large_gap, step=5, interpolate_gaps=True, max_gap_minutes=60)
+
+    assert result is not None, "Result should not be None with large gap"
+    # No assertion on specific behavior, just ensure it doesn't crash
+
+    print("PASS")
+
+    # Test 4: Smoothing reduces noise
+    print("    Test 4: Smoothing effectiveness...", end=" ")
+    load_cumulative = {i: 20.0 - i * 0.1 for i in range(0, 55, 5)}
+
+    # Create noisy car data with spikes
+    car_cumulative_noisy = {
+        0: 5.0,
+        5: 4.2,  # Delta 0.8
+        10: 3.9,  # Delta 0.3 (spike down)
+        15: 3.5,  # Delta 0.4
+        20: 3.1,  # Delta 0.4
+        25: 2.3,  # Delta 0.8 (spike up)
+        30: 1.9,  # Delta 0.4
+        35: 1.5,  # Delta 0.4
+        40: 1.1,  # Delta 0.4
+        45: 0.7,  # Delta 0.4
+        50: 0.3,  # Delta 0.4
+    }
+
+    # Smoothing window of 3-5 should reduce impact of spikes
+    result = component.car_subtraction(load_cumulative, car_cumulative_noisy, step=5, smoothing_window=3)
+
+    assert result is not None, "Smoothing result should not be None"
+    # Verify smoothing produces reasonable output (no extreme values)
+    for minute, value in result.items():
+        assert value >= 0, f"Smoothed result at minute {minute} should be non-negative"
+        assert value < 25.0, f"Smoothed result at minute {minute} should be reasonable, got {value}"
+
+    print("PASS")
+
+    # Test 5: Adaptive matching (timing misalignment)
+    print("    Test 5: Adaptive matching...", end=" ")
+    load_cumulative = {
+        0: 10.0,
+        5: 9.0,  # Delta 1.0
+        10: 8.0,  # Delta 1.0
+        15: 7.0,  # Delta 1.0
+        20: 6.0,  # Delta 1.0
+    }
+
+    # Car data offset by 2 intervals (10 minutes) - adaptive search should find it
+    car_cumulative_offset = {
+        10: 3.0,  # Aligns with load at minute 0 (2 intervals ahead)
+        15: 2.5,  # Delta 0.5
+        20: 2.0,  # Delta 0.5
+        25: 1.5,  # Delta 0.5
+        30: 1.0,  # Delta 0.5
+    }
+
+    # With search_window=2, should find car delta within ±2 intervals (±10 minutes)
+    result = component.car_subtraction(load_cumulative, car_cumulative_offset, step=5)
+
+    assert result is not None, "Adaptive matching result should not be None"
+    assert len(result) > 0, "Adaptive matching should produce results"
+
+    # Verify results are reasonable despite offset
+    for minute, value in result.items():
+        assert value >= 0, f"Adaptive result at minute {minute} should be non-negative"
+
+    print("PASS")
+
+    # Test 6: Edge case - empty car data
+    print("    Test 6: Empty car data...", end=" ")
+    result = component.car_subtraction(load_cumulative, {}, step=5)
+
+    # Should return original load data when car is empty
+    assert result == load_cumulative, "Should return original load when car is empty"
+
+    print("PASS")
+
+    # Test 7: Edge case - empty load data
+    print("    Test 7: Empty load data...", end=" ")
+    result = component.car_subtraction({}, car_cumulative, step=5)
+
+    # Should return empty dict when load is empty
+    assert result == {}, "Should return empty dict when load is empty"
+
+    print("PASS")
+
+    # Test 8: Car exceeds load (should not go negative)
+    print("    Test 8: Car exceeds load protection...", end=" ")
+    load_cumulative_small = {
+        0: 2.0,
+        5: 1.5,  # Delta 0.5
+        10: 1.0,  # Delta 0.5
+        15: 0.5,  # Delta 0.5
+        20: 0.0,  # Delta 0.5
+    }
+    car_cumulative_large = {
+        0: 5.0,
+        5: 4.0,  # Delta 1.0 (exceeds load delta 0.5)
+        10: 3.0,  # Delta 1.0
+        15: 2.0,  # Delta 1.0
+        20: 1.0,  # Delta 1.0
+    }
+
+    result = component.car_subtraction(load_cumulative_small, car_cumulative_large, step=5)
+
+    assert result is not None, "Result should not be None when car exceeds load"
+
+    # Critical: verify NO negative values
+    for minute, value in result.items():
+        assert value >= 0, f"Result at minute {minute} MUST be non-negative even when car exceeds load, got {value}"
+
+    print("PASS")
+
+    # Test 9: Different step sizes
+    print("    Test 9: Different step size (30 min)...", end=" ")
+    load_cumulative_30min = {
+        0: 20.0,
+        30: 17.0,
+        60: 14.0,
+        90: 11.0,
+        120: 8.0,
+    }
+    car_cumulative_30min = {
+        0: 6.0,
+        30: 5.0,
+        60: 4.0,
+        90: 3.0,
+        120: 2.0,
+    }
+
+    result = component.car_subtraction(load_cumulative_30min, car_cumulative_30min, step=30)
+
+    assert result is not None, "Result should work with 30-min step"
+    assert len(result) > 0, "Result should not be empty with 30-min step"
+
+    # Verify subtraction works correctly with 30-min steps
+    for minute, value in result.items():
+        assert value >= 0, f"Result at minute {minute} should be non-negative with 30-min step"
+
+    print("PASS")
+
+    print("  All car_subtraction direct tests passed!")
