@@ -2508,7 +2508,7 @@ chart.render();
             ]
             text += self.render_chart(series_data, "kW", "Solar Forecast", now_str)
         elif chart == "LoadML":
-            load_today_history = self.get_history_with_now_attrs("sensor." + self.prefix + "_load_ml_stats", 1)
+            load_today_history = self.get_history_with_now_attrs("sensor." + self.prefix + "_load_ml_stats", 7)
             # Get historical load data for last 24 hours
             load_today = prune_today(history_attribute(load_today_history, attributes=True, state_key="load_today"), self.now_utc, self.midnight_utc, prune=False)
             load_today_h1 = prune_today(history_attribute(load_today_history, attributes=True, state_key="load_today_h1"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60 * 1)
