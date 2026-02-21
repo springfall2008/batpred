@@ -121,6 +121,8 @@ To prevent drift in long-range predictions, the model blends autoregressive pred
 - Applies same time-weighted sampling to prioritize recent data
 - Preserves learned patterns while adapting to new ones
 - Same regularization techniques applied as initial training
+- Each fine-tune cycle blends the current data's feature statistics (mean/std) with the stored normalization parameters via an exponential moving average (alpha=0.1).
+This lets the model slowly track long-term shifts in feature distributions (e.g. seasonal load changes, new tariff rates) without sudden jumps that could destabilise existing weights.
 
 **Why Full Dataset for Fine-tuning?**
 
@@ -359,6 +361,13 @@ ML Component: Model status: active, last trained: 2024-02-07 10:30:00
 ML Component: Validation MAE: 0.3245 kWh
 ```
 
+### Tracking Normalization Drift
+
+Each time the model trains (initial fit) or fine-tunes (EMA update), it logs a normalization stats line that summarises the mean and standard deviation for each input feature group.
+You can search for Normalization stats in the logfile for this information.
+
+Large shifts in `mean` or `std` for a group (e.g. `import_rate` after a tariff change, or `load` after a new appliance) will be visible here and confirm the EMA is tracking the drift correctly.
+
 ### Common Issues
 
 **Issue**: Model never trains
@@ -403,10 +412,10 @@ The trained model is saved to disk as `predbat_ml_model.npz` in your Predbat con
 
 - **Network weights and biases**: All 4 hidden layers plus output layer
 - **Optimizer state**: Adam momentum terms for continuing fine-tuning
-- **Normalization parameters**: Feature and target mean/standard deviation
+- **Normalization parameters**: Feature and target mean/standard deviation (updated via EMA each fine-tune cycle to track distribution drift)
 - **Training metadata**: Epochs trained, timestamp, model version, architecture details
 
-The model is automatically loaded on Predbat restart, allowing predictions to continue immediately without retraining.
+The model is automatically loaded on Predbat restart, allowing predictions to continue immediately without retraining. The EMA-updated normalization parameters are saved and restored with the model, so drift tracking is preserved across restarts.
 
 **Note**: If you update Predbat and the model architecture or version changes, the old model will be rejected and a new model will be trained from scratch. If the model becomes unstable, you can manually delete `predbat_ml_model.npz` to force retraining.
 

@@ -9,6 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 # fmt: on
 
+from utils import dp4
 import numpy as np
 from datetime import datetime, timezone, timedelta
 import tempfile
@@ -44,6 +45,7 @@ def test_load_ml(my_predbat=None):
         ("dataset_with_pv", _test_dataset_with_pv, "Dataset creation with PV features"),
         ("dataset_with_temp", _test_dataset_with_temp, "Dataset creation with temperature features"),
         ("normalization", _test_normalization, "Z-score normalization correctness"),
+        ("ema_normalization", _test_ema_normalization, "EMA normalization drift tracking during fine-tuning"),
         ("adam_optimizer", _test_adam_optimizer, "Adam optimizer step"),
         ("training_convergence", _test_training_convergence, "Training convergence on synthetic data"),
         ("training_with_pv", _test_training_with_pv, "Training with PV input features"),
@@ -54,10 +56,11 @@ def test_load_ml(my_predbat=None):
         ("prediction", _test_prediction, "End-to-end prediction"),
         ("prediction_with_pv", _test_prediction_with_pv, "Prediction with PV forecast data"),
         ("prediction_with_temp", _test_prediction_with_temp, "Prediction with temperature forecast data"),
-        # ("real_data_training", _test_real_data_training, "Train on real load_minutes_debug.json data with chart"),
-        # ("pretrained_model_prediction", _test_pretrained_model_prediction, "Load pre-trained model and generate predictions with chart"),
         ("component_fetch_load_data", _test_component_fetch_load_data, "LoadMLComponent _fetch_load_data method"),
         ("component_publish_entity", _test_component_publish_entity, "LoadMLComponent _publish_entity method"),
+        ("car_subtraction_direct", _test_car_subtraction_direct, "Direct car_subtraction method with interpolation and smoothing"),
+        # ("real_data_training", _test_real_data_training, "Train on real data with chart"),
+        # ("pretrained_model_prediction", _test_pretrained_model_prediction, "Load pre-trained model and generate predictions with chart"),
     ]
 
     failed_tests = []
@@ -528,6 +531,103 @@ def _test_normalization():
     assert np.allclose(y, y_denorm, atol=1e-5), "Denormalization should recover original"
 
 
+def _test_ema_normalization():
+    """Test EMA normalization drift tracking during fine-tuning.
+
+    Verifies:
+    - EMA blends feature stats proportional to alpha
+    - alpha=0.0 freezes normalization
+    - alpha=1.0 fully replaces normalization
+    - EMA-updated params persist through save/load
+    - train() with is_initial=False applies EMA when alpha>0
+    """
+    np.random.seed(42)
+    now_utc = datetime.now(timezone.utc)
+    midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # --- Part 1: Direct EMA blending math ---
+    # Use constant arrays so we know the exact new_mean that _normalize_features will compute
+    X_initial = np.ones((200, TOTAL_FEATURES), dtype=np.float32)  # mean=1.0 per feature
+    X_shifted = np.ones((200, TOTAL_FEATURES), dtype=np.float32) * 10.0  # mean=10.0 per feature
+
+    predictor = LoadPredictor()
+    predictor._normalize_features(X_initial, fit=True)
+    initial_mean = predictor.feature_mean.copy()
+
+    alpha = 0.1
+    predictor._normalize_features(X_shifted, fit=False, ema_alpha=alpha)
+
+    # EMA formula: new = alpha * new_data_mean + (1-alpha) * old_mean
+    expected_load_mean = alpha * 10.0 + (1 - alpha) * initial_mean[0]  # load group, idx 0
+    assert np.allclose(predictor.feature_mean[0], expected_load_mean, atol=1e-4), "EMA mean should blend: alpha*new_data_mean + (1-alpha)*old_mean, " "got {:.4f} expected {:.4f}".format(predictor.feature_mean[0], expected_load_mean)
+    assert predictor.feature_mean[0] > initial_mean[0], "Feature mean should move toward higher-value distribution"
+
+    # --- Part 2: alpha=0.0 freezes normalization ---
+    predictor2 = LoadPredictor()
+    predictor2._normalize_features(X_initial, fit=True)
+    frozen_mean = predictor2.feature_mean.copy()
+    frozen_std = predictor2.feature_std.copy()
+
+    predictor2._normalize_features(X_shifted, fit=False, ema_alpha=0.0)
+
+    assert np.allclose(predictor2.feature_mean, frozen_mean), "alpha=0.0 should freeze feature_mean (no EMA update)"
+    assert np.allclose(predictor2.feature_std, frozen_std), "alpha=0.0 should freeze feature_std (no EMA update)"
+
+    # --- Part 3: alpha=1.0 fully replaces normalization ---
+    predictor3 = LoadPredictor()
+    predictor3._normalize_features(X_initial, fit=True)
+
+    predictor3._normalize_features(X_shifted, fit=False, ema_alpha=1.0)
+
+    assert np.allclose(predictor3.feature_mean, 10.0), "alpha=1.0 should fully replace feature_mean with new data mean"
+
+    # --- Part 4: EMA-updated params persist through save/load ---
+    predictor4 = LoadPredictor()
+    predictor4._normalize_features(X_initial, fit=True)
+    predictor4._normalize_targets(np.ones((200, 1), dtype=np.float32) * 0.5, fit=True)
+    predictor4._initialize_weights()
+    predictor4.training_timestamp = datetime.now(timezone.utc)
+    predictor4.validation_mae = 0.1
+
+    predictor4._normalize_features(X_shifted, fit=False, ema_alpha=alpha)
+    updated_mean = predictor4.feature_mean.copy()
+
+    with tempfile.NamedTemporaryFile(suffix=".npz", delete=False) as f:
+        temp_path = f.name
+    try:
+        predictor4.save(temp_path)
+        predictor4b = LoadPredictor()
+        assert predictor4b.load(temp_path), "Save/load should succeed for EMA-updated model"
+        assert np.allclose(predictor4b.feature_mean, updated_mean), "EMA-updated normalization params should survive save/load"
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+    # --- Part 5: Integration - train() applies EMA, predictions remain valid ---
+    predictor5 = LoadPredictor(learning_rate=0.01)
+    load_data = _create_synthetic_load_data(n_days=7, now_utc=now_utc)
+    predictor5.train(load_data, now_utc, is_initial=True, epochs=5, time_decay_days=7)
+    mean_after_initial = predictor5.feature_mean.copy()
+
+    # Fine-tune with alpha=0.0 on same data - feature_mean must not change
+    predictor5.train(load_data, now_utc, is_initial=False, epochs=3, time_decay_days=7, norm_ema_alpha=0.0)
+    assert np.allclose(predictor5.feature_mean, mean_after_initial), "norm_ema_alpha=0.0 should not modify feature_mean during fine-tuning"
+
+    # Fine-tune with alpha=0.1 on 5x-scaled data - feature_mean must shift toward higher values
+    load_data_shifted = {k: v * 5.0 for k, v in load_data.items()}
+    predictor5.train(load_data_shifted, now_utc, is_initial=False, epochs=3, time_decay_days=7, norm_ema_alpha=0.1)
+    assert not np.allclose(predictor5.feature_mean, mean_after_initial), "norm_ema_alpha=0.1 with shifted data should update feature_mean"
+    # Mean should have increased (load features shifted to higher values)
+    assert predictor5.feature_mean[0] > mean_after_initial[0], "Feature mean should increase after fine-tuning on higher-load data"
+
+    # Predictions must still function correctly after EMA normalization update
+    predictions = predictor5.predict(load_data, now_utc, midnight_utc)
+    assert isinstance(predictions, dict), "Predictions should return a dict after EMA normalization update"
+    assert len(predictions) > 0, "Should produce non-empty predictions after EMA normalization update"
+    for minute, val in predictions.items():
+        assert val >= 0, "Prediction at minute {} should be non-negative".format(minute)
+
+
 def _test_adam_optimizer():
     """Test Adam optimizer update step"""
     predictor = LoadPredictor(learning_rate=0.01)
@@ -785,13 +885,13 @@ def _test_prediction_with_temp():
 
 def _test_real_data_training():
     """
-    Test training on real load_minutes_debug.json data and generate comparison chart
+    Test training on real input_train_data.json data and generate comparison chart
     """
     import json
     import os
 
     # Try to load the input_train_data.json which has real PV and temperature
-    input_train_paths = ["../coverage/input_train_data.json", "coverage/input_train_data.json", "input_train_data.json"]
+    input_train_paths = ["input_train_data.json"]
 
     load_data = None
     pv_data = None
@@ -803,25 +903,36 @@ def _test_real_data_training():
         if os.path.exists(json_path):
             with open(json_path, "r") as f:
                 train_data = json.load(f)
-            # Format: [load_minutes_new, age_days, load_minutes_now, pv_data, temperature_data, import_rates, export_rates]
-            if len(train_data) >= 5:
-                # Convert string keys to integers
-                load_data = {int(k): float(v) for k, v in train_data[0].items()}
-                pv_data = {int(k): float(v) for k, v in train_data[3].items()} if train_data[3] else {}
-                temp_data = {int(k): float(v) for k, v in train_data[4].items()} if train_data[4] else {}
-                # Load import/export rates if available (elements 5 and 6)
-                if len(train_data) >= 7:
-                    import_rates_data = {int(k): float(v) for k, v in train_data[5].items()} if train_data[5] else {}
-                    export_rates_data = {int(k): float(v) for k, v in train_data[6].items()} if train_data[6] else {}
-                print(f"  Loaded training data from {json_path}")
-                print(f"    Load: {len(load_data)} datapoints")
-                print(f"    PV: {len(pv_data)} datapoints")
-                print(f"    Temperature: {len(temp_data)} datapoints")
-                if import_rates_data is not None:
-                    print(f"    Import rates: {len(import_rates_data)} datapoints")
-                if export_rates_data is not None:
-                    print(f"    Export rates: {len(export_rates_data)} datapoints")
-                break
+
+            # Check if new dict format (with timestamps) or old array format
+            if isinstance(train_data, dict):
+                # New format: dict with named keys
+                load_data = {int(k): float(v) for k, v in train_data["load_minutes"].items()}
+                pv_data = {int(k): float(v) for k, v in train_data["pv_data"].items()} if train_data.get("pv_data") else {}
+                temp_data = {int(k): float(v) for k, v in train_data["temperature_data"].items()} if train_data.get("temperature_data") else {}
+                import_rates_data = {int(k): float(v) for k, v in train_data["import_rates"].items()} if train_data.get("import_rates") else {}
+                export_rates_data = {int(k): float(v) for k, v in train_data["export_rates"].items()} if train_data.get("export_rates") else {}
+            else:
+                # Old format: [load_minutes_new, age_days, load_minutes_now, pv_data, temperature_data, import_rates, export_rates]
+                if len(train_data) >= 5:
+                    # Convert string keys to integers
+                    load_data = {int(k): float(v) for k, v in train_data[0].items()}
+                    pv_data = {int(k): float(v) for k, v in train_data[3].items()} if train_data[3] else {}
+                    temp_data = {int(k): float(v) for k, v in train_data[4].items()} if train_data[4] else {}
+                    # Load import/export rates if available (elements 5 and 6)
+                    if len(train_data) >= 7:
+                        import_rates_data = {int(k): float(v) for k, v in train_data[5].items()} if train_data[5] else {}
+                        export_rates_data = {int(k): float(v) for k, v in train_data[6].items()} if train_data[6] else {}
+
+            print(f"  Loaded training data from {json_path}")
+            print(f"    Load: {len(load_data)} datapoints")
+            print(f"    PV: {len(pv_data)} datapoints")
+            print(f"    Temperature: {len(temp_data)} datapoints")
+            if import_rates_data is not None:
+                print(f"    Import rates: {len(import_rates_data)} datapoints")
+            if export_rates_data is not None:
+                print(f"    Export rates: {len(export_rates_data)} datapoints")
+            break
 
     if load_data is None:
         print("  WARNING: No training data found, skipping real data test")
@@ -853,10 +964,13 @@ def _test_real_data_training():
     has_rates = import_rates_data and export_rates_data and len(import_rates_data) > 0 and len(export_rates_data) > 0
     rates_info = " + import/export rates" if has_rates else ""
     print(f"  Training on real load + {data_source} PV/temperature{rates_info} with {len(load_data)} points...")
-    success = predictor.train(load_data, now_utc, pv_minutes=pv_data, temp_minutes=temp_data, import_rates=import_rates_data, export_rates=export_rates_data, is_initial=True, epochs=50, time_decay_days=7)
+    success = predictor.train(load_data, now_utc, pv_minutes=pv_data, temp_minutes=temp_data, import_rates=import_rates_data, export_rates=export_rates_data, is_initial=True, epochs=50, time_decay_days=7, validation_holdout_hours=48)
 
     assert success, "Training on real data should succeed"
     assert predictor.model_initialized, "Model should be initialized after training"
+
+    success = predictor.train(load_data, now_utc, pv_minutes=pv_data, temp_minutes=temp_data, import_rates=import_rates_data, export_rates=export_rates_data, is_initial=False, epochs=50, time_decay_days=7, validation_holdout_hours=48)
+    success = predictor.train(load_data, now_utc, pv_minutes=pv_data, temp_minutes=temp_data, import_rates=import_rates_data, export_rates=export_rates_data, is_initial=False, epochs=50, time_decay_days=7, validation_holdout_hours=48)
 
     # Make predictions
     print(f"  Generating predictions with PV + temperature{rates_info} forecasts...")
@@ -973,31 +1087,37 @@ def _test_real_data_training():
             )
 
             # Extract first 24h of validation predictions
+            # First cumulative value is already the per-step energy
             val_pred_keys = sorted(val_predictions.keys())
+
             for i, minute in enumerate(val_pred_keys):
                 if minute >= val_period_hours * 60:
                     break
                 if i == 0:
-                    energy_kwh = val_predictions[minute]
+                    # First cumulative value IS the energy for the first step (0-5 min)
+                    energy_kwh = 0
                 else:
+                    # Subsequent steps: calculate delta from previous cumulative
                     prev_minute = val_pred_keys[i - 1]
                     energy_kwh = max(0, val_predictions[minute] - val_predictions[prev_minute])
                 val_pred_minutes.append(minute)
-                val_pred_energy.append(energy_kwh)
+                val_pred_energy.append(dp4(energy_kwh))
 
         # Convert predictions (cumulative kWh) to energy per step (kWh)
+        # First cumulative value is already the per-step energy
         # predictions dict is: {0: cum0, 5: cum5, 10: cum10, ...} representing FUTURE
         pred_minutes = []
         pred_energy = []
         pred_keys = sorted(predictions.keys())
+
         for i, minute in enumerate(pred_keys):
             if minute >= prediction_hours * 60:
                 break
             if i == 0:
-                # First step - use the value directly as energy
-                energy_kwh = predictions[minute]
+                # First cumulative value IS the energy for the first step (0-5 min)
+                energy_kwh = 0
             else:
-                # Subsequent steps - calculate difference from previous
+                # Subsequent steps: calculate delta from previous cumulative
                 prev_minute = pred_keys[i - 1]
                 energy_kwh = max(0, predictions[minute] - predictions[prev_minute])
             pred_minutes.append(minute)
@@ -1559,20 +1679,22 @@ def _test_component_fetch_load_data():
         """Test that car charging energy is correctly subtracted from load data."""
         mock_base_with_car = MockBase()
 
-        # Create load data at 5-minute intervals (matches PREDICT_STEP)
+        # Create load data at 5-minute intervals following Predbat convention:
+        # minute 0 = now (highest cumulative), minute 1440 = 24h ago (lowest)
         # Total load: 1.0 kWh per 5-min step
+        # Need to extend slightly beyond 1440 for delta calculation at minute 1440
         original_load_data = {}
-        cumulative_load = 0.0
-        for minute in range(0, 1441, 5):
+        cumulative_load = 289.0  # Start with total + 1 extra interval
+        for minute in range(0, 1446, 5):  # Go to 1445 to allow delta calc at 1440
             original_load_data[minute] = cumulative_load
-            cumulative_load += 1.0  # 1.0 kWh per step
+            cumulative_load -= 1.0  # Decrease going backwards in time
 
         # Car charging data: 0.3 kWh per 5-min step
         car_charging_data = {}
-        cumulative_car = 0.0
-        for minute in range(0, 1441, 5):
+        cumulative_car = 86.7  # Start with total + 1 extra interval (289 * 0.3)
+        for minute in range(0, 1446, 5):  # Go to 1445 to allow delta calc at 1440
             car_charging_data[minute] = cumulative_car
-            cumulative_car += 0.3  # 0.3 kWh per step
+            cumulative_car -= 0.3  # Decrease going backwards in time
 
         age = 1.0
 
@@ -1639,22 +1761,29 @@ def _test_component_fetch_load_data():
         """Test that car charging is detected based on load threshold when no sensor is configured."""
         mock_base_threshold = MockBase()
 
-        # Create load data at 5-minute intervals with varying consumption
-        # Some intervals will exceed threshold (car charging), others won't
-        # IMPORTANT: Cumulative value represents total UP TO AND INCLUDING that minute
-        original_load_data = {}
-        cumulative_load = 0.0
-
+        # Create load data at 5-minute intervals with varying consumption following Predbat convention:
+        # minute 0 = now (highest cumulative), minute 1440 = 24h ago (lowest)
         # Pattern: high (1.0) at i=0,4,8... and normal (0.2) at other positions
-        for i, minute in enumerate(range(0, 1441, 5)):
+        # Need to calculate total first, then work backwards
+
+        # First calculate total energy
+        total_energy = 0.0
+        pattern = []
+        for i in range(289):  # 289 intervals (0-1440 in steps of 5) + 1 extra for delta calc
             if i % 4 == 0:
-                # High load interval: 1.0 kWh per 5-min (exceeds threshold)
-                delta = 1.0
+                delta = 1.0  # High load (car charging)
             else:
-                # Normal load: 0.2 kWh per 5-min (below threshold)
-                delta = 0.2
-            cumulative_load += delta
-            original_load_data[minute] = cumulative_load  # Store AFTER adding delta
+                delta = 0.2  # Normal load
+            pattern.append(delta)
+            total_energy += delta
+
+        # Now create cumulative data going backwards from total
+        original_load_data = {}
+        cumulative_load = total_energy
+        for i, minute in enumerate(range(0, 1446, 5)):  # Go to 1445 for delta calc
+            original_load_data[minute] = cumulative_load
+            if i < len(pattern):
+                cumulative_load -= pattern[i]
 
         age = 1.0
 
@@ -1917,9 +2046,10 @@ def _test_component_fetch_load_data():
 
         # Create load data with 5-minute intervals following Predbat convention:
         # minute 0 = now (highest cumulative value), minute 1440 = 24h ago (lowest value)
+        # Need to extend slightly beyond 1440 for delta calculation at minute 1440
         load_data = {}
-        cumulative = 144.0  # Total energy over 24h (288 intervals * 0.5 kWh)
-        for minute in range(0, 1441, 5):  # 24 hours at 5-min intervals
+        cumulative = 144.5  # Total energy over 24h + 1 interval (289 intervals * 0.5 kWh)
+        for minute in range(0, 1446, 5):  # Go to 1445 to allow delta calc at 1440
             load_data[minute] = cumulative
             cumulative -= 0.5  # Decrease going backwards in time (0.5 kWh per 5-min step)
 
@@ -2200,3 +2330,280 @@ def _test_component_publish_entity():
     print("    ✓ Empty predictions handled correctly")
 
     print("  All _publish_entity tests passed!")
+
+
+def _test_car_subtraction_direct():
+    """Test car_subtraction method directly with all improved features.
+
+    Tests:
+    - Basic subtraction without gaps
+    - Gap interpolation (linear)
+    - Median smoothing to reduce noise
+    - Adaptive matching (searches ±2 intervals)
+    - No negative values in output
+    - Edge cases (empty data, no overlap, large gaps)
+    """
+    from load_ml_component import LoadMLComponent
+    from datetime import datetime, timezone
+    import numpy as np
+
+    # Create a minimal mock base for component initialization
+    class MockBase:
+        def __init__(self):
+            self.prefix = "predbat"
+            self.config_root = None
+            self.now_utc = datetime.now(timezone.utc)
+            self.midnight_utc = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+            self.minutes_now = (self.now_utc - self.midnight_utc).seconds // 60
+            self.local_tz = timezone.utc
+            self.args = {}
+            self.log_messages = []
+
+        def log(self, msg):
+            self.log_messages.append(msg)
+
+        def get_arg(self, key, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
+            return {
+                "load_today": ["sensor.load_today"],
+                "car_charging_energy": ["sensor.car_charging"],
+                "car_charging_hold": True,
+                "car_charging_threshold": 6.0,
+                "car_charging_energy_scale": 1.0,
+                "car_charging_rate": 7.5,
+            }.get(key, default)
+
+    print("  Testing car_subtraction method directly:")
+
+    mock_base = MockBase()
+    component = LoadMLComponent(mock_base, load_ml_enable=True)
+
+    # Test 1: Basic subtraction without gaps (perfect alignment)
+    print("    Test 1: Basic subtraction (no gaps)...", end=" ")
+    load_cumulative = {
+        0: 10.0,  # Now
+        5: 9.5,  # 5 min ago
+        10: 9.0,  # 10 min ago
+        15: 8.5,  # 15 min ago
+        20: 8.0,  # 20 min ago
+    }
+    car_cumulative = {
+        0: 2.0,  # Now
+        5: 1.7,  # 5 min ago (delta 0.3)
+        10: 1.4,  # 10 min ago (delta 0.3)
+        15: 1.1,  # 15 min ago (delta 0.3)
+        20: 0.8,  # 20 min ago (delta 0.3)
+    }
+
+    result = component.car_subtraction(load_cumulative, car_cumulative, step=5)
+
+    # Verify basic properties
+    assert result is not None, "Result should not be None"
+    assert len(result) > 0, "Result should not be empty"
+
+    # Verify no negative values
+    for minute, value in result.items():
+        assert value >= 0, f"Result at minute {minute} should be non-negative, got {value}"
+
+    # Verify cumulative values increase going towards minute 0
+    # Result is cumulative: minute 20 (oldest) should have lowest value, minute 0 (now) highest
+    if 0 in result and 20 in result:
+        assert result[0] > result[20], f"Cumulative should increase towards minute 0: result[0]={result[0]}, result[20]={result[20]}"
+
+    # The total accumulated energy should be less than or equal to original load
+    # Since we're subtracting car charging
+    if 0 in result:
+        assert result[0] <= load_cumulative[0], f"Result at minute 0 should not exceed original load: {result[0]} vs {load_cumulative[0]}"
+
+    print("PASS")
+
+    # Test 2: Gap interpolation
+    print("    Test 2: Gap interpolation...", end=" ")
+    load_cumulative = {
+        0: 10.0,
+        5: 9.5,
+        10: 9.0,
+        15: 8.5,
+        20: 8.0,
+        25: 7.5,
+        30: 7.0,
+    }
+    car_cumulative_with_gaps = {
+        0: 3.0,
+        5: 2.5,
+        # Missing 10, 15 (20-minute gap - should interpolate)
+        20: 1.5,
+        25: 1.0,
+        30: 0.5,
+    }
+
+    result = component.car_subtraction(load_cumulative, car_cumulative_with_gaps, step=5, interpolate_gaps=True, max_gap_minutes=60)
+
+    assert result is not None, "Result should not be None with gaps"
+    assert len(result) > 0, "Result should not be empty with gaps"
+
+    # Verify no negative values despite gaps
+    for minute, value in result.items():
+        assert value >= 0, f"Result at minute {minute} should be non-negative with gaps, got {value}"
+
+    # Gap interpolation should smooth the subtraction rather than creating spikes
+    # Verify result is reasonable (not NaN or infinity)
+    for minute, value in result.items():
+        assert not np.isnan(value), f"Result at minute {minute} should not be NaN"
+        assert not np.isinf(value), f"Result at minute {minute} should not be infinite"
+
+    print("PASS")
+
+    # Test 3: Large gap (exceeds max_gap_minutes)
+    print("    Test 3: Large gap handling...", end=" ")
+    car_cumulative_large_gap = {
+        0: 3.0,
+        5: 2.5,
+        # Missing 10-60 (55-minute gap - exceeds default 60 min, should NOT interpolate)
+        65: 1.0,
+        70: 0.5,
+    }
+
+    # max_gap_minutes=60 should NOT interpolate this 55-minute gap at minute boundaries
+    # Actually the gap from minute 5 to 65 is 60 minutes which is exactly at the limit
+    result = component.car_subtraction(load_cumulative, car_cumulative_large_gap, step=5, interpolate_gaps=True, max_gap_minutes=60)
+
+    assert result is not None, "Result should not be None with large gap"
+    # No assertion on specific behavior, just ensure it doesn't crash
+
+    print("PASS")
+
+    # Test 4: Smoothing reduces noise
+    print("    Test 4: Smoothing effectiveness...", end=" ")
+    load_cumulative = {i: 20.0 - i * 0.1 for i in range(0, 55, 5)}
+
+    # Create noisy car data with spikes
+    car_cumulative_noisy = {
+        0: 5.0,
+        5: 4.2,  # Delta 0.8
+        10: 3.9,  # Delta 0.3 (spike down)
+        15: 3.5,  # Delta 0.4
+        20: 3.1,  # Delta 0.4
+        25: 2.3,  # Delta 0.8 (spike up)
+        30: 1.9,  # Delta 0.4
+        35: 1.5,  # Delta 0.4
+        40: 1.1,  # Delta 0.4
+        45: 0.7,  # Delta 0.4
+        50: 0.3,  # Delta 0.4
+    }
+
+    # Smoothing window of 3-5 should reduce impact of spikes
+    result = component.car_subtraction(load_cumulative, car_cumulative_noisy, step=5, smoothing_window=3)
+
+    assert result is not None, "Smoothing result should not be None"
+    # Verify smoothing produces reasonable output (no extreme values)
+    for minute, value in result.items():
+        assert value >= 0, f"Smoothed result at minute {minute} should be non-negative"
+        assert value < 25.0, f"Smoothed result at minute {minute} should be reasonable, got {value}"
+
+    print("PASS")
+
+    # Test 5: Adaptive matching (timing misalignment)
+    print("    Test 5: Adaptive matching...", end=" ")
+    load_cumulative = {
+        0: 10.0,
+        5: 9.0,  # Delta 1.0
+        10: 8.0,  # Delta 1.0
+        15: 7.0,  # Delta 1.0
+        20: 6.0,  # Delta 1.0
+    }
+
+    # Car data offset by 2 intervals (10 minutes) - adaptive search should find it
+    car_cumulative_offset = {
+        10: 3.0,  # Aligns with load at minute 0 (2 intervals ahead)
+        15: 2.5,  # Delta 0.5
+        20: 2.0,  # Delta 0.5
+        25: 1.5,  # Delta 0.5
+        30: 1.0,  # Delta 0.5
+    }
+
+    # With search_window=2, should find car delta within ±2 intervals (±10 minutes)
+    result = component.car_subtraction(load_cumulative, car_cumulative_offset, step=5)
+
+    assert result is not None, "Adaptive matching result should not be None"
+    assert len(result) > 0, "Adaptive matching should produce results"
+
+    # Verify results are reasonable despite offset
+    for minute, value in result.items():
+        assert value >= 0, f"Adaptive result at minute {minute} should be non-negative"
+
+    print("PASS")
+
+    # Test 6: Edge case - empty car data
+    print("    Test 6: Empty car data...", end=" ")
+    result = component.car_subtraction(load_cumulative, {}, step=5)
+
+    # Should return original load data when car is empty
+    assert result == load_cumulative, "Should return original load when car is empty"
+
+    print("PASS")
+
+    # Test 7: Edge case - empty load data
+    print("    Test 7: Empty load data...", end=" ")
+    result = component.car_subtraction({}, car_cumulative, step=5)
+
+    # Should return empty dict when load is empty
+    assert result == {}, "Should return empty dict when load is empty"
+
+    print("PASS")
+
+    # Test 8: Car exceeds load (should not go negative)
+    print("    Test 8: Car exceeds load protection...", end=" ")
+    load_cumulative_small = {
+        0: 2.0,
+        5: 1.5,  # Delta 0.5
+        10: 1.0,  # Delta 0.5
+        15: 0.5,  # Delta 0.5
+        20: 0.0,  # Delta 0.5
+    }
+    car_cumulative_large = {
+        0: 5.0,
+        5: 4.0,  # Delta 1.0 (exceeds load delta 0.5)
+        10: 3.0,  # Delta 1.0
+        15: 2.0,  # Delta 1.0
+        20: 1.0,  # Delta 1.0
+    }
+
+    result = component.car_subtraction(load_cumulative_small, car_cumulative_large, step=5)
+
+    assert result is not None, "Result should not be None when car exceeds load"
+
+    # Critical: verify NO negative values
+    for minute, value in result.items():
+        assert value >= 0, f"Result at minute {minute} MUST be non-negative even when car exceeds load, got {value}"
+
+    print("PASS")
+
+    # Test 9: Different step sizes
+    print("    Test 9: Different step size (30 min)...", end=" ")
+    load_cumulative_30min = {
+        0: 20.0,
+        30: 17.0,
+        60: 14.0,
+        90: 11.0,
+        120: 8.0,
+    }
+    car_cumulative_30min = {
+        0: 6.0,
+        30: 5.0,
+        60: 4.0,
+        90: 3.0,
+        120: 2.0,
+    }
+
+    result = component.car_subtraction(load_cumulative_30min, car_cumulative_30min, step=30)
+
+    assert result is not None, "Result should work with 30-min step"
+    assert len(result) > 0, "Result should not be empty with 30-min step"
+
+    # Verify subtraction works correctly with 30-min steps
+    for minute, value in result.items():
+        assert value >= 0, f"Result at minute {minute} should be non-negative with 30-min step"
+
+    print("PASS")
+
+    print("  All car_subtraction direct tests passed!")
