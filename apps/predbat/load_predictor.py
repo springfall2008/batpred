@@ -469,7 +469,7 @@ class LoadPredictor:
             self.log("Warn: Insufficient data for ML training, need {} minutes, have {}".format(min_required, end_minute))
             return None, None, None, None, None
 
-        self.log("ML Predictor: Creating dataset with {} hours of training samples and {} hours of validation samples".format((end_minute * STEP_MINUTES) // 60, validation_holdout_hours))
+        self.log("ML Predictor: Creating dataset with {} hours of training samples and {} hours of validation samples".format(end_minute // 60, validation_holdout_hours))
 
         # Validation uses most recent data (minute 0 to validation_holdout)
         # Training uses ALL data (minute 0 to end_minute), including validation period
