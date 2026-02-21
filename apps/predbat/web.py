@@ -720,7 +720,7 @@ class WebInterface(ComponentBase):
             if not history:
                 history = [[]]
                 if attribute:
-                    history[0].append({"attributes": {attribute: current_value}, "last_updated": (self.now_utc - timedelta(days=days)).strftime(TIME_FORMAT_HA)})
+                    history[0].append({"attributes": {attribute: current_value}, "last_updated": (self.now_now_utc - timedelta(days=days)).strftime(TIME_FORMAT_HA)})
                 else:
                     history[0].append({"state": current_value, "last_updated": (self.now_utc - timedelta(days=days)).strftime(TIME_FORMAT_HA)})
             if attribute:
@@ -728,6 +728,28 @@ class WebInterface(ComponentBase):
             else:
                 history[0].append({"state": current_value, "last_updated": self.now_utc.strftime(TIME_FORMAT_HA)})
 
+        return history
+
+    def get_history_with_now_attrs(self, entity_id, days):
+        """
+        Get history for an entity and append a record at now_utc containing all current
+        attributes. This keeps chart series up-to-date when entities publish infrequently.
+
+        Args:
+            entity_id: HA entity ID
+            days: Number of days of history to fetch
+
+        Returns:
+            History list [[records...]] with current attributes appended at self.now_utc
+        """
+        history = copy.deepcopy(self.get_history_wrapper(entity_id, days, required=False, tracked=False))
+        current_state = self.get_state_wrapper(entity_id, raw=True)
+        if current_state and isinstance(current_state, dict) and "attributes" in current_state:
+            curr_record = {"state": current_state.get("state"), "attributes": current_state["attributes"], "last_updated": self.now_utc.strftime(TIME_FORMAT_HA)}
+            if history and isinstance(history, list) and len(history) > 0:
+                history[0].append(curr_record)
+            else:
+                history = [[curr_record]]
         return history
 
     def get_entity_attributes(self, entity_id):
@@ -2486,14 +2508,11 @@ chart.render();
             ]
             text += self.render_chart(series_data, "kW", "Solar Forecast", now_str)
         elif chart == "LoadML":
+            load_today_history = self.get_history_with_now_attrs("sensor." + self.prefix + "_load_ml_stats", 7)
             # Get historical load data for last 24 hours
-            load_today = prune_today(history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_stats", 1, required=False), attributes=True, state_key="load_today"), self.now_utc, self.midnight_utc, prune=False)
-            load_today_h1 = prune_today(
-                history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_stats", 1, required=False), attributes=True, state_key="load_today_h1"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60 * 1
-            )
-            load_today_h8 = prune_today(
-                history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_stats", 1, required=False), attributes=True, state_key="load_today_h8"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60 * 8
-            )
+            load_today = prune_today(history_attribute(load_today_history, attributes=True, state_key="load_today"), self.now_utc, self.midnight_utc, prune=False)
+            load_today_h1 = prune_today(history_attribute(load_today_history, attributes=True, state_key="load_today_h1"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60 * 1)
+            load_today_h8 = prune_today(history_attribute(load_today_history, attributes=True, state_key="load_today_h8"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60 * 8)
 
             # Get ML forecast from load_forecast_ml entity results
             load_ml_forecast = self.get_entity_results("sensor." + self.prefix + "_load_ml_forecast")
@@ -2514,13 +2533,11 @@ chart.render();
             load_ml_forecast_energy = self.get_entity_results("sensor." + self.prefix + "_load_ml_forecast")
             load_ml_forecast_power = {}
 
-            power_today = prune_today(history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_stats", 7, required=False), attributes=True, state_key="power_today"), self.now_utc, self.midnight_utc, prune=False)
-            power_today_h1 = prune_today(
-                history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_stats", 7, required=False), attributes=True, state_key="power_today_h1"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60 * 1
-            )
-            power_today_h8 = prune_today(
-                history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_stats", 7, required=False), attributes=True, state_key="power_today_h8"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60 * 8
-            )
+            # Fetch stats history once and append current attributes at now_utc
+            power_today_history = self.get_history_with_now_attrs("sensor." + self.prefix + "_load_ml_stats", 7)
+            power_today = prune_today(history_attribute(power_today_history, attributes=True, state_key="power_today"), self.now_utc, self.midnight_utc, prune=False)
+            power_today_h1 = prune_today(history_attribute(power_today_history, attributes=True, state_key="power_today_h1"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60 * 1)
+            power_today_h8 = prune_today(history_attribute(power_today_history, attributes=True, state_key="power_today_h8"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60 * 8)
 
             # Sort timestamps and calculate deltas to get energy per interval
             if load_ml_forecast_energy:
