@@ -45,6 +45,7 @@ def test_load_ml(my_predbat=None):
         ("dataset_with_pv", _test_dataset_with_pv, "Dataset creation with PV features"),
         ("dataset_with_temp", _test_dataset_with_temp, "Dataset creation with temperature features"),
         ("normalization", _test_normalization, "Z-score normalization correctness"),
+        ("ema_normalization", _test_ema_normalization, "EMA normalization drift tracking during fine-tuning"),
         ("adam_optimizer", _test_adam_optimizer, "Adam optimizer step"),
         ("training_convergence", _test_training_convergence, "Training convergence on synthetic data"),
         ("training_with_pv", _test_training_with_pv, "Training with PV input features"),
@@ -530,6 +531,103 @@ def _test_normalization():
     assert np.allclose(y, y_denorm, atol=1e-5), "Denormalization should recover original"
 
 
+def _test_ema_normalization():
+    """Test EMA normalization drift tracking during fine-tuning.
+
+    Verifies:
+    - EMA blends feature stats proportional to alpha
+    - alpha=0.0 freezes normalization
+    - alpha=1.0 fully replaces normalization
+    - EMA-updated params persist through save/load
+    - train() with is_initial=False applies EMA when alpha>0
+    """
+    np.random.seed(42)
+    now_utc = datetime.now(timezone.utc)
+    midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # --- Part 1: Direct EMA blending math ---
+    # Use constant arrays so we know the exact new_mean that _normalize_features will compute
+    X_initial = np.ones((200, TOTAL_FEATURES), dtype=np.float32)  # mean=1.0 per feature
+    X_shifted = np.ones((200, TOTAL_FEATURES), dtype=np.float32) * 10.0  # mean=10.0 per feature
+
+    predictor = LoadPredictor()
+    predictor._normalize_features(X_initial, fit=True)
+    initial_mean = predictor.feature_mean.copy()
+
+    alpha = 0.1
+    predictor._normalize_features(X_shifted, fit=False, ema_alpha=alpha)
+
+    # EMA formula: new = alpha * new_data_mean + (1-alpha) * old_mean
+    expected_load_mean = alpha * 10.0 + (1 - alpha) * initial_mean[0]  # load group, idx 0
+    assert np.allclose(predictor.feature_mean[0], expected_load_mean, atol=1e-4), "EMA mean should blend: alpha*new_data_mean + (1-alpha)*old_mean, " "got {:.4f} expected {:.4f}".format(predictor.feature_mean[0], expected_load_mean)
+    assert predictor.feature_mean[0] > initial_mean[0], "Feature mean should move toward higher-value distribution"
+
+    # --- Part 2: alpha=0.0 freezes normalization ---
+    predictor2 = LoadPredictor()
+    predictor2._normalize_features(X_initial, fit=True)
+    frozen_mean = predictor2.feature_mean.copy()
+    frozen_std = predictor2.feature_std.copy()
+
+    predictor2._normalize_features(X_shifted, fit=False, ema_alpha=0.0)
+
+    assert np.allclose(predictor2.feature_mean, frozen_mean), "alpha=0.0 should freeze feature_mean (no EMA update)"
+    assert np.allclose(predictor2.feature_std, frozen_std), "alpha=0.0 should freeze feature_std (no EMA update)"
+
+    # --- Part 3: alpha=1.0 fully replaces normalization ---
+    predictor3 = LoadPredictor()
+    predictor3._normalize_features(X_initial, fit=True)
+
+    predictor3._normalize_features(X_shifted, fit=False, ema_alpha=1.0)
+
+    assert np.allclose(predictor3.feature_mean, 10.0), "alpha=1.0 should fully replace feature_mean with new data mean"
+
+    # --- Part 4: EMA-updated params persist through save/load ---
+    predictor4 = LoadPredictor()
+    predictor4._normalize_features(X_initial, fit=True)
+    predictor4._normalize_targets(np.ones((200, 1), dtype=np.float32) * 0.5, fit=True)
+    predictor4._initialize_weights()
+    predictor4.training_timestamp = datetime.now(timezone.utc)
+    predictor4.validation_mae = 0.1
+
+    predictor4._normalize_features(X_shifted, fit=False, ema_alpha=alpha)
+    updated_mean = predictor4.feature_mean.copy()
+
+    with tempfile.NamedTemporaryFile(suffix=".npz", delete=False) as f:
+        temp_path = f.name
+    try:
+        predictor4.save(temp_path)
+        predictor4b = LoadPredictor()
+        assert predictor4b.load(temp_path), "Save/load should succeed for EMA-updated model"
+        assert np.allclose(predictor4b.feature_mean, updated_mean), "EMA-updated normalization params should survive save/load"
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+    # --- Part 5: Integration - train() applies EMA, predictions remain valid ---
+    predictor5 = LoadPredictor(learning_rate=0.01)
+    load_data = _create_synthetic_load_data(n_days=7, now_utc=now_utc)
+    predictor5.train(load_data, now_utc, is_initial=True, epochs=5, time_decay_days=7)
+    mean_after_initial = predictor5.feature_mean.copy()
+
+    # Fine-tune with alpha=0.0 on same data - feature_mean must not change
+    predictor5.train(load_data, now_utc, is_initial=False, epochs=3, time_decay_days=7, norm_ema_alpha=0.0)
+    assert np.allclose(predictor5.feature_mean, mean_after_initial), "norm_ema_alpha=0.0 should not modify feature_mean during fine-tuning"
+
+    # Fine-tune with alpha=0.1 on 5x-scaled data - feature_mean must shift toward higher values
+    load_data_shifted = {k: v * 5.0 for k, v in load_data.items()}
+    predictor5.train(load_data_shifted, now_utc, is_initial=False, epochs=3, time_decay_days=7, norm_ema_alpha=0.1)
+    assert not np.allclose(predictor5.feature_mean, mean_after_initial), "norm_ema_alpha=0.1 with shifted data should update feature_mean"
+    # Mean should have increased (load features shifted to higher values)
+    assert predictor5.feature_mean[0] > mean_after_initial[0], "Feature mean should increase after fine-tuning on higher-load data"
+
+    # Predictions must still function correctly after EMA normalization update
+    predictions = predictor5.predict(load_data, now_utc, midnight_utc)
+    assert isinstance(predictions, dict), "Predictions should return a dict after EMA normalization update"
+    assert len(predictions) > 0, "Should produce non-empty predictions after EMA normalization update"
+    for minute, val in predictions.items():
+        assert val >= 0, "Prediction at minute {} should be non-negative".format(minute)
+
+
 def _test_adam_optimizer():
     """Test Adam optimizer update step"""
     predictor = LoadPredictor(learning_rate=0.01)
@@ -870,6 +968,9 @@ def _test_real_data_training():
 
     assert success, "Training on real data should succeed"
     assert predictor.model_initialized, "Model should be initialized after training"
+
+    success = predictor.train(load_data, now_utc, pv_minutes=pv_data, temp_minutes=temp_data, import_rates=import_rates_data, export_rates=export_rates_data, is_initial=False, epochs=50, time_decay_days=7, validation_holdout_hours=48)
+    success = predictor.train(load_data, now_utc, pv_minutes=pv_data, temp_minutes=temp_data, import_rates=import_rates_data, export_rates=export_rates_data, is_initial=False, epochs=50, time_decay_days=7, validation_holdout_hours=48)
 
     # Make predictions
     print(f"  Generating predictions with PV + temperature{rates_info} forecasts...")

@@ -613,6 +613,26 @@ class LoadPredictor:
 
         return X_train, y_train, train_weights, X_val, y_val
 
+    def _get_min_std_array(self, n_features):
+        """
+        Return the per-feature minimum std array used to prevent extreme normalization.
+
+        Args:
+            n_features: Total number of features
+
+        Returns:
+            numpy array of minimum std values, shape (n_features,)
+        """
+        min_std = np.ones(n_features) * 1e-8  # Default fallback
+        if n_features == TOTAL_FEATURES:
+            min_std[0:LOOKBACK_STEPS] = 0.01  # Load energy (kWh)
+            min_std[LOOKBACK_STEPS : 2 * LOOKBACK_STEPS] = 0.01  # PV energy (kWh)
+            min_std[2 * LOOKBACK_STEPS : 3 * LOOKBACK_STEPS] = 0.5  # Temperature (°C)
+            min_std[3 * LOOKBACK_STEPS : 4 * LOOKBACK_STEPS] = 1.0  # Import rates (p/kWh)
+            min_std[4 * LOOKBACK_STEPS : 5 * LOOKBACK_STEPS] = 1.0  # Export rates (p/kWh)
+            min_std[5 * LOOKBACK_STEPS :] = 0.01  # Time features (cyclical)
+        return min_std
+
     def _log_normalization_stats(self, label=""):
         """
         Log per-feature-group normalization statistics for drift tracking.
@@ -661,32 +681,8 @@ class LoadPredictor:
             self.feature_mean = np.mean(X, axis=0)
             self.feature_std = np.std(X, axis=0)
 
-            # Apply feature-type-specific minimum std thresholds to prevent extreme normalization
-            # Feature layout: [load (288), pv (288), temp (288), import_rates (288), export_rates (288), time (4)]
-            n_features = len(self.feature_std)
-            min_std = np.ones(n_features) * 1e-8  # Default fallback
-
-            if n_features == TOTAL_FEATURES:
-                # Load energy features (0-287): min 0.01 kWh typical single-period variation
-                min_std[0:LOOKBACK_STEPS] = 0.01
-
-                # PV energy features (288-575): min 0.01 kWh
-                min_std[LOOKBACK_STEPS : 2 * LOOKBACK_STEPS] = 0.01
-
-                # Temperature features (576-863): min 0.5°C (temps vary by several degrees daily)
-                min_std[2 * LOOKBACK_STEPS : 3 * LOOKBACK_STEPS] = 0.5
-
-                # Import rate features (864-1151): min 1.0 p/kWh (rates vary 0-100p)
-                min_std[3 * LOOKBACK_STEPS : 4 * LOOKBACK_STEPS] = 1.0
-
-                # Export rate features (1152-1439): min 1.0 p/kWh (rates vary 0-115p)
-                min_std[4 * LOOKBACK_STEPS : 5 * LOOKBACK_STEPS] = 1.0
-
-                # Time features (1440-1443): min 0.01 (cyclical features have inherent variation)
-                min_std[5 * LOOKBACK_STEPS :] = 0.01
-
-            # Clamp std to minimums
-            self.feature_std = np.maximum(self.feature_std, min_std)
+            # Clamp std to per-feature minimums to prevent extreme normalization
+            self.feature_std = np.maximum(self.feature_std, self._get_min_std_array(len(self.feature_std)))
             self._log_normalization_stats(label="fit")
 
         elif ema_alpha > 0 and self.feature_mean is not None and self.feature_std is not None:
@@ -695,16 +691,7 @@ class LoadPredictor:
             new_std = np.std(X, axis=0)
 
             # Apply same min-std clamping to new stats before blending
-            n_features = len(new_std)
-            min_std = np.ones(n_features) * 1e-8
-            if n_features == TOTAL_FEATURES:
-                min_std[0:LOOKBACK_STEPS] = 0.01
-                min_std[LOOKBACK_STEPS : 2 * LOOKBACK_STEPS] = 0.01
-                min_std[2 * LOOKBACK_STEPS : 3 * LOOKBACK_STEPS] = 0.5
-                min_std[3 * LOOKBACK_STEPS : 4 * LOOKBACK_STEPS] = 1.0
-                min_std[4 * LOOKBACK_STEPS : 5 * LOOKBACK_STEPS] = 1.0
-                min_std[5 * LOOKBACK_STEPS :] = 0.01
-            new_std = np.maximum(new_std, min_std)
+            new_std = np.maximum(new_std, self._get_min_std_array(len(new_std)))
 
             # Blend: small alpha = slow drift tracking, large alpha = fast adaptation
             self.feature_mean = ema_alpha * new_mean + (1 - ema_alpha) * self.feature_mean
@@ -1218,26 +1205,12 @@ class LoadPredictor:
             # Upgrade old models: ensure minimum std thresholds to prevent extreme normalization
             if self.feature_std is not None:
                 n_features = len(self.feature_std)
-                upgraded = False
+                old_std = self.feature_std.copy()
+                self.feature_std = np.maximum(self.feature_std, self._get_min_std_array(n_features))
 
-                if n_features == TOTAL_FEATURES:
-                    # Apply same minimum thresholds as in _normalize_features
-                    min_std = np.ones(n_features) * 1e-8
-                    min_std[0:LOOKBACK_STEPS] = 0.01  # Load
-                    min_std[LOOKBACK_STEPS : 2 * LOOKBACK_STEPS] = 0.01  # PV
-                    min_std[2 * LOOKBACK_STEPS : 3 * LOOKBACK_STEPS] = 0.5  # Temperature
-                    min_std[3 * LOOKBACK_STEPS : 4 * LOOKBACK_STEPS] = 1.0  # Import rates
-                    min_std[4 * LOOKBACK_STEPS : 5 * LOOKBACK_STEPS] = 1.0  # Export rates
-                    min_std[5 * LOOKBACK_STEPS :] = 0.01  # Time features
-
-                    # Check if upgrade needed
-                    old_std = self.feature_std.copy()
-                    self.feature_std = np.maximum(self.feature_std, min_std)
-
-                    if not np.array_equal(old_std, self.feature_std):
-                        upgraded_count = np.sum(old_std != self.feature_std)
-                        self.log("ML Predictor: Upgraded {} feature std values to prevent extreme normalization".format(upgraded_count))
-                        upgraded = True
+                if not np.array_equal(old_std, self.feature_std):
+                    upgraded_count = np.sum(old_std != self.feature_std)
+                    self.log("ML Predictor: Upgraded {} feature std values to prevent extreme normalization".format(upgraded_count))
 
             # Load training metadata
             if metadata.get("training_timestamp"):
