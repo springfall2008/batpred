@@ -27,6 +27,7 @@ from utils import get_now_from_cumulative, dp2, dp4, minute_data
 from load_predictor import LoadPredictor, MODEL_VERSION
 from const import TIME_FORMAT, PREDICT_STEP
 import traceback
+import numpy as np
 
 # Training intervals
 RETRAIN_INTERVAL_SECONDS = 2 * 60 * 60  # 2 hours between training cycles
@@ -77,6 +78,7 @@ class LoadMLComponent(ComponentBase):
         self.ml_max_model_age_hours = 48
         self.ml_weight_decay = 0.01
         self.ml_max_days_history = load_ml_max_days_history
+        self.ml_validation_holdout_hours = 24
 
         # Data state
         self.load_data = None
@@ -140,6 +142,128 @@ class LoadMLComponent(ComponentBase):
                 self.log("ML Component: Failed to load model, reinitializing predictor")
                 self.predictor = LoadPredictor(log_func=self.log, learning_rate=self.ml_learning_rate, max_load_kw=self.ml_max_load_kw, weight_decay=self.ml_weight_decay)
 
+    def get_from_incrementing(self, data, index, step, backwards=True):
+        """
+        Get a single value from an incrementing series e.g. kWh today -> kWh this minute
+        """
+        while index < 0:
+            index += 24 * 60
+        if backwards:
+            return max(data.get(index, 0) - data.get(index + step, 0), 0)
+        else:
+            return max(data.get(index + step, 0) - data.get(index, 0), 0)
+
+    def car_subtraction(self, load_cumulative, car_cumulative, step=PREDICT_STEP, interpolate_gaps=True, max_gap_minutes=60, smoothing_window=3):
+        """
+        Improved car charging subtraction that handles timing misalignment and gaps.
+
+        Args:
+            load_cumulative: Dict of {minute: cumulative_kwh} for load (backwards format)
+            car_cumulative: Dict of {minute: cumulative_kwh} for car charging (backwards format)
+            step: Step size in minutes (default 5)
+            interpolate_gaps: Whether to interpolate missing car data
+            max_gap_minutes: Maximum gap to interpolate (minutes)
+            smoothing_window: Number of steps for smoothing car data
+
+        Returns:
+            Dict of {minute: cumulative_kwh} with improved car subtraction
+        """
+        if not car_cumulative:
+            return load_cumulative
+        if not load_cumulative:
+            return load_cumulative
+
+        # Step 1: Fill gaps in car charging data with interpolation
+        car_filled = dict(car_cumulative)
+
+        if interpolate_gaps:
+            car_minutes = sorted(car_cumulative.keys())
+            for i in range(len(car_minutes) - 1):
+                current_minute = car_minutes[i]
+                next_minute = car_minutes[i + 1]
+                gap = next_minute - current_minute
+
+                if gap > step and gap <= max_gap_minutes:
+                    # Interpolate linearly between the two points
+                    current_value = car_cumulative[current_minute]
+                    next_value = car_cumulative[next_minute]
+
+                    for m in range(current_minute + step, next_minute, step):
+                        # Linear interpolation
+                        alpha = (m - current_minute) / (next_minute - current_minute)
+                        car_filled[m] = current_value + alpha * (next_value - current_value)
+
+        # Step 2: Calculate per-step deltas with smoothing
+        car_deltas = {}
+        load_deltas = {}
+
+        max_minute = max(load_cumulative.keys())
+        max_minute = (max_minute // step) * step  # Align to step intervals
+
+        for minute in range(0, max_minute + step, step):
+            next_minute = minute + step
+
+            # Calculate load delta
+            load_delta = self.get_from_incrementing(load_cumulative, minute, step, backwards=True)
+            load_deltas[minute] = max(0, load_delta)
+
+            # Calculate car delta
+            car_delta = self.get_from_incrementing(car_filled, minute, step, backwards=True)
+            car_deltas[minute] = max(0, car_delta)
+
+        # Step 3: Apply smoothing to car deltas to handle timing misalignment
+        car_deltas_smoothed = {}
+        car_minutes_sorted = sorted(car_deltas.keys())
+
+        for i, minute in enumerate(car_minutes_sorted):
+            # Collect values within smoothing window
+            values = []
+            for offset in range(-smoothing_window // 2, smoothing_window // 2 + 1):
+                idx = i + offset
+                if 0 <= idx < len(car_minutes_sorted):
+                    other_minute = car_minutes_sorted[idx]
+                    values.append(car_deltas[other_minute])
+
+            # Use median for robust smoothing (less affected by outliers)
+            if values:
+                car_deltas_smoothed[minute] = np.median(values)
+            else:
+                car_deltas_smoothed[minute] = car_deltas[minute]
+
+        # Step 4: Adaptive subtraction - look at nearby intervals for better matching
+        result = {}
+        total_energy = 0.0
+        search_window = 2  # Look ±2 intervals for best match
+
+        for minute in range(max_minute, -step, -step):
+            load_delta = load_deltas.get(minute, 0.0)
+
+            # Find best matching car delta within search window
+            best_car_delta = 0.0
+
+            # Check current and nearby minutes
+            for offset in range(-search_window * step, (search_window + 1) * step, step):
+                check_minute = minute + offset
+                if check_minute in car_deltas_smoothed:
+                    car_delta_candidate = car_deltas_smoothed[check_minute]
+
+                    # Prefer car delta that's close to but not exceeding load delta
+                    if car_delta_candidate <= load_delta:
+                        # Good match - car charging doesn't exceed load
+                        if car_delta_candidate > best_car_delta:
+                            best_car_delta = car_delta_candidate
+                    elif best_car_delta == 0:
+                        # Only use exceeding value if we have no better option
+                        # Take minimum to avoid negative result
+                        best_car_delta = min(car_delta_candidate, load_delta * 0.95)
+
+            # Subtract car charging from load
+            adjusted_delta = max(0.0, load_delta - best_car_delta)
+
+            total_energy += adjusted_delta
+            result[minute] = total_energy
+        return result
+
     async def _fetch_load_data(self):
         """
         Fetch and process load data from configured sensors.
@@ -149,6 +273,7 @@ class LoadMLComponent(ComponentBase):
             or (None, 0, 0, None, None, None, None) on failure
         """
         if not self.ml_load_sensor:
+            self.log("Warn: ML Component: No load sensor configured, cannot fetch load data")
             return None, 0, 0, None, None, None, None
 
         try:
@@ -166,7 +291,6 @@ class LoadMLComponent(ComponentBase):
 
             if self.get_arg("load_power", default=None, indirect=False) and self.get_arg("load_power_fill_enable", True):
                 load_power_data, load_minutes_age = self.base.minute_data_load(self.now_utc, "load_power", days_to_fetch, required_unit="W", load_scaling=1.0, interpolate=True)
-                days_to_fetch = min(days_to_fetch, load_minutes_age)
                 load_minutes = self.base.fill_load_from_power(load_minutes, load_power_data)
 
             car_charging_energy = {}
@@ -177,25 +301,28 @@ class LoadMLComponent(ComponentBase):
             max_minute = (max_minute // 5) * 5  # Align to 5-minute intervals
             load_minutes_new = {}
 
-            # Subtract configured sensors (e.g., car charging)
-            total_load_energy = 0
-            STEP = PREDICT_STEP
-            for minute in range(max_minute, -STEP, -STEP):
-                car_delta = 0.0
-                if self.car_charging_hold and car_charging_energy:
-                    car_delta = abs(car_charging_energy.get(minute, 0.0) - car_charging_energy.get(minute - STEP, car_charging_energy.get(minute, 0.0)))
-                elif self.car_charging_hold:
-                    load_now = abs(load_minutes.get(minute, 0.0) - load_minutes.get(minute - STEP, load_minutes.get(minute, 0.0)))
-                    if load_now >= self.car_charging_threshold * STEP:
-                        car_delta = self.car_charging_rate * STEP
+            if self.car_charging_hold and car_charging_energy:
+                # Use improved car subtraction method that handles timing misalignment and gaps
+                self.log("ML Component: Applying improved car charging subtraction with hold and interpolation")
+                load_minutes_new = self.car_subtraction(load_minutes, car_charging_energy, step=PREDICT_STEP, interpolate_gaps=True, max_gap_minutes=60, smoothing_window=3)
+                self.log("ML Component: Car charging subtraction applied, {} data points after subtraction".format(len(load_minutes_new)))
+            else:
+                # Filter car charging based on threshold if enabled
+                total_load_energy = 0
+                for minute in range(max_minute, -PREDICT_STEP, -PREDICT_STEP):
+                    car_delta = 0.0
+                    if self.car_charging_hold:
+                        load_now = self.get_from_incrementing(load_minutes, minute, PREDICT_STEP, backwards=True)
+                        if load_now >= self.car_charging_threshold * PREDICT_STEP:
+                            car_delta = self.car_charging_rate * PREDICT_STEP
 
-                # Work out load delta and subtract car delta
-                load_delta = abs(load_minutes.get(minute, 0.0) - load_minutes.get(minute - STEP, load_minutes.get(minute, 0.0)))
-                load_delta = max(0.0, load_delta - car_delta)
+                    # Work out load delta and subtract car delta
+                    load_delta = self.get_from_incrementing(load_minutes, minute, PREDICT_STEP, backwards=True)
+                    load_delta = max(0.0, load_delta - car_delta)
 
-                # Store at 5-minute intervals (ML only uses PREDICT_STEP data)
-                load_minutes_new[minute] = total_load_energy + load_delta
-                total_load_energy += load_delta
+                    # Store at 5-minute intervals (ML only uses PREDICT_STEP data)
+                    load_minutes_new[minute] = dp4(total_load_energy + load_delta)
+                    total_load_energy += load_delta
 
             # Get current cumulative load value (excludes car)
             load_minutes_now = get_now_from_cumulative(load_minutes_new, self.minutes_now, backwards=True)
@@ -325,16 +452,18 @@ class LoadMLComponent(ComponentBase):
 
                     json.dump(
                         {
-                            "load_minutes": load_minutes_new,
+                            "now_utc": self.now_utc.isoformat(),
+                            "midnight_utc": self.midnight_utc.isoformat(),
+                            "minutes_now": self.minutes_now,
                             "age_days": days_to_fetch,
                             "load_minutes_now": load_minutes_now,
+                            "load_minutes": load_minutes_new,
+                            "original_load_minutes": load_minutes,
+                            "car_charging_energy": car_charging_energy,
                             "pv_data": pv_data,
                             "temperature_data": temperature_data,
                             "import_rates": import_rates_data,
                             "export_rates": export_rates_data,
-                            "now_utc": self.now_utc.isoformat(),
-                            "midnight_utc": self.midnight_utc.isoformat(),
-                            "minutes_now": self.minutes_now,
                         },
                         f,
                         indent=2,
@@ -437,8 +566,12 @@ class LoadMLComponent(ComponentBase):
                     self.export_rates_data = export_rates_data
                     self.last_data_fetch = self.now_utc
                     self.data_ready = True
+                    if age_days > 3:
+                        self.ml_validation_holdout_hours = 48
+                    else:
+                        self.ml_validation_holdout_hours = 24
                 else:
-                    self.log("Warn: ML Component: Failed to fetch load data")
+                    self.log("Warn: ML Component: Failed to fetch load data, no data was returned.")
 
         # Check if we have data
         if not self.data_ready:
@@ -504,6 +637,7 @@ class LoadMLComponent(ComponentBase):
                     is_initial=is_initial,
                     epochs=epochs,
                     time_decay_days=min(self.ml_time_decay_days, self.load_data_age_days),
+                    validation_holdout_hours=self.ml_validation_holdout_hours,
                 )
 
                 if val_mae is not None:

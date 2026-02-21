@@ -9,6 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 # fmt: on
 
+from utils import dp4
 import numpy as np
 from datetime import datetime, timezone, timedelta
 import tempfile
@@ -54,10 +55,10 @@ def test_load_ml(my_predbat=None):
         ("prediction", _test_prediction, "End-to-end prediction"),
         ("prediction_with_pv", _test_prediction_with_pv, "Prediction with PV forecast data"),
         ("prediction_with_temp", _test_prediction_with_temp, "Prediction with temperature forecast data"),
-        # ("real_data_training", _test_real_data_training, "Train on real load_minutes_debug.json data with chart"),
-        # ("pretrained_model_prediction", _test_pretrained_model_prediction, "Load pre-trained model and generate predictions with chart"),
         ("component_fetch_load_data", _test_component_fetch_load_data, "LoadMLComponent _fetch_load_data method"),
         ("component_publish_entity", _test_component_publish_entity, "LoadMLComponent _publish_entity method"),
+        # ("real_data_training", _test_real_data_training, "Train on real data with chart"),
+        # ("pretrained_model_prediction", _test_pretrained_model_prediction, "Load pre-trained model and generate predictions with chart"),
     ]
 
     failed_tests = []
@@ -785,13 +786,13 @@ def _test_prediction_with_temp():
 
 def _test_real_data_training():
     """
-    Test training on real load_minutes_debug.json data and generate comparison chart
+    Test training on real input_train_data.json data and generate comparison chart
     """
     import json
     import os
 
     # Try to load the input_train_data.json which has real PV and temperature
-    input_train_paths = ["../coverage/input_train_data.json", "coverage/input_train_data.json", "input_train_data.json"]
+    input_train_paths = ["input_train_data.json"]
 
     load_data = None
     pv_data = None
@@ -803,25 +804,36 @@ def _test_real_data_training():
         if os.path.exists(json_path):
             with open(json_path, "r") as f:
                 train_data = json.load(f)
-            # Format: [load_minutes_new, age_days, load_minutes_now, pv_data, temperature_data, import_rates, export_rates]
-            if len(train_data) >= 5:
-                # Convert string keys to integers
-                load_data = {int(k): float(v) for k, v in train_data[0].items()}
-                pv_data = {int(k): float(v) for k, v in train_data[3].items()} if train_data[3] else {}
-                temp_data = {int(k): float(v) for k, v in train_data[4].items()} if train_data[4] else {}
-                # Load import/export rates if available (elements 5 and 6)
-                if len(train_data) >= 7:
-                    import_rates_data = {int(k): float(v) for k, v in train_data[5].items()} if train_data[5] else {}
-                    export_rates_data = {int(k): float(v) for k, v in train_data[6].items()} if train_data[6] else {}
-                print(f"  Loaded training data from {json_path}")
-                print(f"    Load: {len(load_data)} datapoints")
-                print(f"    PV: {len(pv_data)} datapoints")
-                print(f"    Temperature: {len(temp_data)} datapoints")
-                if import_rates_data is not None:
-                    print(f"    Import rates: {len(import_rates_data)} datapoints")
-                if export_rates_data is not None:
-                    print(f"    Export rates: {len(export_rates_data)} datapoints")
-                break
+
+            # Check if new dict format (with timestamps) or old array format
+            if isinstance(train_data, dict):
+                # New format: dict with named keys
+                load_data = {int(k): float(v) for k, v in train_data["load_minutes"].items()}
+                pv_data = {int(k): float(v) for k, v in train_data["pv_data"].items()} if train_data.get("pv_data") else {}
+                temp_data = {int(k): float(v) for k, v in train_data["temperature_data"].items()} if train_data.get("temperature_data") else {}
+                import_rates_data = {int(k): float(v) for k, v in train_data["import_rates"].items()} if train_data.get("import_rates") else {}
+                export_rates_data = {int(k): float(v) for k, v in train_data["export_rates"].items()} if train_data.get("export_rates") else {}
+            else:
+                # Old format: [load_minutes_new, age_days, load_minutes_now, pv_data, temperature_data, import_rates, export_rates]
+                if len(train_data) >= 5:
+                    # Convert string keys to integers
+                    load_data = {int(k): float(v) for k, v in train_data[0].items()}
+                    pv_data = {int(k): float(v) for k, v in train_data[3].items()} if train_data[3] else {}
+                    temp_data = {int(k): float(v) for k, v in train_data[4].items()} if train_data[4] else {}
+                    # Load import/export rates if available (elements 5 and 6)
+                    if len(train_data) >= 7:
+                        import_rates_data = {int(k): float(v) for k, v in train_data[5].items()} if train_data[5] else {}
+                        export_rates_data = {int(k): float(v) for k, v in train_data[6].items()} if train_data[6] else {}
+
+            print(f"  Loaded training data from {json_path}")
+            print(f"    Load: {len(load_data)} datapoints")
+            print(f"    PV: {len(pv_data)} datapoints")
+            print(f"    Temperature: {len(temp_data)} datapoints")
+            if import_rates_data is not None:
+                print(f"    Import rates: {len(import_rates_data)} datapoints")
+            if export_rates_data is not None:
+                print(f"    Export rates: {len(export_rates_data)} datapoints")
+            break
 
     if load_data is None:
         print("  WARNING: No training data found, skipping real data test")
@@ -853,7 +865,7 @@ def _test_real_data_training():
     has_rates = import_rates_data and export_rates_data and len(import_rates_data) > 0 and len(export_rates_data) > 0
     rates_info = " + import/export rates" if has_rates else ""
     print(f"  Training on real load + {data_source} PV/temperature{rates_info} with {len(load_data)} points...")
-    success = predictor.train(load_data, now_utc, pv_minutes=pv_data, temp_minutes=temp_data, import_rates=import_rates_data, export_rates=export_rates_data, is_initial=True, epochs=50, time_decay_days=7)
+    success = predictor.train(load_data, now_utc, pv_minutes=pv_data, temp_minutes=temp_data, import_rates=import_rates_data, export_rates=export_rates_data, is_initial=True, epochs=50, time_decay_days=7, validation_holdout_hours=48)
 
     assert success, "Training on real data should succeed"
     assert predictor.model_initialized, "Model should be initialized after training"
@@ -973,31 +985,37 @@ def _test_real_data_training():
             )
 
             # Extract first 24h of validation predictions
+            # First cumulative value is already the per-step energy
             val_pred_keys = sorted(val_predictions.keys())
+
             for i, minute in enumerate(val_pred_keys):
                 if minute >= val_period_hours * 60:
                     break
                 if i == 0:
-                    energy_kwh = val_predictions[minute]
+                    # First cumulative value IS the energy for the first step (0-5 min)
+                    energy_kwh = 0
                 else:
+                    # Subsequent steps: calculate delta from previous cumulative
                     prev_minute = val_pred_keys[i - 1]
                     energy_kwh = max(0, val_predictions[minute] - val_predictions[prev_minute])
                 val_pred_minutes.append(minute)
-                val_pred_energy.append(energy_kwh)
+                val_pred_energy.append(dp4(energy_kwh))
 
         # Convert predictions (cumulative kWh) to energy per step (kWh)
+        # First cumulative value is already the per-step energy
         # predictions dict is: {0: cum0, 5: cum5, 10: cum10, ...} representing FUTURE
         pred_minutes = []
         pred_energy = []
         pred_keys = sorted(predictions.keys())
+
         for i, minute in enumerate(pred_keys):
             if minute >= prediction_hours * 60:
                 break
             if i == 0:
-                # First step - use the value directly as energy
-                energy_kwh = predictions[minute]
+                # First cumulative value IS the energy for the first step (0-5 min)
+                energy_kwh = 0
             else:
-                # Subsequent steps - calculate difference from previous
+                # Subsequent steps: calculate delta from previous cumulative
                 prev_minute = pred_keys[i - 1]
                 energy_kwh = max(0, predictions[minute] - predictions[prev_minute])
             pred_minutes.append(minute)
@@ -1559,20 +1577,22 @@ def _test_component_fetch_load_data():
         """Test that car charging energy is correctly subtracted from load data."""
         mock_base_with_car = MockBase()
 
-        # Create load data at 5-minute intervals (matches PREDICT_STEP)
+        # Create load data at 5-minute intervals following Predbat convention:
+        # minute 0 = now (highest cumulative), minute 1440 = 24h ago (lowest)
         # Total load: 1.0 kWh per 5-min step
+        # Need to extend slightly beyond 1440 for delta calculation at minute 1440
         original_load_data = {}
-        cumulative_load = 0.0
-        for minute in range(0, 1441, 5):
+        cumulative_load = 289.0  # Start with total + 1 extra interval
+        for minute in range(0, 1446, 5):  # Go to 1445 to allow delta calc at 1440
             original_load_data[minute] = cumulative_load
-            cumulative_load += 1.0  # 1.0 kWh per step
+            cumulative_load -= 1.0  # Decrease going backwards in time
 
         # Car charging data: 0.3 kWh per 5-min step
         car_charging_data = {}
-        cumulative_car = 0.0
-        for minute in range(0, 1441, 5):
+        cumulative_car = 86.7  # Start with total + 1 extra interval (289 * 0.3)
+        for minute in range(0, 1446, 5):  # Go to 1445 to allow delta calc at 1440
             car_charging_data[minute] = cumulative_car
-            cumulative_car += 0.3  # 0.3 kWh per step
+            cumulative_car -= 0.3  # Decrease going backwards in time
 
         age = 1.0
 
@@ -1639,22 +1659,29 @@ def _test_component_fetch_load_data():
         """Test that car charging is detected based on load threshold when no sensor is configured."""
         mock_base_threshold = MockBase()
 
-        # Create load data at 5-minute intervals with varying consumption
-        # Some intervals will exceed threshold (car charging), others won't
-        # IMPORTANT: Cumulative value represents total UP TO AND INCLUDING that minute
-        original_load_data = {}
-        cumulative_load = 0.0
-
+        # Create load data at 5-minute intervals with varying consumption following Predbat convention:
+        # minute 0 = now (highest cumulative), minute 1440 = 24h ago (lowest)
         # Pattern: high (1.0) at i=0,4,8... and normal (0.2) at other positions
-        for i, minute in enumerate(range(0, 1441, 5)):
+        # Need to calculate total first, then work backwards
+
+        # First calculate total energy
+        total_energy = 0.0
+        pattern = []
+        for i in range(289):  # 289 intervals (0-1440 in steps of 5) + 1 extra for delta calc
             if i % 4 == 0:
-                # High load interval: 1.0 kWh per 5-min (exceeds threshold)
-                delta = 1.0
+                delta = 1.0  # High load (car charging)
             else:
-                # Normal load: 0.2 kWh per 5-min (below threshold)
-                delta = 0.2
-            cumulative_load += delta
-            original_load_data[minute] = cumulative_load  # Store AFTER adding delta
+                delta = 0.2  # Normal load
+            pattern.append(delta)
+            total_energy += delta
+
+        # Now create cumulative data going backwards from total
+        original_load_data = {}
+        cumulative_load = total_energy
+        for i, minute in enumerate(range(0, 1446, 5)):  # Go to 1445 for delta calc
+            original_load_data[minute] = cumulative_load
+            if i < len(pattern):
+                cumulative_load -= pattern[i]
 
         age = 1.0
 
@@ -1917,9 +1944,10 @@ def _test_component_fetch_load_data():
 
         # Create load data with 5-minute intervals following Predbat convention:
         # minute 0 = now (highest cumulative value), minute 1440 = 24h ago (lowest value)
+        # Need to extend slightly beyond 1440 for delta calculation at minute 1440
         load_data = {}
-        cumulative = 144.0  # Total energy over 24h (288 intervals * 0.5 kWh)
-        for minute in range(0, 1441, 5):  # 24 hours at 5-min intervals
+        cumulative = 144.5  # Total energy over 24h + 1 interval (289 intervals * 0.5 kWh)
+        for minute in range(0, 1446, 5):  # Go to 1445 to allow delta calc at 1440
             load_data[minute] = cumulative
             cumulative -= 0.5  # Decrease going backwards in time (0.5 kWh per 5-min step)
 

@@ -469,6 +469,8 @@ class LoadPredictor:
             self.log("Warn: Insufficient data for ML training, need {} minutes, have {}".format(min_required, end_minute))
             return None, None, None, None, None
 
+        self.log("ML Predictor: Creating dataset with {} hours of training samples and {} hours of validation samples".format((end_minute * STEP_MINUTES) // 60, validation_holdout_hours))
+
         # Validation uses most recent data (minute 0 to validation_holdout)
         # Training uses ALL data (minute 0 to end_minute), including validation period
         validation_end = validation_holdout_hours * 60
@@ -723,7 +725,7 @@ class LoadPredictor:
 
         return predictions
 
-    def train(self, load_minutes, now_utc, pv_minutes=None, temp_minutes=None, import_rates=None, export_rates=None, is_initial=True, epochs=100, time_decay_days=7, patience=5):
+    def train(self, load_minutes, now_utc, pv_minutes=None, temp_minutes=None, import_rates=None, export_rates=None, is_initial=True, epochs=100, time_decay_days=7, patience=5, validation_holdout_hours=24):
         """
         Train or fine-tune the model.
 
@@ -741,6 +743,7 @@ class LoadPredictor:
             epochs: Number of training epochs
             time_decay_days: Time constant for sample weighting
             patience: Early stopping patience
+            validation_holdout_hours: Hours of most recent data to hold out for validation
 
         Returns:
             Validation MAE or None if training failed
@@ -748,7 +751,9 @@ class LoadPredictor:
         self.log("ML Predictor: Starting {} training with {} epochs".format("initial" if is_initial else "fine-tune", epochs))
 
         # Create dataset with train/validation split
-        result = self._create_dataset(load_minutes, now_utc, pv_minutes=pv_minutes, temp_minutes=temp_minutes, import_rates=import_rates, export_rates=export_rates, is_finetune=not is_initial, time_decay_days=time_decay_days)
+        result = self._create_dataset(
+            load_minutes, now_utc, pv_minutes=pv_minutes, temp_minutes=temp_minutes, import_rates=import_rates, export_rates=export_rates, is_finetune=not is_initial, time_decay_days=time_decay_days, validation_holdout_hours=validation_holdout_hours
+        )
 
         if result[0] is None:
             self.log("Warn: ML Predictor: Failed to create dataset")
