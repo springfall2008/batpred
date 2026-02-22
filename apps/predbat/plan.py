@@ -24,6 +24,7 @@ from multiprocessing import Pool, cpu_count
 from const import PREDICT_STEP, TIME_FORMAT, MINUTE_WATT
 from utils import calc_percent_limit, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, calc_percent_limit, in_car_slot
 from prediction import Prediction, wrapped_run_prediction_single, wrapped_run_prediction_charge, wrapped_run_prediction_charge_min_max, wrapped_run_prediction_export, wrapped_run_prediction_charge_min_max
+from predbat_metrics import metrics
 import time
 
 
@@ -1106,9 +1107,11 @@ class Plan:
             self.log("Plan valid is now true after recompute was {}".format(self.plan_valid))
             if not self.update_pending:
                 self.plan_valid = True
+                metrics().plan_valid.set(1)
             else:
                 self.log("Plan is not valid as update is pending, will re-compute on next run...")
                 self.plan_valid = False
+                metrics().plan_valid.set(0)
             self.plan_last_updated = self.now_utc
             self.plan_last_updated_minutes = self.minutes_now
 
@@ -1216,6 +1219,7 @@ class Plan:
 
         # Record planning duration for SLO metrics
         self.plan_last_duration_seconds = time.time() - plan_start_time
+        metrics().planning_duration_seconds.observe(self.plan_last_duration_seconds)
         self.log("Plan calculation took {:.2f} seconds".format(self.plan_last_duration_seconds))
 
         # Return if we recomputed or not

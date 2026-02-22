@@ -15,6 +15,7 @@ management via the GivEnergy Cloud REST API.
 import aiohttp
 from datetime import timedelta, datetime
 from utils import str2time, dp1
+from predbat_metrics import record_api_call
 import asyncio
 import json
 import random
@@ -1376,6 +1377,7 @@ class GECloudDirect(ComponentBase):
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             self.log(f"Warn: GECloud: Exception during request to {url}: {e}")
             self.failures_total += 1
+            record_api_call("givenergy", False, "connection_error")
             return None
 
         # Check data
@@ -1387,20 +1389,24 @@ class GECloudDirect(ComponentBase):
             if data is None:
                 data = {}
             self.update_success_timestamp()
+            record_api_call("givenergy")
             return data
         elif status in [401, 403, 404, 422]:
             # Unauthorized
             self.failures_total += 1
             self.log("Warn: GECloud: Failed to get data from {} code {}".format(endpoint, status))
+            record_api_call("givenergy", False, "auth_error")
             return {}
         elif status == 429:
             # Rate limiting so wait up to 30 seconds
             self.failures_total += 1
+            record_api_call("givenergy", False, "rate_limit")
             await asyncio.sleep(random.random() * 30)
             return None
         else:
             self.failures_total += 1
             self.log("Warn: GECloud: Failed to get data from {} code {}".format(endpoint, status))
+            record_api_call("givenergy", False, "server_error")
         return None
 
 

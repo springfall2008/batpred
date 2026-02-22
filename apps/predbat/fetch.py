@@ -21,6 +21,7 @@ dictionaries for use by the prediction engine.
 from datetime import datetime, timedelta
 from utils import minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative
 from const import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_CONTROL_SOC, PREDBAT_MODE_CONTROL_CHARGEDISCHARGE, PREDBAT_MODE_CONTROL_CHARGE, PREDBAT_MODE_MONITOR
+from predbat_metrics import metrics
 from futurerate import FutureRate
 from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
 
@@ -775,6 +776,12 @@ class Fetch:
 
         # Log current values
         self.log("Current data so far today: load {}kWh, import {}kWh, export {}kWh, PV {}kWh".format(dp2(self.load_minutes_now), dp2(self.import_today_now), dp2(self.export_today_now), dp2(self.pv_today_now)))
+        m = metrics()
+        m.load_today_kwh.set(self.load_minutes_now)
+        m.import_today_kwh.set(self.import_today_now)
+        m.export_today_kwh.set(self.export_today_now)
+        m.pv_today_kwh.set(self.pv_today_now)
+        m.data_age_days.set(self.load_minutes_age)
 
         if "rates_import_octopus_url" in self.args:
             # Fixed URL for rate import

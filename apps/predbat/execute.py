@@ -17,6 +17,7 @@ reserve level adjustments, and multi-inverter balancing.
 from datetime import timedelta, datetime
 from const import MINUTE_WATT
 from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate
+from predbat_metrics import metrics
 from inverter import Inverter
 import time
 
@@ -267,6 +268,8 @@ class Execute:
                                     if latency < 600:  # 10 minutes
                                         self.iog_last_action_latency_seconds = latency
                                         self.iog_last_action_status = "success"
+                                        metrics().iog_action_latency_seconds.observe(latency)
+                                        metrics().iog_actions_total.labels(status="success").inc()
                                         self.log("IOG action latency: {:.1f} seconds from slot start".format(latency))
 
                                 inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
@@ -600,6 +603,8 @@ class Execute:
 
             # Count register writes
             self.log("Inverter {} count register writes {}".format(inverter.id, inverter.count_register_writes))
+            if inverter.count_register_writes > 0:
+                metrics().inverter_register_writes_total.inc(inverter.count_register_writes)
             self.count_inverter_writes[inverter.id] += inverter.count_register_writes
             inverter.count_register_writes = 0
 
