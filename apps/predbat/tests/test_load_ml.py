@@ -16,7 +16,7 @@ import tempfile
 import os
 from dateutil import parser
 
-from load_predictor import LoadPredictor, OUTPUT_STEPS, HIDDEN_SIZES, TOTAL_FEATURES, STEP_MINUTES, relu, relu_derivative, huber_loss
+from load_predictor import LoadPredictor, OUTPUT_STEPS, HIDDEN_SIZES, TOTAL_FEATURES, STEP_MINUTES, CHUNK_MINUTES, relu, relu_derivative, huber_loss
 
 
 def test_load_ml(my_predbat=None):
@@ -416,9 +416,9 @@ def _test_dataset_creation():
     # Output dimension: OUTPUT_STEPS (1 for autoregressive)
     assert y_train.shape[1] == OUTPUT_STEPS, f"Expected {OUTPUT_STEPS} outputs, got {y_train.shape[1]}"
 
-    # Validation should be approximately 24h worth of samples (288 at 5-min intervals)
-    expected_val_samples = 24 * 60 // STEP_MINUTES
-    assert abs(X_val.shape[0] - expected_val_samples) < 10, f"Expected ~{expected_val_samples} val samples, got {X_val.shape[0]}"
+    # Validation should be approximately 24h worth of chunks (48 at 30-min intervals)
+    expected_val_samples = 24 * 60 // CHUNK_MINUTES
+    assert abs(X_val.shape[0] - expected_val_samples) < 5, f"Expected ~{expected_val_samples} val samples, got {X_val.shape[0]}"
 
 
 def _test_dataset_with_pv():

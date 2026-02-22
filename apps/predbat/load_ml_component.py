@@ -79,6 +79,7 @@ class LoadMLComponent(ComponentBase):
         self.ml_weight_decay = 0.01
         self.ml_max_days_history = load_ml_max_days_history
         self.ml_validation_holdout_hours = 24
+        self.ml_epochs_patience = 5
 
         # Data state
         self.load_data = None
@@ -636,6 +637,7 @@ class LoadMLComponent(ComponentBase):
                     epochs=epochs,
                     time_decay_days=min(self.ml_time_decay_days, self.load_data_age_days),
                     validation_holdout_hours=self.ml_validation_holdout_hours,
+                    patience=self.ml_epochs_patience,
                 )
 
                 if val_mae is not None:
