@@ -841,41 +841,50 @@ class Fetch:
         # Work out current car SoC and limit
         self.car_charging_loss = 1 - float(self.get_arg("car_charging_loss"))
 
-        entity_id = self.get_arg("octopus_intelligent_slot", indirect=False)
-        ohme_automatic = self.get_arg("ohme_automatic", False)
+        # Get octopus intelligent slot configuration - could be single value or list for multiple cars
+        entity_id_config = self.get_arg("octopus_intelligent_slot", indirect=False)
 
-        if entity_id:
-            completed = []
-            planned = []
+        # Normalize to list for multi-car support
+        if entity_id_config and not isinstance(entity_id_config, list):
+            entity_id_list = [entity_id_config]
+        elif entity_id_config:
+            entity_id_list = entity_id_config
+        else:
+            entity_id_list = []
 
-            if entity_id and "octopus_intelligent_slot_action_config" in self.args:
-                config_entry = self.get_arg("octopus_intelligent_slot_action_config", None, indirect=False)
-                service_name = entity_id.replace(".", "/")
-                result = self.call_service_wrapper(service_name, config_entry=config_entry, return_response=True)
-                if result and ("slots" in result):
-                    planned = result["slots"]
+        if entity_id_list:
+            # Process each car's intelligent slot configuration
+            for car_n in range(min(len(entity_id_list), self.num_cars)):
+                entity_id = entity_id_list[car_n]
+                if not entity_id:
+                    continue
+
+                completed = []
+                planned = []
+
+                if entity_id and "octopus_intelligent_slot_action_config" in self.args:
+                    config_entry = self.get_arg("octopus_intelligent_slot_action_config", None, indirect=False)
+                    service_name = entity_id.replace(".", "/")
+                    result = self.call_service_wrapper(service_name, config_entry=config_entry, return_response=True)
+                    if result and ("slots" in result):
+                        planned = result["slots"]
+                    else:
+                        self.log("Warn: Unable to get data from {} for car {} - octopus_intelligent_slot using action config {}, result was {}".format(entity_id, car_n, config_entry, result))
                 else:
-                    self.log("Warn: Unable to get data from {} - octopus_intelligent_slot using action config {}, result was {}".format(entity_id, config_entry, result))
-            else:
-                try:
-                    completed = self.get_state_wrapper(entity_id=entity_id, attribute="completed_dispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="completedDispatches")
-                    planned = self.get_state_wrapper(entity_id=entity_id, attribute="planned_dispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="plannedDispatches")
-                except (ValueError, TypeError):
-                    self.log("Warn: Unable to get data from {} - octopus_intelligent_slot may not be set correctly in apps.yaml".format(entity_id))
-                    self.record_status(message="Error: octopus_intelligent_slot not set correctly in apps.yaml", had_errors=True)
+                    try:
+                        completed = self.get_state_wrapper(entity_id=entity_id, attribute="completed_dispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="completedDispatches")
+                        planned = self.get_state_wrapper(entity_id=entity_id, attribute="planned_dispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="plannedDispatches")
+                    except (ValueError, TypeError):
+                        self.log("Warn: Unable to get data from {} for car {} - octopus_intelligent_slot may not be set correctly in apps.yaml".format(entity_id, car_n))
+                        self.record_status(message="Error: octopus_intelligent_slot not set correctly in apps.yaml for car {}".format(car_n), had_errors=True)
 
-            # Completed and planned slots
-            if completed:
-                self.octopus_slots += completed
-            if planned and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[0]):
-                # We only count planned slots if the car is plugged in or we are ignoring unplugged cars
-                self.octopus_slots += planned
+                # Completed and planned slots - merge from all cars
+                if completed:
+                    self.octopus_slots += completed
+                if planned and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n]):
+                    # We only count planned slots if the car is plugged in or we are ignoring unplugged cars
+                    self.octopus_slots += planned
 
-            # Get rate for import to compute charging costs
-            if self.rate_import:
-                self.rate_scan(self.rate_import, print=False)
-
-            if self.num_cars >= 1:
                 # Extract vehicle data if we can get it
                 size = self.get_state_wrapper(entity_id=entity_id, attribute="vehicle_battery_size_in_kwh")
                 rate = self.get_state_wrapper(entity_id=entity_id, attribute="charge_point_power_in_kw")
@@ -888,45 +897,57 @@ class Fetch:
                 except (ValueError, TypeError):
                     rate = None
                 if size:
-                    self.car_charging_battery_size[0] = size
+                    self.car_charging_battery_size[car_n] = size
                 if rate:
                     # Take the max as Octopus over reports
-                    self.car_charging_rate[0] = max(rate, self.car_charging_rate[0])
+                    self.car_charging_rate[car_n] = max(rate, self.car_charging_rate[car_n])
 
                 # Get car charging limit again from car based on new battery size
-                self.car_charging_limit[0] = dp3((float(self.get_arg("car_charging_limit", 100.0, index=0)) * self.car_charging_battery_size[0]) / 100.0)
+                self.car_charging_limit[car_n] = dp3((float(self.get_arg("car_charging_limit", 100.0, index=car_n)) * self.car_charging_battery_size[car_n]) / 100.0)
 
                 # Extract vehicle preference if we can get it
                 if self.octopus_intelligent_charging:
-                    octopus_ready_time = self.get_arg("octopus_ready_time", None)
+                    octopus_ready_time = self.get_arg("octopus_ready_time", None, index=car_n)
                     if isinstance(octopus_ready_time, str) and len(octopus_ready_time) == 5:
                         octopus_ready_time += ":00"
-                    octopus_limit = self.get_arg("octopus_charge_limit", None)
+                    octopus_limit = self.get_arg("octopus_charge_limit", None, index=car_n)
                     if octopus_limit:
                         try:
                             octopus_limit = float(octopus_limit)
                         except (ValueError, TypeError):
-                            self.log("Warn: octopus_charge_limit is set to a bad value {} in apps.yaml, must be a number".format(octopus_limit))
+                            self.log("Warn: octopus_charge_limit is set to a bad value {} for car {} in apps.yaml, must be a number".format(octopus_limit, car_n))
                             octopus_limit = None
                     if octopus_limit:
-                        octopus_limit = dp3(float(octopus_limit) * self.car_charging_battery_size[0] / 100.0)
-                        self.car_charging_limit[0] = min(self.car_charging_limit[0], octopus_limit)
+                        octopus_limit = dp3(float(octopus_limit) * self.car_charging_battery_size[car_n] / 100.0)
+                        self.car_charging_limit[car_n] = min(self.car_charging_limit[car_n], octopus_limit)
                     if octopus_ready_time:
-                        self.car_charging_plan_time[0] = octopus_ready_time
+                        self.car_charging_plan_time[car_n] = octopus_ready_time
 
-                    # Use octopus slots for charging?
-                    self.octopus_slots = self.add_now_to_octopus_slot(self.octopus_slots, self.now_utc)
-                    if not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[0]:
-                        self.car_charging_slots[0] = self.load_octopus_slots(self.octopus_slots, self.octopus_intelligent_consider_full)
-                        if self.car_charging_slots[0]:
-                            self.log("Car 0 using Octopus Intelligent, charging planned - charging limit {}, ready time {} - battery size {}".format(self.car_charging_limit[0], self.car_charging_plan_time[0], self.car_charging_battery_size[0]))
-                            self.car_charging_planned[0] = True
+            # Get rate for import to compute charging costs
+            if self.rate_import:
+                self.rate_scan(self.rate_import, print=False)
+
+            # Use octopus slots for charging - process for each car
+            if self.octopus_intelligent_charging:
+                self.octopus_slots = self.add_now_to_octopus_slot(self.octopus_slots, self.now_utc)
+                for car_n in range(min(len(entity_id_list), self.num_cars)):
+                    if not entity_id_list[car_n]:
+                        continue
+                    if not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n]:
+                        self.car_charging_slots[car_n] = self.load_octopus_slots(self.octopus_slots, self.octopus_intelligent_consider_full)
+                        if self.car_charging_slots[car_n]:
+                            self.log(
+                                "Car {} using Octopus Intelligent, charging planned - charging limit {}, ready time {} - battery size {}".format(
+                                    car_n, self.car_charging_limit[car_n], self.car_charging_plan_time[car_n], self.car_charging_battery_size[car_n]
+                                )
+                            )
+                            self.car_charging_planned[car_n] = True
                         else:
-                            self.log("Car 0 using Octopus Intelligent, no charging is planned")
-                            self.car_charging_planned[0] = False
+                            self.log("Car {} using Octopus Intelligent, no charging is planned".format(car_n))
+                            self.car_charging_planned[car_n] = False
                     else:
-                        self.log("Car 0 using Octopus Intelligent is unplugged")
-                        self.car_charging_planned[0] = False
+                        self.log("Car {} using Octopus Intelligent is unplugged".format(car_n))
+                        self.car_charging_planned[car_n] = False
         else:
             # Disable octopus charging if we don't have the slot sensor
             self.octopus_intelligent_charging = False

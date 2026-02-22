@@ -606,6 +606,9 @@ class HAInterface(ComponentBase):
         Get state from cached HA data
         """
         if entity_id:
+            if isinstance(entity_id, list):
+                self.log("Error: get_state called with list entity_id: {}, this should be a single entity string".format(entity_id))
+                return default
             self.db_mirror_list[entity_id.lower()] = True
 
         if not entity_id:
