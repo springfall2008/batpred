@@ -122,7 +122,7 @@ pred_bat:
   # the default is 1.0 (full power)
   # The example below is from GE 9.5kwh battery with latest firmware and gen1 inverter
   #
-  # Predbat can compute this curve automatically if you have enough data, restart the add-on and look in the logfile for the data
+  # Predbat can compute this curve automatically if you have enough data, restart the app and look in the logfile for the data
   # once set here Predbat will no longer re-compute the curve.
   # Can also be set to 'auto' to just use the calculation curve, not recommended if you are using low power charging mode.
   #battery_charge_power_curve:
@@ -244,7 +244,8 @@ pred_bat:
   #octopus_slot_low_rate: False
 
   # Carbon Intensity data from National grid
-  carbon_intensity: 're:(sensor.carbon_intensity_uk)'
+  # carbon_postcode: 'SW1 5NA'
+  # carbon_automatic: True
 
   # Octopus saving session points to the saving session Sensor in the Octopus plugin, when enabled saving sessions will be at the assumed
   # Rate is read automatically from the add-in and converted to pence using the conversion rate below (default is 8)

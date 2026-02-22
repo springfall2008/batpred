@@ -111,7 +111,7 @@ pred_bat:
 
   # You must set Home Assistant's device_id for the Huawei Batteries
   #
-  # Click on Developer Tools / Actions and choose "Huawei Solar: Forcible Charge" or any other battery related action.
+  # Click on 'Settings' / 'Developer Tools' / 'Actions' and choose "Huawei Solar: Forcible Charge" or any other battery related action.
   # Click on "Go to YAML mode" and you will find the device_id; copy and paste the long numbers/letters in below:
   device_id: XXXXXX
 
@@ -260,7 +260,8 @@ pred_bat:
   #octopus_slot_low_rate: False
 
   # Carbon Intensity data from National grid
-  carbon_intensity: 're:(sensor.carbon_intensity_uk)'
+  # carbon_postcode: 'SW1 5NA'
+  # carbon_automatic: True
 
   # Octopus saving session points to the saving session Sensor in the Octopus plugin, when enabled saving sessions will be at the assumed
   # Rate is read automatically from the add-in and converted to pence using the conversion rate below (default is 8)

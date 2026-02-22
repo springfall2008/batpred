@@ -280,9 +280,9 @@ class HAInterface(ComponentBase):
             # Get the current addon info, but suppress warning message if the API call fails as non-HAOS installs won't have supervisor running
             res = self.api_call("/addons/self/info", core=False, silent=True)
             if res:
-                # get add-on slug name which is the actual directory name under /addon_configs that /config is mounted to
+                # get app slug name which is the actual directory name under /addon_configs that /config is mounted to
                 self.slug = res["data"]["slug"]
-                self.log("Info: Add-on slug is {}".format(self.slug))
+                self.log("Info: App slug is {}".format(self.slug))
 
             check = self.api_call("/api/services")
             if not check:
@@ -323,7 +323,7 @@ class HAInterface(ComponentBase):
 
     def get_slug(self):
         """
-        Get the add-on slug.
+        Get the app slug.
         """
         return self.slug
 

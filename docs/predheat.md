@@ -160,7 +160,7 @@ Add a **load_forecast** entry in `apps.yaml` to configure Predbat to use the [Pr
 
 If your **load_today** sensor in `apps.yaml` already contains your heat pump load then when Predbat forecasts your house load, the heat pump load will be double counted - once from historical house load data, and once from the Predheat forecast.
 
-To resolve this you need to use **car_charging_energy** to [exclude heat pump load](apps-yaml.md#car-charging-filtering) from the historical house load energy. e.g.:
+To resolve this you need to use **car_charging_energy** to [exclude heat pump load](car-charging.md#filtering-car-charging-energy-from-house-load) from the historical house load energy. e.g.:
 
 ```yaml
   car_charging_energy:

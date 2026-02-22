@@ -171,7 +171,7 @@ pred_bat:
   # enter the charging curve here as a % of the max charge rate for each soc percentage.
   # the default is 1.0 (full power)
   #
-  # Predbat can compute this curve automatically if you have enough data, restart the add-on and look in the logfile for the data
+  # Predbat can compute this curve automatically if you have enough data, restart the app and look in the logfile for the data
   # once set here Predbat will no longer re-compute the curve.
   # Can also be set to 'auto' to just use the calculation curve, not recommended if you are using low power charging mode.
   #
@@ -291,8 +291,9 @@ pred_bat:
   #octopus_ready_time: 'time.ohme_target_time'
   #octopus_charge_limit: 'number.ohme_target_percent'
 
-  # Carbon Intensity data from National grid
-  carbon_intensity: 're:(sensor.carbon_intensity_uk)'
+   # Carbon Intensity data from National grid
+  # carbon_postcode: 'SW1 5NA'
+  # carbon_automatic: True
 
   # Octopus saving session points to the saving session Sensor in the Octopus plugin, when enabled saving sessions will be at the assumed
   # Rate is read automatically from the add-in and converted to pence using the conversion rate below (default is 8)

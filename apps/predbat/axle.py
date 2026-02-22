@@ -70,9 +70,9 @@ class AxleAPI(ComponentBase):
                                 if end_time < now:
                                     self.event_history.append(event)
 
-                    self.log(f"Axle API: Loaded {len(self.event_history)} past events from sensor history")
+                    self.log(f"AxleAPI: Loaded {len(self.event_history)} past events from sensor history")
         except Exception as e:
-            self.log(f"Warn: Axle API: Failed to load event history: {e}")
+            self.log(f"Warn: AxleAPI: Failed to load event history: {e}")
 
         self.history_loaded = True
 
@@ -102,7 +102,7 @@ class AxleAPI(ComponentBase):
         self.event_history = cleaned_history
         removed = original_count - len(self.event_history)
         if removed > 0:
-            self.log(f"Axle API: Cleaned up {removed} events older than 7 days")
+            self.log(f"AxleAPI: Cleaned up {removed} events older than 7 days")
 
     def add_event_to_history(self, event_data):
         """
@@ -136,7 +136,7 @@ class AxleAPI(ComponentBase):
 
         # Add new event to history
         self.event_history.append(event_data.copy())
-        self.log(f"Axle API: Added event to history - {event_data.get('import_export')} from {start_time_str} to {end_time_str}")
+        self.log(f"AxleAPI: Added event to history - {event_data.get('import_export')} from {start_time_str} to {end_time_str}")
 
     async def _request_with_retry(self, url, headers, max_retries=3):
         """
@@ -160,18 +160,18 @@ class AxleAPI(ComponentBase):
                             try:
                                 return await response.json()
                             except Exception as e:
-                                self.log(f"Warn: Axle API: Failed to parse JSON response: {e}")
+                                self.log(f"Warn: AxleAPI: Failed to parse JSON response: {e}")
                                 return None
                         else:
-                            self.log(f"Warn: Axle API: Failed to fetch data, status code {response.status}")
+                            self.log(f"Warn: AxleAPI: Failed to fetch data, status code {response.status}")
                             return None
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 if attempt < max_retries - 1:
                     sleep_time = 2**attempt  # Exponential backoff: 1s, 2s, 4s
-                    self.log(f"Warn: Axle API: Request attempt {attempt + 1} failed: {e}. Retrying in {sleep_time}s...")
+                    self.log(f"Warn: AxleAPI: Request attempt {attempt + 1} failed: {e}. Retrying in {sleep_time}s...")
                     await asyncio.sleep(sleep_time)
                 else:
-                    self.log(f"Warn: Axle API: Request failed after {max_retries} attempts: {e}")
+                    self.log(f"Warn: AxleAPI: Request failed after {max_retries} attempts: {e}")
                     return None
         return None
 
@@ -179,14 +179,14 @@ class AxleAPI(ComponentBase):
         """
         Fetch the latest VPP event from Axle Energy API
         """
-        self.log("Axle API: Fetching latest VPP event data")
+        self.log("AxleAPI: Fetching latest VPP event data")
 
         url = "https://api.axle.energy/vpp/home-assistant/event"
         headers = {"Authorization": f"Bearer {self.api_key}"}
 
         data = await self._request_with_retry(url, headers)
         if data is None:
-            self.log("Axle API: Warn: No event data in response")
+            self.log("AxleAPI: Warn: No event data in response")
             self.failures_total += 1
         elif isinstance(data, dict):
             # Convert ISO 8601 strings to timezone-aware datetime objects
@@ -200,21 +200,21 @@ class AxleAPI(ComponentBase):
                 try:
                     start_time = str2time(start_time)
                 except Exception as e:
-                    self.log(f"Warn: Axle API: Failed to parse start_time: {e}")
+                    self.log(f"Warn: AxleAPI: Failed to parse start_time: {e}")
                     start_time = None
 
             if end_time:
                 try:
                     end_time = str2time(end_time)
                 except Exception as e:
-                    self.log(f"Warn: Axle API: Failed to parse end_time: {e}")
+                    self.log(f"Warn: AxleAPI: Failed to parse end_time: {e}")
                     end_time = None
 
             if updated_at:
                 try:
                     updated_at = str2time(updated_at)
                 except Exception as e:
-                    self.log(f"Warn: Axle API: Failed to parse updated_at: {e}")
+                    self.log(f"Warn: AxleAPI: Failed to parse updated_at: {e}")
                     updated_at = None
 
             self.current_event = {
@@ -249,7 +249,7 @@ class AxleAPI(ComponentBase):
 
             self.cleanup_event_history()
             self.publish_axle_event()
-            self.log(f"Axle API: Successfully fetched event data - {import_export} event from {start_time} to {end_time}" if start_time else "Axle API: No scheduled event")
+            self.log(f"AxleAPI: Successfully fetched event data - {import_export} event from {start_time} to {end_time}" if start_time else "AxleAPI: No scheduled event")
             self.update_success_timestamp()
 
     def publish_axle_event(self):
@@ -296,7 +296,7 @@ class AxleAPI(ComponentBase):
         """
         Automatic configuration for Axle participation
         """
-        self.log("Axle API: Automatic configuration of entities")
+        self.log("AxleAPI: Automatic configuration of entities")
         self.set_arg("axle_session", "binary_sensor." + self.prefix + "_axle_event")
 
     async def run(self, seconds, first):
@@ -313,7 +313,7 @@ class AxleAPI(ComponentBase):
             try:
                 await self.fetch_axle_event()
             except Exception as e:
-                self.log(f"Warn: Axle API: Exception during fetch: {e}")
+                self.log(f"Warn: AxleAPI: Exception during fetch: {e}")
                 self.failures_total += 1
         elif (seconds % 60) == 0:  # Every minute, update state to reflect if event is active or not
             self.publish_axle_event()
@@ -348,7 +348,7 @@ def fetch_axle_sessions(base):
                 if axle_events[i] not in axle_events[i + 1 :]:
                     axle_events_deduplicated.append(axle_events[i])
 
-            base.log("Axle API: Fetched {} total events from sensor {}".format(len(axle_events_deduplicated), entity_id))
+            base.log("AxleAPI: Fetched {} total events from sensor {}".format(len(axle_events_deduplicated), entity_id))
 
     return axle_events_deduplicated
 

@@ -73,7 +73,7 @@ Can be used to extract the car's current SoC.
 
 Predbat can talk direct to the Ohme cloud service to control your Ohme EV charger.
 
-See [Ohme Direct](apps-yaml.md#ohme-car-charger-direct-integration)
+See [Ohme Direct](car-charging.md#ohme-car-charger-direct-integration)
 
 ## HA In-Built Ohme Integration
 
@@ -118,7 +118,7 @@ If you are on the Octopus Intelligent GO tariff the integration can be used to m
 
 **Octopus Intelligent GO**
 
-Replace XXX with your device ID which can be found by going to 'Developer Tools', Selecting 'Actions', Selecting 'Ohme: List Charge Slots'
+Replace XXX with your device ID which can be found by going to 'Settings' / 'Developer Tools' / 'Actions' then selecting 'Ohme: List Charge Slots'
 then selecting your Device from the drop down menu. Then click on 'Go to YAML mode' and copy the long string after config_entry:
 
 ![image](https://github.com/user-attachments/assets/fce4bce1-c6f7-49fe-96bc-7d062977059b)
@@ -271,7 +271,7 @@ Can be used for energy rates, car charging and saving sessions
 
 ### For adjustment to Octopus Intelligent
 
-This is built into Predbat, see the [apps.yaml configuration guide](apps-yaml.md)
+This is built into Predbat, see the [apps.yaml configuration guide](car-charging.md#octopus-led-charging)
 
 ### As your energy rates (e.g. for those in Norway)
 

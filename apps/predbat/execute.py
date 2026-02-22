@@ -813,7 +813,7 @@ class Execute:
 
         if self.debug_enable:
             self.log(
-                "Found {} inverters totals: min reserve {}%, current reserve {}%, soc_max {}%, SoC {}%, charge rate {}kW, discharge rate {}kW, battery_rate_min {}W, ac limit {}kW, export limit {}kW, loss charge {}%, loss discharge {}%, inverter loss {}%".format(
+                "Found {} inverters totals: min reserve {}%, current reserve {}%, soc_max {}%, SoC {}%, charge rate {}kW, discharge rate {}kW, battery_rate_min {}W, AC limit {}kW, export limit {}kW, loss charge {}%, loss discharge {}%, inverter loss {}%".format(
                     len(self.inverters),
                     self.reserve,
                     self.reserve_current,

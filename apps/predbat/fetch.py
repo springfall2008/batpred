@@ -53,7 +53,7 @@ class Fetch:
             pv_factor_round = pv_factor
             if pv_factor_round:
                 pv_factor_round = dp1(pv_factor_round)
-            self.log("PV Forecast {} kWh and 10% Forecast {} kWh pv cloud factor {}".format(dp1(pv_total), dp1(pv_total10), pv_factor_round))
+            self.log("PV Forecast {}kWh and 10% Forecast {}kWh; PV cloud factor {}".format(dp1(pv_total), dp1(pv_total10), pv_factor_round))
             return pv_factor
         else:
             return None
@@ -400,7 +400,8 @@ class Fetch:
         else:
             average_non_zero_day = 24  # Assume a nominal 24kWh day if no data
 
-        self.log("Historical load totals for days {} are {}kWh, minimum value {}kWh".format(days_list, sum_days, min_sum))
+        # log the unsorted list of days and load kWh, easier to read and ensures correct 'lowest day' is reported
+        self.log("Historical load totals for days {} are {}kWh, minimum value {}kWh".format(self.days_previous.copy(), sum_days, min_sum))
         if self.load_filter_modal and total_points >= 3 and (min_sum_day > 0):
             self.log("Modal filter enabled - Discarding day {} as it is the lowest of the {} datapoints".format(min_sum_day, len(days_list)))
             min_sum_day_idx = days_list.index(min_sum_day)
@@ -1713,7 +1714,11 @@ class Fetch:
             else:
                 self.rate_export_cost_threshold = self.rate_export_min + 0.5
 
-        self.log("Rate thresholds (for charge/export) are import {}{} ({}{}), export {}{} ({}{})".format(self.rate_import_cost_threshold, curr, self.rate_low_threshold, curr, self.rate_export_cost_threshold, curr, self.rate_high_threshold, curr))
+        self.log(
+            "Rate thresholds (for charge/export) are import {}{} ({}{}), export {}{} ({}{})".format(
+                dp2(self.rate_import_cost_threshold), curr, dp2(self.rate_low_threshold), curr, dp2(self.rate_export_cost_threshold), curr, dp2(self.rate_high_threshold), curr
+            )
+        )
 
     def rate_scan(self, rates, print=True):
         """
@@ -1784,7 +1789,7 @@ class Fetch:
             self.car_charging_plan_smart[car_n] = self.get_arg("car_charging_plan_smart", False)
             self.car_charging_plan_max_price[car_n] = self.get_arg("car_charging_plan_max_price", 0.0)
             self.car_charging_plan_time[car_n] = self.get_arg("car_charging_plan_time", "07:00:00")
-            self.car_charging_battery_size[car_n] = float(self.get_arg("car_charging_battery_size", 100.0, index=car_n))
+            self.car_charging_battery_size[car_n] = dp2(float(self.get_arg("car_charging_battery_size", 100.0, index=car_n)))
             car_postfix = "" if car_n == 0 else "_" + str(car_n)
             self.car_charging_rate[car_n] = float(self.get_arg("car_charging_rate" + car_postfix))
             self.car_charging_limit[car_n] = dp3((float(self.get_arg("car_charging_limit", 100.0, index=car_n)) * self.car_charging_battery_size[car_n]) / 100.0)
@@ -1792,7 +1797,7 @@ class Fetch:
 
         if self.num_cars > 0:
             self.log(
-                "Cars {} charging from battery {} planned {}, charging_now {} smart {}, max_price {}{}, plan_time {}, battery size {}kWh, limit {}%, rate {}W, exclusive {}".format(
+                "Cars {} charging from battery {} planned {}, charging_now {} smart {}, max_price {}{}, plan_time {}, battery size {}kWh, limit {}%, rate {}kW, exclusive {}".format(
                     self.num_cars,
                     self.car_charging_from_battery,
                     self.car_charging_planned,

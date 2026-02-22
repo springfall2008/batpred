@@ -31,73 +31,62 @@ To setup the inverter with Predbat you will need to:
 
 6. Follow the rest of the [Predbat install instructions](install.md), in particular review that `apps.yaml` is configured correctly for your inverter.
 
-   | Name                                                                                      | Integration                                                                                                                                  | Template                                                                                                                                                                                                                                     |
-   |:----------------------------------------------------------------------------------------- |:-------------------------------------------------------------------------------------------------------------------------------------------- |:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-   | [GivEnergy with GivTCP](#givenergy-with-givtcp)                                           | [GivTCP](https://github.com/britkat1980/ha-addons)                                                                                           | [givenergy_givtcp.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_givtcp.yaml)                                                                                                                       |
-   | [GivEnergy with GE Cloud](#givenergy-with-ge-cloud)                                       | [ge_cloud](https://github.com/springfall2008/ge_cloud)                                                                                       | [givenergy_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_cloud.yaml)                                                                                                                         |
-   | [GivEnergy with GE Cloud EMS](#givenergy-with-ge-cloud-ems)                                        | [ge_cloud EMS](https://github.com/springfall2008/ge_cloud)                                                                                   | [givenergy_ems.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_ems.yaml)                                                                                                                             |
-   | [GivEnergy Octopus Cloud Direct - No Home Assistant](#givenergy-octopus-cloud-direct---no-home-assistant)  | n/a                                                                                                                                          | [ge_cloud_octopus_standalone.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ge_cloud_octopus_standalone.yaml)                                                                                                 |
-   | [Fox](#fox)                                                                               | [Foxess](https://github.com/nathanmarlor/foxess_modbus/)                                                                                     | [fox.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fox.yaml)                                                                                                                                                 |
-   | [Fox Cloud](#fox-cloud)                                                                   | Predbat                                                                                                                                      | [fox_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/fox_cloud.yaml)                                                                                                                          |
-   | [Growatt with Solar Assistant](#growatt-with-solar-assistant)                             | [Solar Assistant](https://solar-assistant.io/help/home-assistant/setup)                                                                      | [spa.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_spa.yaml) or [sph.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_sph.yaml) |
-   | [Huawei](#huawei)                                                                         | [Huawei Solar](https://github.com/wlcrs/huawei_solar)                                                                                        | [huawei.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/huawei.yaml)                                                                                                                                           |
-   | [Kostal Plenticore](#kostal-plenticore)                                                   | [Kostal Plenticore](https://www.home-assistant.io/integrations/kostal_plenticore)                                                            | [kostal.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/kostal.yaml)                                                                                                                                           |
-   | [LuxPower](#luxpower)                                                                     | [LuxPython](https://github.com/guybw/LuxPython_DEV)                                                                                          | [luxpower.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/luxpower.yaml)                                                                                                                                       |
-   | [SigEnergy](#sigenergy-sigenstor)                                                         | [SigEnergy](https://github.com/TypQxQ/Sigenergy-Home-Assistant-Integration)                                                                  | [sigenergy_sigenstor.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_sigenstor.yaml)                                                                                                                 |
-   | [Sofar inverters](#sofar-inverters)                                                       | [Sofar MQTT integration](https://github.com/cmcgerty/Sofar2mqtt)                                                                             | [sofar.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar.yaml)                                                                                                                                             |
-   | [SolarEdge inverters](#solaredge-inverters)                                               | [Solaredge Modbus Multi](https://github.com/WillCodeForCats/solaredge-modbus-multi)                                                          | [solaredge.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solaredge.yaml)                                                                                                                                     |
-   | [Solax Gen4 inverters](#solax-gen4-inverters)                                             | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus)<BR>in Modbus Power Control Mode                           | [solax_sx4.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solax_sx4.yaml)                                                                                                                                     |
-   | [Solax Cloud](#solax-cloud)                                                               | Predbat                                                                                                                                      | [solax_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/solax_cloud.yaml)                                                                                                                      |
-   | [Solis Cloud](#solis-cloud)                                                               | Predbat                                                                                                                                      | [solis_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/solis_cloud.yaml)                                                                                                                      |
-   | [Solis Hybrid inverters (Firmware before FB00)](#solis-inverters-before-fb00)             | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus)                                                           | [ginlong_solis.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml)                                                                                                                             |
-   | [Solis Hybrid inverters (Firmware FB00 and later)](#solis-inverters-fb00-or-later)        | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus)                                                           | [ginlong_solis.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml)                                                                                                                             |
-   | [SunSynk](#sunsynk)                                                                       | [Sunsynk](https://github.com/kellerza/sunsynk)                                                                                               | [sunsynk.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sunsynk.yaml)                                                                                                                                         |
-   | [Tesla Powerwall](#tesla-powerwall)                                                       | [Tesla Fleet](https://www.home-assistant.io/integrations/tesla_fleet) or [Teslemetry](https://www.home-assistant.io/integrations/teslemetry) | [tesla_powerwall.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/tesla_powerwall.yaml)                                                                                                                         |
-   | [Victron](#victron)                                                                       | [Victron MQTT](https://github.com/tomer-w/victron_mqtt)                                                                                      | [victron.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/victron.yaml)  
-                                 |
+   | Name | Integration | Template |
+   | :---------------------------- | :------------- | :------------ |
+   | [GivEnergy with GivTCP](#givenergy-with-givtcp) | [GivTCP](https://github.com/britkat1980/ha-addons) | [givenergy_givtcp.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_givtcp.yaml) |
+   | [Givenergy with GE Cloud](#givenergy-with-ge-cloud) | [ge_cloud](https://github.com/springfall2008/ge_cloud) | [givenergy_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_cloud.yaml) |
+   | [Givenergy with GE Cloud EMS](#givenergy-with-ge-cloud-ems | [ge_cloud EMS](https://github.com/springfall2008/ge_cloud) | [givenergy_ems.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_ems.yaml) |
+   | [Givenergy/Octopus No Home Assistant](#givenergy-octopus-cloud-direct---no-home-assistant) | n/a | [ge_cloud_octopus_standalone.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ge_cloud_octopus_standalone.yaml) |
+   | [Fox](#fox) | [Foxess](https://github.com/nathanmarlor/foxess_modbus/) | [fox.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fox.yaml) |
+   | [Fox Cloud](#fox-cloud) | Predbat | [fox_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/fox_cloud.yaml) |
+   | [Growatt with Solar Assistant](#growatt-with-solar-assistant) | [Solar Assistant](https://solar-assistant.io/help/home-assistant/setup) | [spa.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_spa.yaml) or [sph.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_sph.yaml) |
+   | [Huawei](#huawei) | [Huawei Solar](https://github.com/wlcrs/huawei_solar) | [huawei.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/huawei.yaml) |
+   | [Kostal Plenticore](#kostal-plenticore) | [Kostal Plenticore](https://www.home-assistant.io/integrations/kostal_plenticore) | [kostal.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/kostal.yaml) |
+   | [LuxPower](#luxpower) | [LuxPython](https://github.com/guybw/LuxPython_DEV) | [luxpower.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/luxpower.yaml) |
+   | [SigEnergy](#sigenergy-sigenstor) | [SigEnergy](https://github.com/TypQxQ/Sigenergy-Home-Assistant-Integration) | [sigenergy_sigenstor.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_sigenstor.yaml) |
+   | [Sofar inverters](#sofar-inverters) | [Sofar MQTT integration](https://github.com/cmcgerty/Sofar2mqtt) | [sofar.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar.yaml) |
+   | [SolarEdge inverters](#solaredge-inverters) | [Solaredge Modbus Multi](https://github.com/WillCodeForCats/solaredge-modbus-multi) | [solaredge.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solaredge.yaml) |
+   | [Solax Cloud](#solax-cloud) | Predbat | [solax_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/solax_cloud.yaml) |
+   | [Solax Gen4 inverters](#solax-gen4-inverters) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus)<BR>in Modbus Power Control Mode | [solax_sx4.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solax_sx4.yaml) |
+   | [Solis Cloud](#solis-cloud) | Predbat | [solis_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/solis_cloud.yaml) |
+   | [Solis Hybrid inverters (Firmware before FB00)](#solis-inverters-before-fb00) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) | [ginlong_solis.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml) |
+   | [Solis Hybrid inverters (Firmware FB00 and later)](#solis-inverters-fb00-or-later) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) | [ginlong_solis.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml) |
+   | [SunSynk](#sunsynk) | [Sunsynk](https://github.com/kellerza/sunsynk) | [sunsynk.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sunsynk.yaml) |
+   | [Tesla Powerwall](#tesla-powerwall) | [Tesla Fleet](https://www.home-assistant.io/integrations/tesla_fleet) or [Teslemetry](https://www.home-assistant.io/integrations/teslemetry) | [tesla_powerwall.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/tesla_powerwall.yaml) |
+   | [Victron](#victron) | [Victron MQTT](https://github.com/tomer-w/victron_mqtt) | [victron.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/victron.yaml) |
 
 Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on GitHub.
 
 ## GivEnergy with GivTCP
 
-It's recommended that you first watch the [Installing GivTCP and Mosquitto Add-on's video from Speak to the Geek](https://www.youtube.com/watch?v=d06Mqeplvns).
+It's recommended that you first watch the [Installing GivTCP and Mosquitto Apps video from Speak to the Geek](https://www.youtube.com/watch?v=d06Mqeplvns).
 
-1. Install Mosquitto Broker add-on:
+1. Install Mosquitto Broker app:
 
-- Go to Settings / Add-ons / Add-on Store (bottom right)
-
-- Scroll down the add-on store list, to find 'Mosquitto broker', click on the add-on, then click 'INSTALL'
-
-- Once the Mosquitto broker has been installed, ensure that the 'Start on boot' and 'Watchdog' options are turned on, and click 'START' to start the add-on
-
+- Go to Settings / Apps / Install app (bottom right)
+- Scroll down the apps list, to find 'Mosquitto broker', click on the app, then click 'INSTALL'
+- Once the Mosquitto broker has been installed, ensure that the 'Start on boot' and 'Watchdog' options are turned on, and click 'START' to start the app
 - Next, configure Mosquitto broker by going to Settings / Devices and Services / Integrations.
   Mosquitto broker should appear as a Discovered integration so click the blue 'CONFIGURE' button, then SUBMIT to complete configuring Mosquitto broker
 
-2. Install the GivTCP add-on:
+2. Install the GivTCP app:
 
-- Go to Settings / Add-ons / Add-on Store
-
+- Go to Settings / Apps / Install app
 - Click the three dots in the top right corner, then Repositories
 
 - You'll need to add the GivTCP repository as an additional custom repository so paste/type
-  '[https://github.com/britkat1980/ha-addons](https://github.com/britkat1980/ha-addons')' into the text box and click 'Add' the 'Close'<BR>
-  NB: this URL is for GivTCP v3, not v2 as covered in the video.
-
-- Click the back button and then re-navigate to Settings / Add-ons / Add-on Store so Home Assistant picks up the GivTCP add-on from the custom repository
-
-- Scroll down the add-on store list, to find 'GivTCP-V3', you should see the three addons; the production version, the latest beta and the latest dev versions.
-  Click on the 'GivTCP' add-on, then click 'INSTALL'
-
+'[https://github.com/britkat1980/ha-addons](https://github.com/britkat1980/ha-addons')' into the text box and click 'Add' then 'Close'<BR>
+NB: this URL is for GivTCP v3, not v2 as covered in the video.
+- Click the back button and then re-navigate to Settings / Apps / Install app so Home Assistant picks up the GivTCP app from the custom repository
+- Scroll down the app list, to find 'GivTCP-V3', you should see the three addons; the production version, the latest beta and the latest dev versions.
+Click on the 'GivTCP' app, then click 'INSTALL'
 - Once GivTCP has been installed, ensure that the 'Start on boot' and 'Watchdog' options are turned on
 
 3. Configure GivTCP:
 
-- All configuration for GivTCP is done via the add-on's Web interface
-
-- On the GivTCP add-on, click 'START' to start the add-on
-
-- Once the add-on has started, click 'Open Web UI' or go to [http://homeassistant.local:8099/](http://homeassistant.local:8099/), then click 'Go to Config Page' to configure GivTCP
-
+- All configuration for GivTCP is done via the app Web interface
+- On the GivTCP app, click 'START' to start the app
+- Once the app has started, click 'Open Web UI' or go to [http://homeassistant.local:8099/](http://homeassistant.local:8099/), then click 'Go to Config Page' to configure GivTCP
 - GivTCP will auto-discover your inverters and batteries so you shouldn't need to manually enter these, but check the IP address(s) it finds are correct
 
 - If you have a single AIO then for Predbat to be able to communicate via REST to the AIO, it MUST be the first device configured in GivTCP.  Conversely if you have a gateway and multiple AIO's then the gateway MUST be the first device in GivTCP
@@ -240,22 +229,6 @@ Thanks to the work of @PeterHaban, for this Predbat configuration for Fox ESS in
 - Predbat now has a built-in Fox cloud integration. Today it requires a battery that supports the scheduler mode to function.
 
 See the components documentation for details [Components - Fox cloud](components.md#fox-ess-api-fox)
-
-## Solax Cloud
-
-**Experimental**
-
-- Predbat now has a built-in Solax cloud integration.
-
-See the components documentation for details [Components - Solax cloud](components.md#solax-cloud-api-solax)
-
-## Solis Cloud
-
-**Experimental**
-
-- Predbat now has a built-in Solis cloud integration.
-
-See the components documentation for details [Components - Solis cloud](components.md#solis-cloud-api-solax)
 
 ## Growatt with Solar Assistant
 
@@ -1133,7 +1106,7 @@ triggers:
 
 **Enable Freeze Charging**
 
-- Ensure **`switch.predbat_set_charge_freeze`** is turned On.
+- Ensure **`switch.predbat_set_charge_freeze`** is turned On. Note that as this is an expert mode option, Predbat's [Expert Mode](customisation.md#expert-mode) must be turned on first.
 
 After Predbat recomputes, you may see some light grey **FrzChrg** slots in the state column of the plan.
 To disable Freeze Charging simply turn the switch Off. Predbat will no longer schedule any FrzChrg slots.
@@ -1293,8 +1266,7 @@ increase the delay in the LuxPower Freeze Predbat Override automation.
 
 To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to follow the steps below:
 
-- make sure the inverter is already integrated into Home Assistant. Here is a ([repo](https://github.com/TypQxQ/Sigenergy-Local-Modbus)) with full integration (this is the Python version of the Sigenergy Home Assistant integration).
-
+- make sure the inverter is already integrated into Home Assistant. The Predbat configuration has been developed with the [SigEnergy local modbus](https://github.com/TypQxQ/Sigenergy-Local-Modbus) integration (the Python version of the Sigenergy HA integration).
 - Copy the template [sigenergy_sigenstor.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_sigenstor.yaml) template over your `apps.yaml`, and edit for your system.
 
 - All the Sigenergy entities referenced in `apps.yaml` need to be enabled for Predbat to use them. The following are disabled by default and will need enabling:
@@ -1304,6 +1276,8 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
     - number.sigen_plant_ess_backup_state_of_charge
     - number.sigen_plant_ess_charge_cut_off_state_of_charge
     - number.sigen_plant_ess_discharge_cut_off_state_of_charge
+    - sensor.sigen_plant_ess_max_charging_limit
+    - sensor.sigen_plant_ess_max_discharging_limit
     - sensor.sigen_plant_max_active_power
 
 - The following additions are needed to facilitate integration with Predbat and need to be put into Home Assistant's `configuration.yaml` or configured via the HA user interface:
@@ -1442,38 +1416,46 @@ Add the following automations to `automations.yaml` (or configure via the UI):
                 entity_id: number.sigen_plant_grid_import_limitation
                 value: 100
 
-- id: "automation_sigen_ess_max_charging_limit_input_number_action"
-  alias: "Predbat max charging limit action"
-  description: "Mapper from input_number.charge_rate to number sigen_plant_ess_max_charging_limit"
-  triggers:
+  - id: automation_sigen_ess_max_charging_limit_input_number_action
+    alias: Predbat max charging limit action
+    description: Mapper from input_number.charge_rate to number sigen_plant_ess_max_charging_limit
+    triggers:
     - trigger: state
       entity_id: input_number.charge_rate
-  action:
+    actions:
     - action: number.set_value
       target:
         entity_id: number.sigen_plant_ess_max_charging_limit
       data:
-        value: >-
-          "{{ [(states('input_number.charge_rate') | float / 1000) | round(2),
-          states('sensor.sigen_inverter_ess_rated_charging_power') | float] | min}}"
-  mode: single
+        value: '{{ [(states(''input_number.charge_rate'') | float / 1000) | round(2),
+          states(''sensor.sigen_inverter_ess_rated_charging_power'') | float] | min}}'
+    mode: single
 
-- id: "automation_sigen_ess_max_discharging_limit_input_number_action"
-  alias: "Predbat max discharging limit action"
-  description: "Mapper from input_number.discharge_rate to number.sigen_plant_ess_max_discharging_limit"
+- id: automation_sigen_ess_max_discharging_limit_input_number_action
+  alias: Predbat max discharging limit action
+  description: Mapper from input_number.discharge_rate to number.sigen_plant_ess_max_discharging_limit
   triggers:
-    - trigger: state
-      entity_id: input_number.discharge_rate
-  action:
-    - action: number.set_value
-      target:
-        entity_id: number.sigen_plant_ess_max_discharging_limit
-      data:
-        value: >-
-          "{{ [(states('input_number.discharge_rate') | float / 1000) | round(2),
-          states('sensor.sigen_inverter_ess_rated_discharging_power') | float] | min}}"
+  - trigger: state
+    entity_id: input_number.discharge_rate
+  actions:
+  - action: number.set_value
+    target:
+      entity_id: number.sigen_plant_ess_max_discharging_limit
+    data:
+      value: '{{ [(states(''input_number.discharge_rate'') | float / 1000) | round(2),
+        states(''sensor.sigen_inverter_ess_rated_discharging_power'') | float] | min}}'
   mode: single
 ```
+
+*Note:* Some Sigenergy Predbat users have reported that their Sigenergy modbus integration has created some of the entities that Predbat requires with different names
+so you may need to adapt the above automations and `apps.yaml` (or rename your entities) to match:
+
+- sensor.sigen_inverter_ess_rated_discharging_power is instead named sensor.sigen_inverter_ess_rated_discharge_power
+- sensor.sigen_inverter_ess_rated_charging_power is sensor.sigen_inverter_ess_rated_charge_power
+- sensor.sigen_plant_daily_consumed_energy is sensor.sigen_plant_daily_load_consumption
+
+*Important:* Depending upon your electricity supply, you may need to change where **number.sigen_plant_grid_import_limitation** is set to 100 in the first integration to any lower import limit that your electricity supplier may have imposed,
+e.g. 18kW roughly corresponds to an 80A supply.
 
 ## Sofar Inverters
 
@@ -1642,7 +1624,15 @@ You will need to make a number of changes to the solaredge apps.yaml, replacing 
         {{ myValue }}
 ```
 
-## Solax Gen4 Inverters
+## Solax Cloud
+
+**Experimental**
+
+- Predbat now has a built-in Solax cloud integration.
+
+See the components documentation for details [Components - Solax cloud](components.md#solax-cloud-api-solax)
+
+## Solax Gen4+ Inverters
 
 The Predbat Solax configuration can either either use the Mode1 remote control or the newer Mode8 option. Both should work with the SolaX Gen 4, 5 or 6 inverters.  Thanks @TCWORLD for this configuration.
 
@@ -1861,9 +1851,20 @@ max: 10
 
 - If you are using the inverter in Backup mode then you will need to set **input_number.predbat_set_reserve_min** to no lower than 15% minimum SoC, other modes allow a lower minimum SoC of 10%. This is a Solax limitation.
 
+- It has been reported by one Solax user that his inverter did not respond to commands from either the mode 1 or mode 8 scripts.
+The fix was to enable the hidden HA entity 'VPP Exit Idle Enable' and then change the entity value from Disabled to Enabled. Once this was Enabled the inverter responded correctly to Predbat commands.
+
 - When you first start Predbat, check the [Predbat log](output-data.md#predbat-logfile) to confirm that the correct sensor names are identified by the regular expressions in `apps.yaml`. Any non-matching expressions should be investigated and resolved.
 
 Please see this ticket in Github for ongoing discussion: <https://github.com/springfall2008/batpred/issues/259>
+
+## Solis Cloud
+
+**Experimental**
+
+- Predbat now has a built-in Solis cloud integration.
+
+See the components documentation for details [Components - Solis cloud](components.md#solis-cloud-api-solax)
 
 ## Solis Inverters before FB00
 
@@ -2651,6 +2652,8 @@ The default options passed in are:
 #### charge_freeze_service
 
 If defined will be called for freeze charge, otherwise, charge_start_service is used for freeze charge also.
+
+Note that **switch.predbat_set_charge_freeze** must be turned on for Predbat to plan Freeze Charge activity, and as this is an expert mode option, Predbat's [Expert Mode](customisation.md#expert-mode) must be turned on first.
 
 #### charge_stop_service
 
