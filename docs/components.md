@@ -710,9 +710,11 @@ For a detailed explanation of how the neural network works and comprehensive con
 | Option | Type | Required | Default | Config Key | Description |
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `load_ml_enable` | Boolean | Yes | False | `load_ml_enable` | Set to `True` to enable ML load prediction |
-| `load_ml_source` | Boolean | Yes | False | `load_ml_source` | Set to `True` to use the ML load prediction in Predbat |
+| `load_ml_source` | Boolean | No | False | `load_ml_source` | Set to `True` to use ML predictions in Predbat battery planning |
+| `load_ml_max_days_history` | Integer | No | 28 | `load_ml_max_days_history` | Maximum days of load history to fetch from HA on each poll (bounded by HA recorder retention) |
+| `load_ml_database_days` | Integer | No | 90 | `load_ml_database_days` | Days of history to accumulate in the on-disk database (`predbat_ml_history.npz`); set to 0 to disable the database |
 
-Note: load_today, pv_today and car_charging_energy apps.yaml configuration items are also used, but these should already be set in Predbat.
+Note: `load_today`, `pv_today` and `car_charging_energy` apps.yaml configuration items are also used, but these should already be set in Predbat.
 
 #### Configuration example (load_ml)
 
@@ -723,8 +725,14 @@ predbat:
   # Use the data in Predbat, can be false while exploring the predictions but not using them
   load_ml_source: True
 
+  # Optional: days of history to fetch from HA each poll (default 28, limited by HA retention)
+  # load_ml_max_days_history: 28
+
+  # Optional: days of history to accumulate on disk for training (default 90)
+  # load_ml_database_days: 90
+
   # Optional but recommended: enable temperature forecasts
-  temperature_enable: true  
+  temperature_enable: true
 ```
 
 #### Understanding model status (load_ml)

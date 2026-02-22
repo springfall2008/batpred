@@ -8,6 +8,7 @@ This prediction is based on historical load patterns, time-of-day patterns, day-
 - [Overview](#overview)
 - [How the Neural Network Works](#how-the-neural-network-works)
 - [Configuration](#configuration)
+- [History Accumulation and the Database](#history-accumulation-and-the-database)
 - [Setup Instructions](#setup-instructions)
 - [Understanding the Model](#understanding-the-model)
 - [Monitoring and Troubleshooting](#monitoring-and-troubleshooting)
@@ -26,7 +27,7 @@ The ML Load Prediction component uses a lightweight multi-layer perceptron (MLP)
 - Uses historical and future energy import/export rates as input features
 - Deep neural network with 4 hidden layers [512, 256, 128, 64 neurons]
 - Optimized with He initialization and AdamW weight decay for robust training
-- Automatically trains on historical data (requires at least 1 day, recommended 7+ days, up to 28 days configurable)
+- Automatically trains on historical data (requires at least 1 day, recommended 7+ days; fetches up to `load_ml_max_days_history` days from HA and accumulates up to `load_ml_database_days` days in the on-disk database)
 - Fine-tunes periodically (every 2 hours) using full dataset to adapt to changing patterns
 - Time-weighted training prioritizes recent data while learning from historical patterns
 - Model persists across restarts
@@ -96,8 +97,8 @@ To prevent drift in long-range predictions, the model blends autoregressive pred
 
 **Initial Training:**
 
-- Requires at least 1 day of historical data (7+ days recommended, up to 28 days configurable)
-- Fetches up to 28 days of load history by default (configurable via `load_ml_max_days_history`)
+- Requires at least 1 day of historical data (7+ days recommended, configurable via `load_ml_max_days_history`)
+- Fetches up to `load_ml_max_days_history` days (default: 28) from HA, then merges with accumulated database history (up to `load_ml_database_days`, default: 90 days)
 - Uses 100 epochs with early stopping (patience=5)
 - Batch size: 128 samples
 - AdamW optimizer with learning rate 0.001 and weight decay 0.01
@@ -116,7 +117,7 @@ To prevent drift in long-range predictions, the model blends autoregressive pred
 **Fine-tuning:**
 
 - Runs every 2 hours if enabled
-- Uses full available dataset (same as initial training, up to 28 days)
+- Uses full available dataset (HA fetch merged with database history, up to `load_ml_database_days` total)
 - Uses 3 epochs to quickly adapt to recent changes
 - Applies same time-weighted sampling to prioritize recent data
 - Preserves learned patterns while adapting to new ones
@@ -130,7 +131,7 @@ Although fine-tuning uses up to 20 epochs (vs 100 for initial training), it stil
 
 - **Prevents catastrophic forgetting**: Using only recent data would cause the model to gradually forget older patterns
 - **Balances adaptation**: Time weighting ensures recent changes are prioritized while maintaining long-term pattern knowledge
-- **Handles seasonal patterns**: 28 days of history helps capture weekly cycles and early seasonal trends
+- **Handles seasonal patterns**: A deep history database (default 90 days) helps capture weekly cycles and seasonal trends
 - **Provides stability**: The model learns from a broader context, making predictions more robust
 
 With time-weighted sampling, training samples have these relative weights:
@@ -164,21 +165,51 @@ predbat:
   # Use the output data in Predbat (can be False to explore the use without using the data)
   load_ml_source: True
 
-  # Optional: Maximum days of historical data to use for training (default: 28)
+  # Optional: Maximum days of historical data to fetch from HA on each poll (default: 28)
   # load_ml_max_days_history: 28
+
+  # Optional: Number of days of history to accumulate in the on-disk database (default: 90)
+  # load_ml_database_days: 90
 ```
 
 **Configuration Parameter Details:**
 
 - `load_ml_enable`: Enables the ML component (required)
 - `load_ml_source`: When `true`, Predbat uses ML predictions for battery planning. Set to `false` to test predictions without affecting battery control
-- `load_ml_max_days_history`: Maximum days of historical data to fetch and train on
+- `load_ml_max_days_history`: Maximum days of historical data to fetch from Home Assistant on each poll (every 30 minutes)
     - **Default**: 28 days
     - **Minimum**: 1 day (not recommended for production)
     - **Recommended**: 7-28 days depending on your consumption patterns
+    - **Constraint**: Limited by your HA recorder retention period — you cannot fetch more history than HA has stored
     - **When to increase**: If you have very regular weekly patterns or want seasonal awareness
     - **When to decrease**: If your consumption patterns change frequently, or you have limited historical data storage
-    - **Note**: Training time increases slightly with more data, but fine-tuning remains fast (3 epochs)
+    - **Note**: Training time increases slightly with more data, but fine-tuning remains fast due to importance-weighted sampling
+- `load_ml_database_days`: Number of days of history to accumulate and persist in the on-disk database file (`predbat_ml_history.npz`)
+    - **Default**: 90 days
+    - **How it works**: See [History Accumulation and the Database](#history-accumulation-and-the-database) below
+    - **When to increase**: If you want the model to learn long-term seasonal patterns (e.g. summer vs winter)
+    - **When to decrease**: To save disk space, or if you prefer the model to forget older patterns faster
+    - **Disk usage**: Each day of history uses approximately 1.4 MB (5 channels × 288 steps/day × 4 bytes)
+
+### History Accumulation and the Database
+
+The ML component maintains two distinct layers of historical data:
+
+**Live fetch layer** (`load_ml_max_days_history`):
+Every 30 minutes the component fetches the most recent N days of sensor history from Home Assistant. This is limited by your HA recorder retention — if HA only stores 14 days then that is all you will get regardless of what `load_ml_max_days_history` is set to.
+
+**Accumulated database layer** (`load_ml_database_days`):
+After each successful fetch, the newly fetched data is *merged* with the existing in-memory dataset and saved to `predbat_ml_history.npz`. This means history accumulates over time, well beyond what a single HA fetch can provide. For example with a 14-day HA retention and `load_ml_database_days: 90` set, after 90 days of running the model will have 90 days of load history to train on — far more than HA alone could supply.
+
+**How the merge works:**
+Before each fetch the existing in-memory data is time-shifted forward so that all keys remain anchored to "minutes ago from now". Fresh data from HA is then merged on top, with the fresh values taking priority for the most recent period. Older keys that have shifted beyond `load_ml_database_days` are dropped.
+
+This means:
+
+- `load_ml_max_days_history` controls how much fresh data is pulled from HA each cycle (bounded by HA retention)
+- `load_ml_database_days` controls the total depth of the training dataset that accumulates on disk
+- Setting `load_ml_database_days` to 0 or leaving `load_ml_database_days` unset disables the database entirely — training only ever uses what HA currently has
+- The age reported in logs and the `training_days` attribute reflects the actual depth of the accumulated dataset, computed from the furthest key present in memory
 
 For best results:
 
@@ -239,7 +270,7 @@ Before enabling ML load prediction:
 1. Ensure you have a `load_today` sensor that tracks cumulative daily energy consumption
 2. Optionally configure `pv_today` if you have solar panels
 3. **Recommended**: Enable the Temperature component (Temperature Component in components documentation)
-4. Ensure you have at least 1 day of historical data (7+ days recommended, up to 28 days by default)
+4. Ensure you have at least 1 day of historical data (7+ days recommended); the database will accumulate history over time beyond what HA retains
 
 ### Step 2: Enable the Component
 
@@ -249,7 +280,7 @@ Add `load_ml_enable: true` to your `apps.yaml` and restart Predbat.
 
 On first run, the component will:
 
-1. Fetch historical load data (default: up to 28 days, configurable)
+1. Load the history database (if present) and fetch fresh historical load data from HA (up to `load_ml_max_days_history` days, default 28)
 2. Train the neural network (takes 1-5 minutes depending on data)
 3. Validate the model
 4. Begin making predictions if validation passes
@@ -287,7 +318,7 @@ You can check model status in the Predbat logs or via the component status page 
 
 Good predictions require:
 
-1. **Sufficient Historical Data**: At least 7 days recommended for stable patterns (supports up to 28 days by default)
+1. **Sufficient Historical Data**: At least 7 days recommended for stable patterns; training uses the full accumulated database (up to `load_ml_database_days`, default 90 days) merged with recent HA history (up to `load_ml_max_days_history`, default 28 days)
 2. **Consistent Patterns**: Regular daily/weekly routines improve accuracy
 3. **Temperature Data**: Especially important for homes with electric heating/cooling (requires Temperature component)
 4. **Energy Rate Data**: Automatically included - helps model learn consumption patterns based on time-of-use tariffs
@@ -408,7 +439,11 @@ Access predictions via:
 
 ## Model Persistence
 
-The trained model is saved to disk as `predbat_ml_model.npz` in your Predbat config directory. This file contains:
+Two files are saved to your Predbat config directory:
+
+### `predbat_ml_model.npz` — the trained neural network
+
+This file contains:
 
 - **Network weights and biases**: All 4 hidden layers plus output layer
 - **Optimizer state**: Adam momentum terms for continuing fine-tuning
@@ -418,6 +453,19 @@ The trained model is saved to disk as `predbat_ml_model.npz` in your Predbat con
 The model is automatically loaded on Predbat restart, allowing predictions to continue immediately without retraining. The EMA-updated normalization parameters are saved and restored with the model, so drift tracking is preserved across restarts.
 
 **Note**: If you update Predbat and the model architecture or version changes, the old model will be rejected and a new model will be trained from scratch. If the model becomes unstable, you can manually delete `predbat_ml_model.npz` to force retraining.
+
+### `predbat_ml_history.npz` — the accumulated history database
+
+This file is created when `load_ml_database_days` is set (default: 90). It contains:
+
+- **Five data channels**: load, PV, temperature, import rates, export rates — each stored as a dense float32 array covering `load_ml_database_days` days of 5-minute steps
+- **Metadata**: Save timestamp, schema version, step size, and data age — used on reload to correctly time-shift the stored data before merging with fresh HA data
+
+On startup the history database is loaded, time-shifted to align with the current time, then merged with a fresh fetch from HA. This means the training dataset immediately benefits from all accumulated history even before any new data arrives.
+
+Future PV forecast values (negative keys) are never persisted — they are always re-fetched fresh.
+
+**Resetting the database**: Delete `predbat_ml_history.npz` to discard all accumulated history and start fresh. The model file is independent and does not need to be deleted at the same time.
 
 ---
 

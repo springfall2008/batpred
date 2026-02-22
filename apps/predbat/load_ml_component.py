@@ -26,12 +26,16 @@ from component_base import ComponentBase
 from utils import get_now_from_cumulative, dp2, dp4, minute_data
 from load_predictor import LoadPredictor, MODEL_VERSION
 from const import TIME_FORMAT, PREDICT_STEP
+import json
 import traceback
 import numpy as np
 
 # Training intervals
 RETRAIN_INTERVAL_SECONDS = 2 * 60 * 60  # 2 hours between training cycles
 PREDICTION_INTERVAL_SECONDS = 30 * 60  # 30 minutes between predictions
+
+# Database schema version - increment when the saved format changes to force a clean rebuild
+DATABASE_VERSION = 1
 
 
 class LoadMLComponent(ComponentBase):
@@ -47,14 +51,15 @@ class LoadMLComponent(ComponentBase):
     - Falls back to empty predictions when validation fails or model is stale
     """
 
-    def initialize(self, load_ml_enable, load_ml_source=True, load_ml_max_days_history=28):
+    def initialize(self, load_ml_enable, load_ml_source=True, load_ml_max_days_history=28, load_ml_database_days=365):
         """
         Initialize the ML load forecaster component.
 
         Args:
             load_ml_enable: Whether ML forecasting is enabled
             load_ml_source: Whether using ML as the data source is enabled or not
-            load_ml_max_days_history: Maximum number of days of load history to use for training
+            load_ml_max_days_history: Maximum number of days of load history to fetch
+            load_ml_database_days: Number of days of historical data to store in the database, maximum length for training
         """
 
         self.ml_enable = load_ml_enable
@@ -78,6 +83,7 @@ class LoadMLComponent(ComponentBase):
         self.ml_max_model_age_hours = 48
         self.ml_weight_decay = 0.01
         self.ml_max_days_history = load_ml_max_days_history
+        self.load_ml_database_days = load_ml_database_days
         self.ml_validation_holdout_hours = 24
         self.ml_epochs_patience = 5
 
@@ -98,12 +104,14 @@ class LoadMLComponent(ComponentBase):
         self.model_status = "not_initialized"
         self.last_train_time = None
         self.initial_training_done = False
+        self.database_history_loaded = False
 
         # Predictions cache
         self.current_predictions = {}
 
-        # Model file path
+        # Model and database file paths
         self.model_filepath = None
+        self.database_filepath = None
 
         # Validate configuration
         if self.ml_enable and not self.ml_load_sensor:
@@ -120,8 +128,10 @@ class LoadMLComponent(ComponentBase):
         # Determine model save path
         if self.config_root:
             self.model_filepath = os.path.join(self.config_root, "predbat_ml_model.npz")
+            self.database_filepath = os.path.join(self.config_root, "predbat_ml_history.npz")
         else:
             self.model_filepath = None
+            self.database_filepath = None
 
         # Try to load existing model
         if self.model_filepath and os.path.exists(self.model_filepath):
@@ -282,19 +292,19 @@ class LoadMLComponent(ComponentBase):
             # Fetch load sensor history
             self.log("ML Component: Fetching {} days of load history from {}".format(days_to_fetch, self.ml_load_sensor))
 
-            load_minutes, load_minutes_age = self.base.minute_data_load(self.now_utc, "load_today", days_to_fetch, required_unit="kWh", load_scaling=self.get_arg("load_scaling", 1.0), interpolate=True)
+            load_minutes, load_minutes_age = self.base.minute_data_load(self.now_utc, "load_today", days_to_fetch, required_unit="kWh", load_scaling=self.get_arg("load_scaling", 1.0), interpolate=True, pad=False)
             if not load_minutes:
                 self.log("Warn: ML Component: Failed to convert load history to minute data")
                 return None, 0, 0, None, None, None, None
             days_to_fetch = min(days_to_fetch, load_minutes_age)
 
             if self.get_arg("load_power", default=None, indirect=False) and self.get_arg("load_power_fill_enable", True):
-                load_power_data, load_minutes_age = self.base.minute_data_load(self.now_utc, "load_power", days_to_fetch, required_unit="W", load_scaling=1.0, interpolate=True)
+                load_power_data, load_minutes_age = self.base.minute_data_load(self.now_utc, "load_power", days_to_fetch, required_unit="W", load_scaling=1.0, interpolate=True, pad=False)
                 load_minutes = self.base.fill_load_from_power(load_minutes, load_power_data)
 
             car_charging_energy = {}
             if self.get_arg("car_charging_energy", default=None, indirect=False):
-                car_charging_energy = self.base.minute_data_import_export(days_to_fetch, self.now_utc, "car_charging_energy", scale=self.car_charging_energy_scale, required_unit="kWh")
+                car_charging_energy = self.base.minute_data_import_export(days_to_fetch, self.now_utc, "car_charging_energy", scale=self.car_charging_energy_scale, required_unit="kWh", pad=False)
 
             max_minute = max(load_minutes.keys()) if load_minutes else 0
             max_minute = (max_minute // 5) * 5  # Align to 5-minute intervals
@@ -323,44 +333,55 @@ class LoadMLComponent(ComponentBase):
                     load_minutes_new[minute] = dp4(total_load_energy + load_delta)
                     total_load_energy += load_delta
 
-            # Get current cumulative load value (excludes car)
+            # Get current cumulative load value (excludes car) before converting to per-step
             load_minutes_now = get_now_from_cumulative(load_minutes_new, self.minutes_now, backwards=True)
+
+            # Convert cumulative load data to per-5-min energy for the predictor
+            # Positive keys: historical, minute 0 = most recent; energy = delta per PREDICT_STEP interval
+            load_max_minute = max(load_minutes_new.keys()) if load_minutes_new else 0
+            load_energy_per_step = {}
+            for m in range(0, load_max_minute, PREDICT_STEP):
+                energy = self.get_from_incrementing(load_minutes_new, m, PREDICT_STEP, backwards=True)
+                load_energy_per_step[m] = dp4(energy)
+            load_minutes_new = load_energy_per_step
 
             # PV Data
             if self.ml_pv_sensor:
-                pv_data_hist, pv_minutes_age = self.base.minute_data_load(self.now_utc, "pv_today", days_to_fetch, required_unit="kWh", load_scaling=1.0, interpolate=True)
+                pv_data_hist, pv_minutes_age = self.base.minute_data_load(self.now_utc, "pv_today", days_to_fetch, required_unit="kWh", load_scaling=1.0, interpolate=True, pad=False)
                 days_to_fetch = min(days_to_fetch, pv_minutes_age)
             else:
                 pv_data_hist = {}
 
-            pv_data = {}
-            # The historical PV data is incrementing, but samples can be taken quite frequently.
-            # As the future forecast is only in 30 minute slots aligned to 30 minute boundary
-            # we should try to normalise the historical data otherwise future predictions will be very inaccurate when the historical data is sampled at a different frequency to the future predictions.
-            # To do this we will take the historical PV data and resample it to 30 minute slots aligned to 30 minute boundary, we will then use the future forecast to fill in the gaps between the historical data and the future predictions.
+            # Build per-minute cumulative PV history resampled to 30-min aligned boundaries.
+            # This normalises the data regardless of how frequently the sensor is sampled.
+            pv_data_cumulative = {}
             alignment = self.minutes_now % 30  # e.g. we are 17 minutes past a 30 minute boundary
             current_value = 0
             for minute_align in range(max_minute - alignment, -30, -30):
                 new_value = pv_data_hist.get(minute_align, current_value)
                 delta_per_minute = max(new_value - current_value, 0) / 30.0
-                # Spread the delta evenly over the 30 minute period leading up to this point
-                # Interpolate backwards from new_value at minute_align to current_value at minute_align-30
                 for m in range(29, -1, -1):
                     minute = minute_align + m
                     if minute >= 0:
-                        pv_data[minute] = dp4(new_value - (delta_per_minute * m))
+                        pv_data_cumulative[minute] = dp4(new_value - (delta_per_minute * m))
                 current_value = new_value
 
+            # Convert cumulative per-minute PV history to per-5-min energy
+            # Positive keys: historical; minute 0 = most recent
+            pv_data = {}
+            pv_hist_max = max(pv_data_cumulative.keys()) if pv_data_cumulative else 0
+            for m in range(0, pv_hist_max, PREDICT_STEP):
+                energy = self.get_from_incrementing(pv_data_cumulative, m, PREDICT_STEP, backwards=True)
+                pv_data[m] = dp4(energy)
+
             pv_forecast_minute, pv_forecast_minute10 = self.base.fetch_pv_forecast()
-            # PV Data has the historical PV data (minute is the number of minutes in the past)
-            # PV forecast has the predicted PV generation for the next 24 hours (minute is the number of minutes from midnight forward
-            # Combine the two into a new dict where negative minutes are in the future and positive in the past
-            current_value = pv_data.get(0, 0)
+            # Add future PV forecast as per-5-min energy with negative keys (negative = future)
+            # key -5 = first future step, -10 = second, etc.
             if pv_forecast_minute:
                 max_minute = max(pv_forecast_minute.keys()) + PREDICT_STEP
                 for minute in range(self.minutes_now + PREDICT_STEP, max_minute, PREDICT_STEP):
-                    current_value += pv_forecast_minute.get(minute, 0.0)  # Add 0 if missing, not current_value
-                    pv_data[-minute + self.minutes_now] = dp4(current_value)
+                    step_energy = pv_forecast_minute.get(minute, 0.0)
+                    pv_data[-(minute - self.minutes_now)] = dp4(step_energy)
 
             # Temperature predictions
             temp_entity = "sensor." + self.prefix + "_temperature"
@@ -427,8 +448,8 @@ class LoadMLComponent(ComponentBase):
                     scale=1.0,
                 )
             # try to retrieve import and export rate history to detect rate-based load patterns
-            import_rates_history = self.base.minute_data_import_export(days_to_fetch, self.now_utc, import_entity, scale=1.0, increment=False, smoothing=False)
-            export_rates_history = self.base.minute_data_import_export(days_to_fetch, self.now_utc, export_entity, scale=1.0, increment=False, smoothing=False)
+            import_rates_history = self.base.minute_data_import_export(days_to_fetch, self.now_utc, import_entity, scale=1.0, increment=False, smoothing=False, pad=False)
+            export_rates_history = self.base.minute_data_import_export(days_to_fetch, self.now_utc, export_entity, scale=1.0, increment=False, smoothing=False, pad=False)
 
             # Merge import_rates_history with import_rates_data
             if import_rates_history is None:
@@ -448,8 +469,6 @@ class LoadMLComponent(ComponentBase):
             self.log("ML Component: Fetched {} load data points, {:.1f} days of history".format(len(load_minutes_new), days_to_fetch))
             if 0:
                 with open("ml_load_debug.json", "w") as f:
-                    import json
-
                     json.dump(
                         {
                             "now_utc": self.now_utc.isoformat(),
@@ -474,6 +493,58 @@ class LoadMLComponent(ComponentBase):
             self.log("Error: ML Component: Failed to fetch load data: {}".format(e))
             self.log("Error: ML Component: {}".format(traceback.format_exc()))
             return None, 0, 0, None, None, None, None
+
+    @staticmethod
+    def _shift_channel(d, elapsed_minutes, max_minutes):
+        """Shift {minute: value} keys forward by elapsed time, dropping entries that fall beyond max_minutes."""
+        if not d or elapsed_minutes <= 0:
+            return d
+        shift = round(elapsed_minutes / PREDICT_STEP) * PREDICT_STEP
+        return {k + shift: v for k, v in d.items() if k + shift < max_minutes}
+
+    @staticmethod
+    def _merge_channel(old, new):
+        """Merge two channel dicts, with new values taking priority over old."""
+        if old:
+            merged = dict(old)
+            merged.update(new)
+            return merged
+        return new
+
+    def _recompute_age_days(self):
+        """Recompute load_data_age_days from the actual extent of load_data keys."""
+        if self.load_data:
+            self.load_data_age_days = max(self.load_data.keys()) // (24 * 60)
+
+    def _shift_fetch_data(self):
+        """
+        Shift existing in-memory channel dicts by the time elapsed since the last fetch to keep keys anchored to 'minutes ago from now'.
+        """
+        max_history_minutes = self.load_ml_database_days * 24 * 60 if self.load_ml_database_days else self.ml_max_days_history * 24 * 60
+
+        if self.last_data_fetch:
+            elapsed = (self.now_utc - self.last_data_fetch).total_seconds() / 60.0
+            self.load_data = self._shift_channel(self.load_data, elapsed, max_history_minutes)
+            self.pv_data = self._shift_channel(self.pv_data, elapsed, max_history_minutes)
+            self.temperature_data = self._shift_channel(self.temperature_data, elapsed, max_history_minutes)
+            self.import_rates_data = self._shift_channel(self.import_rates_data, elapsed, max_history_minutes)
+            self.export_rates_data = self._shift_channel(self.export_rates_data, elapsed, max_history_minutes)
+            self._recompute_age_days()
+
+    def _merge_fetch_data(self, load_data, age_days, load_minutes_now, pv_data, temperature_data, import_rates_data, export_rates_data):
+        """
+        Merge newly fetched data with existing in-memory data
+        """
+        self.load_data = self._merge_channel(self.load_data, load_data)
+        self.pv_data = self._merge_channel(self.pv_data, pv_data) if pv_data else self.pv_data
+        self.temperature_data = self._merge_channel(self.temperature_data, temperature_data) if temperature_data else self.temperature_data
+        self.import_rates_data = self._merge_channel(self.import_rates_data, import_rates_data) if import_rates_data else self.import_rates_data
+        self.export_rates_data = self._merge_channel(self.export_rates_data, export_rates_data) if export_rates_data else self.export_rates_data
+        self._recompute_age_days()
+        self.load_minutes_now = load_minutes_now
+        self.last_data_fetch = self.now_utc
+        self.data_ready = True
+        self.ml_validation_holdout_hours = 48 if self.load_data_age_days > 3 else 24
 
     def get_current_prediction(self):
         """
@@ -545,7 +616,12 @@ class LoadMLComponent(ComponentBase):
         should_fetch = first or ((seconds % PREDICTION_INTERVAL_SECONDS) == 0)
         should_train = first or ((seconds % RETRAIN_INTERVAL_SECONDS) == 0)
 
-        if is_initial:
+        if not self.database_history_loaded and self.load_ml_database_days:
+            async with self.data_lock:
+                await self.load_database_history()
+            should_fetch = True
+            should_train = True
+        elif is_initial:
             # Initial run, need to fetch data and train model before we can provide predictions
             should_train = True
             should_fetch = True
@@ -554,24 +630,15 @@ class LoadMLComponent(ComponentBase):
             should_fetch = True
 
         if should_fetch:
+            # Shift existing data to keep it anchored to 'minutes ago from now' before fetching new data, so that we can merge them and preserve historical depth even if the fetch returns limited history
             async with self.data_lock:
+                self._shift_fetch_data()
                 load_data, age_days, load_minutes_now, pv_data, temperature_data, import_rates_data, export_rates_data = await self._fetch_load_data()
                 if load_data:
-                    self.load_data = load_data
-                    self.load_data_age_days = age_days
-                    self.load_minutes_now = load_minutes_now
-                    self.pv_data = pv_data
-                    self.temperature_data = temperature_data
-                    self.import_rates_data = import_rates_data
-                    self.export_rates_data = export_rates_data
-                    self.last_data_fetch = self.now_utc
-                    self.data_ready = True
-                    if age_days > 3:
-                        self.ml_validation_holdout_hours = 48
-                    else:
-                        self.ml_validation_holdout_hours = 24
+                    self._merge_fetch_data(load_data, age_days, load_minutes_now, pv_data, temperature_data, import_rates_data, export_rates_data)
                 else:
                     self.log("Warn: ML Component: Failed to fetch load data, no data was returned.")
+            self.log("ML Component: Data fetch completed, load data age {:.1f} days, {} data points".format(self.load_data_age_days, len(self.load_data) if self.load_data else 0))
 
         # Check if we have data
         if not self.data_ready:
@@ -603,9 +670,135 @@ class LoadMLComponent(ComponentBase):
             # Publish entity with current state
             self._publish_entity()
             self.log("ML Component: Prediction cycle completed")
+            # Write database if enabled
+            if self.load_ml_database_days:
+                await self.save_database_history()
 
         self.update_success_timestamp()
         return True
+
+    async def save_database_history(self):
+        """Save historical channel data to a compact compressed binary file.
+
+        Each channel (load, pv, temp, import_rate, export_rate) is stored as a dense
+        float32 array indexed by step number (index i = minute i*PREDICT_STEP from now).
+        A JSON metadata blob captures the save timestamp and schema version so that on
+        reload we can shift the arrays to align them with the current time.
+
+        Only historical (positive-key) data is persisted; future forecast values
+        (negative keys in pv_data) are always re-fetched fresh.
+        """
+        if not self.database_filepath or not self.load_data:
+            return
+
+        max_steps = self.load_ml_database_days * 24 * 60 // PREDICT_STEP
+
+        def dict_to_array(data_dict):
+            arr = np.zeros(max_steps, dtype=np.float32)
+            if data_dict:
+                for minute, value in data_dict.items():
+                    # Only persist historical data (non-negative integer keys)
+                    if isinstance(minute, int) and minute >= 0:
+                        idx = minute // PREDICT_STEP
+                        if 0 <= idx < max_steps:
+                            arr[idx] = float(value)
+            return arr
+
+        total_steps = len(self.load_data) if self.load_data else 0
+
+        metadata = json.dumps(
+            {
+                "version": DATABASE_VERSION,
+                "saved_utc": self.now_utc.isoformat(),
+                "step_minutes": PREDICT_STEP,
+                "n_steps": total_steps,
+                "age_days": float(self.load_data_age_days),
+            }
+        )
+
+        try:
+            np.savez_compressed(
+                self.database_filepath,
+                metadata_json=np.array(metadata),
+                load=dict_to_array(self.load_data),
+                pv=dict_to_array(self.pv_data),
+                temp=dict_to_array(self.temperature_data),
+                import_rate=dict_to_array(self.import_rates_data),
+                export_rate=dict_to_array(self.export_rates_data),
+            )
+            self.log("ML Component: Saved {} steps ({} days) of history to {}".format(total_steps, self.load_data_age_days, self.database_filepath))
+        except Exception as e:
+            self.log("Warn: ML Component: Failed to save database history: {}".format(e))
+
+    async def load_database_history(self):
+        """Load and time-shift historical channel data from the compressed binary database.
+
+        The arrays are shifted rightward by the number of 5-min steps that have elapsed
+        since the file was saved, so that old data appears at the correct historical offset
+        relative to the current time.  The fresh sensor fetch that follows will overwrite
+        the most recent portion of each channel.
+        """
+        self.database_history_loaded = True
+
+        if not self.database_filepath or not os.path.exists(self.database_filepath):
+            self.log("ML Component: No database history file found, starting fresh")
+            return
+
+        try:
+            data = np.load(self.database_filepath, allow_pickle=False)
+            metadata = json.loads(str(data["metadata_json"]))
+
+            version = metadata.get("version", 0)
+            if version != DATABASE_VERSION:
+                self.log("Warn: ML Component: Database version mismatch (saved={}, current={}), discarding".format(version, DATABASE_VERSION))
+                return
+
+            step_minutes = metadata.get("step_minutes", PREDICT_STEP)
+            if step_minutes != PREDICT_STEP:
+                self.log("Warn: ML Component: Database step size mismatch (saved={}min, current={}min), discarding".format(step_minutes, PREDICT_STEP))
+                return
+
+            saved_utc = datetime.fromisoformat(metadata["saved_utc"])
+            age_days = float(metadata.get("age_days", 0))
+
+            max_steps = self.load_ml_database_days * 24 * 60 // PREDICT_STEP
+
+            def array_to_dict(arr):
+                """Reconstruct a sparse {minute: value} dict with keys as stored (no shift).
+                The shift to align with the current time is applied later in run() via _shift(),
+                using last_data_fetch=saved_utc to compute the correct elapsed time."""
+                result = {}
+                for i in range(len(arr)):
+                    val = float(arr[i])
+                    if val != 0.0:
+                        result[i * PREDICT_STEP] = val
+                return result
+
+            self.load_data = array_to_dict(data["load"])
+            self.pv_data = array_to_dict(data["pv"])
+            self.temperature_data = array_to_dict(data["temp"])
+            self.import_rates_data = array_to_dict(data["import_rate"])
+            self.export_rates_data = array_to_dict(data["export_rate"])
+            self.load_data_age_days = age_days
+            # Restore last_data_fetch to the save time so that run()'s _shift() will
+            # compute the correct elapsed time and apply the shift exactly once.
+            self.last_data_fetch = saved_utc
+
+            if self.load_data:
+                self.data_ready = True
+
+            elapsed_minutes = (self.now_utc - saved_utc).total_seconds() / 60.0
+            self.log("ML Component: Loaded database history: {} load points, {:.1f}h elapsed since save, age {:.1f} days (shift will be applied on next fetch)".format(len(self.load_data), elapsed_minutes / 60.0, self.load_data_age_days))
+
+        except Exception as e:
+            self.log("Warn: ML Component: Failed to load database history: {} - {}".format(e, traceback.format_exc()))
+            # Reset any partial state
+            self.load_data = None
+            self.pv_data = None
+            self.temperature_data = None
+            self.import_rates_data = None
+            self.export_rates_data = None
+            self.data_ready = False
 
     async def _do_training(self, is_initial):
         """

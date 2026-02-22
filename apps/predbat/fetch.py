@@ -524,7 +524,7 @@ class Fetch:
         else:
             return max(data.get(index + 1, 0) - data.get(index, 0), 0)
 
-    def minute_data_import_export(self, max_days_previous, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True):
+    def minute_data_import_export(self, max_days_previous, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True):
         """
         Download one or more entities for import/export data
         """
@@ -552,9 +552,21 @@ class Fetch:
                 history = []
 
             if history and len(history) > 0:
+                item = history[0][0]
+                try:
+                    last_updated_time = str2time(item["last_updated"])
+                except (ValueError, TypeError):
+                    last_updated_time = now_utc
+                age_days = max_days_previous
+                age = now_utc - last_updated_time
+                if age_days is None:
+                    age_days = age.days
+                else:
+                    age_days = min(age_days, age.days)
+
                 import_today, _ = minute_data(
                     history[0],
-                    max_days_previous,
+                    max_days_previous if pad else age_days,
                     now_utc,
                     "state",
                     "last_updated",
@@ -575,7 +587,7 @@ class Fetch:
 
         return import_today
 
-    def minute_data_load(self, now_utc, entity_name, max_days_previous, load_scaling=1.0, required_unit=None, interpolate=False):
+    def minute_data_load(self, now_utc, entity_name, max_days_previous, load_scaling=1.0, required_unit=None, interpolate=False, pad=True):
         """
         Download one or more entities for load data
         """
@@ -615,7 +627,7 @@ class Fetch:
                     age_days = min(age_days, age.days)
                 load_minutes, _ = minute_data(
                     history[0],
-                    max_days_previous,
+                    max_days_previous if pad else age_days,
                     now_utc,
                     "state",
                     "last_updated",

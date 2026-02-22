@@ -59,6 +59,7 @@ def test_load_ml(my_predbat=None):
         ("component_fetch_load_data", _test_component_fetch_load_data, "LoadMLComponent _fetch_load_data method"),
         ("component_publish_entity", _test_component_publish_entity, "LoadMLComponent _publish_entity method"),
         ("car_subtraction_direct", _test_car_subtraction_direct, "Direct car_subtraction method with interpolation and smoothing"),
+        ("component_run_data_merge", _test_component_run_data_merge, "LoadMLComponent run() data fetch, save and merge across two runs"),
         # ("real_data_training", _test_real_data_training, "Train on real data with chart"),
         # ("pretrained_model_prediction", _test_pretrained_model_prediction, "Load pre-trained model and generate predictions with chart"),
     ]
@@ -257,12 +258,15 @@ def _test_pv_energy_conversion():
 
 
 def _create_synthetic_pv_data(n_days=7, now_utc=None, forecast_hours=48):
-    """Create synthetic PV data for testing (historical + forecast)"""
+    """Create synthetic PV data for testing (historical + forecast).
+
+    Returns per-5-min energy (kWh per step) — not cumulative.
+    Positive keys = historical (minute 0 = now), negative keys = future.
+    """
     if now_utc is None:
         now_utc = datetime.now(timezone.utc)
 
     pv_minutes = {}
-    cumulative = 0.0
 
     # Historical PV (positive minutes, backwards from now)
     n_minutes = n_days * 24 * 60
@@ -280,12 +284,11 @@ def _create_synthetic_pv_data(n_days=7, now_utc=None, forecast_hours=48):
         else:
             energy = 0.0
 
-        energy = max(0, energy)
-        cumulative += energy
-        pv_minutes[minute] = cumulative
+        # Store per-step energy directly (not cumulative)
+        pv_minutes[minute] = max(0.0, energy)
 
     # Future PV forecast (negative minutes, forward from now)
-    forecast_cumulative = pv_minutes[0]  # Start from current cumulative
+    # Negative key -5 = first future step, -10 = second, etc.
     for step in range(1, (forecast_hours * 60 // STEP_MINUTES) + 1):
         minute = -step * STEP_MINUTES
         dt = now_utc + timedelta(minutes=step * STEP_MINUTES)
@@ -298,9 +301,8 @@ def _create_synthetic_pv_data(n_days=7, now_utc=None, forecast_hours=48):
         else:
             energy = 0.0
 
-        energy = max(0, energy)
-        forecast_cumulative += energy
-        pv_minutes[minute] = forecast_cumulative
+        # Store per-step energy for each future step (not cumulative)
+        pv_minutes[minute] = max(0.0, energy)
 
     return pv_minutes
 
@@ -358,13 +360,16 @@ def _create_synthetic_temp_data(n_days=7, now_utc=None, forecast_hours=48):
 
 
 def _create_synthetic_load_data(n_days=7, now_utc=None):
-    """Create synthetic load data for testing"""
+    """Create synthetic load data for testing.
+
+    Returns per-5-min energy (kWh per step) — not cumulative.
+    Positive keys = historical, minute 0 = most recent.
+    """
     if now_utc is None:
         now_utc = datetime.now(timezone.utc)
 
     n_minutes = n_days * 24 * 60
     load_minutes = {}
-    cumulative = 0.0
 
     # Build backwards from now (minute 0 = now)
     # Start from a multiple of STEP_MINUTES and go down to 0
@@ -380,9 +385,8 @@ def _create_synthetic_load_data(n_days=7, now_utc=None):
         else:
             energy = 0.05 + 0.02 * np.random.randn()  # ~0.05 kWh at night
 
-        energy = max(0, energy)
-        cumulative += energy
-        load_minutes[minute] = cumulative
+        # Store per-step energy directly (not cumulative)
+        load_minutes[minute] = max(0.0, energy)
 
     return load_minutes
 
@@ -883,6 +887,149 @@ def _test_prediction_with_temp():
         assert max_minute >= 2800, f"Predictions should span ~48h (2880 min), got {max_minute} min"
 
 
+def _test_component_run_data_merge():
+    """Test LoadMLComponent.run() - mocks _fetch_load_data and verifies:
+    1. Data is populated after the first run.
+    2. On the second run, old in-memory keys are shifted forward by elapsed time before
+       fresh data is merged, so history accumulates correctly over successive fetches.
+    """
+    import asyncio
+    from datetime import datetime, timezone, timedelta
+    from load_ml_component import LoadMLComponent
+    from unittest.mock import AsyncMock
+
+    def run_async(coro):
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        return loop.run_until_complete(coro)
+
+    class MockBase:
+        def __init__(self):
+            self.prefix = "predbat"
+            self.config_root = None
+            self.now_utc = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+            self.midnight_utc = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+            self.minutes_now = 720
+            self.local_tz = timezone.utc
+            self.args = {}
+            self.log_messages = []
+
+        def log(self, msg):
+            self.log_messages.append(msg)
+
+        def get_arg(self, key, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
+            return {
+                "load_today": ["sensor.load_today"],
+                "load_power": None,
+                "car_charging_energy": None,
+                "load_scaling": 1.0,
+                "car_charging_energy_scale": 1.0,
+            }.get(key, default)
+
+        def dashboard_item(self, entity_id, state, attributes, app=None):
+            pass
+
+        def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=False):
+            return default
+
+    # First fetch: history covering minutes 0..995 at 0.1 kWh, plus a distant point at minute 2000
+    ELAPSED_MINUTES = 30  # Simulate 30 minutes passing between run 1 and run 2
+    SHIFT = ELAPSED_MINUTES  # keys shift forward by this many minutes (ELAPSED is already a multiple of PREDICT_STEP)
+
+    fetch_data_1 = {m: 0.1 for m in range(0, 1000, 5)}
+    fetch_data_1[2000] = 0.05
+
+    # Second fetch: only recent steps with fresh values (anchored at the new "now")
+    fetch_data_2 = {m: round(0.9 - m * 0.1, 1) for m in range(0, 25, 5)}  # {0:0.9, 5:0.8, 10:0.7, 15:0.6, 20:0.5}
+
+    save_call_count = [0]
+
+    async def run_test():
+        mock_base = MockBase()
+        component = LoadMLComponent(mock_base, load_ml_enable=True)
+
+        # Replace heavy coroutines/methods with lightweight mocks
+        async def mock_load_database_history():
+            """No-op: simulate no existing database file on first boot."""
+            component.database_history_loaded = True
+
+        async def mock_do_training(is_initial):
+            """Simulate a successful training pass."""
+            component.initial_training_done = True
+            component.model_valid = True
+            component.model_status = "active"
+            component.last_train_time = component.now_utc
+
+        def mock_update_model_status():
+            component.model_valid = True
+            component.model_status = "active"
+
+        def mock_get_predictions(now_utc, midnight_utc, exog_features=None):
+            return {}
+
+        def mock_publish_entity():
+            pass
+
+        async def mock_save_database_history():
+            save_call_count[0] += 1
+
+        component.load_database_history = mock_load_database_history
+        component._do_training = mock_do_training
+        component._update_model_status = mock_update_model_status
+        component._get_predictions = mock_get_predictions
+        component._publish_entity = mock_publish_entity
+        component.save_database_history = mock_save_database_history
+
+        # ── Run 1 (first=True, seconds=0) ───────────────────────────────────────
+        component._fetch_load_data = AsyncMock(return_value=(fetch_data_1, 28, 5.0, None, None, None, None))
+
+        result = await component.run(seconds=0, first=True)
+
+        assert result is True, "First run should return True"
+        assert component.load_data is not None, "load_data should be populated after first run"
+        assert component.load_data.get(0) == 0.1, "Expected 0.1 at key 0 after first run (from fetch_data_1)"
+        assert component.load_data.get(2000) == 0.05, "Expected old history point 0.05 at key 2000 after first run"
+        assert component.data_ready is True, "data_ready should be True after first run"
+        assert component.database_history_loaded is True, "database_history_loaded should be True after first run"
+        assert save_call_count[0] == 1, f"save_database_history should be called once after first run, called {save_call_count[0]} times"
+
+        print("    \u2713 Run 1: data populated and save_database_history called")
+
+        # ── Advance time by ELAPSED_MINUTES to simulate the gap between fetches ──
+        mock_base.now_utc = mock_base.now_utc + timedelta(minutes=ELAPSED_MINUTES)
+
+        # ── Run 2 (first=False, seconds=1800 - triggers should_fetch but not should_train) ─
+        component._fetch_load_data = AsyncMock(return_value=(fetch_data_2, 7, 3.0, None, None, None, None))
+
+        result = await component.run(seconds=1800, first=False)
+
+        assert result is True, "Second run should return True"
+        assert component.load_data is not None, "load_data should still be populated after second run"
+
+        # ── Verify time-shift: old keys must be shifted forward by ELAPSED_MINUTES ──
+        # Key 0 from run 1 → SHIFT; key 500 → 500+SHIFT; key 2000 → 2000+SHIFT
+        assert component.load_data.get(SHIFT) == 0.1, f"Old key 0 from run 1 should now be at key {SHIFT} (shifted by {SHIFT}min), got {component.load_data.get(SHIFT)}"
+        assert component.load_data.get(500 + SHIFT) == 0.1, f"Old key 500 should now be at key {500 + SHIFT}, got {component.load_data.get(500 + SHIFT)}"
+        assert component.load_data.get(2000 + SHIFT) == 0.05, f"Old distant key 2000 should now be at key {2000 + SHIFT}, got {component.load_data.get(2000 + SHIFT)}"
+        # Key 2000 itself should be gone (it was shifted to 2030)
+        assert component.load_data.get(2000) is None, f"Key 2000 should no longer exist after shift (moved to {2000 + SHIFT}), but found {component.load_data.get(2000)}"
+
+        # ── Verify fresh data occupies its expected keys (anchored to new now) ──
+        for minute, expected_value in fetch_data_2.items():
+            actual = component.load_data.get(minute)
+            assert actual == expected_value, f"At minute {minute}: expected {expected_value} (from fetch_data_2) but got {actual}"
+
+        # save_database_history should have been called a second time
+        assert save_call_count[0] == 2, f"save_database_history should be called again on second fetch, called {save_call_count[0]} times"
+
+        print("    \u2713 Run 2: old keys shifted by elapsed time, fresh data merged at correct positions")
+
+    run_async(run_test())
+
+
 def _test_real_data_training():
     """
     Test training on real input_train_data.json data and generate comparison chart
@@ -993,17 +1140,16 @@ def _test_real_data_training():
         history_hours = 7 * 24  # 7 days back
         prediction_hours = 48  # 2 days forward
 
-        # Convert historical load_data (cumulative kWh) to energy per 5-min step (kWh)
+        # Read historical load_data (already per-5-min energy — not cumulative)
         # Going backwards in time: minute 0 is now, higher minutes are past
         historical_minutes = []
         historical_energy = []
         max_history_minutes = min(history_hours * 60, max_minute)
 
         for minute in range(0, max_history_minutes, STEP_MINUTES):
-            if minute in load_data and (minute + STEP_MINUTES) in load_data:
-                energy_kwh = max(0, load_data[minute] - load_data.get(minute + STEP_MINUTES, load_data[minute]))
+            if minute in load_data:
                 historical_minutes.append(minute)
-                historical_energy.append(energy_kwh)
+                historical_energy.append(load_data[minute])
 
         # Extract validation period actual data (most recent 24h = day 7)
         # This is the data the model was validated against
@@ -1011,10 +1157,9 @@ def _test_real_data_training():
         val_actual_energy = []
         val_period_hours = 24  # Most recent 24h
         for minute in range(0, val_period_hours * 60, STEP_MINUTES):
-            if minute in load_data and (minute + STEP_MINUTES) in load_data:
-                energy_kwh = max(0, load_data[minute] - load_data.get(minute + STEP_MINUTES, load_data[minute]))
+            if minute in load_data:
                 val_actual_minutes.append(minute)
-                val_actual_energy.append(energy_kwh)
+                val_actual_energy.append(load_data[minute])
 
         # Generate validation predictions: what would the model predict for day 7
         # using only data from day 2-7 (excluding most recent 24h)?
@@ -1094,18 +1239,16 @@ def _test_real_data_training():
                 if minute >= val_period_hours * 60:
                     break
                 if i == 0:
-                    # First cumulative value IS the energy for the first step (0-5 min)
-                    energy_kwh = 0
+                    energy_kwh = val_predictions[minute]  # First step energy
                 else:
-                    # Subsequent steps: calculate delta from previous cumulative
+                    # predict() returns cumulative; compute per-step delta for chart
                     prev_minute = val_pred_keys[i - 1]
                     energy_kwh = max(0, val_predictions[minute] - val_predictions[prev_minute])
                 val_pred_minutes.append(minute)
                 val_pred_energy.append(dp4(energy_kwh))
 
-        # Convert predictions (cumulative kWh) to energy per step (kWh)
-        # First cumulative value is already the per-step energy
-        # predictions dict is: {0: cum0, 5: cum5, 10: cum10, ...} representing FUTURE
+        # Convert predictions (cumulative kWh) to energy per step (kWh) for plotting
+        # predict() returns cumulative format; compute deltas for the chart
         pred_minutes = []
         pred_energy = []
         pred_keys = sorted(predictions.keys())
@@ -1114,33 +1257,29 @@ def _test_real_data_training():
             if minute >= prediction_hours * 60:
                 break
             if i == 0:
-                # First cumulative value IS the energy for the first step (0-5 min)
-                energy_kwh = 0
+                energy_kwh = predictions[minute]  # First step energy
             else:
-                # Subsequent steps: calculate delta from previous cumulative
                 prev_minute = pred_keys[i - 1]
                 energy_kwh = max(0, predictions[minute] - predictions[prev_minute])
             pred_minutes.append(minute)
             pred_energy.append(energy_kwh)
 
-        # Convert PV data to energy per step for plotting
+        # Read PV data (already per-5-min energy — not cumulative)
         # Historical PV (positive minutes, going back in time)
         pv_historical_minutes = []
         pv_historical_energy = []
         for minute in range(0, max_history_minutes, STEP_MINUTES):
-            if minute in pv_data and (minute + STEP_MINUTES) in pv_data:
-                energy_kwh = max(0, pv_data[minute] - pv_data.get(minute + STEP_MINUTES, pv_data[minute]))
+            if minute in pv_data:
                 pv_historical_minutes.append(minute)
-                pv_historical_energy.append(energy_kwh)
+                pv_historical_energy.append(pv_data[minute])
 
         # Future PV forecasts (negative minutes in pv_data dict, representing future)
         pv_forecast_minutes = []
         pv_forecast_energy = []
         for minute in range(-prediction_hours * 60, 0, STEP_MINUTES):
-            if minute in pv_data and (minute + STEP_MINUTES) in pv_data:
-                energy_kwh = max(0, pv_data[minute] - pv_data.get(minute + STEP_MINUTES, pv_data[minute]))
+            if minute in pv_data:
                 pv_forecast_minutes.append(minute)
-                pv_forecast_energy.append(energy_kwh)
+                pv_forecast_energy.append(pv_data[minute])
 
         # Extract temperature data (non-cumulative, so we use raw values)
         # Historical temperature (positive minutes in temp_data dict, going back in time)
@@ -1748,10 +1887,10 @@ def _test_component_fetch_load_data():
             expected = 0.7  # load (1.0) - car (0.3)
             assert abs(value_1440 - expected) < 0.01, f"At minute 1440, expected ~{expected} kWh (1.0 - 0.3), got {value_1440:.4f}"
 
-        # At minute 1435: should have accumulated 0.7 + 0.7 = 1.4 kWh
+        # At minute 1435: per-step data, so only the energy for that single 5-min step (not cumulative)
         if 1435 in result_data:
             value_1435 = result_data[1435]
-            expected = 1.4  # Two intervals of (1.0 - 0.3)
+            expected = 0.7  # One step of (1.0 - 0.3) in per-step format
             assert abs(value_1435 - expected) < 0.01, f"At minute 1435, expected ~{expected} kWh, got {value_1435:.4f}"
 
         print("    ✓ Car charging subtraction works")
@@ -1827,34 +1966,30 @@ def _test_component_fetch_load_data():
             expected = 0.375  # 1.0 - 0.625 (threshold triggered)
             assert abs(value_1440 - expected) < 0.01, f"At minute 1440 (high load), expected ~{expected} kWh (1.0 - 0.625 car estimate), got {value_1440:.4f}"
 
-        # At minute 1435: load delta = 0.2 kWh (below 0.5 threshold, no car charging detected)
-        # Should NOT subtract car delta: just 0.2 kWh
-        # Total accumulated: 0.375 + 0.2 = 0.575 kWh
+        # Per-step format: each key holds the energy for that single 5-min interval only
+        # At minute 1435: load = 0.2 kWh (below 0.5 threshold, no car charging detected)
         if 1435 in result_data:
             value_1435 = result_data[1435]
-            expected = 0.575  # 0.375 + 0.2 (no car detection)
+            expected = 0.2  # No car detection, raw load per step
             assert abs(value_1435 - expected) < 0.01, f"At minute 1435 (normal load), expected ~{expected} kWh, got {value_1435:.4f}"
 
-        # At minute 1430: load delta = 0.2 kWh (below threshold)
-        # Total: 0.575 + 0.2 = 0.775 kWh
+        # At minute 1430: load = 0.2 kWh (below threshold)
         if 1430 in result_data:
             value_1430 = result_data[1430]
-            expected = 0.775
+            expected = 0.2  # No car detection
             assert abs(value_1430 - expected) < 0.01, f"At minute 1430, expected ~{expected} kWh, got {value_1430:.4f}"
 
-        # At minute 1425: load delta = 0.2 kWh (below threshold)
-        # Total: 0.775 + 0.2 = 0.975 kWh
+        # At minute 1425: load = 0.2 kWh (below threshold)
         if 1425 in result_data:
             value_1425 = result_data[1425]
-            expected = 0.975
+            expected = 0.2  # No car detection
             assert abs(value_1425 - expected) < 0.01, f"At minute 1425, expected ~{expected} kWh, got {value_1425:.4f}"
 
-        # At minute 1420: load delta = 1.0 kWh (exceeds threshold again)
-        # Subtract car delta: 1.0 - 0.625 = 0.375
-        # Total: 0.975 + 0.375 = 1.35 kWh
+        # At minute 1420: load = 1.0 kWh (exceeds threshold again)
+        # Subtract estimated car delta: 1.0 - 0.625 = 0.375
         if 1420 in result_data:
             value_1420 = result_data[1420]
-            expected = 1.35
+            expected = 0.375  # Car detected, subtract estimate
             assert abs(value_1420 - expected) < 0.01, f"At minute 1420 (high load again), expected ~{expected} kWh, got {value_1420:.4f}"
 
         print("    ✓ Car charging threshold detection works")
@@ -2081,46 +2216,41 @@ def _test_component_fetch_load_data():
         # With 5-minute interval data, minute-1 would usually equal minute, giving 0 delta.
         # The fix uses minute-STEP (minute-5) which correctly calculates non-zero deltas.
 
-        # The function processes data from minute 1440 (oldest) to minute 0 (now),
-        # calculating deltas and accumulating them into a new cumulative series.
-        # Input:  load_data[1440]=0.0, load_data[1435]=0.5, ..., load_data[0]=144.0
-        # Output: result_data[1440]=0.5 (first delta), result_data[1435]=1.0 (accumulated), ..., result_data[0]=144.0 (total)
+        # The function processes data and returns per-step energy (not cumulative).
+        # Input:  load_data[1445]=0.0, load_data[1440]=0.5, ..., load_data[0]=144.5 (cumulative)
+        # Output: result_data[1440]=0.5 (per-step), result_data[1435]=0.5 (per-step), etc.
 
-        # Check minute 1440 (oldest data point, just the first delta)
+        # Check minute 1440 (oldest data point, per-step energy for that interval)
         if 1440 in result_data:
             value_1440 = result_data[1440]
-            # delta = abs(load_data[1440] - load_data[1435]) = abs(0.0 - 0.5) = 0.5
-            # result_data[1440] = 0 + 0.5 = 0.5 kWh
+            # delta = abs(load_data[1440] - load_data[1445]) = abs(0.5 - 0.0) = 0.5
             expected_value = 0.5
             assert abs(value_1440 - expected_value) < 0.01, f"Energy at minute 1440 should be ~{expected_value:.2f} kWh (got {value_1440:.4f}). Bug #3384 would cause 0.0."
             assert value_1440 > 0.01, f"Energy at minute 1440 should be > 0.01 kWh (got {value_1440:.4f}). Bug #3384 would cause near-zero."
 
-        # Check minute 1435 (second oldest interval, accumulated)
+        # Check minute 1435 (per-step energy for that interval — NOT accumulated)
         if 1435 in result_data:
             value_1435 = result_data[1435]
-            # delta = abs(load_data[1435] - load_data[1430]) = abs(0.5 - 1.0) = 0.5
-            # result_data[1435] = 0.5 + 0.5 = 1.0 kWh (accumulated from 1440 + 1435)
-            expected_value = 1.0
+            # delta = abs(load_data[1435] - load_data[1440]) = abs(1.0 - 0.5) = 0.5
+            expected_value = 0.5
             assert abs(value_1435 - expected_value) < 0.01, f"Energy at minute 1435 should be ~{expected_value:.2f} kWh (got {value_1435:.4f})."
-            assert value_1435 > 0.5, f"Energy at minute 1435 should be > 0.5 kWh (got {value_1435:.4f})."
+            assert value_1435 > 0.4, f"Energy at minute 1435 should be > 0.4 kWh (got {value_1435:.4f})."
 
-        # Check minute 100 (more recent, should have high accumulated value)
+        # Check minute 100 (per-step energy for that interval, should be ~0.5 kWh)
         if 100 in result_data:
             value_100 = result_data[100]
-            # (1440-100)/5 = 268 intervals processed, each delta = 0.5 kWh
-            # result_data[100] ≈ 268 * 0.5 = 134 kWh accumulated
-            expected_value = 134.0
-            assert abs(value_100 - expected_value) < 1.0, f"Energy at minute 100 should be ~{expected_value:.1f} kWh (got {value_100:.2f}). Bug #3384 would cause near-zero."
-            assert value_100 > 130, f"Energy at minute 100 should be > 130 kWh (got {value_100:.2f})."
+            # Each 5-minute step is uniformly 0.5 kWh
+            expected_value = 0.5
+            assert abs(value_100 - expected_value) < 0.01, f"Energy at minute 100 should be ~{expected_value:.1f} kWh (got {value_100:.2f}). Bug #3384 would cause near-zero."
+            assert value_100 > 0.4, f"Energy at minute 100 should be > 0.4 kWh (got {value_100:.2f})."
 
-        # Check minute 0 (now, should have maximum accumulated energy)
-        # Note: minute 0 has 0 delta (no data at minute -5), but accumulated total is carried forward
+        # Check minute 0 (most recent step, per-step energy)
         if 0 in result_data:
             value_0 = result_data[0]
-            # 288 intervals (1440/5) * 0.5 kWh = 144 kWh total
-            expected_value = 144.0
-            assert abs(value_0 - expected_value) < 1.0, f"Energy at minute 0 should be ~{expected_value:.1f} kWh (got {value_0:.2f}). Bug #3384 would cause near-zero."
-            assert value_0 > 140, f"Energy at minute 0 should be > 140 kWh (got {value_0:.2f})."
+            # Each step should be 0.5 kWh
+            expected_value = 0.5
+            assert abs(value_0 - expected_value) < 0.01, f"Energy at minute 0 should be ~{expected_value:.1f} kWh (got {value_0:.2f}). Bug #3384 would cause near-zero."
+            assert value_0 > 0.4, f"Energy at minute 0 should be > 0.4 kWh (got {value_0:.2f})."
 
         # Verify current load is reasonable (not near-zero)
         assert result_now > 0.05, f"Current load should be > 0.05 kWh (got {result_now:.4f}). Bug #3384 would cause near-zero."

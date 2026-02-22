@@ -35,6 +35,8 @@ OUTPUT_STEPS = 1  # Single step output (autoregressive)
 PREDICT_HORIZON = 48 * (60 // CHUNK_MINUTES)  # 48 hours of predictions (96 * 30 min)
 HIDDEN_SIZES = [512, 256, 128, 64]  # Deeper network with more capacity
 BATCH_SIZE = 128  # Batch size
+MAX_BATCHES_PER_EPOCH = 200  # Cap on SGD batches per epoch - with importance sampling this keeps training
+# cost constant regardless of how many days of history are loaded
 
 # Feature constants
 NUM_TIME_FEATURES = 4  # sin/cos minute-of-day, sin/cos day-of-week (for TARGET time)
@@ -522,9 +524,9 @@ class LoadPredictor:
         validation_holdout_hours as a subset to check model fit.
 
         Args:
-            load_minutes: Dict of {minute: cumulative_kwh} going backwards in time
+            load_minutes: Dict of {minute: kwh_per_5min} going backwards in time (pre-converted by load_ml_component)
             now_utc: Current UTC timestamp (used for chunk alignment)
-            pv_minutes: Dict of {minute: cumulative_kwh} PV generation
+            pv_minutes: Dict of {minute: kwh_per_5min} PV generation (positive=historical, negative=future)
             temp_minutes: Dict of {minute: temperature_celsius}
             import_rates: Dict of {minute: rate_per_kwh}
             export_rates: Dict of {minute: rate_per_kwh}
@@ -535,9 +537,9 @@ class LoadPredictor:
         Returns:
             X_train, y_train, train_weights, X_val, y_val
         """
-        # Convert raw cumulative data to 5-min per-step energy
-        energy_per_step = self._load_to_energy_per_step(load_minutes)
-        pv_energy_per_step = self._load_to_energy_per_step(pv_minutes) if pv_minutes else {}
+        # Data is already in per-5-min energy format (pre-converted in load_ml_component)
+        energy_per_step = load_minutes
+        pv_energy_per_step = pv_minutes if pv_minutes else {}
         temp_values = temp_minutes if temp_minutes else {}
         import_rate_values = import_rates if import_rates else {}
         export_rate_values = export_rates if export_rates else {}
@@ -898,33 +900,44 @@ class LoadPredictor:
         best_weights = None
         best_biases = None
 
+        # Pre-compute normalised sampling probabilities from time-decay weights.
+        # Importance sampling: p(i) ∝ weight(i) so the expected gradient is already
+        # correctly weighted - we do NOT additionally scale inside _backward.
+        sampling_probs = train_weights / train_weights.sum()
+
+        # Number of samples to draw per epoch is capped at MAX_BATCHES_PER_EPOCH * BATCH_SIZE.
+        # This keeps per-epoch cost constant regardless of how large the history is.
+        n_epoch_samples = min(MAX_BATCHES_PER_EPOCH * BATCH_SIZE, len(X_train_norm))
+        if len(X_train_norm) > MAX_BATCHES_PER_EPOCH * BATCH_SIZE:
+            self.log("ML Predictor: Large dataset ({} samples) - using importance sampling ({} samples/epoch, {} batches)".format(len(X_train_norm), n_epoch_samples, n_epoch_samples // BATCH_SIZE))
+
         for epoch in range(epochs):
-            # Shuffle training data
-            indices = np.random.permutation(len(X_train_norm))
-            X_shuffled = X_train_norm[indices]
-            y_shuffled = y_train_norm[indices]
-            weights_shuffled = train_weights[indices]
+            # Draw samples with probability proportional to time-decay weights (with replacement).
+            # Recent data is sampled more often; old data still contributes but rarely.
+            sampled_indices = np.random.choice(len(X_train_norm), size=n_epoch_samples, replace=True, p=sampling_probs)
+            X_epoch = X_train_norm[sampled_indices]
+            y_epoch = y_train_norm[sampled_indices]
 
             # Mini-batch training
             epoch_loss = 0
             num_batches = 0
 
-            for batch_start in range(0, len(X_shuffled), BATCH_SIZE):
-                batch_end = min(batch_start + BATCH_SIZE, len(X_shuffled))
-                X_batch = X_shuffled[batch_start:batch_end]
-                y_batch = y_shuffled[batch_start:batch_end]
-                batch_weights = weights_shuffled[batch_start:batch_end]
+            for batch_start in range(0, n_epoch_samples, BATCH_SIZE):
+                batch_end = min(batch_start + BATCH_SIZE, n_epoch_samples)
+                X_batch = X_epoch[batch_start:batch_end]
+                y_batch = y_epoch[batch_start:batch_end]
 
                 # Forward pass
                 y_pred, activations, pre_activations = self._forward(X_batch)
 
-                # Compute unweighted loss for monitoring
+                # Compute loss for monitoring
                 batch_loss = mse_loss(y_batch, y_pred)
                 epoch_loss += batch_loss
                 num_batches += 1
 
-                # Backward pass with sample weights applied to gradient
-                weight_grads, bias_grads = self._backward(y_batch, activations, pre_activations, sample_weights=batch_weights)
+                # Backward pass - no additional sample_weights needed because importance
+                # is already encoded in the sampling distribution
+                weight_grads, bias_grads = self._backward(y_batch, activations, pre_activations)
 
                 # Adam update
                 self._adam_update(weight_grads, bias_grads)
@@ -978,10 +991,10 @@ class LoadPredictor:
         autoregressive drift.
 
         Args:
-            load_minutes: Dict of {minute: cumulative_kwh}
+            load_minutes: Dict of {minute: kwh_per_5min} (positive=historical, pre-converted by load_ml_component)
             now_utc: Current UTC timestamp
             midnight_utc: Today's midnight UTC timestamp
-            pv_minutes: Dict of {minute: cumulative_kwh} PV generation
+            pv_minutes: Dict of {minute: kwh_per_5min} PV generation (positive=historical, negative=future per-step)
             temp_minutes: Dict of {minute: temperature_celsius}
             import_rates: Dict of {minute: rate_per_kwh}
             export_rates: Dict of {minute: rate_per_kwh}
@@ -997,9 +1010,9 @@ class LoadPredictor:
             self.log("Warn: ML Predictor: Model not trained, cannot predict")
             return {}
 
-        # Convert raw cumulative data to 5-min per-step energy
-        energy_per_step = self._load_to_energy_per_step(load_minutes)
-        pv_energy_per_step = self._load_to_energy_per_step(pv_minutes) if pv_minutes else {}
+        # Data is already in per-5-min energy format (pre-converted in load_ml_component)
+        energy_per_step = load_minutes
+        pv_energy_per_step = pv_minutes if pv_minutes else {}
         temp_values = temp_minutes if temp_minutes else {}
         import_rate_values = import_rates if import_rates else {}
         export_rate_values = export_rates if export_rates else {}
