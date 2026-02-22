@@ -6,7 +6,7 @@ The Predbat Web Interface provides an easy to use way to see and change differen
 
 ## Accessing the Web Interface
 
-If you are running the Predbat add-on then the Predbat Web Interface can be accessed by clicking 'Open Web UI' on the add-on screen (arrowed):
+If you are running the Predbat app then the Predbat Web Interface can be accessed by clicking 'Open Web UI' on the app screen (arrowed):
 
 ![image](images/predbat-addon-web-interface.png)
 
@@ -23,7 +23,7 @@ Another option is to include a link on your dashboard using an entities card:
         icon: mdi:bat
 ```
 
-If you are not using the Predbat Add-on then you may be able to access the Web Interface directly on port 5052 (e.g. with a Docker Container or native on your Linux/MAC).  The port number can be changed by setting [web_port in apps.yaml](apps-yaml.md#web-interface).
+If you are not using the Predbat app then you may be able to access the Web Interface directly on port 5052 (e.g. with a Docker Container or native on your Linux/MAC).  The port number can be changed by setting [web_port in apps.yaml](apps-yaml.md#web-interface).
 
 **NOTE:** The Predbat web interface will not work with the AppDaemon or the Predbat-appdaemon installation methods.
 
@@ -160,7 +160,7 @@ You can restart individual Predbat components if required.
 
 ### Editor View
 
-The editor view allows you to edit apps.yaml as text directly within the web interface. If you make a syntax error then the error will be highlighted and save
+The editor view allows you to edit `apps.yaml` as text directly within the web interface. If you make a syntax error then the error will be highlighted and save
 will be disabled pending a fix.
 
 <img alt="image of Predbat Editor view" src="https://github.com/user-attachments/assets/17383694-2300-4c81-996e-63970671b903" />
@@ -170,6 +170,14 @@ will be disabled pending a fix.
 The Browse view gives a simple file system browser to enable you to view any of the configuration, output and code files in the directory that Predbat is installed in.
 
 You can navigate around subfolders and view files, but not make any changes using the Browse view.
+
+### Internals View
+
+The Internals view gives a view of Predbat's internal operations.
+
+It gives the hierarchy of threads, and their status; and the Predbat code object hierarchy.
+
+These are intended for debugging and developer activities, in normal use you can ignore this view!
 
 ### Docs View
 

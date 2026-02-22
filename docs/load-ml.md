@@ -26,8 +26,9 @@ The ML Load Prediction component uses a lightweight multi-layer perceptron (MLP)
 - Uses historical and future energy import/export rates as input features
 - Deep neural network with 4 hidden layers [512, 256, 128, 64 neurons]
 - Optimized with He initialization and AdamW weight decay for robust training
-- Automatically trains on historical data (requires at least 1 day, recommended 7+ days)
-- Fine-tunes periodically to adapt to changing patterns
+- Automatically trains on historical data (requires at least 1 day, recommended 7+ days, up to 28 days configurable)
+- Fine-tunes periodically (every 2 hours) using full dataset to adapt to changing patterns
+- Time-weighted training prioritizes recent data while learning from historical patterns
 - Model persists across restarts
 - Falls back gracefully if predictions are unreliable
 
@@ -47,7 +48,7 @@ The ML Load Predictor uses a deep multi-layer perceptron (MLP) with the followin
 - **He Initialization**: Weights initialized using He/Kaiming method (`std = sqrt(2/fan_in)`), optimized for ReLU activations
 - **AdamW Optimizer**: Adam optimization with weight decay (L2 regularization, default 0.01) to prevent overfitting
 - **Early Stopping**: Training halts if validation error stops improving (patience=5 epochs)
-- **Weighted Samples**: Recent data weighted more heavily (exponential decay over 7 days)
+- **Weighted Samples**: Recent data weighted more heavily (exponential decay over history period)
 
 ### Input Features
 
@@ -95,7 +96,8 @@ To prevent drift in long-range predictions, the model blends autoregressive pred
 
 **Initial Training:**
 
-- Requires at least 1 day of historical data (7+ days recommended)
+- Requires at least 1 day of historical data (7+ days recommended, up to 28 days configurable)
+- Fetches up to 28 days of load history by default (configurable via `load_ml_max_days_history`)
 - Uses 100 epochs with early stopping (patience=5)
 - Batch size: 128 samples
 - AdamW optimizer with learning rate 0.001 and weight decay 0.01
@@ -106,16 +108,39 @@ To prevent drift in long-range predictions, the model blends autoregressive pred
 **Regularization:**
 
 - **Weight Decay**: L2 penalty (0.01) applied to network weights to prevent overfitting
-- **Early Stopping**: Training halts if validation error doesn't improve for 5 consecutive epochs
-- **Time-Weighted Samples**: Recent data has higher importance (7-day exponential decay)
+- **Early Stopping**: Training halts if validation error doesn't improve for 5 consecutive epochs, selecting the best results so far.
+- **Time-Weighted Samples**: Recent data has higher importance (7-day exponential decay constant)
+    - Today's data: 100% weight
+    - N days old: 37% weight (e^-1)
 
 **Fine-tuning:**
 
 - Runs every 2 hours if enabled
-- Uses last 24 hours of data
+- Uses full available dataset (same as initial training, up to 28 days)
 - Uses 3 epochs to quickly adapt to recent changes
+- Applies same time-weighted sampling to prioritize recent data
 - Preserves learned patterns while adapting to new ones
-- Same regularization techniques applied
+- Same regularization techniques applied as initial training
+- Each fine-tune cycle blends the current data's feature statistics (mean/std) with the stored normalization parameters via an exponential moving average (alpha=0.1).
+This lets the model slowly track long-term shifts in feature distributions (e.g. seasonal load changes, new tariff rates) without sudden jumps that could destabilise existing weights.
+
+**Why Full Dataset for Fine-tuning?**
+
+Although fine-tuning uses up to 20 epochs (vs 100 for initial training), it still uses the full dataset with time-weighted sampling. This approach:
+
+- **Prevents catastrophic forgetting**: Using only recent data would cause the model to gradually forget older patterns
+- **Balances adaptation**: Time weighting ensures recent changes are prioritized while maintaining long-term pattern knowledge
+- **Handles seasonal patterns**: 28 days of history helps capture weekly cycles and early seasonal trends
+- **Provides stability**: The model learns from a broader context, making predictions more robust
+
+With time-weighted sampling, training samples have these relative weights:
+
+- **This week**: 100% - 50% (fully weighted)
+- **Last week**: 50% - 20% (moderately weighted)
+- **2 weeks ago**: 20% - 7% (lightly weighted)
+- **3-4 weeks ago**: 7% - 1% (minimal weight, but still contributing to pattern learning)
+
+This allows the model to adapt quickly to recent changes (via time weighting) without losing the benefit of learning from historical patterns.
 
 **Model Validation:**
 
@@ -138,7 +163,22 @@ predbat:
   load_ml_enable: True
   # Use the output data in Predbat (can be False to explore the use without using the data)
   load_ml_source: True
+
+  # Optional: Maximum days of historical data to use for training (default: 28)
+  # load_ml_max_days_history: 28
 ```
+
+**Configuration Parameter Details:**
+
+- `load_ml_enable`: Enables the ML component (required)
+- `load_ml_source`: When `true`, Predbat uses ML predictions for battery planning. Set to `false` to test predictions without affecting battery control
+- `load_ml_max_days_history`: Maximum days of historical data to fetch and train on
+    - **Default**: 28 days
+    - **Minimum**: 1 day (not recommended for production)
+    - **Recommended**: 7-28 days depending on your consumption patterns
+    - **When to increase**: If you have very regular weekly patterns or want seasonal awareness
+    - **When to decrease**: If your consumption patterns change frequently, or you have limited historical data storage
+    - **Note**: Training time increases slightly with more data, but fine-tuning remains fast (3 epochs)
 
 For best results:
 
@@ -199,7 +239,7 @@ Before enabling ML load prediction:
 1. Ensure you have a `load_today` sensor that tracks cumulative daily energy consumption
 2. Optionally configure `pv_today` if you have solar panels
 3. **Recommended**: Enable the Temperature component (Temperature Component in components documentation)
-4. Ensure you have at least 1 day of historical data (7+ days recommended)
+4. Ensure you have at least 1 day of historical data (7+ days recommended, up to 28 days by default)
 
 ### Step 2: Enable the Component
 
@@ -209,7 +249,7 @@ Add `load_ml_enable: true` to your `apps.yaml` and restart Predbat.
 
 On first run, the component will:
 
-1. Fetch historical load data (default: 7 days)
+1. Fetch historical load data (default: up to 28 days, configurable)
 2. Train the neural network (takes 1-5 minutes depending on data)
 3. Validate the model
 4. Begin making predictions if validation passes
@@ -247,13 +287,13 @@ You can check model status in the Predbat logs or via the component status page 
 
 Good predictions require:
 
-1. **Sufficient Historical Data**: At least 7 days recommended for stable patterns
+1. **Sufficient Historical Data**: At least 7 days recommended for stable patterns (supports up to 28 days by default)
 2. **Consistent Patterns**: Regular daily/weekly routines improve accuracy
 3. **Temperature Data**: Especially important for homes with electric heating/cooling (requires Temperature component)
 4. **Energy Rate Data**: Automatically included - helps model learn consumption patterns based on time-of-use tariffs
 5. **PV Generation Data**: If you have solar panels, include `pv_today` sensor for better correlation
 6. **Clean Data**: Avoid gaps or incorrect readings in historical data
-7. **Recent Training**: Model should be retrained periodically (happens automatically every 2 hours)
+7. **Recent Training**: Model retrains every 2 hours using full dataset with time-weighted sampling to adapt to changing patterns
 
 ### Understanding MAE (Mean Absolute Error)
 
@@ -321,6 +361,13 @@ ML Component: Model status: active, last trained: 2024-02-07 10:30:00
 ML Component: Validation MAE: 0.3245 kWh
 ```
 
+### Tracking Normalization Drift
+
+Each time the model trains (initial fit) or fine-tunes (EMA update), it logs a normalization stats line that summarises the mean and standard deviation for each input feature group.
+You can search for Normalization stats in the logfile for this information.
+
+Large shifts in `mean` or `std` for a group (e.g. `import_rate` after a tariff change, or `load` after a new appliance) will be visible here and confirm the EMA is tracking the drift correctly.
+
 ### Common Issues
 
 **Issue**: Model never trains
@@ -365,10 +412,10 @@ The trained model is saved to disk as `predbat_ml_model.npz` in your Predbat con
 
 - **Network weights and biases**: All 4 hidden layers plus output layer
 - **Optimizer state**: Adam momentum terms for continuing fine-tuning
-- **Normalization parameters**: Feature and target mean/standard deviation
+- **Normalization parameters**: Feature and target mean/standard deviation (updated via EMA each fine-tune cycle to track distribution drift)
 - **Training metadata**: Epochs trained, timestamp, model version, architecture details
 
-The model is automatically loaded on Predbat restart, allowing predictions to continue immediately without retraining.
+The model is automatically loaded on Predbat restart, allowing predictions to continue immediately without retraining. The EMA-updated normalization parameters are saved and restored with the model, so drift tracking is preserved across restarts.
 
 **Note**: If you update Predbat and the model architecture or version changes, the old model will be rejected and a new model will be trained from scratch. If the model becomes unstable, you can manually delete `predbat_ml_model.npz` to force retraining.
 

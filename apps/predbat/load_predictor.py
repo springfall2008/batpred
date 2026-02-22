@@ -13,10 +13,11 @@
 
 """NumPy-only MLP neural network for household load forecasting.
 
-Implements a 4-layer feed-forward network (512-256-128-64) trained via
+Implements a 4-layer feed-forward network (96-48-32-16) trained via
 Adam optimiser with autoregressive prediction for 48-hour load forecasts.
-Uses historical load, PV generation, temperature, and energy rates as
-input features with cyclical time encoding.
+Operates at CHUNK_MINUTES resolution (aggregated from 5-min raw data)
+to reduce noise. Uses historical load, PV generation, temperature, and
+energy rates as input features with cyclical time encoding.
 """
 
 import numpy as np
@@ -25,14 +26,15 @@ import os
 from datetime import datetime, timezone, timedelta
 
 # Architecture constants (not user-configurable)
-MODEL_VERSION = 7  # Bumped due to bug fixes in input data, should be retrained - 17/2/26
-LOOKBACK_STEPS = 288  # 24 hours at 5-min intervals
+MODEL_VERSION = 9  # Bumped to V9 for new longer history and improved architecture
+STEP_MINUTES = 5  # Base data resolution in minutes (raw sensor granularity)
+CHUNK_MINUTES = 5  # Prediction resolution: must be a multiple of STEP_MINUTES
+CHUNK_STEPS = CHUNK_MINUTES // STEP_MINUTES  # 5-min steps aggregated per chunk (3)
+LOOKBACK_STEPS = 24 * (60 // CHUNK_MINUTES)  # 24 hours at CHUNK_MINUTES resolution
 OUTPUT_STEPS = 1  # Single step output (autoregressive)
-PREDICT_HORIZON = 576  # 48 hours of predictions (576 * 5 min)
+PREDICT_HORIZON = 48 * (60 // CHUNK_MINUTES)  # 48 hours of predictions (96 * 30 min)
 HIDDEN_SIZES = [512, 256, 128, 64]  # Deeper network with more capacity
-BATCH_SIZE = 128  # Smaller batches for better gradient estimates
-FINETUNE_HOURS = 24  # Hours of data for fine-tuning
-STEP_MINUTES = 5  # Minutes per step
+BATCH_SIZE = 128  # Batch size
 
 # Feature constants
 NUM_TIME_FEATURES = 4  # sin/cos minute-of-day, sin/cos day-of-week (for TARGET time)
@@ -163,6 +165,26 @@ class LoadPredictor:
 
         self.adam_t = 0
         self.model_initialized = True
+
+    def _reset_adam_optimizer(self):
+        """
+        Reset Adam optimizer momentum to zero.
+
+        Used when starting fine-tuning to prevent accumulated momentum
+        from previous training sessions causing overfitting on small
+        fine-tuning datasets.
+        """
+        if not self.model_initialized:
+            return
+
+        for i in range(len(self.weights)):
+            self.m_weights[i] = np.zeros_like(self.weights[i])
+            self.v_weights[i] = np.zeros_like(self.weights[i])
+            self.m_biases[i] = np.zeros_like(self.biases[i])
+            self.v_biases[i] = np.zeros_like(self.biases[i])
+
+        self.adam_t = 0
+        self.log("ML Predictor: Reset Adam optimizer state for fine-tuning")
 
     def _forward(self, X):
         """
@@ -356,37 +378,125 @@ class LoadPredictor:
 
         return energy_per_step
 
-    def _compute_daily_pattern(self, energy_per_step, smoothing_window=6):
+    def _chunk_energy_to_aligned(self, energy_per_step, now_utc):
         """
-        Compute average daily pattern from historical data.
+        Aggregate 5-min historical energy into aligned CHUNK_MINUTES chunks.
 
-        Groups energy values by minute-of-day and computes rolling average.
+        Drops the leading partial chunk so that chunk boundaries align to
+        CHUNK_MINUTES clock intervals (e.g. :00 and :30 for 30-min chunks).
+
+        Args:
+            energy_per_step: Dict of {minute: energy_kwh} at STEP_MINUTES resolution
+                             (positive keys = historical data going backwards in time)
+            now_utc: Current UTC time used to compute alignment offset
+
+        Returns:
+            Tuple of (chunked_dict, alignment_offset_minutes)
+            chunked_dict: {chunk_idx: total_energy_kwh} where chunk_idx=0 is the
+                          most recent complete aligned chunk
+            alignment_offset_minutes: STEP_MINUTES-multiple dropped from front to align
+        """
+        # How many 5-min steps into the current CHUNK_MINUTES window are we?
+        partial_steps = (now_utc.minute % CHUNK_MINUTES) // STEP_MINUTES
+        alignment_offset = partial_steps * STEP_MINUTES
+
+        historical_keys = [k for k in energy_per_step if k >= 0]
+        if not historical_keys:
+            return {}, alignment_offset
+
+        max_minute = max(historical_keys)
+        chunked = {}
+        chunk_idx = 0
+        minute = alignment_offset
+        while minute + CHUNK_MINUTES <= max_minute + STEP_MINUTES:
+            total = 0.0
+            valid = True
+            for j in range(CHUNK_STEPS):
+                m = minute + j * STEP_MINUTES
+                if m in energy_per_step:
+                    total += energy_per_step[m]
+                else:
+                    valid = False
+                    break
+            if valid:
+                chunked[chunk_idx] = total
+            chunk_idx += 1
+            minute += CHUNK_MINUTES
+
+        return chunked, alignment_offset
+
+    def _chunk_instantaneous_to_aligned(self, values_per_step, alignment_offset):
+        """
+        Aggregate instantaneous 5-min values into aligned CHUNK_MINUTES chunks by averaging.
+
+        Used for non-cumulative features such as temperature and energy rates.
+
+        Args:
+            values_per_step: Dict of {minute: value} at STEP_MINUTES resolution
+                             (positive keys = historical data)
+            alignment_offset: Minutes to skip from minute-0 to align chunks
+                              (obtained from _chunk_energy_to_aligned)
+
+        Returns:
+            Dict of {chunk_idx: avg_value}
+        """
+        historical_keys = [k for k in values_per_step if k >= 0]
+        if not historical_keys:
+            return {}
+
+        max_minute = max(historical_keys)
+        chunked = {}
+        chunk_idx = 0
+        minute = alignment_offset
+        while minute + CHUNK_MINUTES <= max_minute + STEP_MINUTES:
+            vals = []
+            for j in range(CHUNK_STEPS):
+                m = minute + j * STEP_MINUTES
+                if m in values_per_step:
+                    vals.append(values_per_step[m])
+            if vals:
+                chunked[chunk_idx] = float(np.mean(vals))
+            chunk_idx += 1
+            minute += CHUNK_MINUTES
+
+        return chunked
+
+    def _compute_daily_pattern(self, energy_per_step, smoothing_window=3):
+        """
+        Compute average daily pattern from historical data at CHUNK_MINUTES resolution.
+
+        Groups 5-min energy values by CHUNK_MINUTES slot of day and averages across
+        days. The result is scaled to represent total energy per CHUNK_MINUTES slot.
         Used to blend with predictions to prevent autoregressive drift.
 
         Args:
-            energy_per_step: Dict of {minute: energy_kwh}
+            energy_per_step: Dict of {minute: energy_kwh} at STEP_MINUTES resolution
             smoothing_window: Number of adjacent slots to smooth over
 
         Returns:
-            Dict of {minute_of_day: avg_energy} for 288 slots in a day
+            Dict of {minute_of_day_slot: avg_energy_per_chunk} keyed at CHUNK_MINUTES intervals
         """
-        # Collect energy values by minute-of-day (0 to 1435 in 5-min steps)
-        by_minute = {}
+        # Accumulate 5-min energy values into CHUNK_MINUTES slots of the day
+        by_slot = {}
         for minute, energy in energy_per_step.items():
+            if minute < 0:
+                continue  # Skip future data
             minute_of_day = minute % (24 * 60)  # 0-1439
-            # Align to 5-minute boundaries
-            slot = (minute_of_day // STEP_MINUTES) * STEP_MINUTES
-            if slot not in by_minute:
-                by_minute[slot] = []
-            by_minute[slot].append(energy)
+            slot = (minute_of_day // CHUNK_MINUTES) * CHUNK_MINUTES
+            if slot not in by_slot:
+                by_slot[slot] = []
+            by_slot[slot].append(energy)
 
-        # Compute mean for each slot
+        # Mean 5-min value per slot * CHUNK_STEPS = expected chunk energy
+        default_energy = 0.01 * CHUNK_STEPS  # Fallback: ~120W average for one chunk
         pattern = {}
-        for slot in range(0, 24 * 60, STEP_MINUTES):
-            if slot in by_minute and len(by_minute[slot]) > 0:
-                pattern[slot] = float(np.mean(by_minute[slot]))
+        slots_in_day = 24 * 60 // CHUNK_MINUTES
+        for slot_idx in range(slots_in_day):
+            slot = slot_idx * CHUNK_MINUTES
+            if slot in by_slot and len(by_slot[slot]) > 0:
+                pattern[slot] = float(np.mean(by_slot[slot])) * CHUNK_STEPS
             else:
-                pattern[slot] = 0.05  # Default fallback
+                pattern[slot] = default_energy
 
         # Apply smoothing to reduce noise
         slots = sorted(pattern.keys())
@@ -402,64 +512,62 @@ class LoadPredictor:
 
     def _create_dataset(self, load_minutes, now_utc, pv_minutes=None, temp_minutes=None, import_rates=None, export_rates=None, is_finetune=False, time_decay_days=7, validation_holdout_hours=24):
         """
-        Create training dataset from load_minutes dict.
+        Create training dataset from load_minutes dict at CHUNK_MINUTES resolution.
 
-        For autoregressive prediction: each sample uses 24h lookback to predict
-        the next single 5-minute step. Time features are for the TARGET time.
+        Raw 5-min data is first aggregated into CHUNK_MINUTES aligned chunks.
+        Each sample uses LOOKBACK_STEPS chunks (24 h) of history to predict
+        the next single chunk. Time features represent the TARGET chunk time.
 
-        Training uses all available data (from most recent to as far back as data goes).
-        Validation uses the most recent 24h as a subset of training data to check model fit.
+        Training uses all available data; validation uses the most recent
+        validation_holdout_hours as a subset to check model fit.
 
         Args:
             load_minutes: Dict of {minute: cumulative_kwh} going backwards in time
-            now_utc: Current UTC timestamp
-            pv_minutes: Dict of {minute: cumulative_kwh} PV generation (backwards for history, negative for future)
-            temp_minutes: Dict of {minute: temperature_celsius} Temperature (backwards for history, negative for future)
-            import_rates: Dict of {minute: rate_per_kwh} Import rates (backwards for history, negative for future)
-            export_rates: Dict of {minute: rate_per_kwh} Export rates (backwards for history, negative for future)
+            now_utc: Current UTC timestamp (used for chunk alignment)
+            pv_minutes: Dict of {minute: cumulative_kwh} PV generation
+            temp_minutes: Dict of {minute: temperature_celsius}
+            import_rates: Dict of {minute: rate_per_kwh}
+            export_rates: Dict of {minute: rate_per_kwh}
             is_finetune: If True, only use last 24 hours; else use full data with time-decay
             time_decay_days: Time constant for exponential decay weighting
             validation_holdout_hours: Hours of most recent data to hold out for validation
 
         Returns:
-            X_train, y_train, train_weights: Training data
-            X_val, y_val: Validation data (most recent period)
+            X_train, y_train, train_weights, X_val, y_val
         """
-        # Convert to energy per step
+        # Convert raw cumulative data to 5-min per-step energy
         energy_per_step = self._load_to_energy_per_step(load_minutes)
         pv_energy_per_step = self._load_to_energy_per_step(pv_minutes) if pv_minutes else {}
-        # Temperature is not cumulative, so just use the raw values (already in correct format)
         temp_values = temp_minutes if temp_minutes else {}
-        # Import and export rates are not cumulative, use raw values
         import_rate_values = import_rates if import_rates else {}
         export_rate_values = export_rates if export_rates else {}
 
         if not energy_per_step:
             return None, None, None, None, None
 
-        max_minute = max(energy_per_step.keys())
+        # Aggregate to CHUNK_MINUTES aligned chunks
+        chunked_energy, alignment_offset = self._chunk_energy_to_aligned(energy_per_step, now_utc)
+        chunked_pv = self._chunk_energy_to_aligned(pv_energy_per_step, now_utc)[0] if pv_energy_per_step else {}
+        chunked_temp = self._chunk_instantaneous_to_aligned(temp_values, alignment_offset)
+        chunked_import = self._chunk_instantaneous_to_aligned(import_rate_values, alignment_offset)
+        chunked_export = self._chunk_instantaneous_to_aligned(export_rate_values, alignment_offset)
 
-        # Determine data range
-        if is_finetune:
-            # Only use last 48 hours for fine-tuning (24h train + 24h for lookback)
-            start_minute = 0
-            end_minute = min(48 * 60, max_minute)
-            validation_holdout_hours = 12  # Smaller holdout for fine-tuning
-        else:
-            # Use 7 days of data for initial training
-            start_minute = 0
-            end_minute = min(7 * 24 * 60, max_minute)
-
-        # Need enough history for lookback plus validation holdout
-        min_required = LOOKBACK_STEPS * STEP_MINUTES + validation_holdout_hours * 60 + STEP_MINUTES
-
-        if end_minute < min_required:
-            self.log("Warn: Insufficient data for ML training, need {} minutes, have {}".format(min_required, end_minute))
+        if not chunked_energy:
             return None, None, None, None, None
 
-        # Validation uses most recent data (minute 0 to validation_holdout)
-        # Training uses ALL data (minute 0 to end_minute), including validation period
-        validation_end = validation_holdout_hours * 60
+        max_chunk_idx = max(chunked_energy.keys())
+
+        # Minimum chunks required: lookback + validation window + 1 target
+        min_required_chunks = LOOKBACK_STEPS + (validation_holdout_hours * 60 // CHUNK_MINUTES) + 1
+
+        if max_chunk_idx < min_required_chunks:
+            self.log("Warn: Insufficient data for ML training, need {} chunks ({} min), have {} chunks ({} min)".format(min_required_chunks, min_required_chunks * CHUNK_MINUTES, max_chunk_idx, max_chunk_idx * CHUNK_MINUTES))
+            return None, None, None, None, None
+
+        self.log("ML Predictor: Creating dataset with {} hours of training data, {} hours validation".format(max_chunk_idx * CHUNK_MINUTES // 60, validation_holdout_hours))
+
+        # Validation window: most recent chunks (chunk_idx 0 … validation_end_chunk-1)
+        validation_end_chunk = validation_holdout_hours * 60 // CHUNK_MINUTES
 
         X_train_list = []
         y_train_list = []
@@ -467,50 +575,39 @@ class LoadPredictor:
         X_val_list = []
         y_val_list = []
 
-        # Create training samples (from all available data, including most recent)
-        # These samples predict targets in the range [0, end_minute - lookback]
-        for target_minute in range(0, end_minute - LOOKBACK_STEPS * STEP_MINUTES, STEP_MINUTES):
-            # Lookback window starts at target_minute + STEP_MINUTES (one step after target)
-            lookback_start = target_minute + STEP_MINUTES
-
-            # Extract lookback window (24 hours of history before the target)
+        def _build_sample(target_chunk_idx):
+            """Build one (features, target) sample centred on target_chunk_idx."""
+            lookback_start = target_chunk_idx + 1
             lookback_values = []
             pv_lookback_values = []
             temp_lookback_values = []
             import_rate_lookback = []
             export_rate_lookback = []
-            valid_sample = True
 
             for lb_offset in range(LOOKBACK_STEPS):
-                lb_minute = lookback_start + lb_offset * STEP_MINUTES
-                if lb_minute in energy_per_step:
-                    lookback_values.append(energy_per_step[lb_minute])
-                    # Add PV generation for the same time period (0 if no PV data)
-                    pv_lookback_values.append(pv_energy_per_step.get(lb_minute, 0.0))
-                    # Add temperature for the same time period (0 if no temp data)
-                    temp_lookback_values.append(temp_values.get(lb_minute, 0.0))
-                    # Add import/export rates for the same time period (0 if no rate data)
-                    import_rate_lookback.append(import_rate_values.get(lb_minute, 0.0))
-                    export_rate_lookback.append(export_rate_values.get(lb_minute, 0.0))
+                lb_idx = lookback_start + lb_offset
+                if lb_idx in chunked_energy:
+                    lookback_values.append(chunked_energy[lb_idx])
+                    pv_lookback_values.append(chunked_pv.get(lb_idx, 0.0))
+                    temp_lookback_values.append(chunked_temp.get(lb_idx, 0.0))
+                    import_rate_lookback.append(chunked_import.get(lb_idx, 0.0))
+                    export_rate_lookback.append(chunked_export.get(lb_idx, 0.0))
                 else:
-                    valid_sample = False
-                    break
+                    return None, None  # Gap in data - skip
 
-            if not valid_sample or len(lookback_values) != LOOKBACK_STEPS:
-                continue
+            if len(lookback_values) != LOOKBACK_STEPS:
+                return None, None
+            if target_chunk_idx not in chunked_energy:
+                return None, None
 
-            # Target is the single next step we're predicting
-            if target_minute not in energy_per_step:
-                continue
-            target_value = energy_per_step[target_minute]
+            target_value = chunked_energy[target_chunk_idx]
 
-            # Calculate time features for the TARGET time (what we're predicting)
-            target_time = now_utc - timedelta(minutes=target_minute)
+            # Time features for the TARGET chunk midpoint
+            target_time = now_utc - timedelta(minutes=alignment_offset + target_chunk_idx * CHUNK_MINUTES)
             minute_of_day = target_time.hour * 60 + target_time.minute
             day_of_week = target_time.weekday()
             time_features = self._create_time_features(minute_of_day, day_of_week)
 
-            # Combine features: [load_lookback..., pv_lookback..., temp_lookback..., import_rates..., export_rates..., time_features...]
             features = np.concatenate(
                 [
                     np.array(lookback_values, dtype=np.float32),
@@ -521,71 +618,28 @@ class LoadPredictor:
                     time_features,
                 ]
             )
+            return features, np.array([target_value], dtype=np.float32)
+
+        # Training samples: all available chunks
+        for target_chunk_idx in range(0, max_chunk_idx - LOOKBACK_STEPS):
+            features, target = _build_sample(target_chunk_idx)
+            if features is None:
+                continue
 
             X_train_list.append(features)
-            y_train_list.append(np.array([target_value], dtype=np.float32))
+            y_train_list.append(target)
 
             # Time-decay weighting (older samples get lower weight)
-            age_days = target_minute / (24 * 60)
-            if is_finetune:
-                weight = 1.0  # Equal weight for fine-tuning
-            else:
-                weight = np.exp(-age_days / time_decay_days)
-            weight_list.append(weight)
+            age_days = (alignment_offset + target_chunk_idx * CHUNK_MINUTES) / (24 * 60)
+            weight_list.append(np.exp(-age_days / time_decay_days))
 
-        # Create validation samples (from most recent data, minute 0 to validation_end)
-        # These samples use lookback from validation_end onwards to predict the holdout period
-        for target_minute in range(0, validation_end, STEP_MINUTES):
-            # Lookback window starts at target_minute + STEP_MINUTES
-            lookback_start = target_minute + STEP_MINUTES
-
-            # Extract lookback window
-            lookback_values = []
-            pv_lookback_values = []
-            temp_lookback_values = []
-            import_rate_lookback = []
-            export_rate_lookback = []
-            valid_sample = True
-
-            for lb_offset in range(LOOKBACK_STEPS):
-                lb_minute = lookback_start + lb_offset * STEP_MINUTES
-                if lb_minute in energy_per_step:
-                    lookback_values.append(energy_per_step[lb_minute])
-                    pv_lookback_values.append(pv_energy_per_step.get(lb_minute, 0.0))
-                    temp_lookback_values.append(temp_values.get(lb_minute, 0.0))
-                    import_rate_lookback.append(import_rate_values.get(lb_minute, 0.0))
-                    export_rate_lookback.append(export_rate_values.get(lb_minute, 0.0))
-                else:
-                    valid_sample = False
-                    break
-
-            if not valid_sample or len(lookback_values) != LOOKBACK_STEPS:
+        # Validation samples: most recent validation_end_chunk chunks
+        for target_chunk_idx in range(0, validation_end_chunk):
+            features, target = _build_sample(target_chunk_idx)
+            if features is None:
                 continue
-
-            # Target value
-            if target_minute not in energy_per_step:
-                continue
-            target_value = energy_per_step[target_minute]
-
-            # Time features for target time
-            target_time = now_utc - timedelta(minutes=target_minute)
-            minute_of_day = target_time.hour * 60 + target_time.minute
-            day_of_week = target_time.weekday()
-            time_features = self._create_time_features(minute_of_day, day_of_week)
-
-            features = np.concatenate(
-                [
-                    np.array(lookback_values, dtype=np.float32),
-                    np.array(pv_lookback_values, dtype=np.float32),
-                    np.array(temp_lookback_values, dtype=np.float32),
-                    np.array(import_rate_lookback, dtype=np.float32),
-                    np.array(export_rate_lookback, dtype=np.float32),
-                    time_features,
-                ]
-            )
-
             X_val_list.append(features)
-            y_val_list.append(np.array([target_value], dtype=np.float32))
+            y_val_list.append(target)
 
         if not X_train_list:
             return None, None, None, None, None
@@ -602,13 +656,66 @@ class LoadPredictor:
 
         return X_train, y_train, train_weights, X_val, y_val
 
-    def _normalize_features(self, X, fit=False):
+    def _get_min_std_array(self, n_features):
+        """
+        Return the per-feature minimum std array used to prevent extreme normalization.
+
+        Args:
+            n_features: Total number of features
+
+        Returns:
+            numpy array of minimum std values, shape (n_features,)
+        """
+        min_std = np.ones(n_features) * 1e-8  # Default fallback
+        if n_features == TOTAL_FEATURES:
+            min_std[0:LOOKBACK_STEPS] = 0.01  # Load energy (kWh)
+            min_std[LOOKBACK_STEPS : 2 * LOOKBACK_STEPS] = 0.01  # PV energy (kWh)
+            min_std[2 * LOOKBACK_STEPS : 3 * LOOKBACK_STEPS] = 0.5  # Temperature (°C)
+            min_std[3 * LOOKBACK_STEPS : 4 * LOOKBACK_STEPS] = 1.0  # Import rates (p/kWh)
+            min_std[4 * LOOKBACK_STEPS : 5 * LOOKBACK_STEPS] = 1.0  # Export rates (p/kWh)
+            min_std[5 * LOOKBACK_STEPS :] = 0.01  # Time features (cyclical)
+        return min_std
+
+    def _log_normalization_stats(self, label=""):
+        """
+        Log per-feature-group normalization statistics for drift tracking.
+
+        Logs mean-of-means and mean-of-stds for each feature group so the
+        log file can be grepped for 'Normalization stats' to compare over time.
+
+        Args:
+            label: Context label (e.g. 'fit' or 'ema-update')
+        """
+        if self.feature_mean is None or self.feature_std is None or len(self.feature_mean) != TOTAL_FEATURES:
+            return
+
+        groups = [
+            ("load", 0, LOOKBACK_STEPS),
+            ("pv", LOOKBACK_STEPS, 2 * LOOKBACK_STEPS),
+            ("temp", 2 * LOOKBACK_STEPS, 3 * LOOKBACK_STEPS),
+            ("import_rate", 3 * LOOKBACK_STEPS, 4 * LOOKBACK_STEPS),
+            ("export_rate", 4 * LOOKBACK_STEPS, 5 * LOOKBACK_STEPS),
+            ("time", 5 * LOOKBACK_STEPS, TOTAL_FEATURES),
+        ]
+
+        parts = []
+        for name, start, end in groups:
+            grp_mean = float(np.mean(self.feature_mean[start:end]))
+            grp_std = float(np.mean(self.feature_std[start:end]))
+            parts.append("{}(mean={:.4f} std={:.4f})".format(name, grp_mean, grp_std))
+
+        self.log("ML Predictor: Normalization stats [{}] target(mean={:.4f} std={:.4f}) {}".format(label, self.target_mean if self.target_mean is not None else 0, self.target_std if self.target_std is not None else 0, " ".join(parts)))
+
+    def _normalize_features(self, X, fit=False, ema_alpha=0.0):
         """
         Normalize features using z-score normalization with feature-specific minimum stds.
 
         Args:
             X: Feature array
             fit: If True, compute and store normalization parameters
+            ema_alpha: If > 0 and existing params exist, blend new stats with old via EMA
+                       (new = alpha * new_stats + (1-alpha) * old_stats). Used during
+                       fine-tuning to track feature distribution drift without sudden jumps.
 
         Returns:
             Normalized feature array
@@ -617,32 +724,22 @@ class LoadPredictor:
             self.feature_mean = np.mean(X, axis=0)
             self.feature_std = np.std(X, axis=0)
 
-            # Apply feature-type-specific minimum std thresholds to prevent extreme normalization
-            # Feature layout: [load (288), pv (288), temp (288), import_rates (288), export_rates (288), time (4)]
-            n_features = len(self.feature_std)
-            min_std = np.ones(n_features) * 1e-8  # Default fallback
+            # Clamp std to per-feature minimums to prevent extreme normalization
+            self.feature_std = np.maximum(self.feature_std, self._get_min_std_array(len(self.feature_std)))
+            self._log_normalization_stats(label="fit")
 
-            if n_features == TOTAL_FEATURES:
-                # Load energy features (0-287): min 0.01 kWh typical single-period variation
-                min_std[0:LOOKBACK_STEPS] = 0.01
+        elif ema_alpha > 0 and self.feature_mean is not None and self.feature_std is not None:
+            # EMA update: blend new statistics with existing to track distribution drift
+            new_mean = np.mean(X, axis=0)
+            new_std = np.std(X, axis=0)
 
-                # PV energy features (288-575): min 0.01 kWh
-                min_std[LOOKBACK_STEPS : 2 * LOOKBACK_STEPS] = 0.01
+            # Apply same min-std clamping to new stats before blending
+            new_std = np.maximum(new_std, self._get_min_std_array(len(new_std)))
 
-                # Temperature features (576-863): min 0.5°C (temps vary by several degrees daily)
-                min_std[2 * LOOKBACK_STEPS : 3 * LOOKBACK_STEPS] = 0.5
-
-                # Import rate features (864-1151): min 1.0 p/kWh (rates vary 0-100p)
-                min_std[3 * LOOKBACK_STEPS : 4 * LOOKBACK_STEPS] = 1.0
-
-                # Export rate features (1152-1439): min 1.0 p/kWh (rates vary 0-115p)
-                min_std[4 * LOOKBACK_STEPS : 5 * LOOKBACK_STEPS] = 1.0
-
-                # Time features (1440-1443): min 0.01 (cyclical features have inherent variation)
-                min_std[5 * LOOKBACK_STEPS :] = 0.01
-
-            # Clamp std to minimums
-            self.feature_std = np.maximum(self.feature_std, min_std)
+            # Blend: small alpha = slow drift tracking, large alpha = fast adaptation
+            self.feature_mean = ema_alpha * new_mean + (1 - ema_alpha) * self.feature_mean
+            self.feature_std = ema_alpha * new_std + (1 - ema_alpha) * self.feature_std
+            self._log_normalization_stats(label="ema-update alpha={}".format(ema_alpha))
 
         if self.feature_mean is None or self.feature_std is None:
             return X
@@ -690,31 +787,34 @@ class LoadPredictor:
         Apply physical constraints to predictions.
 
         Args:
-            predictions: Raw predictions in kWh per 5 min
+            predictions: Raw predictions in kWh per CHUNK_MINUTES
             lookback_buffer: Optional recent values to compute minimum floor
 
         Returns:
             Clipped predictions
         """
-        # Convert max kW to kWh per 5 minutes
-        max_kwh_per_step = self.max_load_kw * STEP_MINUTES / 60.0
+        # Convert max kW to kWh per CHUNK_MINUTES
+        max_kwh_per_step = self.max_load_kw * CHUNK_MINUTES / 60.0
+
+        # Minimum floor: 0.01 kWh per 5-min step * CHUNK_STEPS (scales with chunk size)
+        # This corresponds to ~120W average load as a baseline
+        baseline_floor = 0.01 * CHUNK_STEPS
 
         # Compute minimum floor based on recent data (prevent collapse to zero)
-        # Use 10% of the recent minimum as a floor, but at least 0.01 kWh (120W average)
         if lookback_buffer is not None and len(lookback_buffer) > 0:
             recent_min = min(lookback_buffer)
             recent_mean = sum(lookback_buffer) / len(lookback_buffer)
             # Floor is the smaller of: 20% of recent mean, or recent minimum
-            min_floor = max(0.01, min(recent_min, recent_mean * 0.2))
+            min_floor = max(baseline_floor, min(recent_min, recent_mean * 0.1))
         else:
-            min_floor = 0.01  # ~120W baseline
+            min_floor = baseline_floor
 
         # Clip to valid range with minimum floor
         predictions = np.clip(predictions, min_floor, max_kwh_per_step)
 
         return predictions
 
-    def train(self, load_minutes, now_utc, pv_minutes=None, temp_minutes=None, import_rates=None, export_rates=None, is_initial=True, epochs=100, time_decay_days=7, patience=5):
+    def train(self, load_minutes, now_utc, pv_minutes=None, temp_minutes=None, import_rates=None, export_rates=None, is_initial=True, epochs=100, time_decay_days=7, patience=5, validation_holdout_hours=24, norm_ema_alpha=0.1):
         """
         Train or fine-tune the model.
 
@@ -732,6 +832,8 @@ class LoadPredictor:
             epochs: Number of training epochs
             time_decay_days: Time constant for sample weighting
             patience: Early stopping patience
+            validation_holdout_hours: Hours of most recent data to hold out for validation
+            norm_ema_alpha: EMA alpha for normalization drift tracking during fine-tuning (0=frozen, 0.1=slow drift)
 
         Returns:
             Validation MAE or None if training failed
@@ -739,7 +841,9 @@ class LoadPredictor:
         self.log("ML Predictor: Starting {} training with {} epochs".format("initial" if is_initial else "fine-tune", epochs))
 
         # Create dataset with train/validation split
-        result = self._create_dataset(load_minutes, now_utc, pv_minutes=pv_minutes, temp_minutes=temp_minutes, import_rates=import_rates, export_rates=export_rates, is_finetune=not is_initial, time_decay_days=time_decay_days)
+        result = self._create_dataset(
+            load_minutes, now_utc, pv_minutes=pv_minutes, temp_minutes=temp_minutes, import_rates=import_rates, export_rates=export_rates, is_finetune=not is_initial, time_decay_days=time_decay_days, validation_holdout_hours=validation_holdout_hours
+        )
 
         if result[0] is None:
             self.log("Warn: ML Predictor: Failed to create dataset")
@@ -759,18 +863,40 @@ class LoadPredictor:
             return None
 
         # Normalize features and targets
-        X_train_norm = self._normalize_features(X_train, fit=is_initial or not self.model_initialized)
+        # On initial train: fit normalization from scratch
+        # On fine-tune: apply EMA update to track distribution drift gradually
+        if is_initial or not self.model_initialized:
+            X_train_norm = self._normalize_features(X_train, fit=True)
+            y_train_norm = self._normalize_targets(y_train, fit=True)
+        else:
+            X_train_norm = self._normalize_features(X_train, fit=False, ema_alpha=norm_ema_alpha)
+            y_train_norm = self._normalize_targets(y_train, fit=False)
+            self.log("ML Predictor: Applied EMA normalization update (alpha={}) to track feature drift".format(norm_ema_alpha))
         X_val_norm = self._normalize_features(X_val, fit=False)
-        y_train_norm = self._normalize_targets(y_train, fit=is_initial or not self.model_initialized)
         y_val_norm = self._normalize_targets(y_val, fit=False)
 
         # Initialize weights if needed
         if not self.model_initialized or (is_initial and self.weights is None):
             self._initialize_weights()
 
-        # Training loop
-        best_val_loss = float("inf")
+        # Reset Adam optimizer state for fine-tuning to prevent accumulated
+        # momentum from causing overfitting on small fine-tuning datasets
+        if not is_initial and self.model_initialized:
+            self._reset_adam_optimizer()
+
+        # Compute baseline validation before training (shows loaded model performance)
+        baseline_mae = None
+        if not is_initial:
+            baseline_pred, _, _ = self._forward(X_val_norm)
+            baseline_pred_denorm = self._denormalize_predictions(baseline_pred)
+            baseline_mae = np.mean(np.abs(y_val - baseline_pred_denorm))
+            self.log("ML Predictor: Baseline (pre-finetune) val_mae={:.4f} kWh".format(baseline_mae))
+
+        # Training loop - use baseline as initial best for fine-tuning
+        best_val_loss = baseline_mae if baseline_mae is not None else float("inf")
         patience_counter = 0
+        best_weights = None
+        best_biases = None
 
         for epoch in range(epochs):
             # Shuffle training data
@@ -812,16 +938,25 @@ class LoadPredictor:
 
             self.log("ML Predictor: Epoch {}/{}: train_loss={:.4f} val_mae={:.4f} kWh".format(epoch + 1, epochs, epoch_loss, val_mae))
 
-            # Early stopping check
+            # Early stopping check with weight checkpointing
             if val_mae < best_val_loss:
                 best_val_loss = val_mae
                 patience_counter = 0
+                # Checkpoint best weights
+                best_weights = [w.copy() for w in self.weights]
+                best_biases = [b.copy() for b in self.biases]
             else:
                 patience_counter += 1
 
             if patience_counter >= patience:
                 self.log("ML Predictor: Early stopping at epoch {}".format(epoch + 1))
                 break
+
+        # Restore best weights after early stopping
+        if best_weights is not None and best_biases is not None:
+            self.weights = best_weights
+            self.biases = best_biases
+            self.log("ML Predictor: Restored best weights from epoch with val_mae={:.4f} kWh".format(best_val_loss))
 
         self.training_timestamp = datetime.now(timezone.utc)
         self.validation_mae = best_val_loss
@@ -835,36 +970,37 @@ class LoadPredictor:
         """
         Generate predictions for the next 48 hours using autoregressive approach.
 
-        Each iteration predicts the next 5-minute step, then feeds that prediction
-        back into the lookback window for the next iteration. This allows the model
-        to use target-time features for each prediction.
+        Raw 5-min data is aggregated into CHUNK_MINUTES aligned chunks. Each
+        prediction step predicts one CHUNK_MINUTES chunk, then feeds that back
+        into the lookback window. This reduces noise compared to 5-min resolution.
 
-        To prevent autoregressive drift, predictions are blended with historical
-        daily patterns (average energy by time of day).
+        Predictions are blended with historical daily patterns to prevent
+        autoregressive drift.
 
         Args:
             load_minutes: Dict of {minute: cumulative_kwh}
             now_utc: Current UTC timestamp
             midnight_utc: Today's midnight UTC timestamp
-            pv_minutes: Dict of {minute: cumulative_kwh} PV generation (backwards for history, negative for future)
-            temp_minutes: Dict of {minute: temperature_celsius} Temperature (backwards for history, negative for future)
-            import_rates: Dict of {minute: rate_per_kwh} Import rates (backwards for history, negative for future)
-            export_rates: Dict of {minute: rate_per_kwh} Export rates (backwards for history, negative for future)
+            pv_minutes: Dict of {minute: cumulative_kwh} PV generation
+            temp_minutes: Dict of {minute: temperature_celsius}
+            import_rates: Dict of {minute: rate_per_kwh}
+            export_rates: Dict of {minute: rate_per_kwh}
             exog_features: Optional dict with future exogenous data
 
         Returns:
-            Dict of {minute: cumulative_kwh} in incrementing format for future, or empty dict on failure
+            Dict of {minute: cumulative_kwh} keyed at STEP_MINUTES (5-min) intervals.
+            Each CHUNK_MINUTES prediction is linearly interpolated into CHUNK_STEPS
+            equal 5-min sub-steps so the output matches the standard load_forecast format.
+            Returns empty dict on failure.
         """
         if not self.model_initialized or self.weights is None:
             self.log("Warn: ML Predictor: Model not trained, cannot predict")
             return {}
 
-        # Convert to energy per step for extracting lookback
+        # Convert raw cumulative data to 5-min per-step energy
         energy_per_step = self._load_to_energy_per_step(load_minutes)
         pv_energy_per_step = self._load_to_energy_per_step(pv_minutes) if pv_minutes else {}
-        # Temperature is not cumulative, so just use the raw values
         temp_values = temp_minutes if temp_minutes else {}
-        # Import and export rates are not cumulative, use raw values
         import_rate_values = import_rates if import_rates else {}
         export_rate_values = export_rates if export_rates else {}
 
@@ -872,54 +1008,68 @@ class LoadPredictor:
             self.log("Warn: ML Predictor: No load data available for prediction")
             return {}
 
-        # Compute historical daily patterns for blending (prevents autoregressive drift)
-        # Group historical energy by minute-of-day and compute average
+        # Compute historical daily patterns at CHUNK_MINUTES resolution for blending
         historical_pattern = self._compute_daily_pattern(energy_per_step)
 
-        # Build initial lookback window from historical data (most recent 24 hours)
-        # This will be updated as we make predictions (autoregressive)
+        # Alignment offset: drop the leading partial chunk so buffers start on a
+        # CHUNK_MINUTES clock boundary
+        partial_steps = (now_utc.minute % CHUNK_MINUTES) // STEP_MINUTES
+        alignment_offset = partial_steps * STEP_MINUTES
+
+        # Build initial lookback buffers at CHUNK_MINUTES resolution (LOOKBACK_STEPS chunks)
         lookback_buffer = []
         pv_lookback_buffer = []
         temp_lookback_buffer = []
         import_rate_buffer = []
         export_rate_buffer = []
+
         for lb_offset in range(LOOKBACK_STEPS):
-            lb_minute = lb_offset * STEP_MINUTES
-            if lb_minute in energy_per_step:
-                lookback_buffer.append(energy_per_step[lb_minute])
-            else:
-                lookback_buffer.append(0)  # Fallback to zero
-            # Add PV generation (0 if no data)
-            pv_lookback_buffer.append(pv_energy_per_step.get(lb_minute, 0.0))
-            # Add temperature (0 if no data)
-            temp_lookback_buffer.append(temp_values.get(lb_minute, 0.0))
-            # Add import/export rates (0 if no data)
-            import_rate_buffer.append(import_rate_values.get(lb_minute, 0.0))
-            export_rate_buffer.append(export_rate_values.get(lb_minute, 0.0))
+            lb_start = alignment_offset + lb_offset * CHUNK_MINUTES
+            # Load: sum of CHUNK_STEPS 5-min energy values
+            chunk_energy = sum(energy_per_step.get(lb_start + j * STEP_MINUTES, 0) for j in range(CHUNK_STEPS))
+            lookback_buffer.append(chunk_energy)
+            # PV: sum of 5-min energies over the chunk
+            pv_chunk = sum(pv_energy_per_step.get(lb_start + j * STEP_MINUTES, 0) for j in range(CHUNK_STEPS))
+            pv_lookback_buffer.append(pv_chunk)
+            # Temperature: average over the chunk
+            temp_vals = [temp_values.get(lb_start + j * STEP_MINUTES, 0) for j in range(CHUNK_STEPS)]
+            temp_lookback_buffer.append(float(np.mean(temp_vals)))
+            # Import rate: average over the chunk
+            imp_vals = [import_rate_values.get(lb_start + j * STEP_MINUTES, 0) for j in range(CHUNK_STEPS)]
+            import_rate_buffer.append(float(np.mean(imp_vals)))
+            # Export rate: average over the chunk
+            exp_vals = [export_rate_values.get(lb_start + j * STEP_MINUTES, 0) for j in range(CHUNK_STEPS)]
+            export_rate_buffer.append(float(np.mean(exp_vals)))
 
-        # Autoregressive prediction loop: predict one step at a time
+        # Autoregressive prediction loop: predict one CHUNK_MINUTES chunk at a time
         predictions_energy = []
+        max_kwh_per_chunk = self.max_load_kw * CHUNK_MINUTES / 60.0
+        baseline_floor = 0.01 * CHUNK_STEPS
 
-        # Blending parameters: model weight decreases as we go further into future
-        # At step 0: 100% model, at step PREDICT_HORIZON: blend_floor% model
-        blend_floor = 0.5  # Minimum model weight at horizon (keep more model influence)
+        # Blending: model weight decreases linearly from 1.0 to blend_floor
+        blend_floor = 0.5
 
         for step_idx in range(PREDICT_HORIZON):
-            # Calculate target time for this prediction step
-            target_time = now_utc + timedelta(minutes=(step_idx + 1) * STEP_MINUTES)
+            # Target time: start of the step_idx-th future chunk (newer/recent edge).
+            # Uses step_idx (not step_idx+1) to match training, where time features
+            # represent the chunk's newer boundary (now_utc - alignment_offset -
+            # target_chunk_idx * CHUNK_MINUTES), keeping training and inference aligned.
+            target_time = now_utc + timedelta(minutes=step_idx * CHUNK_MINUTES)
             minute_of_day = target_time.hour * 60 + target_time.minute
             day_of_week = target_time.weekday()
             time_features = self._create_time_features(minute_of_day, day_of_week)
 
-            # Get PV value for the next step from forecast (negative minutes are future)
-            # For future predictions, use forecast; for past, it's already in pv_energy_per_step
-            future_minute = -(step_idx + 1) * STEP_MINUTES  # Negative = future
-            next_pv_value = pv_energy_per_step.get(future_minute, 0.0)
-            # Get temperature value for the next step from forecast (negative minutes are future)
-            next_temp_value = temp_values.get(future_minute, 0.0)
-            # Get import/export rate values for the next step from forecast
-            next_import_rate = import_rate_values.get(future_minute, 0.0)
-            next_export_rate = export_rate_values.get(future_minute, 0.0)
+            # Future PV energy: sum of the CHUNK_STEPS 5-min future values for this chunk
+            # Future 5-min keys are negative (e.g. -5, -10, ...) going forward in time
+            next_pv_value = sum(pv_energy_per_step.get(-(step_idx * CHUNK_MINUTES + (j + 1) * STEP_MINUTES), 0.0) for j in range(CHUNK_STEPS))
+            # Future temperature: average of CHUNK_STEPS 5-min future values
+            temp_future = [temp_values.get(-(step_idx * CHUNK_MINUTES + (j + 1) * STEP_MINUTES), 0.0) for j in range(CHUNK_STEPS)]
+            next_temp_value = float(np.mean(temp_future))
+            # Future import/export rates: average over the chunk
+            imp_future = [import_rate_values.get(-(step_idx * CHUNK_MINUTES + (j + 1) * STEP_MINUTES), 0.0) for j in range(CHUNK_STEPS)]
+            next_import_rate = float(np.mean(imp_future))
+            exp_future = [export_rate_values.get(-(step_idx * CHUNK_MINUTES + (j + 1) * STEP_MINUTES), 0.0) for j in range(CHUNK_STEPS)]
+            next_export_rate = float(np.mean(exp_future))
 
             # Combine features: [load_lookback..., pv_lookback..., temp_lookback..., import_rates..., export_rates..., time_features...]
             features = np.concatenate(
@@ -941,53 +1091,48 @@ class LoadPredictor:
 
             # Apply physical constraints
             pred_energy = self._clip_predictions(pred_energy)
-            model_pred = float(pred_energy[0])  # Single output
+            model_pred = float(pred_energy[0])
 
-            # Get historical pattern value for this time of day
-            slot = (minute_of_day // STEP_MINUTES) * STEP_MINUTES
+            # Blend with historical daily pattern (CHUNK_MINUTES slot)
+            slot = (minute_of_day // CHUNK_MINUTES) * CHUNK_MINUTES
             hist_value = historical_pattern.get(slot, model_pred)
 
-            # Blend model prediction with historical pattern
-            # Linear decay: model weight goes from 1.0 to blend_floor over horizon
+            # Linear blend: 100% model at step 0, blend_floor% model at horizon
             progress = step_idx / PREDICT_HORIZON
             model_weight = 1.0 - progress * (1.0 - blend_floor)
             energy_value = model_weight * model_pred + (1.0 - model_weight) * hist_value
 
-            # Re-apply constraints after blending
-            max_kwh_per_step = self.max_load_kw * STEP_MINUTES / 60.0
-            energy_value = max(0.01, min(energy_value, max_kwh_per_step))
+            # Re-apply hard constraints after blending
+            energy_value = max(baseline_floor, min(energy_value, max_kwh_per_chunk))
 
             predictions_energy.append(energy_value)
 
-            # Update lookback buffer for next iteration (shift and add new prediction)
-            # Lookback[0] is most recent, so insert at front and remove from end
+            # Shift lookback buffers: insert new prediction at front, drop oldest
             lookback_buffer.insert(0, energy_value)
-            lookback_buffer.pop()  # Remove oldest value
-
-            # Update PV lookback buffer with next forecast value
+            lookback_buffer.pop()
             pv_lookback_buffer.insert(0, next_pv_value)
-            pv_lookback_buffer.pop()  # Remove oldest value
-
-            # Update temperature lookback buffer with next forecast value
+            pv_lookback_buffer.pop()
             temp_lookback_buffer.insert(0, next_temp_value)
-            temp_lookback_buffer.pop()  # Remove oldest value
-
-            # Update import/export rate buffers with next forecast values
+            temp_lookback_buffer.pop()
             import_rate_buffer.insert(0, next_import_rate)
-            import_rate_buffer.pop()  # Remove oldest value
+            import_rate_buffer.pop()
             export_rate_buffer.insert(0, next_export_rate)
-            export_rate_buffer.pop()  # Remove oldest value
+            export_rate_buffer.pop()
 
-        # Convert to cumulative kWh format (incrementing into future)
-        # Format matches fetch_extra_load_forecast output
+        # Convert to cumulative kWh format at STEP_MINUTES resolution.
+        # Each CHUNK_MINUTES prediction is split into CHUNK_STEPS equal 5-min sub-steps
+        # so that the output matches the format expected by fetch_extra_load_forecast
+        # (incrementing kWh, one entry per STEP_MINUTES).
         result = {}
         cumulative = 0
 
         for step_idx in range(PREDICT_HORIZON):
-            minute = step_idx * STEP_MINUTES
             energy = predictions_energy[step_idx]
-            cumulative += energy
-            result[minute] = round(cumulative, 4)
+            energy_per_substep = energy / CHUNK_STEPS
+            for j in range(CHUNK_STEPS):
+                minute = step_idx * CHUNK_MINUTES + j * STEP_MINUTES
+                cumulative += energy_per_substep
+                result[minute] = round(cumulative, 4)
 
         return result
 
@@ -1116,26 +1261,12 @@ class LoadPredictor:
             # Upgrade old models: ensure minimum std thresholds to prevent extreme normalization
             if self.feature_std is not None:
                 n_features = len(self.feature_std)
-                upgraded = False
+                old_std = self.feature_std.copy()
+                self.feature_std = np.maximum(self.feature_std, self._get_min_std_array(n_features))
 
-                if n_features == TOTAL_FEATURES:
-                    # Apply same minimum thresholds as in _normalize_features
-                    min_std = np.ones(n_features) * 1e-8
-                    min_std[0:LOOKBACK_STEPS] = 0.01  # Load
-                    min_std[LOOKBACK_STEPS : 2 * LOOKBACK_STEPS] = 0.01  # PV
-                    min_std[2 * LOOKBACK_STEPS : 3 * LOOKBACK_STEPS] = 0.5  # Temperature
-                    min_std[3 * LOOKBACK_STEPS : 4 * LOOKBACK_STEPS] = 1.0  # Import rates
-                    min_std[4 * LOOKBACK_STEPS : 5 * LOOKBACK_STEPS] = 1.0  # Export rates
-                    min_std[5 * LOOKBACK_STEPS :] = 0.01  # Time features
-
-                    # Check if upgrade needed
-                    old_std = self.feature_std.copy()
-                    self.feature_std = np.maximum(self.feature_std, min_std)
-
-                    if not np.array_equal(old_std, self.feature_std):
-                        upgraded_count = np.sum(old_std != self.feature_std)
-                        self.log("ML Predictor: Upgraded {} feature std values to prevent extreme normalization".format(upgraded_count))
-                        upgraded = True
+                if not np.array_equal(old_std, self.feature_std):
+                    upgraded_count = np.sum(old_std != self.feature_std)
+                    self.log("ML Predictor: Upgraded {} feature std values to prevent extreme normalization".format(upgraded_count))
 
             # Load training metadata
             if metadata.get("training_timestamp"):

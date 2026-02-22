@@ -75,8 +75,8 @@ This component is always enabled and required for Predbat to function.
 
 | Option | Type | Required | Default | Config Key | Description |
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
-| `ha_url` | String | No | `http://supervisor/core` | `ha_url` | Home Assistant API URL (the default is for when using an HA add-on) |
-| `ha_key` | String | No | Auto-detected | `ha_key` | Home Assistant access token (auto-detected when running as add-on) |
+| `ha_url` | String | No | `http://supervisor/core` | `ha_url` | Home Assistant API URL (the default is for when using an HA app) |
+| `ha_key` | String | No | Auto-detected | `ha_key` | Home Assistant access token (auto-detected when running as app) |
 | `db_enable` | Boolean | No | False | `db_enable` | Enable database integration |
 | `db_mirror_ha` | Boolean | No | False | `db_mirror_ha` | Copy Home Assistant data into Predbat's database |
 | `db_primary` | Boolean | No | False | `db_primary` | Use Predbat's database instead of Home Assistant for the primary data source |
@@ -118,7 +118,7 @@ Provides a built-in web server that lets you view and manage Predbat through you
 
 #### How to access (web)
 
-If you use Predbat as a Home Assistant add on then click 'Open Web UI' from the add-on or add Predbat Web UI to your side bar.
+If you use Predbat as a Home Assistant app then click 'Open Web UI' from the app or add Predbat Web UI to your side bar.
 If you run Predbat outside then you can access it from the port as configured:  `http://homename:5052`
 
 ---
