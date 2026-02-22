@@ -932,12 +932,18 @@ class Fetch:
             self.octopus_intelligent_charging = False
 
         # Work out car SoC and reset next
+        # Store previous values to detect unexpected resets
+        prev_car_charging_soc = self.car_charging_soc[:] if hasattr(self, 'car_charging_soc') and self.car_charging_soc else []
         self.car_charging_soc = [0.0 for car_n in range(self.num_cars)]
         self.car_charging_soc_next = [None for car_n in range(self.num_cars)]
         for car_n in range(self.num_cars):
             if car_n < len(self.car_charging_manual_soc) and self.car_charging_manual_soc[car_n]:
                 car_postfix = "" if car_n == 0 else "_" + str(car_n)
-                self.car_charging_soc[car_n] = self.get_arg("car_charging_manual_soc_kwh" + car_postfix, 0.0)
+                manual_soc_kwh = self.get_arg("car_charging_manual_soc_kwh" + car_postfix, 0.0)
+                self.car_charging_soc[car_n] = manual_soc_kwh
+                # Log if manual SOC is unexpectedly low
+                if manual_soc_kwh < 0.1 and car_n < len(prev_car_charging_soc) and prev_car_charging_soc[car_n] > 1.0:
+                    self.log("Warn: Car {} manual SOC has dropped from {:.2f} kWh to {:.2f} kWh - this may indicate the entity was reset".format(car_n, prev_car_charging_soc[car_n], manual_soc_kwh))
             else:
                 self.car_charging_soc[car_n] = (self.get_arg("car_charging_soc", 0.0, index=car_n) * self.car_charging_battery_size[car_n]) / 100.0
         if self.num_cars:

@@ -962,7 +962,13 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                     car_postfix = "" if car_n == 0 else "_" + str(car_n)
                     self.log("Car {} charging Manual SoC current is {} next is {}".format(car_n, self.car_charging_soc[car_n], self.car_charging_soc_next[car_n]))
                     if self.car_charging_soc_next[car_n] is not None:
-                        self.expose_config("car_charging_manual_soc_kwh" + car_postfix, dp3(self.car_charging_soc_next[car_n]))
+                        # Prevent manual SOC from being incorrectly reset to zero
+                        # Only update if the new value is reasonable (allows small decreases for rounding)
+                        if self.car_charging_soc_next[car_n] < 0.1 and self.car_charging_soc[car_n] > 1.0:
+                            self.log("Warn: Car {} manual SOC would be reset from {:.2f} kWh to {:.2f} kWh - skipping update to prevent data loss".format(
+                                car_n, self.car_charging_soc[car_n], self.car_charging_soc_next[car_n]))
+                        else:
+                            self.expose_config("car_charging_manual_soc_kwh" + car_postfix, dp3(self.car_charging_soc_next[car_n]))
 
         # Holiday days left countdown, subtract a day at midnight every day
         if scheduled and self.holiday_days_left > 0 and self.minutes_now < RUN_EVERY:
