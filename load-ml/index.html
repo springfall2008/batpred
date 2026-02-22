@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>ML Load Prediction - Predbat Documentation</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "ML Load Prediction";
+        var mkdocs_page_input_path = "load-ml.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">ML Load Prediction</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#table-of-contents">Table of Contents</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#overview">Overview</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#how-the-neural-network-works">How the Neural Network Works</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#architecture">Architecture</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#input-features">Input Features</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#prediction-process">Prediction Process</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#training-process">Training Process</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#configuration">Configuration</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#basic-setup">Basic Setup</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#recommended-enable-temperature-predictions">Recommended: Enable Temperature Predictions</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#optional-add-pv-generation-data">Optional: Add PV Generation Data</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#optional-subtract-car-charging">Optional: Subtract Car Charging</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#setup-instructions">Setup Instructions</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#step-1-verify-prerequisites">Step 1: Verify Prerequisites</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#step-2-enable-the-component">Step 2: Enable the Component</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#step-3-wait-for-initial-training">Step 3: Wait for Initial Training</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#step-4-monitor-predictions">Step 4: Monitor Predictions</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#understanding-the-model">Understanding the Model</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#model-status">Model Status</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#what-makes-good-predictions">What Makes Good Predictions?</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#understanding-mae-mean-absolute-error">Understanding MAE (Mean Absolute Error)</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#expected-accuracy">Expected Accuracy</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#monitoring-and-troubleshooting">Monitoring and Troubleshooting</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#charts">Charts</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#check-model-status">Check Model Status</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#tracking-normalization-drift">Tracking Normalization Drift</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#common-issues">Common Issues</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#viewing-predictions">Viewing Predictions</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#model-persistence">Model Persistence</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#see-also">See Also</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Installing & configuring Predbat</li>
+      <li class="breadcrumb-item active">ML Load Prediction</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="ml-load-prediction">ML Load Prediction</h1>
+<p>Predbat includes a neural network-based machine learning component that can predict your household energy consumption for the next 48 hours.
+This prediction is based on historical load patterns, time-of-day patterns, day-of-week patterns, and optionally PV generation history and temperature forecasts.</p>
+<h2 id="table-of-contents">Table of Contents</h2>
+<ul>
+<li><a href="#overview">Overview</a></li>
+<li><a href="#how-the-neural-network-works">How the Neural Network Works</a></li>
+<li><a href="#configuration">Configuration</a></li>
+<li><a href="#setup-instructions">Setup Instructions</a></li>
+<li><a href="#understanding-the-model">Understanding the Model</a></li>
+<li><a href="#monitoring-and-troubleshooting">Monitoring and Troubleshooting</a></li>
+<li><a href="#model-persistence">Model Persistence</a></li>
+</ul>
+<h2 id="overview">Overview</h2>
+<p>The ML Load Prediction component uses a lightweight multi-layer perceptron (MLP) neural network implemented in pure NumPy. It learns from your historical energy consumption patterns and makes predictions about future load.</p>
+<p><strong>Key Features:</strong></p>
+<ul>
+<li>Predicts 48 hours of load data in 5-minute intervals</li>
+<li>Learns daily and weekly patterns automatically</li>
+<li>Supports historical PV generation data as an input feature</li>
+<li>Supports temperature forecast data for improved accuracy</li>
+<li>Uses historical and future energy import/export rates as input features</li>
+<li>Deep neural network with 4 hidden layers [512, 256, 128, 64 neurons]</li>
+<li>Optimized with He initialization and AdamW weight decay for robust training</li>
+<li>Automatically trains on historical data (requires at least 1 day, recommended 7+ days, up to 28 days configurable)</li>
+<li>Fine-tunes periodically (every 2 hours) using full dataset to adapt to changing patterns</li>
+<li>Time-weighted training prioritizes recent data while learning from historical patterns</li>
+<li>Model persists across restarts</li>
+<li>Falls back gracefully if predictions are unreliable</li>
+</ul>
+<h2 id="how-the-neural-network-works">How the Neural Network Works</h2>
+<h3 id="architecture">Architecture</h3>
+<p>The ML Load Predictor uses a deep multi-layer perceptron (MLP) with the following architecture:</p>
+<ul>
+<li><strong>Input Layer</strong>: 1444 features (288 load + 288 PV + 288 temperature + 288 import rates + 288 export rates + 4 time features)</li>
+<li><strong>Hidden Layers</strong>: 4 layers with [512, 256, 128, 64] neurons using ReLU activation</li>
+<li><strong>Output Layer</strong>: 1 neuron (predicts next 5-minute step)</li>
+<li><strong>Total Parameters</strong>: ~500,000 trainable weights</li>
+</ul>
+<p><strong>Optimization Techniques:</strong></p>
+<ul>
+<li><strong>He Initialization</strong>: Weights initialized using He/Kaiming method (<code>std = sqrt(2/fan_in)</code>), optimized for ReLU activations</li>
+<li><strong>AdamW Optimizer</strong>: Adam optimization with weight decay (L2 regularization, default 0.01) to prevent overfitting</li>
+<li><strong>Early Stopping</strong>: Training halts if validation error stops improving (patience=5 epochs)</li>
+<li><strong>Weighted Samples</strong>: Recent data weighted more heavily (exponential decay over history period)</li>
+</ul>
+<h3 id="input-features">Input Features</h3>
+<p>The neural network uses several types of input features to make predictions:</p>
+<ol>
+<li>
+<p><strong>Historical Load Lookback</strong>
+   - Past 24 hours of energy consumption at 5-minute intervals
+   - Helps the network understand recent usage patterns</p>
+</li>
+<li>
+<p><strong>Historical PV Generation</strong>
+   - Past 24 hours of solar PV generation at 5-minute intervals
+   - Helps correlate solar production with consumption patterns
+   - Requires <code>pv_today</code> sensor to be configured</p>
+</li>
+<li>
+<p><strong>Historical Temperature</strong>
+   - Past 24 hours of temperature data at 5-minute intervals
+   - Helps correlate temperature with energy usage (heating/cooling)
+   - <strong>Requires the Temperature component to be enabled</strong></p>
+</li>
+<li>
+<p><strong>Historical Import/Export Energy Rates</strong> (288 + 288 features)
+   - Past 24 hours of electricity import rates at 5-minute intervals
+   - Past 24 hours of electricity export rates at 5-minute intervals
+   - Helps the model learn consumption patterns based on time-of-use pricing
+   - Automatically extracted from your configured Octopus Energy tariffs or other rate sources
+   - Particularly useful for homes that shift usage to cheaper rate periods</p>
+</li>
+<li>
+<p><strong>Cyclical Time Features</strong> (4 features)
+   - Sin/Cos encoding of minute-of-day (captures daily patterns with 5-min precision)
+   - Sin/Cos encoding of day-of-week (captures weekly patterns)
+   - These features help the network understand that 23:55 is close to 00:05</p>
+</li>
+</ol>
+<h3 id="prediction-process">Prediction Process</h3>
+<p>The model uses an autoregressive approach:</p>
+<ol>
+<li>Takes the last 24 hours of historical data</li>
+<li>Predicts the next 5-minute step</li>
+<li>Adds that prediction to the history window</li>
+<li>Shifts the window forward and repeats</li>
+<li>Continues for 576 steps to cover 48 hours</li>
+</ol>
+<p>To prevent drift in long-range predictions, the model blends autoregressive predictions with historical daily patterns.</p>
+<h3 id="training-process">Training Process</h3>
+<p><strong>Initial Training:</strong></p>
+<ul>
+<li>Requires at least 1 day of historical data (7+ days recommended, up to 28 days configurable)</li>
+<li>Fetches up to 28 days of load history by default (configurable via <code>load_ml_max_days_history</code>)</li>
+<li>Uses 100 epochs with early stopping (patience=5)</li>
+<li>Batch size: 128 samples</li>
+<li>AdamW optimizer with learning rate 0.001 and weight decay 0.01</li>
+<li>Sample weighting: exponential time decay (recent data weighted more)</li>
+<li>Validates on the last 24 hours of data</li>
+<li>Saves model to disk: <code>predbat_ml_model.npz</code></li>
+</ul>
+<p><strong>Regularization:</strong></p>
+<ul>
+<li><strong>Weight Decay</strong>: L2 penalty (0.01) applied to network weights to prevent overfitting</li>
+<li><strong>Early Stopping</strong>: Training halts if validation error doesn't improve for 5 consecutive epochs, selecting the best results so far.</li>
+<li><strong>Time-Weighted Samples</strong>: Recent data has higher importance (7-day exponential decay constant)<ul>
+<li>Today's data: 100% weight</li>
+<li>N days old: 37% weight (e^-1)</li>
+</ul>
+</li>
+</ul>
+<p><strong>Fine-tuning:</strong></p>
+<ul>
+<li>Runs every 2 hours if enabled</li>
+<li>Uses full available dataset (same as initial training, up to 28 days)</li>
+<li>Uses 3 epochs to quickly adapt to recent changes</li>
+<li>Applies same time-weighted sampling to prioritize recent data</li>
+<li>Preserves learned patterns while adapting to new ones</li>
+<li>Same regularization techniques applied as initial training</li>
+<li>Each fine-tune cycle blends the current data's feature statistics (mean/std) with the stored normalization parameters via an exponential moving average (alpha=0.1).
+This lets the model slowly track long-term shifts in feature distributions (e.g. seasonal load changes, new tariff rates) without sudden jumps that could destabilise existing weights.</li>
+</ul>
+<p><strong>Why Full Dataset for Fine-tuning?</strong></p>
+<p>Although fine-tuning uses up to 20 epochs (vs 100 for initial training), it still uses the full dataset with time-weighted sampling. This approach:</p>
+<ul>
+<li><strong>Prevents catastrophic forgetting</strong>: Using only recent data would cause the model to gradually forget older patterns</li>
+<li><strong>Balances adaptation</strong>: Time weighting ensures recent changes are prioritized while maintaining long-term pattern knowledge</li>
+<li><strong>Handles seasonal patterns</strong>: 28 days of history helps capture weekly cycles and early seasonal trends</li>
+<li><strong>Provides stability</strong>: The model learns from a broader context, making predictions more robust</li>
+</ul>
+<p>With time-weighted sampling, training samples have these relative weights:</p>
+<ul>
+<li><strong>This week</strong>: 100% - 50% (fully weighted)</li>
+<li><strong>Last week</strong>: 50% - 20% (moderately weighted)</li>
+<li><strong>2 weeks ago</strong>: 20% - 7% (lightly weighted)</li>
+<li><strong>3-4 weeks ago</strong>: 7% - 1% (minimal weight, but still contributing to pattern learning)</li>
+</ul>
+<p>This allows the model to adapt quickly to recent changes (via time weighting) without losing the benefit of learning from historical patterns.</p>
+<p><strong>Model Validation:</strong></p>
+<ul>
+<li>Model is validated after each training session</li>
+<li>If validation error exceeds threshold (default 2.0 kWh MAE), predictions are disabled</li>
+<li>Model is considered stale after 48 hours and requires retraining</li>
+</ul>
+<h2 id="configuration">Configuration</h2>
+<h3 id="basic-setup">Basic Setup</h3>
+<p>To enable ML load prediction, add to your <code>apps.yaml</code>:</p>
+<pre><code class="language-yaml">predbat:
+  module: predbat
+  class: PredBat
+
+  # Enable ML load prediction
+  load_ml_enable: True
+  # Use the output data in Predbat (can be False to explore the use without using the data)
+  load_ml_source: True
+
+  # Optional: Maximum days of historical data to use for training (default: 28)
+  # load_ml_max_days_history: 28
+</code></pre>
+<p><strong>Configuration Parameter Details:</strong></p>
+<ul>
+<li><code>load_ml_enable</code>: Enables the ML component (required)</li>
+<li><code>load_ml_source</code>: When <code>true</code>, Predbat uses ML predictions for battery planning. Set to <code>false</code> to test predictions without affecting battery control</li>
+<li><code>load_ml_max_days_history</code>: Maximum days of historical data to fetch and train on<ul>
+<li><strong>Default</strong>: 28 days</li>
+<li><strong>Minimum</strong>: 1 day (not recommended for production)</li>
+<li><strong>Recommended</strong>: 7-28 days depending on your consumption patterns</li>
+<li><strong>When to increase</strong>: If you have very regular weekly patterns or want seasonal awareness</li>
+<li><strong>When to decrease</strong>: If your consumption patterns change frequently, or you have limited historical data storage</li>
+<li><strong>Note</strong>: Training time increases slightly with more data, but fine-tuning remains fast (3 epochs)</li>
+</ul>
+</li>
+</ul>
+<p>For best results:</p>
+<ul>
+<li>Ensure you have a least a weeks worth of data before enabling load_ml_source.</li>
+<li>Make sure you do not have PredAI enabled at the same time</li>
+<li>Disable in day adjustment (switch.predbat_calculate_inday_adjustment) as the AI model will do that for you.</li>
+</ul>
+<h3 id="recommended-enable-temperature-predictions">Recommended: Enable Temperature Predictions</h3>
+<p><strong>For best results, enable the Temperature component to provide temperature forecasts:</strong></p>
+<pre><code class="language-yaml">predbat:
+  # ... other config ...
+
+  # Enable temperature predictions (RECOMMENDED for ML load prediction)
+  temperature_enable: true
+
+  # Optional: specify coordinates (defaults to zone.home)
+  # temperature_latitude: 51.5074
+  # temperature_longitude: -0.1278
+</code></pre>
+<p>The temperature data significantly improves prediction accuracy for homes with heating/cooling systems, as energy consumption is often correlated with outside temperature.</p>
+<h3 id="optional-add-pv-generation-data">Optional: Add PV Generation Data</h3>
+<p>Your PV data will be picked from the pv_today setting in Predbat already</p>
+<pre><code class="language-yaml">predbat:
+  # ... other config ...
+
+  pv_today:
+    - sensor.my_solar_generation_today
+</code></pre>
+<h3 id="optional-subtract-car-charging">Optional: Subtract Car Charging</h3>
+<p>If you have an EV charger set in Predbat then this will be subtracted from predictions.
+If this is not set then the default EV charging threshold is used if car_charging_hold is True.</p>
+<pre><code class="language-yaml">predbat:
+  # ... other config ...
+
+  # Optional: subtract car charging from load history
+  car_charging_energy:
+    - sensor.my_ev_charger_energy
+</code></pre>
+<h2 id="setup-instructions">Setup Instructions</h2>
+<h3 id="step-1-verify-prerequisites">Step 1: Verify Prerequisites</h3>
+<p>Before enabling ML load prediction:</p>
+<ol>
+<li>Ensure you have a <code>load_today</code> sensor that tracks cumulative daily energy consumption</li>
+<li>Optionally configure <code>pv_today</code> if you have solar panels</li>
+<li><strong>Recommended</strong>: Enable the Temperature component (Temperature Component in components documentation)</li>
+<li>Ensure you have at least 1 day of historical data (7+ days recommended, up to 28 days by default)</li>
+</ol>
+<h3 id="step-2-enable-the-component">Step 2: Enable the Component</h3>
+<p>Add <code>load_ml_enable: true</code> to your <code>apps.yaml</code> and restart Predbat.</p>
+<h3 id="step-3-wait-for-initial-training">Step 3: Wait for Initial Training</h3>
+<p>On first run, the component will:</p>
+<ol>
+<li>Fetch historical load data (default: up to 28 days, configurable)</li>
+<li>Train the neural network (takes 1-5 minutes depending on data)</li>
+<li>Validate the model</li>
+<li>Begin making predictions if validation passes</li>
+</ol>
+<p>Check the Predbat logs for training progress:</p>
+<pre><code class="language-text">ML Component: Starting initial training
+ML Predictor: Starting initial training with 100 epochs
+ML Predictor: Training complete, final val_mae=0.3245 kWh
+ML Component: Initial training completed, validation MAE=0.3245 kWh
+</code></pre>
+<h3 id="step-4-monitor-predictions">Step 4: Monitor Predictions</h3>
+<p>Once trained, the component publishes predictions to:</p>
+<ul>
+<li><code>sensor.predbat_load_ml_forecast</code> - Contains 48-hour prediction in <code>results</code> attribute</li>
+</ul>
+<p>You can visualize these predictions in the Predbat web interface or by creating charts in Home Assistant.</p>
+<h2 id="understanding-the-model">Understanding the Model</h2>
+<h3 id="model-status">Model Status</h3>
+<p>The ML component tracks several status indicators:</p>
+<ul>
+<li><strong>Model Status</strong>: <code>not_initialized</code>, <code>training</code>, <code>active</code>, <code>validation_failed</code>, <code>stale</code></li>
+<li><strong>Validation MAE</strong>: Mean Absolute Error on validation data (see <a href="#understanding-mae-mean-absolute-error">Understanding MAE</a> for details)</li>
+<li><strong>Model Age</strong>: How long since the model was last trained</li>
+</ul>
+<p>You can check model status in the Predbat logs or via the component status page in the web interface.</p>
+<h3 id="what-makes-good-predictions">What Makes Good Predictions?</h3>
+<p>Good predictions require:</p>
+<ol>
+<li><strong>Sufficient Historical Data</strong>: At least 7 days recommended for stable patterns (supports up to 28 days by default)</li>
+<li><strong>Consistent Patterns</strong>: Regular daily/weekly routines improve accuracy</li>
+<li><strong>Temperature Data</strong>: Especially important for homes with electric heating/cooling (requires Temperature component)</li>
+<li><strong>Energy Rate Data</strong>: Automatically included - helps model learn consumption patterns based on time-of-use tariffs</li>
+<li><strong>PV Generation Data</strong>: If you have solar panels, include <code>pv_today</code> sensor for better correlation</li>
+<li><strong>Clean Data</strong>: Avoid gaps or incorrect readings in historical data</li>
+<li><strong>Recent Training</strong>: Model retrains every 2 hours using full dataset with time-weighted sampling to adapt to changing patterns</li>
+</ol>
+<h3 id="understanding-mae-mean-absolute-error">Understanding MAE (Mean Absolute Error)</h3>
+<p>The model's accuracy is measured using <strong>MAE (Mean Absolute Error)</strong>, which is the primary metric used for validation and monitoring.</p>
+<p><strong>What is MAE?</strong></p>
+<p>MAE measures the average absolute difference between predicted and actual energy consumption values. For example:</p>
+<ul>
+<li>If the model predicts 0.5 kWh for a 5-minute period and actual consumption is 0.7 kWh, the error is 0.2 kWh</li>
+<li>MAE is the average of these errors across all predictions</li>
+</ul>
+<p><strong>How to interpret MAE:</strong></p>
+<ul>
+<li><strong>MAE is in kWh per 5-minute step</strong> - this is the average prediction error for each 5-minute interval</li>
+<li><strong>Lower is better</strong> - an MAE of 0.3 kWh means predictions are typically off by ±0.3 kWh per 5-minute period</li>
+<li><strong>Scale matters</strong> - a 0.3 kWh error means different things for different households:<ul>
+<li>Low consumption home (2 kW average): 0.3 kWh per 5-min ≈ 3.6 kW error → significant</li>
+<li>High consumption home (8 kW average): 0.3 kWh per 5-min ≈ 3.6 kW error → moderate</li>
+</ul>
+</li>
+</ul>
+<p><strong>Practical example:</strong></p>
+<p>If your validation MAE is 0.4 kWh per 5-min step:</p>
+<ul>
+<li>Each 5-minute prediction is off by an average of 0.4 kWh (±24 Wh/min)</li>
+<li>This translates to roughly ±4.8 kW average power error</li>
+<li>Over 1 hour (12 steps), cumulative error averages out but could be up to ±4.8 kWh</li>
+<li>The model learns patterns, so errors tend to cancel out over longer periods</li>
+</ul>
+<p><strong>Why MAE is used:</strong></p>
+<ul>
+<li><strong>Easy to interpret</strong>: Errors are in the same units as predictions (kWh)</li>
+<li><strong>Robust to outliers</strong>: Unlike squared errors, large mistakes don't dominate the metric</li>
+<li><strong>Practical measure</strong>: Directly relates to how much your battery plan might be affected</li>
+</ul>
+<h3 id="expected-accuracy">Expected Accuracy</h3>
+<p>Typical validation MAE values:</p>
+<ul>
+<li><strong>Excellent</strong>: &lt; 0.3 kWh per 5-min step (~ 3.6 kW average)</li>
+<li><strong>Good</strong>: 0.3 - 0.5 kWh per 5-min step</li>
+<li><strong>Fair</strong>: 0.5 - 1.0 kWh per 5-min step</li>
+<li><strong>Poor</strong>: &gt; 1.0 kWh per 5-min step (may indicate issues)</li>
+</ul>
+<p>If validation MAE exceeds the threshold (default 2.0 kWh), predictions are disabled and the model will attempt to retrain.</p>
+<h2 id="monitoring-and-troubleshooting">Monitoring and Troubleshooting</h2>
+<h3 id="charts">Charts</h3>
+<p>The Predbat WebUI has two charts associated with LoadML:</p>
+<p>The LoadML chart shows the correlation between your actual load and the predictions by charting this against the prediction 1 hour in the future and 8 hours in the future.</p>
+<p><img width="1602" height="971" alt="Predbat LoadML chart showing actual household load and ML predictions 1 hour and 8 hours ahead" src="https://github.com/user-attachments/assets/731ef153-01e4-4ed1-bc5b-df1305d84f41" /></p>
+<p>The LoadMLPower chart shows a similar view as power, but also plots PV production, predicted PV production and temperature predictions.</p>
+<h3 id="check-model-status">Check Model Status</h3>
+<p>View model status in Predbat logs:</p>
+<pre><code class="language-text">ML Component: Model status: active, last trained: 2024-02-07 10:30:00
+ML Component: Validation MAE: 0.3245 kWh
+</code></pre>
+<h3 id="tracking-normalization-drift">Tracking Normalization Drift</h3>
+<p>Each time the model trains (initial fit) or fine-tunes (EMA update), it logs a normalization stats line that summarises the mean and standard deviation for each input feature group.
+You can search for Normalization stats in the logfile for this information.</p>
+<p>Large shifts in <code>mean</code> or <code>std</code> for a group (e.g. <code>import_rate</code> after a tariff change, or <code>load</code> after a new appliance) will be visible here and confirm the EMA is tracking the drift correctly.</p>
+<h3 id="common-issues">Common Issues</h3>
+<p><strong>Issue</strong>: Model never trains</p>
+<ul>
+<li><strong>Cause</strong>: Insufficient historical data</li>
+<li><strong>Solution</strong>: Wait until you have at least 1 day of data, preferably 7+ days</li>
+</ul>
+<p><strong>Issue</strong>: Validation MAE too high (predictions disabled)</p>
+<ul>
+<li><strong>Cause</strong>: Inconsistent load patterns, poor data quality, or insufficient training data</li>
+<li><strong>Solution</strong>:<ul>
+<li>Ensure historical data is accurate</li>
+<li>Add temperature data if not already enabled</li>
+<li>Wait for more historical data to accumulate</li>
+<li>Check for gaps or anomalies in historical data</li>
+</ul>
+</li>
+</ul>
+<p><strong>Issue</strong>: Model becomes stale</p>
+<ul>
+<li><strong>Cause</strong>: No training for 48+ hours</li>
+<li><strong>Solution</strong>: Check logs for training failures, ensure Predbat is running continuously</li>
+</ul>
+<p><strong>Issue</strong>: Predictions seem inaccurate</p>
+<ul>
+<li><strong>Cause</strong>: Changing household patterns, insufficient features, or missing temperature data</li>
+<li><strong>Solution</strong>:<ul>
+<li>Enable temperature predictions for better accuracy</li>
+<li>Wait for fine-tuning to adapt to new patterns</li>
+<li>Verify historical data quality</li>
+<li>Consider adding PV data if you have solar panels</li>
+</ul>
+</li>
+</ul>
+<h3 id="viewing-predictions">Viewing Predictions</h3>
+<p>Access predictions via:</p>
+<ol>
+<li><strong>Web Interface</strong>: Navigate to the battery plan view to see ML predictions</li>
+<li><strong>Home Assistant</strong>: Check <code>sensor.predbat_load_ml_forecast</code> and its <code>results</code> attribute</li>
+<li><strong>Logs</strong>: Look for "ML Predictor: Generated predictions" messages</li>
+</ol>
+<h2 id="model-persistence">Model Persistence</h2>
+<p>The trained model is saved to disk as <code>predbat_ml_model.npz</code> in your Predbat config directory. This file contains:</p>
+<ul>
+<li><strong>Network weights and biases</strong>: All 4 hidden layers plus output layer</li>
+<li><strong>Optimizer state</strong>: Adam momentum terms for continuing fine-tuning</li>
+<li><strong>Normalization parameters</strong>: Feature and target mean/standard deviation (updated via EMA each fine-tune cycle to track distribution drift)</li>
+<li><strong>Training metadata</strong>: Epochs trained, timestamp, model version, architecture details</li>
+</ul>
+<p>The model is automatically loaded on Predbat restart, allowing predictions to continue immediately without retraining. The EMA-updated normalization parameters are saved and restored with the model, so drift tracking is preserved across restarts.</p>
+<p><strong>Note</strong>: If you update Predbat and the model architecture or version changes, the old model will be rejected and a new model will be trained from scratch. If the model becomes unstable, you can manually delete <code>predbat_ml_model.npz</code> to force retraining.</p>
+<hr />
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="../components/">Components Documentation</a> - Overview of all Predbat components</li>
+<li><a href="../configuration-guide/">Configuration Guide</a> - General configuration guidance</li>
+<li><a href="../components/#temperature-api-temperature">Temperature Component</a> - Setup guide for temperature forecasts</li>
+<li><a href="../customisation/">Customisation Guide</a> - Advanced customisation options</li>
+</ul>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../components/" class="btn btn-neutral float-left" title="Predbat Components"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../car-charging/" class="btn btn-neutral float-right" title="Car charging">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../components/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../car-charging/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

@@ -1,0 +1,1622 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>Predbat Components - Predbat Documentation</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Predbat Components";
+        var mkdocs_page_input_path = "components.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">Predbat Components</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#table-of-contents">Table of Contents</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#overview">Overview</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#component-list">Component List</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#database-manager-db">Database Manager (db)</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#what-it-does-db">What it does (db)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#when-to-enable-db">When to enable (db)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#configuration-options-db">Configuration Options (db)</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#home-assistant-interface-ha">Home Assistant Interface (ha)</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#what-it-does-ha">What it does (ha)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#when-to-enable-ha">When to enable (ha)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#configuration-options-ha">Configuration Options (ha)</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#home-assistant-history-ha_history">Home Assistant History (ha_history)</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#what-it-does-ha_history">What it does (ha_history)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#when-to-enable-ha_history">When to enable (ha_history)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#configuration-options-ha_history">Configuration Options (ha_history)</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#web-interface-web">Web Interface (web)</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#what-it-does-web">What it does (web)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#configuration-options-web">Configuration Options (web)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#how-to-access-web">How to access (web)</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#mcp-server-mcp">MCP Server (mcp)</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#what-it-does-mcp">What it does (mcp)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#when-to-enable-mcp">When to enable (mcp)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#security-note-mcp">Security note (mcp)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#configuration-options-mcp">Configuration Options (mcp)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#how-to-configure-your-mcp-client-mcp">How to configure your MCP client (mcp)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#available-commands-mcp">Available commands (mcp)</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#givenergy-cloud-direct-gecloud">GivEnergy Cloud Direct (gecloud)</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#what-it-does-gecloud">What it does (gecloud)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#when-to-enable-gecloud">When to enable (gecloud)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#important-notes-gecloud">Important notes (gecloud)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#configuration-options-gecloud">Configuration Options (gecloud)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#how-to-get-your-api-key-gecloud">How to get your API key (gecloud)</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#givenergy-cloud-data-gecloud_data">GivEnergy Cloud Data (gecloud_data)</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#what-it-does-gecloud_data">What it does (gecloud_data)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#when-to-enable-gecloud_data">When to enable (gecloud_data)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#configuration-options-gecloud_data">Configuration Options (gecloud_data)</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#octopus-energy-direct-octopus">Octopus Energy Direct (octopus)</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#what-it-does-octopus">What it does (octopus)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#when-to-enable-octopus">When to enable (octopus)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#important-notes-octopus">Important notes (octopus)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#configuration-options-octopus">Configuration Options (octopus)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#how-to-get-your-api-credentials-octopus">How to get your API credentials (octopus)</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#axle-energy-vpp-axle">Axle Energy VPP (axle)</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#what-it-does-axle">What it does (axle)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#when-to-enable-axle">When to enable (axle)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#important-notes-axle">Important notes (axle)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#configuration-options-axle">Configuration Options (axle)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#how-to-get-your-api-credentials-axle">How to get your API credentials (axle)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#sensor-attributes-axle">Sensor Attributes (axle)</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#solax-cloud-api-solax">SolaX Cloud API (solax)</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#what-it-does-solax">What it does (solax)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#when-to-enable-solax">When to enable (solax)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#important-notes-solax">Important notes (solax)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#configuration-options-solax">Configuration Options (solax)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#how-to-get-your-api-credentials-solax">How to get your API credentials (solax)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#published-entities-solax">Published Entities (solax)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#testing-your-configuration-solax">Testing your configuration (solax)</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#ohme-charger-ohme">Ohme Charger (ohme)</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#what-it-does-ohme">What it does (ohme)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#when-to-enable-ohme">When to enable (ohme)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#important-notes-ohme">Important notes (ohme)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#configuration-options-ohme">Configuration Options (ohme)</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#fox-ess-api-fox">Fox ESS API (fox)</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#what-it-does-fox">What it does (fox)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#when-to-enable-fox">When to enable (fox)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#important-notes-fox">Important notes (fox)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#configuration-options-fox">Configuration Options (fox)</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#solis-cloud-api-solis">Solis Cloud API (solis)</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#what-it-does-solis">What it does (solis)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#when-to-enable-solis">When to enable (solis)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#important-notes-solis">Important notes (solis)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#configuration-options-solis">Configuration Options (solis)</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#alert-feed-alert_feed">Alert Feed (alert_feed)</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#what-it-does-alert_feed">What it does (alert_feed)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#when-to-enable-alert_feed">When to enable (alert_feed)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#how-it-works-alert_feed">How it works (alert_feed)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#configuration-options-alert_feed">Configuration Options (alert_feed)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#configuration-example">Configuration example</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#carbon-intensity-api-carbon">Carbon Intensity API (carbon)</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#what-it-does-carbon">What it does (carbon)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#when-to-enable-carbon">When to enable (carbon)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#how-it-works-carbon">How it works (carbon)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#configuration-options-carbon">Configuration Options (carbon)</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#temperature-api-temperature">Temperature API (temperature)</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#what-it-does-temperature">What it does (temperature)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#when-to-enable-temperature">When to enable (temperature)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#how-it-works-temperature">How it works (temperature)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#configuration-options-temperature">Configuration Options (temperature)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#configuration-example-temperature">Configuration example (temperature)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#accessing-temperature-data-temperature">Accessing temperature data (temperature)</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#ml-load-prediction-load_ml">ML Load Prediction (load_ml)</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#what-it-does-load_ml">What it does (load_ml)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#when-to-enable-load_ml">When to enable (load_ml)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#how-it-works-load_ml">How it works (load_ml)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#configuration-options-load_ml">Configuration Options (load_ml)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#configuration-example-load_ml">Configuration example (load_ml)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#understanding-model-status-load_ml">Understanding model status (load_ml)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#accessing-predictions-load_ml">Accessing predictions (load_ml)</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#for-more-information-load_ml">For more information (load_ml)</a>
+    </li>
+        </ul>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#managing-components">Managing Components</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#checking-component-status">Checking Component Status</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#restarting-components">Restarting Components</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#editing-component-configuration">Editing Component Configuration</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#component-health">Component Health</a>
+    </li>
+        </ul>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Installing & configuring Predbat</li>
+      <li class="breadcrumb-item active">Predbat Components</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="predbat-components">Predbat Components</h1>
+<p>This document provides a comprehensive overview of all Predbat components, their purposes, and configuration options.</p>
+<h2 id="table-of-contents">Table of Contents</h2>
+<ul>
+<li><a href="#overview">Overview</a></li>
+<li><a href="#component-list">Component List</a><ul>
+<li><a href="#database-manager-db">Database Manager (db)</a></li>
+<li><a href="#home-assistant-interface-ha">Home Assistant Interface (ha)</a></li>
+<li><a href="#home-assistant-history-ha_history">Home Assistant History (ha_history)</a></li>
+<li><a href="#web-interface-web">Web Interface (web)</a></li>
+<li><a href="#mcp-server-mcp">MCP Server (mcp)</a></li>
+<li><a href="#givenergy-cloud-direct-gecloud">GivEnergy Cloud Direct (gecloud)</a></li>
+<li><a href="#givenergy-cloud-data-gecloud_data">GivEnergy Cloud Data (gecloud_data)</a></li>
+<li><a href="#octopus-energy-direct-octopus">Octopus Energy Direct (octopus)</a></li>
+<li><a href="#axle-energy-vpp-axle">Axle Energy VPP (axle)</a></li>
+<li><a href="#ohme-charger-ohme">Ohme Charger (ohme)</a></li>
+<li><a href="#fox-ess-api-fox">Fox ESS API (fox)</a></li>
+<li><a href="#solax-cloud-api-solax">Solax Cloud API (Solax)</a></li>
+<li><a href="#solis-cloud-api-solis">Solis Cloud API (Solis)</a></li>
+<li><a href="#alert-feed-alert_feed">Alert Feed (alert_feed)</a></li>
+<li><a href="#carbon-intensity-api-carbon">Carbon Intensity API (carbon)</a></li>
+<li><a href="#temperature-api-temperature">Temperature API (temperature)</a></li>
+<li><a href="#ml-load-prediction-load_ml">ML Load Prediction (load_ml)</a></li>
+</ul>
+</li>
+<li><a href="#managing-components">Managing Components</a><ul>
+<li><a href="#checking-component-status">Checking Component Status</a></li>
+<li><a href="#restarting-components">Restarting Components</a></li>
+<li><a href="#editing-component-configuration">Editing Component Configuration</a></li>
+<li><a href="#component-health">Component Health</a></li>
+</ul>
+</li>
+</ul>
+<h2 id="overview">Overview</h2>
+<p>Predbat uses a modular component architecture where each component provides specific functionality such as database management, cloud API integration, web interfaces, and energy provider integrations.
+Each component can be enabled or disabled independently through your <code>apps.yaml</code> configuration file.</p>
+<h2 id="component-list">Component List</h2>
+<h3 id="database-manager-db">Database Manager (db)</h3>
+<p><strong>Can be restarted:</strong> No</p>
+<h4 id="what-it-does-db">What it does (db)</h4>
+<p>Stores and manages all historical data for Predbat, including energy usage, sensor values, and system states. This allows Predbat to keep its own database of historical information independent of Home Assistant.</p>
+<h4 id="when-to-enable-db">When to enable (db)</h4>
+<ul>
+<li>You want to retain data longer than Home Assistant keeps or you want to run Predbat without Home Assistant.  Under normal use you should not need to configure DB manager and the component will be disabled.</li>
+</ul>
+<h4 id="configuration-options-db">Configuration Options (db)</h4>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Type</th>
+<th>Required</th>
+<th>Default</th>
+<th>Config Key</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>db_enable</code></td>
+<td>Boolean</td>
+<td>Yes</td>
+<td>-</td>
+<td><code>db_enable</code></td>
+<td>Set to <code>true</code> to enable the database, <code>false</code> to disable</td>
+</tr>
+<tr>
+<td><code>db_days</code></td>
+<td>Integer</td>
+<td>No</td>
+<td>30</td>
+<td><code>db_days</code></td>
+<td>Number of days of historical data to keep in the database</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="home-assistant-interface-ha">Home Assistant Interface (ha)</h3>
+<p><strong>Can be restarted:</strong> No</p>
+<h4 id="what-it-does-ha">What it does (ha)</h4>
+<p>Provides the connection between Predbat and Home Assistant. This is the core communication channel that allows Predbat to read sensor data, control devices, and update its status in Home Assistant.</p>
+<p>If you are using Predbat without Home Assistant then this interface layer just talks directly to the Database Manager.</p>
+<h4 id="when-to-enable-ha">When to enable (ha)</h4>
+<p>This component is always enabled and required for Predbat to function.</p>
+<h4 id="configuration-options-ha">Configuration Options (ha)</h4>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Type</th>
+<th>Required</th>
+<th>Default</th>
+<th>Config Key</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ha_url</code></td>
+<td>String</td>
+<td>No</td>
+<td><code>http://supervisor/core</code></td>
+<td><code>ha_url</code></td>
+<td>Home Assistant API URL (the default is for when using an HA app)</td>
+</tr>
+<tr>
+<td><code>ha_key</code></td>
+<td>String</td>
+<td>No</td>
+<td>Auto-detected</td>
+<td><code>ha_key</code></td>
+<td>Home Assistant access token (auto-detected when running as app)</td>
+</tr>
+<tr>
+<td><code>db_enable</code></td>
+<td>Boolean</td>
+<td>No</td>
+<td>False</td>
+<td><code>db_enable</code></td>
+<td>Enable database integration</td>
+</tr>
+<tr>
+<td><code>db_mirror_ha</code></td>
+<td>Boolean</td>
+<td>No</td>
+<td>False</td>
+<td><code>db_mirror_ha</code></td>
+<td>Copy Home Assistant data into Predbat's database</td>
+</tr>
+<tr>
+<td><code>db_primary</code></td>
+<td>Boolean</td>
+<td>No</td>
+<td>False</td>
+<td><code>db_primary</code></td>
+<td>Use Predbat's database instead of Home Assistant for the primary data source</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="home-assistant-history-ha_history">Home Assistant History (ha_history)</h3>
+<p><strong>Can be restarted:</strong> No</p>
+<h4 id="what-it-does-ha_history">What it does (ha_history)</h4>
+<p>Retrieves and processes historical sensor data from Home Assistant's database (or from the Predbat database).
+This component handles all lookups of past energy usage, battery levels, and other historical information.</p>
+<h4 id="when-to-enable-ha_history">When to enable (ha_history)</h4>
+<p>This component is always enabled.</p>
+<h4 id="configuration-options-ha_history">Configuration Options (ha_history)</h4>
+<p>No configuration required. This component automatically uses your Home Assistant connection.</p>
+<hr />
+<h3 id="web-interface-web">Web Interface (web)</h3>
+<p><strong>Can be restarted:</strong> Yes</p>
+<h4 id="what-it-does-web">What it does (web)</h4>
+<p>Provides a built-in web server that lets you view and manage Predbat through your web browser. Access dashboards, view battery plans, check logs, and edit configuration all from an easy-to-use web interface.</p>
+<h4 id="configuration-options-web">Configuration Options (web)</h4>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Type</th>
+<th>Required</th>
+<th>Default</th>
+<th>Config Key</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>port</code></td>
+<td>Integer</td>
+<td>No</td>
+<td>5052</td>
+<td><code>web_port</code></td>
+<td>Port number for the web server</td>
+</tr>
+</tbody>
+</table>
+<h4 id="how-to-access-web">How to access (web)</h4>
+<p>If you use Predbat as a Home Assistant app then click 'Open Web UI' from the app or add Predbat Web UI to your side bar.
+If you run Predbat outside then you can access it from the port as configured:  <code>http://homename:5052</code></p>
+<hr />
+<h3 id="mcp-server-mcp">MCP Server (mcp)</h3>
+<p><strong>Can be restarted:</strong> Yes</p>
+<h4 id="what-it-does-mcp">What it does (mcp)</h4>
+<p>Provides a programmatic API that allows AI assistants (like ChatGPT, Claude, or other MCP-compatible tools) to read and control Predbat. This enables you to use natural language commands to check status, adjust settings, or override plans.</p>
+<h4 id="when-to-enable-mcp">When to enable (mcp)</h4>
+<ul>
+<li>You want to control Predbat through AI assistants</li>
+<li>You're building custom integrations or tools</li>
+<li>You want programmatic access to Predbat data</li>
+</ul>
+<h4 id="security-note-mcp">Security note (mcp)</h4>
+<p>The MCP server requires a secret key for authentication. Keep this secret secure and don't share it publicly.</p>
+<p><strong><em>CAUTION</em></strong> Predbat WebUI does not support https currently, so exposing this MCP port externally to your home network would be unwise.</p>
+<h4 id="configuration-options-mcp">Configuration Options (mcp)</h4>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Type</th>
+<th>Required</th>
+<th>Default</th>
+<th>Config Key</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>mcp_enable</code></td>
+<td>Boolean</td>
+<td>Yes</td>
+<td>False</td>
+<td><code>mcp_enable</code></td>
+<td>Set to <code>true</code> to enable the MCP server</td>
+</tr>
+<tr>
+<td><code>mcp_secret</code></td>
+<td>String</td>
+<td>No</td>
+<td><code>predbat_mcp_secret</code></td>
+<td><code>mcp_secret</code></td>
+<td>Secret key for authentication - change this!</td>
+</tr>
+<tr>
+<td><code>mcp_port</code></td>
+<td>Integer</td>
+<td>No</td>
+<td>8199</td>
+<td><code>mcp_port</code></td>
+<td>Port number for the MCP server</td>
+</tr>
+</tbody>
+</table>
+<h4 id="how-to-configure-your-mcp-client-mcp">How to configure your MCP client (mcp)</h4>
+<p>Below is an example MCP configuration inside VSCode, but it will be similar in Cline/Claude/Cursor etc.</p>
+<pre><code class="language-json">Example usage in VSCode
+{
+ &quot;servers&quot;: {
+  &quot;predbat-mcp&quot;: {
+   &quot;url&quot;: &quot;http://homeassistant.local:8199/mcp&quot;,
+   &quot;type&quot;: &quot;http&quot;,
+   &quot;description&quot;: &quot;Predbat Model Context Protocol Server&quot;,
+   &quot;headers&quot;: {
+    &quot;Authorization&quot; : &quot;Bearer predbat_mcp_secret&quot;,
+   },
+  }
+ },
+ &quot;inputs&quot;: []
+}
+</code></pre>
+<h4 id="available-commands-mcp">Available commands (mcp)</h4>
+<ul>
+<li>Get current system status</li>
+<li>View and update configuration settings</li>
+<li>Browse all entities</li>
+<li>Retrieve battery plan data</li>
+<li>Override plan for specific time periods</li>
+<li>Access apps.yaml configuration</li>
+</ul>
+<hr />
+<h3 id="givenergy-cloud-direct-gecloud">GivEnergy Cloud Direct (gecloud)</h3>
+<p><strong>Can be restarted:</strong> Yes</p>
+<h4 id="what-it-does-gecloud">What it does (gecloud)</h4>
+<p>Connects directly to the GivEnergy Cloud to control your GivEnergy inverter and battery. This allows Predbat to automatically set charge/discharge times, power limits, and read real-time data from your inverter without relying on Home Assistant integrations.</p>
+<h4 id="when-to-enable-gecloud">When to enable (gecloud)</h4>
+<ul>
+<li>You have a GivEnergy inverter</li>
+<li>You want direct cloud-based control (more reliable than local control)</li>
+<li>You have your GivEnergy Cloud API key</li>
+<li>You want automatic control of your battery</li>
+</ul>
+<h4 id="important-notes-gecloud">Important notes (gecloud)</h4>
+<ul>
+<li>Requires a GivEnergy Cloud account and API key</li>
+<li>Can also control GivEnergy EV chargers and smart devices</li>
+</ul>
+<h4 id="configuration-options-gecloud">Configuration Options (gecloud)</h4>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Type</th>
+<th>Required</th>
+<th>Default</th>
+<th>Config Key</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ge_cloud_direct</code></td>
+<td>Boolean</td>
+<td>Yes</td>
+<td>-</td>
+<td><code>ge_cloud_direct</code></td>
+<td>Set to <code>true</code> to enable GivEnergy Cloud control</td>
+</tr>
+<tr>
+<td><code>api_key</code></td>
+<td>String</td>
+<td>Yes</td>
+<td>-</td>
+<td><code>ge_cloud_key</code></td>
+<td>Your GivEnergy Cloud API key</td>
+</tr>
+<tr>
+<td><code>automatic</code></td>
+<td>Boolean</td>
+<td>No</td>
+<td>False</td>
+<td><code>ge_cloud_automatic</code></td>
+<td>Set to <code>true</code> to automatically configured Predbat to use GivEnergy Cloud direct (no additional apps.yaml changes required)</td>
+</tr>
+</tbody>
+</table>
+<h4 id="how-to-get-your-api-key-gecloud">How to get your API key (gecloud)</h4>
+<ol>
+<li>Log in to your GivEnergy account at <a href="https://www.givenergy.cloud">https://www.givenergy.cloud</a></li>
+<li>Go to Settings → API Keys</li>
+<li>Generate a new API key</li>
+<li>Copy the key into your <code>apps.yaml</code> configuration</li>
+</ol>
+<hr />
+<h3 id="givenergy-cloud-data-gecloud_data">GivEnergy Cloud Data (gecloud_data)</h3>
+<p><strong>Can be restarted:</strong> Yes</p>
+<h4 id="what-it-does-gecloud_data">What it does (gecloud_data)</h4>
+<p>Downloads historical energy data from GivEnergy Cloud including consumption, generation, battery usage, and grid import/export. This provides accurate historical data for Predbat's calculations and predictions.</p>
+<h4 id="when-to-enable-gecloud_data">When to enable (gecloud_data)</h4>
+<ul>
+<li>You have a GivEnergy system</li>
+<li>You want Predbat to use historical data from GivEnergy Cloud instead of from Home Assistant.</li>
+</ul>
+<h4 id="configuration-options-gecloud_data">Configuration Options (gecloud_data)</h4>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Type</th>
+<th>Required</th>
+<th>Default</th>
+<th>Config Key</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ge_cloud_data</code></td>
+<td>Boolean</td>
+<td>Yes</td>
+<td>-</td>
+<td><code>ge_cloud_data</code></td>
+<td>Set to <code>true</code> to enable historical data download</td>
+</tr>
+<tr>
+<td><code>ge_cloud_key</code></td>
+<td>String</td>
+<td>Yes</td>
+<td>-</td>
+<td><code>ge_cloud_key</code></td>
+<td>Your GivEnergy Cloud API key (same as Cloud Direct)</td>
+</tr>
+<tr>
+<td><code>ge_cloud_serial</code></td>
+<td>String</td>
+<td>No</td>
+<td>Auto-detected</td>
+<td><code>ge_cloud_serial</code></td>
+<td>Your inverter serial number (usually auto-detected)</td>
+</tr>
+<tr>
+<td><code>days_previous</code></td>
+<td>List</td>
+<td>No</td>
+<td>[7]</td>
+<td><code>days_previous</code></td>
+<td>List of days to download data for, e.g., <code>[7]</code> for last week</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="octopus-energy-direct-octopus">Octopus Energy Direct (octopus)</h3>
+<p><strong>Can be restarted:</strong> Yes</p>
+<h4 id="what-it-does-octopus">What it does (octopus)</h4>
+<p>Connects to your Octopus Energy account to automatically download your tariff rates, including support for dynamic tariffs like Agile and Intelligent Octopus. This ensures Predbat always has the most accurate and up-to-date energy pricing.</p>
+<h4 id="when-to-enable-octopus">When to enable (octopus)</h4>
+<ul>
+<li>You're an Octopus Energy customer</li>
+<li>You want automatic tariff updates</li>
+<li>You're on a variable tariff (Agile, Intelligent Octopus, etc.)</li>
+<li>You want to see your actual consumption data</li>
+</ul>
+<h4 id="important-notes-octopus">Important notes (octopus)</h4>
+<ul>
+<li>Works with all Octopus tariffs including Agile and Intelligent Octopus</li>
+<li>Automatically manages Intelligent Octopus smart charging slots</li>
+<li>Updates rates automatically, no manual intervention needed</li>
+</ul>
+<h4 id="configuration-options-octopus">Configuration Options (octopus)</h4>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Type</th>
+<th>Required</th>
+<th>Default</th>
+<th>Config Key</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>key</code></td>
+<td>String</td>
+<td>Yes</td>
+<td>-</td>
+<td><code>octopus_api_key</code></td>
+<td>Your Octopus Energy API key</td>
+</tr>
+<tr>
+<td><code>account_id</code></td>
+<td>String</td>
+<td>Yes</td>
+<td>-</td>
+<td><code>octopus_api_account</code></td>
+<td>Your Octopus Energy account number (starts with A-)</td>
+</tr>
+<tr>
+<td><code>automatic</code></td>
+<td>Boolean</td>
+<td>No</td>
+<td>True</td>
+<td><code>octopus_automatic</code></td>
+<td>Set to <code>true</code> to automatically configure Predbat to use this Component (no need to update apps.yaml)</td>
+</tr>
+</tbody>
+</table>
+<h4 id="how-to-get-your-api-credentials-octopus">How to get your API credentials (octopus)</h4>
+<ol>
+<li>Log in to your Octopus Energy account at <a href="https://octopus.energy">https://octopus.energy</a></li>
+<li>Go to your account dashboard</li>
+<li>Find your API key (usually in Developer settings)</li>
+<li>Your account number is shown on your dashboard (format: A-XXXXXXXX)</li>
+</ol>
+<hr />
+<h3 id="axle-energy-vpp-axle">Axle Energy VPP (axle)</h3>
+<p><strong>Can be restarted:</strong> Yes</p>
+<h4 id="what-it-does-axle">What it does (axle)</h4>
+<p>Connects to Axle Energy's Virtual Power Plant (VPP) [UK] service to receive and track demand response events.
+When Axle schedules export events, this component will track them and store the history for up to 7 days.
+The component publishes a binary sensor that turns on when an event is currently active.</p>
+<p>If configured in Predbat's <code>apps.yaml</code> Predbat will control your inverter to export in response to the Axle event and adjusts the export energy rate to account for the extra payment from Axle.</p>
+<p>Sign up with my referral code here: <a href="https://vpp.axle.energy/landing/grid?ref=R-VWIICRSA">https://vpp.axle.energy/landing/grid?ref=R-VWIICRSA</a></p>
+<p><em>Please note you are not allowed to be on Octoplus at the same time, so contact Octopus if you need to be removed from this scheme.</em></p>
+<p>Select control my battery for 'Events Only'.</p>
+<h4 id="when-to-enable-axle">When to enable (axle)</h4>
+<ul>
+<li>You're enrolled in Axle Energy's VPP program and want Predbat to be aware of the scheduled events and plan for them.</li>
+</ul>
+<h4 id="important-notes-axle">Important notes (axle)</h4>
+<ul>
+<li>Polls the Axle API every 10 minutes for updates</li>
+<li>Stores event history for up to 7 days</li>
+<li>Events are added to history as soon as they start (become active)</li>
+<li>Binary sensor (default name <code>binary_sensor.predbat_axle_event</code>) is <code>on</code> when an event is currently active, <code>off</code> otherwise</li>
+<li>Current event details and event history are available as sensor attributes ('event_current' and 'event_history')</li>
+<li>Alert notification sent when Predbat adds a new Axle VPP event to the Predbat plan</li>
+<li>When <strong>axle_control</strong> is enabled (set to True in <code>apps.yaml</code>), Predbat will enter read-only mode during active VPP events (default is False)<ul>
+<li>Read-only mode prevents Predbat from controlling the inverter while VPP events are running</li>
+<li>Status will show as "Read-Only (Axle)" when this feature is active</li>
+</ul>
+</li>
+</ul>
+<h4 id="configuration-options-axle">Configuration Options (axle)</h4>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Type</th>
+<th>Required</th>
+<th>Default</th>
+<th>Config Key</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>api_key</code></td>
+<td>String</td>
+<td>Yes</td>
+<td>-</td>
+<td><code>axle_api_key</code></td>
+<td>Your Axle Energy API key from the VPP portal</td>
+</tr>
+<tr>
+<td><code>pence_per_kwh</code></td>
+<td>Integer</td>
+<td>No</td>
+<td>100</td>
+<td><code>axle_pence_per_kwh</code></td>
+<td>Payment rate in pence per kWh for VPP events</td>
+</tr>
+<tr>
+<td><code>automatic</code></td>
+<td>Bool</td>
+<td>No</td>
+<td>True</td>
+<td><code>axle_automatic</code></td>
+<td>When enabled use the default Axle event entity name (<strong>binary_sensor.predbat_axle_event</strong>)</td>
+</tr>
+<tr>
+<td><code>control</code></td>
+<td>Bool</td>
+<td>No</td>
+<td>False</td>
+<td><code>axle_control</code></td>
+<td>When enabled puts Predbat into Read-Only mode during Axle events</td>
+</tr>
+</tbody>
+</table>
+<h4 id="how-to-get-your-api-credentials-axle">How to get your API credentials (axle)</h4>
+<ol>
+<li>Log in to your Axle Energy VPP portal at <a href="https://vpp.axle.energy">https://vpp.axle.energy</a></li>
+<li>Navigate to the Home Assistant integration section</li>
+<li>Copy your API key</li>
+<li>Paste it into <code>axle_api_key</code> in apps.yaml</li>
+</ol>
+<h4 id="sensor-attributes-axle">Sensor Attributes (axle)</h4>
+<p>The binary sensor <code>binary_sensor.predbat_axle_event</code> provides the following attributes:</p>
+<ul>
+<li><code>event_current</code>: List containing the current event (if any), with fields:<ul>
+<li><code>start_time</code>: Event start time (timezone-aware datetime)</li>
+<li><code>end_time</code>: Event end time (timezone-aware datetime)</li>
+<li><code>import_export</code>: Event type ("import" or "export")</li>
+<li><code>updated_at</code>: Last update timestamp</li>
+<li><code>pence_per_kwh</code>: Payment rate for this event</li>
+</ul>
+</li>
+<li><code>event_history</code>: List of past events (up to 7 days) with the same fields as above</li>
+</ul>
+<hr />
+<h3 id="solax-cloud-api-solax">SolaX Cloud API (solax)</h3>
+<p><strong>Can be restarted:</strong> Yes</p>
+<h4 id="what-it-does-solax">What it does (solax)</h4>
+<p>Connects directly to the SolaX Cloud API to control SolaX inverters and batteries.
+This allows Predbat to automatically set charge/discharge schedules, power limits, target SOC, and read real-time data from your inverter without requiring local Home Assistant integrations.</p>
+<p>The component polls your SolaX Cloud account every minute for real-time data and every 30 minutes for device and plant information.
+It publishes comprehensive sensors for battery status, energy totals, and provides full control over charging and discharging schedules.</p>
+<h4 id="when-to-enable-solax">When to enable (solax)</h4>
+<ul>
+<li>You have a SolaX inverter (X1, X3, X3-Hybrid, or other cloud-connected models)</li>
+<li>You want cloud-based control without local integrations</li>
+<li>You have SolaX Cloud API credentials (client ID and secret)</li>
+<li>You want automatic battery charge/discharge optimization</li>
+<li>You want Predbat to read historical energy data directly from SolaX Cloud</li>
+</ul>
+<h4 id="important-notes-solax">Important notes (solax)</h4>
+<ul>
+<li>Requires valid SolaX Cloud API credentials (client ID and client secret)</li>
+<li>Supports multiple plants/inverters with automatic discovery when <code>solax_automatic: true</code></li>
+<li>Region-specific API endpoints: EU, US, or CN</li>
+<li>Authentication tokens are automatically managed (30-day expiry with auto-refresh)</li>
+<li>Supports both residential and commercial installations</li>
+<li>Control commands use time-window based scheduling (similar to GivEnergy)</li>
+<li>Read-only mode available with <code>solax_enable_controls: false</code></li>
+<li>Compatible with Predbat's standard optimization algorithms</li>
+</ul>
+<h4 id="configuration-options-solax">Configuration Options (solax)</h4>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Type</th>
+<th>Required</th>
+<th>Default</th>
+<th>Config Key</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>client_id</code></td>
+<td>String</td>
+<td>Yes</td>
+<td>-</td>
+<td><code>solax_client_id</code></td>
+<td>Your SolaX Cloud API client ID</td>
+</tr>
+<tr>
+<td><code>client_secret</code></td>
+<td>String</td>
+<td>Yes</td>
+<td>-</td>
+<td><code>solax_client_secret</code></td>
+<td>Your SolaX Cloud API client secret</td>
+</tr>
+<tr>
+<td><code>region</code></td>
+<td>String</td>
+<td>No</td>
+<td>'eu'</td>
+<td><code>solax_region</code></td>
+<td>API region: 'eu', 'us', or 'cn'</td>
+</tr>
+<tr>
+<td><code>plant_id</code></td>
+<td>String</td>
+<td>No</td>
+<td>None</td>
+<td><code>solax_plant_id</code></td>
+<td>Optional: Filter to specific plant ID</td>
+</tr>
+<tr>
+<td><code>automatic</code></td>
+<td>Boolean</td>
+<td>No</td>
+<td>False</td>
+<td><code>solax_automatic</code></td>
+<td>Auto-configure all entities and inverters</td>
+</tr>
+<tr>
+<td><code>enable_controls</code></td>
+<td>Boolean</td>
+<td>No</td>
+<td>True</td>
+<td><code>solax_enable_controls</code></td>
+<td>Enable inverter control (false for read-only)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Security Note:</strong> Store <code>solax_client_id</code> and especially <code>solax_client_secret</code> in <code>secrets.yaml</code>:</p>
+<pre><code class="language-yaml">solax_client_id: !secret solax_client_id
+solax_client_secret: !secret solax_client_secret
+</code></pre>
+<h4 id="how-to-get-your-api-credentials-solax">How to get your API credentials (solax)</h4>
+<ol>
+<li>Log in to your SolaX Cloud account:
+   - EU: <a href="https://www.solaxcloud.com">https://www.solaxcloud.com</a>
+   - US: <a href="https://www.solaxcloud.us">https://www.solaxcloud.us</a>
+   - CN: <a href="https://www.solaxcloud.com.cn">https://www.solaxcloud.com.cn</a></li>
+<li>Navigate to Settings → API Management (or Developer Settings)</li>
+<li>Create a new API application or view existing credentials</li>
+<li>Copy your <strong>Client ID</strong> and <strong>Client Secret</strong></li>
+<li>Add to your <code>secrets.yaml</code> file</li>
+<li>Reference in <code>apps.yaml</code> using <code>!secret</code> notation</li>
+</ol>
+<h4 id="published-entities-solax">Published Entities (solax)</h4>
+<p>For each plant (replace <code>{plant_id}</code> with your actual plant ID), the component creates:</p>
+<p><strong>Battery Sensors:</strong></p>
+<ul>
+<li>Battery SOC (kWh)</li>
+<li>Battery capacity (kWh)</li>
+<li>Battery temperature (°C)</li>
+<li>Battery max power (W)</li>
+</ul>
+<p><strong>System Sensors:</strong></p>
+<ul>
+<li>Inverter max power (W)</li>
+<li>PV capacity (kWp)</li>
+<li>Total PV yield (kWh)</li>
+<li>Total battery charged (kWh)</li>
+<li>Total battery discharged (kWh)</li>
+<li>Total grid imported (kWh)</li>
+<li>Total grid exported (kWh)</li>
+<li>Total load (kWh, calculated)</li>
+<li>Total earnings (currency)</li>
+</ul>
+<p><strong>Power Sensors (per inverter):</strong></p>
+<ul>
+<li>Charge/discharge power (W)</li>
+<li>Grid power (W)</li>
+<li>PV power (W)</li>
+<li>AC load power (W)</li>
+</ul>
+<p><strong>Control Entities:</strong></p>
+<ul>
+<li>Battery reserve SOC (number, %)</li>
+<li>Charge start/end times (select, HH:MM:SS format)</li>
+<li>Charge target SOC (number, %)</li>
+<li>Charge rate (number, W)</li>
+<li>Charge enable (switch)</li>
+<li>Export start/end times (select, HH:MM:SS format)</li>
+<li>Export target SOC (number, %)</li>
+<li>Export rate (number, W)</li>
+<li>Export enable (switch)</li>
+</ul>
+<h4 id="testing-your-configuration-solax">Testing your configuration (solax)</h4>
+<p>You can test your SolaX Cloud API connection independently:</p>
+<pre><code class="language-bash">cd /config/appdaemon/apps/predbat
+python3 solax.py --client-id YOUR_CLIENT_ID --client-secret YOUR_CLIENT_SECRET --region eu
+</code></pre>
+<p>This will authenticate, fetch all plants, devices, and real-time data, helping diagnose any connection or configuration issues.</p>
+<hr />
+<h3 id="ohme-charger-ohme">Ohme Charger (ohme)</h3>
+<p><strong>Can be restarted:</strong> Yes</p>
+<h4 id="what-it-does-ohme">What it does (ohme)</h4>
+<p>Integrates with Ohme EV chargers to monitor charging sessions and coordinate charging with your energy tariff. Works particularly well with Intelligent Octopus to optimize charging times and costs.</p>
+<h4 id="when-to-enable-ohme">When to enable (ohme)</h4>
+<ul>
+<li>You have an Ohme EV charger</li>
+<li>You want Predbat to factor in the charging plan within Ohme, this is mostly used with Octopus Intelligent GO.</li>
+</ul>
+<h4 id="important-notes-ohme">Important notes (ohme)</h4>
+<ul>
+<li>Requires your Ohme account credentials</li>
+<li>Can automatically manage Intelligent Octopus charging slots</li>
+<li>Monitors real-time charging status and energy consumption</li>
+</ul>
+<h4 id="configuration-options-ohme">Configuration Options (ohme)</h4>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Type</th>
+<th>Required</th>
+<th>Default</th>
+<th>Config Key</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>email</code></td>
+<td>String</td>
+<td>Yes</td>
+<td>-</td>
+<td><code>ohme_login</code></td>
+<td>Your Ohme account email address</td>
+</tr>
+<tr>
+<td><code>password</code></td>
+<td>String</td>
+<td>Yes</td>
+<td>-</td>
+<td><code>ohme_password</code></td>
+<td>Your Ohme account password</td>
+</tr>
+<tr>
+<td><code>ohme_automatic_octopus_intelligent</code></td>
+<td>Boolean</td>
+<td>No</td>
+<td>-</td>
+<td><code>ohme_automatic_octopus_intelligent</code></td>
+<td>Set to <code>true</code> to automatically sync with Intelligent Octopus</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="fox-ess-api-fox">Fox ESS API (fox)</h3>
+<p><strong>Can be restarted:</strong> Yes</p>
+<h4 id="what-it-does-fox">What it does (fox)</h4>
+<p>Integrates with Fox ESS inverters for monitoring and controlling Fox ESS battery systems. Similar to GivEnergy Cloud Direct, but for Fox ESS equipment.</p>
+<h4 id="when-to-enable-fox">When to enable (fox)</h4>
+<ul>
+<li>You have a Fox ESS inverter</li>
+<li>You want direct API control of your Fox system</li>
+<li>You have your Fox ESS API key</li>
+</ul>
+<h4 id="important-notes-fox">Important notes (fox)</h4>
+<ul>
+<li>Requires Fox ESS Cloud account and API key</li>
+</ul>
+<h4 id="configuration-options-fox">Configuration Options (fox)</h4>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Type</th>
+<th>Required</th>
+<th>Default</th>
+<th>Config Key</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>key</code></td>
+<td>String</td>
+<td>Yes</td>
+<td>-</td>
+<td><code>fox_key</code></td>
+<td>Your Fox ESS API key</td>
+</tr>
+<tr>
+<td><code>automatic</code></td>
+<td>Boolean</td>
+<td>No</td>
+<td>False</td>
+<td><code>fox_automatic</code></td>
+<td>Set to <code>true</code> to automatically configured Predbat to use the Fox inverter (no manual apps.yaml updates required)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="solis-cloud-api-solis">Solis Cloud API (solis)</h3>
+<p><strong>Can be restarted:</strong> Yes</p>
+<h4 id="what-it-does-solis">What it does (solis)</h4>
+<p>Integrates with Solis inverters for monitoring and controlling Solis battery systems via the Solis Cloud API. Provides direct control of charge/discharge schedules, storage modes, and battery parameters.</p>
+<h4 id="when-to-enable-solis">When to enable (solis)</h4>
+<ul>
+<li>You have a Solis hybrid inverter with battery storage</li>
+<li>You want direct API control of your Solis system</li>
+<li>You have your Solis Cloud API credentials</li>
+</ul>
+<h4 id="important-notes-solis">Important notes (solis)</h4>
+<ul>
+<li><strong>EXPERIMENTAL</strong>: This is a new integration and may have issues</li>
+<li>Requires Solis Cloud account with API access</li>
+<li><strong>Battery size configuration</strong>: The Solis Cloud integration cannot automatically determine your battery size from the inverter. You can either:<ul>
+<li>Manually set <code>soc_max</code> in <code>apps.yaml</code> with your battery capacity in kWh (recommended), or</li>
+<li>Leave <code>soc_max</code> unset and allow Predbat to automatically detect battery size from historical charging data (requires several days of data)</li>
+</ul>
+</li>
+<li>Supports both V1 (older firmware) and V2 (newer firmware) time window formats</li>
+<li>Automatic configuration available - sets up all required Predbat sensors automatically</li>
+</ul>
+<h4 id="configuration-options-solis">Configuration Options (solis)</h4>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Type</th>
+<th>Required</th>
+<th>Default</th>
+<th>Config Key</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>api_key</code></td>
+<td>String</td>
+<td>Yes</td>
+<td>-</td>
+<td><code>solis_api_key</code></td>
+<td>Your Solis Cloud API Key (KeyId)</td>
+</tr>
+<tr>
+<td><code>api_secret</code></td>
+<td>String</td>
+<td>Yes</td>
+<td>-</td>
+<td><code>solis_api_secret</code></td>
+<td>Your Solis Cloud API Secret (KeySecret)</td>
+</tr>
+<tr>
+<td><code>inverter_sn</code></td>
+<td>String/List</td>
+<td>No</td>
+<td>-</td>
+<td><code>solis_inverter_sn</code></td>
+<td>Inverter serial number(s) - Leave unset to see all. Single string or list of strings for multiple inverters</td>
+</tr>
+<tr>
+<td><code>automatic</code></td>
+<td>Boolean</td>
+<td>No</td>
+<td>False</td>
+<td><code>solis_automatic</code></td>
+<td>Set to <code>true</code> to automatically configure Predbat to use the Solis inverter (no manual apps.yaml sensor updates required)</td>
+</tr>
+<tr>
+<td><code>base_url</code></td>
+<td>String</td>
+<td>No</td>
+<td>Auto-detected</td>
+<td><code>solis_base_url</code></td>
+<td>Solis Cloud API base URL (automatically selects correct region)</td>
+</tr>
+<tr>
+<td><code>control_enable</code></td>
+<td>Boolean</td>
+<td>No</td>
+<td>True</td>
+<td><code>solis_control_enable</code></td>
+<td>Enable/disable control commands (set to false for monitoring only)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="alert-feed-alert_feed">Alert Feed (alert_feed)</h3>
+<p><strong>Can be restarted:</strong> Yes</p>
+<h4 id="what-it-does-alert_feed">What it does (alert_feed)</h4>
+<p>Monitors weather alert feeds (MeteoAlarm) for severe weather warnings that might impact your energy usage or solar generation. Predbat can use this information to adjust its planning accordingly.</p>
+<h4 id="when-to-enable-alert_feed">When to enable (alert_feed)</h4>
+<ul>
+<li>You want Predbat to be aware of weather alerts</li>
+<li>You want to adjust battery strategy based on weather warnings</li>
+<li>You're in an area with frequent severe weather</li>
+</ul>
+<h4 id="how-it-works-alert_feed">How it works (alert_feed)</h4>
+<ul>
+<li>Checks for alerts every 30 minutes</li>
+<li>Processes weather warnings for your area</li>
+<li>Can be configured with custom alert URLs and filters in <code>apps.yaml</code></li>
+</ul>
+<h4 id="configuration-options-alert_feed">Configuration Options (alert_feed)</h4>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Type</th>
+<th>Required</th>
+<th>Default</th>
+<th>Config Key</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>alert_config</code></td>
+<td>Dictionary</td>
+<td>Yes</td>
+<td>{}</td>
+<td><code>alerts</code></td>
+<td>Alert configuration including URL and filters</td>
+</tr>
+</tbody>
+</table>
+<h4 id="configuration-example">Configuration example</h4>
+<p>See the <a href="../apps-yaml/#weather-alert-system">Weather Alert</a> for more details</p>
+<hr />
+<h3 id="carbon-intensity-api-carbon">Carbon Intensity API (carbon)</h3>
+<p><strong>Can be restarted:</strong> Yes</p>
+<h4 id="what-it-does-carbon">What it does (carbon)</h4>
+<p>Retrieves current and forecast carbon intensity data for the UK electricity grid. This allows Predbat to make environmentally-conscious decisions, charging your battery when grid electricity is greener and discharging when it's more carbon-intensive.</p>
+<h4 id="when-to-enable-carbon">When to enable (carbon)</h4>
+<ul>
+<li>You want to minimize your carbon footprint</li>
+<li>You're interested in carbon-aware energy management</li>
+<li>You're in the UK (uses UK National Grid data)</li>
+<li>You want to see carbon intensity alongside cost optimization</li>
+</ul>
+<h4 id="how-it-works-carbon">How it works (carbon)</h4>
+<ul>
+<li>Uses your postcode to get regional carbon intensity data</li>
+<li>Provides both current intensity and forecasts</li>
+<li>Updates automatically throughout the day</li>
+</ul>
+<p>Note: To use the carbon data in Predbat you also have to turn on <strong>switch.predbat_carbon_enable</strong>. If you want to optimise your plan for carbon then you also need to adjust the carbon weighting.</p>
+<h4 id="configuration-options-carbon">Configuration Options (carbon)</h4>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Type</th>
+<th>Required</th>
+<th>Default</th>
+<th>Config Key</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>postcode</code></td>
+<td>String</td>
+<td>Yes</td>
+<td>-</td>
+<td><code>carbon_postcode</code></td>
+<td>Your UK postcode for regional carbon intensity data</td>
+</tr>
+<tr>
+<td><code>automatic</code></td>
+<td>Boolean</td>
+<td>No</td>
+<td>False</td>
+<td><code>carbon_automatic</code></td>
+<td>Set to <code>true</code> to automatically point Predbat to the carbon data</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="temperature-api-temperature">Temperature API (temperature)</h3>
+<p><strong>Can be restarted:</strong> Yes</p>
+<h4 id="what-it-does-temperature">What it does (temperature)</h4>
+<p>Fetches temperature forecasts from the Open-Meteo API to provide accurate temperature predictions for the next 48+ hours.
+This temperature data is used by the ML Load Prediction component to improve load forecasting accuracy, especially for homes with electric heating or air conditioning systems.</p>
+<h4 id="when-to-enable-temperature">When to enable (temperature)</h4>
+<ul>
+<li>You are using ML Load Prediction and want improved accuracy</li>
+<li>Your energy consumption is significantly affected by temperature (heating/cooling)</li>
+<li>You want temperature forecasts available for other automations</li>
+</ul>
+<h4 id="how-it-works-temperature">How it works (temperature)</h4>
+<ul>
+<li>Fetches temperature data from Open-Meteo API every hour</li>
+<li>Uses your location coordinates (from <code>temperature_latitude</code>/<code>temperature_longitude</code> or defaults to <code>zone.home</code>)</li>
+<li>Provides current temperature and hourly forecasts</li>
+<li>Publishes data to <code>sensor.predbat_temperature</code> with forecasts in the <code>results</code> attribute</li>
+<li>Automatically retries on API failures with exponential backoff</li>
+</ul>
+<p><strong>Important</strong>: This component is <strong>recommended</strong> when using ML Load Prediction, as temperature data cam improve prediction accuracy for households with electric/heat-pump heating.</p>
+<h4 id="configuration-options-temperature">Configuration Options (temperature)</h4>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Type</th>
+<th>Required</th>
+<th>Default</th>
+<th>Config Key</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>temperature_enable</code></td>
+<td>Boolean</td>
+<td>Yes</td>
+<td>False</td>
+<td><code>temperature_enable</code></td>
+<td>Set to <code>true</code> to enable temperature forecasts</td>
+</tr>
+<tr>
+<td><code>temperature_url</code></td>
+<td>String</td>
+<td>No</td>
+<td>Open-Meteo API URL</td>
+<td><code>temperature_url</code></td>
+<td>API URL with LATITUDE/LONGITUDE placeholders</td>
+</tr>
+<tr>
+<td><code>temperature_latitude</code></td>
+<td>Float</td>
+<td>No</td>
+<td>Uses zone.home</td>
+<td><code>temperature_latitude</code></td>
+<td>Latitude for temperature forecast location</td>
+</tr>
+<tr>
+<td><code>temperature_longitude</code></td>
+<td>Float</td>
+<td>No</td>
+<td>Uses zone.home</td>
+<td><code>temperature_longitude</code></td>
+<td>Longitude for temperature forecast location</td>
+</tr>
+</tbody>
+</table>
+<h4 id="configuration-example-temperature">Configuration example (temperature)</h4>
+<pre><code class="language-yaml">predbat:
+  # Enable temperature forecasts (recommended for ML load prediction)
+  temperature_enable: true
+
+  # Optional: specify location (defaults to zone.home)
+  # temperature_latitude: 51.5074
+  # temperature_longitude: -0.1278
+</code></pre>
+<h4 id="accessing-temperature-data-temperature">Accessing temperature data (temperature)</h4>
+<p>Temperature data is published to:</p>
+<ul>
+<li><code>sensor.predbat_temperature</code> - Current temperature with forecast in <code>results</code> attribute</li>
+</ul>
+<p>The <code>results</code> attribute contains a dictionary of timestamp strings (ISO format with timezone) to temperature values in °C.</p>
+<hr />
+<h3 id="ml-load-prediction-load_ml">ML Load Prediction (load_ml)</h3>
+<p><strong>Can be restarted:</strong> Yes</p>
+<h4 id="what-it-does-load_ml">What it does (load_ml)</h4>
+<p>Uses a neural network to predict your household energy consumption for the next 48 hours based on historical patterns, time-of-day, day-of-week, and optionally temperature and PV generation data.
+This provides more accurate load predictions than simple averaging, especially for households with variable usage patterns.</p>
+<h4 id="when-to-enable-load_ml">When to enable (load_ml)</h4>
+<ul>
+<li>You want more accurate load predictions than historical averages</li>
+<li>Your energy consumption has regular daily/weekly patterns</li>
+<li>You have at least 1 day of historical load data (7+ days recommended)</li>
+<li>You want Predbat to automatically adapt to changing consumption patterns</li>
+</ul>
+<h4 id="how-it-works-load_ml">How it works (load_ml)</h4>
+<ul>
+<li>Fetches historical load data from your configured <code>load_today</code> sensor</li>
+<li>Optionally incorporates PV generation and temperature forecast data</li>
+<li>Trains a multi-layer neural network on your historical patterns</li>
+<li>Makes autoregressive predictions for 48 hours ahead in 5-minute intervals</li>
+<li>Fine-tunes periodically (every 2 hours) to adapt to changing patterns</li>
+<li>Validates predictions and falls back gracefully if accuracy is poor</li>
+<li>Publishes predictions to <code>sensor.predbat_load_ml_forecast</code></li>
+</ul>
+<p><strong>Important</strong>: For best results, enable the Temperature component (<code>temperature_enable: true</code>) as temperature data significantly improves prediction accuracy.</p>
+<p>For a detailed explanation of how the neural network works and comprehensive configuration guidance, see the <a href="../load-ml/">ML Load Prediction documentation</a>.</p>
+<h4 id="configuration-options-load_ml">Configuration Options (load_ml)</h4>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Type</th>
+<th>Required</th>
+<th>Default</th>
+<th>Config Key</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>load_ml_enable</code></td>
+<td>Boolean</td>
+<td>Yes</td>
+<td>False</td>
+<td><code>load_ml_enable</code></td>
+<td>Set to <code>True</code> to enable ML load prediction</td>
+</tr>
+<tr>
+<td><code>load_ml_source</code></td>
+<td>Boolean</td>
+<td>Yes</td>
+<td>False</td>
+<td><code>load_ml_source</code></td>
+<td>Set to <code>True</code> to use the ML load prediction in Predbat</td>
+</tr>
+</tbody>
+</table>
+<p>Note: load_today, pv_today and car_charging_energy apps.yaml configuration items are also used, but these should already be set in Predbat.</p>
+<h4 id="configuration-example-load_ml">Configuration example (load_ml)</h4>
+<pre><code class="language-yaml">predbat:
+  # Enable ML load prediction
+  load_ml_enable: True
+  # Use the data in Predbat, can be false while exploring the predictions but not using them
+  load_ml_source: True
+
+  # Optional but recommended: enable temperature forecasts
+  temperature_enable: true  
+</code></pre>
+<h4 id="understanding-model-status-load_ml">Understanding model status (load_ml)</h4>
+<p>The ML component tracks several status indicators:</p>
+<ul>
+<li><strong>not_initialized</strong>: Model has not been created yet</li>
+<li><strong>training</strong>: Model is currently training on historical data</li>
+<li><strong>active</strong>: Model is trained and making predictions</li>
+<li><strong>validation_failed</strong>: Predictions are disabled due to high validation error</li>
+<li><strong>stale</strong>: Model hasn't been trained in 48+ hours and needs retraining</li>
+</ul>
+<p>Check Predbat logs for training progress and validation metrics:</p>
+<pre><code class="language-text">ML Component: Starting initial training
+ML Predictor: Training complete, final val_mae=0.3245 kWh
+ML Component: Model status: active
+</code></pre>
+<h4 id="accessing-predictions-load_ml">Accessing predictions (load_ml)</h4>
+<p>ML load predictions are published to:</p>
+<ul>
+<li><code>sensor.predbat_load_ml_forecast</code> - Contains 48-hour prediction in <code>results</code> attribute</li>
+</ul>
+<p>Predbat automatically uses these predictions when making battery charge/discharge decisions.</p>
+<h4 id="for-more-information-load_ml">For more information (load_ml)</h4>
+<p>See the comprehensive <a href="../load-ml/">ML Load Prediction documentation</a> for:</p>
+<ul>
+<li>Detailed explanation of neural network architecture</li>
+<li>Training process and parameters</li>
+<li>Expected accuracy metrics</li>
+<li>Troubleshooting guide</li>
+<li>Advanced configuration options</li>
+</ul>
+<hr />
+<h2 id="managing-components">Managing Components</h2>
+<h3 id="checking-component-status">Checking Component Status</h3>
+<p>You can check the status of all components through the web interface:</p>
+<ol>
+<li>Open the web interface (default: <code>http://your-ha-ip:5052</code>)</li>
+<li>Navigate to the <strong>Components</strong> page (<code>/components</code>)</li>
+<li>View the status of each component:
+   - <strong>Enabled/Disabled</strong> - Whether the component is configured
+   - <strong>Running/Stopped</strong> - Current operational status
+   - <strong>Healthy/Unhealthy</strong> - Whether the component is working correctly
+   - <strong>Last Updated</strong> - When the component last successfully updated</li>
+</ol>
+<h3 id="restarting-components">Restarting Components</h3>
+<p>Most components can be restarted if they encounter problems:</p>
+<ul>
+<li>Use the 'Restart' button on the Components page in the web interface</li>
+<li>Or restart Predbat entirely to restart all components</li>
+</ul>
+<p><strong>Note:</strong> Core components (Database Manager, Home Assistant Interface, and Home Assistant History) cannot be restarted individually and require a full Predbat restart.</p>
+<h3 id="editing-component-configuration">Editing Component Configuration</h3>
+<p>Click the Pencil icon next to a component to change the component configuration, e.g.:</p>
+<p><img alt="image" src="../images/web-interface-component-configuration.png" /></p>
+<p>Once you save the component configuration the changes will be written to <code>apps.yaml</code> and Predbat and all components will be restarted.</p>
+<h3 id="component-health">Component Health</h3>
+<p>A component is considered healthy when:</p>
+<ul>
+<li>Its task is running</li>
+<li>It has updated within the last 60 minutes</li>
+<li>It reports no errors</li>
+</ul>
+<p>If a component becomes unhealthy:</p>
+<ol>
+<li>Check your configuration in <code>apps.yaml</code></li>
+<li>Verify API keys and credentials are correct</li>
+<li>Check network connectivity</li>
+<li>Review Predbat logs for error messages</li>
+<li>Try restarting the component</li>
+</ol>
+<hr />
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../energy-rates/" class="btn btn-neutral float-left" title="Energy rates"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../load-ml/" class="btn btn-neutral float-right" title="ML Load Prediction">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../energy-rates/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../load-ml/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>
