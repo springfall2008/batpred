@@ -1983,11 +1983,21 @@ class Octopus:
                         if minute in self.rate_export:
                             self.rate_export[minute] += rate
                             rate_replicate[minute] = "saving"
+
+                            # Track saving session override in rate store
+                            if self.rate_store:
+                                today = datetime.now()
+                                self.rate_store.update_auto_override(today, minute, None, self.rate_export[minute], "Saving")
                     else:
                         if minute in self.rate_import:
                             self.rate_import[minute] += rate
                             self.load_scaling_dynamic[minute] = self.load_scaling_saving
                             rate_replicate[minute] = "saving"
+
+                            # Track saving session override in rate store
+                            if self.rate_store:
+                                today = datetime.now()
+                                self.rate_store.update_auto_override(today, minute, self.rate_import[minute], None, "Saving")
 
     def decode_octopus_slot(self, slot, raw=False):
         """
@@ -2185,10 +2195,20 @@ class Octopus:
                                     slots_added_set.add(slot_start)
                                     rates[minute] = assumed_price
 
+                                    # Track IOG override in rate store
+                                    if self.rate_store:
+                                        today = datetime.now()
+                                        self.rate_store.update_auto_override(today, minute, assumed_price, None, "IOG")
+
                             else:
                                 # For minutes within a 30-min slot, only apply if the slot was added
                                 if slot_start in slots_added_set:
                                     rates[minute] = assumed_price
+
+                                    # Track IOG override in rate store
+                                    if self.rate_store:
+                                        today = datetime.now()
+                                        self.rate_store.update_auto_override(today, minute, assumed_price, None, "IOG")
                     else:
                         assumed_price = self.rate_import.get(start_minutes, self.rate_min)
 
