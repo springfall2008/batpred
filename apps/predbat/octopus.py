@@ -17,6 +17,7 @@ import asyncio
 import requests
 import re
 from datetime import datetime, timedelta, timezone
+from predbat_metrics import record_api_call
 from const import TIME_FORMAT, TIME_FORMAT_OCTOPUS
 from utils import str2time, minutes_to_time, dp1, dp2, dp4, minute_data
 from component_base import ComponentBase
@@ -985,13 +986,16 @@ class OctopusAPI(ComponentBase):
                         if response.status not in [200, 201, 400]:
                             self.failures_total += 1
                             self.log("Warn: Error downloading Octopus data from URL {}, code {}".format(url, response.status))
+                            record_api_call("octopus", False, "server_error")
                             return {}
                         try:
                             data = await response.json()
                             self.last_success_timestamp = datetime.now(timezone.utc)
+                            record_api_call("octopus")
                         except (aiohttp.ContentTypeError, json.JSONDecodeError):
                             self.failures_total += 1
                             self.log("Warn: Error downloading Octopus data from URL {} (JSONDecodeError)".format(url))
+                            record_api_call("octopus", False, "decode_error")
                             return {}
 
                         if response.status == 400:
@@ -1239,6 +1243,7 @@ class OctopusAPI(ComponentBase):
                 if error_code == "KT-CT-1199":
                     msg = f'Warn: Octopus API: Rate limit error in request ({url}): {data_as_json["errors"]}'
                     self.log(msg)
+                    record_api_call("octopus", False, "rate_limit")
                     # Don't sleep if shutting down
                     if not self.api_stop:
                         await asyncio.sleep(5)  # Sleep briefly to avoid hammering
@@ -1309,6 +1314,7 @@ class OctopusAPI(ComponentBase):
                         error_code = error.get("extensions", {}).get("errorCode")
                         if error_code in ("KT-CT-1139", "KT-CT-1111", "KT-CT-1143"):
                             self.log(f"Octopus API: Kraken token invalid (error {error_code}), forcing refresh and retry")
+                            record_api_call("octopus", False, "auth_error")
                             self.graphql_token = None
                             retry_token = await self.async_refresh_token()
                             if retry_token is None:
@@ -1340,6 +1346,7 @@ class OctopusAPI(ComponentBase):
         except TimeoutError:
             self.failures_total += 1
             self.log(f"Warn: OctopusAPI: Failed to connect. Timeout of {self.timeout} exceeded.")
+            record_api_call("octopus", False, "connection_error")
 
         return None
 

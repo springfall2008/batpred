@@ -25,6 +25,7 @@ import pytz
 from datetime import datetime, timedelta, timezone
 from const import TIME_FORMAT, TIME_FORMAT_SOLCAST
 from utils import dp1, dp2, dp4, history_attribute_to_minute_data, minute_data, history_attribute, prune_today
+from predbat_metrics import record_api_call, metrics
 from component_base import ComponentBase
 
 """
@@ -134,22 +135,28 @@ class SolarAPI(ComponentBase):
                         self.log("Warn: Error downloading data from url {}, code {}".format(url, status_code))
                         if is_solcast_api:
                             self.solcast_failures_total += 1
+                            record_api_call("solcast", False, "server_error")
                         if is_forecast_solar_api:
                             self.forecast_solar_failures_total += 1
+                            record_api_call("forecast_solar", False, "server_error")
                         return data
 
                     try:
                         data = await response.json()
                         if is_solcast_api:
                             self.solcast_last_success_timestamp = datetime.now(timezone.utc)
+                            record_api_call("solcast")
                         if is_forecast_solar_api:
                             self.forecast_solar_last_success_timestamp = datetime.now(timezone.utc)
+                            record_api_call("forecast_solar")
                     except (aiohttp.ContentTypeError, Exception) as e:
                         self.log("Warn: Error downloading data from URL {}, error {} code {}".format(url, e, status_code))
                         if is_solcast_api:
                             self.solcast_failures_total += 1
+                            record_api_call("solcast", False, "decode_error")
                         if is_forecast_solar_api:
                             self.forecast_solar_failures_total += 1
+                            record_api_call("forecast_solar", False, "decode_error")
                         if data:
                             self.log("Warn: Error downloading data from URL {}, using cached data age {} minutes".format(url, dp1(age_minutes)))
                         else:
@@ -158,8 +165,10 @@ class SolarAPI(ComponentBase):
             self.log("Warn: Error downloading data from URL {}, error {}".format(url, e))
             if is_solcast_api:
                 self.solcast_failures_total += 1
+                record_api_call("solcast", False, "connection_error")
             if is_forecast_solar_api:
                 self.forecast_solar_failures_total += 1
+                record_api_call("forecast_solar", False, "connection_error")
             return data
 
         # Store data in cache
@@ -707,6 +716,8 @@ class SolarAPI(ComponentBase):
             worst_day_scaling = 0.7
             best_day_scaling = 1.3
         self.log("PV Calibration: Worst day scaling factor {}, best day scaling factor {}".format(dp2(worst_day_scaling), dp2(best_day_scaling)))
+        self.pv_calibration_worst_scaling = worst_day_scaling
+        self.pv_calibration_best_scaling = best_day_scaling
 
         for slot in pv_forecast_by_slot:
             if pv_forecast_by_slot_count[slot] > 0:
@@ -738,6 +749,11 @@ class SolarAPI(ComponentBase):
         total_adjustment = max(min(total_adjustment, PV_CALIBRATION_HIGHEST), PV_CALIBRATION_LOWEST)
         if not enabled_calibration:
             total_adjustment = 1.0
+        self.pv_calibration_total_adjustment = total_adjustment
+        m = metrics()
+        m.pv_scaling_worst.set(worst_day_scaling)
+        m.pv_scaling_best.set(best_day_scaling)
+        m.pv_scaling_total.set(total_adjustment)
         self.log("PV Calibration: PV production: {} kWh, Total forecast: {} kWh, adjustment {}x slot adjustments {}, max_kwh {}, divide_by {}".format(dp2(total_production), dp2(total_forecast), total_adjustment, slot_adjustment, max_kwh, divide_by))
 
         # Look at PV forecast today and an adjusted version

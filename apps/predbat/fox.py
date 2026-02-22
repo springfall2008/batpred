@@ -18,6 +18,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 import time
 import hashlib
+from predbat_metrics import record_api_call
 import aiohttp
 import json
 import argparse
@@ -1131,11 +1132,13 @@ class FoxAPI(ComponentBase):
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             self.log(f"Warn: Fox: Exception during request to {url}: {e}")
             self.failures_total += 1
+            record_api_call("fox", False, "connection_error")
             return None, False
 
         if status_code in [400, 401, 402, 403]:
             self.log("Warn: Fox: Authentication error with status code {} from {}".format(status_code, url))
             self.failures_total += 1
+            record_api_call("fox", False, "auth_error")
             return None, False
 
         if status_code in [200, 201]:
@@ -1149,6 +1152,7 @@ class FoxAPI(ComponentBase):
                     # Rate limiting detected
                     self.rate_limit_errors_today += 1
                     self.log(f"Info: Fox: Rate limiting or comms issue detected {msg}:{errno}, waiting...")
+                    record_api_call("fox", False, "rate_limit")
                     await asyncio.sleep(random.random() * 30 + 1)
                     return None, True
                 elif errno in [40402]:
@@ -1174,14 +1178,17 @@ class FoxAPI(ComponentBase):
                     data = {}
 
             self.update_success_timestamp()
+            record_api_call("fox")
             return data, False
         else:
             self.failures_total += 1
             if status_code == 429:
                 # Rate limiting so wait up to 30 seconds
                 self.log("Info: Fox: Rate limiting detected, waiting...")
+                record_api_call("fox", False, "rate_limit")
                 await asyncio.sleep(random.random() * 30 + 1)
                 return None, True
+            record_api_call("fox", False, "server_error")
         return None, False
 
     async def publish_data(self):

@@ -15,6 +15,7 @@ import json
 import time
 import copy
 from datetime import datetime, timedelta, UTC
+from predbat_metrics import record_api_call
 from component_base import ComponentBase
 
 
@@ -294,6 +295,8 @@ class SolisAPI(ComponentBase):
                     # Check HTTP status
                     if response.status != 200:
                         error_text = await response.text()
+                        reason = "auth_error" if response.status in (401, 403) else "server_error"
+                        record_api_call("solis", False, reason)
                         raise SolisAPIError(f"HTTP error: {error_text}", status_code=response.status)
 
                     # Parse JSON response
@@ -304,14 +307,18 @@ class SolisAPI(ComponentBase):
                     if str(code) != "0":
                         error_msg = response_json.get("msg", "Unknown error")
                         error_detail = SOLIS_API_CODES.get(str(code), f"Unknown code: {code}")
+                        record_api_call("solis", False, "server_error")
                         raise SolisAPIError(f"API error: {error_msg} ({error_detail} - {response_json})", response_code=str(code))
 
                     # Return data field
+                    record_api_call("solis")
                     return response_json.get("data")
 
         except asyncio.TimeoutError as err:
+            record_api_call("solis", False, "connection_error")
             raise SolisAPIError(f"Timeout accessing {url}") from err
         except aiohttp.ClientError as err:
+            record_api_call("solis", False, "connection_error")
             raise SolisAPIError(f"Network error accessing {url}: {str(err)}") from err
 
     async def _with_retry(self, operation, max_retry_time=SOLIS_MAX_RETRY_TIME):
