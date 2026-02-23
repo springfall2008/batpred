@@ -626,11 +626,6 @@ class LoadMLComponent(ComponentBase):
         if not self.ml_enable:
             self.api_started = True
             return True
-        
-        if self.base.prediction_started:
-            self.log("ML Component: Waiting for current prediction cycle to complete before starting run")
-            while self.base.prediction_started:
-                await asyncio.sleep(0.5)
 
         # Determine if training is needed
         is_initial = not self.initial_training_done
@@ -680,34 +675,42 @@ class LoadMLComponent(ComponentBase):
         elif should_train:
             self.log("ML Component: Starting fine-tune training (2h interval)")
 
-        if should_train:
+        if should_train or should_fetch:
+            # Hold prediction_started across all NumPy-heavy work (training + predict + save)
+            # so that the plan's multiprocessing pool is never fork()ed while Numpy threads are active.
             if self.base.prediction_started:
-                self.log("ML Component: Waiting for current prediction cycle to complete before running training")
+                self.log("ML Component: Waiting for current prediction cycle to complete before running ML work")
                 while self.base.prediction_started:
                     await asyncio.sleep(0.5)
             try:
                 self.base.prediction_started = True
-                self.log("ML Component: Doing training...")
-                await self._do_training(is_initial)
-            except:
-                self.log("Error: ML Component: Failed to do training: {}".format(traceback.format_exc()))
+
+                if should_train:
+                    self.log("ML Component: Doing training...")
+                    await self._do_training(is_initial)
+
+                # Update model validity status
+                self._update_model_status()
+
+                if should_fetch:
+                    # Get predictions for the current cycle (will be used by fetch.py to publish forecast entity)
+                    self._get_predictions(self.now_utc, self.midnight_utc)
+
+                    # Publish entity with current state
+                    self._publish_entity()
+                    self.log("ML Component: Prediction cycle completed")
+
+                    # Write database if enabled (uses np.savez_compressed - keep inside guard)
+                    if self.load_ml_database_days:
+                        await self.save_database_history()
+
+            except Exception:
+                self.log("Error: ML Component: Failed during ML work: {}".format(traceback.format_exc()))
             finally:
                 self.base.prediction_started = False
-
-        # Update model validity status
-        self._update_model_status()
-
-        if should_fetch:
-            # Get predictions for the current cycle (will be used by fetch.py to publish forecast entity)
-            self._get_predictions(self.now_utc, self.midnight_utc)
-
-            # Publish entity with current state
-            self._publish_entity()
-            self.log("ML Component: Prediction cycle completed")
-
-            # Write database if enabled
-            if self.load_ml_database_days:
-                await self.save_database_history()
+        else:
+            # Update model validity status when no ML work needed
+            self._update_model_status()
 
         self.update_success_timestamp()
         return True
