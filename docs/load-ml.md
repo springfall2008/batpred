@@ -189,7 +189,7 @@ predbat:
     - **How it works**: See [History Accumulation and the Database](#history-accumulation-and-the-database) below
     - **When to increase**: If you want the model to learn long-term seasonal patterns (e.g. summer vs winter)
     - **When to decrease**: To save disk space, or if you prefer the model to forget older patterns faster
-    - **Disk usage**: Each day of history uses approximately 1.4 MB (5 channels × 288 steps/day × 4 bytes)
+    - **Disk usage**: Each day of history uses approximately 5.6 KB (5 channels × 288 steps/day × 4 bytes, plus minimal metadata/format overhead)
 
 ### History Accumulation and the Database
 
