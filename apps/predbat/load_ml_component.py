@@ -496,11 +496,23 @@ class LoadMLComponent(ComponentBase):
 
     @staticmethod
     def _shift_channel(d, elapsed_minutes, max_minutes):
-        """Shift {minute: value} keys forward by elapsed time, dropping entries that fall beyond max_minutes."""
+        """
+        Shift historical {minute: value} keys (k >= 0) forward by elapsed time, dropping entries
+        that fall beyond max_minutes. Negative keys (future data) are not shifted to avoid
+        promoting future entries into persisted history.
+        """
         if not d or elapsed_minutes <= 0:
             return d
         shift = round(elapsed_minutes / PREDICT_STEP) * PREDICT_STEP
-        return {k + shift: v for k, v in d.items() if k + shift < max_minutes}
+        shifted = {}
+        for k, v in d.items():
+            # Only shift historical entries; future (negative) keys are ignored here and should be re-fetched
+            if k < 0:
+                continue
+            new_k = k + shift
+            if new_k < max_minutes:
+                shifted[new_k] = v
+        return shifted
 
     @staticmethod
     def _merge_channel(old, new):
