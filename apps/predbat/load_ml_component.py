@@ -733,19 +733,28 @@ class LoadMLComponent(ComponentBase):
             }
         )
 
-        try:
-            np.savez_compressed(
-                self.database_filepath,
-                metadata_json=np.array(metadata),
-                load=dict_to_array(self.load_data),
-                pv=dict_to_array(self.pv_data),
-                temp=dict_to_array(self.temperature_data),
-                import_rate=dict_to_array(self.import_rates_data),
-                export_rate=dict_to_array(self.export_rates_data),
-            )
-            self.log("ML Component: Saved {} steps ({} days) of history to {}".format(total_steps, self.load_data_age_days, self.database_filepath))
-        except Exception as e:
-            self.log("Warn: ML Component: Failed to save database history: {}".format(e))
+        save_kwargs = dict(
+            metadata_json=np.array(metadata),
+            load=dict_to_array(self.load_data),
+            pv=dict_to_array(self.pv_data),
+            temp=dict_to_array(self.temperature_data),
+            import_rate=dict_to_array(self.import_rates_data),
+            export_rate=dict_to_array(self.export_rates_data),
+        )
+        filepath = self.database_filepath
+        log = self.log
+        log_msg = "ML Component: Saved {} steps ({} days) of history to {}".format(total_steps, self.load_data_age_days, filepath)
+
+        def _save():
+            try:
+                np.savez_compressed(filepath, **save_kwargs)
+                log(log_msg)
+            except Exception as e:
+                log("Warn: ML Component: Failed to save database history: {}".format(e))
+
+        # Run blocking disk IO in executor so the event loop stays responsive
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _save)
 
     async def load_database_history(self):
         """Load and time-shift historical channel data from the compressed binary database.
@@ -762,7 +771,9 @@ class LoadMLComponent(ComponentBase):
             return
 
         try:
-            data = np.load(self.database_filepath, allow_pickle=False)
+            # np.load is blocking disk IO - run in executor so the event loop stays alive
+            loop = asyncio.get_event_loop()
+            data = await loop.run_in_executor(None, lambda: np.load(self.database_filepath, allow_pickle=False))
             metadata = json.loads(str(data["metadata_json"]))
 
             version = metadata.get("version", 0)
@@ -822,56 +833,74 @@ class LoadMLComponent(ComponentBase):
         Args:
             is_initial: True for full training, False for fine-tuning
         """
+        # Snapshot data under the lock so we can release it before the CPU-bound
+        # training call.  predictor.train() can take 30-120 seconds on slow hardware
+        # and must NOT run while holding data_lock or the asyncio event loop will freeze.
         async with self.data_lock:
             if not self.load_data:
                 self.log("Warn: ML Component: No data for training")
                 return
 
-            # Warn if limited data
             if self.load_data_age_days < 3:
                 self.log("Warn: ML Component: Training with only {} days of data, recommend 3+ days for better accuracy".format(self.load_data_age_days))
 
-            try:
-                # Run training in executor to avoid blocking
-                epochs = self.ml_epochs_initial if is_initial else self.ml_epochs_update
+            # Shallow copies are sufficient - predictor.train() only reads the dicts
+            load_data_snap = dict(self.load_data)
+            pv_data_snap = dict(self.pv_data) if self.pv_data else {}
+            temp_data_snap = dict(self.temperature_data) if self.temperature_data else {}
+            import_rates_snap = dict(self.import_rates_data) if self.import_rates_data else {}
+            export_rates_snap = dict(self.export_rates_data) if self.export_rates_data else {}
+            now_utc_snap = self.now_utc
+            epochs = self.ml_epochs_initial if is_initial else self.ml_epochs_update
+            time_decay = min(self.ml_time_decay_days, self.load_data_age_days)
+            holdout_hours = self.ml_validation_holdout_hours
+            patience = self.ml_epochs_patience
+        # Lock released - event loop is free during training
 
-                val_mae = self.predictor.train(
-                    self.load_data,
-                    self.now_utc,
-                    pv_minutes=self.pv_data,
-                    temp_minutes=self.temperature_data,
-                    import_rates=self.import_rates_data,
-                    export_rates=self.export_rates_data,
+        try:
+            # Run synchronous NumPy training in a thread-pool executor so the
+            # asyncio event loop stays responsive throughout.
+            loop = asyncio.get_event_loop()
+            val_mae = await loop.run_in_executor(
+                None,
+                lambda: self.predictor.train(
+                    load_data_snap,
+                    now_utc_snap,
+                    pv_minutes=pv_data_snap,
+                    temp_minutes=temp_data_snap,
+                    import_rates=import_rates_snap,
+                    export_rates=export_rates_snap,
                     is_initial=is_initial,
                     epochs=epochs,
-                    time_decay_days=min(self.ml_time_decay_days, self.load_data_age_days),
-                    validation_holdout_hours=self.ml_validation_holdout_hours,
-                    patience=self.ml_epochs_patience,
-                )
+                    time_decay_days=time_decay,
+                    validation_holdout_hours=holdout_hours,
+                    patience=patience,
+                ),
+            )
 
-                if val_mae is not None:
-                    self.last_train_time = datetime.now(timezone.utc)
-                    self.initial_training_done = True
+            if val_mae is not None:
+                self.last_train_time = datetime.now(timezone.utc)
+                self.initial_training_done = True
 
-                    # Check validation threshold
-                    if val_mae <= self.ml_validation_threshold:
-                        self.model_valid = True
-                        self.model_status = "active"
-                        self.log("ML Component: Training successful, val_mae={:.4f} kWh".format(val_mae))
-                    else:
-                        self.model_valid = False
-                        self.model_status = "fallback_validation"
-                        self.log("Warn: ML Component: Validation MAE ({:.4f}) exceeds threshold ({:.4f})".format(val_mae, self.ml_validation_threshold))
-
-                    # Save model
-                    if self.model_filepath:
-                        self.predictor.save(self.model_filepath)
+                # Check validation threshold
+                if val_mae <= self.ml_validation_threshold:
+                    self.model_valid = True
+                    self.model_status = "active"
+                    self.log("ML Component: Training successful, val_mae={:.4f} kWh".format(val_mae))
                 else:
-                    self.log("Warn: ML Component: Training failed")
+                    self.model_valid = False
+                    self.model_status = "fallback_validation"
+                    self.log("Warn: ML Component: Validation MAE ({:.4f}) exceeds threshold ({:.4f})".format(val_mae, self.ml_validation_threshold))
 
-            except Exception as e:
-                self.log("Error: ML Component: Training exception: {}".format(e))
-                self.log("Error: " + traceback.format_exc())
+                # Save model (fast - no lock needed)
+                if self.model_filepath:
+                    self.predictor.save(self.model_filepath)
+            else:
+                self.log("Warn: ML Component: Training failed")
+
+        except Exception as e:
+            self.log("Error: ML Component: Training exception: {}".format(e))
+            self.log("Error: " + traceback.format_exc())
 
     def _update_model_status(self):
         """Update model validity status based on current state."""
