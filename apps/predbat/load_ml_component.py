@@ -570,6 +570,7 @@ class LoadMLComponent(ComponentBase):
             Dict of {minute: cumulative_kwh} or empty dict on fallback
         """
         if not self.ml_enable:
+            self.log("ML Component: ML forecasting disabled, returning empty predictions")
             return {}
 
         if not self.data_ready:
@@ -582,13 +583,16 @@ class LoadMLComponent(ComponentBase):
 
         # Generate predictions using current model
         try:
+            self.log("ML Component: Generating predictions load data age {:.1f} days, {} data points".format(self.load_data_age_days, len(self.load_data) if self.load_data else 0))
             predictions = self.predictor.predict(self.load_data, now_utc, midnight_utc, pv_minutes=self.pv_data, temp_minutes=self.temperature_data, import_rates=self.import_rates_data, export_rates=self.export_rates_data, exog_features=exog_features)
 
             if predictions:
                 self.current_predictions = predictions
                 self.log("ML Component: Generated {} predictions (total {:.2f} kWh over 48h)".format(len(predictions), max(predictions.values()) if predictions else 0))
+            else:
+                self.log("ML Component: Predictor returned no predictions, returning previous dict")
 
-            return predictions
+            return self.current_predictions
 
         except Exception as e:
             self.log("Error: ML Component: Prediction failed: {}".format(e))
@@ -642,16 +646,14 @@ class LoadMLComponent(ComponentBase):
 
         # Check if we have data
         if not self.data_ready:
-            if first:
-                self.log("ML Component: Waiting for load data from sensors")
+            self.log("ML Component: Waiting for load data from sensors")
             return True  # Not an error, just waiting
 
         # Check if we have enough data
         if self.load_data_age_days < self.ml_min_days:
             self.model_status = "insufficient_data"
             self.model_valid = False
-            if first:
-                self.log("ML Component: Insufficient data ({:.1f} days, need {})".format(self.load_data_age_days, self.ml_min_days))
+            self.log("ML Component: Insufficient data ({:.1f} days, need {})".format(self.load_data_age_days, self.ml_min_days))
             return True
 
         if is_initial:
@@ -666,6 +668,7 @@ class LoadMLComponent(ComponentBase):
         self._update_model_status()
 
         if should_fetch:
+            self.log("ML Component: Generating predictions for load_forecast integration")
             self._get_predictions(self.now_utc, self.midnight_utc)
             # Publish entity with current state
             self._publish_entity()

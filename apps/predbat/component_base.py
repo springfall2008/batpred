@@ -63,6 +63,7 @@ class ComponentBase(ABC):
         self.args = base.args
         self.initialize(**kwargs)
         self.count_errors = 0
+        self.run_timeout = 15 * 60  # Default run time in seconds, can be overridden by subclasses
 
     @abstractmethod
     def initialize(self, **kwargs):
@@ -183,7 +184,20 @@ class ComponentBase(ABC):
                         should_run = True
 
                 if should_run:
-                    if await self.run(seconds, first):
+                    task = asyncio.ensure_future(self.run(seconds, first))
+                    try:
+                        run_result = await asyncio.wait_for(asyncio.shield(task), timeout=self.run_timeout)
+                    except asyncio.TimeoutError:
+                        stack = task.get_stack()
+                        tb_lines = ["Traceback of timed-out run():"] + ['  File "{}", line {}, in {}'.format(frame.f_code.co_filename, frame.f_lineno, frame.f_code.co_name) for frame in stack]
+                        self.log("Error: {}: run() exceeded {}s timeout:\n{}".format(self.__class__.__name__, self.run_timeout, "\n".join(tb_lines)))
+                        task.cancel()
+                        try:
+                            await task
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                        run_result = False
+                    if run_result:
                         if not self.api_started:
                             self.api_started = True
                             self.log(f"{self.__class__.__name__}: Started")

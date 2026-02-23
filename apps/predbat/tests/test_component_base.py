@@ -247,6 +247,57 @@ def test_component_base_exception_handling(my_predbat):
     return asyncio.run(run_test())
 
 
+def test_component_base_run_timeout(my_predbat):
+    """Test that a hung run() is detected, its stack is logged, and it is treated as a failure"""
+    print("\n*** Test: ComponentBase run() timeout detection ***")
+
+    class SlowComponent(ComponentBase):
+        def __init__(self, base):
+            self.run_count = 0
+            super().__init__(base)
+            self.run_timeout = 0.05  # 50 ms - fires before fast_sleep(10) completes (~100 ms real)
+
+        def initialize(self, **kwargs):
+            pass
+
+        async def run(self, seconds, first):
+            self.run_count += 1
+            await asyncio.sleep(10)  # fast_sleep makes this ~100 ms real - longer than timeout
+            return True
+
+    async def run_test():
+        with patch("asyncio.sleep", side_effect=fast_sleep):
+            base = MockBase()
+            component = SlowComponent(base)
+
+            task = asyncio.create_task(component.start())
+
+            # Wait long enough for: timeout to fire + error processing + one sleep(5) cycle
+            await asyncio.sleep(2)  # ~20 ms real time via fast_sleep - enough for timeout + bookkeeping
+
+            await component.stop()
+            await task
+
+            # Component should not have started - run() never returned True
+            assert not component.api_started, "Component should not have started (run timed out)"
+
+            # Error count must have been incremented
+            assert component.count_errors > 0, f"Error count should be > 0, got {component.count_errors}"
+
+            # A 'timeout' message must appear in the log
+            timeout_logged = any("timeout" in msg.lower() for msg in base.log_messages)
+            assert timeout_logged, "Timeout should have been logged. Messages:\n" + "\n".join(base.log_messages)
+
+            # A traceback line should also have been logged (stack dump)
+            traceback_logged = any("File" in msg for msg in base.log_messages)
+            assert traceback_logged, "Stack trace should have been logged. Messages:\n" + "\n".join(base.log_messages)
+
+            print(f"PASS: Timeout caught and stack-traced (error_count={component.count_errors})")
+        return False  # False = test passed
+
+    return asyncio.run(run_test())
+
+
 def test_component_base_all(my_predbat):
     """Run all component_base tests"""
     tests = [
@@ -255,6 +306,7 @@ def test_component_base_all(my_predbat):
         ("stop_during_backoff", test_component_base_stop_during_backoff, "Component respects api_stop during backoff"),
         ("normal_operation", test_component_base_normal_operation_after_start, "Component runs every 60s after start"),
         ("exception_handling", test_component_base_exception_handling, "Component handles exceptions with backoff"),
+        ("run_timeout", test_component_base_run_timeout, "Hung run() triggers timeout, stack trace, and error count"),
     ]
 
     failed = []
