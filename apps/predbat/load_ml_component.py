@@ -51,7 +51,7 @@ class LoadMLComponent(ComponentBase):
     - Falls back to empty predictions when validation fails or model is stale
     """
 
-    def initialize(self, load_ml_enable, load_ml_source=True, load_ml_max_days_history=28, load_ml_database_days=365):
+    def initialize(self, load_ml_enable, load_ml_source=True, load_ml_max_days_history=28, load_ml_database_days=90):
         """
         Initialize the ML load forecaster component.
 
