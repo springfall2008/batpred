@@ -916,6 +916,7 @@ def _test_component_run_data_merge():
             self.local_tz = timezone.utc
             self.args = {}
             self.log_messages = []
+            self.prediction_started = False
 
         def log(self, msg):
             self.log_messages.append(msg)

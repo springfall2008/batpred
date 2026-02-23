@@ -682,8 +682,19 @@ class LoadMLComponent(ComponentBase):
         self._update_model_status()
 
         if should_fetch:
-            self.log("ML Component: Generating predictions for load_forecast integration")
-            self._get_predictions(self.now_utc, self.midnight_utc)
+            if self.base.prediction_started:
+                self.log("ML Component: Waiting for current prediction cycle to complete before generating new ML predictions")
+                while self.base.prediction_started:
+                    await asyncio.sleep(0.5)
+            try:
+                self.base.prediction_started = True
+                self.log("ML Component: Generating predictions for load_forecast integration")
+                self._get_predictions(self.now_utc, self.midnight_utc)
+            except:
+                self.log("Error: ML Component: Failed to generate predictions: {}".format(traceback.format_exc()))
+            finally:
+                self.base.prediction_started = False
+
             # Publish entity with current state
             self._publish_entity()
             self.log("ML Component: Prediction cycle completed")
@@ -741,20 +752,8 @@ class LoadMLComponent(ComponentBase):
             import_rate=dict_to_array(self.import_rates_data),
             export_rate=dict_to_array(self.export_rates_data),
         )
-        filepath = self.database_filepath
-        log = self.log
-        log_msg = "ML Component: Saved {} steps ({} days) of history to {}".format(total_steps, self.load_data_age_days, filepath)
-
-        def _save():
-            try:
-                np.savez_compressed(filepath, **save_kwargs)
-                log(log_msg)
-            except Exception as e:
-                log("Warn: ML Component: Failed to save database history: {}".format(e))
-
-        # Run blocking disk IO in executor so the event loop stays responsive
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, _save)
+        np.savez_compressed(self.database_filepath, **save_kwargs)
+        self.log("ML Component: Saved {} steps ({} days) of history to {}".format(total_steps, self.load_data_age_days, self.database_filepath))
 
     async def load_database_history(self):
         """Load and time-shift historical channel data from the compressed binary database.
@@ -772,8 +771,7 @@ class LoadMLComponent(ComponentBase):
 
         try:
             # np.load is blocking disk IO - run in executor so the event loop stays alive
-            loop = asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, lambda: np.load(self.database_filepath, allow_pickle=False))
+            data = np.load(self.database_filepath, allow_pickle=False)
             metadata = json.loads(str(data["metadata_json"]))
 
             version = metadata.get("version", 0)
@@ -860,22 +858,18 @@ class LoadMLComponent(ComponentBase):
         try:
             # Run synchronous NumPy training in a thread-pool executor so the
             # asyncio event loop stays responsive throughout.
-            loop = asyncio.get_event_loop()
-            val_mae = await loop.run_in_executor(
-                None,
-                lambda: self.predictor.train(
-                    load_data_snap,
-                    now_utc_snap,
-                    pv_minutes=pv_data_snap,
-                    temp_minutes=temp_data_snap,
-                    import_rates=import_rates_snap,
-                    export_rates=export_rates_snap,
-                    is_initial=is_initial,
-                    epochs=epochs,
-                    time_decay_days=time_decay,
-                    validation_holdout_hours=holdout_hours,
-                    patience=patience,
-                ),
+            val_mae = self.predictor.train(
+                load_data_snap,
+                now_utc_snap,
+                pv_minutes=pv_data_snap,
+                temp_minutes=temp_data_snap,
+                import_rates=import_rates_snap,
+                export_rates=export_rates_snap,
+                is_initial=is_initial,
+                epochs=epochs,
+                time_decay_days=time_decay,
+                validation_holdout_hours=holdout_hours,
+                patience=patience,
             )
 
             if val_mae is not None:
