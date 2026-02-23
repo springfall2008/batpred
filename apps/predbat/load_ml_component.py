@@ -781,9 +781,7 @@ class LoadMLComponent(ComponentBase):
             max_steps = self.load_ml_database_days * 24 * 60 // PREDICT_STEP
 
             def array_to_dict(arr):
-                """Reconstruct a sparse {minute: value} dict with keys as stored (no shift).
-                The shift to align with the current time is applied later in run() via _shift(),
-                using last_data_fetch=saved_utc to compute the correct elapsed time."""
+                """Reconstruct a sparse {minute: value} dict with keys as stored"""
                 result = {}
                 for i in range(len(arr)):
                     val = float(arr[i])
