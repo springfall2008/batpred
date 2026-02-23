@@ -542,6 +542,8 @@ class LoadMLComponent(ComponentBase):
             self.import_rates_data = self._shift_channel(self.import_rates_data, elapsed, max_history_minutes)
             self.export_rates_data = self._shift_channel(self.export_rates_data, elapsed, max_history_minutes)
             self._recompute_age_days()
+            # Update the reference time so the same elapsed interval is not applied more than once
+            self.last_data_fetch = self.now_utc
 
     def _merge_fetch_data(self, load_data, age_days, load_minutes_now, pv_data, temperature_data, import_rates_data, export_rates_data):
         """
