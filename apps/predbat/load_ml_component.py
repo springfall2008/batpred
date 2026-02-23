@@ -626,7 +626,7 @@ class LoadMLComponent(ComponentBase):
         if not self.ml_enable:
             self.api_started = True
             return True
-        
+
         if self.base.prediction_started:
             self.log("ML Component: Waiting for current prediction cycle to complete before starting run")
             while self.base.prediction_started:
