@@ -626,6 +626,11 @@ class LoadMLComponent(ComponentBase):
         if not self.ml_enable:
             self.api_started = True
             return True
+        
+        if self.base.prediction_started:
+            self.log("ML Component: Waiting for current prediction cycle to complete before starting run")
+            while self.base.prediction_started:
+                await asyncio.sleep(0.5)
 
         # Determine if training is needed
         is_initial = not self.initial_training_done
@@ -676,28 +681,30 @@ class LoadMLComponent(ComponentBase):
             self.log("ML Component: Starting fine-tune training (2h interval)")
 
         if should_train:
-            await self._do_training(is_initial)
+            if self.base.prediction_started:
+                self.log("ML Component: Waiting for current prediction cycle to complete before running training")
+                while self.base.prediction_started:
+                    await asyncio.sleep(0.5)
+            try:
+                self.base.prediction_started = True
+                self.log("ML Component: Doing training...")
+                await self._do_training(is_initial)
+            except:
+                self.log("Error: ML Component: Failed to do training: {}".format(traceback.format_exc()))
+            finally:
+                self.base.prediction_started = False
 
         # Update model validity status
         self._update_model_status()
 
         if should_fetch:
-            if self.base.prediction_started:
-                self.log("ML Component: Waiting for current prediction cycle to complete before generating new ML predictions")
-                while self.base.prediction_started:
-                    await asyncio.sleep(0.5)
-            try:
-                self.base.prediction_started = True
-                self.log("ML Component: Generating predictions for load_forecast integration")
-                self._get_predictions(self.now_utc, self.midnight_utc)
-            except:
-                self.log("Error: ML Component: Failed to generate predictions: {}".format(traceback.format_exc()))
-            finally:
-                self.base.prediction_started = False
+            # Get predictions for the current cycle (will be used by fetch.py to publish forecast entity)
+            self._get_predictions(self.now_utc, self.midnight_utc)
 
             # Publish entity with current state
             self._publish_entity()
             self.log("ML Component: Prediction cycle completed")
+
             # Write database if enabled
             if self.load_ml_database_days:
                 await self.save_database_history()
