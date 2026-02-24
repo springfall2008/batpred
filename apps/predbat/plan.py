@@ -929,7 +929,7 @@ class Plan:
             self.minutes_now,
             forward=False,
             scale_today=self.load_inday_adjustment,
-            scale_fixed=1.0,
+            scale_fixed=self.load_scaling,
             type_load=True,
             load_forecast=self.load_forecast,
             load_scaling_dynamic=self.load_scaling_dynamic,

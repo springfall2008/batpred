@@ -292,12 +292,13 @@ class LoadMLComponent(ComponentBase):
             # Fetch load sensor history
             self.log("ML Component: Fetching {} days of load history from {}".format(days_to_fetch, self.ml_load_sensor))
 
-            load_minutes, load_minutes_age = self.base.minute_data_load(self.now_utc, "load_today", days_to_fetch, required_unit="kWh", load_scaling=self.get_arg("load_scaling", 1.0), interpolate=True, pad=False)
+            load_minutes, load_minutes_age = self.base.minute_data_load(self.now_utc, "load_today", days_to_fetch, required_unit="kWh", load_scaling=1.0, interpolate=True, pad=False)
             if not load_minutes:
                 self.log("Warn: ML Component: Failed to convert load history to minute data")
                 return None, 0, 0, None, None, None, None
             days_to_fetch = min(days_to_fetch, load_minutes_age)
 
+            load_power_data = None
             if self.get_arg("load_power", default=None, indirect=False) and self.get_arg("load_power_fill_enable", True):
                 load_power_data, load_minutes_age = self.base.minute_data_load(self.now_utc, "load_power", days_to_fetch, required_unit="W", load_scaling=1.0, interpolate=True, pad=False)
                 load_minutes = self.base.fill_load_from_power(load_minutes, load_power_data)
@@ -477,6 +478,7 @@ class LoadMLComponent(ComponentBase):
                             "age_days": days_to_fetch,
                             "load_minutes_now": load_minutes_now,
                             "load_minutes": load_minutes_new,
+                            "load_power": load_power_data,
                             "original_load_minutes": load_minutes,
                             "car_charging_energy": car_charging_energy,
                             "pv_data": pv_data,
