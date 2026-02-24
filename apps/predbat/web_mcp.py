@@ -18,7 +18,7 @@ to expose battery prediction data and plan information via the MCP protocol.
 
 import asyncio
 import json
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from datetime import datetime, timezone, timedelta
 from utils import calc_percent_limit, get_override_time_from_string
 import re
@@ -26,6 +26,7 @@ from aiohttp import web
 import secrets
 import jwt as pyjwt
 import hashlib
+from contextlib import suppress
 from component_base import ComponentBase
 
 
@@ -812,7 +813,8 @@ class PredbatMCPServer(ComponentBase):
 
     async def html_mcp_get(self, request):
         """
-        Handle GET requests to MCP endpoint - returns server info and available tools
+        Handle GET requests to MCP endpoint.
+        Opens a persistent SSE stream only when requested by the client.
         Supports both OAuth tokens and legacy Bearer token authentication
         """
         self.log("MCP GET: Received request from {}".format(request.remote))
@@ -850,11 +852,50 @@ class PredbatMCPServer(ComponentBase):
             return web.json_response({"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Unauthorized: Invalid or expired token."}}, status=401, headers={"WWW-Authenticate": www_auth})
 
         try:
-            result = await self.mcp_server.handle_mcp_request(request, self.mcp_server)
-            return web.json_response(result)
+            wants_sse = "text/event-stream" in request.headers.get("Accept", "").lower() or request.query.get("stream", "").lower() in {"1", "true", "yes"}
+            if not wants_sse:
+                return web.json_response(
+                    {
+                        "error": "not_acceptable",
+                        "message": "GET /mcp requires Accept: text/event-stream (or ?stream=1) for streamable HTTP.",
+                    },
+                    status=406,
+                )
+            return await self._streamable_mcp_get(request)
         except Exception as e:
             self.log(f"Error in MCP GET endpoint: {e}")
             return web.json_response({"jsonrpc": "2.0", "id": None, "error": {"code": -32603, "message": f"Server error: {str(e)}"}}, status=500)
+
+    async def _streamable_mcp_get(self, request):
+        """
+        Open a persistent SSE channel for streamable HTTP MCP clients.
+        """
+        response = web.StreamResponse(
+            status=200,
+            reason="OK",
+            headers={
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+        await response.prepare(request)
+
+        # Initial comment frame confirms stream availability.
+        await response.write(b": predbat mcp stream connected\n\n")
+
+        try:
+            while True:
+                await asyncio.sleep(15)
+                await response.write(b": keepalive\n\n")
+        except (asyncio.CancelledError, ConnectionResetError, BrokenPipeError):
+            pass
+        finally:
+            with suppress(Exception):
+                await response.write_eof()
+
+        return response
 
     async def html_mcp_post(self, request):
         """
@@ -900,6 +941,9 @@ class PredbatMCPServer(ComponentBase):
 
         try:
             result = await self.mcp_server.handle_mcp_request(request, self.mcp_server)
+            if result is None:
+                # Notification methods do not return JSON-RPC responses.
+                return web.Response(status=202)
             return web.json_response(result)
         except Exception as e:
             self.log(f"Error in MCP POST endpoint: {e}")
@@ -917,6 +961,7 @@ class MCPServerWrapper:
         self.log = log_func or print
         self.is_running = False
         self.plan_interval_minutes = base.plan_interval_minutes
+        self.prefix = getattr(base, "prefix", "predbat")
 
         if log_func:
             log_func("Creating HTTP MCP Server with Predbat integration")
@@ -1133,7 +1178,7 @@ class MCPServerWrapper:
         except Exception as e:
             return {"success": False, "error": f"Error setting configuration: {str(e)}", "data": None}
 
-    async def handle_mcp_request(self, request, mcp_server):
+    async def handle_mcp_request(self, request, mcp_server) -> Optional[Dict[str, Any]]:
         """
         Handle HTTP requests implementing the Model Context Protocol over HTTP
 
@@ -1166,9 +1211,8 @@ class MCPServerWrapper:
                 elif method == "tools/call":
                     result = await self._handle_tools_call(params)
                 elif method == "notifications/initialized":
-                    # This is a notification - return empty success response
-                    # Some clients expect a response even for notifications over HTTP
-                    return {"jsonrpc": jsonrpc, "id": request_id, "result": {}}
+                    # Notification: intentionally no JSON-RPC response body.
+                    return None
                 else:
                     # Method not found
                     return {"jsonrpc": jsonrpc, "id": request_id, "error": {"code": -32601, "message": f"Method not found: {method}"}}
@@ -1185,8 +1229,11 @@ class MCPServerWrapper:
 
     async def _handle_initialize(self, params):
         """Handle MCP initialize request"""
-        tools = await self._handle_tools_list(params)
-        return {"protocolVersion": "2024-11-05", "capabilities": {"tools": tools["tools"]}, "serverInfo": {"name": "Predbat MCP Server", "version": "1.0.1"}}
+        return {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {"tools": {"listChanged": False}},
+            "serverInfo": {"name": "Predbat MCP Server", "version": "1.0.1"},
+        }
 
     async def _handle_tools_list(self, params):
         """Handle MCP tools/list request"""
