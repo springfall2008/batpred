@@ -1112,13 +1112,13 @@ def _test_real_data_training():
     has_rates = import_rates_data and export_rates_data and len(import_rates_data) > 0 and len(export_rates_data) > 0
     rates_info = " + import/export rates" if has_rates else ""
     print(f"  Training on real load + {data_source} PV/temperature{rates_info} with {len(load_data)} points...")
-    success = predictor.train(load_data, now_utc, pv_minutes=pv_data, temp_minutes=temp_data, import_rates=import_rates_data, export_rates=export_rates_data, is_initial=True, epochs=50, time_decay_days=7, validation_holdout_hours=48)
+    success = predictor.train(load_data, now_utc, pv_minutes=pv_data, temp_minutes=temp_data, import_rates=import_rates_data, export_rates=export_rates_data, is_initial=True, epochs=100, time_decay_days=30, validation_holdout_hours=48, patience=20)
 
     assert success, "Training on real data should succeed"
     assert predictor.model_initialized, "Model should be initialized after training"
 
-    success = predictor.train(load_data, now_utc, pv_minutes=pv_data, temp_minutes=temp_data, import_rates=import_rates_data, export_rates=export_rates_data, is_initial=False, epochs=50, time_decay_days=7, validation_holdout_hours=48)
-    success = predictor.train(load_data, now_utc, pv_minutes=pv_data, temp_minutes=temp_data, import_rates=import_rates_data, export_rates=export_rates_data, is_initial=False, epochs=50, time_decay_days=7, validation_holdout_hours=48)
+    success = predictor.train(load_data, now_utc, pv_minutes=pv_data, temp_minutes=temp_data, import_rates=import_rates_data, export_rates=export_rates_data, is_initial=False, epochs=20, time_decay_days=30, validation_holdout_hours=48, patience=10)
+    success = predictor.train(load_data, now_utc, pv_minutes=pv_data, temp_minutes=temp_data, import_rates=import_rates_data, export_rates=export_rates_data, is_initial=False, epochs=20, time_decay_days=30, validation_holdout_hours=48, patience=10)
 
     # Make predictions
     print(f"  Generating predictions with PV + temperature{rates_info} forecasts...")
@@ -1247,6 +1247,15 @@ def _test_real_data_training():
                     energy_kwh = max(0, val_predictions[minute] - val_predictions[prev_minute])
                 val_pred_minutes.append(minute)
                 val_pred_energy.append(dp4(energy_kwh))
+
+        # --- Day 7 total comparison ---
+        actual_day7_total = sum(val_actual_energy)
+        predicted_day7_total = sum(val_pred_energy)
+        error_kwh = predicted_day7_total - actual_day7_total
+        error_pct = (error_kwh / actual_day7_total * 100) if actual_day7_total > 0 else 0.0
+        print(f"  Day 7 actual total   : {actual_day7_total:.3f} kWh")
+        print(f"  Day 7 predicted total: {predicted_day7_total:.3f} kWh")
+        print(f"  Day 7 error          : {error_kwh:+.3f} kWh ({error_pct:+.1f}%)")
 
         # Convert predictions (cumulative kWh) to energy per step (kWh) for plotting
         # predict() returns cumulative format; compute deltas for the chart

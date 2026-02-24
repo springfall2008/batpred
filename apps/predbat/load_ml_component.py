@@ -75,7 +75,9 @@ class LoadMLComponent(ComponentBase):
 
         self.ml_learning_rate = 0.001
         self.ml_epochs_initial = 100
-        self.ml_epochs_update = 20
+        self.ml_epochs_update = 30
+        self.ml_patience_initial = 20
+        self.ml_patience_update = 10
         self.ml_min_days = 1
         self.ml_validation_threshold = 2.0
         self.ml_time_decay_days = 30
@@ -85,7 +87,6 @@ class LoadMLComponent(ComponentBase):
         self.ml_max_days_history = load_ml_max_days_history
         self.load_ml_database_days = load_ml_database_days
         self.ml_validation_holdout_hours = 24
-        self.ml_epochs_patience = 5
 
         # Data state
         self.load_data = None
@@ -864,7 +865,7 @@ class LoadMLComponent(ComponentBase):
             epochs = self.ml_epochs_initial if is_initial else self.ml_epochs_update
             time_decay = min(self.ml_time_decay_days, self.load_data_age_days)
             holdout_hours = self.ml_validation_holdout_hours
-            patience = self.ml_epochs_patience
+            patience = self.ml_patience_initial if is_initial else self.ml_patience_update
         # Lock released - event loop is free during training
 
         try:
