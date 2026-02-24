@@ -1851,7 +1851,7 @@ class Fetch:
                     clean_increment=False,
                     smoothing=True,
                     divide_by=1.0,
-                    scale=self.load_scaling,
+                    scale=1.0,
                 )
 
                 if load_forecast:
@@ -1908,7 +1908,7 @@ class Fetch:
                     clean_increment=False,
                     smoothing=True,
                     divide_by=1.0,
-                    scale=self.load_scaling,
+                    scale=1.0,
                     required_unit="kWh",
                 )
 
