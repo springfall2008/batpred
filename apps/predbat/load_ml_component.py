@@ -84,6 +84,7 @@ class LoadMLComponent(ComponentBase):
         self.ml_max_load_kw = 50.0
         self.ml_max_model_age_hours = 48
         self.ml_weight_decay = 0.01
+        self.ml_dropout_rate = 0.1
         self.ml_max_days_history = load_ml_max_days_history
         self.load_ml_database_days = load_ml_database_days
         self.ml_validation_holdout_hours = 24
@@ -124,7 +125,7 @@ class LoadMLComponent(ComponentBase):
 
     def _init_predictor(self):
         """Initialize or reinitialize the predictor."""
-        self.predictor = LoadPredictor(log_func=self.log, learning_rate=self.ml_learning_rate, max_load_kw=self.ml_max_load_kw, weight_decay=self.ml_weight_decay)
+        self.predictor = LoadPredictor(log_func=self.log, learning_rate=self.ml_learning_rate, max_load_kw=self.ml_max_load_kw, weight_decay=self.ml_weight_decay, dropout_rate=self.ml_dropout_rate)
 
         # Determine model save path
         if self.config_root:
@@ -152,7 +153,7 @@ class LoadMLComponent(ComponentBase):
                 # Model load failed (version mismatch, architecture change, etc.)
                 # Reinitialize predictor to ensure clean state
                 self.log("ML Component: Failed to load model, reinitializing predictor")
-                self.predictor = LoadPredictor(log_func=self.log, learning_rate=self.ml_learning_rate, max_load_kw=self.ml_max_load_kw, weight_decay=self.ml_weight_decay)
+                self.predictor = LoadPredictor(log_func=self.log, learning_rate=self.ml_learning_rate, max_load_kw=self.ml_max_load_kw, weight_decay=self.ml_weight_decay, dropout_rate=self.ml_dropout_rate)
 
     def get_from_incrementing(self, data, index, step, backwards=True):
         """
@@ -469,7 +470,7 @@ class LoadMLComponent(ComponentBase):
                     export_rates_data[minute] = value
 
             self.log("ML Component: Fetched {} load data points, {:.1f} days of history".format(len(load_minutes_new), days_to_fetch))
-            if 0:
+            if 1:
                 with open("ml_load_debug.json", "w") as f:
                     json.dump(
                         {
@@ -986,6 +987,7 @@ class LoadMLComponent(ComponentBase):
                 "power_today_h1": dp2(power_today_h1),
                 "power_today_h8": dp2(power_today_h8),
                 "mae_kwh": round(self.predictor.validation_mae, 4) if self.predictor and self.predictor.validation_mae else None,
+                "bias_kwh": round(self.predictor.validation_bias, 4) if self.predictor and self.predictor.validation_bias is not None else None,
                 "last_trained": self.last_train_time.isoformat() if self.last_train_time else None,
                 "model_age_hours": round(model_age_hours, 1) if model_age_hours else None,
                 "training_days": self.load_data_age_days,

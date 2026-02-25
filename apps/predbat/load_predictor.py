@@ -94,7 +94,7 @@ class LoadPredictor:
     - Placeholder for future exogenous features (temperature, solar)
     """
 
-    def __init__(self, log_func=None, learning_rate=0.001, max_load_kw=23.0, weight_decay=0.01):
+    def __init__(self, log_func=None, learning_rate=0.001, max_load_kw=23.0, weight_decay=0.01, dropout_rate=0.2):
         """
         Initialize the load predictor.
 
@@ -103,11 +103,14 @@ class LoadPredictor:
             learning_rate: Learning rate for Adam optimizer
             max_load_kw: Maximum load in kW for clipping predictions
             weight_decay: L2 regularization coefficient for AdamW (0.0 disables)
+            dropout_rate: Fraction of hidden-layer neurons to drop during training (0.0 disables);
+                          inverted dropout is used so inference requires no scaling
         """
         self.log = log_func if log_func else print
         self.learning_rate = learning_rate
         self.max_load_kw = max_load_kw
         self.weight_decay = weight_decay
+        self.dropout_rate = dropout_rate
 
         # Model weights (initialized on first train)
         self.weights = None
@@ -131,6 +134,7 @@ class LoadPredictor:
         # Training metadata
         self.training_timestamp = None
         self.validation_mae = None
+        self.validation_bias = None  # Signed metric: mean(predicted - actual); + = over-predicting, - = under-predicting
         self.epochs_trained = 0
         self.model_initialized = False
 
@@ -188,18 +192,22 @@ class LoadPredictor:
         self.adam_t = 0
         self.log("ML Predictor: Reset Adam optimizer state for fine-tuning")
 
-    def _forward(self, X):
+    def _forward(self, X, training=False):
         """
         Forward pass through the network.
 
         Args:
             X: Input features (batch_size, TOTAL_FEATURES)
+            training: If True, apply inverted dropout to hidden layers
 
         Returns:
-            Output predictions and list of layer activations for backprop
+            Tuple of (output, activations, pre_activations, dropout_masks).
+            dropout_masks is a list with one entry per hidden layer (None when
+            dropout is disabled or training=False).
         """
         activations = [X]
         pre_activations = []
+        dropout_masks = []
 
         current = X
         for i, (w, b) in enumerate(zip(self.weights, self.biases)):
@@ -209,14 +217,23 @@ class LoadPredictor:
             # Apply ReLU for hidden layers, linear for output
             if i < len(self.weights) - 1:
                 current = relu(z)
+                # Inverted dropout: scale kept neurons by 1/(1-p) so inference
+                # runs without any scaling adjustment
+                if training and self.dropout_rate > 0.0:
+                    mask = (np.random.rand(*current.shape) > self.dropout_rate).astype(np.float32)
+                    mask /= 1.0 - self.dropout_rate
+                    current = current * mask
+                    dropout_masks.append(mask)
+                else:
+                    dropout_masks.append(None)
             else:
                 current = z  # Linear output
 
             activations.append(current)
 
-        return current, activations, pre_activations
+        return current, activations, pre_activations, dropout_masks
 
-    def _backward(self, y_true, activations, pre_activations, sample_weights=None):
+    def _backward(self, y_true, activations, pre_activations, sample_weights=None, dropout_masks=None):
         """
         Backward pass using backpropagation.
 
@@ -225,6 +242,8 @@ class LoadPredictor:
             activations: Layer activations from forward pass
             pre_activations: Pre-activation values from forward pass
             sample_weights: Optional per-sample weights for weighted loss
+            dropout_masks: Optional list of dropout masks from _forward (one per hidden layer);
+                           None entries mean no dropout was applied to that layer
 
         Returns:
             Gradients for weights and biases
@@ -250,6 +269,10 @@ class LoadPredictor:
             if i > 0:
                 # Propagate gradient to previous layer
                 delta = np.dot(delta, self.weights[i].T) * relu_derivative(pre_activations[i - 1])
+                # Apply dropout mask: zero out gradients for dropped neurons
+                # (mask already carries the inverted scaling factor 1/(1-p))
+                if dropout_masks is not None and (i - 1) < len(dropout_masks) and dropout_masks[i - 1] is not None:
+                    delta = delta * dropout_masks[i - 1]
 
         return weight_grads, bias_grads
 
@@ -888,17 +911,24 @@ class LoadPredictor:
 
         # Compute baseline validation before training (shows loaded model performance)
         baseline_mae = None
+        baseline_bias = 0.0
         if not is_initial:
-            baseline_pred, _, _ = self._forward(X_val_norm)
+            baseline_pred, _, _, _ = self._forward(X_val_norm)
             baseline_pred_denorm = self._denormalize_predictions(baseline_pred)
             baseline_mae = np.mean(np.abs(y_val - baseline_pred_denorm))
-            self.log("ML Predictor: Baseline (pre-finetune) val_mae={:.4f} kWh".format(baseline_mae))
+            baseline_bias = float(np.mean(baseline_pred_denorm - y_val))
+            self.log("ML Predictor: Baseline (pre-finetune) val_mae={:.4f} kWh val_bias={:+.4f} kWh".format(baseline_mae, baseline_bias))
 
-        # Training loop - use baseline as initial best for fine-tuning
+        # Training loop - combined metric (val_mae + 0.5 * |val_bias|) used for early stopping
+        # to penalise both absolute error and systematic over/under-prediction
         best_val_loss = baseline_mae if baseline_mae is not None else float("inf")
+        best_val_bias = baseline_bias  # Track actual baseline bias, not 0.0
+        best_combined = (baseline_mae + 0.5 * abs(baseline_bias)) if baseline_mae is not None else float("inf")
         patience_counter = 0
-        best_weights = None
-        best_biases = None
+        # Checkpoint current weights as the starting best so that if no epoch improves
+        # on the baseline, we correctly restore these weights (not the final epoch's weights)
+        best_weights = [w.copy() for w in self.weights]
+        best_biases = [b.copy() for b in self.biases]
 
         # Pre-compute normalised sampling probabilities from time-decay weights.
         # Importance sampling: p(i) ∝ weight(i) so the expected gradient is already
@@ -927,8 +957,8 @@ class LoadPredictor:
                 X_batch = X_epoch[batch_start:batch_end]
                 y_batch = y_epoch[batch_start:batch_end]
 
-                # Forward pass
-                y_pred, activations, pre_activations = self._forward(X_batch)
+                # Forward pass (training=True enables dropout)
+                y_pred, activations, pre_activations, dropout_masks = self._forward(X_batch, training=True)
 
                 # Compute loss for monitoring
                 batch_loss = mse_loss(y_batch, y_pred)
@@ -937,23 +967,30 @@ class LoadPredictor:
 
                 # Backward pass - no additional sample_weights needed because importance
                 # is already encoded in the sampling distribution
-                weight_grads, bias_grads = self._backward(y_batch, activations, pre_activations)
+                weight_grads, bias_grads = self._backward(y_batch, activations, pre_activations, dropout_masks=dropout_masks)
 
                 # Adam update
                 self._adam_update(weight_grads, bias_grads)
 
             epoch_loss /= num_batches
 
-            # Validation
-            val_pred, _, _ = self._forward(X_val_norm)
+            # Validation (training=False: no dropout for deterministic evaluation)
+            val_pred, _, _, _ = self._forward(X_val_norm)
             val_pred_denorm = self._denormalize_predictions(val_pred)
             val_mae = np.mean(np.abs(y_val - val_pred_denorm))
+            # Signed bias: positive = over-predicting, negative = under-predicting
+            val_bias = np.mean(val_pred_denorm - y_val)
+            val_mean_actual = np.mean(y_val) if np.mean(y_val) > 1e-8 else 1e-8
+            val_bias_pct = 100.0 * float(val_bias) / float(val_mean_actual)
+            val_combined = val_mae + 0.5 * abs(float(val_bias))
 
-            self.log("ML Predictor: Epoch {}/{}: train_loss={:.4f} val_mae={:.4f} kWh".format(epoch + 1, epochs, epoch_loss, val_mae))
+            self.log("ML Predictor: Epoch {}/{}: train_loss={:.4f} val_mae={:.4f} kWh val_bias={:+.4f} kWh ({:+.1f}%) combined={:.4f} kWh".format(epoch + 1, epochs, epoch_loss, val_mae, float(val_bias), val_bias_pct, val_combined))
 
-            # Early stopping check with weight checkpointing
-            if val_mae < best_val_loss:
+            # Early stopping check with weight checkpointing (combined = val_mae + 0.5 * |val_bias|)
+            if val_combined < best_combined:
+                best_combined = val_combined
                 best_val_loss = val_mae
+                best_val_bias = val_bias
                 patience_counter = 0
                 # Checkpoint best weights
                 best_weights = [w.copy() for w in self.weights]
@@ -969,13 +1006,18 @@ class LoadPredictor:
         if best_weights is not None and best_biases is not None:
             self.weights = best_weights
             self.biases = best_biases
-            self.log("ML Predictor: Restored best weights from epoch with val_mae={:.4f} kWh".format(best_val_loss))
+            self.log(
+                "ML Predictor: Restored best weights from epoch with val_mae={:.4f} kWh val_bias={:+.4f} kWh ({:+.1f}%)".format(
+                    best_val_loss, float(best_val_bias), 100.0 * float(best_val_bias) / (float(np.mean(y_val)) if float(np.mean(y_val)) > 1e-8 else 1e-8)
+                )
+            )
 
         self.training_timestamp = datetime.now(timezone.utc)
         self.validation_mae = best_val_loss
+        self.validation_bias = float(best_val_bias)
         self.epochs_trained += epochs
 
-        self.log("ML Predictor: Training complete, final val_mae={:.4f} kWh".format(best_val_loss))
+        self.log("ML Predictor: Training complete, final val_mae={:.4f} kWh val_bias={:+.4f} kWh ({:+.1f}%)".format(best_val_loss, float(best_val_bias), 100.0 * float(best_val_bias) / (float(np.mean(y_val)) if float(np.mean(y_val)) > 1e-8 else 1e-8)))
 
         return best_val_loss
 
@@ -1097,9 +1139,9 @@ class LoadPredictor:
             )
             features = self._add_exog_features(features, exog_features)
 
-            # Normalize and forward pass
+            # Normalize and forward pass (inference: no dropout)
             features_norm = self._normalize_features(features.reshape(1, -1), fit=False)
-            pred_norm, _, _ = self._forward(features_norm)
+            pred_norm, _, _, _ = self._forward(features_norm)
             pred_energy = self._denormalize_predictions(pred_norm[0])
 
             # Apply physical constraints
@@ -1170,9 +1212,11 @@ class LoadPredictor:
                 "hidden_sizes": HIDDEN_SIZES,
                 "training_timestamp": self.training_timestamp.isoformat() if self.training_timestamp else None,
                 "validation_mae": float(self.validation_mae) if self.validation_mae else None,
+                "validation_bias": float(self.validation_bias) if self.validation_bias is not None else None,
                 "epochs_trained": self.epochs_trained,
                 "learning_rate": self.learning_rate,
                 "max_load_kw": self.max_load_kw,
+                "dropout_rate": self.dropout_rate,
                 "feature_mean": self.feature_mean.tolist() if self.feature_mean is not None else None,
                 "feature_std": self.feature_std.tolist() if self.feature_std is not None else None,
                 "target_mean": float(self.target_mean) if self.target_mean is not None else None,
@@ -1285,11 +1329,18 @@ class LoadPredictor:
             if metadata.get("training_timestamp"):
                 self.training_timestamp = datetime.fromisoformat(metadata["training_timestamp"])
             self.validation_mae = metadata.get("validation_mae")
+            self.validation_bias = metadata.get("validation_bias", None)
             self.epochs_trained = metadata.get("epochs_trained", 0)
+            # Restore dropout rate; fall back to 0.1 for models saved before this feature
+            self.dropout_rate = metadata.get("dropout_rate", 0.1)
 
             self.model_initialized = True
 
-            self.log("ML Predictor: Model loaded from {} (trained {}, val_mae={:.4f})".format(filepath, self.training_timestamp.strftime("%Y-%m-%d %H:%M") if self.training_timestamp else "unknown", self.validation_mae if self.validation_mae else 0))
+            self.log(
+                "ML Predictor: Model loaded from {} (trained {}, val_mae={:.4f}, val_bias={:+.4f})".format(
+                    filepath, self.training_timestamp.strftime("%Y-%m-%d %H:%M") if self.training_timestamp else "unknown", self.validation_mae if self.validation_mae else 0, self.validation_bias if self.validation_bias is not None else 0
+                )
+            )
             return True
 
         except Exception as e:

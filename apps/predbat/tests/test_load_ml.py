@@ -131,7 +131,7 @@ def _test_forward_pass():
     X = np.random.randn(2, TOTAL_FEATURES).astype(np.float32)
 
     # Forward pass
-    output, activations, pre_activations = predictor._forward(X)
+    output, activations, pre_activations, dropout_masks = predictor._forward(X)
 
     # Check output shape: should be (batch_size, OUTPUT_STEPS)
     assert output.shape == (2, OUTPUT_STEPS), f"Expected output shape (2, {OUTPUT_STEPS}), got {output.shape}"
@@ -154,7 +154,7 @@ def _test_backward_pass():
     X = np.random.randn(4, TOTAL_FEATURES).astype(np.float32)
     y_true = np.random.randn(4, OUTPUT_STEPS).astype(np.float32)
 
-    output, activations, pre_activations = predictor._forward(X)
+    output, activations, pre_activations, dropout_masks = predictor._forward(X)
 
     # Backward pass
     weight_grads, bias_grads = predictor._backward(y_true, activations, pre_activations)
@@ -692,7 +692,7 @@ def _test_training_with_pv():
 
     # Verify the model can accept correct input size (with PV features)
     test_input = np.random.randn(1, TOTAL_FEATURES).astype(np.float32)
-    output, _, _ = predictor._forward(test_input)
+    output, _, _, _ = predictor._forward(test_input)
     assert output.shape == (1, OUTPUT_STEPS), "Model should produce correct output shape with PV features"
 
 
@@ -716,7 +716,7 @@ def _test_training_with_temp():
 
     # Verify the model can accept correct input size (with temperature features)
     test_input = np.random.randn(1, TOTAL_FEATURES).astype(np.float32)
-    output, _, _ = predictor._forward(test_input)
+    output, _, _, _ = predictor._forward(test_input)
     assert output.shape == (1, OUTPUT_STEPS), "Model should produce correct output shape with temperature features"
 
 
@@ -751,8 +751,8 @@ def _test_model_persistence():
         # Test prediction produces same result
         np.random.seed(123)
         test_input = np.random.randn(1, TOTAL_FEATURES).astype(np.float32)
-        out1, _, _ = predictor._forward(test_input)
-        out2, _, _ = predictor2._forward(test_input)
+        out1, _, _, _ = predictor._forward(test_input)
+        out2, _, _, _ = predictor2._forward(test_input)
         assert np.allclose(out1, out2), "Predictions should match after load"
 
     finally:
@@ -1087,7 +1087,7 @@ def _test_real_data_training():
         return
 
     # Initialize predictor with lower learning rate for better convergence
-    predictor = LoadPredictor(learning_rate=0.0005, max_load_kw=20.0)
+    predictor = LoadPredictor(learning_rate=0.001, max_load_kw=20.0, dropout_rate=0.1)
     now_utc = datetime.now(timezone.utc)
     midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
 
@@ -1430,7 +1430,7 @@ def _test_pretrained_model_prediction():
     print(f"  Found saved model at {model_path}")
 
     # Load the input_train_data.json for data to predict on
-    input_train_paths = ["ml_pretrained_debug.json"]
+    input_train_paths = ["input_train_data.json"]
 
     load_data = None
     pv_data = None
@@ -1447,29 +1447,19 @@ def _test_pretrained_model_prediction():
                 train_data = json.load(f)
 
             # Check if new dict format (with timestamps) or old array format
-            if isinstance(train_data, dict):
-                # New format: dict with named keys including timestamps
-                load_data = {int(k): float(v) for k, v in train_data["load_minutes"].items()}
-                pv_data = {int(k): float(v) for k, v in train_data["pv_data"].items()} if train_data.get("pv_data") else {}
-                temp_data = {int(k): float(v) for k, v in train_data["temperature_data"].items()} if train_data.get("temperature_data") else {}
-                import_rates_data = {int(k): float(v) for k, v in train_data["import_rates"].items()} if train_data.get("import_rates") else {}
-                export_rates_data = {int(k): float(v) for k, v in train_data["export_rates"].items()} if train_data.get("export_rates") else {}
-                # Load timestamps
-                if "now_utc" in train_data:
-                    now_utc = parser.parse(train_data["now_utc"])
-                    midnight_utc = parser.parse(train_data["midnight_utc"])
-                    minutes_now = train_data["minutes_now"]
-                    print(f"  Using captured timestamp: {now_utc.strftime('%Y-%m-%d %H:%M:%S')}")
-                    print(f"  Minutes since midnight: {minutes_now}")
-            else:
-                # Old format: [load_minutes_new, age_days, load_minutes_now, pv_data, temperature_data, import_rates, export_rates]
-                if len(train_data) >= 5:
-                    load_data = {int(k): float(v) for k, v in train_data[0].items()}
-                    pv_data = {int(k): float(v) for k, v in train_data[3].items()} if train_data[3] else {}
-                    temp_data = {int(k): float(v) for k, v in train_data[4].items()} if train_data[4] else {}
-                    if len(train_data) >= 7:
-                        import_rates_data = {int(k): float(v) for k, v in train_data[5].items()} if train_data[5] else {}
-                        export_rates_data = {int(k): float(v) for k, v in train_data[6].items()} if train_data[6] else {}
+            # New format: dict with named keys including timestamps
+            load_data = {int(k): float(v) for k, v in train_data["load_minutes"].items()}
+            pv_data = {int(k): float(v) for k, v in train_data["pv_data"].items()} if train_data.get("pv_data") else {}
+            temp_data = {int(k): float(v) for k, v in train_data["temperature_data"].items()} if train_data.get("temperature_data") else {}
+            import_rates_data = {int(k): float(v) for k, v in train_data["import_rates"].items()} if train_data.get("import_rates") else {}
+            export_rates_data = {int(k): float(v) for k, v in train_data["export_rates"].items()} if train_data.get("export_rates") else {}
+            # Load timestamps
+            if "now_utc" in train_data:
+                now_utc = parser.parse(train_data["now_utc"])
+                midnight_utc = parser.parse(train_data["midnight_utc"])
+                minutes_now = train_data["minutes_now"]
+                print(f"  Using captured timestamp: {now_utc.strftime('%Y-%m-%d %H:%M:%S')}")
+                print(f"  Minutes since midnight: {minutes_now}")
 
             print(f"  Loaded data from {json_path}")
             print(f"    Load: {len(load_data)} datapoints")
@@ -1555,9 +1545,8 @@ def _test_pretrained_model_prediction():
 
         for minute in range(0, max_history_minutes, STEP_MINUTES):
             if minute in load_data and (minute + STEP_MINUTES) in load_data:
-                energy_kwh = max(0, load_data[minute] - load_data.get(minute + STEP_MINUTES, load_data[minute]))
                 historical_minutes.append(minute)
-                historical_energy.append(energy_kwh)
+                historical_energy.append(load_data[minute])
 
         # Convert predictions to energy per step
         pred_minutes = []
@@ -1579,7 +1568,7 @@ def _test_pretrained_model_prediction():
         pv_historical_energy = []
         for minute in range(0, max_history_minutes, STEP_MINUTES):
             if minute in pv_data and (minute + STEP_MINUTES) in pv_data:
-                energy_kwh = max(0, pv_data[minute] - pv_data.get(minute + STEP_MINUTES, pv_data[minute]))
+                energy_kwh = pv_data[minute]
                 pv_historical_minutes.append(minute)
                 pv_historical_energy.append(energy_kwh)
 
@@ -1587,7 +1576,7 @@ def _test_pretrained_model_prediction():
         pv_forecast_energy = []
         for minute in range(-prediction_hours * 60, 0, STEP_MINUTES):
             if minute in pv_data and (minute + STEP_MINUTES) in pv_data:
-                energy_kwh = max(0, pv_data[minute] - pv_data.get(minute + STEP_MINUTES, pv_data[minute]))
+                energy_kwh = pv_data[minute]
                 pv_forecast_minutes.append(minute)
                 pv_forecast_energy.append(energy_kwh)
 
