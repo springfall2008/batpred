@@ -982,7 +982,7 @@ class LoadPredictor:
             val_bias = np.mean(val_pred_denorm - y_val)
             val_mean_actual = np.mean(y_val) if np.mean(y_val) > 1e-8 else 1e-8
             val_bias_pct = 100.0 * float(val_bias) / float(val_mean_actual)
-            val_combined = val_mae + 0.5 * abs(float(val_bias))
+            val_combined = val_mae * 0.5 + abs(float(val_bias))
 
             self.log("ML Predictor: Epoch {}/{}: train_loss={:.4f} val_mae={:.4f} kWh val_bias={:+.4f} kWh ({:+.1f}%) combined={:.4f} kWh".format(epoch + 1, epochs, epoch_loss, val_mae, float(val_bias), val_bias_pct, val_combined))
 
@@ -1030,6 +1030,11 @@ class LoadPredictor:
         This shifts the view window so that the "most recent" edge of the slice
         lands at key 0, which is what _create_dataset() expects when computing the
         validation holdout (it uses the lowest-key chunks as validation).
+
+        IMPORTANT: Because the keys are re-indexed, the caller MUST pass an adjusted
+        `now_utc` to train() / _create_dataset() to keep time features correct.
+        Specifically, pass `now_utc - timedelta(minutes=start_minute)` so that
+        chunk key 0 maps to the real wall-clock time of the slice's newest edge.
 
         Args:
             data_dict: Dict of {minute: value} with positive keys = minutes back from now
@@ -1149,10 +1154,12 @@ class LoadPredictor:
         val_mae = None
         for pass_idx, window in enumerate(window_sizes):
             # Slice data to the oldest 'window' minutes.
-            # start_minute is the more-recent edge; after shifting it becomes key 0
-            # so _create_dataset()'s holdout (lowest-key chunks) covers the transition
-            # boundary between this window and the next.
+            # start_minute is the more-recent edge; after re-indexing it becomes key 0.
+            # We pass slice_now = now_utc - start_minute to train() so that the
+            # re-indexed key 0 maps to the correct wall-clock time, keeping
+            # time-of-day and day-of-week features accurate for this slice.
             start_minute = max_minute - window
+            slice_now = now_utc - timedelta(minutes=start_minute)
             load_slice = self._slice_data_dict(load_minutes, start_minute, max_minute)
             pv_slice = self._slice_data_dict(pv_minutes, start_minute, max_minute)
             temp_slice = self._slice_data_dict(temp_minutes, start_minute, max_minute)
@@ -1163,7 +1170,7 @@ class LoadPredictor:
 
             pass_mae = self.train(
                 load_slice,
-                now_utc,
+                slice_now,
                 pv_minutes=pv_slice,
                 temp_minutes=temp_slice,
                 import_rates=import_slice,

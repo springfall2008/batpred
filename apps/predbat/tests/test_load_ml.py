@@ -1228,7 +1228,7 @@ def _test_real_data_training():
         validation_holdout_hours=24,
         patience=10,
         curriculum_window_days=7,
-        curriculum_step_days=7,
+        curriculum_step_days=5,
         max_intermediate_passes=8,
     )
     success = predictor.train_curriculum(

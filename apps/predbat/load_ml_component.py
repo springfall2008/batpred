@@ -474,7 +474,7 @@ class LoadMLComponent(ComponentBase):
                     export_rates_data[minute] = value
 
             self.log("ML Component: Fetched {} load data points, {:.1f} days of history".format(len(load_minutes_new), days_to_fetch))
-            if 1:
+            if 0:
                 with open("ml_load_debug.json", "w") as f:
                     json.dump(
                         {
@@ -641,7 +641,7 @@ class LoadMLComponent(ComponentBase):
         retrain_age_seconds = (self.now_utc - self.last_train_time).total_seconds() if self.last_train_time else RETRAIN_INTERVAL_SECONDS
         should_train = not first and (retrain_age_seconds >= RETRAIN_INTERVAL_SECONDS)
 
-        # Fetch fresh load data periodically (every 15 minutes)
+        # Fetch fresh load data periodically (every N minutes)
         should_fetch = first or should_train or ((seconds % PREDICTION_INTERVAL_SECONDS) == 0)
 
         # Load database
@@ -894,7 +894,7 @@ class LoadMLComponent(ComponentBase):
                     validation_holdout_hours=holdout_hours,
                     patience=patience,
                     curriculum_window_days=window_days,
-                    curriculum_step_days=7,
+                    curriculum_step_days=5,
                     max_intermediate_passes=8,
                 )
             # Even if initial was done we need to do one fine tuned curriculum pass too.
