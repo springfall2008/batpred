@@ -53,6 +53,7 @@ def test_load_ml(my_predbat=None):
         ("model_persistence", _test_model_persistence, "Model save/load with version check"),
         ("cold_start", _test_cold_start, "Cold start with insufficient data"),
         ("fine_tune", _test_fine_tune, "Fine-tune on recent data"),
+        ("curriculum_training", _test_curriculum_training, "Curriculum training with progressive window expansion"),
         ("prediction", _test_prediction, "End-to-end prediction"),
         ("prediction_with_pv", _test_prediction_with_pv, "Prediction with PV forecast data"),
         ("prediction_with_temp", _test_prediction_with_temp, "Prediction with temperature forecast data"),
@@ -801,6 +802,85 @@ def _test_fine_tune():
     assert predictor.model_initialized, "Model should still be initialized after fine-tune attempt"
 
 
+def _test_curriculum_training():
+    """Test train_curriculum() with multiple passes and fallback behaviour"""
+    from load_predictor import LoadPredictor
+
+    now_utc = datetime.now(timezone.utc)
+
+    # ── Happy-path: 28 days of data → 3 intermediate passes + 1 final ────────
+    np.random.seed(42)
+    load_data_28 = _create_synthetic_load_data(n_days=28, now_utc=now_utc)
+
+    predictor = LoadPredictor(learning_rate=0.01)
+    val_mae = predictor.train_curriculum(
+        load_data_28,
+        now_utc,
+        epochs=3,
+        patience=3,
+        curriculum_window_days=7,
+        curriculum_step_days=7,
+    )
+
+    assert val_mae is not None, "train_curriculum should return a float MAE with 28 days of data, got None"
+    assert isinstance(val_mae, float), f"val_mae should be float, got {type(val_mae)}"
+    assert val_mae >= 0, f"val_mae should be non-negative, got {val_mae}"
+    assert predictor.model_initialized, "Model should be initialised after curriculum training"
+
+    # Verify the trained model can produce a prediction
+    midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    predictions = predictor.predict(load_data_28, now_utc, midnight_utc)
+    assert isinstance(predictions, dict), "predict() should return a dict after curriculum training"
+    assert len(predictions) > 0, "predict() should return a non-empty dict"
+    for minute, val in predictions.items():
+        assert val >= 0, f"Prediction at minute {minute} should be non-negative"
+
+    # ── _slice_data_dict correctness ──────────────────────────────────────────
+    # Verify slice + re-index produces expected key range
+    max_minute = max(k for k in load_data_28 if k > 0)
+    day_minutes = 24 * 60  # 1 440
+    sliced = LoadPredictor._slice_data_dict(load_data_28, max_minute - 7 * day_minutes, max_minute)
+    assert 0 in sliced or min(sliced.keys()) == 0, "Slice start should map to key 0"
+    assert max(sliced.keys()) <= 7 * day_minutes, f"Slice end should be at most {7 * day_minutes}, got {max(sliced.keys())}"
+    # All values should be non-negative (same as input)
+    for v in sliced.values():
+        assert v >= 0, f"Sliced value should be non-negative, got {v}"
+
+    # ── max_intermediate_passes cap ──────────────────────────────────────────
+    # 28 days / 7 day step = 3 intermediate windows; cap to 2 means only the
+    # last 2 (14- and 21-day slices) run before the final full-data pass.
+    np.random.seed(0)
+    predictor3 = LoadPredictor(learning_rate=0.01)
+    val_mae3 = predictor3.train_curriculum(
+        load_data_28,
+        now_utc,
+        epochs=2,
+        patience=2,
+        curriculum_window_days=7,
+        curriculum_step_days=7,
+        max_intermediate_passes=2,
+    )
+    assert val_mae3 is None or isinstance(val_mae3, float), f"Capped curriculum should return float or None, got {type(val_mae3)}"
+    assert predictor3.model_initialized, "Model should be initialised after capped curriculum training"
+
+    # ── Fallback: insufficient data (5 days < 2 weeks initial window) ─────────
+    np.random.seed(42)
+    load_data_5 = _create_synthetic_load_data(n_days=5, now_utc=now_utc)
+    predictor2 = LoadPredictor(learning_rate=0.01)
+    val_mae2 = predictor2.train_curriculum(
+        load_data_5,
+        now_utc,
+        epochs=3,
+        patience=3,
+        curriculum_window_days=14,  # Requires 14 days; only 5 days available → fallback
+        curriculum_step_days=7,
+    )
+    # Fallback should complete without crashing and return a MAE or None (if still
+    # insufficient for even a single pass with 5 days of data)
+    assert val_mae2 is None or isinstance(val_mae2, float), f"Fallback should return float or None, got {type(val_mae2)}"
+    assert predictor2.model_initialized, "Model should be initialised after curriculum fallback"
+
+
 def _test_prediction():
     """Test end-to-end prediction"""
     predictor = LoadPredictor(learning_rate=0.01)
@@ -889,13 +969,15 @@ def _test_prediction_with_temp():
 
 def _test_component_run_data_merge():
     """Test LoadMLComponent.run() - mocks _fetch_load_data and verifies:
-    1. Data is populated after the first run.
-    2. On the second run, old in-memory keys are shifted forward by elapsed time before
-       fresh data is merged, so history accumulates correctly over successive fetches.
+    1. Run 1 (first=True): data is fetched and stored, but training is deferred (no save).
+    2. Run 2 (first=False, last_train_time=None): initial training fires because the model
+       has never been trained; old keys are shifted before new data is merged.
+    3. Run 3 (first=False, model just trained): only a fetch+predict cycle runs (no retrain),
+       save_database_history is called again.
     """
     import asyncio
     from datetime import datetime, timezone, timedelta
-    from load_ml_component import LoadMLComponent
+    from load_ml_component import LoadMLComponent, PREDICTION_INTERVAL_SECONDS
     from unittest.mock import AsyncMock
 
     def run_async(coro):
@@ -936,29 +1018,31 @@ def _test_component_run_data_merge():
         def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=False):
             return default
 
-    # First fetch: history covering minutes 0..995 at 0.1 kWh, plus a distant point at minute 2000
+    # Initial fetch: history covering minutes 0..995 at 0.1 kWh, plus a distant point at 2000
     ELAPSED_MINUTES = 30  # Simulate 30 minutes passing between run 1 and run 2
-    SHIFT = ELAPSED_MINUTES  # keys shift forward by this many minutes (ELAPSED is already a multiple of PREDICT_STEP)
+    SHIFT = ELAPSED_MINUTES
 
     fetch_data_1 = {m: 0.1 for m in range(0, 1000, 5)}
     fetch_data_1[2000] = 0.05
 
-    # Second fetch: only recent steps with fresh values (anchored at the new "now")
-    fetch_data_2 = {m: round(0.9 - m * 0.1, 1) for m in range(0, 25, 5)}  # {0:0.9, 5:0.8, 10:0.7, 15:0.6, 20:0.5}
+    # Second fetch (run 2): recent steps only
+    fetch_data_2 = {m: round(0.9 - m * 0.1, 1) for m in range(0, 25, 5)}  # {0:0.9, 5:0.8, ...}
+
+    # Third fetch (run 3): same shape as fetch_data_2
+    fetch_data_3 = {m: 0.2 for m in range(0, 25, 5)}
 
     save_call_count = [0]
+    training_call_count = [0]
 
     async def run_test():
         mock_base = MockBase()
         component = LoadMLComponent(mock_base, load_ml_enable=True)
 
-        # Replace heavy coroutines/methods with lightweight mocks
         async def mock_load_database_history():
-            """No-op: simulate no existing database file on first boot."""
             component.database_history_loaded = True
 
         async def mock_do_training(is_initial):
-            """Simulate a successful training pass."""
+            training_call_count[0] += 1
             component.initial_training_done = True
             component.model_valid = True
             component.model_status = "active"
@@ -985,48 +1069,68 @@ def _test_component_run_data_merge():
         component.save_database_history = mock_save_database_history
 
         # ── Run 1 (first=True, seconds=0) ───────────────────────────────────────
+        # Expect: data fetched and stored, but training deferred → no save, no training.
         component._fetch_load_data = AsyncMock(return_value=(fetch_data_1, 28, 5.0, None, None, None, None))
 
         result = await component.run(seconds=0, first=True)
 
         assert result is True, "First run should return True"
         assert component.load_data is not None, "load_data should be populated after first run"
-        assert component.load_data.get(0) == 0.1, "Expected 0.1 at key 0 after first run (from fetch_data_1)"
-        assert component.load_data.get(2000) == 0.05, "Expected old history point 0.05 at key 2000 after first run"
+        assert component.load_data.get(0) == 0.1, "Expected 0.1 at key 0 after first run"
+        assert component.load_data.get(2000) == 0.05, "Expected history point 0.05 at key 2000"
         assert component.data_ready is True, "data_ready should be True after first run"
-        assert component.database_history_loaded is True, "database_history_loaded should be True after first run"
-        assert save_call_count[0] == 1, f"save_database_history should be called once after first run, called {save_call_count[0]} times"
+        assert component.database_history_loaded is True, "database_history_loaded should be True"
+        assert component.initial_training_done is False, "initial_training_done should still be False after first run"
+        assert save_call_count[0] == 0, f"save_database_history should NOT be called on first run (deferred), called {save_call_count[0]} times"
+        assert training_call_count[0] == 0, f"Training should NOT run on first run, ran {training_call_count[0]} times"
 
-        print("    \u2713 Run 1: data populated and save_database_history called")
+        print("    \u2713 Run 1: data populated, training deferred, no save")
 
-        # ── Advance time by ELAPSED_MINUTES to simulate the gap between fetches ──
+        # ── Advance time by ELAPSED_MINUTES ─────────────────────────────────────
         mock_base.now_utc = mock_base.now_utc + timedelta(minutes=ELAPSED_MINUTES)
 
-        # ── Run 2 (first=False, seconds=1800 - triggers should_fetch but not should_train) ─
+        # ── Run 2 (first=False, seconds=30) ─────────────────────────────────────
+        # last_train_time is None → retrain_age_seconds = RETRAIN_INTERVAL_SECONDS → should_train=True
+        # Expect: shift old keys, merge fresh data, run initial training, save once.
         component._fetch_load_data = AsyncMock(return_value=(fetch_data_2, 7, 3.0, None, None, None, None))
 
-        result = await component.run(seconds=1800, first=False)
+        result = await component.run(seconds=30, first=False)
 
         assert result is True, "Second run should return True"
-        assert component.load_data is not None, "load_data should still be populated after second run"
+        assert training_call_count[0] == 1, f"Initial training should run on second run, ran {training_call_count[0]} times"
+        assert component.initial_training_done is True, "initial_training_done should be True after second run"
+        assert save_call_count[0] == 1, f"save_database_history should be called once after second run, called {save_call_count[0]} times"
 
-        # ── Verify time-shift: old keys must be shifted forward by ELAPSED_MINUTES ──
-        # Key 0 from run 1 → SHIFT; key 500 → 500+SHIFT; key 2000 → 2000+SHIFT
-        assert component.load_data.get(SHIFT) == 0.1, f"Old key 0 from run 1 should now be at key {SHIFT} (shifted by {SHIFT}min), got {component.load_data.get(SHIFT)}"
-        assert component.load_data.get(500 + SHIFT) == 0.1, f"Old key 500 should now be at key {500 + SHIFT}, got {component.load_data.get(500 + SHIFT)}"
-        assert component.load_data.get(2000 + SHIFT) == 0.05, f"Old distant key 2000 should now be at key {2000 + SHIFT}, got {component.load_data.get(2000 + SHIFT)}"
-        # Key 2000 itself should be gone (it was shifted to 2030)
-        assert component.load_data.get(2000) is None, f"Key 2000 should no longer exist after shift (moved to {2000 + SHIFT}), but found {component.load_data.get(2000)}"
+        # ── Verify time-shift: old keys shifted forward by ELAPSED_MINUTES ──
+        assert component.load_data.get(SHIFT) == 0.1, f"Old key 0 → key {SHIFT} after shift, got {component.load_data.get(SHIFT)}"
+        assert component.load_data.get(500 + SHIFT) == 0.1, f"Old key 500 → key {500 + SHIFT}, got {component.load_data.get(500 + SHIFT)}"
+        assert component.load_data.get(2000 + SHIFT) == 0.05, f"Old key 2000 → key {2000 + SHIFT}, got {component.load_data.get(2000 + SHIFT)}"
+        assert component.load_data.get(2000) is None, f"Key 2000 should be gone after shift (moved to {2000 + SHIFT})"
 
-        # ── Verify fresh data occupies its expected keys (anchored to new now) ──
+        # ── Verify fresh data from fetch_data_2 is at the expected keys ──
         for minute, expected_value in fetch_data_2.items():
             actual = component.load_data.get(minute)
-            assert actual == expected_value, f"At minute {minute}: expected {expected_value} (from fetch_data_2) but got {actual}"
+            assert actual == expected_value, f"At minute {minute}: expected {expected_value} (fetch_data_2) but got {actual}"
 
-        # save_database_history should have been called a second time
-        assert save_call_count[0] == 2, f"save_database_history should be called again on second fetch, called {save_call_count[0]} times"
+        print("    \u2713 Run 2: initial training fired, keys shifted, fresh data merged, save called")
 
-        print("    \u2713 Run 2: old keys shifted by elapsed time, fresh data merged at correct positions")
+        # ── Advance time by another ELAPSED_MINUTES ──────────────────────────────
+        mock_base.now_utc = mock_base.now_utc + timedelta(minutes=ELAPSED_MINUTES)
+
+        # ── Run 3 (first=False, seconds=PREDICTION_INTERVAL_SECONDS) ─────────────
+        # last_train_time = 30 min ago (set in mock_do_training to component.now_utc of Run 2).
+        # retrain_age_seconds = 30*60 = 1800 < RETRAIN_INTERVAL_SECONDS (7200) → should_train=False.
+        # seconds % PREDICTION_INTERVAL_SECONDS == 0 → should_fetch=True.
+        # Expect: fetch+predict+save only, no training.
+        component._fetch_load_data = AsyncMock(return_value=(fetch_data_3, 7, 3.0, None, None, None, None))
+
+        result = await component.run(seconds=PREDICTION_INTERVAL_SECONDS, first=False)
+
+        assert result is True, "Third run should return True"
+        assert training_call_count[0] == 1, f"Training should NOT run again on third run (model too fresh), ran {training_call_count[0]} times total"
+        assert save_call_count[0] == 2, f"save_database_history should be called again on third run, called {save_call_count[0]} times"
+
+        print("    \u2713 Run 3: fetch-only cycle (model fresh), save called without retraining")
 
     run_async(run_test())
 
@@ -1111,14 +1215,40 @@ def _test_real_data_training():
     data_source = "real" if (pv_data and len(pv_data) > 100 and temp_data and len(temp_data) > 100) else "synthetic"
     has_rates = import_rates_data and export_rates_data and len(import_rates_data) > 0 and len(export_rates_data) > 0
     rates_info = " + import/export rates" if has_rates else ""
-    print(f"  Training on real load + {data_source} PV/temperature{rates_info} with {len(load_data)} points...")
-    success = predictor.train(load_data, now_utc, pv_minutes=pv_data, temp_minutes=temp_data, import_rates=import_rates_data, export_rates=export_rates_data, is_initial=True, epochs=100, time_decay_days=30, validation_holdout_hours=48, patience=20)
+    print(f"  Training on real load + {data_source} PV/temperature{rates_info} with {len(load_data)} points (curriculum)...")
+    success = predictor.train_curriculum(
+        load_data,
+        now_utc,
+        pv_minutes=pv_data,
+        temp_minutes=temp_data,
+        import_rates=import_rates_data,
+        export_rates=export_rates_data,
+        epochs=100,
+        time_decay_days=30,
+        validation_holdout_hours=24,
+        patience=10,
+        curriculum_window_days=7,
+        curriculum_step_days=7,
+        max_intermediate_passes=8,
+    )
+    success = predictor.train_curriculum(
+        load_data,
+        now_utc,
+        pv_minutes=pv_data,
+        temp_minutes=temp_data,
+        import_rates=import_rates_data,
+        export_rates=export_rates_data,
+        epochs=30,
+        time_decay_days=30,
+        validation_holdout_hours=24,
+        patience=10,
+        curriculum_window_days=7,
+        curriculum_step_days=1,
+        max_intermediate_passes=4,
+    )
 
     assert success, "Training on real data should succeed"
     assert predictor.model_initialized, "Model should be initialized after training"
-
-    success = predictor.train(load_data, now_utc, pv_minutes=pv_data, temp_minutes=temp_data, import_rates=import_rates_data, export_rates=export_rates_data, is_initial=False, epochs=20, time_decay_days=30, validation_holdout_hours=48, patience=10)
-    success = predictor.train(load_data, now_utc, pv_minutes=pv_data, temp_minutes=temp_data, import_rates=import_rates_data, export_rates=export_rates_data, is_initial=False, epochs=20, time_decay_days=30, validation_holdout_hours=48, patience=10)
 
     # Make predictions
     print(f"  Generating predictions with PV + temperature{rates_info} forecasts...")

@@ -92,8 +92,9 @@ def test_component_base_immediate_success(my_predbat):
             # Start component in background
             task = asyncio.create_task(component.start())
 
-            # Wait briefly for it to start
-            await asyncio.sleep(0.01)
+            # Wait briefly for it to start (1.0 → 0.01s real via fast_sleep; must be
+            # shorter than the component's 5s loop sleep → 0.05s real)
+            await asyncio.sleep(1.0)
 
             # Check it started successfully
             assert component.api_started, "Component should have started"
@@ -122,12 +123,13 @@ def test_component_base_backoff_sequence(my_predbat):
             task = asyncio.create_task(component.start())
 
             # First run happens immediately (at second 0)
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(1.0)
             assert component.run_count == 1, f"Expected 1 run after start, got {component.run_count}"
             assert not component.api_started, "Component should not have started yet (failed first attempt)"
 
             # Wait slightly longer - should still be 1 run (waiting for backoff)
-            await asyncio.sleep(0.05)
+            # Backoff = 60s real → 0.6s real via fast_sleep; we wait 0.5 → 0.005s real
+            await asyncio.sleep(0.5)
             assert component.run_count == 1, f"Should still be 1 run (waiting for backoff), got {component.run_count}"
 
             # Stop component before the backoff completes
@@ -153,7 +155,7 @@ def test_component_base_stop_during_backoff(my_predbat):
             task = asyncio.create_task(component.start())
 
             # Wait for first run
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(1.0)
             assert component.run_count == 1, f"Expected 1 run, got {component.run_count}"
             assert not component.api_started, "Component should not have started yet"
 
@@ -182,12 +184,13 @@ def test_component_base_normal_operation_after_start(my_predbat):
             task = asyncio.create_task(component.start())
 
             # Wait for it to start
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(1.0)
             assert component.api_started, "Component should have started"
             initial_run_count = component.run_count
 
             # Wait a bit more - should not run again immediately (only every 60 seconds)
-            await asyncio.sleep(0.05)
+            # Component loop sleep = 5s → 0.05s real; we wait 0.5 → 0.005s real
+            await asyncio.sleep(0.5)
             assert component.run_count == initial_run_count, f"Should not run again immediately, expected {initial_run_count}, got {component.run_count}"
 
             # Stop component
@@ -228,7 +231,7 @@ def test_component_base_exception_handling(my_predbat):
             task = asyncio.create_task(component.start())
 
             # Wait for first run
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(1.0)
             assert component.run_count == 1, f"Expected 1 run, got {component.run_count}"
             assert not component.api_started, "Component should not have started due to exception"
             assert component.count_errors == 1, "Error count should be incremented"

@@ -923,7 +923,7 @@ class LoadPredictor:
         # to penalise both absolute error and systematic over/under-prediction
         best_val_loss = baseline_mae if baseline_mae is not None else float("inf")
         best_val_bias = baseline_bias  # Track actual baseline bias, not 0.0
-        best_combined = (baseline_mae + 0.5 * abs(baseline_bias)) if baseline_mae is not None else float("inf")
+        best_combined = (0.5 * baseline_mae + abs(baseline_bias)) if baseline_mae is not None else float("inf")
         patience_counter = 0
         # Checkpoint current weights as the starting best so that if no epoch improves
         # on the baseline, we correctly restore these weights (not the final epoch's weights)
@@ -1020,6 +1020,190 @@ class LoadPredictor:
         self.log("ML Predictor: Training complete, final val_mae={:.4f} kWh val_bias={:+.4f} kWh ({:+.1f}%)".format(best_val_loss, float(best_val_bias), 100.0 * float(best_val_bias) / (float(np.mean(y_val)) if float(np.mean(y_val)) > 1e-8 else 1e-8)))
 
         return best_val_loss
+
+    @staticmethod
+    def _slice_data_dict(data_dict, start_minute, end_minute):
+        """
+        Slice a {minute: value} data dict to the range [start_minute, end_minute]
+        and re-index so that start_minute becomes key 0.
+
+        This shifts the view window so that the "most recent" edge of the slice
+        lands at key 0, which is what _create_dataset() expects when computing the
+        validation holdout (it uses the lowest-key chunks as validation).
+
+        Args:
+            data_dict: Dict of {minute: value} with positive keys = minutes back from now
+            start_minute: Inclusive lower bound (more-recent edge of the slice)
+            end_minute: Inclusive upper bound (older edge of the slice)
+
+        Returns:
+            New dict with keys shifted so start_minute → 0
+        """
+        if not data_dict:
+            return {}
+        return {k - start_minute: v for k, v in data_dict.items() if start_minute <= k <= end_minute}
+
+    def train_curriculum(
+        self,
+        load_minutes,
+        now_utc,
+        pv_minutes=None,
+        temp_minutes=None,
+        import_rates=None,
+        export_rates=None,
+        epochs=100,
+        time_decay_days=30,
+        patience=5,
+        validation_holdout_hours=24,
+        norm_ema_alpha=0.1,
+        curriculum_window_days=7,
+        curriculum_step_days=7,
+        max_intermediate_passes=0,
+    ):
+        """
+                Train using curriculum learning: progressively expand the training window
+                from the oldest available data forward, using the following 24 hours as the
+                holdout at each intermediate pass.
+
+                Pass structure (example: 4 weeks of data, window=1, step=1):
+                  Pass 1/4: slice = oldest 1 week, holdout = most-recent 24 h of that slice
+                  Pass 2/4: slice = oldest 2 weeks, holdout = most-recent 24 h of that slice
+                  Pass 3/4: slice = oldest 3 weeks, holdout = most-recent 24 h of that slice
+                  Final 4/4: full data, holdout = most-recent validation_holdout_hours
+
+                If there is insufficient data for even one intermediate pass (less than
+        curriculum_window_days days of history), falls back to a single train() call.
+
+                All curriculum sizing parameters are explicit keyword arguments so they can
+                be driven from component config without touching this method.
+
+                Args:
+                    load_minutes: Dict of {minute: energy_kwh} (positive keys = minutes back from now)
+                    now_utc: Current UTC timestamp
+                    pv_minutes: Dict of {minute: energy_kwh} PV generation
+                    temp_minutes: Dict of {minute: temperature_celsius}
+                    import_rates: Dict of {minute: rate_per_kwh}
+                    export_rates: Dict of {minute: rate_per_kwh}
+                    epochs: Epochs per pass
+                    time_decay_days: Time-decay constant for sample weighting
+                    patience: Early-stopping patience per pass
+                    validation_holdout_hours: Holdout window for the final pass
+                    norm_ema_alpha: Normalisation EMA alpha for passes after the first
+                    curriculum_window_days: Initial training window size in days (default 7)
+                    curriculum_step_days: Days added per subsequent pass (default 7)
+                    max_intermediate_passes: Maximum number of intermediate passes to run;
+                                             0 (default) means no limit. When > 0, only the
+                                             last N windows (largest/most-recent slices) are
+                                             used, skipping the very earliest small windows.
+
+                Returns:
+                    Validation MAE from the final pass, or None if all passes failed.
+        """
+        # Build list of positive minute keys to find total history span
+        hist_minutes = [k for k in load_minutes if isinstance(k, int) and k > 0]
+        if not hist_minutes:
+            self.log("Warn: ML Predictor: Curriculum training - no historical data")
+            return None
+
+        max_minute = max(hist_minutes)
+        day_minutes = 24 * 60  # 1 440 minutes per day
+
+        # Normalise optional dicts so we can always pass them to _slice_data_dict
+        pv_minutes = pv_minutes or {}
+        temp_minutes = temp_minutes or {}
+        import_rates = import_rates or {}
+        export_rates = export_rates or {}
+
+        # Intermediate window sizes (minutes): initial window, initial+step, ... up to but
+        # not including the full dataset (the final unrestricted pass covers that).
+        initial_window = curriculum_window_days * day_minutes
+        step_window = curriculum_step_days * day_minutes
+        window_sizes = list(range(initial_window, max_minute, step_window))
+
+        # If a pass cap is set, keep only the last N entries (largest windows, closest to full data)
+        if max_intermediate_passes > 0 and len(window_sizes) > max_intermediate_passes:
+            window_sizes = window_sizes[-max_intermediate_passes:]
+            self.log("ML Predictor: Curriculum training - capped to last {} intermediate passes (starting at window={:.1f} days)".format(max_intermediate_passes, window_sizes[0] / day_minutes))
+
+        if not window_sizes:
+            # Less data than the initial window — skip curriculum, single pass
+            self.log("ML Predictor: Curriculum training - insufficient data ({:.1f} days) for multiple passes, using single-pass training".format(max_minute / day_minutes))
+            return self.train(
+                load_minutes,
+                now_utc,
+                pv_minutes=pv_minutes,
+                temp_minutes=temp_minutes,
+                import_rates=import_rates,
+                export_rates=export_rates,
+                is_initial=True,
+                epochs=epochs,
+                time_decay_days=time_decay_days,
+                patience=patience,
+                validation_holdout_hours=validation_holdout_hours,
+                norm_ema_alpha=norm_ema_alpha,
+            )
+
+        total_passes = len(window_sizes) + 1  # intermediate passes + final full pass
+        self.log("ML Predictor: Curriculum training - {} passes, window {:.1f}→{:.1f} days + final full pass ({:.1f} days)".format(total_passes, window_sizes[0] / day_minutes, window_sizes[-1] / day_minutes, max_minute / day_minutes))
+
+        val_mae = None
+        for pass_idx, window in enumerate(window_sizes):
+            # Slice data to the oldest 'window' minutes.
+            # start_minute is the more-recent edge; after shifting it becomes key 0
+            # so _create_dataset()'s holdout (lowest-key chunks) covers the transition
+            # boundary between this window and the next.
+            start_minute = max_minute - window
+            load_slice = self._slice_data_dict(load_minutes, start_minute, max_minute)
+            pv_slice = self._slice_data_dict(pv_minutes, start_minute, max_minute)
+            temp_slice = self._slice_data_dict(temp_minutes, start_minute, max_minute)
+            import_slice = self._slice_data_dict(import_rates, start_minute, max_minute)
+            export_slice = self._slice_data_dict(export_rates, start_minute, max_minute)
+
+            self.log("ML Predictor: Curriculum pass {}/{}: window={:.1f} days ({} hours of data)".format(pass_idx + 1, total_passes, window / day_minutes, window // 60))
+
+            pass_mae = self.train(
+                load_slice,
+                now_utc,
+                pv_minutes=pv_slice,
+                temp_minutes=temp_slice,
+                import_rates=import_slice,
+                export_rates=export_slice,
+                is_initial=(pass_idx == 0),
+                epochs=epochs,
+                time_decay_days=time_decay_days,
+                patience=patience,
+                validation_holdout_hours=validation_holdout_hours,
+                norm_ema_alpha=norm_ema_alpha,
+            )
+
+            if pass_mae is None:
+                self.log("Warn: ML Predictor: Curriculum pass {}/{} failed (insufficient data or training error) - skipping".format(pass_idx + 1, total_passes))
+            else:
+                val_mae = pass_mae
+                self.log("ML Predictor: Curriculum pass {}/{} complete, val_mae={:.4f} kWh".format(pass_idx + 1, total_passes, val_mae))
+
+        # Final pass: full dataset, standard holdout window
+        self.log("ML Predictor: Curriculum final pass {}/{}: full dataset ({:.1f} days)".format(total_passes, total_passes, max_minute / day_minutes))
+        final_mae = self.train(
+            load_minutes,
+            now_utc,
+            pv_minutes=pv_minutes,
+            temp_minutes=temp_minutes,
+            import_rates=import_rates,
+            export_rates=export_rates,
+            is_initial=False,
+            epochs=epochs,
+            time_decay_days=time_decay_days,
+            patience=patience,
+            validation_holdout_hours=validation_holdout_hours,
+            norm_ema_alpha=norm_ema_alpha,
+        )
+
+        if final_mae is not None:
+            val_mae = final_mae
+
+        self.log("ML Predictor: Curriculum training complete, final val_mae={}".format("{:.4f} kWh".format(val_mae) if val_mae is not None else "None (all passes failed)"))
+        return val_mae
 
     def predict(self, load_minutes, now_utc, midnight_utc, pv_minutes=None, temp_minutes=None, import_rates=None, export_rates=None, exog_features=None):
         """
