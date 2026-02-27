@@ -682,7 +682,7 @@ class LoadMLComponent(ComponentBase):
         elif should_train:
             self.log("ML Component: Starting fine-tune training (2h interval), model age is {} hours".format(retrain_age_seconds / 3600.0))
         elif should_fetch:
-            # If not fetching either than no need to print anything
+            # If not training either then no need to print anything
             self.log("ML Component: No training needed, model age is {} hours".format(dp2(retrain_age_seconds / 3600.0)))
 
         if should_train or should_fetch:
