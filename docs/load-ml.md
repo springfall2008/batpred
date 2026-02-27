@@ -52,7 +52,7 @@ The ML Load Predictor uses a deep multi-layer perceptron (MLP) with the followin
 - **Cosine LR Decay**: Learning rate decays from `lr_max` (0.001) to `lr_min` (0.0001) following a cosine curve over all epochs, reducing oscillation in late training
 - **Huber Loss**: Training uses Huber loss (δ=1.35 in normalised space) instead of MSE, which reduces the influence of individual spike events (e.g. EV charging) on the gradient
 - **Inverted Dropout**: Random neurons are dropped during training (default rate 0.1) to reduce overfitting; no scaling is needed at inference time
-- **Early Stopping**: Training halts when the EMA-smoothed combined metric `val_mae + 0.5 × |val_bias_median|` stops improving. The EMA (α=0.3) smooths out epoch-to-epoch noise caused by stochastic mini-batch sampling. Median bias (rather than mean) is used so a single outlier step cannot prematurely trigger a checkpoint
+- **Early Stopping**: Training halts when the EMA-smoothed combined metric `val_mae * 0.5 + |val_bias_median|` stops improving. The EMA (α=0.3) smooths out epoch-to-epoch noise caused by stochastic mini-batch sampling. Median bias (rather than mean) is used so a single outlier step cannot prematurely trigger a checkpoint
 - **Weighted Samples**: Recent data weighted more heavily (exponential decay over history period)
 - **Curriculum Learning**: Initial training begins with the oldest available data and progressively expands the window, so the model builds up general patterns before seeing the full history
 
