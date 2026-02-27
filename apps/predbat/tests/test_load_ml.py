@@ -178,7 +178,7 @@ def _test_cyclical_features():
 
     # Test midnight (minute 0)
     features = predictor._create_time_features(0, 0)
-    assert len(features) == 4, "Should have 4 time features"
+    assert len(features) == 6, "Should have 6 time features"
     assert abs(features[0] - 0.0) < 1e-6, "Midnight sin should be 0"
     assert abs(features[1] - 1.0) < 1e-6, "Midnight cos should be 1"
 
@@ -196,6 +196,14 @@ def _test_cyclical_features():
     features_mon = predictor._create_time_features(0, 0)
     features_thu = predictor._create_time_features(0, 3)
     assert features_mon[2] != features_thu[2], "Different days should have different encodings"
+
+    # Test seasonality features (day_of_year): day 1 (Jan 1) vs day 183 (~Jul 2)
+    features_jan = predictor._create_time_features(0, 0, day_of_year=1)
+    features_jul = predictor._create_time_features(0, 0, day_of_year=183)
+    assert abs(features_jan[4] - 0.0) < 1e-4, "Jan 1 season_sin should be ~0"
+    assert abs(features_jan[5] - 1.0) < 1e-4, "Jan 1 season_cos should be ~1"
+    assert features_jan[4] != features_jul[4], "Different seasons should have different sin encodings"
+    assert features_jan[5] != features_jul[5], "Different seasons should have different cos encodings"
 
 
 def _test_load_to_energy():
@@ -1225,7 +1233,7 @@ def _test_real_data_training():
         export_rates=export_rates_data,
         epochs=100,
         time_decay_days=30,
-        validation_holdout_hours=24,
+        validation_holdout_hours=48,
         patience=10,
         curriculum_window_days=7,
         curriculum_step_days=5,
@@ -1240,7 +1248,7 @@ def _test_real_data_training():
         export_rates=export_rates_data,
         epochs=30,
         time_decay_days=30,
-        validation_holdout_hours=24,
+        validation_holdout_hours=48,
         patience=10,
         curriculum_window_days=7,
         curriculum_step_days=1,

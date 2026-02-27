@@ -91,7 +91,7 @@ class LoadMLComponent(ComponentBase):
         self.ml_curriculum_step_days = 1  # Days added per subsequent pass
         self.ml_curriculum_max_passes = 4  # Max intermediate passes (0 = no limit)
         self.load_ml_database_days = load_ml_database_days
-        self.ml_validation_holdout_hours = 24
+        self.ml_validation_holdout_hours = 48
 
         # Data state
         self.load_data = None

@@ -26,7 +26,7 @@ The ML Load Prediction component uses a lightweight multi-layer perceptron (MLP)
 - Supports historical PV generation data as an input feature
 - Supports temperature forecast data for improved accuracy
 - Uses historical and future energy import/export rates as input features
-- Deep neural network with 4 hidden layers [512, 256, 128, 64 neurons]
+- Deep neural network with 3 hidden layers [512, 256, 64 neurons]
 - Optimized with He initialization and AdamW weight decay for robust training
 - Automatically trains on historical data (requires at least 1 day, recommended 7+ days; fetches up to `load_ml_max_days_history` days from HA and accumulates up to `load_ml_database_days` days in the on-disk database)
 - Fine-tunes periodically (every 2 hours) using full dataset to adapt to changing patterns
@@ -40,17 +40,19 @@ The ML Load Prediction component uses a lightweight multi-layer perceptron (MLP)
 
 The ML Load Predictor uses a deep multi-layer perceptron (MLP) with the following architecture:
 
-- **Input Layer**: 1444 features (288 load + 288 PV + 288 temperature + 288 import rates + 288 export rates + 4 time features)
-- **Hidden Layers**: 4 layers with [512, 256, 128, 64] neurons using ReLU activation
+- **Input Layer**: 1446 features (288 load + 288 PV + 288 temperature + 288 import rates + 288 export rates + 6 time features)
+- **Hidden Layers**: 3 layers with [512, 256, 64] neurons using ReLU activation
 - **Output Layer**: 1 neuron (predicts next 5-minute step)
-- **Total Parameters**: ~500,000 trainable weights
+- **Total Parameters**: ~889,000 trainable weights
 
 **Optimization Techniques:**
 
 - **He Initialization**: Weights initialized using He/Kaiming method (`std = sqrt(2/fan_in)`), optimized for ReLU activations
 - **AdamW Optimizer**: Adam optimization with weight decay (L2 regularization, default 0.01) to prevent overfitting
+- **Cosine LR Decay**: Learning rate decays from `lr_max` (0.001) to `lr_min` (0.0001) following a cosine curve over all epochs, reducing oscillation in late training
+- **Huber Loss**: Training uses Huber loss (δ=1.35 in normalised space) instead of MSE, which reduces the influence of individual spike events (e.g. EV charging) on the gradient
 - **Inverted Dropout**: Random neurons are dropped during training (default rate 0.1) to reduce overfitting; no scaling is needed at inference time
-- **Early Stopping**: Training halts when the combined metric `val_mae + 0.5 × |val_bias|` stops improving, penalizing both prediction error and systematic over/under-prediction
+- **Early Stopping**: Training halts when the EMA-smoothed combined metric `val_mae + 0.5 × |val_bias_median|` stops improving. The EMA (α=0.3) smooths out epoch-to-epoch noise caused by stochastic mini-batch sampling. Median bias (rather than mean) is used so a single outlier step cannot prematurely trigger a checkpoint
 - **Weighted Samples**: Recent data weighted more heavily (exponential decay over history period)
 - **Curriculum Learning**: Initial training begins with the oldest available data and progressively expands the window, so the model builds up general patterns before seeing the full history
 
@@ -79,10 +81,11 @@ The neural network uses several types of input features to make predictions:
    - Automatically extracted from your configured Octopus Energy tariffs or other rate sources
    - Particularly useful for homes that shift usage to cheaper rate periods
 
-5. **Cyclical Time Features** (4 features)
+5. **Cyclical Time Features** (6 features)
    - Sin/Cos encoding of minute-of-day (captures daily patterns with 5-min precision)
    - Sin/Cos encoding of day-of-week (captures weekly patterns)
-   - These features help the network understand that 23:55 is close to 00:05
+   - Sin/Cos encoding of day-of-year (captures seasonality — winter heating vs summer load profiles)
+   - These features help the network understand that 23:55 is close to 00:05, that Sunday is close to Monday, and that December is close to January
 
 ### Prediction Process
 
@@ -94,7 +97,7 @@ The model uses an autoregressive approach:
 4. Shifts the window forward and repeats
 5. Continues for 576 steps to cover 48 hours
 
-To prevent drift in long-range predictions, the model blends autoregressive predictions with historical daily patterns.
+To prevent drift in long-range predictions, the model blends autoregressive predictions with historical daily patterns. The blending uses **day-of-week-aware patterns**: separate average profiles are maintained for each of the 7 days of the week (Monday–Sunday), so the weekend fallback differs from weekday. If a particular day of the week has insufficient data (fewer than 2 complete observations per slot), the global all-days average is used instead.
 
 ### Training Process
 
@@ -113,7 +116,8 @@ To prevent drift in long-range predictions, the model blends autoregressive pred
 
 - **Weight Decay**: L2 penalty (0.01) applied to network weights to prevent overfitting
 - **Dropout**: 10% of hidden neurons are randomly dropped during each training forward pass (inverted dropout — no scaling needed at inference). Reduces over-reliance on any single neuron.
-- **Early Stopping**: Training halts when the combined metric `val_mae + 0.5 × |val_bias|` stops improving for more than `patience` consecutive epochs, selecting the best checkpoint seen so far. The combined metric penalizes both absolute prediction error (MAE) and systematic bias (mean over/under-prediction), so the model is prevented from trading one for the other.
+- **Huber Loss**: The training loss function transitions from quadratic (for small errors) to linear (for large errors) at a threshold of δ=1.35 in normalised space. This makes gradient updates robust to spike events such as EV charging or tumble-dryer loads without requiring them to be filtered out of training data.
+- **Early Stopping**: Training halts when the EMA-smoothed combined metric `val_mae + 0.5 × |val_bias_median|` stops improving for more than `patience` consecutive epochs, selecting the best checkpoint seen so far. The EMA smoothing (α=0.3) prevents a single noisy epoch from triggering an early stop or a premature checkpoint. Median bias is used so that a single outlier sample in the validation set cannot dominate the stopping decision.
 - **Time-Weighted Samples**: Recent data has higher importance (7-day exponential decay constant)
     - Today's data: 100% weight
     - N days old: 37% weight (e^-1)
@@ -321,9 +325,12 @@ Check the Predbat logs for training progress:
 ```text
 ML Component: Starting initial training
 ML Predictor: Curriculum training - 4 passes, window 7.0→10.0 days + final full pass (full period)
-ML Predictor: Training complete, final val_mae=0.3245 kWh
-ML Component: Initial training completed, validation MAE=0.3245 kWh
+ML Predictor: Training complete, final val_mae=0.0051 kWh val_bias=+0.0010 kWh (+2.0%)
+ML Predictor: AR rollout over holdout: ar_mae=0.0135 kWh ar_bias=-0.0030 kWh (-6.2%) [drift vs teacher-forced: +0.0031 kWh]
+ML Component: Initial training completed, validation MAE=0.0051 kWh
 ```
+
+The **AR rollout** line shows how the model performs when predictions feed back into subsequent steps (autoregressive mode, as used in real predictions), compared to the teacher-forced validation MAE. A small drift (< 3× teacher-forced MAE) indicates the model handles its own outputs well.
 
 ### Step 4: Monitor Predictions
 
@@ -476,7 +483,7 @@ Two files are saved to your Predbat config directory:
 
 This file contains:
 
-- **Network weights and biases**: All 4 hidden layers plus output layer
+- **Network weights and biases**: All 3 hidden layers plus output layer
 - **Optimizer state**: Adam momentum terms for continuing fine-tuning
 - **Normalization parameters**: Feature and target mean/standard deviation (updated via EMA each fine-tune cycle to track distribution drift)
 - **Training metadata**: Epochs trained, timestamp, model version, architecture details
@@ -520,6 +527,9 @@ The following internal parameters are set in `load_ml_component.py` and are not 
 | `ml_max_model_age_hours` | 48 | Hours after which a model is considered stale and requires retraining |
 | `ml_time_decay_days` | 30 | Exponential time-decay constant for sample weighting (older samples get lower weight) |
 | `ml_validation_holdout_hours` | 24 | Hours of most-recent data held out for validation (not used in training) |
+| `ml_huber_delta` | 1.35 | Huber loss transition point in normalised target units; errors below this are penalised quadratically, above it linearly. Lower values make training more robust to spikes; higher values bring it closer to MSE |
+| `ml_ema_smoothing_alpha` | 0.3 | EMA alpha applied to the early-stopping metric across epochs (0 = no smoothing, 1 = no memory). Higher values react faster to per-epoch changes but are noisier |
+| `ml_lr_decay` | `"cosine"` | Learning rate schedule: `"cosine"` decays from `ml_learning_rate` to 10% of it over all epochs; `None` keeps it constant |
 
 ---
 

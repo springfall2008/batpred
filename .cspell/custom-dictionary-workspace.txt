@@ -377,6 +377,7 @@ xload
 xticks
 yaxis
 yaxistooltip
+yday
 ylabel
 yuanzhi
 zappi

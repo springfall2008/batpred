@@ -13,11 +13,11 @@
 
 """NumPy-only MLP neural network for household load forecasting.
 
-Implements a 4-layer feed-forward network (96-48-32-16) trained via
-Adam optimiser with autoregressive prediction for 48-hour load forecasts.
-Operates at CHUNK_MINUTES resolution (aggregated from 5-min raw data)
-to reduce noise. Uses historical load, PV generation, temperature, and
-energy rates as input features with cyclical time encoding.
+Implements a 3-hidden-layer feed-forward network ([512, 256, 64]) trained via
+AdamW optimiser with cosine LR decay and Huber loss. Uses autoregressive
+prediction for 48-hour load forecasts at CHUNK_MINUTES (5-min) resolution.
+Inputs: historical load, PV generation, temperature, import/export rates,
+and cyclical time features (minute-of-day, day-of-week, day-of-year).
 """
 
 import numpy as np
@@ -26,20 +26,20 @@ import os
 from datetime import datetime, timezone, timedelta
 
 # Architecture constants (not user-configurable)
-MODEL_VERSION = 9  # Bumped to V9 for new longer history and improved architecture
+MODEL_VERSION = 10  # Bumped to V10 for day-of-year seasonality features and network layer changes
 STEP_MINUTES = 5  # Base data resolution in minutes (raw sensor granularity)
 CHUNK_MINUTES = 5  # Prediction resolution: must be a multiple of STEP_MINUTES
 CHUNK_STEPS = CHUNK_MINUTES // STEP_MINUTES  # 5-min steps aggregated per chunk (3)
 LOOKBACK_STEPS = 24 * (60 // CHUNK_MINUTES)  # 24 hours at CHUNK_MINUTES resolution
 OUTPUT_STEPS = 1  # Single step output (autoregressive)
 PREDICT_HORIZON = 48 * (60 // CHUNK_MINUTES)  # 48 hours of predictions (96 * 30 min)
-HIDDEN_SIZES = [512, 256, 128, 64]  # Deeper network with more capacity
+HIDDEN_SIZES = [512, 256, 64]  # Deeper network with more capacity
 BATCH_SIZE = 128  # Batch size
 MAX_BATCHES_PER_EPOCH = 200  # Cap on SGD batches per epoch - with importance sampling this keeps training
 # cost constant regardless of how many days of history are loaded
 
 # Feature constants
-NUM_TIME_FEATURES = 4  # sin/cos minute-of-day, sin/cos day-of-week (for TARGET time)
+NUM_TIME_FEATURES = 6  # sin/cos minute-of-day, sin/cos day-of-week, sin/cos day-of-year (for TARGET time)
 NUM_LOAD_FEATURES = LOOKBACK_STEPS  # Historical load values
 NUM_PV_FEATURES = LOOKBACK_STEPS  # Historical PV generation values
 NUM_TEMP_FEATURES = LOOKBACK_STEPS  # Historical temperature values
@@ -72,16 +72,6 @@ def huber_loss_derivative(y_true, y_pred, delta=1.0):
     error = y_pred - y_true
     abs_error = np.abs(error)
     return np.where(abs_error <= delta, error, delta * np.sign(error)) / y_true.shape[0]
-
-
-def mse_loss(y_true, y_pred):
-    """Mean Squared Error loss"""
-    return np.mean((y_true - y_pred) ** 2)
-
-
-def mse_loss_derivative(y_true, y_pred):
-    """Derivative of MSE loss"""
-    return 2 * (y_pred - y_true) / y_true.shape[0]
 
 
 class LoadPredictor:
@@ -233,7 +223,7 @@ class LoadPredictor:
 
         return current, activations, pre_activations, dropout_masks
 
-    def _backward(self, y_true, activations, pre_activations, sample_weights=None, dropout_masks=None):
+    def _backward(self, y_true, activations, pre_activations, sample_weights=None, dropout_masks=None, huber_delta=1.35):
         """
         Backward pass using backpropagation.
 
@@ -244,14 +234,14 @@ class LoadPredictor:
             sample_weights: Optional per-sample weights for weighted loss
             dropout_masks: Optional list of dropout masks from _forward (one per hidden layer);
                            None entries mean no dropout was applied to that layer
+            huber_delta: Huber loss transition point in normalised target units (default 1.35;
+                         errors below this are quadratic, above are linear)
 
         Returns:
             Gradients for weights and biases
         """
-        batch_size = y_true.shape[0]
-
-        # Output layer gradient (MSE loss derivative)
-        delta = mse_loss_derivative(y_true, activations[-1])
+        # Output layer gradient (Huber loss derivative - robust to outlier spikes)
+        delta = huber_loss_derivative(y_true, activations[-1], delta=huber_delta)
 
         # Apply sample weights to gradient if provided
         if sample_weights is not None:
@@ -276,7 +266,7 @@ class LoadPredictor:
 
         return weight_grads, bias_grads
 
-    def _adam_update(self, weight_grads, bias_grads, beta1=0.9, beta2=0.999, epsilon=1e-8):
+    def _adam_update(self, weight_grads, bias_grads, beta1=0.9, beta2=0.999, epsilon=1e-8, lr=None):
         """
         Update weights using Adam optimizer with optional weight decay (AdamW).
 
@@ -286,8 +276,10 @@ class LoadPredictor:
             beta1: Exponential decay rate for first moment
             beta2: Exponential decay rate for second moment
             epsilon: Small constant for numerical stability
+            lr: Learning rate override (if None, uses self.learning_rate)
         """
         self.adam_t += 1
+        effective_lr = lr if lr is not None else self.learning_rate
 
         for i in range(len(self.weights)):
             # Update momentum for weights
@@ -299,11 +291,11 @@ class LoadPredictor:
             v_hat = self.v_weights[i] / (1 - beta2**self.adam_t)
 
             # Update weights with Adam step
-            self.weights[i] -= self.learning_rate * m_hat / (np.sqrt(v_hat) + epsilon)
+            self.weights[i] -= effective_lr * m_hat / (np.sqrt(v_hat) + epsilon)
 
             # Apply weight decay (AdamW-style L2 regularization)
             if self.weight_decay > 0:
-                self.weights[i] *= 1 - self.learning_rate * self.weight_decay
+                self.weights[i] *= 1 - effective_lr * self.weight_decay
 
             # Update momentum for biases
             self.m_biases[i] = beta1 * self.m_biases[i] + (1 - beta1) * bias_grads[i]
@@ -314,18 +306,19 @@ class LoadPredictor:
             v_hat = self.v_biases[i] / (1 - beta2**self.adam_t)
 
             # Update biases (no weight decay on biases)
-            self.biases[i] -= self.learning_rate * m_hat / (np.sqrt(v_hat) + epsilon)
+            self.biases[i] -= effective_lr * m_hat / (np.sqrt(v_hat) + epsilon)
 
-    def _create_time_features(self, minute_of_day, day_of_week):
+    def _create_time_features(self, minute_of_day, day_of_week, day_of_year=1):
         """
         Create cyclical time features.
 
         Args:
             minute_of_day: Minutes since midnight (0-1439)
             day_of_week: Day of week (0-6, Monday=0)
+            day_of_year: Day of year (1-365/366)
 
         Returns:
-            Array of 4 time features: sin/cos minute, sin/cos day
+            Array of 6 time features: sin/cos minute, sin/cos day-of-week, sin/cos day-of-year
         """
         # Cyclical encoding for minute of day
         minute_sin = np.sin(2 * np.pi * minute_of_day / 1440)
@@ -335,7 +328,11 @@ class LoadPredictor:
         day_sin = np.sin(2 * np.pi * day_of_week / 7)
         day_cos = np.cos(2 * np.pi * day_of_week / 7)
 
-        return np.array([minute_sin, minute_cos, day_sin, day_cos], dtype=np.float32)
+        # Cyclical encoding for day of year (seasonality)
+        season_sin = np.sin(2 * np.pi * (day_of_year - 1) / 365)
+        season_cos = np.cos(2 * np.pi * (day_of_year - 1) / 365)
+
+        return np.array([minute_sin, minute_cos, day_sin, day_cos, season_sin, season_cos], dtype=np.float32)
 
     def _add_exog_features(self, X, exog_dict=None):
         """
@@ -486,54 +483,74 @@ class LoadPredictor:
 
         return chunked
 
-    def _compute_daily_pattern(self, energy_per_step, smoothing_window=3):
+    def _compute_daily_pattern(self, energy_per_step, now_utc, smoothing_window=3, min_obs_per_slot=2):
         """
-        Compute average daily pattern from historical data at CHUNK_MINUTES resolution.
+        Compute per-day-of-week daily patterns from historical data at CHUNK_MINUTES resolution.
 
-        Groups 5-min energy values by CHUNK_MINUTES slot of day and averages across
-        days. The result is scaled to represent total energy per CHUNK_MINUTES slot.
-        Used to blend with predictions to prevent autoregressive drift.
+        Maintains 7 separate patterns (Monday=0 … Sunday=6) so weekday vs weekend
+        load profiles are captured independently. Falls back to the global (all-days)
+        pattern for any DOW that has fewer than min_obs_per_slot observations per slot,
+        which avoids noisy estimates from sparse data.
 
         Args:
             energy_per_step: Dict of {minute: energy_kwh} at STEP_MINUTES resolution
+                             (positive keys = minutes back from now_utc)
+            now_utc: Current UTC timestamp, used to map minute offsets to real datetimes
             smoothing_window: Number of adjacent slots to smooth over
+            min_obs_per_slot: Minimum observations per slot for a DOW pattern to be
+                              used; DOWs below this threshold fall back to the global pattern
 
         Returns:
-            Dict of {minute_of_day_slot: avg_energy_per_chunk} keyed at CHUNK_MINUTES intervals
+            Dict of {day_of_week: {minute_of_day_slot: avg_energy_per_chunk}}
+            where day_of_week 0=Monday … 6=Sunday.
+            The global fallback pattern is stored under key None.
         """
-        # Accumulate 5-min energy values into CHUNK_MINUTES slots of the day
-        by_slot = {}
+        default_energy = 0.01 * CHUNK_STEPS  # ~120W baseline per chunk
+        slots_in_day = 24 * 60 // CHUNK_MINUTES
+
+        # Accumulate per-DOW slot observations
+        # by_dow_slot[dow][slot] = [energy, ...]
+        by_dow_slot = {dow: {} for dow in range(7)}
+        by_slot_global = {}  # Global fallback (all DOWs combined)
+
         for minute, energy in energy_per_step.items():
             if minute < 0:
                 continue  # Skip future data
-            minute_of_day = minute % (24 * 60)  # 0-1439
+            actual_time = now_utc - timedelta(minutes=minute)
+            dow = actual_time.weekday()
+            minute_of_day = actual_time.hour * 60 + actual_time.minute
             slot = (minute_of_day // CHUNK_MINUTES) * CHUNK_MINUTES
-            if slot not in by_slot:
-                by_slot[slot] = []
-            by_slot[slot].append(energy)
 
-        # Mean 5-min value per slot * CHUNK_STEPS = expected chunk energy
-        default_energy = 0.01 * CHUNK_STEPS  # Fallback: ~120W average for one chunk
-        pattern = {}
-        slots_in_day = 24 * 60 // CHUNK_MINUTES
-        for slot_idx in range(slots_in_day):
-            slot = slot_idx * CHUNK_MINUTES
-            if slot in by_slot and len(by_slot[slot]) > 0:
-                pattern[slot] = float(np.mean(by_slot[slot])) * CHUNK_STEPS
+            by_dow_slot[dow].setdefault(slot, []).append(energy)
+            by_slot_global.setdefault(slot, []).append(energy)
+
+        def _build_smoothed_pattern(by_slot):
+            """Average, scale, and smooth a {slot: [values]} accumulator."""
+            raw = {}
+            for slot_idx in range(slots_in_day):
+                slot = slot_idx * CHUNK_MINUTES
+                vals = by_slot.get(slot, [])
+                raw[slot] = float(np.mean(vals)) * CHUNK_STEPS if vals else default_energy
+            slots = sorted(raw.keys())
+            smoothed = {}
+            for i, slot in enumerate(slots):
+                window_vals = [raw[slots[(i + off) % len(slots)]] for off in range(-smoothing_window // 2, smoothing_window // 2 + 1)]
+                smoothed[slot] = float(np.mean(window_vals))
+            return smoothed
+
+        global_pattern = _build_smoothed_pattern(by_slot_global)
+
+        patterns = {None: global_pattern}  # Fallback always available
+        for dow in range(7):
+            slot_data = by_dow_slot[dow]
+            # Use DOW-specific pattern only if every slot has enough observations
+            obs_counts = [len(slot_data.get(slot_idx * CHUNK_MINUTES, [])) for slot_idx in range(slots_in_day)]
+            if obs_counts and min(obs_counts) >= min_obs_per_slot:
+                patterns[dow] = _build_smoothed_pattern(slot_data)
             else:
-                pattern[slot] = default_energy
+                patterns[dow] = global_pattern  # Fall back to global
 
-        # Apply smoothing to reduce noise
-        slots = sorted(pattern.keys())
-        smoothed = {}
-        for i, slot in enumerate(slots):
-            values = []
-            for offset in range(-smoothing_window // 2, smoothing_window // 2 + 1):
-                idx = (i + offset) % len(slots)
-                values.append(pattern[slots[idx]])
-            smoothed[slot] = float(np.mean(values))
-
-        return smoothed
+        return patterns
 
     def _create_dataset(self, load_minutes, now_utc, pv_minutes=None, temp_minutes=None, import_rates=None, export_rates=None, is_finetune=False, time_decay_days=7, validation_holdout_hours=24):
         """
@@ -631,7 +648,8 @@ class LoadPredictor:
             target_time = now_utc - timedelta(minutes=alignment_offset + target_chunk_idx * CHUNK_MINUTES)
             minute_of_day = target_time.hour * 60 + target_time.minute
             day_of_week = target_time.weekday()
-            time_features = self._create_time_features(minute_of_day, day_of_week)
+            day_of_year = target_time.timetuple().tm_yday
+            time_features = self._create_time_features(minute_of_day, day_of_week, day_of_year)
 
             features = np.concatenate(
                 [
@@ -680,6 +698,115 @@ class LoadPredictor:
         y_val = np.array(y_val_list, dtype=np.float32) if y_val_list else None
 
         return X_train, y_train, train_weights, X_val, y_val
+
+    def _ar_rollout_diagnostic(self, load_minutes, now_utc, pv_minutes=None, temp_minutes=None, import_rates=None, export_rates=None, validation_holdout_hours=24):
+        """
+        Run an autoregressive rollout over the validation holdout period.
+
+        Unlike teacher-forced validation (which evaluates each step with real context),
+        this feeds each predicted chunk back as the next step's context, exposing
+        how compounding errors accumulate over the holdout window.
+
+        Args:
+            load_minutes: Dict of {minute: kwh_per_step} historical load data
+            now_utc: Current UTC timestamp used during training
+            pv_minutes: Dict of {minute: kwh_per_step} PV data
+            temp_minutes: Dict of {minute: celsius} temperature data
+            import_rates: Dict of {minute: rate} import tariff data
+            export_rates: Dict of {minute: rate} export tariff data
+            validation_holdout_hours: Size of the holdout window (must match training)
+
+        Returns:
+            (ar_mae, ar_bias) in kWh per chunk, or (None, None) on failure.
+        """
+        if not self.model_initialized or self.weights is None:
+            return None, None
+
+        energy_per_step = load_minutes
+        pv_energy_per_step = pv_minutes if pv_minutes else {}
+        temp_values = temp_minutes if temp_minutes else {}
+        import_rate_values = import_rates if import_rates else {}
+        export_rate_values = export_rates if export_rates else {}
+
+        if not energy_per_step:
+            return None, None
+
+        # Chunk data identically to _create_dataset
+        chunked_energy, alignment_offset = self._chunk_energy_to_aligned(energy_per_step, now_utc)
+        chunked_pv = self._chunk_energy_to_aligned(pv_energy_per_step, now_utc)[0] if pv_energy_per_step else {}
+        chunked_temp = self._chunk_instantaneous_to_aligned(temp_values, alignment_offset)
+        chunked_import = self._chunk_instantaneous_to_aligned(import_rate_values, alignment_offset)
+        chunked_export = self._chunk_instantaneous_to_aligned(export_rate_values, alignment_offset)
+
+        if not chunked_energy:
+            return None, None
+
+        # Holdout window: chunks 0 .. validation_end_chunk-1 (most-recent = 0)
+        validation_end_chunk = validation_holdout_hours * 60 // CHUNK_MINUTES
+
+        # We need LOOKBACK_STEPS real chunks immediately before the holdout as context
+        context_start = validation_end_chunk  # chunk just before the holdout starts
+        if (context_start + LOOKBACK_STEPS - 1) not in chunked_energy:
+            return None, None
+
+        # Initialise lookback buffers from real data (index 0 = most-recent context)
+        ar_load = [chunked_energy.get(context_start + lb, 0.0) for lb in range(LOOKBACK_STEPS)]
+        ar_pv = [chunked_pv.get(context_start + lb, 0.0) for lb in range(LOOKBACK_STEPS)]
+        ar_temp = [chunked_temp.get(context_start + lb, 0.0) for lb in range(LOOKBACK_STEPS)]
+        ar_imp = [chunked_import.get(context_start + lb, 0.0) for lb in range(LOOKBACK_STEPS)]
+        ar_exp = [chunked_export.get(context_start + lb, 0.0) for lb in range(LOOKBACK_STEPS)]
+
+        errors = []
+        biases = []
+
+        # Step from oldest holdout chunk down to newest (autoregressive order)
+        for step in range(validation_end_chunk):
+            target_chunk_idx = validation_end_chunk - 1 - step
+            if target_chunk_idx not in chunked_energy:
+                continue
+
+            true_value = chunked_energy[target_chunk_idx]
+
+            target_time = now_utc - timedelta(minutes=alignment_offset + target_chunk_idx * CHUNK_MINUTES)
+            minute_of_day = target_time.hour * 60 + target_time.minute
+            day_of_week = target_time.weekday()
+            day_of_year = target_time.timetuple().tm_yday
+            time_features = self._create_time_features(minute_of_day, day_of_week, day_of_year)
+
+            features = np.concatenate(
+                [
+                    np.array(ar_load, dtype=np.float32),
+                    np.array(ar_pv, dtype=np.float32),
+                    np.array(ar_temp, dtype=np.float32),
+                    np.array(ar_imp, dtype=np.float32),
+                    np.array(ar_exp, dtype=np.float32),
+                    time_features,
+                ]
+            )
+
+            features_norm = self._normalize_features(features.reshape(1, -1), fit=False)
+            pred_norm, _, _, _ = self._forward(features_norm, training=False)
+            pred_value = float(self._clip_predictions(self._denormalize_predictions(pred_norm[0]))[0])
+
+            errors.append(abs(pred_value - true_value))
+            biases.append(pred_value - true_value)
+
+            # Feed predicted load back; use real exogenous values (they are known history)
+            ar_load.insert(0, pred_value)
+            ar_load.pop()
+            ar_pv.insert(0, chunked_pv.get(target_chunk_idx, 0.0))
+            ar_pv.pop()
+            ar_temp.insert(0, chunked_temp.get(target_chunk_idx, 0.0))
+            ar_temp.pop()
+            ar_imp.insert(0, chunked_import.get(target_chunk_idx, 0.0))
+            ar_imp.pop()
+            ar_exp.insert(0, chunked_export.get(target_chunk_idx, 0.0))
+            ar_exp.pop()
+
+        if not errors:
+            return None, None
+
+        return float(np.mean(errors)), float(np.mean(biases))
 
     def _get_min_std_array(self, n_features):
         """
@@ -839,7 +966,24 @@ class LoadPredictor:
 
         return predictions
 
-    def train(self, load_minutes, now_utc, pv_minutes=None, temp_minutes=None, import_rates=None, export_rates=None, is_initial=True, epochs=100, time_decay_days=7, patience=5, validation_holdout_hours=24, norm_ema_alpha=0.1):
+    def train(
+        self,
+        load_minutes,
+        now_utc,
+        pv_minutes=None,
+        temp_minutes=None,
+        import_rates=None,
+        export_rates=None,
+        is_initial=True,
+        epochs=100,
+        time_decay_days=7,
+        patience=5,
+        validation_holdout_hours=24,
+        norm_ema_alpha=0.1,
+        lr_decay="cosine",
+        ema_smoothing_alpha=0.3,
+        huber_delta=1.35,
+    ):
         """
         Train or fine-tune the model.
 
@@ -859,6 +1003,10 @@ class LoadPredictor:
             patience: Early stopping patience
             validation_holdout_hours: Hours of most recent data to hold out for validation
             norm_ema_alpha: EMA alpha for normalization drift tracking during fine-tuning (0=frozen, 0.1=slow drift)
+            lr_decay: Learning rate schedule - "cosine" decays from lr to 0.1*lr over all epochs, None keeps lr constant
+            huber_delta: Huber loss transition point in normalised target units (default 1.35; errors within
+                         this threshold are penalised quadratically, beyond it linearly)
+            ema_smoothing_alpha: EMA alpha for smoothing the early-stopping metric across epochs (0=no smoothing, 0.3=moderate)
 
         Returns:
             Validation MAE or None if training failed
@@ -941,7 +1089,20 @@ class LoadPredictor:
         if len(X_train_norm) > MAX_BATCHES_PER_EPOCH * BATCH_SIZE:
             self.log("ML Predictor: Large dataset ({} samples) - using importance sampling ({} samples/epoch, {} batches)".format(len(X_train_norm), n_epoch_samples, n_epoch_samples // BATCH_SIZE))
 
+        # Cosine LR schedule bounds
+        lr_max = self.learning_rate
+        lr_min = 0.1 * self.learning_rate
+
+        # EMA accumulator for early-stopping metric (seeds on first epoch)
+        ema_combined = None
+
         for epoch in range(epochs):
+            # Cosine LR decay: lr_t decays from lr_max at epoch 0 to lr_min at the final epoch
+            if lr_decay == "cosine":
+                lr_t = lr_min + 0.5 * (lr_max - lr_min) * (1.0 + np.cos(np.pi * epoch / max(epochs - 1, 1)))
+            else:
+                lr_t = lr_max
+
             # Draw samples with probability proportional to time-decay weights (with replacement).
             # Recent data is sampled more often; old data still contributes but rarely.
             sampled_indices = np.random.choice(len(X_train_norm), size=n_epoch_samples, replace=True, p=sampling_probs)
@@ -960,17 +1121,17 @@ class LoadPredictor:
                 # Forward pass (training=True enables dropout)
                 y_pred, activations, pre_activations, dropout_masks = self._forward(X_batch, training=True)
 
-                # Compute loss for monitoring
-                batch_loss = mse_loss(y_batch, y_pred)
+                # Compute Huber loss for monitoring (in normalised space)
+                batch_loss = huber_loss(y_batch, y_pred, delta=huber_delta)
                 epoch_loss += batch_loss
                 num_batches += 1
 
                 # Backward pass - no additional sample_weights needed because importance
                 # is already encoded in the sampling distribution
-                weight_grads, bias_grads = self._backward(y_batch, activations, pre_activations, dropout_masks=dropout_masks)
+                weight_grads, bias_grads = self._backward(y_batch, activations, pre_activations, dropout_masks=dropout_masks, huber_delta=huber_delta)
 
-                # Adam update
-                self._adam_update(weight_grads, bias_grads)
+                # Adam update with current cosine LR
+                self._adam_update(weight_grads, bias_grads, lr=lr_t)
 
             epoch_loss /= num_batches
 
@@ -978,19 +1139,35 @@ class LoadPredictor:
             val_pred, _, _, _ = self._forward(X_val_norm)
             val_pred_denorm = self._denormalize_predictions(val_pred)
             val_mae = np.mean(np.abs(y_val - val_pred_denorm))
-            # Signed bias: positive = over-predicting, negative = under-predicting
-            val_bias = np.mean(val_pred_denorm - y_val)
+            # Median bias for early stopping: more robust than mean when validation set
+            # contains a few outlier samples (e.g. a single EV charging spike).
+            val_bias_median = float(np.median(val_pred_denorm - y_val))
+            # Mean bias for human-readable logging
+            val_bias_mean = float(np.mean(val_pred_denorm - y_val))
             val_mean_actual = np.mean(y_val) if np.mean(y_val) > 1e-8 else 1e-8
-            val_bias_pct = 100.0 * float(val_bias) / float(val_mean_actual)
-            val_combined = val_mae * 0.5 + abs(float(val_bias))
+            val_bias_pct = 100.0 * val_bias_mean / float(val_mean_actual)
+            # Combined metric uses median bias so a single outlier epoch does not gate checkpointing
+            val_combined = val_mae * 0.5 + abs(val_bias_median)
 
-            self.log("ML Predictor: Epoch {}/{}: train_loss={:.4f} val_mae={:.4f} kWh val_bias={:+.4f} kWh ({:+.1f}%) combined={:.4f} kWh".format(epoch + 1, epochs, epoch_loss, val_mae, float(val_bias), val_bias_pct, val_combined))
+            # EMA-smooth the combined metric to reduce noise from stochastic sampling
+            if ema_combined is None:
+                ema_combined = val_combined  # Seed on first epoch
+            else:
+                ema_combined = ema_smoothing_alpha * val_combined + (1.0 - ema_smoothing_alpha) * ema_combined
 
-            # Early stopping check with weight checkpointing (combined = val_mae + 0.5 * |val_bias|)
-            if val_combined < best_combined:
-                best_combined = val_combined
+            self.log(
+                "ML Predictor: Epoch {}/{}: lr={:.5f} huber_loss={:.4f} val_mae={:.4f} kWh val_bias={:+.4f} kWh ({:+.1f}%) combined={:.4f} kWh ema_combined={:.4f} kWh".format(
+                    epoch + 1, epochs, lr_t, epoch_loss, val_mae, val_bias_mean, val_bias_pct, val_combined, ema_combined
+                )
+            )
+
+            # Early stopping uses EMA-smoothed combined metric so a single noisy epoch
+            # cannot prematurely checkpoint a suboptimal set of weights.
+            # Weight checkpointing uses the raw epoch weights (not a smoothed version).
+            if ema_combined < best_combined:
+                best_combined = ema_combined
                 best_val_loss = val_mae
-                best_val_bias = val_bias
+                best_val_bias = val_bias_mean
                 patience_counter = 0
                 # Checkpoint best weights
                 best_weights = [w.copy() for w in self.weights]
@@ -1018,6 +1195,22 @@ class LoadPredictor:
         self.epochs_trained += epochs
 
         self.log("ML Predictor: Training complete, final val_mae={:.4f} kWh val_bias={:+.4f} kWh ({:+.1f}%)".format(best_val_loss, float(best_val_bias), 100.0 * float(best_val_bias) / (float(np.mean(y_val)) if float(np.mean(y_val)) > 1e-8 else 1e-8)))
+
+        # Autoregressive diagnostic: run a full AR rollout over the holdout period
+        # to expose compounding error (teacher-forced val_mae won't show this)
+        ar_mae, ar_bias = self._ar_rollout_diagnostic(
+            load_minutes,
+            now_utc,
+            pv_minutes=pv_minutes,
+            temp_minutes=temp_minutes,
+            import_rates=import_rates,
+            export_rates=export_rates,
+            validation_holdout_hours=validation_holdout_hours,
+        )
+        if ar_mae is not None:
+            mean_y_val = float(np.mean(y_val)) if float(np.mean(y_val)) > 1e-8 else 1e-8
+            ar_drift = ar_mae - best_val_loss
+            self.log("ML Predictor: AR rollout over holdout: ar_mae={:.4f} kWh ar_bias={:+.4f} kWh ({:+.1f}%) [drift vs teacher-forced: {:+.4f} kWh]".format(ar_mae, ar_bias, 100.0 * ar_bias / mean_y_val, ar_drift))
 
         return best_val_loss
 
@@ -1064,6 +1257,7 @@ class LoadPredictor:
         curriculum_window_days=7,
         curriculum_step_days=7,
         max_intermediate_passes=0,
+        huber_delta=1.35,
     ):
         """
                 Train using curriculum learning: progressively expand the training window
@@ -1100,6 +1294,7 @@ class LoadPredictor:
                                              0 (default) means no limit. When > 0, only the
                                              last N windows (largest/most-recent slices) are
                                              used, skipping the very earliest small windows.
+                    huber_delta: Huber loss transition point passed through to each train() call
 
                 Returns:
                     Validation MAE from the final pass, or None if all passes failed.
@@ -1146,6 +1341,7 @@ class LoadPredictor:
                 patience=patience,
                 validation_holdout_hours=validation_holdout_hours,
                 norm_ema_alpha=norm_ema_alpha,
+                huber_delta=huber_delta,
             )
 
         total_passes = len(window_sizes) + 1  # intermediate passes + final full pass
@@ -1181,6 +1377,7 @@ class LoadPredictor:
                 patience=patience,
                 validation_holdout_hours=validation_holdout_hours,
                 norm_ema_alpha=norm_ema_alpha,
+                huber_delta=huber_delta,
             )
 
             if pass_mae is None:
@@ -1204,6 +1401,7 @@ class LoadPredictor:
             patience=patience,
             validation_holdout_hours=validation_holdout_hours,
             norm_ema_alpha=norm_ema_alpha,
+            huber_delta=huber_delta,
         )
 
         if final_mae is not None:
@@ -1255,7 +1453,8 @@ class LoadPredictor:
             return {}
 
         # Compute historical daily patterns at CHUNK_MINUTES resolution for blending
-        historical_pattern = self._compute_daily_pattern(energy_per_step)
+        # Returns 7 DOW-specific patterns (falling back to global when data is sparse)
+        daily_patterns = self._compute_daily_pattern(energy_per_step, now_utc)
 
         # Alignment offset: drop the leading partial chunk so buffers start on a
         # CHUNK_MINUTES clock boundary
@@ -1303,7 +1502,8 @@ class LoadPredictor:
             target_time = now_utc + timedelta(minutes=step_idx * CHUNK_MINUTES)
             minute_of_day = target_time.hour * 60 + target_time.minute
             day_of_week = target_time.weekday()
-            time_features = self._create_time_features(minute_of_day, day_of_week)
+            day_of_year = target_time.timetuple().tm_yday
+            time_features = self._create_time_features(minute_of_day, day_of_week, day_of_year)
 
             # Future PV energy: sum of the CHUNK_STEPS 5-min future values for this chunk
             # Future 5-min keys are negative (e.g. -5, -10, ...) going forward in time
@@ -1339,9 +1539,9 @@ class LoadPredictor:
             pred_energy = self._clip_predictions(pred_energy)
             model_pred = float(pred_energy[0])
 
-            # Blend with historical daily pattern (CHUNK_MINUTES slot)
+            # Blend with historical daily pattern for this day-of-week (CHUNK_MINUTES slot)
             slot = (minute_of_day // CHUNK_MINUTES) * CHUNK_MINUTES
-            hist_value = historical_pattern.get(slot, model_pred)
+            hist_value = daily_patterns[day_of_week].get(slot, model_pred)
 
             # Linear blend: 100% model at step 0, blend_floor% model at horizon
             progress = step_idx / PREDICT_HORIZON
