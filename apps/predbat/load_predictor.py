@@ -84,7 +84,7 @@ class LoadPredictor:
     - Placeholder for future exogenous features (temperature, solar)
     """
 
-    def __init__(self, log_func=None, learning_rate=0.001, max_load_kw=23.0, weight_decay=0.01, dropout_rate=0.2):
+    def __init__(self, log_func=None, learning_rate=0.001, max_load_kw=23.0, weight_decay=0.01, dropout_rate=0.1):
         """
         Initialize the load predictor.
 
