@@ -206,7 +206,7 @@ predbat:
 - `load_ml_source`: When `true`, Predbat uses ML predictions for battery planning. Set to `false` to test predictions without affecting battery control
 - `load_ml_max_days_history`: Maximum days of historical data to fetch from Home Assistant on each poll (every 30 minutes)
     - **Default**: 28 days
-    - **Minimum**: 7 day
+    - **Minimum**: 7 days
     - **Recommended**: 28 days
     - **Constraint**: Limited by your HA recorder retention period — you cannot fetch more history than HA has stored
     - **When to increase**: If you have very regular weekly patterns or want seasonal awareness
