@@ -2611,7 +2611,7 @@ Or the custom method where you can define all the parameter values passed to the
       soc: "{target_soc}"
       charge_start_time: "{charge_start_time}"
       charge_end_time: "{charge_end_time}"
-```text
+```
 
 You can also call more than one service e.g:
 
@@ -2635,7 +2635,7 @@ If however, you want the service to be called on each Predbat run then you shoul
       power: "{power}"
       soc: "{target_soc}"
       repeat: True
-```text
+```
 
 #### charge_start_service
 
