@@ -717,7 +717,7 @@ class LoadMLComponent(ComponentBase):
             self.log("ML Component: No training needed, model age is {} hours".format(dp2(retrain_age_seconds / 3600.0)))
 
         if should_train or should_fetch:
-            # Hold prediction_started across all NumPy-heavy work (training + predict + save)
+            # Set load_ml_calculating across all NumPy-heavy work (training + predict + save)
             # so that the plan's multiprocessing pool is never fork()ed while Numpy threads are active.
             if self.base.prediction_started:
                 self.log("ML Component: Waiting for current prediction cycle to complete before running ML work")
