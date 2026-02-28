@@ -2308,13 +2308,13 @@ chart.render();
             with open(also_file, "r") as f:
                 data2 = f.read()
                 if data2 and data:
-                    data = data2 + "\n" + data
+                    data = data + "\n" + data2
                 elif data2:
                     data = data2
         return await self.html_file(as_file or filename, data)
 
     async def html_debug_log(self, request):
-        return await self.html_file_load("predbat.1.log", also_file="predbat.log", as_file="predbat.log.txt")
+        return await self.html_file_load("predbat.1.log", also_file="predbat.log", as_file="predbat.log")
 
     async def html_debug_apps(self, request):
         return await self.html_file_load("apps.yaml", as_file="apps.yaml.txt")

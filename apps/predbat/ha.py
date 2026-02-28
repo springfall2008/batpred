@@ -670,12 +670,12 @@ class HAInterface(ComponentBase):
                 if last_changed:
                     try:
                         last_changed = datetime.strptime(last_changed, TIME_FORMAT_HA_TZ)
-                    except (ValueError, TypeError) as e:
-                        self.log("Warn: Failed to parse last_changed time {} for entity {} : {}".format(last_changed, entity_id, e))
+                    except (ValueError, TypeError):
                         # Try fallback format without microseconds
                         try:
                             last_changed = datetime.strptime(last_changed, "%Y-%m-%dT%H:%M:%S%z")
-                        except (ValueError, TypeError):
+                        except (ValueError, TypeError) as e:
+                            self.log("Warn: Failed to parse last_changed time {} for entity {} : {}".format(last_changed, entity_id, e))
                             last_changed = datetime.now()
                 else:
                     last_changed = datetime.now()
