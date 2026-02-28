@@ -6289,6 +6289,11 @@ def get_plan_renderer_js():
                 return '<p style="color:red;">No plan data available</p>';
             }
 
+            // Store plan midnight reference so getMinutesFromTimeString can compute
+            // absolute minutes for next-day slots (e.g., tomorrow 00:00 = 1440 min,
+            // not 0 which is what a plain hours*60+minutes calculation would return).
+            window.planMidnightRef = jsonData.time || null;
+
             let html = '<table>';
             const cellStyle = 'style="padding: 4px;"';
 
@@ -6725,6 +6730,14 @@ def get_plan_renderer_js():
             // Try to parse as ISO timestamp first
             const date = new Date(timeStr);
             if (!isNaN(date.getTime())) {
+                // Use the plan midnight reference to compute absolute minutes so that
+                // next-day slots (e.g., tomorrow 00:00) return 1440 not 0.
+                // This makes the value comparable to the override times lists which
+                // are stored as minutes-from-today's-midnight (can exceed 1439).
+                if (window.planMidnightRef) {
+                    const midnight = new Date(window.planMidnightRef);
+                    return Math.round((date - midnight) / 60000);
+                }
                 return date.getHours() * 60 + date.getMinutes();
             }
             // Fallback to "Day HH:MM" format parsing
