@@ -384,10 +384,11 @@ def load_axle_slot(base, axle_sessions, export, rate_replicate={}):
                 for minute in range(start_minutes, end_minutes):
                     if export:
                         base.rate_export[minute] = base.rate_export.get(minute, 0) + pence_per_kwh
+                        base.load_scaling_dynamic[minute] = base.load_scaling_saving
                         rate_replicate[minute] = "saving"
                     else:
-                        base.rate_import[minute] = base.rate_import.get(minute, 0) + pence_per_kwh
-                        base.load_scaling_dynamic[minute] = base.load_scaling_saving
+                        base.rate_import[minute] = base.rate_import.get(minute, 0) - pence_per_kwh
+                        base.load_scaling_dynamic[minute] = base.load_scaling_free
                         rate_replicate[minute] = "saving"
 
 
