@@ -471,7 +471,7 @@ class LoadMLComponent(ComponentBase):
                 export_rates_history = {}
 
             # Merge the two dicts, with import_rates_data (from minute_data) taking priority over import_rates_history (raw import)
-            for minute in range(int(days_to_fetch * 24 * 60), -PREDICT_STEP, -PREDICT_STEP):
+            for minute in range(int(days_to_fetch * 24 * 60) - PREDICT_STEP, -PREDICT_STEP, -PREDICT_STEP):
                 value = import_rates_history.get(max(minute - 3, 0), None)
                 if value is not None and minute not in import_rates_data:
                     import_rates_data[minute] = value
