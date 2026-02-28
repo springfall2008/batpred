@@ -353,10 +353,12 @@ def fetch_axle_sessions(base):
     return axle_events_deduplicated
 
 
-def load_axle_slot(base, axle_sessions, export, rate_replicate={}):
+def load_axle_slot(base, axle_sessions, export, rate_replicate=None):
     """
     Load Axle VPP session slot
     """
+    if rate_replicate is None:
+        rate_replicate = {}
 
     for axle_session in axle_sessions:
         start_time = axle_session.get("start_time")

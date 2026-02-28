@@ -1912,10 +1912,12 @@ class Octopus:
                 self.log("Car is charging now - added new IO slot {}".format(slot))
         return octopus_slots
 
-    def load_free_slot(self, octopus_free_slots, export=False, rate_replicate={}):
+    def load_free_slot(self, octopus_free_slots, export=False, rate_replicate=None):
         """
         Load octopus free session slot
         """
+        if rate_replicate is None:
+            rate_replicate = {}
         start_minutes = 0
         end_minutes = 0
 
@@ -1947,10 +1949,12 @@ class Octopus:
                         self.load_scaling_dynamic[minute] = self.load_scaling_free
                     rate_replicate[minute] = "saving"
 
-    def load_saving_slot(self, octopus_saving_slots, export=False, rate_replicate={}):
+    def load_saving_slot(self, octopus_saving_slots, export=False, rate_replicate=None):
         """
         Load octopus saving session slot
         """
+        if rate_replicate is None:
+            rate_replicate = {}
         start_minutes = 0
         end_minutes = 0
 
