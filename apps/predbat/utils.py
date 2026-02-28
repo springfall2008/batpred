@@ -395,6 +395,9 @@ def minute_data(
         try:
             state = float(state) * scale
             last_updated_time = str2time(item[last_updated_key])
+            # Truncate sub-minute precision: a timestamp of 23:30:04 should land on the 23:30 minute boundary,
+            # not be floored to 23:31 due to int() truncation of the elapsed seconds.
+            last_updated_time = last_updated_time.replace(second=0, microsecond=0)
         except (ValueError, TypeError):
             continue
 
@@ -519,16 +522,26 @@ def minute_data(
                             minute += 1
                             index += 1
                 else:
-                    while minute < minutes_to:
-                        if minute >= minute_min and minute <= minute_max:
-                            if backwards:
+                    if backwards:
+                        # In backwards (oldest-first) mode, this item's `state` became active AT `minutes`.
+                        # Write the current state at the transition minute, then fill the older period
+                        # (minutes+1 to minutes_to inclusive) with `last_state` (the previous value).
+                        if minutes >= minute_min and minutes <= minute_max:
+                            mdata[minutes] = state
+                        minute = minutes + 1
+                        while minute <= minutes_to:
+                            if minute >= minute_min and minute <= minute_max:
                                 mdata[minute] = last_state
-                            else:
+                                if adjusted:
+                                    adata[minute] = True
+                            minute += 1
+                    else:
+                        while minute < minutes_to:
+                            if minute >= minute_min and minute <= minute_max:
                                 mdata[minute] = state
-
-                            if adjusted:
-                                adata[minute] = True
-                        minute += 1
+                                if adjusted:
+                                    adata[minute] = True
+                            minute += 1
         else:
             if spreading:
                 for minute in range(minutes, minutes + spreading):

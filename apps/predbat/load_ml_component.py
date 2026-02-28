@@ -454,6 +454,7 @@ class LoadMLComponent(ComponentBase):
                     divide_by=1.0,
                     scale=1.0,
                 )
+
             # try to retrieve import and export rate history to detect rate-based load patterns
             import_rates_history = self.base.minute_data_import_export(days_to_fetch, self.now_utc, import_entity, scale=1.0, increment=False, smoothing=False, pad=False)
             export_rates_history = self.base.minute_data_import_export(days_to_fetch, self.now_utc, export_entity, scale=1.0, increment=False, smoothing=False, pad=False)
@@ -464,12 +465,12 @@ class LoadMLComponent(ComponentBase):
             if export_rates_history is None:
                 export_rates_history = {}
 
-            for minute in range(0, int(days_to_fetch * 24 * 60), PREDICT_STEP):
-                # Note we offset by 2 minutes to allow predbat to have published the rate for this period
-                value = import_rates_history.get(minute + 2, None)
+            # Merge the two dicts, with import_rates_data (from minute_data) taking priority over import_rates_history (raw import)
+            for minute in range(int(days_to_fetch * 24 * 60), -PREDICT_STEP, -PREDICT_STEP):
+                value = import_rates_history.get(max(minute - 3, 0), None)
                 if value is not None and minute not in import_rates_data:
                     import_rates_data[minute] = value
-                value = export_rates_history.get(minute + 2, None)
+                value = export_rates_history.get(max(minute - 3, 0), None)
                 if value is not None and minute not in export_rates_data:
                     export_rates_data[minute] = value
 
@@ -576,6 +577,29 @@ class LoadMLComponent(ComponentBase):
         """
         return self.current_predictions
 
+    def _log_prediction_input_table(self, now_utc):
+        """
+        Log a compact table of the last 288 five-minute samples (24 hours) used as input to the prediction.
+
+        Each row shows: datetime | load(kWh) | pv(kWh) | temp(°C) | import(p/kWh) | export(p/kWh)
+        Keys in the data dicts are minutes-ago from now (0 = most recent, 5 = 5 min ago, etc.).
+        """
+        LOOKBACK_ROWS = 288  # 24 hours at 5-min resolution
+        STEP = 5
+
+        self.log("ML Component: Prediction input table (last 24h, oldest first):")
+        self.log("  {:<20} {:>10} {:>10} {:>8} {:>14} {:>14}".format("datetime", "load(kWh)", "pv(kWh)", "temp(C)", "import(p/kWh)", "export(p/kWh)"))
+
+        for i in range(LOOKBACK_ROWS - 1, -1, -1):
+            minutes_ago = i * STEP
+            row_time = now_utc - timedelta(minutes=minutes_ago)
+            load_val = self.load_data.get(minutes_ago, 0.0) if self.load_data else 0.0
+            pv_val = self.pv_data.get(minutes_ago, 0.0) if self.pv_data else 0.0
+            temp_val = self.temperature_data.get(minutes_ago, 0.0) if self.temperature_data else 0.0
+            import_val = self.import_rates_data.get(minutes_ago, 0.0) if self.import_rates_data else 0.0
+            export_val = self.export_rates_data.get(minutes_ago, 0.0) if self.export_rates_data else 0.0
+            self.log("  {:<20} {:>10.4f} {:>10.4f} {:>8.1f} {:>14.4f} {:>14.4f}".format(row_time.strftime("%Y-%m-%d %H:%M"), load_val, pv_val, temp_val, import_val, export_val))
+
     def _get_predictions(self, now_utc, midnight_utc, exog_features=None):
         """
         Get current predictions for integration with load_forecast.
@@ -605,6 +629,8 @@ class LoadMLComponent(ComponentBase):
         # Generate predictions using current model
         try:
             self.log("ML Component: Generating predictions load data age {:.1f} days, {} data points".format(self.load_data_age_days, len(self.load_data) if self.load_data else 0))
+            if 0:
+                self._log_prediction_input_table(now_utc)
             predictions = self.predictor.predict(self.load_data, now_utc, midnight_utc, pv_minutes=self.pv_data, temp_minutes=self.temperature_data, import_rates=self.import_rates_data, export_rates=self.export_rates_data, exog_features=exog_features)
 
             if predictions:
