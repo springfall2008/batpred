@@ -966,17 +966,31 @@ class Plan:
         # Creation prediction object
         self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10)
 
+        # Check if LoadML is active and disable thread pools as it causes lockup due to race conditions with NumPy
+        load_ml_comp = self.components.get_component("load_ml") if self.components else None
+        load_ml_calculating = False
+        if load_ml_comp:
+            load_ml_calculating = load_ml_comp.is_calculating()
+            self.log("LoadML is_calculating {}".format(load_ml_calculating))
+            if load_ml_calculating and self.pool:
+                self.log("Disabling thread pool as LoadML is calculating to avoid lockups")
+                self.pool.terminate()
+                self.pool = None
+
         # Create pool
         if not self.pool:
-            threads = self.get_arg("threads", "auto")
-            if threads == "auto":
-                self.log("Creating pool of {} processes to match your CPU count".format(cpu_count()))
-                self.pool = Pool(processes=cpu_count())
-            elif threads:
-                self.log("Creating pool of {} processes as per apps.yaml".format(int(threads)))
-                self.pool = Pool(processes=int(threads))
+            if load_ml_calculating:
+                self.log("Not using thread pool as LoadML is calculating to avoid lockups")
             else:
-                self.log("Not using threading as threads is set to 0 in apps.yaml")
+                threads = self.get_arg("threads", "auto")
+                if threads == "auto":
+                    self.log("Creating pool of {} processes to match your CPU count".format(cpu_count()))
+                    self.pool = Pool(processes=cpu_count())
+                elif threads:
+                    self.log("Creating pool of {} processes as per apps.yaml".format(int(threads)))
+                    self.pool = Pool(processes=int(threads))
+                else:
+                    self.log("Not using threading as threads is set to 0 in apps.yaml")
 
         # Simulate current settings to get initial data
         metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(

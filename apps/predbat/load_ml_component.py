@@ -103,6 +103,7 @@ class LoadMLComponent(ComponentBase):
         self.data_ready = False
         self.data_lock = asyncio.Lock()
         self.last_data_fetch = None
+        self.load_ml_calculating = False
 
         # Model state
         self.predictor = None
@@ -158,6 +159,10 @@ class LoadMLComponent(ComponentBase):
                 # Reinitialize predictor to ensure clean state
                 self.log("ML Component: Failed to load model, reinitializing predictor")
                 self.predictor = LoadPredictor(log_func=self.log, learning_rate=self.ml_learning_rate, max_load_kw=self.ml_max_load_kw, weight_decay=self.ml_weight_decay, dropout_rate=self.ml_dropout_rate)
+
+    def is_calculating(self):
+        """Return whether the component is currently calculating predictions."""
+        return self.load_ml_calculating
 
     def get_from_incrementing(self, data, index, step, backwards=True):
         """
@@ -719,7 +724,7 @@ class LoadMLComponent(ComponentBase):
                 while self.base.prediction_started:
                     await asyncio.sleep(0.5)
             try:
-                self.base.prediction_started = True
+                self.load_ml_calculating = True
 
                 if should_train:
                     self.log("ML Component: Doing training...")
@@ -743,9 +748,10 @@ class LoadMLComponent(ComponentBase):
             except Exception:
                 self.log("Error: ML Component: Failed during ML work: {}".format(traceback.format_exc()))
             finally:
-                self.base.prediction_started = False
+                self.load_ml_calculating = False
         else:
             # Update model validity status when no ML work needed
+            self.load_ml_calculating = False
             self._update_model_status()
 
         self.update_success_timestamp()
