@@ -1121,6 +1121,7 @@ class SolisAPI(ComponentBase):
         Loop over each of the windows (that are present) and get the values from HA
         """
 
+        sn_lower = sn.lower()
         for slot in range (1,7):
             for direction in ['charge', 'discharge']:
                 if sn not in self.charge_discharge_time_windows:
@@ -1128,11 +1129,11 @@ class SolisAPI(ComponentBase):
                 if slot not in self.charge_discharge_time_windows[sn]:
                     continue
                 # Build the entity IDs
-                enable_entity_id = f"switch.{self.prefix}_solis_{sn}_{direction}_slot{slot}_enable"
-                start_time_entity_id = f"select.{self.prefix}_solis_{sn}_{direction}_slot{slot}_start_time"
-                end_time_entity_id = f"select.{self.prefix}_solis_{sn}_{direction}_slot{slot}_end_time"
-                soc_entity_id = f"number.{self.prefix}_solis_{sn}_{direction}_slot{slot}_soc"
-                power_entity_id = f"number.{self.prefix}_solis_{sn}_{direction}_slot{slot}_power"
+                enable_entity_id = f"switch.{self.prefix}_solis_{sn_lower}_{direction}_slot{slot}_enable"
+                start_time_entity_id = f"select.{self.prefix}_solis_{sn_lower}_{direction}_slot{slot}_start_time"
+                end_time_entity_id = f"select.{self.prefix}_solis_{sn_lower}_{direction}_slot{slot}_end_time"
+                soc_entity_id = f"number.{self.prefix}_solis_{sn_lower}_{direction}_slot{slot}_soc"
+                power_entity_id = f"number.{self.prefix}_solis_{sn_lower}_{direction}_slot{slot}_power"
                 # Fetch the values from HA
                 enable_state = self.get_state_wrapper(enable_entity_id)
                 start_time_state = self.get_state_wrapper(start_time_entity_id)
@@ -1168,6 +1169,7 @@ class SolisAPI(ComponentBase):
             # Get inverter details for friendly name
             detail = self.inverter_details.get(inverter_sn, {})
             inverter_name = detail.get("inverterName", inverter_sn)
+            inverter_sn_lower = inverter_sn.lower()
 
             # Get cached values for this inverter
             values = self.cached_values.get(inverter_sn, {})
@@ -1175,7 +1177,7 @@ class SolisAPI(ComponentBase):
             # Inverter size
             power = detail.get("power")
             powerStr = detail.get("powerStr", "kW")
-            entity_id = f"sensor.{prefix}_solis_{inverter_sn}_inverter_size"
+            entity_id = f"sensor.{prefix}_solis_{inverter_sn_lower}_inverter_size"
             self.dashboard_item(
                 entity_id,
                 state=power,
@@ -1191,7 +1193,7 @@ class SolisAPI(ComponentBase):
 
             # Publish sensors from inverter detail API (not CID-based)
             # Total Load Energy
-            entity_id = f"sensor.{prefix}_solis_{inverter_sn}_total_load_energy"
+            entity_id = f"sensor.{prefix}_solis_{inverter_sn_lower}_total_load_energy"
             total_load = detail.get("homeLoadTotalEnergy")
             total_load_units = detail.get("homeLoadTotalEnergyStr", "kWh")
             try:
@@ -1215,7 +1217,7 @@ class SolisAPI(ComponentBase):
             )
             total_today = detail.get('homeLoadTodayEnergy')
             total_load_units = detail.get("homeLoadTodayEnergyStr", "kWh")
-            entity_id = f"sensor.{prefix}_solis_{inverter_sn}_today_load_energy"
+            entity_id = f"sensor.{prefix}_solis_{inverter_sn_lower}_today_load_energy"
             self.dashboard_item(
                 entity_id,
                 state=total_today,
@@ -1230,7 +1232,7 @@ class SolisAPI(ComponentBase):
             )
 
             # Total Export Energy
-            entity_id = f"sensor.{prefix}_solis_{inverter_sn}_today_export_energy"
+            entity_id = f"sensor.{prefix}_solis_{inverter_sn_lower}_today_export_energy"
             total_export = detail.get("gridSellTodayEnergy")
             total_export_units = detail.get("gridSellTodayEnergyStr", "kWh")
             self.dashboard_item(
@@ -1247,7 +1249,7 @@ class SolisAPI(ComponentBase):
             )
 
             # Total Import Energy
-            entity_id = f"sensor.{prefix}_solis_{inverter_sn}_today_import_energy"
+            entity_id = f"sensor.{prefix}_solis_{inverter_sn_lower}_today_import_energy"
             total_import = detail.get("gridPurchasedTodayEnergy")
             total_import_units = detail.get("gridPurchasedTodayEnergyStr", "kWh")
             self.dashboard_item(
@@ -1269,7 +1271,7 @@ class SolisAPI(ComponentBase):
                 battery_soh = float(battery_soh) / 100.0
             except (ValueError, TypeError):
                 battery_soh = None
-            entity_id = f"sensor.{prefix}_solis_{inverter_sn}_battery_soh"
+            entity_id = f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_soh"
             self.dashboard_item(
                 entity_id,
                 state=battery_soh,
@@ -1284,7 +1286,7 @@ class SolisAPI(ComponentBase):
             )
 
             # Battery Capacity SOC (from detail API, not live CID)
-            entity_id = f"sensor.{prefix}_solis_{inverter_sn}_battery_soc"
+            entity_id = f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_soc"
             battery_soc = detail.get("batteryCapacitySoc")
             try:
                 battery_soc = float(battery_soc)
@@ -1304,7 +1306,7 @@ class SolisAPI(ComponentBase):
             )
 
             # PV Energy Total
-            entity_id = f"sensor.{prefix}_solis_{inverter_sn}_pv_energy_total"
+            entity_id = f"sensor.{prefix}_solis_{inverter_sn_lower}_pv_energy_total"
             pv_total = detail.get("eTotal")
             pv_total_unit = detail.get("eTotalStr", "kWh")
             if pv_total_unit == 'MWh':
@@ -1327,7 +1329,7 @@ class SolisAPI(ComponentBase):
             )
 
             # PV Power (Real-time AC output power)
-            entity_id = f"sensor.{prefix}_solis_{inverter_sn}_pv_power"
+            entity_id = f"sensor.{prefix}_solis_{inverter_sn_lower}_pv_power"
             pv_power = detail.get("pac")
             pv_power_unit = detail.get("pacStr", "kW")
             self.dashboard_item(
@@ -1344,7 +1346,7 @@ class SolisAPI(ComponentBase):
             )
 
             # Product Model
-            entity_id = f"sensor.{prefix}_solis_{inverter_sn}_product_model"
+            entity_id = f"sensor.{prefix}_solis_{inverter_sn_lower}_product_model"
             product_model = detail.get("productModel")
             self.dashboard_item(
                 entity_id,
@@ -1357,7 +1359,7 @@ class SolisAPI(ComponentBase):
             )
 
             # Inverter Temperature
-            entity_id = f"sensor.{prefix}_solis_{inverter_sn}_inverter_temperature"
+            entity_id = f"sensor.{prefix}_solis_{inverter_sn_lower}_inverter_temperature"
             inverter_temp = detail.get("inverterTemperature")
             self.dashboard_item(
                 entity_id,
@@ -1373,7 +1375,7 @@ class SolisAPI(ComponentBase):
             )
 
             # Battery Power (from detail)
-            entity_id = f"sensor.{prefix}_solis_{inverter_sn}_battery_power"
+            entity_id = f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_power"
             battery_power = detail.get("batteryPower")
             battery_power_unit = detail.get("batteryPowerStr", "kW")
             self.dashboard_item(
@@ -1390,7 +1392,7 @@ class SolisAPI(ComponentBase):
             )
 
             # Battery Voltage (from detail)
-            entity_id = f"sensor.{prefix}_solis_{inverter_sn}_battery_voltage"
+            entity_id = f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_voltage"
             battery_voltage = detail.get("batteryVoltage")
             battery_voltage_unit = detail.get("batteryVoltageStr", "V")
             self.dashboard_item(
@@ -1407,7 +1409,7 @@ class SolisAPI(ComponentBase):
             )
 
             # Battery Current (from detail)
-            entity_id = f"sensor.{prefix}_solis_{inverter_sn}_battery_current"
+            entity_id = f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_current"
             battery_current = detail.get("batteryCurrent")
             battery_current_unit = detail.get("batteryCurrentStr", "A")
             self.dashboard_item(
@@ -1424,7 +1426,7 @@ class SolisAPI(ComponentBase):
             )
 
             # Load Power (from detail)
-            entity_id = f"sensor.{prefix}_solis_{inverter_sn}_load_power"
+            entity_id = f"sensor.{prefix}_solis_{inverter_sn_lower}_load_power"
             load_power = detail.get("familyLoadPower")
             load_power_unit = detail.get("familyLoadPowerStr", "kW")
             self.dashboard_item(
@@ -1441,7 +1443,7 @@ class SolisAPI(ComponentBase):
             )
 
             # Grid Power (from detail)
-            entity_id = f"sensor.{prefix}_solis_{inverter_sn}_grid_power"
+            entity_id = f"sensor.{prefix}_solis_{inverter_sn_lower}_grid_power"
             grid_power = detail.get("psum")
             grid_power_unit = detail.get("psumStr", "kW")
             self.dashboard_item(
@@ -1473,7 +1475,7 @@ class SolisAPI(ComponentBase):
                         charge_enable = int(slot_data["charge_enable"])
                     except (ValueError, TypeError):
                         charge_enable = 0
-                    entity_id = f"switch.{prefix}_solis_{inverter_sn}_charge_slot{slot_num}_enable"
+                    entity_id = f"switch.{prefix}_solis_{inverter_sn_lower}_charge_slot{slot_num}_enable"
                     self.dashboard_item(
                         entity_id,
                         state="on" if charge_enable else "off",
@@ -1486,7 +1488,7 @@ class SolisAPI(ComponentBase):
 
                 # Start time selector
                 if "charge_start_time" in slot_data:
-                    entity_id = f"select.{prefix}_solis_{inverter_sn}_charge_slot{slot_num}_start_time"
+                    entity_id = f"select.{prefix}_solis_{inverter_sn_lower}_charge_slot{slot_num}_start_time"
                     start_time = slot_data["charge_start_time"]
                     # Convert HH:MM to HH:MM:00 format
                     if start_time and ":" in start_time and len(start_time.split(":")) == 2:
@@ -1506,7 +1508,7 @@ class SolisAPI(ComponentBase):
 
                 # End time selector
                 if "charge_end_time" in slot_data:
-                    entity_id = f"select.{prefix}_solis_{inverter_sn}_charge_slot{slot_num}_end_time"
+                    entity_id = f"select.{prefix}_solis_{inverter_sn_lower}_charge_slot{slot_num}_end_time"
                     end_time = slot_data["charge_end_time"]
                     # Convert HH:MM to HH:MM:00 format
                     if end_time and ":" in end_time and len(end_time.split(":")) == 2:
@@ -1526,7 +1528,7 @@ class SolisAPI(ComponentBase):
 
                 # SOC target number
                 if "charge_soc" in slot_data:
-                    entity_id = f"number.{prefix}_solis_{inverter_sn}_charge_slot{slot_num}_soc"
+                    entity_id = f"number.{prefix}_solis_{inverter_sn_lower}_charge_slot{slot_num}_soc"
                     try:
                         soc_value = int(slot_data["charge_soc"])
                     except (ValueError, TypeError):
@@ -1547,7 +1549,7 @@ class SolisAPI(ComponentBase):
 
                 # Current limit number (displayed as power in watts)
                 if "charge_current" in slot_data:
-                    entity_id = f"number.{prefix}_solis_{inverter_sn}_charge_slot{slot_num}_power"
+                    entity_id = f"number.{prefix}_solis_{inverter_sn_lower}_charge_slot{slot_num}_power"
                     current_value_amps = slot_data["charge_current"]
 
                     # Convert amps to watts for display
@@ -1586,7 +1588,7 @@ class SolisAPI(ComponentBase):
 
                 # Enable switch
                 if "discharge_enable" in slot_data:
-                    entity_id = f"switch.{prefix}_solis_{inverter_sn}_discharge_slot{slot_num}_enable"
+                    entity_id = f"switch.{prefix}_solis_{inverter_sn_lower}_discharge_slot{slot_num}_enable"
                     try:
                         discharge_enable = int(slot_data["discharge_enable"])
                     except (ValueError, TypeError):
@@ -1603,7 +1605,7 @@ class SolisAPI(ComponentBase):
 
                 # Start time selector
                 if "discharge_start_time" in slot_data:
-                    entity_id = f"select.{prefix}_solis_{inverter_sn}_discharge_slot{slot_num}_start_time"
+                    entity_id = f"select.{prefix}_solis_{inverter_sn_lower}_discharge_slot{slot_num}_start_time"
                     start_time = slot_data["discharge_start_time"]
                     # Convert HH:MM to HH:MM:00 format
                     if start_time and ":" in start_time and len(start_time.split(":")) == 2:
@@ -1623,7 +1625,7 @@ class SolisAPI(ComponentBase):
 
                 # End time selector
                 if "discharge_end_time" in slot_data:
-                    entity_id = f"select.{prefix}_solis_{inverter_sn}_discharge_slot{slot_num}_end_time"
+                    entity_id = f"select.{prefix}_solis_{inverter_sn_lower}_discharge_slot{slot_num}_end_time"
                     end_time = slot_data["discharge_end_time"]
                     # Convert HH:MM to HH:MM:00 format
                     if end_time and ":" in end_time and len(end_time.split(":")) == 2:
@@ -1643,7 +1645,7 @@ class SolisAPI(ComponentBase):
 
                 # SOC target number
                 if "discharge_soc" in slot_data:
-                    entity_id = f"number.{prefix}_solis_{inverter_sn}_discharge_slot{slot_num}_soc"
+                    entity_id = f"number.{prefix}_solis_{inverter_sn_lower}_discharge_slot{slot_num}_soc"
                     try:
                         soc_value = int(slot_data["discharge_soc"])
                     except (ValueError, TypeError):
@@ -1664,7 +1666,7 @@ class SolisAPI(ComponentBase):
 
                 # Current limit number (displayed as power in watts)
                 if "discharge_current" in slot_data:
-                    entity_id = f"number.{prefix}_solis_{inverter_sn}_discharge_slot{slot_num}_power"
+                    entity_id = f"number.{prefix}_solis_{inverter_sn_lower}_discharge_slot{slot_num}_power"
                     current_value_amps = slot_data["discharge_current"]
 
                     # Convert amps to watts for display
@@ -1695,7 +1697,7 @@ class SolisAPI(ComponentBase):
                     )
 
             # Storage mode selector
-            entity_id = f"select.{prefix}_solis_{inverter_sn}_storage_mode"
+            entity_id = f"select.{prefix}_solis_{inverter_sn_lower}_storage_mode"
             mode_value = values.get(SOLIS_CID_STORAGE_MODE, None)
             # Storage mode bit switches
             storage_mode_int = None
@@ -1720,7 +1722,7 @@ class SolisAPI(ComponentBase):
 
 
             # Battery reserve switch
-            entity_id = f"switch.{prefix}_solis_{inverter_sn}_battery_reserve"
+            entity_id = f"switch.{prefix}_solis_{inverter_sn_lower}_battery_reserve"
             reserve_on = (storage_mode_int & (1 << SOLIS_BIT_BACKUP_MODE)) != 0 if storage_mode_int is not None else None
             self.dashboard_item(
                 entity_id,
@@ -1733,7 +1735,7 @@ class SolisAPI(ComponentBase):
             )
 
             # Allow grid charging switch
-            entity_id = f"switch.{prefix}_solis_{inverter_sn}_allow_grid_charging"
+            entity_id = f"switch.{prefix}_solis_{inverter_sn_lower}_allow_grid_charging"
             grid_charging_on = (storage_mode_int & (1 << SOLIS_BIT_GRID_CHARGING)) != 0 if storage_mode_int is not None else None
             self.dashboard_item(
                 entity_id,
@@ -1746,7 +1748,7 @@ class SolisAPI(ComponentBase):
             )
 
             # Time of use switch
-            entity_id = f"switch.{prefix}_solis_{inverter_sn}_time_of_use"
+            entity_id = f"switch.{prefix}_solis_{inverter_sn_lower}_time_of_use"
             tou_on = (storage_mode_int & (1 << SOLIS_BIT_TOU_MODE)) != 0 if storage_mode_int is not None else None
             self.dashboard_item(
                 entity_id,
@@ -1759,7 +1761,7 @@ class SolisAPI(ComponentBase):
             )
 
             # Allow export switch (inverted logic: "0" = allow, "1" = block)
-            entity_id = f"switch.{prefix}_solis_{inverter_sn}_allow_export"
+            entity_id = f"switch.{prefix}_solis_{inverter_sn_lower}_allow_export"
             allow_export_value = values.get(SOLIS_CID_ALLOW_EXPORT, None)
             allow_export_on = (allow_export_value == SOLIS_ALLOW_EXPORT_ON) if allow_export_value is not None else None
             self.dashboard_item(
@@ -1780,7 +1782,7 @@ class SolisAPI(ComponentBase):
                 (SOLIS_CID_BATTERY_RECOVERY_SOC, "recovery_soc", "Battery Recovery SOC", "mdi:battery-50"),
                 (SOLIS_CID_BATTERY_MAX_CHARGE_SOC, "max_charge_soc", "Battery Max Charge SOC", "mdi:battery"),
             ]:
-                entity_id = f"number.{prefix}_solis_{inverter_sn}_{name}"
+                entity_id = f"number.{prefix}_solis_{inverter_sn_lower}_{name}"
                 soc_value = values.get(cid, None)
                 self.dashboard_item(
                     entity_id,
@@ -1798,7 +1800,7 @@ class SolisAPI(ComponentBase):
                 )
 
             # Battery max current numbers (displayed as power in watts)
-            entity_id = f"number.{prefix}_solis_{inverter_sn}_max_charge_power"
+            entity_id = f"number.{prefix}_solis_{inverter_sn_lower}_max_charge_power"
             max_charge_current_amps = values.get(SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT, None)
 
             # Convert amps to watts for display
@@ -1824,7 +1826,7 @@ class SolisAPI(ComponentBase):
                 app="solis"
             )
 
-            entity_id = f"number.{prefix}_solis_{inverter_sn}_max_discharge_power"
+            entity_id = f"number.{prefix}_solis_{inverter_sn_lower}_max_discharge_power"
             max_discharge_current_amps = values.get(SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT, None)
 
             # Convert amps to watts for display
@@ -1851,7 +1853,7 @@ class SolisAPI(ComponentBase):
             )
 
             # Power control numbers
-            entity_id = f"number.{prefix}_solis_{inverter_sn}_power_limit"
+            entity_id = f"number.{prefix}_solis_{inverter_sn_lower}_power_limit"
             power_limit_value = values.get(SOLIS_CID_POWER_LIMIT, None)
             self.dashboard_item(
                 entity_id,
@@ -1867,7 +1869,7 @@ class SolisAPI(ComponentBase):
                 app="solis"
             )
 
-            entity_id = f"number.{prefix}_solis_{inverter_sn}_max_output_power"
+            entity_id = f"number.{prefix}_solis_{inverter_sn_lower}_max_output_power"
             max_output_power_value = values.get(SOLIS_CID_MAX_OUTPUT_POWER, None)
             self.dashboard_item(
                 entity_id,
@@ -1883,7 +1885,7 @@ class SolisAPI(ComponentBase):
                 app="solis"
             )
 
-            entity_id = f"number.{prefix}_solis_{inverter_sn}_max_export_power"
+            entity_id = f"number.{prefix}_solis_{inverter_sn_lower}_max_export_power"
             max_export_power_value = values.get(SOLIS_CID_MAX_EXPORT_POWER, None)
             try:
                 max_export_power = float(max_export_power_value)
@@ -1912,7 +1914,7 @@ class SolisAPI(ComponentBase):
                 try:
                     battery_capacity_ah = float(battery_capacity_ah)
                     battery_capacity_kWh = battery_capacity_ah * self.nominal_voltage / 1000.0
-                    entity_id = f"sensor.{prefix}_solis_{inverter_sn}_battery_capacity"
+                    entity_id = f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_capacity"
                     self.dashboard_item(
                         entity_id,
                         state=round(battery_capacity_kWh, 2),
