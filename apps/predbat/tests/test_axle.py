@@ -1080,28 +1080,4 @@ def _test_axle_active_function(my_predbat=None):
     assert result is False, "fetch_axle_active should return False when axle_session is not configured"
 
     print("✓ fetch_axle_active function test passed")
-
-
-# Run all tests
-if __name__ == "__main__":
-    print("\n=== Axle API Component Tests ===\n")
-
-    test_axle_initialization()
-    test_axle_fetch_with_active_event()
-    test_axle_fetch_with_future_event()
-    test_axle_fetch_with_past_event()
-    test_axle_fetch_no_event()
-    test_axle_http_error()
-    test_axle_request_exception()
-    test_axle_retry_success_after_failure()
-    test_axle_json_parse_error()
-    test_axle_datetime_parsing_variations()
-    test_axle_run_method()
-    test_axle_history_loading()
-    test_axle_history_cleanup()
-    test_axle_fetch_sessions()
-    test_axle_load_slot_export()
-    test_axle_load_slot_import()
-    test_axle_active_function()
-
-    print("\n=== All Axle API tests passed! ===\n")
+    return False
