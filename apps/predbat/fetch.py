@@ -997,6 +997,7 @@ class Fetch:
             self.rate_import = self.rate_add_io_slots(self.rate_import, self.octopus_slots)
             self.load_saving_slot(self.octopus_saving_slots, export=False, rate_replicate=self.rate_import_replicated)
             self.load_free_slot(self.octopus_free_slots, export=False, rate_replicate=self.rate_import_replicated)
+            load_axle_slot(self, self.axle_sessions, export=False, rate_replicate=self.rate_import_replicated)
             self.rate_import = self.basic_rates(self.get_arg("rates_import_override", [], indirect=False), "rates_import_override", self.rate_import, self.rate_import_replicated)
             self.rate_import = self.apply_manual_rates(self.rate_import, self.manual_import_rates, is_import=True, rate_replicate=self.rate_import_replicated)
             self.rate_scan(self.rate_import, print=True)
