@@ -97,13 +97,14 @@ class Plan:
 
         # Is the car currently planned to charge?
         load_car_slot = False
-        for car_n in range(0, self.num_cars):
-            for slot_n in range(0, len(self.car_charging_slots[car_n])):
-                slot = self.car_charging_slots[car_n][slot_n]
-                # Don't include the exact start minute as it may take a few for the load to filter through
-                if slot["start"] <= self.minutes_now < slot["end"]:
-                    load_car_slot = True
-                    self.log("Dynamic load adjust sees car {} charging now slot {}-{}, previous car slot {}".format(car_n + 1, slot["start"], slot["end"], self.load_last_car_slot))
+        if self.car_energy_reported_load:
+            for car_n in range(0, self.num_cars):
+                for slot_n in range(0, len(self.car_charging_slots[car_n])):
+                    slot = self.car_charging_slots[car_n][slot_n]
+                    # Don't include the exact start minute as it may take a few for the load to filter through
+                    if slot["start"] <= self.minutes_now < slot["end"]:
+                        load_car_slot = True
+                        self.log("Dynamic load adjust sees car {} charging now slot {}-{}, previous car slot {}".format(car_n + 1, slot["start"], slot["end"], self.load_last_car_slot))
         self.load_last_car_slot = load_car_slot
         self.dynamic_load_baseline = {}
         if self.metric_dynamic_load_adjust:
@@ -126,7 +127,11 @@ class Plan:
             if self.load_last_status == "high":
                 have_printed = False
                 for minute_absolute in range(minutes_now, minutes_end_slot, PREDICT_STEP):
-                    car_load = sum(in_car_slot(minute_absolute, self.num_cars, self.car_charging_slots))
+                    if not self.car_energy_reported_load:
+                        # If car energy is not reported as load then we should not attempt to adjust the load prediction based on car load.
+                        car_load = 0
+                    else:
+                        car_load = sum(in_car_slot(minute_absolute, self.num_cars, self.car_charging_slots))
                     load_last_period = self.load_last_period / 60 * PREDICT_STEP
                     load_last_period = max(load_last_period - car_load, 0)
                     if load_last_period > 0:

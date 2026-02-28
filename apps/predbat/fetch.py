@@ -2112,6 +2112,7 @@ class Fetch:
         self.octopus_intelligent_charging = self.get_arg("octopus_intelligent_charging")
         self.octopus_intelligent_ignore_unplugged = self.get_arg("octopus_intelligent_ignore_unplugged")
         self.octopus_intelligent_consider_full = self.get_arg("octopus_intelligent_consider_full")
+        self.car_energy_reported_load = self.get_arg("car_energy_reported_load")
         self.get_car_charging_planned()
         self.load_inday_adjustment = 1.0
 
@@ -2236,6 +2237,9 @@ class Fetch:
 
         # Car options
         self.car_charging_hold = self.get_arg("car_charging_hold")
+        if not self.car_energy_reported_load:
+            # If car energy is not reported as load then we should not attempt to remove car energy from the load data.
+            self.car_charging_hold = False
         self.car_charging_manual_soc = [False for c in range(max(self.num_cars, 1))]
         for car_n in range(self.num_cars):
             car_postfix = "" if car_n == 0 else "_" + str(car_n)

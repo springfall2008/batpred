@@ -565,6 +565,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.battery_rate_min = 0
         self.battery_rate_max_scaling = 1.0
         self.battery_rate_max_scaling_discharge = 1.0
+        self.car_energy_reported_load = False
         self.charge_rate_now = 0
         self.discharge_rate_now = 0
         self.car_charging_hold = False

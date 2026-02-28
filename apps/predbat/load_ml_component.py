@@ -69,6 +69,9 @@ class LoadMLComponent(ComponentBase):
         self.ml_pv_sensor = self.get_arg("pv_today", default=[], indirect=False)
         self.ml_subtract_sensors = self.get_arg("car_charging_energy", default=[], indirect=False)
         self.car_charging_hold = self.get_arg("car_charging_hold", True)
+        self.car_energy_reported_load = self.get_arg("car_energy_reported_load", True)
+        if not self.car_energy_reported_load:
+            self.car_charging_hold = False
         self.car_charging_threshold = float(self.get_arg("car_charging_threshold", 6.0)) / 60.0
         self.car_charging_energy_scale = self.get_arg("car_charging_energy_scale", 1.0)
         self.car_charging_rate = float(self.get_arg("car_charging_rate", 7.5)) / 60.0

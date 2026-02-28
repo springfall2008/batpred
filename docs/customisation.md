@@ -211,6 +211,7 @@ There are a number of configuration items in Home Assistant for Predbat to contr
 
 These are described in detail in [Car Charging](car-charging.md) and are listed here just for completeness:
 
+- **switch.predbat_car_energy_reported_load** - whether the car charger is inside the CT clamp (energy visible as house load)
 - **switch.predbat_car_charging_hold** - remove the historical car charging load from the house load
 - **input_number.predbat_car_charging_threshold** - power threshold above which Predbat assumes the car is being charged
 - **input_number.predbat_car_charging_energy_scale** - used to scale the **car_charging_energy** sensor in `apps.yaml`

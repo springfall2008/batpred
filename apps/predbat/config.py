@@ -604,9 +604,16 @@ CONFIG_ITEMS = [
     },
     {
         "name": "car_charging_hold",
-        "friendly_name": "Car charging hold",
+        "friendly_name": "Car charging hold (remove car charging energy from load data)",
         "type": "switch",
         "default": True,
+    },
+    {
+        "name": "car_energy_reported_load",
+        "friendly_name": "Car energy is reported in load data (inside CT clamp)",
+        "type": "switch",
+        "default": True,
+        "enable_condition": "num_cars > 0",
     },
     {
         "name": "car_charging_manual_soc",

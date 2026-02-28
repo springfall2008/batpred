@@ -33,7 +33,15 @@ high battery charge levels when the car was charged previously (e.g. last week).
 
 *TIP:* Check the house load being reported by your inverter when your car is charging. If it doesn't include the car charging load then there is no need to follow these steps below (and if you do, you'll artificially deflate your house load).
 
-- **switch.predbat_car_charging_hold** - A switch that when turned on (the default) tells Predbat to remove car charging data from your historical house load so that Predbat's battery prediction plan is not distorted by previous car charging.
+- **switch.predbat_car_energy_reported_load** - A switch (default On) that tells Predbat whether your EV charger is on the **house-load side of the CT clamp** (i.e. the inverter 'sees' the car charging as part of house load).
+
+    - **On (default)** - The car charger is inside the CT clamp and its energy is reported as part of the house load. Predbat will attempt to strip car charging energy from historical load data (via **switch.predbat_car_charging_hold**) and will prevent the battery from discharging into the car when **switch.predbat_car_charging_from_battery** is Off.
+    - **Off** - The car charger is wired outside the CT clamp (e.g. directly to the grid connection). The inverter cannot see the car charging load directly. In this case Predbat will:
+        - Automatically disable **switch.predbat_car_charging_hold** (no need to strip car data from house load, as it was never included).
+        - Automatically set **switch.predbat_car_charging_from_battery** to On in the model (the battery cannot discharge into the car anyway as it is on a separate circuit).
+        - Model that any export from the battery/PV may flow into the car rather than the grid, and so conservatively not credit that energy with export income.
+
+- **switch.predbat_car_charging_hold** - A switch that when turned on (the default) tells Predbat to remove car charging data from your historical house load so that Predbat's battery prediction plan is not distorted by previous car charging. This switch is automatically overridden to Off when **switch.predbat_car_energy_reported_load** is Off, since the car load is not in the house load data.
 
 If you are getting [erroneous house load predictions in your plan](faq.md#why-is-my-house-load-lower-than-expected-or-zero) then check this setting and **car_charging_energy** or **input_number.predbat_car_charging_threshold** are set correctly.
 
@@ -304,6 +312,8 @@ When set to Off home battery discharge will be prevented when your car charges, 
 This is achieved by setting the battery discharge rate to 0 during car charging and to the maximum otherwise.
 The home battery can still charge from the grid/solar in either case. Only use this if Predbat knows your car charging plan,
 e.g. you are using Intelligent Octopus or you use the car slots in Predbat to control your car charging.
+
+  *NOTE:* If **switch.predbat_car_energy_reported_load** is set to Off (car outside the CT clamp), this setting has no effect as the battery cannot supply the car directly. Predbat will automatically treat the car as being supplied from the grid/export.
 
 - **input_number.predbat_car_charging_loss** gives the percentage amount of energy lost when charging the car (load in the home vs energy added to the battery).
 A good setting is 0.08 which is 8%.
