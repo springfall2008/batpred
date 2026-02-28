@@ -2294,9 +2294,9 @@ chart.render();
         Return the Predbat debug yaml data
         """
         yaml_debug = self.base.create_debug_yaml(write_file=False)
-        return await self.html_file("predbat_debug.yaml", yaml_debug)
+        return await self.html_file("predbat_debug.yaml.txt", yaml_debug)
 
-    async def html_file_load(self, filename):
+    async def html_file_load(self, filename, also_file=None, as_file=None):
         """
         Load a file and serve it up
         """
@@ -2304,13 +2304,20 @@ chart.render();
         if os.path.exists(filename):
             with open(filename, "r") as f:
                 data = f.read()
-        return await self.html_file(filename, data)
+        if also_file and os.path.exists(also_file):
+            with open(also_file, "r") as f:
+                data2 = f.read()
+                if data2 and data:
+                    data = data2 + "\n" + data
+                elif data2:
+                    data = data2
+        return await self.html_file(as_file or filename, data)
 
     async def html_debug_log(self, request):
-        return await self.html_file_load("predbat.log")
+        return await self.html_file_load("predbat.1.log", also_file="predbat.log", as_file="predbat.log.txt")
 
     async def html_debug_apps(self, request):
-        return await self.html_file_load("apps.yaml")
+        return await self.html_file_load("apps.yaml", as_file="apps.yaml.txt")
 
     async def html_debug_plan(self, request):
         html_plan = self.get_state_wrapper(entity_id=self.prefix + ".plan_html", attribute="html", default="<p>No plan available</p>")

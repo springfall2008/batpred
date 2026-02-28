@@ -7049,6 +7049,7 @@ def get_header_html(title, calculating, default_page, arg_errors, THIS_VERSION, 
     """
 
     text = '<!doctype html><html><head><meta charset="utf-8"><title>{}</title>'.format(title)
+    text += '<link rel="icon" type="image/png" href="https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_light.png">'
 
     text += """
 <link href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" rel="stylesheet">
