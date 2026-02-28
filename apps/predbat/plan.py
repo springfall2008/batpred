@@ -974,7 +974,8 @@ class Plan:
             self.log("LoadML is_calculating {}".format(load_ml_calculating))
             if load_ml_calculating and self.pool:
                 self.log("Disabling thread pool as LoadML is calculating to avoid lockups")
-                self.pool.terminate()
+                self.pool.close()
+                self.pool.join()
                 self.pool = None
 
         # Create pool
