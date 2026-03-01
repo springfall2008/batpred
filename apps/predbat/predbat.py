@@ -1073,6 +1073,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
 
         files = predbat_update_download(version)
         if files:
+            # Notify before killing threads so the WebSocket is still healthy
+            if self.get_arg("set_system_notify"):
+                self.call_notify("Predbat: update to: {}".format(version))
+
             # Kill the current threads
             self.log("Kill current threads before update")
             self.stop_thread = True
@@ -1085,10 +1089,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                     self.log("Warn: Failed to close thread pool: {}".format(e))
                     self.log("Warn: " + traceback.format_exc())
                 self.pool = None
-
-            # Notify that we are about to update
-            if self.get_arg("set_system_notify"):
-                self.call_notify("Predbat: update to: {}".format(version))
 
             # Perform the update
             self.log("Perform the update.....")

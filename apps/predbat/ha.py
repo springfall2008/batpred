@@ -372,7 +372,7 @@ class HAInterface(ComponentBase):
 
         # Check for timeout (neither success nor error was set)
         if result_holder.get("success") is None and not result_holder.get("error"):
-            self.log("Warn: Service call {}/{} timed out....".format(domain, service))
+            self.log("Warn: Service call {}/{} failed or timed out: result {}".format(domain, service, result_holder))
             return None
 
         success = result_holder.get("success", False)
@@ -587,6 +587,11 @@ class HAInterface(ComponentBase):
                     self.ws_pending_requests.clear()
                     if self.ws_command_queue:
                         self.log("Warn: {} queued commands dropped due to connection loss".format(len(self.ws_command_queue)))
+                        for dropped_cmd in self.ws_command_queue:
+                            dropped_domain, dropped_service, dropped_data, dropped_rr, dropped_event, dropped_result = dropped_cmd
+                            dropped_result["error"] = "connection_lost"
+                            dropped_result["success"] = False
+                            dropped_event.set()
                         self.ws_command_queue.clear()
 
             if not self.api_stop:
