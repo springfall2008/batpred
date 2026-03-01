@@ -95,6 +95,7 @@ class LoadMLComponent(ComponentBase):
         self.ml_curriculum_max_passes = 4  # Max intermediate passes (0 = no limit)
         self.load_ml_database_days = load_ml_database_days
         self.ml_validation_holdout_hours = 48
+        self.run_timeout = 2 * 60 * 60  # 2 hours timeout for the whole run to prevent runaway execution
 
         # Data state
         self.load_data = None
