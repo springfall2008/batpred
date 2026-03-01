@@ -239,18 +239,8 @@ Copy the template [fronius.yaml](https://raw.githubusercontent.com/springfall200
 
 ### Prerequisites
 
-- Enable Modbus TCP on your Fronius inverter. In the Fronius web interface, go to **Communication → Modbus** and configure the following settings:
-
-  | Setting | Value |
-  |---|---|
-  | Mode | TCP Server |
-  | Port | 502 (default) |
-  | Sunspec Model Type | int + SF |
-  | Meter Address Offset | 200 |
-  | Allow Control via Modbus | On |
-  | Restrict Control | Off |
 - Install the [Fronius integration](https://www.home-assistant.io/integrations/fronius/) in Home Assistant and confirm that inverter and battery sensors are appearing.
-- Download `fronius_battery_control.py` from [fronius-modbus-control](https://github.com/knackerbrot/fronius-modbus-control) and place it in your HA config directory (e.g. `/config/fronius_battery_control.py`).
+- Download `fronius_battery_control.py` from [fronius-modbus-control](https://github.com/knackerbrot/fronius-modbus-control) and place it in your HA config directory (e.g. `/config/fronius_battery_control.py`). Follow the [Prerequisites](https://github.com/knackerbrot/fronius-modbus-control#prerequisites) and [Safety Warning](https://github.com/knackerbrot/fronius-modbus-control#%EF%B8%8F-safety-warning) sections in the fronius-modbus-control README to configure your inverter's Modbus settings before proceeding.
 
 > **Warning:** This script writes directly to inverter Modbus registers. Read the
 > [safety warnings](https://github.com/knackerbrot/fronius-modbus-control#safety) in the
