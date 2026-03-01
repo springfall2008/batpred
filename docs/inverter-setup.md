@@ -483,7 +483,7 @@ Edit `apps.yaml`:
 - Configure your energy rates — see [Energy Rates](../energy-rates/)
 - Delete the `template: True` line to allow Predbat to start
 
-### Notes
+### Fronius Notes
 
 - The Fronius integration provides power sensors named `sensor.solarnet_power_battery`, `sensor.solarnet_power_photovoltaics`, `sensor.solarnet_power_load` and `sensor.solarnet_power_grid`. These entity names are standard for the HA Fronius integration and should not need changing.
 - The `grid_power_invert: true` and `load_power_invert: true` settings in the template are required because Fronius reports these values with the opposite sign convention to what Predbat expects.
