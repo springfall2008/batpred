@@ -61,9 +61,9 @@ class ComponentBase(ABC):
         self.local_tz = base.local_tz
         self.prefix = base.prefix
         self.args = base.args
-        self.initialize(**kwargs)
         self.count_errors = 0
         self.run_timeout = 60 * 60  # Default run time in seconds, can be overridden by subclasses
+        self.initialize(**kwargs)
 
     @abstractmethod
     def initialize(self, **kwargs):
