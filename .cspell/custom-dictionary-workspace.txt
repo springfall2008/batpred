@@ -116,6 +116,7 @@ fontweight
 Forestfire
 foxess
 freephase
+fronius
 futurerate
 gecloud
 gekey
@@ -248,6 +249,7 @@ pdetails
 perc
 percnt
 PeterHaban
+photovoltaics
 pitem
 pkwh
 Plenticore
@@ -289,6 +291,7 @@ rowspan
 rstart
 rtype
 ruamel
+Rvrt
 saverestore
 savez
 scalarstring
@@ -312,6 +315,7 @@ socs
 sofar
 SolarEdge
 solarman
+solarnet
 Solax
 solaxcloud
 solaxmodbus
@@ -328,6 +332,7 @@ stdlib
 stepline
 strptime
 substep
+sunspec
 sunsynk
 syscmd
 tabindex
