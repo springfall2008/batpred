@@ -879,7 +879,7 @@ class Fetch:
             # Completed and planned slots
             if completed:
                 self.octopus_slots += completed
-            if planned and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[0]):
+            if planned and (not self.octopus_intelligent_ignore_unplugged or (self.num_cars >= 1 and self.car_charging_planned[0])):
                 # We only count planned slots if the car is plugged in or we are ignoring unplugged cars
                 self.octopus_slots += planned
 
