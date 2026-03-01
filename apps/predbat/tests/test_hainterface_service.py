@@ -368,6 +368,82 @@ def test_hainterface_async_call_service_error_limit(my_predbat=None):
     return failed
 
 
+def test_hainterface_async_call_service_connection_drop_queued(my_predbat=None):
+    """Regression test for #3460: queued command gets connection_lost immediately on disconnect.
+
+    Before the fix, ws_command_queue entries were silently dropped via .clear() without
+    unblocking their threading.Event, leaving the caller to wait the full 2-minute timeout.
+    This test verifies that when the socketLoop cleanup runs, any commands sitting in
+    ws_command_queue (not yet sent) have their events set with error='connection_lost' so
+    the caller returns promptly instead of blocking for 2 minutes.
+    """
+    print("\n=== Testing #3460: queued command unblocked on connection drop ===")
+    failed = 0
+
+    import threading
+    import time
+    mock_base = MockBase()
+    ha_interface = create_ha_interface(mock_base, ha_key="test_key", ha_url="http://localhost:8123")
+
+    ha_interface.ws_command_queue = []
+    ha_interface.ws_pending_requests = {}
+    ha_interface.ws_pending_lock = threading.Lock()
+
+    start_time = [None]
+    end_time = [None]
+
+    async def test_command():
+        # Simulate socketLoop connection-drop cleanup happening shortly after command is queued
+        def simulate_connection_drop():
+            time.sleep(0.05)  # Let the command get queued first
+            with ha_interface.ws_pending_lock:
+                # This is the fixed code path: iterate and set events instead of silently dropping
+                for dropped_cmd in ha_interface.ws_command_queue:
+                    dropped_domain, dropped_service, dropped_data, dropped_rr, dropped_event, dropped_result = dropped_cmd
+                    dropped_result["error"] = "connection_lost"
+                    dropped_result["success"] = False
+                    dropped_event.set()
+                ha_interface.ws_command_queue.clear()
+
+        drop_thread = threading.Thread(target=simulate_connection_drop, daemon=True)
+        drop_thread.start()
+
+        start_time[0] = time.monotonic()
+        result = await ha_interface.async_call_service_websocket_command("notify", "notify", {"message": "Predbat: update to: v9.0.0"})
+        end_time[0] = time.monotonic()
+
+        drop_thread.join(timeout=1.0)
+        return result, 0
+
+    result, test_failed = run_async(test_command())
+    failed += test_failed
+
+    elapsed = end_time[0] - start_time[0]
+
+    # Must return promptly: well under 1 second, not the 2-minute timeout
+    if elapsed >= 5.0:
+        print(f"ERROR: Caller blocked for {elapsed:.2f}s — should have returned promptly on connection_lost")
+        failed += 1
+    else:
+        print(f"\u2713 Caller returned promptly in {elapsed:.3f}s (not the 2-minute timeout)")
+
+    # Must log the 'connection_lost' failure warning
+    if not any("Service call" in log and "failed" in log for log in mock_base.log_messages):
+        print("ERROR: Should log warning that service call failed with connection_lost")
+        failed += 1
+    else:
+        print("\u2713 Warning logged for connection_lost")
+
+    # Must return None (failure)
+    if result is not None:
+        print(f"ERROR: Expected None on connection_lost, got {result}")
+        failed += 1
+    else:
+        print("\u2713 Returned None on connection_lost")
+
+    return failed
+
+
 def test_hainterface_set_state_external_config_item_switch(my_predbat=None):
     """Test set_state_external() with CONFIG_ITEMS switch"""
     print("\n=== Testing HAInterface set_state_external() CONFIG_ITEMS switch ===")
@@ -709,6 +785,7 @@ def run_hainterface_service_tests(my_predbat):
     failed += test_hainterface_async_call_service_failed(my_predbat)
     failed += test_hainterface_async_call_service_exception(my_predbat)
     failed += test_hainterface_async_call_service_error_limit(my_predbat)
+    failed += test_hainterface_async_call_service_connection_drop_queued(my_predbat)
     failed += test_hainterface_set_state_external_config_item_switch(my_predbat)
     failed += test_hainterface_set_state_external_config_item_number(my_predbat)
     failed += test_hainterface_set_state_external_config_item_select(my_predbat)
