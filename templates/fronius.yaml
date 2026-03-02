@@ -70,6 +70,7 @@ pred_bat:
   # See https://springfall2008.github.io/batpred/inverter-setup/#inverter-control-options
   inverter_type: "FR"
   inverter:
+    name: "Fronius GEN24"
     has_rest_api: false
     has_mqtt_api: false
     has_service_api: true
