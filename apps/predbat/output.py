@@ -588,14 +588,16 @@ class Output:
                 text = "zero"
             elif rate < 0:
                 text = "negative"
-            elif rate <= (export_cost_threshold * 0.5):
-                text = "very low"
-            elif rate < export_cost_threshold:
-                text = "low"
-            elif rate <= (export_cost_threshold * 1.5):
-                text = "good"
             else:
-                text = "very good"
+                rate_frac = (rate - self.rate_export_min) / (self.rate_export_max - self.rate_export_min)
+                if rate_frac <= 0.25:
+                    text = "very low"
+                elif rate_frac <= 0.5:
+                    text = "low"
+                elif rate_frac <= 0.75:
+                    text = "good"
+                else:
+                    text = "very good"
         return text
 
     def get_rate_text(self, minute, export=False, with_value=False):
