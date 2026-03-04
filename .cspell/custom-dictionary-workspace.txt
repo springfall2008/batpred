@@ -12,6 +12,7 @@ Anson
 apexcharts
 appdaemon
 appkey
+appsyaml
 argname
 ASHP
 asyncio
@@ -327,6 +328,7 @@ Southwell
 springfall
 starthour
 startminute
+startswith
 startt
 stdlib
 stepline
