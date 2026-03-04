@@ -567,11 +567,6 @@ class Output:
         import_cost_threshold = self.rate_import_cost_threshold
         export_cost_threshold = self.rate_export_cost_threshold
 
-        if self.rate_best_cost_threshold_charge:
-            import_cost_threshold = self.rate_best_cost_threshold_charge
-        if self.rate_best_cost_threshold_export:
-            export_cost_threshold = self.rate_best_cost_threshold_export
-
         rate = dp2(rate)
 
         if not export:
@@ -581,14 +576,18 @@ class Output:
                 text = "free"
             elif rate < 0:
                 text = "negative"
-            elif rate <= import_cost_threshold * 0.5:
-                text = "very cheap"
-            elif rate <= import_cost_threshold:
-                text = "cheap"
-            elif rate <= (import_cost_threshold * 1.5):
-                text = "expensive"
+            elif self.rate_max <= self.rate_min:
+                text = "fixed"
             else:
-                text = "very expensive"
+                rate_frac = (rate - self.rate_min) / (self.rate_max - self.rate_min)
+                if rate_frac <= 0.1:
+                    text = "very cheap"
+                elif rate_frac <= 0.5:
+                    text = "cheap"
+                elif rate_frac <= 0.8:
+                    text = "expensive"
+                else:
+                    text = "very expensive"
         else:
             if self.rate_export_min == self.rate_export_max:
                 text = "fixed"
@@ -1209,12 +1208,23 @@ class Output:
             if plan_debug and load_forecast10 > 0.0:
                 load_forecast += " (%s)" % (str(load_forecast10))
 
-            if rate_value_import <= 0:  # colour the import rate, blue for negative, then green, yellow and red
+            if rate_value_import <= 0:  # colour the import rate based on position in min-max range
                 rate_color_import = "#74C1FF"
-            elif rate_value_import <= import_cost_threshold:
-                rate_color_import = "#3AEE85"
-            elif rate_value_import > (import_cost_threshold * 1.5):
-                rate_color_import = "#F18261"
+            elif self.rate_min >= self.rate_max:
+                rate_color_import = "#FFFFAA"
+            else:
+                rate_frac = (rate_value_import - self.rate_min) / (self.rate_max - self.rate_min)
+                rate_frac = max(0.0, min(1.0, rate_frac))
+                if rate_frac <= 0.1:
+                    rate_color_import = "#3AEE85"
+                elif rate_frac <= 0.35:
+                    rate_color_import = "#AAEE85"
+                elif rate_frac <= 0.65:
+                    rate_color_import = "#FFFFAA"
+                elif rate_frac <= 0.9:
+                    rate_color_import = "#F1A861"
+                else:
+                    rate_color_import = "#F18261"
 
             if rate_value_export >= (1.5 * export_cost_threshold):
                 rate_color_export = "#F18261"
