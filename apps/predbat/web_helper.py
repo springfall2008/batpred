@@ -7069,8 +7069,11 @@ def get_header_html(title, calculating, default_page, arg_errors, THIS_VERSION, 
 // Apply dark mode immediately before CSS is parsed to prevent flash of white
 if (localStorage.getItem('darkMode') === 'true') {
     document.documentElement.classList.add('dark-mode');
-    document.documentElement.style.backgroundColor = '#121212';
-    document.documentElement.style.color = '#e0e0e0';
+    document.addEventListener('DOMContentLoaded', function() {
+        if (document.body) {
+            document.body.classList.add('dark-mode');
+        }
+    });
 }
 </script>
 <link href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" rel="stylesheet">
