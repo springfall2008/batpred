@@ -596,6 +596,7 @@ class OctopusAPI(ComponentBase):
             return self.tariffs
 
         now = datetime.now()
+        old_tariff_keys = set(self.tariffs.keys())
 
         tariffs = {}
         gas = self.account_data.get("account", {}).get("gasAgreements", [])
@@ -653,6 +654,13 @@ class OctopusAPI(ComponentBase):
                     tariffs["gas"]["data"] = self.tariffs.get("gas", {}).get("data", None)
                     tariffs["gas"]["standing"] = self.tariffs.get("gas", {}).get("standing", None)
         self.tariffs = tariffs
+
+        # Re-run automatic config if tariff structure changed (e.g. export agreement became active)
+        new_tariff_keys = set(self.tariffs.keys())
+        if old_tariff_keys and new_tariff_keys != old_tariff_keys and self.automatic:
+            self.log("Octopus API: Tariff structure changed from {} to {}, reconfiguring".format(old_tariff_keys, new_tariff_keys))
+            self.automatic_config(self.tariffs)
+
         return self.tariffs
 
     async def async_update_intelligent_device(self, account_id):
