@@ -1558,7 +1558,7 @@ class LoadPredictor:
             progress = step_idx / PREDICT_HORIZON
             model_weight = 1.0 - progress * (1.0 - blend_floor)
             energy_value = model_weight * model_pred + (1.0 - model_weight) * hist_value
-        
+
             # Cap final value to 5x the maximum historical energy seen for this day-of-week
             energy_value = min(energy_value, 5 * max_energy_by_dow[day_of_week])
 
