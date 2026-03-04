@@ -1516,14 +1516,17 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                 self.log("Warning: Failed to initialize plugin system: {}".format(e))
                 self.plugin_system = None
 
-            # Register OSS /metrics endpoint (no-ops when prometheus_client absent)
-            from predbat_metrics import PROMETHEUS_AVAILABLE, metrics_handler
+            # Register /metrics endpoints (no-ops when prometheus_client absent)
+            from predbat_metrics import PROMETHEUS_AVAILABLE, metrics_handler, metrics_json_handler
+            from web_metrics_dashboard import metrics_dashboard_handler
 
             if PROMETHEUS_AVAILABLE:
                 web_component = self.components.get_component("web")
                 if web_component:
                     web_component.register_endpoint("/metrics", metrics_handler, "GET")
-                    self.log("OSS /metrics endpoint registered")
+                    web_component.register_endpoint("/metrics/json", metrics_json_handler, "GET")
+                    web_component.register_endpoint("/metrics/dashboard", metrics_dashboard_handler, "GET")
+                    self.log("Metrics endpoints registered (/metrics, /metrics/json, /metrics/dashboard)")
 
             # Now start all sub-components (including web server which will pick up registered endpoints)
             if not self.components.start(phase=0):

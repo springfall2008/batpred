@@ -2,7 +2,7 @@
 # pylint: disable=line-too-long
 """Prometheus metrics for PredBat.
 
-Defines all metrics emitted by the OSS PredBat codebase. Each component
+Defines all metrics emitted by the PredBat codebase. Each component
 imports ``metrics()`` and emits its own data at the point of origin.
 ``prometheus_client`` is optional -- when absent every metric operation
 silently no-ops so the core engine runs unchanged.
@@ -125,6 +125,69 @@ class PredbatMetrics:
         self.pv_scaling_total = _gauge("predbat_pv_scaling_total", "PV calibration total adjustment factor")
 
 
+    def to_dict(self):
+        """Return current metric values as a plain dict for the dashboard."""
+        def _val(metric):
+            """Read current value from a prometheus Gauge/Counter."""
+            if isinstance(metric, _NoOpMetric):
+                return 0
+            try:
+                return metric._value.get()
+            except AttributeError:
+                return 0
+
+        def _labeled(metric):
+            """Read all label combinations from a labeled metric."""
+            if isinstance(metric, _NoOpMetric):
+                return {}
+            try:
+                return {
+                    str(dict(labels)): child._value.get()
+                    for labels, child in metric._metrics.items()
+                }
+            except AttributeError:
+                return {}
+
+        return {
+            # Health
+            "up": _labeled(self.up),
+            "errors_total": _labeled(self.errors_total),
+            "last_update_timestamp": _val(self.last_update_timestamp),
+            "config_valid": _val(self.config_valid),
+            "config_warnings": _val(self.config_warnings),
+            # Plan
+            "plan_valid": _val(self.plan_valid),
+            "plan_age_minutes": _val(self.plan_age_minutes),
+            # Battery
+            "battery_soc_percent": _val(self.battery_soc_percent),
+            "battery_soc_kwh": _val(self.battery_soc_kwh),
+            "battery_max_kwh": _val(self.battery_max_kwh),
+            "charge_rate_kw": _val(self.charge_rate_kw),
+            "discharge_rate_kw": _val(self.discharge_rate_kw),
+            # Energy
+            "load_today_kwh": _val(self.load_today_kwh),
+            "import_today_kwh": _val(self.import_today_kwh),
+            "export_today_kwh": _val(self.export_today_kwh),
+            "pv_today_kwh": _val(self.pv_today_kwh),
+            "data_age_days": _val(self.data_age_days),
+            # Cost
+            "cost_today": _val(self.cost_today),
+            "savings_today_pvbat": _val(self.savings_today_pvbat),
+            "savings_today_actual": _val(self.savings_today_actual),
+            # API (labeled)
+            "api_requests_total": _labeled(self.api_requests_total),
+            "api_failures_total": _labeled(self.api_failures_total),
+            "api_last_success_timestamp": _labeled(self.api_last_success_timestamp),
+            # Solar
+            "solcast_api_limit": _val(self.solcast_api_limit),
+            "solcast_api_used": _val(self.solcast_api_used),
+            "solcast_api_remaining": _val(self.solcast_api_remaining),
+            "pv_scaling_worst": _val(self.pv_scaling_worst),
+            "pv_scaling_best": _val(self.pv_scaling_best),
+            "pv_scaling_total": _val(self.pv_scaling_total),
+        }
+
+
 # ---------------------------------------------------------------------------
 # Module-level singleton
 # ---------------------------------------------------------------------------
@@ -174,4 +237,21 @@ async def metrics_handler(request):
     return web.Response(
         text=generate_latest().decode("utf-8"),
         content_type="text/plain",
+    )
+
+
+async def metrics_json_handler(request):
+    """Serve metrics as JSON at ``/metrics/json``."""
+    import json
+    from aiohttp import web
+
+    if not PROMETHEUS_AVAILABLE:
+        return web.Response(
+            status=503,
+            text='{"error":"prometheus_client not installed"}',
+            content_type="application/json",
+        )
+    return web.Response(
+        text=json.dumps(metrics().to_dict()),
+        content_type="application/json",
     )
