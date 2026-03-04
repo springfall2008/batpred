@@ -866,14 +866,13 @@ class Fetch:
 
         completed = []
         planned = []
-        
+
         if entity_id_list:
             # Process each car's intelligent slot configuration
             for car_n in range(min(len(entity_id_list), self.num_cars)):
                 entity_id = entity_id_list[car_n]
                 if not entity_id:
                     continue
-
 
                 if entity_id and "octopus_intelligent_slot_action_config" in self.args:
                     config_entry = self.get_arg("octopus_intelligent_slot_action_config", None, indirect=False)
@@ -939,11 +938,11 @@ class Fetch:
             # Completed and planned slots
             if completed:
                 self.octopus_slots += completed
-                
+
             if planned and (not self.octopus_intelligent_ignore_unplugged or (self.num_cars >= 1 and self.car_charging_planned[0])):
                 # We only count planned slots if the car is plugged in or we are ignoring unplugged cars
                 self.octopus_slots += planned
-                        
+
             # Get rate for import to compute charging costs
             if self.rate_import:
                 self.rate_scan(self.rate_import, print=False)
