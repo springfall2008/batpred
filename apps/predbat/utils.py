@@ -1,6 +1,6 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2024 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
@@ -8,9 +8,18 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+
+"""Utility functions for data processing, time manipulation, and calculations.
+
+Provides helpers for parsing Home Assistant history data into per-minute
+dictionaries, time string parsing, data filtering/pruning, rounding,
+and historical data extraction from incrementing energy counters.
+"""
+
 from datetime import datetime, timedelta, timezone, time
 from functools import lru_cache
 from const import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, MAX_INCREMENT, TIME_FORMAT_DAILY
+import copy
 
 DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
@@ -41,7 +50,7 @@ def get_now_from_cumulative(data, minutes_now, backwards):
     return max(value, 0)
 
 
-def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=False, intermediate=False):
+def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=False, prune_future_days=0, prune_past_days=0, intermediate=False, offset_minutes=0):
     """
     Remove data from before today
     """
@@ -54,18 +63,19 @@ def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=
             timekey = datetime.strptime(key, TIME_FORMAT_SECONDS)
         else:
             timekey = datetime.strptime(key, TIME_FORMAT)
-        if last_time and (timekey - last_time).seconds < group * 60:
+        if last_time and (timekey - last_time).total_seconds() < group * 60:
             continue
-        if intermediate and last_time and ((timekey - last_time).seconds > group * 60):
+        if intermediate and last_time and ((timekey - last_time).total_seconds() > group * 60):
             # Large gap, introduce intermediate data point
             seconds_gap = int((timekey - last_time).total_seconds())
             for i in range(1, seconds_gap // int(group * 60)):
-                new_time = last_time + timedelta(seconds=i * group * 60)
-                results[new_time.strftime(TIME_FORMAT)] = prev_value
-        if not prune or (timekey > midnight_utc):
-            if prune_future and (timekey > now_utc):
+                new_time = last_time + timedelta(seconds=i * group * 60) + timedelta(minutes=offset_minutes)
+                results[new_time.isoformat()] = prev_value
+        if not prune or (timekey > (midnight_utc - timedelta(days=prune_past_days))):
+            if prune_future and (timekey > (now_utc + timedelta(days=prune_future_days))):
                 continue
-            results[key] = data[key]
+            new_time = timekey + timedelta(minutes=offset_minutes)
+            results[new_time.isoformat()] = data[key]
             last_time = timekey
             prev_value = data[key]
     return results
@@ -325,6 +335,8 @@ def minute_data(
     if not history:
         return mdata, io_adjusted
 
+    history = copy.deepcopy(history)  # Copy to avoid modifying original history
+
     # Glitch filter, cleans glitches in the data and removes bad values, only for incrementing data
     if clean_increment and backwards:
         if len(history) > 2:
@@ -383,6 +395,9 @@ def minute_data(
         try:
             state = float(state) * scale
             last_updated_time = str2time(item[last_updated_key])
+            # Truncate sub-minute precision: a timestamp of 23:30:04 should land on the 23:30 minute boundary,
+            # not be floored to 23:31 due to int() truncation of the elapsed seconds.
+            last_updated_time = last_updated_time.replace(second=0, microsecond=0)
         except (ValueError, TypeError):
             continue
 
@@ -507,16 +522,26 @@ def minute_data(
                             minute += 1
                             index += 1
                 else:
-                    while minute < minutes_to:
-                        if minute >= minute_min and minute <= minute_max:
-                            if backwards:
+                    if backwards:
+                        # In backwards (oldest-first) mode, this item's `state` became active AT `minutes`.
+                        # Write the current state at the transition minute, then fill the older period
+                        # (minutes+1 to minutes_to inclusive) with `last_state` (the previous value).
+                        if minutes >= minute_min and minutes <= minute_max:
+                            mdata[minutes] = state
+                        minute = minutes + 1
+                        while minute <= minutes_to:
+                            if minute >= minute_min and minute <= minute_max:
                                 mdata[minute] = last_state
-                            else:
+                                if adjusted:
+                                    adata[minute] = True
+                            minute += 1
+                    else:
+                        while minute < minutes_to:
+                            if minute >= minute_min and minute <= minute_max:
                                 mdata[minute] = state
-
-                            if adjusted:
-                                adata[minute] = True
-                        minute += 1
+                                if adjusted:
+                                    adata[minute] = True
+                            minute += 1
         else:
             if spreading:
                 for minute in range(minutes, minutes + spreading):
@@ -750,6 +775,10 @@ def compute_window_minutes(start_time, end_time, minutes_now):
     Returns:
         Tuple of (start_minute, end_minute) adjusted for midnight spanning and current time
     """
+    if start_time is None or end_time is None:
+        # Invalid time, return 0,0
+        return 0, 0
+
     start_minute = start_time.hour * 60 + start_time.minute
     end_minute = end_time.hour * 60 + end_time.minute
 

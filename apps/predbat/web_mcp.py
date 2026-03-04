@@ -1,6 +1,6 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2025 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
@@ -804,7 +804,7 @@ class PredbatMCPServer(ComponentBase):
             await asyncio.sleep(60)
             self.authorization_codes.pop(code, None)
 
-        asyncio.create_task(cleanup_code())
+        asyncio.create_task(cleanup_code(), name="cleanup_used_auth_code")
 
         self.log(f"MCP OAuth: Access token issued (authorization_code), resource: {resource}")
 

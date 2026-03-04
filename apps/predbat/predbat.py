@@ -1,12 +1,21 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2025 - All Rights Reserved
+# Copyright Trefor Southwell 2025-2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
+
+
+"""Main PredBat orchestrator module.
+
+Entry point for the battery prediction and optimisation system. The PredBat class
+uses multiple inheritance to combine Home Assistant interface, data fetching,
+planning, execution, output publishing, and user interface capabilities into a
+single orchestrator that runs the main prediction/optimisation loop every 5 minutes.
+"""
 
 import copy
 import os
@@ -27,10 +36,10 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.31.12"
+THIS_VERSION = "v8.33.11"
 
 # fmt: off
-PREDBAT_FILES = ["predbat.py", "const.py", "hass.py", "config.py", "prediction.py", "gecloud.py", "utils.py", "inverter.py", "ha.py", "download.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py", "execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "web_mcp.py", "component_base.py", "axle.py", "solax.py", "solis.py", "unit_test.py"]
+PREDBAT_FILES = ["predbat.py", "const.py", "hass.py", "config.py", "prediction.py", "gecloud.py", "utils.py", "inverter.py", "ha.py", "download.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py", "execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "temperature.py", "web_mcp.py", "component_base.py", "axle.py", "solax.py", "solis.py", "unit_test.py", "load_ml_component.py", "load_predictor.py"]
 # fmt: on
 
 from download import predbat_update_move, predbat_update_download, check_install
@@ -79,8 +88,12 @@ from plugin_system import PluginSystem
 
 
 class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Output, UserInterface):
-    """
-    The battery prediction class itself
+    """Main PredBat orchestrator combining all subsystems via multiple inheritance.
+
+    Inherits from Hass (HA interface), Octopus (rate loading), Energidataservice,
+    Fetch (data loading), Plan (optimisation), Execute (inverter control),
+    Output (sensor publishing), and UserInterface (config management).
+    Runs the main prediction/optimisation loop every 5 minutes via update_pred().
     """
 
     def download_predbat_releases_url(self, url):
@@ -309,6 +322,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         state = self.unit_conversion(entity_id, state, None, required_unit, going_to=True)
         return self.ha_interface.set_state(entity_id, state, attributes=attributes)
 
+    def fire_event_wrapper(self, domain, service):
+        """
+        Wrapper function to fire a HA event
+        """
+        if not self.ha_interface:
+            self.log("Error: fire_event_wrapper - No HA interface available")
+            return False
+        return self.call_service_wrapper("fire_event/service_registered", event_domain=domain, event_service=service)
+
     def call_service_wrapper(self, service, **kwargs):
         """
         Wrapper function to call a HA service
@@ -523,9 +545,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.io_adjusted = {}
         self.current_charge_limit = 0.0
         self.charge_limit = []
-        self.charge_limit_percent = []
         self.charge_limit_best = []
-        self.charge_limit_best_percent = []
         self.charge_window = []
         self.charge_window_best = []
         self.car_charging_battery_size = [100]
@@ -545,6 +565,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.battery_rate_min = 0
         self.battery_rate_max_scaling = 1.0
         self.battery_rate_max_scaling_discharge = 1.0
+        self.car_energy_reported_load = False
         self.charge_rate_now = 0
         self.discharge_rate_now = 0
         self.car_charging_hold = False
@@ -725,10 +746,20 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.fetch_config_options()
         sensor_force_replan = self.fetch_sensor_data()
 
+        # Check if any sensor changes require a replan
         if sensor_force_replan:
             self.log("Sensor changes require a replan, will recompute the plan")
             recompute = True
+
+        # Fetch inverter data
         self.fetch_inverter_data()
+
+        # Check if we have valid import rates
+        if self.rate_min == self.rate_max == 0:
+            self.log("Error: Import rates are all zero, not able to compute a plan")
+            self.record_status("Error: Import rates are all zero, not able to compute a plan", had_errors=True)
+            return
+
         if self.dynamic_load():
             self.log("Dynamic load adjustment changed, will recompute the plan")
             recompute = True
@@ -758,6 +789,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             plan_age_minutes = plan_age.seconds / 60.0
 
             if (plan_age_minutes + RUN_EVERY) > self.calculate_plan_every:
+                recompute = True
                 self.log("Will recompute the plan as it is now {} minutes old and will exceed the max age of {} minutes before the next run".format(dp1(plan_age_minutes), self.calculate_plan_every))
                 plan_random_delay = self.get_arg("plan_random_delay", 0)
                 if plan_random_delay > 0:
@@ -815,12 +847,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             savings_total_last_updated = self.load_previous_value_from_ha(self.prefix + ".savings_total_predbat", attribute="last_updated")
             savings_total_start_date = self.load_previous_value_from_ha(self.prefix + ".savings_total_predbat", attribute="start_date")
             todays_date = self.now_utc_real.strftime("%Y-%m-%d")
+
+            # If there is no date its a new install so we will save tomorrow as the first point
+            if not savings_total_last_updated:
+                savings_total_last_updated = todays_date
             if not savings_total_start_date:
                 savings_total_start_date = todays_date
-
-            # As last updated date is new we assume if we already have data then its been updated for today
-            if not savings_total_last_updated and savings_total_predbat > 0.0:
-                savings_total_last_updated = todays_date
 
             savings_total_pvbat = self.load_previous_value_from_ha(self.prefix + ".savings_total_pvbat")
             try:
@@ -850,7 +882,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                 cost_total_car = 0
 
             # Increment total at 1am once we have today's data stable (cloud data can lag)
-            if self.minutes_now > 60 and savings_total_last_updated and savings_total_last_updated != todays_date and scheduled and recompute and not self.set_read_only:
+            if self.minutes_now > 60 and savings_total_last_updated and savings_total_last_updated != todays_date and scheduled and not self.set_read_only:
                 savings_total_predbat += self.savings_today_predbat
                 savings_total_pvbat += self.savings_today_pvbat
                 savings_total_soc = self.savings_today_predbat_soc
@@ -1041,6 +1073,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
 
         files = predbat_update_download(version)
         if files:
+            # Notify before killing threads so the WebSocket is still healthy
+            if self.get_arg("set_system_notify"):
+                self.call_notify("Predbat: update to: {}".format(version))
+
             # Kill the current threads
             self.log("Kill current threads before update")
             self.stop_thread = True
@@ -1053,9 +1089,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                     self.log("Warn: Failed to close thread pool: {}".format(e))
                     self.log("Warn: " + traceback.format_exc())
                 self.pool = None
-
-            # Notify that we are about to update
-            self.call_notify("Predbat: update to: {}".format(version))
 
             # Perform the update
             self.log("Perform the update.....")
@@ -1470,7 +1503,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
 
             self.ha_interface.update_states()
             self.auto_config()
-            self.load_user_config(quiet=False, register=True)
+            self.load_user_config(quiet=False, register=False)
             self.validate_config()
             self.comparison = Compare(self)
 
@@ -1479,6 +1512,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                 self.log("Error: Some components failed to start (phase1)")
                 self.record_status("Error: Some components failed to start (phase1)", had_errors=True)
 
+            self.load_user_config(quiet=False, register=True)
             self.auto_config(final=True)
 
         except Exception as e:
@@ -1558,9 +1592,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             # Full update required
             self.update_pending = False
             self.prediction_started = True
-            self.load_user_config()
-            self.validate_config()
             try:
+                self.load_user_config()
+                self.validate_config()
                 self.update_pred(scheduled=False)
                 self.create_entity_list()
             except Exception as e:
@@ -1570,7 +1604,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                 raise e
             finally:
                 self.prediction_started = False
-            self.prediction_started = False
         elif not self.prediction_started:
             time_now = datetime.now()
             if self.inverter_data_last_fetch:
@@ -1578,8 +1611,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                 if tdiff.total_seconds() >= INVERTER_QUICK_UPDATE_SECONDS:
                     # Perform quick update of inverter data for the dashboard only
                     self.prediction_started = True
-                    self.quick_inverter_data_update()
-                    self.prediction_started = False
+                    try:
+                        self.quick_inverter_data_update()
+                    except Exception as e:
+                        self.log("Error: Exception raised {}".format(e))
+                        self.log("Error: " + traceback.format_exc())
+                        self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc(), had_errors=True)
+                        raise e
+                    finally:
+                        self.prediction_started = False
 
     def check_entity_refresh(self):
         """
@@ -1616,19 +1656,21 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
 
         self.check_entity_refresh()
         if not self.prediction_started:
-            was_update_pending = self.update_pending
-            config_changed = False
             self.prediction_started = True
-            self.update_pending = False
-
-            if was_update_pending:
-                self.ha_interface.update_states()
-                self.load_user_config()
-                self.validate_config()
-                config_changed = True
-
             try:
+                config_changed = False
+                if self.update_pending:
+                    self.update_pending = False
+                    self.ha_interface.update_states()
+                    self.load_user_config()
+                    self.validate_config()
+                    config_changed = True
+
+                # Run the prediction
                 self.update_pred(scheduled=True)
+
+                if config_changed:
+                    self.create_entity_list()
             except Exception as e:
                 self.log("Error: Exception raised {}".format(e))
                 self.log("Error: " + traceback.format_exc())
@@ -1636,9 +1678,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                 raise e
             finally:
                 self.prediction_started = False
-            if config_changed:
-                self.create_entity_list()
-            self.prediction_started = False
 
     def run_time_loop_balance(self, cb_args):
         """

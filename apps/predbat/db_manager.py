@@ -1,11 +1,19 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2024 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # Database Manager for Predbat Home Battery System
 # This module handles all SQL Lite database operations.
 # -----------------------------------------------------------------------------
+
+
+"""Async database manager with IPC queue.
+
+Wraps DatabaseEngine in an async-safe ComponentBase with thread-bridged
+IPC queue for database operations. Ensures thread-safe access to SQLite
+from multiple async contexts.
+"""
 
 from datetime import timedelta, datetime, timezone
 import asyncio
@@ -15,8 +23,17 @@ import threading
 from db_engine import DatabaseEngine, TIME_FORMAT_DB
 from component_base import ComponentBase
 
+IPC_TIMEOUT = 60.0  # Seconds to wait for IPC response
+
 
 class DatabaseManager(ComponentBase):
+    """Async database manager with IPC queue.
+
+    Wraps DatabaseEngine in thread-bridged IPC for async-safe database
+    operations. Processes get_history, set_state, get_all_entities, and
+    get_state commands from the queue.
+    """
+
     def initialize(self, db_enable, db_days):
         self.db_days = db_days
         self.db_queue = []
@@ -111,7 +128,7 @@ class DatabaseManager(ComponentBase):
 
         if expect_response:
             count = 0.0
-            while (queue_id not in self.queue_results) and count < 15.0:
+            while (queue_id not in self.queue_results) and count < IPC_TIMEOUT:
                 self.return_event.wait(0.1)
                 if queue_id not in self.queue_results:
                     time.sleep(0.1)  # Wait a bit before checking again

@@ -7,7 +7,7 @@ or daily/half-hourly/quarter-hour rates that track electricity market prices (e.
 
 Energy rates are all configured in the `apps.yaml` file that's stored in a directory name that depends on [what type of Predbat installation method you have used](apps-yaml.md#appsyaml-settings).
 
-You will need to use a file editor within Home Assistant (e.g. either the File editor or Studio Code Server add-ons)
+You will need to use a file editor within Home Assistant (e.g. either the File editor or Studio Code Server apps)
 to edit this file - see [editing configuration files within Home Assistant](install.md#editing-configuration-files-in-home-assistant) if you need to install an editor.
 
 There are four different ways of configuring your Energy rates in `apps.yaml`, using [Octopus Energy Direct](#octopus-energy-direct),
@@ -102,7 +102,7 @@ Repeat this for the other events.
 
 The gas rates are only required if you have a gas boiler, and an iBoost, and are [using Predbat to determine whether it's cheaper to heat your hot water with the iBoost or via gas](customisation.md#iboost-energy-rate-filtering)
 
-Verify that the integration is working correctly in Home Assistant by going to Developer Tools / States, and entering 'octopus' in the 'Filter entities' box.
+Verify that the integration is working correctly in Home Assistant by going to 'Settings' / 'Developer Tools' / 'States', and entering 'octopus' in the 'Filter entities' box.
 Confirm that the Octopus entities are being populated correctly.
 
 ### Configuring Predbat to use the Octopus Energy integration
@@ -377,7 +377,7 @@ You can also override the import or export energy rates (regardless of whether t
 Rate override is used to set the specific date and time period where your rates are different, e.g. an Octopus Power Up session (zero rate for an hour or two),
 or the British Gas half-price electricity on Sundays.
 
-Unfortunately, there aren't any API's available to feed this information automatically into Predbat so you will have to define your own input controls and use the [Predbat manual API](manual-api.md#example-solution-to-over-ride-predicted-house-load),
+Unfortunately, there aren't any API's available to feed this information automatically into Predbat so you will have to define your own input controls and use the [Predbat Manual API](manual-api.md#example-solution-to-over-ride-predicted-house-load),
 or edit `apps.yaml` manually to set the appropriate rate over-ride dates and times:
 
 ```yaml
@@ -494,6 +494,11 @@ Defaults to False so Predbat will control export of your inverter according to t
 
 To use the Axle VPP service only **axle_api_key** is required to be configured in `apps.yaml`, the other configuration options are optional.
 
+Energy usage during an event:
+
+- **input_number.predbat_load_scaling_saving** is applied to scale your predicted load for Axle export events.
+- **input_number.predbat_load_scaling_free** is applied to scale your predicted load for Axle import events.
+
 ## Grid Carbon intensity
 
 Predbat can also track Carbon intensity by linking it to an integration which provides this data.
@@ -518,7 +523,7 @@ Predbat can also [optimise your grid charging based on the Carbon footprint](cus
 
 ### UK Grid Carbon intensity (HA Integration)
 
-If you prefer you can instead install this integration: <https://github.com/jfparis/sensor.carbon_intensity_uk>
+If you prefer you can instead install this integration: <https://github.com/jfparis/sensor.carbon_intensity_uk>. There have been reports that this integration might not be working any more.
 
 Once it is active update apps.yaml to link Predbat to the Sensor (if it's not already in your template):
 

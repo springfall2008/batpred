@@ -1,6 +1,6 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2025 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
@@ -13,6 +13,9 @@ from datetime import datetime, timedelta
 from ha import HAHistory
 from utils import str2time
 from tests.test_infra import run_async
+
+
+FIVE_MINUTE_ENTRIES_PER_DAY = 1440 // 5
 
 
 class MockComponents:
@@ -45,6 +48,10 @@ class MockHAInterface:
             # Filter by from_time if provided
             if from_time:
                 history = [entry for entry in history if str2time(entry.get("last_updated", "")) > from_time]
+            # Else filter by days
+            else:
+                num_entries = days * FIVE_MINUTE_ENTRIES_PER_DAY
+                history = history[-num_entries:]
             return [history] if history else None
         return None
 
@@ -213,8 +220,11 @@ def test_hahistory_get_history_fetch_and_cache(my_predbat=None):
 
     # Create mock history data
     entity_id = "sensor.battery"
-    mock_history = create_mock_history(entity_id, days=30)
+    mock_history = create_mock_history(entity_id, days=60)
     mock_ha.add_mock_history(entity_id, mock_history)
+
+    length_30_days_history = 30 * FIVE_MINUTE_ENTRIES_PER_DAY
+    length_60_days_history = 60 * FIVE_MINUTE_ENTRIES_PER_DAY
 
     # Test 1: Fetch history (tracked=True, should cache)
     result = ha_history.get_history(entity_id, days=30, tracked=True)
@@ -225,7 +235,7 @@ def test_hahistory_get_history_fetch_and_cache(my_predbat=None):
     elif len(result) != 1:
         print("ERROR: Should return list with one element")
         failed += 1
-    elif len(result[0]) != len(mock_history):
+    elif len(result[0]) != length_30_days_history:
         print(f"ERROR: Expected {len(mock_history)} entries, got {len(result[0])}")
         failed += 1
     else:
@@ -273,6 +283,21 @@ def test_hahistory_get_history_fetch_and_cache(my_predbat=None):
     else:
         print("✓ Entity tracking updated to 60 days")
 
+    # Test 4: Request more days again - cache should have them populated
+    result4 = ha_history.get_history(entity_id, days=60, tracked=True)
+    if len(result4[0]) != length_60_days_history:
+        print("ERROR: Cache did not correctly return 60 days")
+        failed += 1
+    else:
+        print("✓ Cache correctly populated with longer history")
+
+    sorted_result4 = sorted(result4[0], key=lambda x: x["last_updated"])
+    if sorted_result4 != result4[0]:
+        print("ERROR: Cache population did not correctly order entries when adding longer history")
+        failed += 1
+    else:
+        print("✓ Cache order correct after adding longer history")
+
     return failed
 
 
@@ -315,6 +340,105 @@ def test_hahistory_get_history_untracked(my_predbat=None):
         failed += 1
     else:
         print("✓ History not cached correctly")
+
+    return failed
+
+
+def test_hahistory_expand_from_7_to_30_days(my_predbat=None):
+    """Test HAHistory get_history() correctly fetches full 30 days when only 7 days cached"""
+    print("\n=== Testing HAHistory get_history() expand from 7 to 30 days ===")
+    failed = 0
+
+    mock_base = MockBase()
+    ha_history = HAHistory(mock_base)
+    ha_history.initialize()
+
+    # Setup mock HAInterface
+    mock_ha = MockHAInterface()
+    mock_base.components.register_component("ha", mock_ha)
+
+    # Create 30 days of mock history data available in the "backend"
+    entity_id = "sensor.battery"
+    mock_history_30_days = create_mock_history(entity_id, days=30)
+    mock_ha.add_mock_history(entity_id, mock_history_30_days)
+
+    length_7_days = 7 * FIVE_MINUTE_ENTRIES_PER_DAY
+    length_30_days = 30 * FIVE_MINUTE_ENTRIES_PER_DAY
+
+    # Step 1: First fetch only 7 days (simulate initial cache)
+    print("\n  Step 1: Fetching 7 days to populate cache...")
+    result_7 = ha_history.get_history(entity_id, days=7, tracked=True)
+
+    if result_7 is None:
+        print("ERROR: Should return 7 days of history")
+        failed += 1
+    elif len(result_7[0]) != length_7_days:
+        print(f"ERROR: Expected {length_7_days} entries for 7 days, got {len(result_7[0])}")
+        failed += 1
+    else:
+        print(f"✓ Fetched and cached 7 days ({len(result_7[0])} entries)")
+
+    # Verify entity is tracked with 7 days
+    if ha_history.history_entities.get(entity_id) != 7:
+        print(f"ERROR: Entity should be tracked with 7 days, but has {ha_history.history_entities.get(entity_id)}")
+        failed += 1
+    else:
+        print("✓ Entity tracked with 7 days")
+
+    # Step 2: Now request 30 days (more than cached)
+    print("\n  Step 2: Requesting 30 days (more than cached 7 days)...")
+    initial_call_count = len(mock_ha.get_history_calls)
+    result_30 = ha_history.get_history(entity_id, days=30, tracked=True)
+
+    # Verify a new fetch occurred
+    if len(mock_ha.get_history_calls) == initial_call_count:
+        print("ERROR: Should fetch from HAInterface when requesting more days than cached")
+        failed += 1
+    else:
+        print("✓ Correctly triggered new fetch from HAInterface")
+
+    # Verify we got the FULL 30 days, not just 7
+    if result_30 is None:
+        print("ERROR: Should return 30 days of history")
+        failed += 1
+    elif len(result_30[0]) != length_30_days:
+        print(f"ERROR: Expected {length_30_days} entries for 30 days, got {len(result_30[0])}")
+        print(f"       This suggests only {len(result_30[0]) / FIVE_MINUTE_ENTRIES_PER_DAY:.1f} days were returned")
+        failed += 1
+    else:
+        print(f"✓ Correctly returned FULL 30 days of history ({len(result_30[0])} entries)")
+
+    # Verify entity tracking was updated to 30 days
+    if ha_history.history_entities.get(entity_id) != 30:
+        print(f"ERROR: Entity should be tracked with 30 days, but has {ha_history.history_entities.get(entity_id)}")
+        failed += 1
+    else:
+        print("✓ Entity tracking updated to 30 days")
+
+    # Verify the last fetch call requested 30 days
+    last_call = mock_ha.get_history_calls[-1]
+    if last_call["days"] != 30:
+        print(f"ERROR: Last fetch should have requested 30 days, but requested {last_call['days']}")
+        failed += 1
+    else:
+        print("✓ Fetch correctly requested 30 days from backend")
+
+    # Step 3: Request 30 days again - should use cache now
+    print("\n  Step 3: Requesting 30 days again (should use cache)...")
+    cache_call_count = len(mock_ha.get_history_calls)
+    result_30_again = ha_history.get_history(entity_id, days=30, tracked=True)
+
+    if len(mock_ha.get_history_calls) != cache_call_count:
+        print("ERROR: Should use cache when requesting same or fewer days")
+        failed += 1
+    else:
+        print("✓ Correctly used cache for subsequent request")
+
+    if len(result_30_again[0]) != length_30_days:
+        print(f"ERROR: Cached result should still have {length_30_days} entries, got {len(result_30_again[0])}")
+        failed += 1
+    else:
+        print("✓ Cache correctly returns full 30 days")
 
     return failed
 
@@ -775,6 +899,7 @@ def run_hahistory_tests(my_predbat):
     failed += test_hahistory_get_history_no_interface(my_predbat)
     failed += test_hahistory_get_history_fetch_and_cache(my_predbat)
     failed += test_hahistory_get_history_untracked(my_predbat)
+    failed += test_hahistory_expand_from_7_to_30_days(my_predbat)
 
     # Data management tests
     failed += test_hahistory_update_entity_filter_attributes(my_predbat)

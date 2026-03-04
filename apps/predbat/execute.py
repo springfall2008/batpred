@@ -1,6 +1,12 @@
+"""Execution module for applying optimised charge/discharge plans to inverters.
+
+Handles the translation of PredBat's optimised plan into concrete inverter
+control actions. Manages charge window programming, discharge/export scheduling,
+reserve level adjustments, and multi-inverter balancing.
+"""
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2024 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
@@ -20,6 +26,13 @@ Execute Predbat plan
 
 
 class Execute:
+    """Execution mixin for applying optimised plans to physical inverters.
+
+    Translates the best charge/discharge plan into concrete inverter
+    control actions including window programming, rate setting, reserve
+    adjustment, and multi-inverter balancing.
+    """
+
     def execute_plan(self):
         status_extra = ""  # extra status text added to Predbat notifications
         status_hold_car = ""  # car hold status text
@@ -107,10 +120,10 @@ class Execute:
                 if (not inExportWindow) and ((minutes_start - self.minutes_now) < (24 * 60)) and (minutes_end > self.minutes_now):
                     charge_start_time = self.midnight_utc + timedelta(minutes=minutes_start)
                     charge_end_time = self.midnight_utc + timedelta(minutes=minutes_end)
-                    self.log("Inverter {} Charge window will be: {} - {} - current SoC {}%, target {}%".format(inverter.id, charge_start_time, charge_end_time, inverter.soc_percent, self.charge_limit_percent_best[0]))
+                    self.log("Inverter {} Charge window will be: {} - {} - current SoC {}%, target {}%".format(inverter.id, charge_start_time, charge_end_time, inverter.soc_percent, calc_percent_limit(self.charge_limit_best[0], self.soc_max)))
                     # Are we actually charging?
                     if self.minutes_now >= minutes_start and self.minutes_now < minutes_end:
-                        target_soc = self.charge_limit_percent_best[0] if not self.is_freeze_charge(self.charge_limit_best[0]) else calc_percent_limit(self.soc_kw, self.soc_max)
+                        target_soc = calc_percent_limit(self.charge_limit_best[0], self.soc_max) if not self.is_freeze_charge(self.charge_limit_best[0]) else calc_percent_limit(self.soc_kw, self.soc_max)
                         inv_target_soc = self.adjust_battery_target_multi(inverter, target_soc, True, False, check=True)
 
                         current_charge_rate = inverter.get_current_charge_rate()
@@ -411,13 +424,13 @@ class Execute:
 
             # Car charging from battery disable?
             carHolding = False
-            if self.set_charge_window and not self.car_charging_from_battery:
+            if self.set_charge_window and not self.car_charging_from_battery and self.car_energy_reported_load:
                 for car_n in range(self.num_cars):
                     if self.car_charging_slots[car_n]:
                         window = self.car_charging_slots[car_n][0]
                         if self.car_charging_soc[car_n] >= self.car_charging_limit[car_n]:
                             self.log("Car {} is already charged, ignoring additional charging slot from {} - {}".format(car_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"])))
-                        elif self.minutes_now >= window["start"] and self.minutes_now < window["end"] and window["kwh"] > 0:
+                        elif self.minutes_now >= window["start"] and self.minutes_now < window["end"] and window.get("kwh", 0) > 0:
                             self.log("Car charging from battery is off, next slot for car {} is {} - {}".format(car_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"])))
                             # Don't disable discharge during force charge/discharge slots but otherwise turn it off to prevent
                             # from draining the battery
@@ -707,8 +720,10 @@ class Execute:
         self.inverter_data_last_fetch = datetime.now()
         found_first = False
 
-        if create:
+        # Create inverters list if needed
+        if create or (not self.inverters) or (len(self.inverters) != self.num_inverters):
             self.inverters = []
+            create = True
 
         # For each inverter get the details
         for id in range(self.num_inverters):
@@ -798,7 +813,7 @@ class Execute:
 
         if self.debug_enable:
             self.log(
-                "Found {} inverters totals: min reserve {}%, current reserve {}%, soc_max {}%, SoC {}%, charge rate {}kW, discharge rate {}kW, battery_rate_min {}W, ac limit {}kW, export limit {}kW, loss charge {}%, loss discharge {}%, inverter loss {}%".format(
+                "Found {} inverters totals: min reserve {}%, current reserve {}%, soc_max {}%, SoC {}%, charge rate {}kW, discharge rate {}kW, battery_rate_min {}W, AC limit {}kW, export limit {}kW, loss charge {}%, loss discharge {}%, inverter loss {}%".format(
                     len(self.inverters),
                     self.reserve,
                     self.reserve_current,
@@ -817,8 +832,7 @@ class Execute:
 
         # Work out current charge limits and publish charge limit base
         self.charge_limit = [self.current_charge_limit * self.soc_max / 100.0 for i in range(len(self.charge_window))]
-        self.charge_limit_percent = calc_percent_limit(self.charge_limit, self.soc_max)
-        self.publish_charge_limit(self.charge_limit, self.charge_window, self.charge_limit_percent, best=False)
+        self.publish_charge_limit(self.charge_limit, self.charge_window, best=False)
         self.publish_inverter_data()
 
     def quick_inverter_data_update(self):
@@ -838,7 +852,7 @@ class Execute:
             self.prefix + ".pv_power",
             state=dp3(self.pv_power / 1000.0),
             attributes={
-                "friendly_name": "Predicted PV Power",
+                "friendly_name": "Current PV Power",
                 "state_class": "measurement",
                 "unit_of_measurement": "kW",
                 "icon": "mdi:battery",
@@ -848,7 +862,7 @@ class Execute:
             self.prefix + ".grid_power",
             state=dp3(self.grid_power / 1000.0),
             attributes={
-                "friendly_name": "Predicted Grid Power",
+                "friendly_name": "Current Grid Power",
                 "state_class": "measurement",
                 "unit_of_measurement": "kW",
                 "icon": "mdi:battery",
@@ -858,7 +872,7 @@ class Execute:
             self.prefix + ".load_power",
             state=dp3(self.load_power / 1000.0),
             attributes={
-                "friendly_name": "Predicted Load Power",
+                "friendly_name": "Current Load Power",
                 "state_class": "measurement",
                 "unit_of_measurement": "kW",
                 "icon": "mdi:battery",
@@ -868,7 +882,7 @@ class Execute:
             self.prefix + ".battery_power",
             state=dp3(self.battery_power / 1000.0),
             attributes={
-                "friendly_name": "Predicted Battery Power",
+                "friendly_name": "Current Battery Power",
                 "state_class": "measurement",
                 "unit_of_measurement": "kW",
                 "icon": "mdi:battery",

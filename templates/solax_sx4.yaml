@@ -284,7 +284,8 @@ pred_bat:
   #octopus_slot_low_rate: False
 
   # Carbon Intensity data from National grid
-  carbon_intensity: 're:(sensor.carbon_intensity_uk)'
+  # carbon_postcode: 'SW1 5NA'
+  # carbon_automatic: True
 
   # Octopus saving session points to the saving session Sensor in the Octopus plugin, when enabled saving sessions will be at the assumed
   # Rate is read automatically from the add-in and converted to pence using the conversion rate below (default is 8)
@@ -373,10 +374,6 @@ pred_bat:
   # Specify the devices that notifies are sent to, the default is 'notify' which goes to all
   #notify_devices:
   #  - mobile_app_treforsiphone12_2
-
-  # Set the frequency in minutes that this plugin is run
-  # recommend something that divides by 60 (5, 10 or 15) or you won't trigger at the start of energy price slots
-  run_every: 5
 
   # Battery scaling makes the battery smaller (e.g. 0.9) or bigger than its reported
   # If you have an 80% DoD battery that falsely reports it's kwh then set it to 0.8 to report the real figures

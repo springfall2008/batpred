@@ -1,8 +1,17 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2024 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
+
+
+"""Octopus Energy API integration.
+
+Provides both REST and GraphQL API access to Octopus Energy for fetching
+tariff rates, intelligent dispatch schedules, saving sessions, and account
+data. Implements file-based caching with stale-while-revalidate strategy
+for multi-pod deployments.
+"""
 
 import asyncio
 import requests
@@ -34,6 +43,8 @@ OCTOPUS_DAY_RATE_START_HOUR = 7
 OCTOPUS_DAY_RATE_START_MINUTE = 30
 OCTOPUS_DAY_RATE_END_HOUR = 0
 OCTOPUS_DAY_RATE_END_MINUTE = 30
+
+OCTOPUS_MAX_RETRIES = 5
 
 BASE_TIME = datetime.strptime("00:00", "%H:%M")
 OPTIONS_TIME = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M")) for minute in range(4 * 60, 11 * 60, 30)]
@@ -283,6 +294,12 @@ intelligent_settings_mutation_schedule = """{{
 
 
 class OctopusEnergyApiClient:
+    """Low-level async HTTP client for Octopus Energy REST and GraphQL APIs.
+
+    Handles authentication, session management, rate fetching, intelligent
+    dispatch queries, and saving session management.
+    """
+
     def __init__(self, api_key, log, timeout_in_seconds=20):
         if api_key is None:
             raise Exception("Octopus API KEY is not set")
@@ -310,6 +327,13 @@ class OctopusEnergyApiClient:
 
 
 class OctopusAPI(ComponentBase):
+    """Octopus Energy integration component.
+
+    Manages tariff discovery, rate caching, intelligent device tracking,
+    saving sessions, and account data via both REST and GraphQL APIs.
+    Publishes rate sensors and handles Octopus-specific features.
+    """
+
     def initialize(self, key, account_id, automatic):
         """Initialize the Octopus API component"""
         self.api_key = key
@@ -572,6 +596,7 @@ class OctopusAPI(ComponentBase):
             return self.tariffs
 
         now = datetime.now()
+        old_tariff_keys = set(self.tariffs.keys())
 
         tariffs = {}
         gas = self.account_data.get("account", {}).get("gasAgreements", [])
@@ -629,6 +654,13 @@ class OctopusAPI(ComponentBase):
                     tariffs["gas"]["data"] = self.tariffs.get("gas", {}).get("data", None)
                     tariffs["gas"]["standing"] = self.tariffs.get("gas", {}).get("standing", None)
         self.tariffs = tariffs
+
+        # Re-run automatic config if tariff structure changed (e.g. export agreement became active)
+        new_tariff_keys = set(self.tariffs.keys())
+        if old_tariff_keys and new_tariff_keys != old_tariff_keys and self.automatic:
+            self.log("Octopus API: Tariff structure changed from {} to {}, reconfiguring".format(old_tariff_keys, new_tariff_keys))
+            self.automatic_config(self.tariffs)
+
         return self.tariffs
 
     async def async_update_intelligent_device(self, account_id):
@@ -665,6 +697,8 @@ class OctopusAPI(ComponentBase):
                     if not already_exists and dispatch.get("start", None) and dispatch.get("end", None) and dispatch.get("charge_in_kwh", None):
                         current_completed.append(dispatch)
             current_completed = sorted(current_completed, key=lambda x: parse_date_time(x["start"]))
+            # Prune completed dispatches for results older than 5 days
+            current_completed = [x for x in current_completed if parse_date_time(x["start"]) > self.now_utc_exact - timedelta(days=5)]
             self.intelligent_device["completed_dispatches"] = current_completed
 
     def join_saving_session_event(self, event_code):
@@ -1154,6 +1188,27 @@ class OctopusAPI(ComponentBase):
             self.log("Octopus API: tariff {} not available, using zero".format(tariff_type))
             return {n: 0 for n in range(0, 60 * 24)}
 
+    async def async_read_response_retry(self, response, url, ignore_errors=False):
+        """
+        Read response with retry on failure
+        """
+        max_retries = OCTOPUS_MAX_RETRIES
+        for attempt in range(max_retries):
+            # Check for shutdown signal
+            if self.api_stop:
+                self.log("Octopus API: Aborting retry loop due to shutdown")
+                return None
+
+            data_as_json = await self.async_read_response(response, url, ignore_errors=ignore_errors)
+            if data_as_json is not None:
+                return data_as_json
+            else:
+                if attempt < max_retries - 1:
+                    self.log(f"Octopus API: Retrying read response for {url} (attempt {attempt + 2} of {max_retries})")
+                    await asyncio.sleep(2**attempt)  # Exponential backoff
+        self.failures_total += 1
+        return None
+
     async def async_read_response(self, response, url, ignore_errors=False):
         """Reads the response, logging any json errors"""
 
@@ -1192,6 +1247,9 @@ class OctopusAPI(ComponentBase):
                 if error_code == "KT-CT-1199":
                     msg = f'Warn: Octopus API: Rate limit error in request ({url}): {data_as_json["errors"]}'
                     self.log(msg)
+                    # Don't sleep if shutting down
+                    if not self.api_stop:
+                        await asyncio.sleep(5)  # Sleep briefly to avoid hammering
                     return None
 
         # Return the response as-is - let caller handle other errors (including auth errors that need retry)
@@ -1214,7 +1272,7 @@ class OctopusAPI(ComponentBase):
 
         try:
             async with client.post(url, headers=headers, json=payload) as token_response:
-                token_response_body = await self.async_read_response(token_response, url)
+                token_response_body = await self.async_read_response_retry(token_response, url)
                 if (
                     token_response_body is not None
                     and "data" in token_response_body
@@ -1251,7 +1309,7 @@ class OctopusAPI(ComponentBase):
             headers = {"Authorization": f"JWT {self.graphql_token}", integration_context_header: request_context}
             async with client.post(url, json=payload, headers=headers) as response:
                 # Process response (which reads the text)
-                response_body = await self.async_read_response(response, url, ignore_errors=ignore_errors)
+                response_body = await self.async_read_response_retry(response, url, ignore_errors=ignore_errors)
 
                 # Check for auth errors and retry once
                 if response_body and "errors" in response_body and _retry_count == 0:
@@ -1535,6 +1593,13 @@ class OctopusAPI(ComponentBase):
 
 
 class Octopus:
+    """High-level Octopus rate loading mixin used by the Fetch class.
+
+    Provides methods for downloading rates from URLs, loading intelligent
+    dispatch slots, applying free/saving sessions, and converting Octopus
+    rate data to per-minute dictionaries.
+    """
+
     def octopus_free_line(self, res, free_sessions):
         """
         Parse a line from the octopus free data
@@ -1855,10 +1920,12 @@ class Octopus:
                 self.log("Car is charging now - added new IO slot {}".format(slot))
         return octopus_slots
 
-    def load_free_slot(self, octopus_free_slots, export=False, rate_replicate={}):
+    def load_free_slot(self, octopus_free_slots, export=False, rate_replicate=None):
         """
         Load octopus free session slot
         """
+        if rate_replicate is None:
+            rate_replicate = {}
         start_minutes = 0
         end_minutes = 0
 
@@ -1890,10 +1957,12 @@ class Octopus:
                         self.load_scaling_dynamic[minute] = self.load_scaling_free
                     rate_replicate[minute] = "saving"
 
-    def load_saving_slot(self, octopus_saving_slots, export=False, rate_replicate={}):
+    def load_saving_slot(self, octopus_saving_slots, export=False, rate_replicate=None):
         """
         Load octopus saving session slot
         """
+        if rate_replicate is None:
+            rate_replicate = {}
         start_minutes = 0
         end_minutes = 0
 
@@ -2045,8 +2114,8 @@ class Octopus:
                     new_slot["average"] = self.rate_import.get(start_minutes, self.rate_min)
                     if octopus_slot_low_rate and source != "bump-charge":
                         new_slot["average"] = self.rate_min  # Assume price in min
-                    new_slot["cost"] = new_slot["average"] * kwh
-                    new_slot["soc"] = car_soc
+                    new_slot["cost"] = dp2(new_slot["average"] * kwh)
+                    new_slot["soc"] = dp2(car_soc)
                     new_slots.append(new_slot)
 
                     if end_minutes_original > end_minutes:
@@ -2058,7 +2127,7 @@ class Octopus:
                         if octopus_slot_low_rate and source != "bump-charge":
                             new_slot["average"] = self.rate_min  # Assume price in min
                         new_slot["cost"] = 0.0
-                        new_slot["soc"] = car_soc
+                        new_slot["soc"] = dp2(car_soc)
                         new_slots.append(new_slot)
 
                 else:
@@ -2070,8 +2139,8 @@ class Octopus:
                     new_slot["average"] = self.rate_import.get(start_minutes, self.rate_min)
                     if octopus_slot_low_rate and source != "bump-charge":
                         new_slot["average"] = self.rate_min  # Assume price in min
-                    new_slot["cost"] = new_slot["average"] * kwh
-                    new_slot["soc"] = car_soc
+                    new_slot["cost"] = dp2(new_slot["average"] * kwh)
+                    new_slot["soc"] = dp2(car_soc)
                     new_slots.append(new_slot)
         return new_slots
 
@@ -2089,6 +2158,7 @@ class Octopus:
 
         # Track which 30-min slot starts were actually added (for filling in the rest of the slot)
         slots_added_set = set()
+        plan_interval_minutes = self.plan_interval_minutes
 
         if octopus_slots:
             # Add in IO slots
@@ -2098,41 +2168,44 @@ class Octopus:
                 # Ignore bump-charge slots as their cost won't change
                 if source != "bump-charge" and (not location or location == "AT_HOME"):
                     # Round slots to 30 minute boundary
-                    start_minutes = int(round(start_minutes / 30, 0) * 30)
-                    end_minutes = int(round(end_minutes / 30, 0) * 30)
+                    # Floor the start (round down) and ceiling the end (round up)
+                    # This ensures any partial overlap with a 30-min slot marks the entire slot as off-peak
+                    start_minutes = (start_minutes // plan_interval_minutes) * plan_interval_minutes
+                    end_minutes = ((end_minutes + plan_interval_minutes - 1) // plan_interval_minutes) * plan_interval_minutes
+                    start_minutes = max(start_minutes, -96 * 60)  # Allow for previous 2 days
+                    end_minutes = min(end_minutes, self.forecast_minutes)
 
                     if octopus_slot_low_rate:
                         assumed_price = self.rate_min
                         for minute in range(start_minutes, end_minutes):
-                            if minute >= (-96 * 60) and minute < self.forecast_minutes:
-                                # Calculate which day this minute belongs to (day boundary at midnight)
-                                # Day 0 = minutes 0-1439, Day 1 = 1440-2879, Day -1 = -1440 to -1, etc.
-                                # Python's floor division handles negative numbers correctly
-                                day_offset = minute // (24 * 60)
+                            # Calculate which day this minute belongs to (day boundary at midnight)
+                            # Day 0 = minutes 0-1439, Day 1 = 1440-2879, Day -1 = -1440 to -1, etc.
+                            # Python's floor division handles negative numbers correctly
+                            day_offset = minute // (24 * 60)
 
-                                # Initialize counter for this day if needed
-                                if day_offset not in slots_per_day:
-                                    slots_per_day[day_offset] = 0
+                            # Initialize counter for this day if needed
+                            if day_offset not in slots_per_day:
+                                slots_per_day[day_offset] = 0
 
-                                # Calculate the 30-min slot start for this minute
-                                slot_start = (minute // 30) * 30
+                            # Calculate the 30-min slot start for this minute
+                            slot_start = (minute // 30) * 30
 
-                                # At the start of each 30-min slot, decide if we can add it
-                                if minute % 30 == 0:
-                                    if slots_per_day[day_offset] < octopus_slot_max:
-                                        slots_per_day[day_offset] += 1
-                                        slots_added_set.add(slot_start)
-                                        rates[minute] = assumed_price
+                            # At the start of each 30-min slot, decide if we can add it
+                            if minute % 30 == 0:
+                                if slots_per_day[day_offset] < octopus_slot_max:
+                                    slots_per_day[day_offset] += 1
+                                    slots_added_set.add(slot_start)
+                                    rates[minute] = assumed_price
 
-                                else:
-                                    # For minutes within a 30-min slot, only apply if the slot was added
-                                    if slot_start in slots_added_set:
-                                        rates[minute] = assumed_price
+                            else:
+                                # For minutes within a 30-min slot, only apply if the slot was added
+                                if slot_start in slots_added_set:
+                                    rates[minute] = assumed_price
                     else:
                         assumed_price = self.rate_import.get(start_minutes, self.rate_min)
 
                     self.log(
-                        "Octopus Intelligent slot at {}-{} assumed price {} amount {} kWh location {} source {} octopus_slot_low_rate {}".format(
+                        "Octopus Intelligent slot at {}-{}, assumed price {}, amount {}, kWh location {}, source {}, octopus_slot_low_rate {}".format(
                             self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), dp2(assumed_price), dp2(kwh), location, source, octopus_slot_low_rate
                         )
                     )
@@ -2308,7 +2381,8 @@ class Octopus:
                             else:
                                 # Join via octopus event (Bottle Cap Dave)
                                 self.call_service_wrapper("octopus_energy/join_octoplus_saving_session_event", event_code=code, entity_id=entity_id)
-                            self.call_notify("Predbat: Joined Octopus saving event {}-{}, {} p/kWh".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
+                            if self.get_arg("set_event_notify"):
+                                self.call_notify("Predbat: Joined Octopus saving event {}-{}, {} p/kWh".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
                             self.octopus_last_joined_try = self.now_utc
 
             if joined_events:

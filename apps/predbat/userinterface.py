@@ -1,12 +1,21 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2024 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
+
+
+"""Configuration management and Home Assistant event handling.
+
+Mixin class for loading, validating, and synchronising configuration settings
+between PredBat and Home Assistant. Handles entity creation for switches,
+input_numbers, and select inputs, and routes HA events (state changes,
+service calls) to the appropriate handlers.
+"""
 
 import os
 from datetime import timedelta
@@ -43,10 +52,18 @@ DEBUG_EXCLUDE_LIST = [
     "futurerate_url_cache",
     "github_url_cache",
     "octopus_url_cache",
+    "secrets",
 ]
 
 
 class UserInterface:
+    """Configuration management and HA event handling mixin.
+
+    Loads, validates, and synchronises configuration settings between
+    PredBat and Home Assistant. Creates entities for switches, input_numbers,
+    and selects. Routes HA events to appropriate handlers.
+    """
+
     def call_notify(self, message):
         """
         Sync wrapper for call_notify
@@ -588,7 +605,8 @@ class UserInterface:
                 if (item["value"] != item.get("default", None)) and item.get("restore", True):
                     self.log("Restore setting: {} = {} (was {})".format(item["name"], item["default"], item["value"]))
                     await self.async_expose_config(item["name"], item["default"], event=True)
-            await self.async_call_notify("Predbat settings restored from default")
+            if self.get_arg("set_system_notify"):
+                await self.async_call_notify("Predbat settings restored from default")
         else:
             filepath = os.path.join(self.save_restore_dir, filename)
             if os.path.exists(filepath):
@@ -602,7 +620,8 @@ class UserInterface:
                         if current and (current["value"] != item["value"]) and current.get("restore", True):
                             self.log("Restore setting: {} = {} (was {})".format(item["name"], item["value"], current["value"]))
                             await self.async_expose_config(item["name"], item["value"], event=True)
-                await self.async_call_notify("Predbat settings restored from {}".format(filename))
+                if self.get_arg("set_system_notify"):
+                    await self.async_call_notify("Predbat settings restored from {}".format(filename))
         await self.async_expose_config("saverestore", None)
 
     def load_current_config(self):
@@ -673,7 +692,8 @@ class UserInterface:
         with open(filepath, "w") as file:
             yaml.dump(self.CONFIG_ITEMS, file)
         self.log("Saved Predbat settings to {}".format(filepath_p))
-        await self.async_call_notify("Predbat settings saved to {}".format(filename))
+        if self.get_arg("set_system_notify"):
+            await self.async_call_notify("Predbat settings saved to {}".format(filename))
 
     def read_debug_yaml(self, filename):
         """
@@ -730,7 +750,7 @@ class UserInterface:
                         # Remove keys from args
                         debug[key] = copy.deepcopy(self.__dict__[key])
                         for sub_key in debug[key]:
-                            if "_key" in sub_key:
+                            if ("_key" in sub_key.lower()) or ("password" in sub_key.lower()):
                                 debug[key][sub_key] = "xxx"
                     else:
                         debug[key] = self.__dict__[key]
@@ -987,16 +1007,10 @@ class UserInterface:
             self.watch_list = self.get_arg("watch_list", [], indirect=False)
             self.log("Watch list {}".format(self.watch_list))
 
-            if not self.ha_interface.websocket_active and not self.ha_interface.db_primary:
+            if self.ha_interface.websocket_active and not self.ha_interface.db_primary:
                 # Registering HA events as Websocket is not active
                 for item in self.SERVICE_REGISTER_LIST:
-                    self.fire_event("service_registered", domain=item["domain"], service=item["service"])
-                for item in self.EVENT_LISTEN_LIST:
-                    self.listen_select_handle = self.listen_event(item["callback"], event="call_service", domain=item["domain"], service=item["service"])
-
-                for entity in self.watch_list:
-                    if entity and isinstance(entity, str) and ("." in entity):
-                        self.listen_state(self.watch_event, entity_id=entity)
+                    self.fire_event_wrapper(domain=item["domain"], service=item["service"])
 
         # Save current config to file if it was pending
         self.save_current_config()
@@ -1164,9 +1178,26 @@ class UserInterface:
         elif "[" in value:
             value = value.replace("[", "")
             value = value.replace("]", "")
-            if value in values_list:
+            # For manual rates, remove any override for the same time slot regardless of rate value
+            if manual_rate and "=" in value:
+                time_part = value.split("=")[0]
+                old_count = len(values_list)
+                values_list = [v for v in values_list if not v.startswith(time_part + "=")]
+                if len(values_list) < old_count:
+                    self.log(f"Cleared rate override for {time_part}")
+            elif value in values_list:
+                # For non-rate overrides, remove exact match
                 values_list.remove(value)
         else:
+            # For manual rates, remove any existing override for the same time slot before adding new one
+            if manual_rate and "=" in value:
+                time_part = value.split("=")[0]
+                # Remove any existing entries with the same time
+                old_count = len(values_list)
+                values_list = [v for v in values_list if not v.startswith(time_part + "=")]
+                if len(values_list) < old_count:
+                    self.log(f"Removed existing rate override for {time_part} before adding new value")
+
             if value not in values_list:
                 values_list.append(value)
                 exclude_list.append(value)
@@ -1311,7 +1342,7 @@ class UserInterface:
         # Deconstruct the value into a list of minutes
         item = self.config_index.get(config_item)
         if item is None:
-            return []
+            return rate_overrides_minutes
 
         if new_value:
             values = new_value

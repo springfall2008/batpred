@@ -1,12 +1,20 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2024 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
+
+
+"""Output and sensor publishing module.
+
+Publishes prediction results, plans, rates, status, and metrics as Home
+Assistant entities. Generates HTML plan visualisations, car charging
+schedules, rate window sensors, and financial metric summaries.
+"""
 
 import math
 from datetime import datetime, timedelta
@@ -17,6 +25,13 @@ from prediction import Prediction
 
 
 class Output:
+    """Output and sensor publishing mixin.
+
+    Publishes prediction results, plans, rates, status, and metrics as
+    Home Assistant entities. Generates HTML plan visualisations, car
+    charging schedules, and financial metric summaries.
+    """
+
     def publish_car_plan(self):
         """
         Publish the car charging plan
@@ -988,6 +1003,7 @@ class Output:
         raw_plan["num_cars"] = self.num_cars
         raw_plan["iboost_enable"] = self.iboost_enable
         raw_plan["carbon_enable"] = self.carbon_enable
+        raw_plan["manual_load_value"] = self.get_arg("manual_load_value", 0.5)
 
         rate_start = self.midnight_utc
         for minute in range(minute_now_align, end_plan, self.plan_interval_minutes):
@@ -1486,10 +1502,39 @@ class Output:
             json_row["time"] = rate_start.strftime(TIME_FORMAT)
             json_row["import_rate"] = rate_value_import
             json_row["export_rate"] = rate_value_export
+            # Add adjusted rates (always included for client-side debug toggle)
+            json_row["import_rate_adjusted"] = dp2(rate_value_import / self.battery_loss / self.inverter_loss + self.metric_battery_cycle)
+            json_row["export_rate_adjusted"] = dp2(rate_value_export * self.battery_loss_discharge * self.inverter_loss - self.metric_battery_cycle)
             json_row["state"] = raw_state
             json_row["state_target"] = raw_state_target
             json_row["state_override"] = raw_state_override
             json_row["state_html"] = state
+
+            # Parse state_html to extract structured data for client-side rendering
+            if split and "</td><td" in state:
+                # Extract two states from split cell HTML
+                parts = state.split("</td><td")
+                state_text1 = parts[0]
+                # Extract bgcolor from second part (e.g., "bgcolor=#FFFF00 style=...")
+                import re
+
+                bgcolor_match = re.search(r"bgcolor=(#[A-F0-9]{6})", parts[1], re.IGNORECASE)
+                state2_color = bgcolor_match.group(1) if bgcolor_match else "#FFFFFF"
+                # Extract text after the closing ">"
+                text_match = re.search(r">(.+)$", parts[1])
+                state_text2 = text_match.group(1) if text_match else ""
+                json_row["state_text"] = state_text1
+                json_row["state_color"] = state_color
+                json_row["state2_text"] = state_text2
+                json_row["state2_color"] = state2_color
+            else:
+                # Single state cell
+                json_row["state_text"] = state
+                json_row["state_color"] = state_color
+                json_row["state2_text"] = None
+                json_row["state2_color"] = None
+
+            json_row["show_limit"] = show_limit
             json_row["pv_forecast"] = raw_pv_forecast
             json_row["pv_forecast10"] = pv_forecast10
             json_row["pv_forecast_total"] = raw_pv_total
@@ -1497,22 +1542,44 @@ class Output:
             json_row["load_forecast10"] = load_forecast10
             json_row["load_forecast_total"] = raw_load_total
             json_row["clipped"] = clipped_change
+
+            # Add color information for client-side rendering
+            json_row["rate_color_import"] = rate_color_import
+            json_row["rate_color_export"] = rate_color_export
+            json_row["pv_color"] = pv_color
+            json_row["load_color"] = load_color
+            json_row["soc_color"] = soc_color
+            json_row["cost_color"] = cost_color
+            json_row["clipped_color"] = clipped_color
+
             if self.load_forecast:
                 json_row["extra_load"] = raw_extra_forecast
                 json_row["extra_load_total"] = raw_extra_forecast_total
+                json_row["extra_color"] = extra_color
             if self.num_cars > 0:
                 json_row["car_charging"] = car_charging_kwh
+                json_row["car_color"] = car_color
             if self.iboost_enable:
                 json_row["iboost"] = iboost_amount
                 json_row["iboost_change"] = iboost_change
+                json_row["iboost_color"] = iboost_color
             json_row["soc_percent"] = soc_percent
             json_row["soc_change"] = dp2(soc_change)
+            json_row["soc_sym"] = soc_sym
             json_row["cost_change"] = dp2(metric_change / 100.0)
             json_row["total_cost"] = dp2(metric_end / 100.0)
             if self.carbon_enable:
                 json_row["carbon_intensity"] = carbon_intensity
                 json_row["carbon_change"] = carbon_change
                 json_row["total_carbon"] = dp2(carbon_amount_end / 1000.0)
+                json_row["carbon_intensity_color"] = carbon_intensity_color
+                json_row["carbon_color"] = carbon_color
+            # Add rowspan hints for client-side rendering
+            json_row["rowspan_state"] = rowspan if start_span else 0
+            json_row["skip_state_cell"] = in_span and not start_span
+            json_row["rowspan_limit"] = rowspan if start_span else 0
+            json_row["skip_limit_cell"] = in_span and not start_span
+            json_row["split"] = split
             raw_plan["rows"].append(json_row)
 
         # End of plan costs
@@ -1552,10 +1619,9 @@ class Output:
         totals["total_cost"] = dp2(metric_end / 100.0)
         totals["pv_forecast"] = dp2(pv_total)
         totals["load_forecast"] = dp2(load_total)
-        if plan_debug:
-            clipped_amount_end = self.predict_clipped_best.get(minute_relative_slot_end, clipped_amount)
-            totals["clipped"] = dp2(clipped_amount_end)
-        if plan_debug and self.load_forecast:
+        clipped_amount_end = self.predict_clipped_best.get(minute_relative_slot_end, clipped_amount)
+        totals["clipped"] = dp2(clipped_amount_end)
+        if self.load_forecast:
             totals["extra_load"] = dp2(xload_total)
         if self.num_cars > 0:
             totals["car_charging"] = dp2(car_total)
@@ -1566,6 +1632,9 @@ class Output:
             totals["carbon_intensity"] = carbon_intensity
             totals["total_carbon"] = dp2(carbon_amount_end / 1000.0)
         raw_plan["totals"] = totals
+
+        # Add timestamp to the plan data
+        raw_plan["timestamp"] = self.now_utc_real.isoformat()
 
         if publish:
             self.dashboard_item(self.prefix + ".plan_html", state="", attributes={"text": self.text_plan, "html": html, "raw": raw_plan, "friendly_name": "Plan in HTML", "icon": "mdi:web-box"})
@@ -2139,7 +2208,7 @@ class Output:
                 },
             )
 
-    def publish_charge_limit(self, charge_limit, charge_window, charge_limit_percent, best=False, soc={}):
+    def publish_charge_limit(self, charge_limit, charge_window, best=False, soc={}):
         """
         Create entity to chart charge limit
 
@@ -2147,11 +2216,13 @@ class Output:
 
         - charge_limit (list): List of charge limits in kWh
         - charge_window (list): List of charge window dictionaries
-        - charge_limit_percent (list): List of charge limit percentages
         - best (bool, optional): Flag indicating if we publish as base or as best
         - soc (dict, optional): Dictionary of the predicted SoC over time
 
         """
+        # Calculate charge_limit_percent from charge_limit
+        charge_limit_percent = calc_percent_limit(charge_limit, self.soc_max)
+
         charge_limit_time = {}
         charge_limit_time_kw = {}
         prev_perc = -1
@@ -3176,7 +3247,10 @@ class Output:
         first_window = True
         for window_n in range(len(windows)):
             window = windows[window_n]
-            percent = percents[window_n]
+            if len(percents) <= window_n:
+                percent = 0.0
+            else:
+                percent = percents[window_n]
             average = window["average"]
 
             if ignore_min and percent == 0.0:

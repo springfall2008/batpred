@@ -1,6 +1,6 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2024 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
@@ -9,6 +9,15 @@
 # pylint: disable=attribute-defined-outside-init
 #
 # Helper functions for web pages
+
+
+"""Web UI component generators for CSS and JavaScript.
+
+Contains functions that generate CSS stylesheets and JavaScript code for
+all web dashboard UI components including charts (ApexCharts), entity
+selectors, form controls, code editors (CodeMirror), modals, and responsive
+navigation menus.
+"""
 
 
 def get_restart_button_js():
@@ -935,10 +944,8 @@ function typeIsNumerical(value) {
     try {
         if (value.includes('.')) {
             value = parseFloat(value);
-            console.log("Parsed as float:", value);
         } else {
             value = parseInt(value);
-            console.log("Parsed as integer:", value);
         }
     } catch (e) {
         return false; // Not a numerical value
@@ -5234,11 +5241,9 @@ function initializeCodeMirror() {
 
         // Update button states based on YAML validation result
         updateButtonStates(saveButton, revertButton, content, !isValid);
-        console.log('Button states updated by change handler, YAML valid:', isValid);
 
         // Save content to localStorage whenever it changes
         localStorage.setItem('appsYamlContent', content);
-        console.log('Content saved to localStorage');
     });
 
     // Make CodeMirror fill the available space
@@ -5282,16 +5287,60 @@ function initializeCodeMirror() {
 
                 // Update button states with error flag
                 updateButtonStates(saveButton, revertButton, content, true);
-                console.log('Button states updated by lint event (with errors)');
             } else {
                 // Clear the lint status when syntax is valid
                 lintStatusEl.innerHTML = '';
 
                 // Update button states with no error flag
                 updateButtonStates(saveButton, revertButton, content, false);
-                console.log('Button states updated by lint event (no errors)');
             }
         });
+
+        // Set up external change detection
+        const form = document.getElementById('editorForm');
+        let originalChecksum = form.getAttribute('data-file-checksum');
+        let externalChangeWarningShown = false;
+
+        function checkForExternalChanges() {
+            fetch('./apps_editor_checksum')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.checksum && data.checksum !== originalChecksum && !externalChangeWarningShown) {
+                        const currentContent = editor.getValue();
+                        const hasLocalChanges = currentContent !== window.originalContent;
+
+                        if (!hasLocalChanges) {
+                            // No local edits - auto-reload
+                            editor.setValue(data.content);
+                            window.originalContent = data.content;
+                            originalChecksum = data.checksum;  // Update the variable
+                            form.setAttribute('data-file-checksum', data.checksum);
+                            showMessage('File was changed externally and has been reloaded.', 'success');
+                            externalChangeWarningShown = false;  // Reset so we can detect future changes
+                        } else {
+                            // Has local edits - show warning
+                            externalChangeWarningShown = true;
+                            const warningDiv = document.createElement('div');
+                            warningDiv.className = 'message warning';
+                            warningDiv.style.display = 'block';
+                            warningDiv.style.backgroundColor = '#fff3cd';
+                            warningDiv.style.color = '#856404';
+                            warningDiv.style.border = '1px solid #ffeeba';
+                            warningDiv.innerHTML = `
+                                <strong>⚠️ Warning:</strong> The apps.yaml file has been changed externally. You have unsaved local changes.<br>
+                                <button onclick="location.reload()" style="margin-top: 10px; padding: 5px 10px; background: #856404; color: white; border: none; border-radius: 4px; cursor: pointer;">Reload and discard local changes</button>
+                            `;
+                            const messageContainer = document.getElementById('messageContainer');
+                            messageContainer.innerHTML = '';
+                            messageContainer.appendChild(warningDiv);
+                        }
+                    }
+                })
+                .catch(err => console.error('Error checking for external changes:', err));
+        }
+
+        // Check every 5 seconds for external changes
+        setInterval(checkForExternalChanges, 5000);
 
         // Initial lint after a short delay to ensure editor is fully loaded
         setTimeout(() => {
@@ -5318,7 +5367,6 @@ function initializeCodeMirror() {
 
                         // Update button states based on content validity
                         updateButtonStates(saveButton, revertButton, content, !isValidYaml);
-                        console.log('Button states updated by initial validation');
 
                         // Also clear the lint status if it exists and YAML is valid
                         if (lintStatusEl && isValidYaml) {
@@ -5327,12 +5375,9 @@ function initializeCodeMirror() {
                     } else {
                         // Empty content is considered valid
                         updateButtonStates(saveButton, revertButton, content, false);
-                        console.log('Button states updated for empty content');
                     }
                 } catch (e) {
                     // Something went wrong, keep the save button disabled but enable revert if changed
-                    console.log('Error during initialization button state update:', e.message);
-
                     const content = editor.getValue();
                     updateButtonStates(saveButton, revertButton, content, true);
                 }
@@ -5404,10 +5449,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
                 // Update buttons states consistently
                 updateButtonStates(saveButton, revertButton, content, !isValid);
-                console.log('Button states updated by DOMContentLoaded final check, YAML valid:', isValid);
 
             } catch (e) {
-                console.log('YAML validation error in DOMContentLoaded:', e.message);
                 // We already know there's an error, but we won't disable the button here
                 // as that should be handled by the lint event
             }
@@ -5488,6 +5531,51 @@ document.addEventListener('DOMContentLoaded', function() {
 def get_plan_css():
     text = """<body>
     <style>
+    /* CSS Variables for colors */
+    :root {
+        --bg-default: #FFFFFF;
+        --bg-table: #FFFFFF;
+        --text-default: #000000;
+        --text-muted: #666666;
+        --border-color: #ddd;
+    }
+
+    body.dark-mode {
+        --bg-default: #1e1e1e;
+        --bg-table: #2d2d2d;
+        --text-default: #FFFFFF;
+        --text-muted: #cccccc;
+        --border-color: #444;
+    }
+
+    /* Table styling for dark mode */
+    body {
+        background-color: var(--bg-default);
+        color: var(--text-default);
+    }
+
+    table {
+        background-color: var(--bg-table);
+        color: var(--text-default);
+        border-collapse: collapse;
+    }
+
+    table td, table th {
+        border: 1px solid var(--border-color);
+        color: var(--text-default);
+    }
+
+    /* Ensure text is pure white in dark mode */
+    body.dark-mode table td,
+    body.dark-mode table th {
+        color: #FFFFFF !important;
+    }
+
+    /* Timestamp styling for dark mode */
+    body.dark-mode #planTimestamp {
+        color: #aaaaaa;
+    }
+
     .dropdown {
         position: relative;
         display: inline-block;
@@ -5497,32 +5585,54 @@ def get_plan_css():
         display: none;
         position: absolute;
         background-color: #f9f9f9;
-        min-width: 160px;
+        min-width: 220px;
         box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2);
-        z-index: 1;
+        z-index: 2001;
         border-radius: 4px;
+        padding: 12px;
+        box-sizing: border-box;
     }
 
     .dropdown-content a {
         color: black;
-        padding: 12px 16px;
+        padding: 10px 12px;
         text-decoration: none;
         display: block;
         cursor: pointer;
+        border-radius: 3px;
+        margin: 4px 0;
     }
 
     .dropdown-content a:hover {
         background-color: #f1f1f1;
     }
 
+    .dropdown-content label {
+        display: block;
+        margin-bottom: 6px;
+        font-weight: 500;
+        color: #333;
+        font-size: 13px;
+    }
+
     .clickable-time-cell {
         cursor: pointer;
         position: relative;
         transition: background-color 0.2s;
+        z-index: 1;
+    }
+
+    /* Boost z-index for cell with open dropdown */
+    .clickable-time-cell:has(.dropdown-content[style*="display: block"]) {
+        z-index: 2000;
     }
 
     .clickable-time-cell:hover {
-        background-color: #f5f5f5 !important;
+        filter: brightness(0.9);
+    }
+
+    body.dark-mode .clickable-time-cell:hover {
+        filter: brightness(1.2);
     }
 
     /* Dark mode styles */
@@ -5539,8 +5649,8 @@ def get_plan_css():
         background-color: #444;
     }
 
-    body.dark-mode .clickable-time-cell:hover {
-        background-color: #444 !important;
+    body.dark-mode .dropdown-content label {
+        color: #e0e0e0;
     }
 
     /* ============================
@@ -5606,11 +5716,18 @@ def get_plan_css():
         background-color: #fff;
         color: #333;
         border: 1px solid #ccc;
+        width: 100%;
+        padding: 8px 10px;
+        border-radius: 4px;
+        box-sizing: border-box;
+        font-size: 14px;
+        margin-bottom: 8px;
     }
 
     .dropdown-content input[type="number"]:focus {
         outline: none;
         border-color: #4CAF50;
+        box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.2);
     }
 
     .dropdown-content button {
@@ -5618,13 +5735,33 @@ def get_plan_css():
         color: white;
         border: none;
         cursor: pointer;
+        width: 100%;{
+        padding: 12px;
     }
 
-    .dropdown-content button:hover {
+    body.dark-mode .dropdown-content input[type="number"] {
+        background-color: #444;
+        color: #e0e0e0;
+        border-color: #666;
+    }
+
+    body.dark-mode .dropdown-content input[type="number"]:focus {
+        border-color: #4CAF50;
+        box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.3);
+    }
+
+    body.dark-mode .dropdown-content button {
+        background-color: #4CAF50;
+        color: white !important;
+    }
+
+    body.dark-mode .dropdown-content button:hover {
         background-color: #45a049;
+        color: white !important;
     }
 
-    /* Dark mode styles for input and button */
+    body.dark-mode .dropdown-content button:active {
+        background-color: #3d8b40 and button */
     body.dark-mode .dropdown-content input[type="number"] {
         background-color: #444;
         color: #e0e0e0;
@@ -5656,6 +5793,91 @@ def get_plan_css():
     </style>
 
     <script>
+    // Function to darken a hex color for dark mode
+    function darkenColor(hex, factor = 0.4) {
+        // Remove # if present
+        hex = hex.replace('#', '');
+
+        // Parse RGB
+        const r = parseInt(hex.substring(0, 2), 16);
+        const g = parseInt(hex.substring(2, 4), 16);
+        const b = parseInt(hex.substring(4, 6), 16);
+
+        // Darken by reducing brightness
+        const newR = Math.round(r * factor);
+        const newG = Math.round(g * factor);
+        const newB = Math.round(b * factor);
+
+        // Convert back to hex
+        return '#' + [newR, newG, newB].map(x => {
+            const hex = x.toString(16);
+            return hex.length === 1 ? '0' + hex : hex;
+        }).join('');
+    }
+
+    // Check if a color is white or very light (close to white)
+    function isWhiteColor(hex) {
+        // Remove # if present
+        hex = hex.replace('#', '').toUpperCase();
+
+        // Check if it's white or very close to white
+        return hex === 'FFFFFF' || hex === 'FFF';
+    }
+
+    // Check if dark mode is active
+    function isDarkMode() {
+        return document.body.classList.contains('dark-mode');
+    }
+
+    // Apply colors to table cells based on mode
+    function updateTableColors() {
+        const cells = document.querySelectorAll('td[bgcolor]');
+        const darkMode = isDarkMode();
+
+        cells.forEach(cell => {
+            // Skip cells with override classes - they have their own dark mode CSS
+            if (cell.classList.contains('override-charge') ||
+                cell.classList.contains('override-export') ||
+                cell.classList.contains('override-freeze-charge') ||
+                cell.classList.contains('override-freeze-export') ||
+                cell.classList.contains('override-demand') ||
+                cell.classList.contains('override-active')) {
+                return;
+            }
+
+            const bgColor = cell.getAttribute('bgcolor');
+            if (bgColor) {
+                if (darkMode) {
+                    // Convert white to black, darken other colors
+                    if (isWhiteColor(bgColor)) {
+                        cell.style.backgroundColor = '#1e1e1e';
+                    } else {
+                        cell.style.backgroundColor = darkenColor(bgColor);
+                    }
+                } else {
+                    // Keep original color in light mode
+                    cell.style.backgroundColor = bgColor;
+                }
+            }
+        });
+    }
+
+    // Watch for dark mode changes on body element
+    const bodyObserver = new MutationObserver((mutations) => {
+        mutations.forEach((mutation) => {
+            if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
+                updateTableColors();
+            }
+        });
+    });
+    bodyObserver.observe(document.body, { attributes: true });
+
+    // Apply colors on initial load
+    document.addEventListener('DOMContentLoaded', updateTableColors);
+    if (document.readyState !== 'loading') {
+        updateTableColors();
+    }
+
     // Close all dropdown menus
     function closeDropdowns() {
         var dropdowns = document.getElementsByClassName("dropdown-content");
@@ -5735,13 +5957,40 @@ def get_plan_css():
     }
 
     // Handle rate override option function
-    function handleRateOverride(time, rate, action, clear) {
-        console.log("Rate override:", time, "Rate:", rate, "Action:", action);
+    function handleRateOverride(time, type, dropdownId, clear) {
+        // Get the rate value from the input field (unless clearing)
+        let rate = null;
+        if (!clear && dropdownId) {
+            const inputElement = document.getElementById('rate_' + dropdownId);
+            if (inputElement) {
+                rate = inputElement.value;
+            }
+        } else if (clear) {
+            // When clearing, we need to find the actual stored rate for this time
+            const minutesFromMidnight = getMinutesFromTimeString(time);
+            const overrideList = type === 'import' ? window.overridesData.manual_import_rates : window.overridesData.manual_export_rates;
+            const override = overrideList.find(r => r.minutes === minutesFromMidnight);
+            if (override) {
+                rate = override.rate;
+            } else {
+                rate = 0; // Fallback if not found
+            }
+        }
+
+        // Construct the action string the server expects
+        let action;
+        if (clear) {
+            action = type === 'import' ? 'Clear Import' : 'Clear Export';
+        } else {
+            action = type === 'import' ? 'Set Import' : 'Set Export';
+        }
+
         // Create a form data object to send the override parameters
         const formData = new FormData();
         formData.append('time', time);
-        formData.append('rate', rate);
+        formData.append('rate', rate || '0');
         formData.append('action', action);
+
         // Send the override request to the server
         fetch('./rate_override', {
             method: 'POST',
@@ -5789,13 +6038,33 @@ def get_plan_css():
 
     }
 
-    // Handle rate override option function
-    function handleLoadOverride(time, adjustment, action, clear) {
-        console.log("Load override:", time, "Adjustment:", adjustment, "Action:", action);
+    // Handle load override option function
+    function handleLoadOverride(time, dropdownId, clear) {
+        // Get the adjustment value from the input field (unless clearing)
+        let adjustment = null;
+        if (!clear && dropdownId) {
+            const inputElement = document.getElementById('load_' + dropdownId);
+            if (inputElement) {
+                adjustment = inputElement.value;
+            }
+        } else if (clear) {
+            // When clearing, we need to find the actual stored adjustment for this time
+            const minutesFromMidnight = getMinutesFromTimeString(time);
+            const override = window.overridesData.manual_load_adjust.find(r => r.minutes === minutesFromMidnight);
+            if (override) {
+                adjustment = override.adjustment;
+            } else {
+                adjustment = 0; // Fallback if not found
+            }
+        }
+
+        // Construct the action string the server expects
+        const action = clear ? 'Clear Load' : 'Set Load';
+
         // Create a form data object to send the override parameters
         const formData = new FormData();
         formData.append('time', time);
-        formData.append('rate', adjustment);
+        formData.append('rate', adjustment || '0');
         formData.append('action', action);
         // Send the override request to the server
         fetch('./rate_override', {
@@ -5847,7 +6116,6 @@ def get_plan_css():
 
     // Handle option selection
     function handleTimeOverride(time, action) {
-        console.log("Time override:", time, "Action:", action);
 
         // Create a form data object to send the override parameters
         const formData = new FormData();
@@ -5898,14 +6166,33 @@ def get_plan_css():
     }
 
     // Handle SOC override
-    function handleSocOverride(time, value, action, isClear) {
-        console.log("SOC override:", time, "Value:", value, "Action:", action, "Clear:", isClear);
+    function handleSocOverride(time, dropdownId, isClear) {
+        // Get the SOC value from the input field (unless clearing)
+        let value = null;
+        if (!isClear && dropdownId) {
+            const inputElement = document.getElementById('soc_' + dropdownId);
+            if (inputElement) {
+                value = inputElement.value;
+            }
+        } else if (isClear) {
+            // When clearing, we need to find the actual stored SOC for this time
+            const minutesFromMidnight = getMinutesFromTimeString(time);
+            const override = window.overridesData.manual_soc.find(r => r.minutes === minutesFromMidnight);
+            if (override) {
+                value = override.target;
+            } else {
+                value = 0; // Fallback if not found
+            }
+        }
+
+        // Construct the action string the server expects
+        const action = isClear ? 'Clear SOC' : 'Set SOC';
 
         // Create a form data object to send the override parameters
         const formData = new FormData();
         formData.append('time', time);
         formData.append('action', action);
-        formData.append('rate', value);
+        formData.append('rate', value || '0');
 
         // Send the override request to the server
         fetch('./rate_override', {
@@ -5965,12 +6252,817 @@ def get_plan_css():
     return text
 
 
+def get_plan_renderer_js():
+    """
+    JavaScript renderer for client-side plan table generation from JSON data
+    Includes timestamp-based change detection, 5-second polling, error handling, and stale data warnings
+    """
+    text = """
+    <script>
+    // State variables
+    let currentView = 'plan';
+    let newestDataTimestamp = null;  // Track the newest data timestamp we've seen
+    let updateIntervalId = null;
+    let dropdownCounter = 0;
+
+    // Load debug toggle state from sessionStorage
+    function loadDebugState() {
+        const debugToggle = document.getElementById('debugToggle');
+        if (debugToggle) {
+            const savedState = sessionStorage.getItem('planDebugToggle');
+            debugToggle.checked = savedState === 'true';
+        }
+    }
+
+    // Save debug toggle state to sessionStorage
+    function saveDebugState() {
+        const debugToggle = document.getElementById('debugToggle');
+        if (debugToggle) {
+            sessionStorage.setItem('planDebugToggle', debugToggle.checked);
+        }
+    }
+
+    // Render plan table from JSON data
+    function renderPlanTable(jsonData, overrides, showDebug, editable) {
+        try {
+            if (!jsonData || !jsonData.rows) {
+                return '<p style="color:red;">No plan data available</p>';
+            }
+
+            // Store plan midnight reference so getMinutesFromTimeString can compute
+            // absolute minutes for next-day slots (e.g., tomorrow 00:00 = 1440 min,
+            // not 0 which is what a plain hours*60+minutes calculation would return).
+            window.planMidnightRef = jsonData.time || null;
+
+            let html = '<table>';
+            const cellStyle = 'style="padding: 4px;"';
+
+            // Render header
+            html += '<tr>';
+            html += '<th><b>Time</b></th>';
+            html += showDebug ? '<th><b>Import p (w/loss)</b></th>' : '<th><b>Import p</b></th>';
+            html += showDebug ? '<th><b>Export p (w/loss)</b></th>' : '<th><b>Export p</b></th>';
+            html += '<th colspan="2"><b>State</b></th>';
+            html += '<th><b>Limit %</b></th>';
+            html += showDebug ? '<th><b>PV kWh (10%)</b></th>' : '<th><b>PV kWh</b></th>';
+            html += showDebug ? '<th><b>Load kWh (10%)</b></th>' : '<th><b>Load kWh</b></th>';
+            if (showDebug) {
+                html += '<th><b>Clip kWh</b></th>';
+            }
+            if (showDebug && jsonData.rows.some(r => r.extra_load !== undefined)) {
+                html += '<th><b>XLoad kWh</b></th>';
+            }
+            if (jsonData.num_cars > 0) {
+                html += '<th><b>Car kWh</b></th>';
+            }
+            if (jsonData.iboost_enable) {
+                html += '<th><b>iBoost kWh</b></th>';
+            }
+            html += '<th><b>SoC %</b></th>';
+            html += '<th><b>Cost</b></th>';
+            html += '<th><b>Total</b></th>';
+            if (jsonData.carbon_enable) {
+                html += '<th><b>CO2 g/kWh</b></th>';
+                html += '<th><b>CO2 kg</b></th>';
+            }
+            html += '</tr>';
+
+            // Render rows
+            for (let i = 0; i < jsonData.rows.length; i++) {
+                const row = jsonData.rows[i];
+                html += '<tr style="color:black">';
+
+                // Time cell with dropdown (if editable)
+                const timeDisplay = formatTimeDisplay(row.time);
+                if (editable) {
+                    html += renderTimeCell(row.time, timeDisplay, overrides);
+                } else {
+                    html += `<td id=time bgcolor=#FFFFFF>${timeDisplay}</td>`;
+                }
+
+                // Import rate - formatted bold if in charge window, with adjusted rate in parentheses if debug mode
+                const importBold = row.state && (row.state === 'Chrg' || row.state === 'HoldChrg' || row.state === 'FrzChrg');
+                let importText = row.import_rate.toFixed(2);
+                if (showDebug && row.import_rate_adjusted !== undefined) {
+                    importText += ` (${row.import_rate_adjusted.toFixed(2)})`;
+                }
+                if (importBold) {
+                    importText = `<b>${importText}</b>`;
+                }
+                if (editable) {
+                    html += renderRateCell(row.import_rate, row.rate_color_import, 'import', row.time, timeDisplay, overrides, importText);
+                } else {
+                    html += `<td id=import ${cellStyle} bgcolor=${row.rate_color_import || '#FFFFFF'}>${importText}</td>`;
+                }
+
+                // Export rate - with adjusted rate in parentheses if debug mode
+                let exportText = row.export_rate.toFixed(2);
+                if (showDebug && row.export_rate_adjusted !== undefined) {
+                    exportText += ` (${row.export_rate_adjusted.toFixed(2)})`;
+                }
+                if (editable) {
+                    html += renderRateCell(row.export_rate, row.rate_color_export, 'export', row.time, timeDisplay, overrides, exportText);
+                } else {
+                    html += `<td id=export ${cellStyle} bgcolor=${row.rate_color_export || '#FFFFFF'}>${exportText}</td>`;
+                }
+
+                // State cells (with rowspan and split handling)
+                if (!row.skip_state_cell) {
+                    if (editable) {
+                        html += renderStateCell(row, timeDisplay, overrides);
+                    } else {
+                        const rowspanAttr = row.rowspan_state > 0 ? ` rowspan="${row.rowspan_state}"` : '';
+                        const colspanAttr = row.split ? '' : ' colspan=2';
+                        html += `<td${colspanAttr}${rowspanAttr} ${cellStyle} bgcolor=${row.state_color || '#FFFFFF'}>${row.state_text || ''}</td>`;
+
+                        // Second state cell if split
+                        if (row.split && row.state2_text) {
+                            html += `<td${rowspanAttr} ${cellStyle} bgcolor=${row.state2_color || '#FFFFFF'}>${row.state2_text}</td>`;
+                        }
+                    }
+                }
+
+                // Limit cell (with rowspan handling)
+                if (!row.skip_limit_cell) {
+                    const rowspanAttr = row.rowspan_limit > 0 ? ` rowspan="${row.rowspan_limit}"` : '';
+                    html += `<td${rowspanAttr} bgcolor=#FFFFFF> ${row.show_limit || ''}</td>`;
+                }
+
+                // PV forecast (with 10% value in brackets if debug mode)
+                let pvText = row.pv_forecast == 0 ? '&#9866;' : row.pv_forecast;
+                if (showDebug && row.pv_forecast10 > 0) {
+                    pvText += ` (${row.pv_forecast10})`;
+                }
+                if (row.pv_forecast >= 0.1) {
+                    pvText += '&#9728;';
+                }
+                html += `<td id=pv bgcolor=${row.pv_color || '#FFFFFF'}>${pvText}</td>`;
+
+                // Load forecast (with 10% value in brackets if debug mode)
+                if (editable) {
+                    html += renderLoadCell(row.time, timeDisplay, row.load_forecast, row.load_forecast10, row.load_color, showDebug, overrides, jsonData.manual_load_value !== undefined ? jsonData.manual_load_value : 0.5);
+                } else {
+                    let loadText = row.load_forecast !== undefined ? row.load_forecast : '';
+                    if (showDebug && row.load_forecast10 > 0) {
+                        loadText += ` (${row.load_forecast10})`;
+                    }
+                    html += `<td id=load bgcolor=${row.load_color || '#FFFFFF'}>${loadText}</td>`;
+                }
+
+                // Clipped (only if debug)
+                if (showDebug) {
+                    const clippedVal = row.clipped == 0 ? '&#9866;' : row.clipped;
+                    html += `<td id=clip bgcolor=${row.clipped_color || '#FFFFFF'}>${clippedVal}</td>`;
+                }
+
+                // XLoad (extra load) - only if debug and extra_load exists
+                if (showDebug && row.extra_load !== undefined) {
+                    const xloadVal = row.extra_load || '&#9866;';
+                    html += `<td id=extra bgcolor=${row.extra_color || '#FFFFFF'}>${xloadVal}</td>`;
+                }
+
+                // Car charging (conditional)
+                if (jsonData.num_cars > 0) {
+                    const carVal = row.car_charging > 0 ? row.car_charging : '&#9866;';
+                    html += `<td id=car bgcolor=${row.car_color || '#FFFFFF'}>${carVal}</td>`;
+                }
+
+                // iBoost (conditional)
+                if (jsonData.iboost_enable) {
+                    const iboostVal = row.iboost || '&#9866;';
+                    html += `<td bgcolor=${row.iboost_color || '#FFFFFF'}>${iboostVal}</td>`;
+                }
+
+                // SOC
+                const socSym = row.soc_sym || (row.soc_change > 0 ? '&nearr;' : (row.soc_change < 0 ? '&searr;' : '&rarr;'));
+                if (editable) {
+                    html += renderSocCell(row.time, timeDisplay, row.soc_percent, row.soc_color, socSym, overrides);
+                } else {
+                    html += `<td id=soc bgcolor=${row.soc_color || '#FFFFFF'}>${row.soc_percent}${socSym}</td>`;
+                }
+
+                // Cost change
+                const costChange = row.cost_change || 0;
+                let costStr = '';
+                if (costChange >= 0.005) {
+                    costStr = `+${Math.round(costChange * 100)} ${jsonData.currency_symbols[1]} &nearr;`;
+                } else if (costChange <= -0.005) {
+                    costStr = `-${Math.round(Math.abs(costChange) * 100)} ${jsonData.currency_symbols[1]} &searr;`;
+                } else {
+                    costStr = '&rarr;';
+                }
+                html += `<td id=cost bgcolor=${row.cost_color || '#FFFFFF'}>${costStr}</td>`;
+
+                // Total cost
+                const totalCost = row.total_cost ? `${jsonData.currency_symbols[0]}${row.total_cost.toFixed(2)}` : '';
+                html += `<td id=total_cost bgcolor=#FFFFFF>${totalCost}</td>`;
+
+                // Carbon (conditional)
+                if (jsonData.carbon_enable) {
+                    html += `<td id=carbon bgcolor=${row.carbon_intensity_color || '#FFFFFF'}>${row.carbon_intensity || ''}</td>`;
+                    html += `<td id=total_carbon bgcolor=${row.carbon_color || '#FFFFFF'}>${row.total_carbon || ''}</td>`;
+                }
+
+                html += '</tr>';
+            }
+
+            // Render totals row if available
+            if (jsonData.totals) {
+                const totals = jsonData.totals;
+                html += '<tr style="color:black">';
+
+                // Empty cells for Time, Import p, Export p, State (colspan 2), Limit %
+                html += '<td></td><td></td><td></td><td></td><td></td><td></td>';
+
+                // PV forecast total
+                html += `<td bgcolor=#FFFFFF><b>${totals.pv_forecast || ''}</b></td>`;
+
+                // Load forecast total
+                html += `<td bgcolor=#FFFFFF><b>${totals.load_forecast || ''}</b></td>`;
+
+                // Clipped (if debug)
+                if (showDebug && totals.clipped !== undefined) {
+                    html += `<td bgcolor=#FFFFFF><b>${totals.clipped}</b></td>`;
+                }
+
+                // XLoad (if debug and exists)
+                if (showDebug && totals.extra_load !== undefined) {
+                    html += `<td bgcolor=#FFFFFF><b>${totals.extra_load}</b></td>`;
+                }
+
+                // Car charging (if enabled)
+                if (jsonData.num_cars > 0 && totals.car_charging !== undefined) {
+                    html += `<td bgcolor=#FFFFFF><b>${totals.car_charging}</b></td>`;
+                }
+
+                // iBoost (if enabled)
+                if (jsonData.iboost_enable && totals.iboost !== undefined) {
+                    const iboostVal = totals.iboost == 0 ? '&#9866;' : totals.iboost;
+                    html += `<td bgcolor=#FFFFFF><b>${iboostVal}</b></td>`;
+                }
+
+                // SOC percent
+                html += `<td bgcolor=#FFFFFF><b>${totals.soc_percent || ''}</b></td>`;
+
+                // Empty cell for SOC change
+                html += '<td></td>';
+
+                // Total cost
+                const totalCostStr = totals.total_cost >= 0 ?
+                    `${jsonData.currency_symbols[0]}${totals.total_cost}` :
+                    `-${jsonData.currency_symbols[0]}${Math.abs(totals.total_cost).toFixed(2)}`;
+                html += `<td bgcolor=#FFFFFF><b>${totalCostStr}</b></td>`;
+
+                // Carbon (if enabled)
+                if (jsonData.carbon_enable) {
+                    html += '<td></td>'; // Empty cell for carbon intensity
+                    html += `<td bgcolor=#FFFFFF><b>${totals.total_carbon || ''}</b></td>`;
+                }
+
+                html += '</tr>';
+            }
+
+            html += '</table>';
+            return html;
+        } catch (error) {
+            console.error('Error rendering plan:', error);
+            return `<p style="color:red;">Error rendering plan: ${error.message}</p>`;
+        }
+    }
+
+    // Render time cell (simple, no highlighting - that's moved to state column)
+    function renderTimeCell(timeStr, timeDisplay, overrides) {
+        const dropdownId = `dropdown_${dropdownCounter++}`;
+        const minutesFromMidnight = getMinutesFromTimeString(timeStr);
+
+        const manualTimes = overrides.manual_charge_times.concat(
+            overrides.manual_export_times,
+            overrides.manual_freeze_charge_times,
+            overrides.manual_freeze_export_times,
+            overrides.manual_demand_times
+        );
+
+        // Determine highlight color based on override type
+        let bgColor = '#FFFFFF';
+        let overrideClass = '';
+
+        if (overrides.manual_charge_times.includes(minutesFromMidnight)) {
+            bgColor = '#D0F0D0';  // Light green hint
+            overrideClass = 'override-charge';
+        } else if (overrides.manual_export_times.includes(minutesFromMidnight)) {
+            bgColor = '#FFFFE0';  // Light yellow hint
+            overrideClass = 'override-export';
+        } else if (overrides.manual_demand_times.includes(minutesFromMidnight)) {
+            bgColor = '#FFE0E0';  // Light red hint
+            overrideClass = 'override-demand';
+        } else if (overrides.manual_freeze_charge_times.includes(minutesFromMidnight)) {
+            bgColor = '#E8E8E8';  // Light gray hint
+            overrideClass = 'override-freeze-charge';
+        } else if (overrides.manual_freeze_export_times.includes(minutesFromMidnight)) {
+            bgColor = '#D8D8D8';  // Darker gray hint
+            overrideClass = 'override-freeze-export';
+        }
+
+        let html = `<td bgcolor=${bgColor} onclick="toggleForceDropdown('${dropdownId}')" class="clickable-time-cell ${overrideClass}">`;
+        html += timeDisplay;
+        html += '<div class="dropdown">';
+        html += `<div id="${dropdownId}" class="dropdown-content">`;
+
+        // Add dropdown options
+        if (manualTimes.includes(minutesFromMidnight)) {
+            html += `<a onclick="handleTimeOverride('${timeDisplay}', 'Clear')">Clear</a>`;
+        }
+        if (!overrides.manual_demand_times.includes(minutesFromMidnight)) {
+            html += `<a onclick="handleTimeOverride('${timeDisplay}', 'Manual Demand')">Manual Demand</a>`;
+        }
+        if (!overrides.manual_charge_times.includes(minutesFromMidnight)) {
+            html += `<a onclick="handleTimeOverride('${timeDisplay}', 'Manual Charge')">Manual Charge</a>`;
+        }
+        if (!overrides.manual_export_times.includes(minutesFromMidnight)) {
+            html += `<a onclick="handleTimeOverride('${timeDisplay}', 'Manual Export')">Manual Export</a>`;
+        }
+        if (!overrides.manual_freeze_charge_times.includes(minutesFromMidnight)) {
+            html += `<a onclick="handleTimeOverride('${timeDisplay}', 'Manual Freeze Charge')">Manual Freeze Charge</a>`;
+        }
+        if (!overrides.manual_freeze_export_times.includes(minutesFromMidnight)) {
+            html += `<a onclick="handleTimeOverride('${timeDisplay}', 'Manual Freeze Export')">Manual Freeze Export</a>`;
+        }
+
+        html += '</div></div></td>';
+        return html;
+    }
+
+    // Render state cell without dropdown (dropdown moved to time column)
+    function renderStateCell(row, timeDisplay, overrides) {
+        const cellStyle = 'style="padding: 4px;"';
+        const timeStr = row.time;
+        const minutesFromMidnight = getMinutesFromTimeString(timeStr);
+
+        // Determine background color based on override type (prioritize manual overrides over default state color)
+        let bgColor = row.state_color || '#FFFFFF';
+        let overrideClass = '';
+
+        if (overrides.manual_charge_times.includes(minutesFromMidnight)) {
+            bgColor = '#3AEE85';
+            overrideClass = 'override-charge';
+        } else if (overrides.manual_export_times.includes(minutesFromMidnight)) {
+            bgColor = '#FFFF00';
+            overrideClass = 'override-export';
+        } else if (overrides.manual_demand_times.includes(minutesFromMidnight)) {
+            bgColor = '#F18261';
+            overrideClass = 'override-demand';
+        } else if (overrides.manual_freeze_charge_times.includes(minutesFromMidnight)) {
+            bgColor = '#C0C0C0';
+            overrideClass = 'override-freeze-charge';
+        } else if (overrides.manual_freeze_export_times.includes(minutesFromMidnight)) {
+            bgColor = '#AAAAAA';
+            overrideClass = 'override-freeze-export';
+        }
+
+        const rowspanAttr = row.rowspan_state > 0 ? ` rowspan="${row.rowspan_state}"` : '';
+        const colspanAttr = row.split ? '' : ' colspan=2';
+
+        let html = `<td${colspanAttr}${rowspanAttr} ${cellStyle} bgcolor=${bgColor} class="${overrideClass}">`;
+        html += row.state_text || '';
+        html += '</td>';
+
+        // Second state cell if split
+        if (row.split && row.state2_text) {
+            html += `<td${rowspanAttr} ${cellStyle} bgcolor=${row.state2_color || '#FFFFFF'}>${row.state2_text}</td>`;
+        }
+
+        return html;
+    }
+
+    // Render rate cell with dropdown for manual rate overrides
+    function renderRateCell(rate, bgColor, type, timeStr, timeDisplay, overrides, displayText) {
+        const cellStyle = 'style="padding: 4px;"';
+        const dropdownId = `dropdown_${dropdownCounter++}`;
+        const minutesFromMidnight = getMinutesFromTimeString(timeStr);
+        const overrideList = type === 'import' ? overrides.manual_import_rates : overrides.manual_export_rates;
+        const override = overrideList.find(r => r.minutes === minutesFromMidnight);
+        const isOverride = override !== undefined;
+
+        // Use provided displayText if available, otherwise format rate
+        const rateDisplay = displayText !== undefined ? displayText : rate.toFixed(2);
+
+        // Use the actual stored override rate for the input field if one exists
+        const inputValue = isOverride ? override.rate : rate;
+
+        let html = `<td id=${type} data-minute="${minutesFromMidnight}" data-rate="${rate}" ${cellStyle} bgcolor=${bgColor} onclick="toggleForceDropdown('${dropdownId}')" class="clickable-time-cell">`;
+        html += `${rateDisplay}${isOverride ? ' &#8526;' : ''}`;
+        html += '<div class="dropdown">';
+        html += `<div id="${dropdownId}" class="dropdown-content">`;
+        html += `<label>Override ${type} rate:</label>`;
+        html += `<input type="number" id="rate_${dropdownId}" value="${inputValue}" step="0.01">`;
+        html += `<button onclick="handleRateOverride('${timeDisplay}', '${type}', '${dropdownId}')">Set Override</button>`;
+        if (isOverride) {
+            html += `<a onclick="handleRateOverride('${timeDisplay}', '${type}', null, true)">Clear</a>`;
+        }
+        html += '</div></div></td>';
+        return html;
+    }
+
+    // Render load cell with dropdown for load adjustments
+    function renderLoadCell(timeStr, timeDisplay, loadValue, loadValue10, bgColor, showDebug, overrides, manualLoadValue) {
+        const dropdownId = `dropdown_${dropdownCounter++}`;
+        const minutesFromMidnight = getMinutesFromTimeString(timeStr);
+        const isOverride = overrides.manual_load_adjust.some(r => r.minutes === minutesFromMidnight);
+
+        // Add 10% value in brackets if debug mode
+        let displayValue = loadValue;
+        if (showDebug && loadValue10 > 0) {
+            displayValue += ` (${loadValue10})`;
+        }
+
+        const defaultLoadValue = manualLoadValue !== undefined ? manualLoadValue : 0.5;
+        let html = `<td id=load data-minute="${minutesFromMidnight}" bgcolor=${bgColor} onclick="toggleForceDropdown('${dropdownId}')" class="clickable-time-cell">`;
+        html += `${displayValue}${isOverride ? ' &#8526;' : ''}`;
+        html += '<div class="dropdown">';
+        html += `<div id="${dropdownId}" class="dropdown-content">`;
+        html += '<label>Adjust load (kWh):</label>';
+        html += `<input type="number" id="load_${dropdownId}" value="${defaultLoadValue}" step="0.1">`;
+        html += `<button onclick="handleLoadOverride('${timeDisplay}', '${dropdownId}')">Set Adjustment</button>`;
+        if (isOverride) {
+            html += `<a onclick="handleLoadOverride('${timeDisplay}', null, true)">Clear</a>`;
+        }
+        html += '</div></div></td>';
+        return html;
+    }
+
+    // Render SOC cell with dropdown for manual SOC targets
+    function renderSocCell(timeStr, timeDisplay, socValue, bgColor, socSym, overrides) {
+        const dropdownId = `dropdown_${dropdownCounter++}`;
+        const minutesFromMidnight = getMinutesFromTimeString(timeStr);
+        const isOverride = overrides.manual_soc.some(r => r.minutes === minutesFromMidnight);
+
+        let html = `<td id=soc data-minute="${minutesFromMidnight}" bgcolor=${bgColor} onclick="toggleForceDropdown('${dropdownId}')" class="clickable-time-cell">`;
+        html += `${socValue}${socSym}${isOverride ? ' &#8526;' : ''}`;
+        html += '<div class="dropdown">';
+        html += `<div id="${dropdownId}" class="dropdown-content">`;
+        html += '<label>Target SOC (%):</label>';
+        html += `<input type="number" id="soc_${dropdownId}" value="${socValue}" step="1" min="0" max="100">`;
+        html += `<button onclick="handleSocOverride('${timeDisplay}', '${dropdownId}')">Set Target</button>`;
+        if (isOverride) {
+            html += `<a onclick="handleSocOverride('${timeDisplay}', null, true)">Clear</a>`;
+        }
+        html += '</div></div></td>';
+        return html;
+    }
+
+    // Utility: Format ISO timestamp to short display format (e.g., "Fri 15:45")
+    function formatTimeDisplay(isoTimestamp) {
+        try {
+            const date = new Date(isoTimestamp);
+            const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+            const dayName = days[date.getDay()];
+            const hours = date.getHours().toString().padStart(2, '0');
+            const minutes = date.getMinutes().toString().padStart(2, '0');
+            return `${dayName} ${hours}:${minutes}`;
+        } catch (e) {
+            return isoTimestamp; // Fallback to original if parsing fails
+        }
+    }
+
+    // Utility: Convert time string to minutes from midnight
+    function getMinutesFromTimeString(timeStr) {
+        try {
+            // Try to parse as ISO timestamp first
+            const date = new Date(timeStr);
+            if (!isNaN(date.getTime())) {
+                // Use the plan midnight reference to compute absolute minutes so that
+                // next-day slots (e.g., tomorrow 00:00) return 1440 not 0.
+                // This makes the value comparable to the override times lists which
+                // are stored as minutes-from-today's-midnight (can exceed 1439).
+                if (window.planMidnightRef) {
+                    const midnight = new Date(window.planMidnightRef);
+                    return Math.round((date - midnight) / 60000);
+                }
+                return date.getHours() * 60 + date.getMinutes();
+            }
+            // Fallback to "Day HH:MM" format parsing
+            const parts = timeStr.split(' ');
+            if (parts.length < 2) return 0;
+            const timeParts = parts[1].split(':');
+            if (timeParts.length < 2) return 0;
+            return parseInt(timeParts[0]) * 60 + parseInt(timeParts[1]);
+        } catch (e) {
+            return 0;
+        }
+    }
+
+    // Format timestamp to readable format
+    function formatTimestamp(isoTimestamp) {
+        if (!isoTimestamp) return '';
+        try {
+            const date = new Date(isoTimestamp);
+            const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            const day = date.getDate();
+            const month = months[date.getMonth()];
+            const year = date.getFullYear();
+            const hours = String(date.getHours()).padStart(2, '0');
+            const minutes = String(date.getMinutes()).padStart(2, '0');
+            const seconds = String(date.getSeconds()).padStart(2, '0');
+            return `Updated: ${day} ${month} ${year} ${hours}:${minutes}:${seconds}`;
+        } catch (e) {
+            return '';
+        }
+    }
+
+    // Adjust timestamp size based on window width
+    function adjustTimestampSize() {
+        const timestampElement = document.getElementById('planTimestamp');
+        if (!timestampElement) return;
+
+        const width = window.innerWidth;
+
+        if (width <= 600) {
+            timestampElement.style.fontSize = '10px';
+            timestampElement.style.marginLeft = '6px';
+        } else if (width <= 900) {
+            timestampElement.style.fontSize = '11px';
+            timestampElement.style.marginLeft = '10px';
+        } else if (width <= 1200) {
+            timestampElement.style.fontSize = '12px';
+            timestampElement.style.marginLeft = '12px';
+        } else {
+            timestampElement.style.fontSize = '13px';
+            timestampElement.style.marginLeft = '16px';
+        }
+    }
+
+    // Adjust all font sizes based on window width for responsive layout
+    function adjustResponsiveSizes() {
+        const width = window.innerWidth;
+
+        // Adjust timestamp
+        adjustTimestampSize();
+
+        // Adjust table fonts
+        const tables = document.querySelectorAll('table');
+        const buttons = document.querySelectorAll('.view-button');
+        const debugLabel = document.getElementById('debugToggleLabel');
+
+        if (width <= 600) {
+            // Very small screens
+            tables.forEach(table => {
+                table.style.fontSize = '10px';
+                const cells = table.querySelectorAll('td, th');
+                cells.forEach(cell => cell.style.padding = '2px');
+            });
+            buttons.forEach(btn => btn.style.fontSize = '11px');
+            if (debugLabel) debugLabel.style.fontSize = '11px';
+        } else if (width <= 900) {
+            // Small screens
+            tables.forEach(table => {
+                table.style.fontSize = '11px';
+                const cells = table.querySelectorAll('td, th');
+                cells.forEach(cell => cell.style.padding = '3px');
+            });
+            buttons.forEach(btn => btn.style.fontSize = '12px');
+            if (debugLabel) debugLabel.style.fontSize = '12px';
+        } else if (width <= 1200) {
+            // Medium screens
+            tables.forEach(table => {
+                table.style.fontSize = '13px';
+                const cells = table.querySelectorAll('td, th');
+                cells.forEach(cell => cell.style.padding = '4px');
+            });
+            buttons.forEach(btn => btn.style.fontSize = '13px');
+            if (debugLabel) debugLabel.style.fontSize = '13px';
+        } else {
+            // Large screens - reset to default
+            tables.forEach(table => {
+                table.style.fontSize = '';
+                const cells = table.querySelectorAll('td, th');
+                cells.forEach(cell => cell.style.padding = '');
+            });
+            buttons.forEach(btn => btn.style.fontSize = '14px');
+            if (debugLabel) debugLabel.style.fontSize = '';
+        }
+    }
+
+    // Update timestamp display
+    function updateTimestampDisplay() {
+        let timestamp = null;
+        if (currentView === 'plan' && window.planData) {
+            timestamp = window.planData.timestamp;
+        } else if (currentView === 'yesterday' && window.yesterdayData) {
+            timestamp = window.yesterdayData.timestamp;
+        } else if (currentView === 'baseline' && window.baselineData) {
+            timestamp = window.baselineData.timestamp;
+        }
+
+        const timestampElement = document.getElementById('planTimestamp');
+        if (timestampElement) {
+            timestampElement.textContent = formatTimestamp(timestamp);
+            adjustResponsiveSizes();
+        }
+    }
+
+    // Switch between plan views
+    function switchView(view) {
+        currentView = view;
+
+        // Update button styling
+        document.querySelectorAll('.view-button').forEach(btn => {
+            if (btn.dataset.view === view) {
+                btn.style.backgroundColor = '#4CAF50';
+                btn.style.color = 'white';
+            } else {
+                btn.style.backgroundColor = '#f0f0f0';
+                btn.style.color = 'black';
+            }
+        });
+
+        // Show/hide debug toggle based on view
+        const debugToggleLabel = document.getElementById('debugToggleLabel');
+        if (debugToggleLabel) {
+            if (view === 'plan') {
+                debugToggleLabel.style.display = 'block';
+            } else {
+                debugToggleLabel.style.display = 'none';
+            }
+        }
+
+        // Update timestamp display
+        updateTimestampDisplay();
+
+        // Render the selected view
+        refreshPlan();
+    }
+
+    // Refresh plan display
+    function refreshPlan() {
+        const container = document.getElementById('planContainer');
+        const debugToggle = document.getElementById('debugToggle');
+        // Only allow debug mode for the plan view
+        const showDebug = (currentView === 'plan' && debugToggle) ? debugToggle.checked : false;
+
+        let data, timestamp, overrides;
+        if (currentView === 'plan') {
+            data = window.planData;
+            timestamp = data ? data.timestamp : null;
+            overrides = window.overridesData || {};
+        } else if (currentView === 'yesterday') {
+            data = window.yesterdayData;
+            timestamp = data ? data.timestamp : null;
+            overrides = {};
+        } else {
+            data = window.baselineData;
+            timestamp = data ? data.timestamp : null;
+            overrides = {};
+        }
+
+        if (!data) {
+            container.innerHTML = '<h2>Plan data is loading, please wait...</h2>';
+            return;
+        }
+
+        // Check for stale data
+        checkStaleness(timestamp);
+
+        // Render table
+        const editable = (currentView === 'plan');
+        container.innerHTML = renderPlanTable(data, overrides, showDebug, editable);
+
+        // Apply dark mode colors if needed
+        updateTableColors();
+
+        // Apply responsive sizing
+        adjustResponsiveSizes();
+    }
+
+    // Check if data is stale (>15 minutes old)
+    function checkStaleness(timestamp) {
+        const staleWarning = document.getElementById('staleWarning');
+        if (!timestamp || !staleWarning) return;
+
+        const dataTime = new Date(timestamp);
+        const now = new Date();
+        const ageMs = now - dataTime;
+        const isStale = ageMs > 900000; // 15 minutes in milliseconds
+
+        if (isStale) {
+            staleWarning.style.display = 'block';
+        } else {
+            staleWarning.style.display = 'none';
+        }
+    }
+
+    // Fetch and render plan data
+    async function fetchAndRenderPlan() {
+        try {
+            // Build query string with newest data timestamp for conditional fetch
+            const params = new URLSearchParams();
+            if (newestDataTimestamp) {
+                params.append('newest_timestamp', newestDataTimestamp);
+            }
+            if (window.overridesHash) {
+                params.append('overrides_hash', window.overridesHash);
+            }
+
+            const url = './api/plan_data' + (params.toString() ? '?' + params.toString() : '');
+            const response = await fetch(url);
+            if (!response.ok) {
+                throw new Error(`HTTP error ${response.status}`);
+            }
+
+            const data = await response.json();
+
+            // Check if server says data is unchanged
+            if (data.unchanged === true) {
+                // Data hasn't changed, no need to update
+                // Still check staleness based on plan data timestamp
+                if (window.planData && window.planData.timestamp) {
+                    checkStaleness(window.planData.timestamp);
+                }
+
+                // Hide error message
+                const errorDiv = document.getElementById('planError');
+                if (errorDiv) {
+                    errorDiv.style.display = 'none';
+                }
+                return; // Exit early, no updates needed
+            }
+
+            // We received new data - update everything and re-render
+            window.planData = data.plan;
+            window.yesterdayData = data.yesterday;
+            window.baselineData = data.baseline;
+            window.overridesData = data.overrides;
+            window.overridesHash = data.overrides_hash;
+
+            // Update newestDataTimestamp to the newest timestamp from the data we just received
+            const timestamps = [];
+            if (data.plan && data.plan.timestamp) timestamps.push(data.plan.timestamp);
+            if (data.yesterday && data.yesterday.timestamp) timestamps.push(data.yesterday.timestamp);
+            if (data.baseline && data.baseline.timestamp) timestamps.push(data.baseline.timestamp);
+            if (timestamps.length > 0) {
+                newestDataTimestamp = timestamps.reduce((a, b) => a > b ? a : b);
+            }
+
+            // Hide error message on successful fetch
+            const errorDiv = document.getElementById('planError');
+            if (errorDiv) {
+                errorDiv.style.display = 'none';
+            }
+
+            // Update timestamp display with new data
+            updateTimestampDisplay();
+
+            // Always re-render when we receive new data
+            refreshPlan();
+        } catch (error) {
+            console.error('Error fetching plan data:', error);
+            const errorDiv = document.getElementById('planError');
+            if (errorDiv) {
+                errorDiv.textContent = `Error fetching plan data: ${error.message}`;
+                errorDiv.style.display = 'block';
+            }
+        }
+    }
+
+    // Start automatic updates
+    function startPlanUpdates() {
+        // Load debug state
+        loadDebugState();
+
+        // Initial render
+        refreshPlan();
+
+        // Set up polling every 5 seconds
+        if (updateIntervalId) {
+            clearInterval(updateIntervalId);
+        }
+        updateIntervalId = setInterval(fetchAndRenderPlan, 5000);
+    }
+
+    // Stop automatic updates
+    function stopPlanUpdates() {
+        if (updateIntervalId) {
+            clearInterval(updateIntervalId);
+            updateIntervalId = null;
+        }
+    }
+
+    // Handle debug toggle change
+    function onDebugToggleChange() {
+        saveDebugState();
+        refreshPlan();
+    }
+    </script>
+    """
+    return text
+
+
 def get_header_html(title, calculating, default_page, arg_errors, THIS_VERSION, battery_status_icon, refresh=0, codemirror=False):
     """
     Return the HTML header for a page
     """
 
     text = '<!doctype html><html><head><meta charset="utf-8"><title>{}</title>'.format(title)
+    text += '<link rel="icon" type="image/png" href="https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_light.png">'
 
     text += """
 <link href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" rel="stylesheet">
@@ -6648,9 +7740,52 @@ if (activeItem) {
 }
 }
 
+// Live status update functionality
+let statusUpdateInterval = null;
+
+function updateLiveStatus() {
+    fetch('./api/status')
+        .then(response => response.json())
+        .then(data => {
+            // Update calculating/idle icon
+            const statusIcon = document.getElementById('status-icon');
+            if (statusIcon) {
+                if (data.calculating) {
+                    statusIcon.innerHTML = '<span class="mdi mdi-sync mdi-spin calculating-icon" style="color: #4CAF50; font-size: 24px; margin-left: 10px; margin-right: 10px;" title="Calculation in progress..."></span>';
+                } else {
+                    statusIcon.innerHTML = '<span class="mdi mdi-check-circle idle-icon" style="color: #4CAF50; font-size: 24px; margin-left: 10px; margin-right: 10px;" title="System idle"></span>';
+                }
+            }
+
+            // Update battery status
+            const batteryStatus = document.getElementById('battery-status');
+            if (batteryStatus && data.battery_html) {
+                batteryStatus.innerHTML = data.battery_html;
+            }
+        })
+        .catch(error => {
+            console.error('Error updating status:', error);
+        });
+}
+
+function startStatusUpdates() {
+    // Initial update
+    updateLiveStatus();
+    // Update every 5 seconds
+    statusUpdateInterval = setInterval(updateLiveStatus, 5000);
+}
+
+function stopStatusUpdates() {
+    if (statusUpdateInterval) {
+        clearInterval(statusUpdateInterval);
+        statusUpdateInterval = null;
+    }
+}
+
 // Initialize menu on page load
 document.addEventListener("DOMContentLoaded", function() {
 setActiveMenuItem();
+startStatusUpdates();
 
 // For each menu item, add click handler to set it as active
 const menuLinks = document.querySelectorAll('.menu-bar a');
@@ -6708,10 +7843,10 @@ setTimeout(function() {
             onclick="flyBat()"
             style="cursor: pointer;"
     >
-    """
+    <span id="status-icon">"""
         + status_icon
-        + """
-    <div class="battery-wrapper">
+        + """</span>
+    <div class="battery-wrapper" id="battery-status">
         """
         + battery_status_icon
         + """
@@ -6730,6 +7865,7 @@ setTimeout(function() {
 <a href='./components'>Components</a>
 <a href='./apps_editor'>Editor</a>
 <a href='./browse'>Browse</a>
+<a href='./internals'>Internals</a>
 <a href='https://springfall2008.github.io/batpred/'>Docs</a>
 <div class="dark-mode-toggle">
     """
@@ -6842,6 +7978,32 @@ def get_browse_css():
     border-bottom: 1px solid #ddd;
 }
 
+.file-actions {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.download-button {
+    background-color: #2196F3;
+    color: white;
+    padding: 8px 16px;
+    text-decoration: none;
+    border-radius: 4px;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.download-button:hover {
+    background-color: #0b7dda;
+}
+
+.download-button .mdi {
+    font-size: 16px;
+}
+
 .back-button {
     background-color: #4CAF50;
     color: white;
@@ -6936,5 +8098,671 @@ body.dark-mode .back-button:hover {
     background-color: #444;
     color: #fff;
 }
+
+body.dark-mode .download-button {
+    background-color: #1976D2;
+    color: #e0e0e0;
+    border: 1px solid #1565C0;
+}
+
+body.dark-mode .download-button:hover {
+    background-color: #1565C0;
+    color: #fff;
+}
 </style>
+    """
+
+
+def get_internals_css():
+    """
+    Return CSS styles for the internals page
+    """
+    return """
+<style>
+.internals-container {
+    margin: 20px;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+}
+
+.threads-section {
+    margin-bottom: 30px;
+    padding: 15px;
+    background-color: #f8f9fa;
+    border-radius: 5px;
+    border: 1px solid #ddd;
+}
+
+.threads-section h3 {
+    margin-top: 0;
+    margin-bottom: 15px;
+    color: #333;
+}
+
+.threads-container {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.thread-item {
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+
+.thread-header {
+    padding: 10px 15px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background-color: #fff;
+    transition: background-color 0.2s;
+}
+
+.thread-header:hover {
+    background-color: #f0f0f0;
+}
+
+.thread-name {
+    font-weight: bold;
+    color: #2196F3;
+    flex: 0 0 200px;
+}
+
+.thread-id {
+    color: #666;
+    font-size: 0.9em;
+    flex: 0 0 150px;
+}
+
+.thread-status {
+    color: #4CAF50;
+    font-size: 0.9em;
+}
+
+.thread-stack {
+    max-height: 500px;
+    overflow-y: auto;
+    background-color: #fafafa;
+    border-top: 1px solid #ddd;
+}
+
+.thread-stack.collapsed {
+    display: none;
+}
+
+.thread-stack.expanded {
+    display: block;
+}
+
+.stack-frames {
+    padding: 10px;
+}
+
+.stack-frame {
+    padding: 8px 10px;
+    margin-bottom: 5px;
+    background: white;
+    border-left: 3px solid #2196F3;
+    font-family: 'Courier New', monospace;
+    font-size: 0.85em;
+}
+
+.frame-number {
+    display: inline-block;
+    width: 40px;
+    color: #999;
+    font-weight: bold;
+}
+
+.frame-file {
+    color: #FF9800;
+    margin-right: 10px;
+}
+
+.frame-function {
+    color: #9C27B0;
+}
+
+.frame-code {
+    margin-top: 5px;
+    padding: 5px 10px;
+    background-color: #f5f5f5;
+    border-left: 2px solid #ddd;
+    color: #333;
+    margin-left: 40px;
+}
+
+.asyncio-tasks {
+    margin-top: 15px;
+    padding: 10px;
+    background-color: #e3f2fd;
+    border-left: 3px solid #2196F3;
+}
+
+.asyncio-tasks h4 {
+    margin: 0 0 10px 0;
+    color: #1976D2;
+    font-size: 0.9em;
+}
+
+.asyncio-task {
+    margin-bottom: 10px;
+    padding: 8px;
+    background: white;
+    border-radius: 3px;
+    border: 1px solid #90CAF9;
+}
+
+.task-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 5px;
+}
+
+.task-name {
+    font-weight: bold;
+    color: #1976D2;
+}
+
+.task-state {
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 0.85em;
+    background-color: #4CAF50;
+    color: white;
+}
+
+.task-stack {
+    margin-top: 8px;
+    padding-left: 10px;
+}
+
+.tree-section {
+    margin-bottom: 30px;
+    padding: 15px;
+    background-color: #f8f9fa;
+    border-radius: 5px;
+    border: 1px solid #ddd;
+}
+
+.tree-section h3 {
+    margin-top: 0;
+    margin-bottom: 15px;
+    color: #333;
+}
+
+.tree-container {
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 10px;
+}
+
+.tree-view {
+    margin-top: 20px;
+}
+
+.tree-node {
+    margin-left: 0;
+    list-style: none;
+    padding: 0;
+}
+
+.tree-item {
+    padding: 4px 8px;
+    margin: 2px 0;
+    cursor: pointer;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    border-radius: 3px;
+}
+
+.tree-item:hover {
+    background-color: #f0f0f0;
+}
+
+.tree-item .expand-icon {
+    width: 20px;
+    display: inline-block;
+    cursor: pointer;
+    font-weight: bold;
+    color: #666;
+    text-align: center;
+}
+
+.tree-item .expand-icon.expandable {
+    color: #4CAF50;
+}
+
+.tree-item .refresh-icon {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 2px 6px;
+    font-size: 14px;
+    color: #007bff;
+    background-color: rgba(0, 123, 255, 0.1);
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.tree-item .refresh-icon:hover {
+    background-color: rgba(0, 123, 255, 0.2);
+    transform: rotate(180deg);
+}
+
+.tree-item .download-icon {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 2px 6px;
+    font-size: 14px;
+    color: #28a745;
+    text-decoration: none;
+    border-radius: 3px;
+    background-color: rgba(40, 167, 69, 0.1);
+    transition: all 0.2s;
+}
+
+.tree-item .download-icon:hover {
+    background-color: rgba(40, 167, 69, 0.2);
+    transform: scale(1.1);
+}
+
+.tree-item .key {
+    font-weight: bold;
+    color: #2196F3;
+    margin-right: 8px;
+}
+
+.tree-item .type {
+    color: #999;
+    font-size: 0.9em;
+    margin-right: 8px;
+}
+
+.tree-item .value {
+    color: #333;
+    word-break: break-all;
+}
+
+.tree-item .value.string {
+    color: #4CAF50;
+}
+
+.tree-item .value.number {
+    color: #FF9800;
+}
+
+.tree-item .value.boolean {
+    color: #9C27B0;
+}
+
+.tree-item .value.none {
+    color: #999;
+    font-style: italic;
+}
+
+.tree-children {
+    margin-left: 20px;
+    border-left: 1px solid #ddd;
+    padding-left: 10px;
+    display: none;
+}
+
+.tree-children.expanded {
+    display: block;
+}
+
+.loading {
+    color: #999;
+    font-style: italic;
+}
+
+.error {
+    background-color: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+    border-radius: 4px;
+    padding: 12px;
+    margin: 10px 0;
+}
+
+.breadcrumb-container {
+    margin-bottom: 20px;
+    border-bottom: 1px solid #ddd;
+    padding-bottom: 10px;
+}
+
+.breadcrumb {
+    margin-top: 10px;
+    font-size: 14px;
+    color: #666;
+}
+
+/* Dark mode styles */
+body.dark-mode .threads-section {
+    background-color: #2a2a2a;
+    border-color: #444;
+}
+
+body.dark-mode .threads-section h3 {
+    color: #e0e0e0;
+}
+
+body.dark-mode .thread-item {
+    background: #1e1e1e;
+    border-color: #444;
+}
+
+body.dark-mode .thread-header {
+    background-color: #1e1e1e;
+}
+
+body.dark-mode .thread-header:hover {
+    background-color: #333;
+}
+
+body.dark-mode .thread-name {
+    color: #64B5F6;
+}
+
+body.dark-mode .thread-id {
+    color: #999;
+}
+
+body.dark-mode .thread-status {
+    color: #81C784;
+}
+
+body.dark-mode .thread-stack {
+    background-color: #252525;
+    border-top-color: #444;
+}
+
+body.dark-mode .stack-frame {
+    background: #2a2a2a;
+    border-left-color: #64B5F6;
+}
+
+body.dark-mode .frame-file {
+    color: #FFB74D;
+}
+
+body.dark-mode .frame-function {
+    color: #BA68C8;
+}
+
+body.dark-mode .frame-code {
+    background-color: #1a1a1a;
+    border-left-color: #444;
+    color: #e0e0e0;
+}
+
+body.dark-mode .asyncio-tasks {
+    background-color: #1a2332;
+    border-left-color: #64B5F6;
+}
+
+body.dark-mode .asyncio-tasks h4 {
+    color: #64B5F6;
+}
+
+body.dark-mode .asyncio-task {
+    background: #2a2a2a;
+    border-color: #64B5F6;
+}
+
+body.dark-mode .task-name {
+    color: #64B5F6;
+}
+
+body.dark-mode .tree-section {
+    background-color: #2a2a2a;
+    border-color: #444;
+}
+
+body.dark-mode .tree-section h3 {
+    color: #e0e0e0;
+}
+
+body.dark-mode .tree-container {
+    background: #1e1e1e;
+    border-color: #444;
+}
+
+body.dark-mode .tree-item:hover {
+    background-color: #333;
+}
+
+body.dark-mode .tree-item .key {
+    color: #64B5F6;
+}
+
+body.dark-mode .tree-item .type {
+    color: #999;
+}
+
+body.dark-mode .tree-item .value {
+    color: #e0e0e0;
+}
+
+body.dark-mode .tree-item .value.string {
+    color: #81C784;
+}
+
+body.dark-mode .tree-item .value.number {
+    color: #FFB74D;
+}
+
+body.dark-mode .tree-item .value.boolean {
+    color: #BA68C8;
+}
+
+body.dark-mode .tree-item .refresh-icon {
+    color: #64B5F6;
+    background-color: rgba(100, 181, 246, 0.15);
+}
+
+body.dark-mode .tree-item .refresh-icon:hover {
+    background-color: rgba(100, 181, 246, 0.25);
+}
+
+body.dark-mode .tree-item .download-icon {
+    color: #4CAF50;
+    background-color: rgba(76, 175, 80, 0.15);
+}
+
+body.dark-mode .tree-item .download-icon:hover {
+    background-color: rgba(76, 175, 80, 0.25);
+}
+
+body.dark-mode .tree-children {
+    border-left-color: #444;
+}
+
+body.dark-mode .breadcrumb-container {
+    border-bottom-color: #333;
+}
+
+body.dark-mode .error {
+    background-color: #3c2124;
+    color: #f5b5c4;
+    border-color: #662c34;
+}
+</style>
+    """
+
+
+def get_internals_js():
+    """
+    Return JavaScript for the internals page
+    """
+    return """
+<script>
+async function toggleThreadStack(headerElement) {
+    const stackContainer = headerElement.nextElementSibling;
+    const expandIcon = headerElement.querySelector('.expand-icon');
+
+    if (!stackContainer || !stackContainer.classList.contains('thread-stack')) {
+        return;
+    }
+
+    if (stackContainer.classList.contains('expanded')) {
+        // Collapse
+        stackContainer.classList.remove('expanded');
+        stackContainer.classList.add('collapsed');
+        expandIcon.textContent = '+';
+    } else {
+        // Expand
+        stackContainer.classList.remove('collapsed');
+        stackContainer.classList.add('expanded');
+        expandIcon.textContent = '−';
+    }
+}
+
+async function toggleNode(element, path) {
+    const childrenContainer = element.nextElementSibling;
+    const expandIcon = element.querySelector('.expand-icon');
+
+    if (!childrenContainer || !childrenContainer.classList.contains('tree-children')) {
+        return;
+    }
+
+    if (childrenContainer.classList.contains('expanded')) {
+        // Collapse
+        childrenContainer.classList.remove('expanded');
+        expandIcon.textContent = '+';
+    } else {
+        // Expand
+        if (childrenContainer.children.length === 0) {
+            // Load children if not already loaded
+            childrenContainer.innerHTML = '<div class="loading">Loading...</div>';
+
+            try {
+                const response = await fetch(`./api/internals?path=${encodeURIComponent(path)}`);
+                const data = await response.json();
+
+                if (data.success) {
+                    childrenContainer.innerHTML = '';
+                    renderTreeNodes(childrenContainer, data.members, path);
+                } else {
+                    childrenContainer.innerHTML = `<div class="error">${data.error}</div>`;
+                }
+            } catch (error) {
+                childrenContainer.innerHTML = `<div class="error">Error loading: ${error.message}</div>`;
+            }
+        }
+
+        childrenContainer.classList.add('expanded');
+        expandIcon.textContent = '−';
+    }
+}
+
+async function refreshNode(buttonElement, path) {
+    // Find the parent tree-item
+    const treeItem = buttonElement.closest('.tree-item');
+    if (!treeItem) return;
+
+    // Find the children container
+    const childrenContainer = treeItem.nextElementSibling;
+    if (!childrenContainer || !childrenContainer.classList.contains('tree-children')) return;
+
+    // Only refresh if already expanded
+    if (!childrenContainer.classList.contains('expanded')) return;
+
+    // Show loading state
+    childrenContainer.innerHTML = '<div class="loading">Refreshing...</div>';
+
+    try {
+        const response = await fetch(`./api/internals?path=${encodeURIComponent(path)}`);
+        const data = await response.json();
+
+        if (data.success) {
+            childrenContainer.innerHTML = '';
+            renderTreeNodes(childrenContainer, data.members, path);
+        } else {
+            childrenContainer.innerHTML = `<div class="error">${data.error}</div>`;
+        }
+    } catch (error) {
+        childrenContainer.innerHTML = `<div class="error">Error refreshing: ${error.message}</div>`;
+    }
+}
+
+function renderTreeNodes(container, members, basePath) {
+    members.forEach(member => {
+        const itemDiv = document.createElement('div');
+        itemDiv.className = 'tree-item';
+
+        // Use the path provided by the server
+        const path = member.path || (basePath ? `${basePath}.${member.key}` : member.key);
+
+        // Add tooltip showing full path
+        itemDiv.title = path;
+
+        let expandIcon = '';
+        let refreshButton = '';
+        let downloadButton = '';
+        if (member.expandable) {
+            expandIcon = `<span class="expand-icon expandable">+</span>`;
+            // Add refresh button for expandable items
+            const safePathJs = path.replace(/'/g, "\\'");
+            refreshButton = `<button class="refresh-icon" title="Refresh this node" onclick="event.stopPropagation(); refreshNode(this, '${safePathJs}')">🔄</button>`;
+            // Add download button for expandable items
+            const safePathUrl = encodeURIComponent(path);
+            downloadButton = `<a href="./api/internals/download?path=${safePathUrl}" class="download-icon" title="Download as YAML" onclick="event.stopPropagation()">⬇</a>`;
+            itemDiv.onclick = function() { toggleNode(this, path); };
+        } else {
+            expandIcon = `<span class="expand-icon"></span>`;
+        }
+
+        let valueHtml = '';
+        if (!member.expandable && member.value !== undefined) {
+            let valueClass = 'value';
+            if (member.type === 'str') {
+                valueClass += ' string';
+                valueHtml = `<span class="${valueClass}">"${escapeHtml(member.value)}"</span>`;
+            } else if (member.type === 'int' || member.type === 'float') {
+                valueClass += ' number';
+                valueHtml = `<span class="${valueClass}">${member.value}</span>`;
+            } else if (member.type === 'bool') {
+                valueClass += ' boolean';
+                valueHtml = `<span class="${valueClass}">${member.value}</span>`;
+            } else if (member.type === 'NoneType') {
+                valueClass += ' none';
+                valueHtml = `<span class="${valueClass}">None</span>`;
+            } else {
+                valueHtml = `<span class="${valueClass}">${escapeHtml(String(member.value))}</span>`;
+            }
+        }
+
+        itemDiv.innerHTML = `
+            ${expandIcon}
+            ${refreshButton}
+            ${downloadButton}
+            <span class="key">${escapeHtml(member.key)}</span>
+            <span class="type">&lt;${member.type}${member.size !== undefined ? ': ' + member.size + ' items' : ''}&gt;</span>
+            ${valueHtml}
+        `;
+
+        container.appendChild(itemDiv);
+
+        if (member.expandable) {
+            const childrenDiv = document.createElement('div');
+            childrenDiv.className = 'tree-children';
+            container.appendChild(childrenDiv);
+        }
+    });
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+</script>
     """

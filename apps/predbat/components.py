@@ -1,6 +1,6 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2025 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
@@ -9,11 +9,20 @@
 # pylint: disable=attribute-defined-outside-init
 
 
+"""Component registry and lifecycle manager.
+
+Defines COMPONENT_LIST mapping all available components to their classes
+and configuration requirements, and provides the Components class for
+initialising, starting, stopping, and restarting components in the correct
+phase order. Routes HA events to components based on entity prefix filtering.
+"""
+
 from solcast import SolarAPI
 from gecloud import GECloudDirect, GECloudData
 from ohme import OhmeAPI
 from octopus import OctopusAPI
 from carbon import CarbonAPI
+from temperature import TemperatureAPI
 from axle import AxleAPI
 from solax import SolaxAPI
 from solis import SolisAPI
@@ -23,6 +32,7 @@ from ha import HAInterface, HAHistory
 from db_manager import DatabaseManager
 from fox import FoxAPI
 from web_mcp import PredbatMCPServer
+from load_ml_component import LoadMLComponent
 from datetime import datetime, timezone, timedelta
 import asyncio
 import os
@@ -33,12 +43,11 @@ COMPONENT_LIST = {
         "class": DatabaseManager,
         "name": "Database Manager",
         "args": {
-            "db_enable": {"required": True, "config": "db_enable"},
+            "db_enable": {"required_true": True, "config": "db_enable"},
             "db_days": {"required": False, "config": "db_days", "default": 30},
         },
         "can_restart": False,
         "phase": 0,
-        "new": True,
     },
     "ha": {
         "class": HAInterface,
@@ -53,7 +62,7 @@ COMPONENT_LIST = {
         "can_restart": False,
         "phase": 0,
     },
-    "ha_history": {"class": HAHistory, "name": "Home Assistant History", "args": {}, "can_restart": False, "phase": 0, "new": True},
+    "ha_history": {"class": HAHistory, "name": "Home Assistant History", "args": {}, "can_restart": False, "phase": 0},
     "web": {
         "class": WebInterface,
         "name": "Web Interface",
@@ -88,7 +97,7 @@ COMPONENT_LIST = {
             "pv_forecast_d4": {"required": False, "config": "pv_forecast_d4"},
             "pv_scaling": {"required": False, "config": "pv_scaling", "default": 1.0},
         },
-        "required_or": ["solcast_host", "forecast_solar", "pv_forecast_today"],
+        "required_or": ["solcast_api_key", "forecast_solar", "pv_forecast_today"],
         "phase": 1,
     },
     "gecloud": {
@@ -191,6 +200,10 @@ COMPONENT_LIST = {
                 "default": False,
                 "config": "fox_automatic",
             },
+            "inverter_sn": {
+                "required": False,
+                "config": "fox_inverter_sn",
+            },
         },
         "phase": 1,
     },
@@ -216,6 +229,17 @@ COMPONENT_LIST = {
         },
         "phase": 1,
     },
+    "temperature": {
+        "class": TemperatureAPI,
+        "name": "External Temperature API",
+        "args": {
+            "temperature_enable": {"required_true": True, "config": "temperature_enable", "default": False},
+            "temperature_latitude": {"required": False, "config": "temperature_latitude", "default": None},
+            "temperature_longitude": {"required": False, "config": "temperature_longitude", "default": None},
+            "temperature_url": {"required": False, "config": "temperature_url", "default": "https://api.open-meteo.com/v1/forecast?latitude=LATITUDE&longitude=LONGITUDE&hourly=temperature_2m&current=temperature_2m&past_days=28"},
+        },
+        "phase": 1,
+    },
     "axle": {
         "class": AxleAPI,
         "name": "Axle Energy",
@@ -238,6 +262,10 @@ COMPONENT_LIST = {
             "region": {"required": False, "config": "solax_region", "default": "eu"},
             "automatic": {"required": False, "config": "solax_automatic", "default": False},
             "enable_controls": {"required": False, "config": "solax_enable_controls", "default": True},
+            "plant_sn": {
+                "required": False,
+                "config": "solax_plant_sn",
+            },
         },
         "phase": 1,
         "can_restart": True,
@@ -257,10 +285,30 @@ COMPONENT_LIST = {
         "phase": 1,
         "can_restart": True,
     },
+    "load_ml": {
+        "class": LoadMLComponent,
+        "name": "ML Load Forecaster",
+        "event_filter": "predbat_load_ml_",
+        "args": {
+            "load_ml_enable": {"required_true": True, "config": "load_ml_enable", "default": False},
+            "load_ml_source": {"required": False, "config": "load_ml_source", "default": False},
+            "load_ml_max_days_history": {"required": False, "config": "load_ml_max_days_history", "default": 28},
+            "load_ml_database_days": {"required": False, "config": "load_ml_database_days", "default": 90},
+        },
+        "phase": 1,
+        "can_restart": True,
+    },
 }
 
 
 class Components:
+    """Central component registry and lifecycle manager.
+
+    Initialises, starts, stops, and restarts components in correct phase
+    order. Routes HA events (select, switch, number) to components based
+    on entity prefix filtering.
+    """
+
     def __init__(self, base):
         self.components = {}
         self.component_tasks = {}
@@ -325,7 +373,7 @@ class Components:
                     self.log(f"Starting {component_info['name']} interface")
 
                 # Create new task
-                self.component_tasks[component_name] = self.base.create_task(component.start())
+                self.component_tasks[component_name] = self.base.create_task(component.start(), name=f"{component_name}_component_task")
                 if not component.wait_api_started():
                     self.log(f"Error: {component_info['name']} API failed to start")
                     failed = True

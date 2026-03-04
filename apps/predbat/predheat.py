@@ -1,6 +1,6 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2024 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
@@ -10,6 +10,14 @@
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
+
+
+"""Heat pump prediction and heating energy forecasting.
+
+Physics-based heating simulation using COP efficiency tables, weather
+compensation curves, and thermal models to predict heating energy
+requirements and costs for heat pump systems.
+"""
 
 from datetime import datetime, timedelta
 import pytz

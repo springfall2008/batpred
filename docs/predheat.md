@@ -6,7 +6,7 @@ Further details can be found in the [Predheat YouTube video](https://youtu.be/_-
 
 ## Operation
 
-The app runs every 5 minutes and it will automatically update its prediction for the heating system for the next period, up to a maximum of 48 hours.
+The app runs every 5 minutes (by default) and will automatically update its prediction for the heating system for the next period, up to a maximum of 48 hours.
 
 The inputs are as follows
 
@@ -42,9 +42,9 @@ Then add in the Home Assistant service and connect up your API key to obtain hou
 
 ### Apex Charts install
 
-Use HACS to install Apex Charts (Lovelace frontend add-on) - <https://github.com/RomRider/apexcharts-card>
+Use HACS to install Apex Charts: <https://github.com/RomRider/apexcharts-card>
 
-There is a template for the Predheat charts in: <https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/example_chart_predbat.yaml_template>
+There is a template of [example_Predheat charts](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/example_chart_predheat.yaml_template) you can use.
 
 Create a new Apex chart for each chart in this template and copy the YAML code into the chart.
 
@@ -110,6 +110,8 @@ For energy rates, they will come from the Predbat configuration, ensure you have
 
 Note you can also change the tables for **gas_efficiency**, **heat_pump_efficiency** and **delta_correction** in the Predheat configuration but the defaults should be fine to get going.
 
+Set **run_every** to how often you want Predheat to update its heat energy prediction. By default this is every 5 minutes.
+
 Now comes the tricky part, we need to calculate the heat loss for your house:
 
 What will help here is historical temperature data, find a time period in the last few weeks when your heating was turned off (for a few hours beforehand) and the house is cooling down.
@@ -158,7 +160,7 @@ Add a **load_forecast** entry in `apps.yaml` to configure Predbat to use the [Pr
 
 If your **load_today** sensor in `apps.yaml` already contains your heat pump load then when Predbat forecasts your house load, the heat pump load will be double counted - once from historical house load data, and once from the Predheat forecast.
 
-To resolve this you need to use **car_charging_energy** to [exclude heat pump load](apps-yaml.md#car-charging-filtering) from the historical house load energy. e.g.:
+To resolve this you need to use **car_charging_energy** to [exclude heat pump load](car-charging.md#filtering-car-charging-energy-from-house-load) from the historical house load energy. e.g.:
 
 ```yaml
   car_charging_energy:

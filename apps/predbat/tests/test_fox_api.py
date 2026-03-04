@@ -1,6 +1,6 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2025 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # Test Fox API functions
@@ -27,6 +27,7 @@ class MockFoxAPI:
         self.device_current_schedule = {}
         self.fdpwr_max = {}
         self.fdsoc_min = {}
+        self.inverter_sn_filter = []
 
     def getMinSocOnGrid(self, deviceSN):
         """Mock implementation of getMinSocOnGrid"""
@@ -51,7 +52,8 @@ class MockFoxAPIWithRequests(FoxAPI):
         self.available_variables = {}
         self.device_values = {}
         self.device_settings = {}
-        self.device_production = {}
+        self.device_production_month = {}
+        self.device_production_year = {}
         self.device_battery_charging_time = {}
         self.device_scheduler = {}
         self.device_current_schedule = {}
@@ -59,6 +61,7 @@ class MockFoxAPIWithRequests(FoxAPI):
         self.fdpwr_max = {}
         self.fdsoc_min = {}
         self.local_tz = pytz.timezone("Europe/London")
+        self.inverter_sn_filter = []
 
         # Mock request responses - keyed by API path
         self.mock_responses = {}
@@ -2010,11 +2013,11 @@ def test_api_get_real_time_data(my_predbat):
     return False
 
 
-def test_api_get_device_production(my_predbat):
+def test_api_get_device_production_year(my_predbat):
     """
-    Test get_device_production API endpoint
+    Test get_device_production API endpoint with dimension 'year'
     """
-    print("  - test_api_get_device_production")
+    print("  - test_api_get_device_production_year")
 
     fox = MockFoxAPIWithRequests()
     deviceSN = "TEST123456"
@@ -2028,10 +2031,94 @@ def test_api_get_device_production(my_predbat):
         ],
     )
 
-    result = asyncio.run(fox.get_device_production(deviceSN))
+    result = asyncio.run(fox.get_device_production_year(deviceSN))
 
-    assert deviceSN in fox.device_production
-    assert len(fox.device_production[deviceSN]) == 3
+    assert deviceSN in fox.device_production_year
+    assert len(fox.device_production_year[deviceSN]) == 3
+
+    return False
+
+
+def test_api_get_device_production_month(my_predbat):
+    """
+    Test get_device_production API endpoint with dimension 'month'
+    """
+    print("  - test_api_get_device_production_month")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    fox.set_mock_response(
+        "/op/v0/device/report/query",
+        [
+            {
+                "unit": "kWh",
+                "values": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.1000000000003638,
+                    0.3999999999996362,
+                    0.5,
+                    0.3999999999996362,
+                    0.3999999999996362,
+                    0.3000000000010914,
+                    1.1000000000003638,
+                    1.5,
+                    1.2999999999992724,
+                    0.7000000000007276,
+                    0.5,
+                    0.4000000000014552,
+                    0.5,
+                    2.600000000000364,
+                    0.5,
+                    0.7999999999992724,
+                    0.7000000000007276,
+                    0.5,
+                    0.0,
+                ],
+                "variable": "generation",
+            },
+            {"unit": "kWh", "values": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8999999999996362, 1.199999999999818, 0.6999999999998181, 0.3000000000001819, 0.0, 0.0, 0.0, 1.800000000000182, 0.0, 0.0, 0.0, 0.0, 0.0], "variable": "feedin"},
+            {
+                "unit": "kWh",
+                "values": [
+                    11.399999999999636,
+                    1.3000000000010914,
+                    5.100000000000364,
+                    6.800000000001091,
+                    6.799999999999272,
+                    1.6000000000003638,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.09999999999854481,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.2000000000007276,
+                ],
+                "variable": "gridConsumption",
+            },
+        ],
+    )
+
+    result = asyncio.run(fox.get_device_production_year(deviceSN))
+
+    assert deviceSN in fox.device_production_year
+    assert len(fox.device_production_year[deviceSN]) == 3
 
     return False
 
@@ -4794,6 +4881,118 @@ def test_automatic_config_custom_prefix(my_predbat):
     return False
 
 
+def test_automatic_config_export_limit_all_devices(my_predbat):
+    """
+    Test automatic_config sets export_limit for all devices when they all have exportlimit setting
+    """
+    print("  - test_automatic_config_export_limit_all_devices")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN1 = "TEST111111"
+    deviceSN2 = "TEST222222"
+
+    fox.device_list = [{"deviceSN": deviceSN1}, {"deviceSN": deviceSN2}]
+    fox.device_detail[deviceSN1] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {"scheduler": True}}
+    fox.device_detail[deviceSN2] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {"scheduler": True}}
+
+    # Both devices have exportlimit setting
+    fox.device_settings[deviceSN1] = {"exportLimit": {"value": 5000}}
+    fox.device_settings[deviceSN2] = {"exportLimit": {"value": 3000}}
+
+    run_async(fox.automatic_config())
+
+    # Verify export_limit includes both devices
+    export_limit = fox.args_set.get("export_limit", [])
+    assert len(export_limit) == 2, f"Expected 2 devices in export_limit, got {len(export_limit)}"
+    assert f"number.predbat_fox_{deviceSN1.lower()}_setting_exportlimit" in export_limit
+    assert f"number.predbat_fox_{deviceSN2.lower()}_setting_exportlimit" in export_limit
+
+    return False
+
+
+def test_automatic_config_export_limit_some_devices(my_predbat):
+    """
+    Test automatic_config sets export_limit with 99999 for devices without exportlimit setting
+    """
+    print("  - test_automatic_config_export_limit_some_devices")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN1 = "TEST111111"
+    deviceSN2 = "TEST222222"
+
+    fox.device_list = [{"deviceSN": deviceSN1}, {"deviceSN": deviceSN2}]
+    fox.device_detail[deviceSN1] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {"scheduler": True}}
+    fox.device_detail[deviceSN2] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {"scheduler": True}}
+
+    # Only device 1 has exportlimit setting
+    fox.device_settings[deviceSN1] = {"exportLimit": {"value": 5000}}
+    fox.device_settings[deviceSN2] = {}  # No exportLimit
+
+    run_async(fox.automatic_config())
+
+    # Verify export_limit includes both devices, with 99999 for device without setting
+    export_limit = fox.args_set.get("export_limit", [])
+    assert len(export_limit) == 2, f"Expected 2 devices in export_limit, got {len(export_limit)}"
+    assert f"number.predbat_fox_{deviceSN1.lower()}_setting_exportlimit" in export_limit
+    assert 99999 in export_limit
+
+    return False
+
+
+def test_automatic_config_export_limit_no_devices(my_predbat):
+    """
+    Test automatic_config sets export_limit with 99999 when no devices have exportlimit setting
+    """
+    print("  - test_automatic_config_export_limit_no_devices")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN1 = "TEST111111"
+    deviceSN2 = "TEST222222"
+
+    fox.device_list = [{"deviceSN": deviceSN1}, {"deviceSN": deviceSN2}]
+    fox.device_detail[deviceSN1] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {"scheduler": True}}
+    fox.device_detail[deviceSN2] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {"scheduler": True}}
+
+    # Neither device has exportlimit setting
+    fox.device_settings[deviceSN1] = {}
+    fox.device_settings[deviceSN2] = {}
+
+    run_async(fox.automatic_config())
+
+    # Verify export_limit includes both devices with 99999 for each
+    export_limit = fox.args_set.get("export_limit", [])
+    assert len(export_limit) == 2, f"Expected 2 devices in export_limit, got {len(export_limit)}"
+    assert export_limit[0] == 99999, f"Expected 99999 for device 1, got {export_limit[0]}"
+    assert export_limit[1] == 99999, f"Expected 99999 for device 2, got {export_limit[1]}"
+
+    return False
+
+
+def test_automatic_config_export_limit_case_insensitive(my_predbat):
+    """
+    Test automatic_config handles case-insensitive exportlimit key matching
+    """
+    print("  - test_automatic_config_export_limit_case_insensitive")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    fox.device_list = [{"deviceSN": deviceSN}]
+    fox.device_detail[deviceSN] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {"scheduler": True}}
+
+    # Setting key with different case - should be detected because code uses setting.lower()
+    fox.device_settings[deviceSN] = {"ExportLimit": {"value": 5000}}
+
+    run_async(fox.automatic_config())
+
+    # The code checks setting.lower() == "exportlimit", so it SHOULD match "ExportLimit"
+    export_limit = fox.args_set.get("export_limit", [])
+    assert len(export_limit) == 1, f"Expected 1 device in export_limit (case-insensitive match), got {len(export_limit)}"
+    assert f"number.predbat_fox_{deviceSN.lower()}_setting_exportlimit" in export_limit
+
+    return False
+
+
 def test_fox_rate_limiting_normal_operation(my_predbat):
     """Test that normal operation under 60/hour allows retries"""
     print("  - test_fox_rate_limiting_normal_operation")
@@ -5096,7 +5295,8 @@ def run_fox_api_tests(my_predbat):
         failed |= test_api_set_scheduler(my_predbat)
         failed |= test_api_set_scheduler_enabled(my_predbat)
         failed |= test_api_get_real_time_data(my_predbat)
-        failed |= test_api_get_device_production(my_predbat)
+        failed |= test_api_get_device_production_year(my_predbat)
+        failed |= test_api_get_device_production_month(my_predbat)
         failed |= test_api_get_device_power_generation(my_predbat)
         failed |= test_api_request_failure(my_predbat)
         failed |= test_api_set_device_setting_failure(my_predbat)
@@ -5209,6 +5409,10 @@ def run_fox_api_tests(my_predbat):
         failed |= test_automatic_config_battery_and_pv_inverter(my_predbat)
         failed |= test_automatic_config_no_scheduler_error(my_predbat)
         failed |= test_automatic_config_custom_prefix(my_predbat)
+        failed |= test_automatic_config_export_limit_all_devices(my_predbat)
+        failed |= test_automatic_config_export_limit_some_devices(my_predbat)
+        failed |= test_automatic_config_export_limit_no_devices(my_predbat)
+        failed |= test_automatic_config_export_limit_case_insensitive(my_predbat)
 
         # Rate limiting tests
         failed |= test_fox_rate_limiting_normal_operation(my_predbat)

@@ -1,6 +1,6 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2025 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
@@ -237,6 +237,36 @@ def run_rate_add_io_slots_tests(my_predbat):
         expected_rates[minute] = 4.0
 
     failed |= run_rate_add_io_slots_test("test12_floor_division", my_predbat, slots, True, 12, expected_rates)
+
+    # Test 13: Partial slot spanning multiple 30-min periods (Issue #3328)
+    # IOG slot from 19:30 to 20:15 (45 mins) should make BOTH 19:30-20:00 AND 20:00-20:30 off-peak
+    print("\n**** Test 13: Partial slot spanning multiple 30-min periods (Issue #3328) ****")
+    slot_start = midnight_utc + timedelta(hours=19, minutes=30)  # 19:30
+    slot_end = slot_start + timedelta(minutes=45)  # 20:15 (45 mins = spans into second 30-min slot)
+    slots = [{"start": slot_start.strftime(TIME_FORMAT), "end": slot_end.strftime(TIME_FORMAT), "charge_in_kwh": 5.76, "source": "smart-charge", "location": "AT_HOME"}]
+
+    expected_rates = {}
+    # First 30-min slot: 19:30-20:00 (minutes 1170-1199) - fully covered, should be cheap
+    for minute in range(1170, 1200):
+        expected_rates[minute] = 4.0
+    # Second 30-min slot: 20:00-20:30 (minutes 1200-1229) - partially covered (20:00-20:15), should ALSO be cheap
+    for minute in range(1200, 1230):
+        expected_rates[minute] = 4.0  # Expected behavior: entire 30-min slot should be off-peak
+
+    failed |= run_rate_add_io_slots_test("test13_partial_slot_issue3328", my_predbat, slots, True, 12, expected_rates)
+
+    # Test 14: Another partial slot example - tiny overlap within a 30-min slot should make entire slot off-peak
+    print("\n**** Test 14: Tiny overlap (within one 30-min slot) should still make entire 30-min slot off-peak ****")
+    slot_start = midnight_utc + timedelta(hours=13, minutes=37, seconds=11)  # 13:37:11
+    slot_end = slot_start + timedelta(minutes=1, seconds=16)  # 13:38:27 (fully within the same 5-min and 30-min slot)
+    slots = [{"start": slot_start.strftime(TIME_FORMAT), "end": slot_end.strftime(TIME_FORMAT), "charge_in_kwh": 0.16, "source": "smart-charge", "location": "AT_HOME"}]
+
+    expected_rates = {}
+    # 13:30-14:00 slot (minutes 810-839) - should be cheap because IOG slot touches it
+    for minute in range(810, 840):
+        expected_rates[minute] = 4.0
+
+    failed |= run_rate_add_io_slots_test("test14_tiny_overlap_issue3328", my_predbat, slots, True, 12, expected_rates)
 
     # Restore original forecast_minutes
     my_predbat.forecast_minutes = original_forecast_minutes

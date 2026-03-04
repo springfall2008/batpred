@@ -1,12 +1,22 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2024 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
+
+
+"""Configuration item definitions for all PredBat settings.
+
+Defines CONFIG_ITEMS - the master list of all user-configurable settings
+including their types (switch, input_number, select), defaults, ranges,
+units, icons, conditional visibility rules, and dependencies. Covers
+battery parameters, rate thresholds, car charging, metrics, notifications,
+and calculation options.
+"""
 
 from predbat import THIS_VERSION
 from const import OPTIONS_TIME, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_CONTROL_CHARGEDISCHARGE
@@ -594,9 +604,16 @@ CONFIG_ITEMS = [
     },
     {
         "name": "car_charging_hold",
-        "friendly_name": "Car charging hold",
+        "friendly_name": "Car charging hold (remove car charging energy from load data)",
         "type": "switch",
         "default": True,
+    },
+    {
+        "name": "car_energy_reported_load",
+        "friendly_name": "Car energy is reported in load data (inside CT clamp)",
+        "type": "switch",
+        "default": True,
+        "enable_condition": "num_cars > 0",
     },
     {
         "name": "car_charging_manual_soc",
@@ -773,7 +790,6 @@ CONFIG_ITEMS = [
         "name": "calculate_inday_adjustment",
         "friendly_name": "Calculate in-day adjustment",
         "type": "switch",
-        "enable": "expert_mode",
         "default": True,
     },
     {
@@ -813,6 +829,18 @@ CONFIG_ITEMS = [
         "friendly_name": "Set Inverter Notify",
         "type": "switch",
         "default": False,
+    },
+    {
+        "name": "set_event_notify",
+        "friendly_name": "Set Event Notify",
+        "type": "switch",
+        "default": True,
+    },
+    {
+        "name": "set_system_notify",
+        "friendly_name": "Set System Notify",
+        "type": "switch",
+        "default": True,
     },
     {
         "name": "set_charge_freeze",
@@ -1217,7 +1245,7 @@ CONFIG_ITEMS = [
         "unit": "p/kWh",
         "icon": "mdi:currency-usd",
         "enable": "iboost_enable",
-        "default": 1000,
+        "default": 100,
     },
     {
         "name": "iboost_rate_threshold_export",
@@ -1229,7 +1257,7 @@ CONFIG_ITEMS = [
         "unit": "p/kWh",
         "icon": "mdi:currency-usd",
         "enable": "iboost_enable",
-        "default": 1000,
+        "default": 100,
     },
     {
         "name": "iboost_smart",
@@ -2090,4 +2118,7 @@ APPS_SCHEMA = {
     "predheat": {"type": "dict"},
     "forecast_solar": {"type": "dict_list"},
     "forecast_solar_max_age": {"type": "float"},
+    "enable_coarse_fine_levels": {"type": "boolean"},
+    "load_power_fill_enable": {"type": "boolean"},
+    "load_ml_enable": {"type": "boolean"},
 }

@@ -1,6 +1,6 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2025 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
@@ -13,6 +13,7 @@ from axle import AxleAPI
 from unittest.mock import patch
 from datetime import datetime, timezone, timedelta
 from const import TIME_FORMAT
+from config import CONFIG_ITEMS
 from tests.test_infra import create_aiohttp_mock_response, create_aiohttp_mock_session, run_async
 
 
@@ -72,8 +73,16 @@ class MockAxleAPI(AxleAPI):
         return self._state_store[entity_id]["state"]
 
     def get_arg(self, arg, default=None, indirect=False):
-        """Mock get_arg - retrieves from config_args"""
-        return self.config_args.get(arg, default)
+        """Mock get_arg - retrieves from config_args with CONFIG_ITEMS defaults"""
+        if arg in self.config_args:
+            return self.config_args[arg]
+
+        # Look up default from CONFIG_ITEMS like the real get_arg does
+        for item in CONFIG_ITEMS:
+            if item.get("name") == arg:
+                return item.get("default", default)
+
+        return default
 
     def update_success_timestamp(self):
         """Mock update_success_timestamp"""
@@ -106,6 +115,8 @@ def test_axle(my_predbat=None):
     sub_tests = [
         ("initialization", _test_axle_initialization, "Axle API initialization"),
         ("active_event", _test_axle_fetch_with_active_event, "Fetch with active event"),
+        ("duplicate_event", _test_axle_duplicate_event_detection, "Duplicate event detection"),
+        ("notify_config", _test_axle_fetch_with_notify_config, "Notification config control"),
         ("future_event", _test_axle_fetch_with_future_event, "Fetch with future event"),
         ("past_event", _test_axle_fetch_with_past_event, "Fetch with past event"),
         ("no_event", _test_axle_fetch_no_event, "Fetch with no event"),
@@ -119,6 +130,7 @@ def test_axle(my_predbat=None):
         ("history_cleanup", _test_axle_history_cleanup, "History cleanup old events"),
         ("fetch_sessions", _test_axle_fetch_sessions, "Fetch sessions from API"),
         ("load_slot_export", _test_axle_load_slot_export, "Load slot export integration"),
+        ("load_slot_import", _test_axle_load_slot_import, "Load slot import integration"),
         ("active_function", _test_axle_active_function, "Active status checking"),
     ]
 
@@ -216,6 +228,172 @@ def _test_axle_fetch_with_active_event(my_predbat=None):
     assert axle.failures_total == 0, "No failures should be recorded"
 
     print("  ✓ Active event fetched and published correctly")
+    return False
+
+
+def _test_axle_duplicate_event_detection(my_predbat=None):
+    """Test duplicate event detection - should not trigger alert for same event"""
+    print("Test: Axle API duplicate event detection")
+
+    axle = MockAxleAPI()
+    axle.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
+
+    # Set current time
+    now = datetime(2025, 12, 20, 14, 30, 0, tzinfo=timezone.utc)
+    axle._now_utc = now
+
+    # Pre-populate state with existing event in sensor
+    sensor_id = "binary_sensor.predbat_axle_event"
+    existing_event = {
+        "start_time": "2025-12-20T14:00:00+0000",
+        "end_time": "2025-12-20T16:00:00+0000",
+        "import_export": "export",
+        "pence_per_kwh": 100,
+    }
+    axle._state_store[sensor_id] = {
+        "state": "on",
+        "attributes": {
+            "event_current": [existing_event],
+            "event_history": [existing_event],
+        },
+    }
+
+    # Test 1: Fetch the SAME event (duplicate) - should NOT trigger alert
+    print("  Test 1: Same event (duplicate)")
+    json_data = {"start_time": "2025-12-20T14:00:00Z", "end_time": "2025-12-20T16:00:00Z", "import_export": "export", "updated_at": "2025-12-20T13:45:00Z"}
+    mock_response = create_aiohttp_mock_response(status=200, json_data=json_data)
+    mock_session = create_aiohttp_mock_session(mock_response=mock_response)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        run_async(axle.fetch_axle_event())
+
+    # Check that NO alert was sent for duplicate event
+    alert_messages = [msg for msg in axle.log_messages if msg.startswith("Alert:")]
+    assert len(alert_messages) == 0, "Should NOT send alert for duplicate event"
+    print("    ✓ No alert sent for duplicate event")
+
+    # Reset log messages
+    axle.log_messages = []
+
+    # Test 2: Fetch a DIFFERENT event - should trigger alert
+    print("  Test 2: Different event (new)")
+    json_data_new = {"start_time": "2025-12-20T18:00:00Z", "end_time": "2025-12-20T20:00:00Z", "import_export": "import", "updated_at": "2025-12-20T17:45:00Z"}
+    mock_response_new = create_aiohttp_mock_response(status=200, json_data=json_data_new)
+    mock_session_new = create_aiohttp_mock_session(mock_response=mock_response_new)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session_new):
+        run_async(axle.fetch_axle_event())
+
+    # Check that alert WAS sent for new event
+    alert_messages = [msg for msg in axle.log_messages if msg.startswith("Alert:")]
+    assert len(alert_messages) == 1, "Should send alert for new/different event"
+    assert "18:00" in alert_messages[0], "Alert should contain new event time"
+    assert "20:00" in alert_messages[0], "Alert should contain new event end time"
+    print("    ✓ Alert sent for new/different event")
+
+    # Test 3: Fetch event with different end time - should trigger alert
+    print("  Test 3: Same start but different end time")
+    axle.log_messages = []
+    json_data_diff_end = {"start_time": "2025-12-20T18:00:00Z", "end_time": "2025-12-20T21:00:00Z", "import_export": "import", "updated_at": "2025-12-20T17:50:00Z"}
+    mock_response_diff = create_aiohttp_mock_response(status=200, json_data=json_data_diff_end)
+    mock_session_diff = create_aiohttp_mock_session(mock_response=mock_response_diff)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session_diff):
+        run_async(axle.fetch_axle_event())
+
+    # Check that alert WAS sent for modified event
+    alert_messages = [msg for msg in axle.log_messages if msg.startswith("Alert:")]
+    assert len(alert_messages) == 1, "Should send alert for event with different end time"
+    assert "21:00" in alert_messages[0], "Alert should contain updated end time"
+    print("    ✓ Alert sent for event with different end time")
+
+    # Test 4: No current_event in sensor (empty state) - should trigger alert for new event
+    print("  Test 4: Empty sensor state (first event)")
+    axle.log_messages = []
+    axle._state_store[sensor_id] = {
+        "state": "off",
+        "attributes": {
+            "event_current": [],
+            "event_history": [],
+        },
+    }
+
+    json_data_first = {"start_time": "2025-12-20T22:00:00Z", "end_time": "2025-12-20T23:00:00Z", "import_export": "export", "updated_at": "2025-12-20T21:45:00Z"}
+    mock_response_first = create_aiohttp_mock_response(status=200, json_data=json_data_first)
+    mock_session_first = create_aiohttp_mock_session(mock_response=mock_response_first)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session_first):
+        run_async(axle.fetch_axle_event())
+
+    # Check that alert WAS sent for first event
+    alert_messages = [msg for msg in axle.log_messages if msg.startswith("Alert:")]
+    assert len(alert_messages) == 1, "Should send alert for first event when sensor is empty"
+    assert "22:00" in alert_messages[0], "Alert should contain first event time"
+    print("    ✓ Alert sent for first event when sensor empty")
+
+    print("  ✓ All duplicate event detection tests passed")
+    return False
+
+
+def _test_axle_fetch_with_notify_config(my_predbat=None):
+    """Test set_event_notify configuration option controls notifications"""
+    print("Test: Axle API fetch with notification config")
+
+    # Test 1: set_event_notify enabled (default) - should send notification
+    print("  Test 1: Notifications enabled (set_event_notify=True)")
+    axle = MockAxleAPI()
+    axle.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
+    axle.config_args = {"set_event_notify": True}
+
+    # Set current time during event
+    now = datetime(2025, 12, 20, 18, 30, 0, tzinfo=timezone.utc)
+    axle._now_utc = now
+
+    # Mock API response with active event
+    json_data = {"start_time": "2025-12-20T18:00:00Z", "end_time": "2025-12-20T20:00:00Z", "import_export": "import", "updated_at": "2025-12-20T17:50:00Z"}
+    mock_response = create_aiohttp_mock_response(status=200, json_data=json_data)
+    mock_session = create_aiohttp_mock_session(mock_response=mock_response)
+
+    # Clear logs and fetch event
+    axle.log_messages.clear()
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        run_async(axle.fetch_axle_event())
+
+    # Verify notification was sent
+    alert_messages = [msg for msg in axle.log_messages if msg.startswith("Alert:")]
+    assert len(alert_messages) == 1, "Should send notification when set_event_notify=True"
+    assert "18:00" in alert_messages[0], "Notification should contain event time"
+    print("    ✓ Notification sent when enabled")
+
+    # Test 2: set_event_notify disabled - should NOT send notification
+    print("  Test 2: Notifications disabled (set_event_notify=False)")
+    axle2 = MockAxleAPI()
+    axle2.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
+    axle2.config_args = {"set_event_notify": False}
+    axle2._now_utc = now
+
+    # Same event data
+    mock_response2 = create_aiohttp_mock_response(status=200, json_data=json_data)
+    mock_session2 = create_aiohttp_mock_session(mock_response=mock_response2)
+
+    # Clear logs and fetch event
+    axle2.log_messages.clear()
+    with patch("aiohttp.ClientSession", return_value=mock_session2):
+        run_async(axle2.fetch_axle_event())
+
+    # Verify NO notification was sent
+    alert_messages2 = [msg for msg in axle2.log_messages if msg.startswith("Alert:")]
+    assert len(alert_messages2) == 0, "Should NOT send notification when set_event_notify=False"
+    print("    ✓ Notification blocked when disabled")
+
+    # Verify event data was still processed correctly
+    assert axle2.current_event["start_time"] == "2025-12-20T18:00:00+0000"
+    assert axle2.current_event["import_export"] == "import"
+    sensor2 = axle2.dashboard_items["binary_sensor.predbat_axle_event"]
+    assert sensor2["state"] == "on", "Sensor should be ON even without notification"
+    print("    ✓ Event data processed correctly without notification")
+
+    print("  ✓ Notification config tests passed")
     return False
 
 
@@ -702,6 +880,7 @@ def _test_axle_load_slot_export(my_predbat=None):
             self.rate_import = {}
             self.load_scaling_dynamic = {}
             self.load_scaling_saving = 0.5
+            self.load_scaling_free = 0.0
 
         def log(self, message):
             print(f"  [LOG] {message}")
@@ -750,10 +929,13 @@ def _test_axle_load_slot_export(my_predbat=None):
         actual_rate = base.rate_export[minute]
         assert actual_rate == expected_rate, f"Rate at minute {minute} should be {expected_rate}, got {actual_rate}"
         assert rate_replicate.get(minute) == "saving", f"Minute {minute} should be marked as 'saving' in rate_replicate"
+        assert base.load_scaling_dynamic.get(minute) == base.load_scaling_saving, f"load_scaling_dynamic at minute {minute} should be {base.load_scaling_saving}, got {base.load_scaling_dynamic.get(minute)}"
 
     # Verify rates outside the event period were NOT modified
     assert base.rate_export[start_minutes - 1] == 5.0, "Rate before event should be unchanged"
     assert base.rate_export[end_minutes] == 5.0, "Rate at end_minutes (not inclusive) should be unchanged"
+    assert base.load_scaling_dynamic.get(start_minutes - 1) is None, "load_scaling_dynamic before event should be unchanged"
+    assert base.load_scaling_dynamic.get(end_minutes) is None, "load_scaling_dynamic after event should be unchanged"
 
     # Verify the event was logged
     print("  ✓ Export rates increased by 100p/kWh for 2-hour period (14:00-16:00)")
@@ -761,6 +943,89 @@ def _test_axle_load_slot_export(my_predbat=None):
     print(f"  ✓ Rate at 13:59 unchanged: {base.rate_export[start_minutes - 1]}")
     print(f"  ✓ Rate at 16:00 unchanged: {base.rate_export[end_minutes]}")
     print(f"  ✓ {len(rate_replicate)} minutes marked as 'saving' events")
+    print(f"  ✓ load_scaling_saving ({base.load_scaling_saving}) applied to {len(base.load_scaling_dynamic)} minutes in export event")
+
+    return False
+
+
+def _test_axle_load_slot_import(my_predbat=None):
+    """
+    Test that load_axle_slot decreases import rates by pence_per_kwh and applies load_scaling_free for import events
+    """
+    from axle import load_axle_slot
+    from datetime import datetime, timezone
+
+    print("Testing load_axle_slot import rate decrease...")
+
+    class MockBase:
+        def __init__(self):
+            self.midnight_utc = datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+            self.now_utc = datetime(2024, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+            self.minutes_now = 10 * 60  # 10:00 AM
+            self.forecast_minutes = 24 * 60  # 24 hours
+            self.prefix = "predbat"
+
+            # Initialize rate_import with base rates for each minute
+            self.rate_import = {}
+            for minute in range(self.forecast_minutes):
+                self.rate_import[minute] = 30.0  # Base rate of 30p/kWh
+
+            self.rate_export = {}
+            self.load_scaling_dynamic = {}
+            self.load_scaling_saving = 0.5
+            self.load_scaling_free = 0.0
+
+        def log(self, message):
+            print(f"  [LOG] {message}")
+
+        def time_abs_str(self, minutes):
+            return f"{minutes//60:02d}:{minutes%60:02d}"
+
+        def get_arg(self, name, indirect=True):
+            return None
+
+    base = MockBase()
+
+    start_time = "2024-01-01T02:00:00+00:00"
+    end_time = "2024-01-01T04:00:00+00:00"
+
+    axle_sessions = [
+        {
+            "start_time": start_time,
+            "end_time": end_time,
+            "import_export": "import",
+            "pence_per_kwh": 10.0,
+        }
+    ]
+
+    start_minutes = 2 * 60  # 02:00 = 120 minutes
+    end_minutes = 4 * 60  # 04:00 = 240 minutes
+
+    original_rate = base.rate_import[start_minutes]
+
+    rate_replicate = {}
+    load_axle_slot(base, axle_sessions, export=False, rate_replicate=rate_replicate)
+
+    # Verify import rates were decreased by pence_per_kwh during the event period
+    for minute in range(start_minutes, end_minutes):
+        expected_rate = original_rate - 10.0  # 30.0 - 10.0 = 20.0
+        actual_rate = base.rate_import[minute]
+        assert actual_rate == expected_rate, f"Import rate at minute {minute} should be {expected_rate}, got {actual_rate}"
+        assert rate_replicate.get(minute) == "saving", f"Minute {minute} should be marked as 'saving' in rate_replicate"
+        assert base.load_scaling_dynamic.get(minute) == base.load_scaling_free, f"load_scaling_dynamic at minute {minute} should be {base.load_scaling_free}, got {base.load_scaling_dynamic.get(minute)}"
+
+    # Verify outside the event period were NOT modified
+    assert base.rate_import[start_minutes - 1] == 30.0, "Import rate before event should be unchanged"
+    assert base.rate_import[end_minutes] == 30.0, "Import rate at end_minutes (not inclusive) should be unchanged"
+    assert base.load_scaling_dynamic.get(start_minutes - 1) is None, "load_scaling_dynamic before event should be unchanged"
+    assert base.load_scaling_dynamic.get(end_minutes) is None, "load_scaling_dynamic after event should be unchanged"
+
+    print("  ✓ Import rates decreased by 10p/kWh for 2-hour period (02:00-04:00)")
+    print(f"  ✓ Rate at 02:00 changed from {original_rate} to {base.rate_import[start_minutes]}")
+    print(f"  ✓ Rate at 01:59 unchanged: {base.rate_import[start_minutes - 1]}")
+    print(f"  ✓ Rate at 04:00 unchanged: {base.rate_import[end_minutes]}")
+    print(f"  ✓ {len(rate_replicate)} minutes marked as 'saving' events")
+    print(f"  ✓ load_scaling_free ({base.load_scaling_free}) applied to {len(base.load_scaling_dynamic)} minutes in import event")
 
     return False
 
@@ -815,27 +1080,4 @@ def _test_axle_active_function(my_predbat=None):
     assert result is False, "fetch_axle_active should return False when axle_session is not configured"
 
     print("✓ fetch_axle_active function test passed")
-
-
-# Run all tests
-if __name__ == "__main__":
-    print("\n=== Axle API Component Tests ===\n")
-
-    test_axle_initialization()
-    test_axle_fetch_with_active_event()
-    test_axle_fetch_with_future_event()
-    test_axle_fetch_with_past_event()
-    test_axle_fetch_no_event()
-    test_axle_http_error()
-    test_axle_request_exception()
-    test_axle_retry_success_after_failure()
-    test_axle_json_parse_error()
-    test_axle_datetime_parsing_variations()
-    test_axle_run_method()
-    test_axle_history_loading()
-    test_axle_history_cleanup()
-    test_axle_fetch_sessions()
-    test_axle_load_slot_export()
-    test_axle_active_function()
-
-    print("\n=== All Axle API tests passed! ===\n")
+    return False

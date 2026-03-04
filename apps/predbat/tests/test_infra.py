@@ -1,6 +1,6 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2025 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
@@ -363,6 +363,7 @@ class MockConfigProvider:
             "iboost_value_scaling": 1.0,
             "iboost_energy_subtract": False,
             "car_charging_hold": True,
+            "car_energy_reported_load": True,
             "car_charging_manual_soc": False,
             "car_charging_threshold": 60.0,
             "car_charging_energy_scale": 1.0,
@@ -491,7 +492,6 @@ def reset_inverter(my_predbat):
     my_predbat.charge_window_best = []
     my_predbat.export_limits_best = []
     my_predbat.export_window_best = []
-    my_predbat.charge_limit_percent_best = []
     my_predbat.manual_charge_times = []
     my_predbat.manual_demand_times = []
     my_predbat.manual_export_times = []
@@ -548,6 +548,7 @@ def simple_scenario(
     battery_rate_max_charge=1.0,
     charge_car=0,
     car_charging_from_battery=True,
+    car_energy_reported_load=True,
     iboost_solar=False,
     iboost_solar_excess=False,
     iboost_gas=False,
@@ -651,6 +652,7 @@ def simple_scenario(
     my_predbat.battery_rate_max_charge_scaled = battery_rate_max_charge / 60.0
     my_predbat.battery_rate_max_discharge_scaled = battery_rate_max_charge / 60.0
     my_predbat.car_charging_from_battery = car_charging_from_battery
+    my_predbat.car_energy_reported_load = car_energy_reported_load
     my_predbat.set_charge_low_power = set_charge_low_power
     my_predbat.set_charge_window = set_charge_window
     my_predbat.set_charge_freeze = set_charge_freeze

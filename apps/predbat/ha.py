@@ -1,12 +1,21 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2024 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
+
+
+"""Home Assistant communication interface.
+
+Provides the HAInterface class for direct WebSocket and REST API communication
+with Home Assistant. Manages state caching, entity synchronisation, service
+calls, history retrieval, and optional SQLite database mirroring. Also includes
+HAHistory for automatic entity history tracking and pruning.
+"""
 
 import os
 from datetime import timedelta, datetime
@@ -54,6 +63,7 @@ class HAHistory(ComponentBase):
     def initialize(self):
         self.history_entities = {}
         self.history_data = {}
+        self.history_lock = threading.Lock()
 
     def add_entity(self, entity_id, days):
         """
@@ -69,9 +79,13 @@ class HAHistory(ComponentBase):
         """
         Get history data for an entity
         """
-        if self.history_data.get(entity_id, None) and self.history_entities.get(entity_id, 0) >= days:
-            return [self.history_data[entity_id]]
-        else:
+        result = None
+
+        with self.history_lock:
+            if self.history_data.get(entity_id, None) and self.history_entities.get(entity_id, 0) >= days:
+                result = [self.history_data[entity_id]]
+
+        if result is None:
             ha_interface = self.base.components.get_component("ha")
             if not ha_interface:
                 self.log("Error: HAHistory: No HAInterface available, cannot fetch history")
@@ -84,30 +98,33 @@ class HAHistory(ComponentBase):
                 history_data = history_data[0]
                 if tracked:
                     self.update_entity(entity_id, history_data)
-                return [history_data]
-        return None
+                result = [history_data]
+
+        return result
 
     def prune_history(self, now):
         """
         Prune history data older than required
         """
-        for entity_id in list(self.history_data.keys()):
-            max_days = self.history_entities.get(entity_id, 30)
-            cutoff_time = now - timedelta(days=max_days)
-            new_history = []
-            keep_all = False
-            for entry in self.history_data[entity_id]:
-                if keep_all:
-                    new_history.append(entry)
-                else:
-                    last_updated = entry.get("last_updated", None)
-                    if last_updated:
-                        entry_time = str2time(last_updated)
-                        if entry_time >= cutoff_time:
-                            new_history.append(entry)
-                            # Keep remaining entries now as they are in order
-                            keep_all = True
-            self.history_data[entity_id] = new_history
+        with self.history_lock:
+            for entity_id in list(self.history_data.keys()):
+                max_days = self.history_entities.get(entity_id, 30)
+                cutoff_time = now - timedelta(days=max_days)
+                new_history = []
+                keep_all = False
+                for entry in self.history_data[entity_id]:
+                    if keep_all:
+                        new_history.append(entry)
+                    else:
+                        last_updated = entry.get("last_updated", None)
+                        if last_updated:
+                            entry_time = str2time(last_updated)
+                            if entry_time >= cutoff_time:
+                                new_history.append(entry)
+                                # Keep remaining entries now as they are in order
+                                keep_all = True
+                        # Note: Entries without last_updated are dropped
+                self.history_data[entity_id] = new_history
 
     def update_entity(self, entity_id, new_history_data):
         """
@@ -127,29 +144,37 @@ class HAHistory(ComponentBase):
             for entry_attr in FILTER_ENTRIES:
                 entry.pop(entry_attr, None)
 
-        current_history_data = self.history_data.get(entity_id, None)
-        last_updated = current_history_data[-1].get("last_updated", None) if current_history_data and len(current_history_data) > 0 else None
-        count_added = 0
-        if last_updated:
-            # Find the last timestamp in the previous history data, data is always in order from oldest to newest
-            last_timestamp = str2time(last_updated)
-            # Scan new data, using the timestamp only add new entries
-            add_all = False
-            for entry in new_history_data:
-                if add_all:
-                    self.history_data[entity_id].append(entry)
-                    count_added += 1
-                else:
-                    this_updated = entry.get("last_updated", None)
-                    if this_updated:
-                        entry_time = str2time(this_updated)
-                        if entry_time > last_timestamp:
-                            self.history_data[entity_id].append(entry)
-                            add_all = True  # Remaining entries are all newer
-                            count_added += 1
-        else:
-            count_added += len(new_history_data)
-            self.history_data[entity_id] = new_history_data
+        with self.history_lock:
+            current_history_data = self.history_data.get(entity_id, None)
+            if current_history_data and len(current_history_data) > 0:
+                first_updated = current_history_data[0].get("last_updated", None)
+                last_updated = current_history_data[-1].get("last_updated", None)
+            else:
+                first_updated = None
+                last_updated = None
+
+            if last_updated:
+                # Find the last timestamp in the previous history data, data is always in order from oldest to newest
+                first_timestamp = str2time(first_updated)
+                last_timestamp = str2time(last_updated)
+                # Scan new data, using the timestamp only add new entries
+                add_all = False
+                for entry in new_history_data:
+                    if add_all:
+                        self.history_data[entity_id].append(entry)
+                    else:
+                        this_updated = entry.get("last_updated", None)
+                        if this_updated:
+                            entry_time = str2time(this_updated)
+                            if entry_time > last_timestamp:
+                                self.history_data[entity_id].append(entry)
+                                add_all = True  # Remaining entries are all newer
+                            elif entry_time < first_timestamp:
+                                self.history_data[entity_id].append(entry)
+
+                self.history_data[entity_id].sort(key=lambda x: x.get("last_updated"))
+            else:
+                self.history_data[entity_id] = new_history_data
 
         # Update last success timestamp
         self.update_success_timestamp()
@@ -183,8 +208,9 @@ class HAHistory(ComponentBase):
 
         if first or (seconds % (60 * 60) == 0):
             # Prune history data every hour
-            self.log("Info: HAHistory: Pruning history data")
+            self.log("Info: HAHistory: Pruning history data started.")
             self.prune_history(datetime.now(self.local_tz))
+            self.log("Info: HAHistory: Pruning history data completed.")
         return True
 
 
@@ -254,9 +280,9 @@ class HAInterface(ComponentBase):
             # Get the current addon info, but suppress warning message if the API call fails as non-HAOS installs won't have supervisor running
             res = self.api_call("/addons/self/info", core=False, silent=True)
             if res:
-                # get add-on slug name which is the actual directory name under /addon_configs that /config is mounted to
+                # get app slug name which is the actual directory name under /addon_configs that /config is mounted to
                 self.slug = res["data"]["slug"]
-                self.log("Info: Add-on slug is {}".format(self.slug))
+                self.log("Info: App slug is {}".format(self.slug))
 
             check = self.api_call("/api/services")
             if not check:
@@ -297,7 +323,7 @@ class HAInterface(ComponentBase):
 
     def get_slug(self):
         """
-        Get the add-on slug.
+        Get the app slug.
         """
         return self.slug
 
@@ -346,7 +372,7 @@ class HAInterface(ComponentBase):
 
         # Check for timeout (neither success nor error was set)
         if result_holder.get("success") is None and not result_holder.get("error"):
-            self.log("Warn: Service call {}/{} timed out....".format(domain, service))
+            self.log("Warn: Service call {}/{} failed or timed out: result {}".format(domain, service, result_holder))
             return None
 
         success = result_holder.get("success", False)
@@ -394,11 +420,8 @@ class HAInterface(ComponentBase):
                         await websocket.send_json({"id": sid, "type": "subscribe_events", "event_type": "call_service"})
                         sid += 1
 
-                        # Get service list
-                        # await websocket.send_json({"id": sid, "type": "get_services"})
-                        # sid += 1
-
-                        # Fire events to say we have registered services
+                        # Fire events to say we have registered services, this will be repeated later after startup
+                        # To make sure we don't miss any events due to them not being active yet.
                         for item in self.base.SERVICE_REGISTER_LIST:
                             await websocket.send_json({"id": sid, "type": "fire_event", "event_type": "service_registered", "event_data": {"service": item["service"], "domain": item["domain"]}})
                             sid += 1
@@ -508,7 +531,10 @@ class HAInterface(ComponentBase):
 
                                 # Send command with current sid
                                 try:
-                                    await websocket.send_json({"id": sid, "type": "call_service", "domain": domain, "service": service, "service_data": service_data, "return_response": return_response})
+                                    if domain == "fire_event":
+                                        await websocket.send_json({"id": sid, "type": domain, "event_type": service, "event_data": {"service": service_data["event_service"], "domain": service_data["event_domain"]}})
+                                    else:
+                                        await websocket.send_json({"id": sid, "type": "call_service", "domain": domain, "service": service, "service_data": service_data, "return_response": return_response})
 
                                     # Track pending request (only if send succeeded)
                                     with self.ws_pending_lock:
@@ -519,7 +545,7 @@ class HAInterface(ComponentBase):
                                     error_count = 0  # Reset error count on successful result
                                 except Exception as e:
                                     # Failed to send - notify caller immediately
-                                    self.log("Warn: Failed to send service call {}/{}: {}".format(domain, service, e))
+                                    self.log("Warn: Failed to send service call {}/{}: exception: {}".format(domain, service, e))
                                     error_count += 1
                                     result_holder["error"] = "send_failed: {}".format(e)
                                     result_holder["success"] = False
@@ -561,6 +587,11 @@ class HAInterface(ComponentBase):
                     self.ws_pending_requests.clear()
                     if self.ws_command_queue:
                         self.log("Warn: {} queued commands dropped due to connection loss".format(len(self.ws_command_queue)))
+                        for dropped_cmd in self.ws_command_queue:
+                            dropped_domain, dropped_service, dropped_data, dropped_rr, dropped_event, dropped_result = dropped_cmd
+                            dropped_result["error"] = "connection_lost"
+                            dropped_result["success"] = False
+                            dropped_event.set()
                         self.ws_command_queue.clear()
 
             if not self.api_stop:
@@ -609,6 +640,8 @@ class HAInterface(ComponentBase):
         Update state for entity_id from the SQLLite database
         """
         self.db_mirror_list[entity_id.lower()] = True
+        if not self.db_enable:
+            return
         item = self.db_manager.get_state_db(entity_id)
         if item:
             self.update_state_item(item, entity_id, nodb=True)
@@ -640,14 +673,20 @@ class HAInterface(ComponentBase):
         if "state" in item:
             state = item["state"]
             self.state_data[entity_id] = {"state": state, "attributes": attributes, "last_changed": last_changed}
-            if not nodb and ((self.db_mirror_ha and (entity_id in self.db_mirror_list)) or self.db_primary):
+            if not nodb and self.db_enable and ((self.db_mirror_ha and (entity_id in self.db_mirror_list)) or self.db_primary):
                 # Instead of appending to a local mirror_updates list, call the database manager to schedule the update
                 if last_changed:
                     try:
                         last_changed = datetime.strptime(last_changed, TIME_FORMAT_HA_TZ)
-                    except (ValueError, TypeError) as e:
-                        self.log("Warn: Failed to parse last_changed time {} for entity {} : {}".format(last_changed, entity_id, e))
-                        last_changed = datetime.now()
+                    except (ValueError, TypeError):
+                        # Try fallback format without microseconds
+                        try:
+                            last_changed = datetime.strptime(last_changed, "%Y-%m-%dT%H:%M:%S%z")
+                        except (ValueError, TypeError) as e:
+                            self.log("Warn: Failed to parse last_changed time {} for entity {} : {}".format(last_changed, entity_id, e))
+                            last_changed = datetime.now()
+                else:
+                    last_changed = datetime.now()
 
                 self.db_manager.set_state_db(entity_id, state, attributes, timestamp=last_changed)
 
@@ -659,8 +698,11 @@ class HAInterface(ComponentBase):
             return
 
         entities = self.db_manager.get_all_entities_db()
-        for entity_name in entities:
-            self.update_state_db(entity_name)
+        if entities:
+            for entity_name in entities:
+                self.update_state_db(entity_name)
+        else:
+            self.log("Warn: Failed to update state data from DB")
 
     def update_states(self):
         """
@@ -781,7 +823,7 @@ class HAInterface(ComponentBase):
         """
         self.db_mirror_list[entity_id] = True
 
-        if self.db_mirror_ha or self.db_primary:
+        if self.db_enable and (self.db_mirror_ha or self.db_primary):
             item = self.db_manager.set_state_db(entity_id, state, attributes)
             # Locally cache state until DB update happens
             self.update_state_item(item, entity_id, nodb=True)
@@ -802,7 +844,13 @@ class HAInterface(ComponentBase):
         data = {}
         for key in kwargs:
             data[key] = kwargs[key]
-        domain, service = service.split("/")
+        if "/" in service:
+            domain, service = service.split("/")
+        elif "." in service:
+            domain, service = service.split(".")
+        else:
+            domain = ""
+
         if self.websocket_active:
             return self.call_service_websocket_command(domain, service, data)
         else:
@@ -858,6 +906,11 @@ class HAInterface(ComponentBase):
             data = None
         except (requests.Timeout, requests.exceptions.ReadTimeout):
             self.log("Warn: Timeout from {}".format(url))
+            self.api_errors += 1
+            data = None
+        except requests.exceptions.ConnectionError as e:
+            if not silent:
+                self.log("Warn: Connection error from {}: {}".format(url, e))
             self.api_errors += 1
             data = None
 

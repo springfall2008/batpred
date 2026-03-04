@@ -1,6 +1,6 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2024 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
@@ -9,14 +9,30 @@
 # pylint: disable=attribute-defined-outside-init
 # pyright: reportAttributeAccessIssue=false
 
+
+"""Data fetching module for energy rates, consumption, and forecasts.
+
+Orchestrates loading of import/export energy rates from multiple sources
+(Octopus, Energi Data Service, manual config), historical load and PV data,
+battery temperature, and other sensor inputs. Converts all data to per-minute
+dictionaries for use by the prediction engine.
+"""
+
 from datetime import datetime, timedelta
-from utils import minutes_to_time, str2time, dp0, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative
+from utils import minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative
 from const import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_CONTROL_SOC, PREDBAT_MODE_CONTROL_CHARGEDISCHARGE, PREDBAT_MODE_CONTROL_CHARGE, PREDBAT_MODE_MONITOR
 from futurerate import FutureRate
 from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
 
 
 class Fetch:
+    """Data fetching mixin for loading energy rates, consumption, and forecasts.
+
+    Orchestrates loading of import/export rates from multiple sources,
+    historical load/PV data, battery temperature, car charging energy,
+    and other sensor inputs. Converts all data to per-minute dictionaries.
+    """
+
     def get_cloud_factor(self, minutes_now, pv_data, pv_data10):
         """
         Work out approximated cloud factor
@@ -37,7 +53,7 @@ class Fetch:
             pv_factor_round = pv_factor
             if pv_factor_round:
                 pv_factor_round = dp1(pv_factor_round)
-            self.log("PV Forecast {} kWh and 10% Forecast {} kWh pv cloud factor {}".format(dp1(pv_total), dp1(pv_total10), pv_factor_round))
+            self.log("PV Forecast {}kWh and 10% Forecast {}kWh; PV cloud factor {}".format(dp1(pv_total), dp1(pv_total10), pv_factor_round))
             return pv_factor
         else:
             return None
@@ -195,6 +211,151 @@ class Fetch:
 
         return load_yesterday, load_yesterday_raw
 
+    def fill_load_from_power(self, load_minutes, load_power_data):
+        """
+        This function helps to deal with load sensors which don't increment very often leading to poor quality load data
+        For example if its in kWh units then it might take many hours to increment.
+        Predbat actually wants a much more real time estimate, but integrating power sensors alone leads to drift over time.
+
+        Strategy: Divide data into 30-minute periods. For each period:
+        1. Calculate total load consumed (difference between start and end of period)
+        2. Integrate power data over that period
+        3. Scale power data to match the total load
+        4. Generate smooth minute-by-minute load curve
+
+        Since data goes backwards in time (minute 0 is now, higher minutes are further in past),
+        the load value DECREASES as we go forward in time (backwards through minutes).
+        """
+
+        if not load_power_data:
+            self.log("Warn: No power data provided to fill_load_from_power")
+            return load_minutes
+
+        # Create a copy to avoid modifying the original
+        new_load_minutes = load_minutes.copy()
+
+        # Find all the minutes we have data for
+        max_minute = max(max(load_minutes.keys()) if load_minutes else 0, max(load_power_data.keys()) if load_power_data else 0)
+
+        # Determine gap size threshold for zero-load detection
+        # This uses the same threshold as the gap filling logic
+        gap_size = max(self.get_arg("load_filter_threshold", self.plan_interval_minutes), 5)
+
+        # Preprocessing: Fill periods of zero load where power data exists
+        # Find zero-load periods by looking for consecutive minutes with the same value (or 0)
+        zero_periods = []
+        period_start = None
+        last_value = None
+
+        for minute in range(0, max_minute + 1):
+            current_value = new_load_minutes.get(minute, 0)
+
+            # Check if this is a zero or constant period
+            if minute == 0:
+                last_value = current_value
+                if current_value == 0 or current_value == new_load_minutes.get(minute + 1, 0):
+                    period_start = minute
+            else:
+                # If value is same as previous and same as next, it's a flat period
+                next_value = new_load_minutes.get(minute + 1, current_value)
+                if current_value == last_value and current_value == next_value:
+                    if period_start is None:
+                        period_start = minute
+                else:
+                    # End of constant period
+                    if period_start is not None and period_start < minute:
+                        period_length = minute - period_start
+                        # Only consider it zero load if it exceeds the gap_size threshold
+                        if period_length >= gap_size:
+                            # Check if there's power data in this period
+                            has_power = any(load_power_data.get(m, 0) > 0 for m in range(period_start, minute))
+                            if has_power and (last_value == 0 or last_value == new_load_minutes.get(minute, 0)):
+                                zero_periods.append((period_start, minute - 1, last_value))
+                    period_start = None
+                last_value = current_value
+
+        # Check final period
+        if period_start is not None and period_start < max_minute:
+            period_length = max_minute - period_start + 1
+            # Only consider it zero load if it exceeds the gap_size threshold
+            if period_length >= gap_size:
+                has_power = any(load_power_data.get(m, 0) > 0 for m in range(period_start, max_minute + 1))
+                if has_power and last_value == 0:
+                    zero_periods.append((period_start, max_minute, last_value))
+
+        # Fill zero periods with integrated power data
+        if zero_periods:
+            for period_start, period_end, base_value in zero_periods:
+                # Integrate power data over this period
+                # First calculate total energy consumed in this period
+                total_energy = 0
+                for minute in range(period_start, period_end + 1):
+                    power = load_power_data.get(minute, 0)
+                    total_energy += power / 60.0 / 1000.0
+
+                amount_to_fill = 0
+                for minute in range(period_end, period_start, -1):
+                    power = load_power_data.get(minute, 0)
+                    energy = power / 60.0 / 1000.0
+                    amount_to_fill += energy
+                    new_load_minutes[minute] = new_load_minutes.get(minute, 0) + amount_to_fill
+                # Fill to start
+                for minute in range(period_start, -1, -1):
+                    new_load_minutes[minute] = new_load_minutes.get(minute, 0) + amount_to_fill
+
+        # Process in 30-minute periods
+        period_length = 30
+        num_periods = (max_minute + period_length) // period_length
+
+        self.log("Processing {} 30-minute periods for power integration".format(num_periods))
+        for period_idx in range(num_periods):
+            period_start = period_idx * period_length
+            period_end = min(period_start + period_length - 1, max_minute)
+
+            # Get load at start and end of period (going backwards in time)
+            # period_start is more recent (higher cumulative value)
+            # period_end is further in past (lower cumulative value)
+            load_at_start = new_load_minutes.get(period_start, 0)
+            load_at_end = new_load_minutes.get(period_end + 1, new_load_minutes.get(period_end, 0))
+
+            # Total energy consumed in this period (going backwards means decrement)
+            load_total = load_at_start - load_at_end
+
+            # Integrate power data over this period (convert W to kWh)
+            integrated_energy = 0.0
+            power_count = 0
+            for minute in range(period_start, period_end + 1):
+                power = max(load_power_data.get(minute, 0), 0)
+                if power > 0:
+                    power_count += 1
+                # Convert watts to kWh per minute: W * (1 hour / 60 minutes) / 1000
+                integrated_energy += power / 60.0 / 1000.0
+
+            # If we have both power data and load consumption, scale the power integration
+            if integrated_energy > 0 and load_total > 0:
+                # Calculate scaling factor to match load total
+                scale_factor = load_total / integrated_energy
+
+                # Apply scaled power integration to create smooth load curve
+                # Start from the highest value (at period_start = most recent)
+                # and decrement going backwards in time
+                running_total = load_at_start
+                for minute in range(period_start, period_end + 1):
+                    new_load_minutes[minute] = dp4(running_total)
+                    power = load_power_data.get(minute, 0)
+                    energy_decrement = (power / 60.0 / 1000.0) * scale_factor
+                    running_total -= energy_decrement
+            elif load_total > 0:
+                # No power data but we have load consumption
+                # Distribute the load evenly across the period
+                energy_per_minute = load_total / (period_end - period_start + 1)
+                running_total = load_at_start
+                for minute in range(period_start, period_end + 1):
+                    new_load_minutes[minute] = dp4(running_total)
+                    running_total -= energy_per_minute
+
+        return new_load_minutes
+
     def previous_days_modal_filter(self, data):
         """
         Look at the data from previous days and discard the best case one
@@ -205,28 +366,42 @@ class Fetch:
         sum_days_id = {}
         min_sum = 99999999
         min_sum_day = 0
+        sum_all_days = {}
 
         days_list = self.days_previous.copy()
         # Sort days list in numerical order with highest number day first
         days_list.sort(reverse=True)
-
-        idx = 0
-        for days in days_list:
-            use_days = max(min(days, self.load_minutes_age), 1)
+        max_days = max(max(days_list), self.load_minutes_age)
+        for days in range(1, max_days + 1):
             sum_day = 0
-            full_days = 24 * 60 * (use_days - 1)
+            full_days = 24 * 60 * (days - 1)
             for minute in range(0, 24 * 60, PREDICT_STEP):
                 minute_previous = 24 * 60 - minute + full_days - 1
                 load_yesterday, load_yesterday_raw = self.get_filtered_load_minute(data, minute_previous, historical=False, step=PREDICT_STEP)
                 sum_day += load_yesterday
-            sum_days.append(dp2(sum_day))
-            sum_days_id[days] = sum_day
-            if sum_day < min_sum:
-                min_sum_day = days
-                min_sum = dp2(sum_day)
-            idx += 1
+            if days in days_list:
+                sum_days.append(dp2(sum_day))
+                sum_days_id[days] = sum_day
+                if sum_day < min_sum:
+                    min_sum_day = days
+                    min_sum = dp2(sum_day)
+            sum_all_days[days] = dp2(sum_day)
 
-        self.log("Historical load totals for days {} are {}kWh, minimum value {}kWh".format(days_list, sum_days, min_sum))
+        # Work out the average non-zero day
+        average_non_zero_day = 0
+        average_non_zero_count = 0
+        for day_sum in sum_all_days.values():
+            # Sensible threshold to ignore zero days
+            if day_sum > 2.5:
+                average_non_zero_day += day_sum
+                average_non_zero_count += 1
+        if average_non_zero_count > 0:
+            average_non_zero_day /= average_non_zero_count
+        else:
+            average_non_zero_day = 24  # Assume a nominal 24kWh day if no data
+
+        # log the unsorted list of days and load kWh, easier to read and ensures correct 'lowest day' is reported
+        self.log("Historical load totals for days {} are {}kWh, minimum value {}kWh".format(self.days_previous.copy(), sum_days, min_sum))
         if self.load_filter_modal and total_points >= 3 and (min_sum_day > 0):
             self.log("Modal filter enabled - Discarding day {} as it is the lowest of the {} datapoints".format(min_sum_day, len(days_list)))
             min_sum_day_idx = days_list.index(min_sum_day)
@@ -236,59 +411,68 @@ class Fetch:
             del self.days_previous[min_sum_day_idx]
             del self.days_previous_weight[min_sum_day_idx]
 
-        # Gap filling
+        # Fill all the gaps including days we don't use
         gap_size = max(self.get_arg("load_filter_threshold", self.plan_interval_minutes), 5)
-        for days in days_list:
-            use_days = max(min(days, self.load_minutes_age), 1)
-            num_gaps = 0
-            full_days = 24 * 60 * (use_days - 1)
-            gap_minutes = 0
-            gap_start = None
-            gap_list = []
+        gap_minutes = 0
+        gap_start_minute_previous = None
+        gap_list = []
+        num_gaps = 0
+        max_minute = max(max_days * 24 * 60, max(data.keys()) if data else 0)
 
-            # Find all the gaps
-            for minute in range(PREDICT_STEP, 24 * 60 + PREDICT_STEP, PREDICT_STEP):
-                minute_previous = 24 * 60 - minute + full_days
-                if data.get(minute_previous, 0) == data.get(minute_previous + PREDICT_STEP, 0):
-                    gap_minutes += PREDICT_STEP
-                    if gap_start is None:
-                        gap_start = minute - PREDICT_STEP
-                else:
-                    if gap_minutes >= gap_size:
-                        num_gaps += gap_minutes
-                        gap_list.append((gap_start, gap_minutes))
-                    gap_minutes = 0
-                    gap_start = None
-            if gap_minutes >= gap_size:
-                num_gaps += gap_minutes
-                gap_list.append((gap_start, gap_minutes))
+        # Find all the gaps
+        for minute_previous in range(0, max_minute, PREDICT_STEP):
+            if data.get(minute_previous, 0) == data.get(minute_previous + PREDICT_STEP, 0):
+                gap_minutes += PREDICT_STEP
+                if gap_start_minute_previous is None:
+                    gap_start_minute_previous = minute_previous
+            else:
+                if gap_minutes >= gap_size:
+                    num_gaps += gap_minutes
+                    gap_list.append((gap_start_minute_previous, gap_minutes))
+                gap_minutes = 0
+                gap_start_minute_previous = None
+        if gap_minutes >= gap_size:
+            num_gaps += gap_minutes
+            gap_list.append((gap_start_minute_previous, gap_minutes))
 
-            # If we have some gaps
-            if num_gaps > 0:
-                average_day = sum_days_id[days]
-                if (average_day == 0) or (num_gaps >= 24 * 60):
-                    self.log("Warn: Historical day {} has no load history data, unable to fill gaps normally using nominal 24kWh - you should check your load_today sensor in apps.yaml".format(days))
-                    average_day = 24.0
-                else:
-                    real_data_percent = ((24 * 60) - num_gaps) / (24 * 60)
-                    average_day /= real_data_percent
-                    self.log(
-                        "Warn: Historical day {} has {} minutes of gap in the load history data, filled from {}kWh to make new average {}kWh (percent {}%)".format(days, num_gaps, dp2(sum_days_id[days]), dp2(average_day), dp0(real_data_percent * 100.0))
-                    )
+        # Work out total number of gap_minutes
+        if num_gaps > 0:
+            self.log("Warn: Found {} gaps in load_today totalling {} minutes to fill using average data".format(len(gap_list), num_gaps))
 
-                # Do the filling
-                per_minute_increment = average_day / (24 * 60)
-                for gap in gap_list:
-                    gap_start = gap[0]
-                    gap_minutes = gap[1]
-                    total_to_add = 0
-                    end_of_data = 24 * 60 + full_days
-                    for minute in range(gap_start, end_of_data + 1):
-                        minute_previous = 24 * 60 - minute + full_days
-                        if minute_previous >= 0:
-                            data[minute_previous] = dp4(data.get(minute_previous, 0) + total_to_add)
-                            if minute < (gap_start + gap_minutes):
-                                total_to_add += per_minute_increment
+        # Do the filling
+        for gap in gap_list:
+            gap_start_minute_previous = gap[0]
+            gap_minutes = gap[1]
+            gap_end_minute_previous = gap_start_minute_previous + gap_minutes
+
+            total_to_add = 0
+            # Fill the gap region by stepping backward through time (decrementing minute_previous)
+            # gap_start_minute_previous is the highest index (earliest in gap)
+            # We fill from there down to the end of the gap
+
+            minute_previous = gap_end_minute_previous
+            gap_day = None
+            while minute_previous > gap_start_minute_previous and minute_previous >= 0:
+                # Change of day?
+                new_gap_day = max(minute_previous // (24 * 60), 1)
+                if gap_day is None or (new_gap_day != gap_day):
+                    gap_day = new_gap_day
+                    average_day = sum_all_days.get(gap_day, average_non_zero_day)
+                    if average_day <= 2.5:
+                        average_day = average_non_zero_day
+                    per_minute_increment = average_day / (24 * 60)
+                    gap_day = new_gap_day
+
+                data[minute_previous] = dp4(data.get(minute_previous, 0) + total_to_add)
+                minute_previous -= 1
+                total_to_add += per_minute_increment
+
+            # Now ensure the sensor is incrementing all the way to 0
+            while minute_previous >= 0:
+                data[minute_previous] = dp4(data.get(minute_previous, 0) + total_to_add)
+                minute_previous -= 1
+
+        return data
 
     def get_historical_base(self, data, minute, base_minutes):
         """
@@ -340,7 +524,7 @@ class Fetch:
         else:
             return max(data.get(index + 1, 0) - data.get(index, 0), 0)
 
-    def minute_data_import_export(self, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True):
+    def minute_data_import_export(self, max_days_previous, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True):
         """
         Download one or more entities for import/export data
         """
@@ -357,15 +541,32 @@ class Fetch:
 
         import_today = {}
         for entity_id in entity_ids:
+            # Ignore invalid entity IDs, they might be fixed values
+            if (not entity_id) or ("." not in entity_id):
+                continue
+
             try:
-                history = self.get_history_wrapper(entity_id=entity_id, days=self.max_days_previous)
-            except (ValueError, TypeError):
+                history = self.get_history_wrapper(entity_id=entity_id, days=max_days_previous)
+            except (ValueError, TypeError) as exc:
+                self.log("Warn: No history data found for {} : {}".format(entity_id, exc))
                 history = []
 
-            if history:
+            if history and len(history) > 0:
+                item = history[0][0]
+                try:
+                    last_updated_time = str2time(item["last_updated"])
+                except (ValueError, TypeError):
+                    last_updated_time = now_utc
+                age_days = max_days_previous
+                age = now_utc - last_updated_time
+                if age_days is None:
+                    age_days = age.days
+                else:
+                    age_days = min(age_days, age.days)
+
                 import_today, _ = minute_data(
                     history[0],
-                    self.max_days_previous,
+                    max_days_previous if pad else age_days,
                     now_utc,
                     "state",
                     "last_updated",
@@ -377,23 +578,37 @@ class Fetch:
                     required_unit=required_unit,
                 )
             else:
-                self.log("Error: Unable to fetch history for {}".format(entity_id))
-                self.record_status("Error: Unable to fetch history from {}".format(entity_id), had_errors=True)
-                raise ValueError
+                if history is None:
+                    # Only record as a failure if it was None (not just empty but failure)
+                    self.log("Warn: Failure to fetch history for {}".format(entity_id))
+                    self.record_status("Warn: Failure to fetch history from {}".format(entity_id), had_errors=True)
+                else:
+                    self.log("Warn: Unable to fetch history for {}".format(entity_id))
 
         return import_today
 
-    def minute_data_load(self, now_utc, entity_name, max_days_previous, load_scaling=1.0, required_unit=None, interpolate=False):
+    def minute_data_load(self, now_utc, entity_name, max_days_previous, load_scaling=1.0, required_unit=None, interpolate=False, pad=True):
         """
         Download one or more entities for load data
         """
-        entity_ids = self.get_arg(entity_name, indirect=False)
+        if "." not in entity_name:
+            entity_ids = self.get_arg(entity_name, indirect=False)
+        else:
+            entity_ids = entity_name
+
         if isinstance(entity_ids, str):
             entity_ids = [entity_ids]
+        if entity_ids is None:
+            self.log("Error: No entity IDs provided for {}".format(entity_name))
+            entity_ids = []
 
         load_minutes = {}
         age_days = None
         for entity_id in entity_ids:
+            if (not entity_id) or ("." not in entity_id):
+                # Invalid entity ID, might be a fixed value
+                continue
+
             try:
                 history = self.get_history_wrapper(entity_id=entity_id, days=max_days_previous)
             except (ValueError, TypeError):
@@ -412,7 +627,7 @@ class Fetch:
                     age_days = min(age_days, age.days)
                 load_minutes, _ = minute_data(
                     history[0],
-                    max_days_previous,
+                    max_days_previous if pad else age_days,
                     now_utc,
                     "state",
                     "last_updated",
@@ -425,9 +640,12 @@ class Fetch:
                     interpolate=interpolate,
                 )
             else:
-                self.log("Error: Unable to fetch history for {}".format(entity_id))
-                self.record_status("Error: Unable to fetch history from {}".format(entity_id), had_errors=True)
-                raise ValueError
+                if history is None:
+                    # Only record as a failure if it was None (not just empty but failure)
+                    self.log("Warn: Failure to fetch history for {}".format(entity_id))
+                    self.record_status("Warn: Failure to fetch history from {}".format(entity_id), had_errors=True)
+                else:
+                    self.log("Warn: Unable to fetch history for {}".format(entity_id))
 
         if age_days is None:
             age_days = 0
@@ -492,19 +710,38 @@ class Fetch:
                 self.iboost_today = dp2(abs(self.iboost_energy_today[0] - self.iboost_energy_today[self.minutes_now]))
                 self.log("iBoost energy today from sensor reads {} kWh".format(self.iboost_today))
 
+        # Fetch ML forecast if enabled
+        load_ml_forecast = {}
+        if self.get_arg("load_ml_enable", False) and self.get_arg("load_ml_source", False):
+            load_ml_forecast = self.fetch_ml_load_forecast(self.now_utc)
+            if load_ml_forecast:
+                self.load_forecast_only = True  # Use only ML forecast for load if enabled and we have data
+
         # Fetch extra load forecast
-        self.load_forecast, self.load_forecast_array = self.fetch_extra_load_forecast(self.now_utc)
+        self.load_forecast, self.load_forecast_array = self.fetch_extra_load_forecast(self.now_utc, load_ml_forecast)
 
         # Load previous load data
         if self.get_arg("ge_cloud_data", False):
             self.download_ge_data(self.now_utc)
+
+            if ("load_power" in self.args) and self.get_arg("load_power_fill_enable", True):
+                # Use power data to make load data more accurate
+                self.log("Using load_power data to fill gaps in load_today data")
+                load_power_data, _ = self.minute_data_load(self.now_utc, "load_power", self.max_days_previous, required_unit="W", load_scaling=1.0, interpolate=True)
+                self.load_minutes = self.fill_load_from_power(self.load_minutes, load_power_data)
         else:
             # Load data
             if "load_today" in self.args:
-                self.load_minutes, self.load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous, required_unit="kWh", load_scaling=self.load_scaling, interpolate=True)
+                self.load_minutes, self.load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous, required_unit="kWh", load_scaling=1.0, interpolate=True)
                 self.log("Found {} load_today datapoints going back {} days".format(len(self.load_minutes), self.load_minutes_age))
                 self.load_minutes_now = get_now_from_cumulative(self.load_minutes, self.minutes_now, backwards=True)
                 self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
+
+                if ("load_power" in self.args) and self.get_arg("load_power_fill_enable", True):
+                    # Use power data to make load data more accurate
+                    self.log("Using load_power data to fill gaps in load_today data")
+                    load_power_data, _ = self.minute_data_load(self.now_utc, "load_power", self.max_days_previous, required_unit="W", load_scaling=1.0, interpolate=True)
+                    self.load_minutes = self.fill_load_from_power(self.load_minutes, load_power_data)
             else:
                 if self.load_forecast:
                     self.log("Using load forecast from load_forecast sensor")
@@ -518,28 +755,28 @@ class Fetch:
 
             # Load import today data
             if "import_today" in self.args:
-                self.import_today = self.minute_data_import_export(self.now_utc, "import_today", scale=self.import_export_scaling, required_unit="kWh")
+                self.import_today = self.minute_data_import_export(self.max_days_previous, self.now_utc, "import_today", scale=self.import_export_scaling, required_unit="kWh")
                 self.import_today_now = get_now_from_cumulative(self.import_today, self.minutes_now, backwards=True)
             else:
                 self.log("Warn: You have not set import_today in apps.yaml, you will have no previous import data")
 
             # Load export today data
             if "export_today" in self.args:
-                self.export_today = self.minute_data_import_export(self.now_utc, "export_today", scale=self.import_export_scaling, required_unit="kWh")
+                self.export_today = self.minute_data_import_export(self.max_days_previous, self.now_utc, "export_today", scale=self.import_export_scaling, required_unit="kWh")
                 self.export_today_now = get_now_from_cumulative(self.export_today, self.minutes_now, backwards=True)
             else:
                 self.log("Warn: You have not set export_today in apps.yaml, you will have no previous export data")
 
             # PV today data
             if "pv_today" in self.args:
-                self.pv_today = self.minute_data_import_export(self.now_utc, "pv_today", required_unit="kWh")
+                self.pv_today = self.minute_data_import_export(self.max_days_previous, self.now_utc, "pv_today", required_unit="kWh")
                 self.pv_today_now = get_now_from_cumulative(self.pv_today, self.minutes_now, backwards=True)
             else:
                 self.log("Warn: You have not set pv_today in apps.yaml, you will have no previous PV data")
 
         # Battery temperature
         if "battery_temperature_history" in self.args:
-            self.battery_temperature_history = self.minute_data_import_export(self.now_utc, "battery_temperature_history", scale=1.0, increment=False, smoothing=False)
+            self.battery_temperature_history = self.minute_data_import_export(self.max_days_previous, self.now_utc, "battery_temperature_history", scale=1.0, increment=False, smoothing=False)
             data = []
             for minute in range(0, 24 * 60, 5):
                 data.append({minute: self.battery_temperature_history.get(minute, 0)})
@@ -627,6 +864,9 @@ class Fetch:
         else:
             entity_id_list = []
 
+        completed = []
+        planned = []
+        
         if entity_id_list:
             # Process each car's intelligent slot configuration
             for car_n in range(min(len(entity_id_list), self.num_cars)):
@@ -634,8 +874,6 @@ class Fetch:
                 if not entity_id:
                     continue
 
-                completed = []
-                planned = []
 
                 if entity_id and "octopus_intelligent_slot_action_config" in self.args:
                     config_entry = self.get_arg("octopus_intelligent_slot_action_config", None, indirect=False)
@@ -698,6 +936,14 @@ class Fetch:
                     if octopus_ready_time:
                         self.car_charging_plan_time[car_n] = octopus_ready_time
 
+            # Completed and planned slots
+            if completed:
+                self.octopus_slots += completed
+                
+            if planned and (not self.octopus_intelligent_ignore_unplugged or (self.num_cars >= 1 and self.car_charging_planned[0])):
+                # We only count planned slots if the car is plugged in or we are ignoring unplugged cars
+                self.octopus_slots += planned
+                        
             # Get rate for import to compute charging costs
             if self.rate_import:
                 self.rate_scan(self.rate_import, print=False)
@@ -781,6 +1027,7 @@ class Fetch:
             self.rate_import = self.rate_add_io_slots(self.rate_import, self.octopus_slots)
             self.load_saving_slot(self.octopus_saving_slots, export=False, rate_replicate=self.rate_import_replicated)
             self.load_free_slot(self.octopus_free_slots, export=False, rate_replicate=self.rate_import_replicated)
+            load_axle_slot(self, self.axle_sessions, export=False, rate_replicate=self.rate_import_replicated)
             self.rate_import = self.basic_rates(self.get_arg("rates_import_override", [], indirect=False), "rates_import_override", self.rate_import, self.rate_import_replicated)
             self.rate_import = self.apply_manual_rates(self.rate_import, self.manual_import_rates, is_import=True, rate_replicate=self.rate_import_replicated)
             self.rate_scan(self.rate_import, print=True)
@@ -886,8 +1133,8 @@ class Fetch:
         # Fetch PV forecast if enabled, today must be enabled, other days are optional
         self.pv_forecast_minute, self.pv_forecast_minute10 = self.fetch_pv_forecast()
 
-        # Apply modal filter to historical data
         if self.load_minutes and not self.load_forecast_only:
+            # Apply modal filter to historical data
             self.previous_days_modal_filter(self.load_minutes)
             self.log("Historical days now {} weight {}".format(self.days_previous, self.days_previous_weight))
 
@@ -923,6 +1170,12 @@ class Fetch:
         entity_id = "sensor." + self.prefix + "_pv_forecast_raw"
         pv_forecast_packed_ld = self.get_state_wrapper(entity_id=entity_id, attribute="forecast")
         pv_forecast10_packed_ld = self.get_state_wrapper(entity_id=entity_id, attribute="forecast10")
+        relative_time = self.get_state_wrapper(entity_id=entity_id, attribute="relative_time")
+        try:
+            relative_time = datetime.strptime(relative_time, TIME_FORMAT)
+        except (ValueError, TypeError):
+            self.log(f"Warn: Unable to parse relative_time from PV forecast sensor: {relative_time}, using midnight UTC as fallback")
+            relative_time = self.midnight_utc
 
         # Convert keys to integers and values to floats
         pv_forecast_packed = {}
@@ -948,11 +1201,14 @@ class Fetch:
         max_minute = max(pv_forecast_packed.keys()) if pv_forecast_packed else 0
         last_value = 0
         last_value10 = 0
+        # The forecast could be for a different time to our relative time, so we need to offset the minutes to align with our midnight_utc
+        minute_offset = int((self.midnight_utc - relative_time).total_seconds() / 60)
         for minute in range(0, max_minute + 1):
+            target_minute = minute + minute_offset
             last_value = pv_forecast_packed.get(minute, last_value)
             last_value10 = pv_forecast10_packed.get(minute, last_value10)
-            pv_forecast_minute[minute] = last_value
-            pv_forecast_minute10[minute] = last_value10
+            pv_forecast_minute[target_minute] = last_value
+            pv_forecast_minute10[target_minute] = last_value10
 
         return pv_forecast_minute, pv_forecast_minute10
 
@@ -1011,7 +1267,7 @@ class Fetch:
 
         age = now_utc - oldest_data_time
         self.load_minutes_age = age.days
-        self.load_minutes, _ = minute_data(mdata, self.max_days_previous, now_utc, "consumption", "last_updated", backwards=True, smoothing=True, scale=self.load_scaling, clean_increment=True, interpolate=True)
+        self.load_minutes, _ = minute_data(mdata, self.max_days_previous, now_utc, "consumption", "last_updated", backwards=True, smoothing=True, scale=1.0, clean_increment=True, interpolate=True)
         self.import_today, _ = minute_data(mdata, self.max_days_previous, now_utc, "import", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
         self.export_today, _ = minute_data(mdata, self.max_days_previous, now_utc, "export", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
         self.pv_today, _ = minute_data(mdata, self.max_days_previous, now_utc, "pv", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
@@ -1024,23 +1280,23 @@ class Fetch:
 
         # More up to date sensors for current values if set
         if "load_today" in self.args:
-            load_minutes, load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous, required_unit="kWh", load_scaling=self.load_scaling, interpolate=True)
+            load_minutes, load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous, required_unit="kWh", load_scaling=1.0, interpolate=True)
             self.load_minutes_now = get_now_from_cumulative(load_minutes, self.minutes_now, backwards=True)
             self.load_last_period = (load_minutes.get(0, 0) - load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
             self.log("GECloudData load_last_period from immediate sensor is {} kW".format(dp2(self.load_last_period)))
 
         if "import_today" in self.args:
-            import_today = self.minute_data_import_export(self.now_utc, "import_today", scale=self.import_export_scaling, required_unit="kWh")
+            import_today = self.minute_data_import_export(self.max_days_previous, self.now_utc, "import_today", scale=self.import_export_scaling, required_unit="kWh")
             self.import_today_now = get_now_from_cumulative(import_today, self.minutes_now, backwards=True)
 
         # Load export today data
         if "export_today" in self.args:
-            export_today = self.minute_data_import_export(self.now_utc, "export_today", scale=self.import_export_scaling, required_unit="kWh")
+            export_today = self.minute_data_import_export(self.max_days_previous, self.now_utc, "export_today", scale=self.import_export_scaling, required_unit="kWh")
             self.export_today_now = get_now_from_cumulative(export_today, self.minutes_now, backwards=True)
 
         # PV today data
         if "pv_today" in self.args:
-            pv_today = self.minute_data_import_export(self.now_utc, "pv_today", required_unit="kWh")
+            pv_today = self.minute_data_import_export(self.max_days_previous, self.now_utc, "pv_today", required_unit="kWh")
             self.pv_today_now = get_now_from_cumulative(pv_today, self.minutes_now, backwards=True)
 
         self.log("Downloaded {} datapoints from GECloudData going back {} days".format(len(self.load_minutes), self.load_minutes_age))
@@ -1192,10 +1448,12 @@ class Fetch:
             rate_low_average = dp2(rate_low_average / rate_low_count)
         return rate_low_start, rate_low_end, rate_low_average
 
-    def apply_manual_rates(self, rates, manual_items, is_import=True, rate_replicate={}):
+    def apply_manual_rates(self, rates, manual_items, is_import=True, rate_replicate=None):
         """
         Apply manual rates to the rates dictionary
         """
+        if rate_replicate is None:
+            rate_replicate = {}
         if not manual_items:
             return rates
 
@@ -1212,12 +1470,14 @@ class Fetch:
 
         return rates
 
-    def basic_rates(self, info, rtype, prev=None, rate_replicate={}):
+    def basic_rates(self, info, rtype, prev=None, rate_replicate=None):
         """
         Work out the energy rates based on user supplied time periods
         works on a 24-hour period only and then gets replicated later for future days
         """
         rates = {}
+        if rate_replicate is None:
+            rate_replicate = {}
         curr = self.currency_symbols[1]
 
         if prev:
@@ -1501,7 +1761,11 @@ class Fetch:
             else:
                 self.rate_export_cost_threshold = self.rate_export_min + 0.5
 
-        self.log("Rate thresholds (for charge/export) are import {}{} ({}{}), export {}{} ({}{})".format(self.rate_import_cost_threshold, curr, self.rate_low_threshold, curr, self.rate_export_cost_threshold, curr, self.rate_high_threshold, curr))
+        self.log(
+            "Rate thresholds (for charge/export) are import {}{} ({}{}), export {}{} ({}{})".format(
+                dp2(self.rate_import_cost_threshold), curr, dp2(self.rate_low_threshold), curr, dp2(self.rate_export_cost_threshold), curr, dp2(self.rate_high_threshold), curr
+            )
+        )
 
     def rate_scan(self, rates, print=True):
         """
@@ -1572,7 +1836,7 @@ class Fetch:
             self.car_charging_plan_smart[car_n] = self.get_arg("car_charging_plan_smart", False)
             self.car_charging_plan_max_price[car_n] = self.get_arg("car_charging_plan_max_price", 0.0)
             self.car_charging_plan_time[car_n] = self.get_arg("car_charging_plan_time", "07:00:00")
-            self.car_charging_battery_size[car_n] = float(self.get_arg("car_charging_battery_size", 100.0, index=car_n))
+            self.car_charging_battery_size[car_n] = dp2(float(self.get_arg("car_charging_battery_size", 100.0, index=car_n)))
             car_postfix = "" if car_n == 0 else "_" + str(car_n)
             self.car_charging_rate[car_n] = float(self.get_arg("car_charging_rate" + car_postfix))
             self.car_charging_limit[car_n] = dp3((float(self.get_arg("car_charging_limit", 100.0, index=car_n)) * self.car_charging_battery_size[car_n]) / 100.0)
@@ -1580,7 +1844,7 @@ class Fetch:
 
         if self.num_cars > 0:
             self.log(
-                "Cars {} charging from battery {} planned {}, charging_now {} smart {}, max_price {}{}, plan_time {}, battery size {}kWh, limit {}%, rate {}W, exclusive {}".format(
+                "Cars {} charging from battery {} planned {}, charging_now {} smart {}, max_price {}{}, plan_time {}, battery size {}kWh, limit {}%, rate {}kW, exclusive {}".format(
                     self.num_cars,
                     self.car_charging_from_battery,
                     self.car_charging_planned,
@@ -1596,12 +1860,50 @@ class Fetch:
                 )
             )
 
-    def fetch_extra_load_forecast(self, now_utc):
+    def fetch_ml_load_forecast(self, now_utc):
+        """
+        Fetches ML load forecast from sensor
+        and returns it as a minute_data dictionary
+        """
+        # Use ML Model for load prediction
+        load_ml_forecast = self.get_state_wrapper("sensor." + self.prefix + "_load_ml_forecast", attribute="results")
+        if load_ml_forecast:
+            self.log("Loading ML load forecast from sensor.sensor.{}_load_ml_forecast".format(self.prefix))
+            # Convert format from dict to array
+            if isinstance(load_ml_forecast, dict):
+                data_array = []
+                for key, value in load_ml_forecast.items():
+                    data_array.append({"energy": value, "last_updated": key})
+
+                # Load data
+                load_forecast, _ = minute_data(
+                    data_array,
+                    self.forecast_days + 1,
+                    self.midnight_utc,
+                    "energy",
+                    "last_updated",
+                    backwards=False,
+                    clean_increment=False,
+                    smoothing=True,
+                    divide_by=1.0,
+                    scale=1.0,
+                )
+
+                if load_forecast:
+                    self.log("Loaded the ML load forecast; now {}kWh to midnight {}kwh".format(load_forecast.get(self.minutes_now, 0), load_forecast.get(24 * 60 - PREDICT_STEP, 0)))
+                    return load_forecast
+        return {}
+
+    def fetch_extra_load_forecast(self, now_utc, ml_forecast=None):
         """
         Fetch extra load forecast, this is future load data
         """
         load_forecast_final = {}
         load_forecast_array = []
+
+        # Add ML forecast if available
+        if ml_forecast:
+            load_forecast_array.append(ml_forecast)
 
         if "load_forecast" in self.args:
             entity_ids = self.get_arg("load_forecast", indirect=False)
@@ -1641,7 +1943,7 @@ class Fetch:
                     clean_increment=False,
                     smoothing=True,
                     divide_by=1.0,
-                    scale=self.load_scaling,
+                    scale=1.0,
                     required_unit="kWh",
                 )
 
@@ -1682,7 +1984,7 @@ class Fetch:
         state = self.get_state_wrapper(entity_id=entity_id)
         if state is not None:
             try:
-                carbon_history = self.minute_data_import_export(self.now_utc, entity_id, required_unit="g/kWh", increment=False, smoothing=False)
+                carbon_history = self.minute_data_import_export(self.max_days_previous, self.now_utc, entity_id, required_unit="g/kWh", increment=False, smoothing=False)
             except (ValueError, TypeError):
                 self.log("Warn: No carbon intensity history in sensor {}".format(entity_id))
         else:
@@ -1840,6 +2142,7 @@ class Fetch:
         self.octopus_intelligent_charging = self.get_arg("octopus_intelligent_charging")
         self.octopus_intelligent_ignore_unplugged = self.get_arg("octopus_intelligent_ignore_unplugged")
         self.octopus_intelligent_consider_full = self.get_arg("octopus_intelligent_consider_full")
+        self.car_energy_reported_load = self.get_arg("car_energy_reported_load")
         self.get_car_charging_planned()
         self.load_inday_adjustment = 1.0
 
@@ -1964,6 +2267,9 @@ class Fetch:
 
         # Car options
         self.car_charging_hold = self.get_arg("car_charging_hold")
+        if not self.car_energy_reported_load:
+            # If car energy is not reported as load then we should not attempt to remove car energy from the load data.
+            self.car_charging_hold = False
         self.car_charging_manual_soc = [False for c in range(max(self.num_cars, 1))]
         for car_n in range(self.num_cars):
             car_postfix = "" if car_n == 0 else "_" + str(car_n)
@@ -1993,7 +2299,7 @@ class Fetch:
         """
         self.car_charging_energy = {}
         if "car_charging_energy" in self.args:
-            self.car_charging_energy = self.minute_data_import_export(now_utc, "car_charging_energy", scale=self.car_charging_energy_scale, required_unit="kWh")
+            self.car_charging_energy = self.minute_data_import_export(self.max_days_previous, now_utc, "car_charging_energy", scale=self.car_charging_energy_scale, required_unit="kWh")
         else:
             self.log("Car charging hold {}, threshold {}kWh".format(self.car_charging_hold, self.car_charging_threshold * 60.0))
         return self.car_charging_energy

@@ -1,12 +1,21 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2024 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
+
+
+"""Minute-by-minute battery simulation engine.
+
+Implements the core prediction model that simulates energy flows (PV generation,
+load consumption, battery charge/discharge, grid import/export) for each minute
+of the forecast period. Used by the optimiser to evaluate different charge/discharge
+plans and select the one with the lowest cost metric.
+"""
 
 from datetime import timedelta
 from const import PREDICT_STEP, RUN_EVERY, TIME_FORMAT
@@ -107,6 +116,7 @@ class Prediction:
             self.car_charging_soc = base.car_charging_soc
             self.car_charging_soc_next = base.car_charging_soc_next
             self.car_charging_loss = base.car_charging_loss
+            self.car_energy_reported_load = base.car_energy_reported_load
             self.reserve = base.reserve
             self.metric_standing_charge = base.metric_standing_charge
             self.set_charge_freeze = base.set_charge_freeze
@@ -475,6 +485,7 @@ class Prediction:
         iboost_running = self.iboost_running
         iboost_running_solar = self.iboost_running_solar
         iboost_running_full = self.iboost_running_full
+        car_load_energy = 0
 
         # Remove intersecting windows and optimise the data format of the charge/discharge window
         charge_limit, charge_window = remove_intersecting_windows(charge_limit, charge_window, export_limits, export_window)
@@ -497,12 +508,14 @@ class Prediction:
         enable_standing_charge = save and (save in ["best", "base", "base10", "best10", "test", "yesterday", "yesterday10"])
         enable_save_stats = save and (save in ["best", "test", "compare", "yesterday"])
         car_enable = self.num_cars > 0
+        car_energy_reported_load = self.car_energy_reported_load
         inverter_limit = self.inverter_limit * step
         export_limit = self.export_limit * step
         set_charge_low_power = self.set_charge_window and self.set_charge_low_power and (save in ["best", "best10", "test"])
         carbon_enable = self.carbon_enable
         reserve = self.reserve
         soc_max = self.soc_max
+        reserve_percent = calc_percent_limit(reserve, soc_max)
         battery_loss = self.battery_loss
         battery_loss_discharge = self.battery_loss_discharge
         battery_temperature_prediction = self.battery_temperature_prediction
@@ -591,7 +604,7 @@ class Prediction:
             charge_limit_n = 0
             if charge_window_active:
                 charge_limit_n = charge_limit[charge_window_n]
-                if self.set_charge_freeze and (charge_limit_n == reserve):
+                if self.set_charge_freeze and (calc_percent_limit(charge_limit_n, soc_max) == reserve_percent):
                     # Charge freeze via reserve
                     charge_limit_n = max(soc, reserve)
 
@@ -650,6 +663,7 @@ class Prediction:
             # Simulate car charging
             if car_enable:
                 car_load = in_car_slot(minute_absolute, self.num_cars, self.car_charging_slots)
+                car_load_energy = 0
 
                 # Car charging?
                 for car_n in range(self.num_cars):
@@ -658,10 +672,14 @@ class Prediction:
                         car_load_scale = car_load_scale * self.car_charging_loss
                         car_load_scale = max(min(car_load_scale, self.car_charging_limit[car_n] - car_soc[car_n]), 0)
                         car_soc[car_n] = car_soc[car_n] + car_load_scale
-                        load_yesterday += car_load_scale / self.car_charging_loss
-                        # Model not allowing the car to charge from the battery
-                        if (car_load_scale > 0) and (not self.car_charging_from_battery) and set_charge_window:
-                            discharge_rate_now = battery_rate_min  # 0
+                        if self.car_energy_reported_load:
+                            # Only add load if the car is reporting it as load, otherwise its outside the CT Clamp
+                            load_yesterday += car_load_scale / self.car_charging_loss
+                            # Model not allowing the car to charge from the battery
+                            if (car_load_scale > 0) and (not self.car_charging_from_battery) and set_charge_window:
+                                discharge_rate_now = battery_rate_min  # 0
+                        else:
+                            car_load_energy += car_load_scale
 
             # Iboost
             iboost_rate_okay = True
@@ -1018,7 +1036,15 @@ class Prediction:
                 if carbon_enable:
                     carbon_g -= energy * carbon_intensity.get(minute, 0)
 
-                metric -= export_rate * energy
+                if not car_energy_reported_load and car_load_energy > 0:
+                    # If the car is not reporting load, but we export then this export can
+                    # end up in the car meaning we don't get the export profit.
+                    # We can't really value the car charging amount so we just assume its 0 value to be conservative.
+                    metric -= export_rate * max(0, energy - car_load_energy)
+                else:
+                    metric -= export_rate * energy
+
+                # Show the symbol
                 if diff != 0:
                     grid_state = ">"
                 else:

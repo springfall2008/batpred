@@ -1,12 +1,22 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2025 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
+
+
+"""Abstract base class for all PredBat components.
+
+Provides standardised lifecycle management (initialise, start, stop),
+health monitoring with exponential backoff on startup failures, error
+counting, and delegation to the main PredBat instance for HA operations.
+All component types (HAInterface, WebInterface, SolarAPI, etc.) inherit
+from this class.
+"""
 
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
@@ -45,15 +55,15 @@ class ComponentBase(ABC):
         """
         self.base = base
         self.log = base.log
-        self.call_notify = base.call_notify
         self.api_started = False
         self.api_stop = False
         self.last_success_timestamp = None
         self.local_tz = base.local_tz
         self.prefix = base.prefix
         self.args = base.args
-        self.initialize(**kwargs)
         self.count_errors = 0
+        self.run_timeout = 60 * 60  # Default run time in seconds, can be overridden by subclasses
+        self.initialize(**kwargs)
 
     @abstractmethod
     def initialize(self, **kwargs):
@@ -174,7 +184,20 @@ class ComponentBase(ABC):
                         should_run = True
 
                 if should_run:
-                    if await self.run(seconds, first):
+                    task = asyncio.ensure_future(self.run(seconds, first))
+                    try:
+                        run_result = await asyncio.wait_for(asyncio.shield(task), timeout=self.run_timeout)
+                    except asyncio.TimeoutError:
+                        stack = task.get_stack()
+                        tb_lines = ["Traceback of timed-out run():"] + ['  File "{}", line {}, in {}'.format(frame.f_code.co_filename, frame.f_lineno, frame.f_code.co_name) for frame in stack]
+                        self.log("Error: {}: run() exceeded {}s timeout:\n{}".format(self.__class__.__name__, self.run_timeout, "\n".join(tb_lines)))
+                        task.cancel()
+                        try:
+                            await task
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                        run_result = False
+                    if run_result:
                         if not self.api_started:
                             self.api_started = True
                             self.log(f"{self.__class__.__name__}: Started")
@@ -257,6 +280,9 @@ class ComponentBase(ABC):
 
     def set_state_wrapper(self, entity_id, state, attributes={}, required_unit=None):
         return self.base.set_state_wrapper(entity_id, state, attributes=attributes, required_unit=required_unit)
+
+    def call_notify(self, message):
+        return self.base.call_notify(message)
 
     def wait_api_started(self, timeout=10 * 60):
         """

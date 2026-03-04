@@ -1,8 +1,17 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2025 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
+
+
+"""Tariff comparison engine.
+
+Runs optimisation scenarios across different energy tariffs to compare
+costs, enabling users to evaluate whether switching tariffs would reduce
+their energy bills. Loads tariff definitions from YAML and generates
+per-tariff plan visualisations.
+"""
 
 import os
 from datetime import datetime
@@ -17,6 +26,13 @@ import copy
 
 
 class Compare:
+    """Tariff comparison engine.
+
+    Runs optimisation scenarios across different energy tariffs loaded
+    from YAML configuration, generating per-tariff plans and cost
+    comparisons to evaluate tariff switching decisions.
+    """
+
     def __init__(self, my_predbat):
         self.pb = my_predbat
         self.log = self.pb.log
@@ -416,7 +432,6 @@ class Compare:
         save_export_window_best = my_predbat.export_window_best
         save_export_limits_best = my_predbat.export_limits_best
         save_charge_limit_best = my_predbat.charge_limit_best
-        save_charge_limit_percent_best = my_predbat.charge_limit_percent_best
         save_cost_today_sofar = my_predbat.cost_today_sofar
         save_carbon_today_sofar = my_predbat.carbon_today_sofar
         save_iboost_today = my_predbat.iboost_today
@@ -462,7 +477,6 @@ class Compare:
         my_predbat.export_window_best = save_export_window_best
         my_predbat.export_limits_best = save_export_limits_best
         my_predbat.charge_limit_best = save_charge_limit_best
-        my_predbat.charge_limit_percent_best = save_charge_limit_percent_best
         my_predbat.cost_today_sofar = save_cost_today_sofar
         my_predbat.carbon_today_sofar = save_carbon_today_sofar
         my_predbat.iboost_today = save_iboost_today

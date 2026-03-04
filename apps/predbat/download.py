@@ -1,12 +1,19 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2024 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
+
+
+"""PredBat self-update utilities.
+
+Downloads PredBat source files from GitHub releases, validates installed
+file integrity via SHA1 hashing, and manages the update/rollback process.
+"""
 
 import os
 import requests

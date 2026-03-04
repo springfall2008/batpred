@@ -1,3 +1,11 @@
+"""Standalone mode wrapper for running PredBat outside AppDaemon.
+
+Provides the Hass class that emulates the AppDaemon interface for standalone
+execution, including YAML configuration loading, secret management, log
+rotation, scheduled callback execution, and file change detection for
+development hot-reload.
+"""
+
 import io
 import yaml
 import sys
@@ -96,6 +104,13 @@ if __name__ == "__main__":
 
 
 class Hass:
+    """Standalone mode wrapper emulating the AppDaemon interface.
+
+    Enables PredBat to run outside Home Assistant/AppDaemon with YAML
+    config loading, secret management, log rotation, scheduled callbacks,
+    and file change detection for development hot-reload.
+    """
+
     def log(self, msg, quiet=True):
         """
         Log a message to the logfile
@@ -143,12 +158,12 @@ class Hass:
         """
         asyncio.run(self.task_waiter_async(task))
 
-    def create_task(self, task):
+    def create_task(self, task, name="TaskCreate"):
         """
         Creates a new thread to run the task in
         """
         self.log("Creating task: {}".format(task), quiet=False)
-        t1 = threading.Thread(name="TaskCreate", target=self.task_waiter, args=[task])
+        t1 = threading.Thread(name=name, target=self.task_waiter, args=[task])
         t1.start()
         self.threads.append(t1)
         return t1
@@ -260,7 +275,7 @@ class Hass:
                 try:
                     item["callback"](None)
                 except Exception as e:
-                    self.log("Error: {}".format(e), quiet=False)
+                    self.log("Error: timer_tick caught exception: {}".format(e), quiet=False)
                     print(traceback.format_exc())
                 while now > item["next_time"]:
                     run_every = timedelta(seconds=item["run_every"])

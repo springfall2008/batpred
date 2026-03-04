@@ -1,6 +1,6 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2025 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
@@ -92,8 +92,9 @@ def test_component_base_immediate_success(my_predbat):
             # Start component in background
             task = asyncio.create_task(component.start())
 
-            # Wait briefly for it to start
-            await asyncio.sleep(0.01)
+            # Wait briefly for it to start (1.0 → 0.01s real via fast_sleep; must be
+            # shorter than the component's 5s loop sleep → 0.05s real)
+            await asyncio.sleep(1.0)
 
             # Check it started successfully
             assert component.api_started, "Component should have started"
@@ -122,12 +123,13 @@ def test_component_base_backoff_sequence(my_predbat):
             task = asyncio.create_task(component.start())
 
             # First run happens immediately (at second 0)
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(1.0)
             assert component.run_count == 1, f"Expected 1 run after start, got {component.run_count}"
             assert not component.api_started, "Component should not have started yet (failed first attempt)"
 
             # Wait slightly longer - should still be 1 run (waiting for backoff)
-            await asyncio.sleep(0.05)
+            # Backoff = 60s real → 0.6s real via fast_sleep; we wait 0.5 → 0.005s real
+            await asyncio.sleep(0.5)
             assert component.run_count == 1, f"Should still be 1 run (waiting for backoff), got {component.run_count}"
 
             # Stop component before the backoff completes
@@ -153,7 +155,7 @@ def test_component_base_stop_during_backoff(my_predbat):
             task = asyncio.create_task(component.start())
 
             # Wait for first run
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(1.0)
             assert component.run_count == 1, f"Expected 1 run, got {component.run_count}"
             assert not component.api_started, "Component should not have started yet"
 
@@ -182,12 +184,13 @@ def test_component_base_normal_operation_after_start(my_predbat):
             task = asyncio.create_task(component.start())
 
             # Wait for it to start
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(1.0)
             assert component.api_started, "Component should have started"
             initial_run_count = component.run_count
 
             # Wait a bit more - should not run again immediately (only every 60 seconds)
-            await asyncio.sleep(0.05)
+            # Component loop sleep = 5s → 0.05s real; we wait 0.5 → 0.005s real
+            await asyncio.sleep(0.5)
             assert component.run_count == initial_run_count, f"Should not run again immediately, expected {initial_run_count}, got {component.run_count}"
 
             # Stop component
@@ -228,7 +231,7 @@ def test_component_base_exception_handling(my_predbat):
             task = asyncio.create_task(component.start())
 
             # Wait for first run
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(1.0)
             assert component.run_count == 1, f"Expected 1 run, got {component.run_count}"
             assert not component.api_started, "Component should not have started due to exception"
             assert component.count_errors == 1, "Error count should be incremented"
@@ -247,6 +250,57 @@ def test_component_base_exception_handling(my_predbat):
     return asyncio.run(run_test())
 
 
+def test_component_base_run_timeout(my_predbat):
+    """Test that a hung run() is detected, its stack is logged, and it is treated as a failure"""
+    print("\n*** Test: ComponentBase run() timeout detection ***")
+
+    class SlowComponent(ComponentBase):
+        def __init__(self, base):
+            self.run_count = 0
+            super().__init__(base)
+            self.run_timeout = 0.05  # 50 ms - fires before fast_sleep(10) completes (~100 ms real)
+
+        def initialize(self, **kwargs):
+            pass
+
+        async def run(self, seconds, first):
+            self.run_count += 1
+            await asyncio.sleep(10)  # fast_sleep makes this ~100 ms real - longer than timeout
+            return True
+
+    async def run_test():
+        with patch("asyncio.sleep", side_effect=fast_sleep):
+            base = MockBase()
+            component = SlowComponent(base)
+
+            task = asyncio.create_task(component.start())
+
+            # Wait long enough for: timeout to fire + error processing + one sleep(5) cycle
+            await asyncio.sleep(2)  # ~20 ms real time via fast_sleep - enough for timeout + bookkeeping
+
+            await component.stop()
+            await task
+
+            # Component should not have started - run() never returned True
+            assert not component.api_started, "Component should not have started (run timed out)"
+
+            # Error count must have been incremented
+            assert component.count_errors > 0, f"Error count should be > 0, got {component.count_errors}"
+
+            # A 'timeout' message must appear in the log
+            timeout_logged = any("timeout" in msg.lower() for msg in base.log_messages)
+            assert timeout_logged, "Timeout should have been logged. Messages:\n" + "\n".join(base.log_messages)
+
+            # A traceback line should also have been logged (stack dump)
+            traceback_logged = any("File" in msg for msg in base.log_messages)
+            assert traceback_logged, "Stack trace should have been logged. Messages:\n" + "\n".join(base.log_messages)
+
+            print(f"PASS: Timeout caught and stack-traced (error_count={component.count_errors})")
+        return False  # False = test passed
+
+    return asyncio.run(run_test())
+
+
 def test_component_base_all(my_predbat):
     """Run all component_base tests"""
     tests = [
@@ -255,6 +309,7 @@ def test_component_base_all(my_predbat):
         ("stop_during_backoff", test_component_base_stop_during_backoff, "Component respects api_stop during backoff"),
         ("normal_operation", test_component_base_normal_operation_after_start, "Component runs every 60s after start"),
         ("exception_handling", test_component_base_exception_handling, "Component handles exceptions with backoff"),
+        ("run_timeout", test_component_base_run_timeout, "Hung run() triggers timeout, stack trace, and error count"),
     ]
 
     failed = []

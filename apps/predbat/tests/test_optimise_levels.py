@@ -1,13 +1,12 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2024 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
-from utils import calc_percent_limit
 from tests.test_infra import reset_rates, update_rates_import, update_rates_export, reset_inverter
 from prediction import Prediction
 
@@ -105,6 +104,8 @@ def run_optimise_levels(
         best_battery_value,
         tried_list,
         level_results,
+        best_max_charge_slots,
+        best_max_export_slots,
     ) = my_predbat.optimise_charge_limit_price_threads(
         price_set,
         price_links,
@@ -128,7 +129,6 @@ def run_optimise_levels(
 
     # Save plan
     my_predbat.charge_limit_best = charge_limit_best
-    my_predbat.charge_limit_percent_best = calc_percent_limit(charge_limit_best, my_predbat.soc_max)
     my_predbat.export_limits_best = export_limits_best
     my_predbat.charge_window_best = charge_window_best
     my_predbat.export_window_best = export_window_best

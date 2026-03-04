@@ -41,7 +41,7 @@ Some inverters have their own groups also e.g:
 Please see [License](https://github.com/springfall2008/batpred/blob/main/License.md)
 
 ```text
-Copyright (c) Trefor Southwell 2025 - All rights reserved
+Copyright (c) Trefor Southwell 2025-2026 - All rights reserved
 This software maybe used at no cost for personal use only.
 No warranty is given, either expressed or implied.
 ```

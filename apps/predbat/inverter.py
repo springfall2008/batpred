@@ -1,12 +1,22 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2024 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
+
+
+"""Base inverter abstraction layer.
+
+Provides the unified Inverter class that abstracts control of different
+inverter brands (GivEnergy, Fox ESS, Solis, SolaX, etc.) behind a common
+interface. Handles charge/discharge rate control, window programming,
+target SoC setting, and reserve management via both REST API and Home
+Assistant entity writes with polling validation.
+"""
 
 import os
 import time
@@ -15,12 +25,20 @@ import requests
 from datetime import datetime, timedelta
 from config import INVERTER_DEF, SOLAX_SOLIS_MODES_NEW, SOLAX_SOLIS_MODES
 from const import MINUTE_WATT, TIME_FORMAT, TIME_FORMAT_OCTOPUS, INVERTER_TEST, TIME_FORMAT_SECONDS, INVERTER_MAX_RETRY, INVERTER_MAX_RETRY_REST
-from utils import calc_percent_limit, compute_window_minutes, dp0, dp2, dp3, dp4, time_string_to_stamp, minute_data, minute_data_state, window2minutes
+from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, minute_data_state, window2minutes
 
 TIME_FORMAT_HMS = "%H:%M:%S"
 
 
 class Inverter:
+    """Unified inverter control abstraction for multiple brands.
+
+    Provides a common interface for controlling GivEnergy, Fox ESS, Solis,
+    SolaX, and other inverter brands. Handles charge/discharge rate control,
+    window programming, target SoC setting, and reserve management via both
+    REST API and Home Assistant entity writes with polling validation.
+    """
+
     def self_test(self, minutes_now):
         self.base.log(f"======= INVERTER CONTROL SELF TEST START - REST={self.rest_api} ========")
         self.adjust_battery_target(99, False)
@@ -97,7 +115,8 @@ class Inverter:
                     else:
                         self.log("Warn: Calling restart service {}".format(service))
                         self.base.call_service_wrapper(service)
-                    self.base.call_notify("Auto-restart service {} called due to: {}".format(service, reason))
+                    if self.base.get_arg("set_system_notify"):
+                        self.base.call_notify("Auto-restart service {} called due to: {}".format(service, reason))
                     self.sleep(15)
             raise Exception("Auto-restart triggered")
         else:
@@ -126,9 +145,10 @@ class Inverter:
         self.current_charge_limit = 0.0
         self.soc_kw = 0
         self.soc_percent = 0
+        self.soc_max = None
         self.rest_data = None
-        self.inverter_limit = 7500.0
-        self.export_limit = 99999.0
+        self.inverter_limit = 7500.0 / MINUTE_WATT
+        self.export_limit = 99999.0 / MINUTE_WATT
         self.inverter_time = None
         self.reserve_percent = self.base.get_arg("battery_min_soc", default=4.0, index=self.id, required_unit="%")
         self.reserve_percent_current = self.base.get_arg("battery_min_soc", default=4.0, index=self.id, required_unit="%")
@@ -331,7 +351,7 @@ class Inverter:
                         self.in_calibration = True
 
             if self.in_calibration:
-                self.log("Warn: Inverter is in calibration mode {}, Predbat will not function correctly and will be disabled".format(soc_force_adjust))
+                self.log("Warn: Inverter {} is in calibration mode '{}', Predbat will not function correctly and will be disabled".format(self.id, soc_force_adjust))
 
             # Max battery rate
             if "Invertor_Max_Bat_Rate" in idetails:
@@ -343,7 +363,7 @@ class Inverter:
 
             # Max invertor rate
             if "Invertor_Max_Inv_Rate" in idetails:
-                self.inverter_limit = idetails["Invertor_Max_Inv_Rate"]
+                self.inverter_limit = idetails["Invertor_Max_Inv_Rate"] / MINUTE_WATT
 
             # Inverter time
             if "Invertor_Time" in idetails:
@@ -363,7 +383,7 @@ class Inverter:
             ivtime = self.base.get_arg("inverter_time", index=self.id, default=None)
 
         # Battery cannot be zero size
-        if self.soc_max <= 0:
+        if not self.soc_max or self.soc_max <= 0:
             self.log("Note: Battery size was not set, attempting to find it..")
             found_size = self.find_battery_size()
             if not found_size or found_size <= 0:
@@ -460,9 +480,9 @@ class Inverter:
 
         # Max inverter rate override
         if "inverter_limit" in self.base.args:
-            self.inverter_limit = self.base.get_arg("inverter_limit", self.inverter_limit, index=self.id, required_unit="W") / MINUTE_WATT
+            self.inverter_limit = self.base.get_arg("inverter_limit", self.inverter_limit * MINUTE_WATT, index=self.id, required_unit="W") / MINUTE_WATT
         if "export_limit" in self.base.args:
-            self.export_limit = self.base.get_arg("export_limit", self.inverter_limit, index=self.id, required_unit="W") / MINUTE_WATT
+            self.export_limit = self.base.get_arg("export_limit", self.export_limit * MINUTE_WATT, index=self.id, required_unit="W") / MINUTE_WATT
 
         # Log inverter details
         if not quiet:
@@ -575,7 +595,7 @@ class Inverter:
                 for minute in battery_power:
                     battery_power[minute] = -battery_power[minute]
             min_len = min(len(soc_percent), len(battery_power))
-            self.log("Find battery size has {} days of data, max days {}".format(min_len / 60 / 24.0, self.base.max_days_previous))
+            self.log("Find battery size has {} days of data, max days {}".format(dp0(min_len / 60 / 24.0), self.base.max_days_previous))
 
             estimate_battery_sizes = []
 
@@ -665,7 +685,7 @@ class Inverter:
                         percent_change = clipped_end_soc - clipped_start_soc
 
                         self.log(
-                            "Charging clipped start at {} percent {} end {} percent {}, percent change {}".format(
+                            "Charging clipped start at {} with SoC {}%, end at {} with SoC {}%; SoC change {}%".format(
                                 clipped_start_minute,
                                 clipped_start_soc,
                                 clipped_end_minute,
@@ -683,7 +703,7 @@ class Inverter:
                                 power_added += minute_power / 60.0  # W to Wh
                                 sample_count += 1
 
-                            self.log("  Power added over {} samples is {} Wh".format(sample_count, power_added))
+                            self.log("  Power added over {} samples is {}kWh".format(sample_count, dp1(power_added / 1000)))
 
                             if power_added > 0:
                                 estimated_battery_size = (power_added / percent_change) * 100.0 / 1000.0  # Convert Wh to kWh
@@ -696,7 +716,7 @@ class Inverter:
                 average_battery_size = dp2(average_battery_size)
                 # Add in charging loss factor, assume the inverter loss is not counted in the charge rate sensor (as it's AC side)
                 average_battery_size *= self.base.battery_loss * self.base.inverter_loss
-                self.log("Estimated battery size is {} kWh from {} samples (assumed charging loss factor {})".format(average_battery_size, len(estimate_battery_sizes), self.base.battery_loss * self.base.inverter_loss))
+                self.log("Estimated battery size is {}kWh from {} samples (assumed charging loss factor {})".format(dp2(average_battery_size), len(estimate_battery_sizes), dp1(self.base.battery_loss * self.base.inverter_loss)))
                 return average_battery_size
             else:
                 self.log("Warn: Unable to find any suitable charge periods to estimate battery size")
@@ -750,7 +770,7 @@ class Inverter:
 
         if soc_kwh_sensor and charge_rate_sensor and battery_power_sensor and predbat_status_sensor:
             battery_power_sensor = battery_power_sensor.replace("number.", "sensor.")  # Workaround as old template had number.
-            self.log("Find {} curve with sensors {}, {}, {} and {}".format(curve_type, soc_kwh_sensor, charge_rate_sensor, predbat_status_sensor, battery_power_sensor))
+            self.log("Looking for {} curve with sensors {}, {}, {} and {}".format(curve_type, soc_kwh_sensor, charge_rate_sensor, predbat_status_sensor, battery_power_sensor))
             if soc_kwh_percent:
                 soc_kwh_data = self.base.get_history_wrapper(entity_id=soc_kwh_sensor, days=self.base.max_days_previous, required=False)
             else:
@@ -828,7 +848,7 @@ class Inverter:
                     for minute in battery_power:
                         battery_power[minute] = -battery_power[minute]
                 min_len = min(len(soc_kwh), len(charge_rate), len(predbat_status), len(battery_power))
-                self.log("Find {} curve has {} days of data, max days {}".format(curve_type, min_len / 60 / 24.0, self.base.max_days_previous))
+                self.log("Looking for {} curve, have found {} days of history data, max days {}".format(curve_type, dp1(min_len / 60 / 24.0), self.base.max_days_previous))
 
                 soc_percent = {}
                 for minute in range(0, min_len):
@@ -996,13 +1016,13 @@ class Inverter:
                         self.log("Note: Found incomplete battery {} curve (no data points), maybe try again when you have more data.".format(curve_type))
                 else:
                     self.log(
-                        "Note: Cannot find battery {} curve (no final curve found for battery to {}), one of the required settings for {}, {}_rate, battery_power and predbat.status do not have history, check apps.yaml".format(
-                            curve_type, curve_label, soc_label, curve_type
+                        "Note: Cannot find battery {} curve (no full rate {} curve found for battery to {}), one of the required settings for {}, {}_rate, battery_power and predbat.status do not have history, check apps.yaml".format(
+                            curve_type, curve_type, curve_label, soc_label, curve_type
                         )
                     )
             else:
                 self.log("Note: Cannot find battery {} curve (missing history), one of the required settings for {}, {}_rate, battery_power and predbat.status do not have history, check apps.yaml".format(curve_type, soc_label, curve_type))
-                self.log("Note: Sensor with history data lengths: {} {}, {}_rate {}, battery_power {}, predbat_status {}".format(soc_label, len(soc_kwh), curve_type, len(charge_rate), len(battery_power), len(predbat_status)))
+                self.log("Note: Sensor history data lengths: {} {}, {}_rate {}, battery_power {}, predbat_status {}".format(soc_label, len(soc_kwh), curve_type, len(charge_rate), len(battery_power), len(predbat_status)))
         else:
             self.log("Note: Cannot find battery {} curve (settings missing), one of the required settings for {}, {}_rate and battery_power are missing from apps.yaml".format(curve_type, soc_label, curve_type))
         return {}
@@ -1099,14 +1119,15 @@ class Inverter:
         else:
             self.soc_percent = calc_percent_limit(self.soc_kw, self.soc_max)
 
-        if self.rest_data and ("Power" in self.rest_data):
+        if self.rest_data and ("Power" in self.rest_data) and not self.base.get_arg("givtcp_rest_power_ignore", default=False, index=self.id):
             pdetails = self.rest_data["Power"]
             if "Power" in pdetails:
                 ppdetails = pdetails["Power"]
+                # self.log("DEBUG: Power details from REST: {}".format(ppdetails))
                 self.battery_power = float(ppdetails.get("Battery_Power", 0.0))
                 self.pv_power = float(ppdetails.get("PV_Power", 0.0))
-                self.load_power = float(ppdetails.get("Load_Power", 0.0))
                 self.grid_power = float(ppdetails.get("Grid_Power", 0.0))
+                self.load_power = float(ppdetails.get("Load_Power", 0.0))
                 if self.rest_v3:
                     self.battery_voltage = float(ppdetails.get("Battery_Voltage", 0.0))
                 else:
@@ -1160,39 +1181,44 @@ class Inverter:
                 raise ValueError
 
             if charge_start_time is None or charge_end_time is None:
-                self.log("Error: Inverter {} unable to read charge window time as charge_start_time or charge_end_time is None".format(self.id))
-                self.base.record_status("Error: Inverter {} unable to read charge window time as charge_start_time or charge_end_time is None".format(self.id), had_errors=True)
-                raise ValueError
-
-            # Update simulated charge enable time to match the charge window time.
-            if not self.inv_has_charge_enable_time:
-                if charge_start_time == charge_end_time:
-                    self.charge_enable_time = False
-                else:
-                    self.charge_enable_time = True
-                self.write_and_poll_switch("scheduled_charge_enable", self.base.get_arg("scheduled_charge_enable", indirect=False, index=self.id), self.charge_enable_time)
-
-            # Track charge start/end
-            if charge_start_time and charge_end_time:
-                self.track_charge_start = charge_start_time.strftime(TIME_FORMAT_HMS)
-                self.track_charge_end = charge_end_time.strftime(TIME_FORMAT_HMS)
-            else:
-                self.track_charge_start = "00:00:00"
-                self.track_charge_end = "00:00:00"
-
-            # Reverse clock skew
-            charge_start_time -= timedelta(seconds=self.base.inverter_clock_skew_start * 60)
-            charge_end_time -= timedelta(seconds=self.base.inverter_clock_skew_end * 60)
-
-            # Compute charge window minutes start/end just for the next charge window
-            self.charge_start_time_minutes, self.charge_end_time_minutes = compute_window_minutes(charge_start_time, charge_end_time, minutes_now)
-
-            # Charge is off due to start/end time being same
-            if not self.inv_has_charge_enable_time and not self.charge_enable_time:
+                self.log("Warn: Inverter {} unable to read charge window time as charge_start_time or charge_end_time is None, will retry next update".format(self.id))
+                self.base.record_status("Warn: Inverter {} unable to read charge window time, will retry next update".format(self.id), had_errors=True)
+                # Set safe defaults to allow graceful recovery on next update
+                self.charge_enable_time = False
                 self.charge_start_time_minutes = self.base.forecast_minutes
                 self.charge_end_time_minutes = self.base.forecast_minutes
                 self.track_charge_start = "00:00:00"
                 self.track_charge_end = "00:00:00"
+            else:
+                # Update simulated charge enable time to match the charge window time.
+                if not self.inv_has_charge_enable_time:
+                    if charge_start_time == charge_end_time:
+                        self.charge_enable_time = False
+                    else:
+                        self.charge_enable_time = True
+                    self.write_and_poll_switch("scheduled_charge_enable", self.base.get_arg("scheduled_charge_enable", indirect=False, index=self.id), self.charge_enable_time)
+
+                # Track charge start/end
+                if charge_start_time and charge_end_time:
+                    self.track_charge_start = charge_start_time.strftime(TIME_FORMAT_HMS)
+                    self.track_charge_end = charge_end_time.strftime(TIME_FORMAT_HMS)
+                else:
+                    self.track_charge_start = "00:00:00"
+                    self.track_charge_end = "00:00:00"
+
+                # Reverse clock skew
+                charge_start_time -= timedelta(seconds=self.base.inverter_clock_skew_start * 60)
+                charge_end_time -= timedelta(seconds=self.base.inverter_clock_skew_end * 60)
+
+                # Compute charge window minutes start/end just for the next charge window
+                self.charge_start_time_minutes, self.charge_end_time_minutes = compute_window_minutes(charge_start_time, charge_end_time, minutes_now)
+
+                # Charge is off due to start/end time being same
+                if not self.inv_has_charge_enable_time and not self.charge_enable_time:
+                    self.charge_start_time_minutes = self.base.forecast_minutes
+                    self.charge_end_time_minutes = self.base.forecast_minutes
+                    self.track_charge_start = "00:00:00"
+                    self.track_charge_end = "00:00:00"
         else:
             # If charging is disabled set a fake window outside
             self.charge_start_time_minutes = self.base.forecast_minutes
@@ -1258,30 +1284,40 @@ class Inverter:
             self.base.record_status("Error: Inverter {} unable to read Export window as neither REST or discharge_start_time are set".format(self.id), had_errors=True)
             raise ValueError
 
-        # Update simulated discharge enable time to match the discharge window time.
-        if not self.inv_has_discharge_enable_time and not self.inv_has_ge_inverter_mode:
-            if discharge_start == discharge_end:
-                self.discharge_enable_time = False
-            else:
-                self.discharge_enable_time = True
-            entity_id = self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id)
-            self.write_and_poll_switch("scheduled_discharge_enable", entity_id, self.discharge_enable_time)
-            self.log("Inverter {} {} set to {}".format(self.id, entity_id, self.discharge_enable_time))
-
-        # Tracking for idle time
-        if self.discharge_enable_time:
-            self.track_discharge_start = discharge_start.strftime(TIME_FORMAT_HMS)
-            self.track_discharge_end = discharge_end.strftime(TIME_FORMAT_HMS)
-        else:
+        if discharge_start is None or discharge_end is None:
+            self.log("Warn: Inverter {} unable to read Export window as discharge_start or discharge_end is None, will retry next update".format(self.id))
+            self.base.record_status("Warn: Inverter {} unable to read Export window, will retry next update".format(self.id), had_errors=True)
+            # Set safe defaults to allow graceful recovery on next update
+            self.discharge_enable_time = False
+            self.discharge_start_time_minutes = 0
+            self.discharge_end_time_minutes = 0
             self.track_discharge_start = "00:00:00"
             self.track_discharge_end = "00:00:00"
+        else:
+            # Update simulated discharge enable time to match the discharge window time.
+            if not self.inv_has_discharge_enable_time and not self.inv_has_ge_inverter_mode:
+                if discharge_start == discharge_end:
+                    self.discharge_enable_time = False
+                else:
+                    self.discharge_enable_time = True
+                entity_id = self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id)
+                self.write_and_poll_switch("scheduled_discharge_enable", entity_id, self.discharge_enable_time)
+                self.log("Inverter {} {} set to {}".format(self.id, entity_id, self.discharge_enable_time))
 
-        # Reverse clock skew
-        discharge_start -= timedelta(seconds=self.base.inverter_clock_skew_discharge_start * 60)
-        discharge_end -= timedelta(seconds=self.base.inverter_clock_skew_discharge_end * 60)
+            # Tracking for idle time
+            if self.discharge_enable_time:
+                self.track_discharge_start = discharge_start.strftime(TIME_FORMAT_HMS)
+                self.track_discharge_end = discharge_end.strftime(TIME_FORMAT_HMS)
+            else:
+                self.track_discharge_start = "00:00:00"
+                self.track_discharge_end = "00:00:00"
 
-        # Compute discharge window minutes start/end just for the next discharge window
-        self.discharge_start_time_minutes, self.discharge_end_time_minutes = compute_window_minutes(discharge_start, discharge_end, minutes_now)
+            # Reverse clock skew
+            discharge_start -= timedelta(seconds=self.base.inverter_clock_skew_discharge_start * 60)
+            discharge_end -= timedelta(seconds=self.base.inverter_clock_skew_discharge_end * 60)
+
+            # Compute discharge window minutes start/end just for the next discharge window
+            self.discharge_start_time_minutes, self.discharge_end_time_minutes = compute_window_minutes(discharge_start, discharge_end, minutes_now)
 
         if not quiet:
             self.base.log("Inverter {} scheduled discharge enable is {}".format(self.id, self.discharge_enable_time))
@@ -1691,7 +1727,11 @@ class Inverter:
             if isinstance(new_value, str):
                 matched = current_state == new_value
             else:
-                matched = abs(float(current_state) - new_value) <= fuzzy
+                try:
+                    current_state = float(current_state)
+                except (ValueError, TypeError):
+                    current_state = 0.0
+                matched = abs(current_state - new_value) <= fuzzy
 
         if retry == 0:
             self.base.log(f"Inverter {self.id} write_and_poll_value: No write needed for {name}: {new_value} == {current_state} fuzzy {fuzzy}")
@@ -2005,6 +2045,10 @@ class Inverter:
         elif "discharge_start_time" in self.base.args:
             old_start = self.base.get_arg("discharge_start_time", index=self.id)
             old_end = self.base.get_arg("discharge_end_time", index=self.id)
+            if old_start is None:
+                old_start = "00:00:00"
+            if old_end is None:
+                old_end = "00:00:00"
             if len(old_start) == 5:
                 old_start += ":00"
             if len(old_end) == 5:
@@ -2236,7 +2280,7 @@ class Inverter:
             solax_modes = SOLAX_SOLIS_MODES_NEW if self.base.get_arg("solax_modbus_new", True) else SOLAX_SOLIS_MODES
 
             entity_id = self.base.get_arg("energy_control_switch", indirect=False, index=self.id)
-            switch = solax_modes.get(self.base.get_state_wrapper(entity_id), 0)
+            switch = solax_modes.get(str(self.base.get_state_wrapper(entity_id, "")), 0)
 
             if direction == "charge":
                 if enable:
@@ -2461,6 +2505,10 @@ class Inverter:
         elif "charge_start_time" in self.base.args:
             old_start = self.base.get_arg("charge_start_time", index=self.id)
             old_end = self.base.get_arg("charge_end_time", index=self.id)
+            if old_start is None:
+                old_start = "00:00:00"
+            if old_end is None:
+                old_end = "00:00:00"
             if len(old_start) == 5:
                 old_start += ":00"
             if len(old_end) == 5:

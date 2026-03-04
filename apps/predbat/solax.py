@@ -1,12 +1,20 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2025 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt: off
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
+
+
+"""SolaX Cloud API integration.
+
+Cloud API client for SolaX inverters with OAuth-style authentication.
+Supports multi-plant configurations, working mode control, and battery
+schedule management via the SolaX OpenAPI.
+"""
 
 import aiohttp
 import asyncio
@@ -303,7 +311,7 @@ class SolaxAPI(ComponentBase):
     Handles authentication and plant information retrieval
     """
 
-    def initialize(self, client_id, client_secret, region="eu", plant_id=None, automatic=False, enable_controls=True):
+    def initialize(self, client_id, client_secret, region="eu", plant_id=None, automatic=False, enable_controls=True, plant_sn=None):
         """
         Initialize the SolaX API component
 
@@ -342,6 +350,14 @@ class SolaxAPI(ComponentBase):
 
         # Error tracking
         self.error_count = 0
+
+        # Convert plant_sn to list
+        if plant_sn is None:
+            self.plant_sn_filter = []
+        elif isinstance(plant_sn, str):
+            self.plant_sn_filter = [plant_sn]
+        else:
+            self.plant_sn_filter = plant_sn
 
         self.log(f"SolaX API: Initialized with region={region}, base_url={self.base_url}")
 
@@ -2380,6 +2396,8 @@ class SolaxAPI(ComponentBase):
                 return False
 
             self.plant_list = [plant.get('plantId') for plant in self.plant_info]
+            if self.plant_sn_filter:
+                self.plant_list = [pid for pid in self.plant_list if pid in self.plant_sn_filter]
             self.log(f"SolaX API: Found {len(self.plant_list)} plants IDs: {self.plant_list}")
 
         # Check readonly mode

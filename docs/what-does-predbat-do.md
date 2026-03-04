@@ -44,6 +44,12 @@ The inverter also converts AC power from the grid into DC to charge a battery.
 - **Slot** - A period of time where Predbat acts e.g. charging. In Predbat everything is a multiple of 5 minutes
     - Charge slots are always in multiples of the [plan interval duration](energy-rates.md#plan-interval), default is 30 minutes, and align to the interval time boundaries to match the way energy rates are allocated
     - Discharge slots can be any multiple of 5 minutes and always finish on a plan interval (default 30-minute) boundary.
+- **Low-rate slot** - A time period where the import rate is below a threshold, making it suitable for charging.
+By default Predbat automatically calculates this threshold based on future import rates.
+You can adjust the threshold using **input_number.predbat_rate_low_threshold** (_expert mode_) - see [Battery margins and metrics options](customisation.md#battery-margins-and-metrics-options).
+- **High-rate slot** - A time period where the export rate is above a threshold, making it suitable for forced export.
+By default Predbat automatically calculates this threshold based on future export rates.
+You can adjust the threshold using **input_number.predbat_rate_high_threshold** (_expert mode_) - see [Battery margins and metrics options](customisation.md#battery-margins-and-metrics-options).
 - **Loss** - Refers to energy lost in your system due to heat or other factors.
 
 - **PV10** - A prediction of the 10% scenario for solar, this is like a worst case, occurs 1 in 10 days
@@ -106,7 +112,7 @@ but is set to prevent discharging into the car (requires **switch.predbat_car_ch
 
 - **Read-Only (Axle)** - Predbat is in [read-only mode for the duration of an Axle VPP export event](energy-rates.md#axle-vpp), and will automatically return to a normal execution mode at the end of the Axle event.
 
-- **[Alert]** will be appended to the Predbat status if an [Alert is active](apps-yaml.md#alert-system).
+- **[Alert]** will be appended to the Predbat status if an [Alert is active](apps-yaml.md#weather-alert-system).
 
 - **Calibration** - The inverter is calibrating the batteries.
 On GivEnergy systems the battery state of charge (SoC) level has to be calibrated by performing a full battery discharge and then a full charge
