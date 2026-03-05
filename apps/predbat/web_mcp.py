@@ -948,7 +948,7 @@ class MCPServerWrapper:
     async def _execute_get_plan(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Execute the get_plan tool"""
         try:
-            raw_plan = self.base.get_state_wrapper(self.prefix + ".plan_html", attribute="raw", default=None)
+            raw_plan = self.base.get_state_wrapper(self.base.prefix + ".plan_html", attribute="raw", default=None)
             # Check if we have plan data available
             if not raw_plan:
                 return {"success": False, "error": "No plan data available", "data": None}
