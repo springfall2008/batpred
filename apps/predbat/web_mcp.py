@@ -967,23 +967,29 @@ class MCPServerWrapper:
             entities = self.base.dashboard_values
             returned_entities = []
             for entity in entities:
-                entity_id = entity.get("entity_id", "")
+                if isinstance(entity, str):
+                    entity_id = entity
+                else:
+                    entity_id = entity.get("entity_id", "")
                 if filter:
                     if not re.search(filter, entity_id):
                         continue
-                value = {
-                    "entity_id": entity.get("entity_id"),
-                    "state": entity.get("state"),
-                    "friendly_name": entity.get("friendly_name"),
-                }
-                if "unit_of_measurement" in entity:
-                    value["unit_of_measurement"] = entity.get("unit_of_measurement")
-                if "device_class" in entity:
-                    value["device_class"] = entity.get("device_class")
-                if "state_class" in entity:
-                    value["state_class"] = entity.get("state_class")
-                if "icon" in entity:
-                    value["icon"] = entity.get("icon")
+                if isinstance(entity, str):
+                    value = {"entity_id": entity_id}
+                else:
+                    value = {
+                        "entity_id": entity.get("entity_id"),
+                        "state": entity.get("state"),
+                        "friendly_name": entity.get("friendly_name"),
+                    }
+                    if "unit_of_measurement" in entity:
+                        value["unit_of_measurement"] = entity.get("unit_of_measurement")
+                    if "device_class" in entity:
+                        value["device_class"] = entity.get("device_class")
+                    if "state_class" in entity:
+                        value["state_class"] = entity.get("state_class")
+                    if "icon" in entity:
+                        value["icon"] = entity.get("icon")
                 returned_entities.append(value)
             return {"success": True, "error": None, "data": returned_entities, "timestamp": datetime.now().isoformat(), "description": "The current Predbat entities and their states"}
 
