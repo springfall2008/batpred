@@ -1171,10 +1171,12 @@ class Fetch:
         max_minute = max(pv_forecast_packed.keys()) if pv_forecast_packed else 0
         last_value = 0
         last_value10 = 0
-        # The forecast could be for a different time to our relative time, so we need to offset the minutes to align with our midnight_utc
+        # The forecast could be for a different time to our relative time, so we need to offset the minutes to align with our midnight_utc.
+        # relative_time is the midnight at which the forecast was saved, so stored minute keys are relative to that midnight.
+        # We subtract the offset so that stored minute X (= relative_time + X) maps to (relative_time + X - midnight_utc) minutes from today's midnight.
         minute_offset = int((self.midnight_utc - relative_time).total_seconds() / 60)
         for minute in range(0, max_minute + 1):
-            target_minute = minute + minute_offset
+            target_minute = minute - minute_offset
             last_value = pv_forecast_packed.get(minute, last_value)
             last_value10 = pv_forecast10_packed.get(minute, last_value10)
             pv_forecast_minute[target_minute] = last_value
