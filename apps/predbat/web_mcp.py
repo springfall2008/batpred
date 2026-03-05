@@ -1191,8 +1191,7 @@ class MCPServerWrapper:
 
     async def _handle_initialize(self, params):
         """Handle MCP initialize request"""
-        tools = await self._handle_tools_list(params)
-        return {"protocolVersion": "2024-11-05", "capabilities": {"tools": tools["tools"]}, "serverInfo": {"name": "Predbat MCP Server", "version": "1.0.1"}}
+        return {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}}, "serverInfo": {"name": "Predbat MCP Server", "version": "1.0.1"}}
 
     async def _handle_tools_list(self, params):
         """Handle MCP tools/list request"""
