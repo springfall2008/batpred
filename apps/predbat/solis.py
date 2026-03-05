@@ -234,6 +234,17 @@ class SolisAPI(ComponentBase):
 
         self.log(f"Solis API: Initialized with inverter_sn={self.inverter_sn} automatic={automatic}")
 
+    # ==================== Helper Methods ====================
+
+    def find_inverter_by_sn(self, sn_from_entity_id):
+        """Return the original-case serial number that matches sn_from_entity_id case-insensitively.
+
+        HA normalises entity IDs to lowercase, so serial numbers containing uppercase hex digits
+        (A-F) would never match self.inverter_sn via a plain 'in' check.  This method does a
+        case-insensitive search and returns the canonical (API-casing) SN, or None if not found.
+        """
+        return next((sn for sn in self.inverter_sn if sn.lower() == sn_from_entity_id.lower()), None)
+
     # ==================== Authentication Methods ====================
 
     def _digest(self, body):
@@ -2004,9 +2015,11 @@ class SolisAPI(ComponentBase):
             inverter_sn = parts[0]
             field = "_".join(parts[1:])
 
-            # Validate inverter exists
-            if inverter_sn not in self.inverter_sn:
-                self.log(f"Warn: Solis API: Unknown inverter {inverter_sn} in select_event")
+            # Validate inverter exists (case-insensitive: HA normalises entity IDs to lowercase,
+            # so SNs containing uppercase hex digits A-F would never match otherwise)
+            inverter_sn = self.find_inverter_by_sn(inverter_sn)
+            if inverter_sn is None:
+                self.log(f"Warn: Solis API: Unknown inverter {parts[0]} in select_event")
                 return
 
             # Handle storage mode
@@ -2123,9 +2136,11 @@ class SolisAPI(ComponentBase):
             inverter_sn = parts[0]
             field = "_".join(parts[1:])
 
-            # Validate inverter exists
-            if inverter_sn not in self.inverter_sn:
-                self.log(f"Warn: Solis API: Unknown inverter {inverter_sn} in number_event")
+            # Validate inverter exists (case-insensitive: HA normalises entity IDs to lowercase,
+            # so SNs containing uppercase hex digits A-F would never match otherwise)
+            inverter_sn = self.find_inverter_by_sn(inverter_sn)
+            if inverter_sn is None:
+                self.log(f"Warn: Solis API: Unknown inverter {parts[0]} in number_event")
                 return
 
             # Convert value to string for API
@@ -2324,9 +2339,11 @@ class SolisAPI(ComponentBase):
             inverter_sn = parts[0]
             field = "_".join(parts[1:])
 
-            # Validate inverter exists
-            if inverter_sn not in self.inverter_sn:
-                self.log(f"Warn: Solis API: Unknown inverter {inverter_sn} in switch_event")
+            # Validate inverter exists (case-insensitive: HA normalises entity IDs to lowercase,
+            # so SNs containing uppercase hex digits A-F would never match otherwise)
+            inverter_sn = self.find_inverter_by_sn(inverter_sn)
+            if inverter_sn is None:
+                self.log(f"Warn: Solis API: Unknown inverter {parts[0]} in switch_event")
                 return
 
             # Handle charge slot enables
