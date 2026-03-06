@@ -644,7 +644,7 @@ class OctopusAPI(ComponentBase):
                     break
             if isActiveMeter and isActiveAgreement:
                 if not isImport and not isExport and not isGas:
-                    if 'OUTGOING' in tariffCode or 'EXPORT' in tariffCode:
+                    if "OUTGOING" in tariffCode or "EXPORT" in tariffCode:
                         isExport = True
                         deviceID_export = None
                         self.log("OctopusAPI: No export meter found but tariff code indicates export, treating as export tariff with device ID None")
