@@ -644,7 +644,7 @@ class OctopusAPI(ComponentBase):
                     break
             if isActiveMeter and isActiveAgreement:
                 if not isImport and not isExport and not isGas:
-                    if 'OUTGOING' in tariffCode or 'EXPORT' in tariffCode:
+                    if tariffCode and ("OUTGOING" in tariffCode or "EXPORT" in tariffCode):
                         isExport = True
                         deviceID_export = None
                         self.log("OctopusAPI: No export meter found but tariff code indicates export, treating as export tariff with device ID None")
@@ -2215,7 +2215,7 @@ class Octopus:
                         assumed_price = self.rate_import.get(start_minutes, self.rate_min)
 
                     self.log(
-                        "Octopus: Octopus Intelligent slot at {}-{}, assumed price {}, amount {}, kWh location {}, source {}, octopus_slot_low_rate {}".format(
+                        "Octopus: Intelligent slot at {}-{}, assumed price {}, amount {}, kWh location {}, source {}, octopus_slot_low_rate {}".format(
                             self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), dp2(assumed_price), dp2(kwh), location, source, octopus_slot_low_rate
                         )
                     )
@@ -2223,7 +2223,7 @@ class Octopus:
         # Log daily slot counts for debugging
         for day_offset in sorted(slots_per_day.keys()):
             if slots_per_day[day_offset] > 0:
-                self.log("Octopus: Octopus Intelligent slots for day {}: {} of {} max".format(day_offset, slots_per_day[day_offset], octopus_slot_max))
+                self.log("Octopus: Intelligent slots for day {}: {} of {} max".format(day_offset, slots_per_day[day_offset], octopus_slot_max))
 
         return rates
 
@@ -2337,7 +2337,7 @@ class Octopus:
                             end_time = str2time(end)
                             diff_time = start_time - self.now_utc
                             if abs(diff_time.days) <= 3:
-                                self.log("Octopus: Octopus free events code {} {}-{}".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M")))
+                                self.log("Octopus: free events code {} {}-{}".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M")))
                             octopus_free_slot = {}
                             octopus_free_slot["start"] = start
                             octopus_free_slot["end"] = end
