@@ -302,7 +302,7 @@ class OctopusEnergyApiClient:
 
     def __init__(self, api_key, log, timeout_in_seconds=20):
         if api_key is None:
-            raise Exception("Octopus API KEY is not set")
+            raise Exception("OctopusAPI: API KEY is not set")
 
         self.api_key = api_key
         self.log = log
@@ -365,7 +365,7 @@ class OctopusAPI(ComponentBase):
 
         # User-specific cache file (account_data, intelligent_device, saving_sessions only)
         self.user_cache_file = self.cache_path + "/octopus_user_{}.yaml".format(self.account_id)
-        self.log("Octopus API: Initialized with account ID {} cache {} shared {}".format(self.account_id, self.user_cache_file, self.shared_cache_path))
+        self.log("OctopusAPI: Initialized with account ID {} cache {} shared {}".format(self.account_id, self.user_cache_file, self.shared_cache_path))
 
     async def select_event(self, entity_id, value):
         if entity_id == self.get_entity_name("select", "intelligent_target_time"):
@@ -379,7 +379,7 @@ class OctopusAPI(ComponentBase):
             try:
                 value = int(value)
             except ValueError:
-                self.log("Error: Octopus API: Invalid value for intelligent target soc: {}".format(value))
+                self.log("Error: OctopusAPI: Invalid value for intelligent target soc: {}".format(value))
                 return
             self.commands.append({"command": "set_intelligent_target_percentage", "value": value})
 
@@ -396,7 +396,7 @@ class OctopusAPI(ComponentBase):
         if first:
             # Load cached data
             await self.load_octopus_cache()
-            self.log("Octopus API: Started")
+            self.log("OctopusAPI: Started")
 
         # Update time every minute
         now = datetime.now()
@@ -484,7 +484,7 @@ class OctopusAPI(ComponentBase):
                 with open(cache_file, "r") as f:
                     return yaml.safe_load(f)
             except Exception as e:
-                self.log(f"Warn: Failed to load URL cache {url_hash}: {e}")
+                self.log(f"Warn: OctopusAPI: Failed to load URL cache {url_hash}: {e}")
         return None
 
     def save_url_to_cache(self, url, data):
@@ -500,7 +500,7 @@ class OctopusAPI(ComponentBase):
             with open(cache_file, "w") as f:
                 yaml.dump(data, f)
         except Exception as e:
-            self.log(f"Warn: Failed to save URL cache {url_hash}: {e}")
+            self.log(f"Warn: OctopusAPI: Failed to save URL cache {url_hash}: {e}")
 
     def decode_kraken_token_expiry(self, token):
         """
@@ -526,7 +526,7 @@ class OctopusAPI(ComponentBase):
                 return datetime.fromtimestamp(payload_decoded["exp"])
             return None
         except Exception as e:
-            self.log(f"Warn: Failed to decode Kraken token expiry: {e}")
+            self.log(f"Warn: OctopusAPI: Failed to decode Kraken token expiry: {e}")
             return None
 
     async def load_octopus_cache(self):
@@ -541,7 +541,7 @@ class OctopusAPI(ComponentBase):
                 with open(self.user_cache_file, "r") as f:
                     data = yaml.safe_load(f)
             except Exception as e:
-                self.log("Warn: Octopus API: Failed to load cache from {} - {}".format(self.user_cache_file, e))
+                self.log("Warn: OctopusAPI: Failed to load cache from {} - {}".format(self.user_cache_file, e))
 
             if data:
                 self.account_data = data.get("account_data", {})
@@ -591,7 +591,7 @@ class OctopusAPI(ComponentBase):
         """
         Find the tariffs for the account
         """
-        self.log("Find tariffs account data {}".format(self.account_data))
+        self.log("OctopusAPI: Find tariffs account data {}".format(self.account_data))
         if not self.account_data:
             return self.tariffs
 
@@ -620,12 +620,15 @@ class OctopusAPI(ComponentBase):
                     if meter.get("smartImportElectricityMeter", None):
                         isImport = True
                         deviceID_import = meter.get("smartImportElectricityMeter", {}).get("deviceId", None)
+                        self.log("OctopusAPI: Found active import meter with device ID {}".format(deviceID_import))
                     if meter.get("smartExportElectricityMeter", None):
                         isExport = True
                         deviceID_export = meter.get("smartExportElectricityMeter", {}).get("deviceId", None)
+                        self.log("OctopusAPI: Found active export meter with device ID {}".format(deviceID_export))
                     if meter.get("smartGasMeter", None):
                         isGas = True
                         deviceID_gas = meter.get("smartGasMeter", {}).get("deviceId", None)
+                        self.log("OctopusAPI: Found active gas meter with device ID {}".format(deviceID_gas))
                     break
             isActiveAgreement = False
             tariffCode = None
@@ -640,16 +643,23 @@ class OctopusAPI(ComponentBase):
                     productCode = tariff.get("productCode", None)
                     break
             if isActiveMeter and isActiveAgreement:
-                self.log("Octopus API: Found tariff code {} product {} device_id {}".format(tariffCode, productCode, deviceID_import))
+                if not isImport and not isExport and not isGas:
+                    if 'OUTGOING' in tariffCode or 'EXPORT' in tariffCode:
+                        isExport = True
+                        deviceID_export = None
+                        self.log("OctopusAPI: No export meter found but tariff code indicates export, treating as export tariff with device ID None")
                 if isImport:
+                    self.log("OctopusAPI: Adding import tariff with code {} product {} device ID {}".format(tariffCode, productCode, deviceID_import))
                     tariffs["import"] = {"tariffCode": tariffCode, "productCode": productCode, "deviceID": deviceID_import}
                     tariffs["import"]["data"] = self.tariffs.get("import", {}).get("data", None)
                     tariffs["import"]["standing"] = self.tariffs.get("import", {}).get("standing", None)
                 if isExport:
+                    self.log("OctopusAPI: Adding export tariff with code {} product {} device ID {}".format(tariffCode, productCode, deviceID_export))
                     tariffs["export"] = {"tariffCode": tariffCode, "productCode": productCode, "deviceID": deviceID_export}
                     tariffs["export"]["data"] = self.tariffs.get("export", {}).get("data", None)
                     tariffs["export"]["standing"] = self.tariffs.get("export", {}).get("standing", None)
                 if isGas:
+                    self.log("OctopusAPI: Adding gas tariff with code {} product {} device ID {}".format(tariffCode, productCode, deviceID_gas))
                     tariffs["gas"] = {"tariffCode": tariffCode, "productCode": productCode, "deviceID": deviceID_gas}
                     tariffs["gas"]["data"] = self.tariffs.get("gas", {}).get("data", None)
                     tariffs["gas"]["standing"] = self.tariffs.get("gas", {}).get("standing", None)
@@ -658,7 +668,7 @@ class OctopusAPI(ComponentBase):
         # Re-run automatic config if tariff structure changed (e.g. export agreement became active)
         new_tariff_keys = set(self.tariffs.keys())
         if old_tariff_keys and new_tariff_keys != old_tariff_keys and self.automatic:
-            self.log("Octopus API: Tariff structure changed from {} to {}, reconfiguring".format(old_tariff_keys, new_tariff_keys))
+            self.log("OctopusAPI: Tariff structure changed from {} to {}, reconfiguring".format(old_tariff_keys, new_tariff_keys))
             self.automatic_config(self.tariffs)
 
         return self.tariffs
@@ -713,11 +723,11 @@ class OctopusAPI(ComponentBase):
         """
         device = self.get_intelligent_device()
         if not device:
-            self.log("Warn: Octopus API: Try to set target schedule, but no intelligent device found")
+            self.log("Warn: OctopusAPI: Try to set target schedule, but no intelligent device found")
             return
         device_id = device.get("device_id", None)
         if not device_id:
-            self.log("Warn: Octopus API: Try to set target schedule, but no intelligent device ID found")
+            self.log("Warn: OctopusAPI: Try to set target schedule, but no intelligent device ID found")
             return
         daysOfWeek = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"]
         if target_time is None:
@@ -725,7 +735,7 @@ class OctopusAPI(ComponentBase):
         target_time = target_time[:5]  # HH:MM format
         if target_percentage is None:
             target_percentage = self.get_intelligent_target_soc()
-        self.log("Octopus API: Setting intelligent target schedule time {} percentage {}".format(target_time, target_percentage))
+        self.log("OctopusAPI: Setting intelligent target schedule time {} percentage {}".format(target_time, target_percentage))
         schedule = ", ".join(list(map(lambda day: intelligent_settings_mutation_schedule.format(day_of_week=day, target_percentage=target_percentage, target_time=target_time), daysOfWeek)))
         await self.async_graphql_query(intelligent_settings_mutation.format(device_id=device_id, schedules=schedule), "set-intelligent-target-time", returns_data=False)
 
@@ -741,7 +751,7 @@ class OctopusAPI(ComponentBase):
         """
         if event_code:
             # Join the saving sessions
-            self.log("Octopus API: Joining saving session event {}".format(event_code))
+            self.log("OctopusAPI: Joining saving session event {}".format(event_code))
             await self.async_graphql_query(octoplus_saving_session_join_mutation.format(account_id=account_id, event_code=event_code), "join-saving-session-event", returns_data=False)
             # Re-fetch the saving sessions if we have joined any
             self.saving_sessions = await self.async_get_saving_sessions(account_id)
@@ -852,7 +862,7 @@ class OctopusAPI(ComponentBase):
         event_code = {}
 
         if not has_joined:
-            self.log("Octopus API: User has not joined Octopus saving sessions campaign")
+            self.log("OctopusAPI: User has not joined Octopus saving sessions campaign")
             available_events = []
 
         for event in joined_events:
@@ -904,7 +914,7 @@ class OctopusAPI(ComponentBase):
         """
         Automatic configuration of entities
         """
-        self.log("Octopus API: Automatic configuration of entities")
+        self.log("OctopusAPI: Automatic configuration of entities")
         self.set_arg("octopus_saving_session", self.get_entity_name("binary_sensor", "saving_session"))
         self.set_arg("octopus_saving_session_join", self.get_entity_name("select", "saving_session_join"))
         for tariff in tariffs:
@@ -938,7 +948,7 @@ class OctopusAPI(ComponentBase):
         Get day and night rates from Octopus
         """
         mdata = []
-        self.log("Info: Octopus API: tariff has day and night rates, fetching both")
+        self.log("Info: OctopusAPI: tariff has day and night rates, fetching both")
         url_day = url.replace("standard-unit-rates", "day-unit-rates")
         url_night = url.replace("standard-unit-rates", "night-unit-rates")
         result_day = await self.fetch_url_cached(url_day)
@@ -959,7 +969,7 @@ class OctopusAPI(ComponentBase):
             valid_from_stamp = datetime.strptime(valid_from_stamp, DATE_TIME_STR_FORMAT)
             if valid_from_stamp <= self.now_utc_exact:
                 current_night_rate = rate.get("value_inc_vat", None)
-        self.log("Info: Current day rate {} night rate {}".format(current_day_rate, current_night_rate))
+        self.log("Info: OctopusAPI: Current day rate {} night rate {}".format(current_day_rate, current_night_rate))
         if current_day_rate is not None and current_night_rate is not None:
             # Now create a combined list of rates, start from 2 days back and go forward 3 days with the day and night rates
             night_start_time = self.now_utc_exact.replace(hour=OCTOPUS_NIGHT_RATE_START_HOUR, minute=OCTOPUS_NIGHT_RATE_START_MINUTE, second=0, microsecond=0) - timedelta(days=2)
@@ -992,26 +1002,26 @@ class OctopusAPI(ComponentBase):
                     async with session.get(url, headers={"accept": "application/json", "user-agent": "predbat/1.0"}) as response:
                         if response.status not in [200, 201, 400]:
                             self.failures_total += 1
-                            self.log("Warn: Error downloading Octopus data from URL {}, code {}".format(url, response.status))
+                            self.log("Warn: OctopusAPI: Error downloading Octopus data from URL {}, code {}".format(url, response.status))
                             return {}
                         try:
                             data = await response.json()
                             self.last_success_timestamp = datetime.now(timezone.utc)
                         except (aiohttp.ContentTypeError, json.JSONDecodeError):
                             self.failures_total += 1
-                            self.log("Warn: Error downloading Octopus data from URL {} (JSONDecodeError)".format(url))
+                            self.log("Warn: OctopusAPI: Error downloading Octopus data from URL {} (JSONDecodeError)".format(url))
                             return {}
 
                         if response.status == 400:
                             detail = data.get("detail", "")
                             if "This tariff has day and night rates" in detail:
-                                self.log("Info: Octopus tariff has day and night rates, fetching both")
+                                self.log("Info: OctopusAPI: Octopus tariff has day and night rates, fetching both")
                                 mdata = await self.async_get_day_night_rates(url)
                                 if mdata:
                                     return mdata
                                 else:
                                     self.failures_total += 1
-                                    self.log("Warn: Error downloading Octopus data from URL {} (No Results)".format(url))
+                                    self.log("Warn: OctopusAPI: Error downloading Octopus data from URL {} (No Results)".format(url))
                                     return {}
                             else:
                                 self.failures_total += 1
@@ -1024,13 +1034,13 @@ class OctopusAPI(ComponentBase):
                             detail = data.get("detail", "")
 
                             self.failures_total += 1
-                            self.log("Warn: Error downloading Octopus data from URL {} (No Results) - {}".format(url, detail))
+                            self.log("Warn: OctopusAPI: Error downloading Octopus data from URL {} (No Results) - {}".format(url, detail))
                             return {}
                         url = data.get("next", None)
                         pages += 1
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 self.failures_total += 1
-                self.log("Warn: Error downloading Octopus data from URL {} - {}".format(url, e))
+                self.log("Warn: OctopusAPI: Error downloading Octopus data from URL {} - {}".format(url, e))
                 return {}
 
         return mdata
@@ -1054,9 +1064,9 @@ class OctopusAPI(ComponentBase):
                             age = now - stamp
                             if age.total_seconds() > (24 * 60 * 60):
                                 os.remove(filepath)
-                                self.log(f"Octopus API: Cleaned old URL cache file: {filename}")
+                                self.log(f"OctopusAPI: Cleaned old URL cache file: {filename}")
                     except Exception as e:
-                        self.log(f"Warn: Octopus API: Failed to clean cache file {filename}: {e}")
+                        self.log(f"Warn: OctopusAPI: Failed to clean cache file {filename}: {e}")
 
     async def fetch_url_cached(self, url):
         """
@@ -1091,13 +1101,13 @@ class OctopusAPI(ComponentBase):
                         if data:
                             cache_entry = {"stamp": datetime.now(), "data": data}
                             self.save_url_to_cache(url, cache_entry)
-                            self.log(f"Octopus API: Refreshed stale cache for {url_hash}")
+                            self.log(f"OctopusAPI: Refreshed stale cache for {url_hash}")
                     finally:
                         os.close(fd)
                         os.remove(lock_file)
                 except FileExistsError:
                     # Another pod is refreshing, serve stale data
-                    self.log(f"Octopus API: Serving stale cache due to file access lock {url_hash}")
+                    self.log(f"OctopusAPI: Serving stale cache due to file access lock {url_hash}")
                     pass
 
                 # Serve stale data (either we just refreshed, or another pod is refreshing)
@@ -1185,7 +1195,7 @@ class OctopusAPI(ComponentBase):
             return pdata
         else:
             # No tariff
-            self.log("Octopus API: tariff {} not available, using zero".format(tariff_type))
+            self.log("OctopusAPI: tariff {} not available, using zero".format(tariff_type))
             return {n: 0 for n in range(0, 60 * 24)}
 
     async def async_read_response_retry(self, response, url, ignore_errors=False):
@@ -1196,7 +1206,7 @@ class OctopusAPI(ComponentBase):
         for attempt in range(max_retries):
             # Check for shutdown signal
             if self.api_stop:
-                self.log("Octopus API: Aborting retry loop due to shutdown")
+                self.log("OctopusAPI: Aborting retry loop due to shutdown")
                 return None
 
             data_as_json = await self.async_read_response(response, url, ignore_errors=ignore_errors)
@@ -1204,7 +1214,7 @@ class OctopusAPI(ComponentBase):
                 return data_as_json
             else:
                 if attempt < max_retries - 1:
-                    self.log(f"Octopus API: Retrying read response for {url} (attempt {attempt + 2} of {max_retries})")
+                    self.log(f"OctopusAPI: Retrying read response for {url} (attempt {attempt + 2} of {max_retries})")
                     await asyncio.sleep(2**attempt)  # Exponential backoff
         self.failures_total += 1
         return None
@@ -1218,26 +1228,26 @@ class OctopusAPI(ComponentBase):
 
         if response.status >= 400:
             if response.status >= 500:
-                msg = f"Warn: Octopus API: Response received - {url} ({request_context}) - DO NOT REPORT - Octopus Energy server error ({url}): {response.status}; {text}"
+                msg = f"Warn: OctopusAPI: Response received - {url} ({request_context}) - DO NOT REPORT - Octopus Energy server error ({url}): {response.status}; {text}"
                 self.log(msg)
                 return None
             elif response.status in [401, 403]:
-                msg = f"Warn: Octopus API: Response received - {url} ({request_context}) - Unauthenticated request: {response.status}; {text}"
+                msg = f"Warn: OctopusAPI: Response received - {url} ({request_context}) - Unauthenticated request: {response.status}; {text}"
                 self.log(msg)
                 return None
             elif response.status not in [404]:
-                msg = f"Warn: Octopus API: Response received - {url} ({request_context}) - Unexpected response received: {response.status}; {text}"
+                msg = f"Warn: OctopusAPI: Response received - {url} ({request_context}) - Unexpected response received: {response.status}; {text}"
                 self.log(msg)
                 return None
 
-            self.log(f"Warn: Octopus API: Response received - {url} ({request_context}) - Unexpected response received: {response.status}; {text}")
+            self.log(f"Warn: OctopusAPI: Response received - {url} ({request_context}) - Unexpected response received: {response.status}; {text}")
             return None
 
         data_as_json = None
         try:
             data_as_json = json.loads(text)
         except Exception as e:
-            self.log(f"Warn: Octopus API: Failed to extract response json: {e} - {url} - {text}")
+            self.log(f"Warn: OctopusAPI: Failed to extract response json: {e} - {url} - {text}")
             return None
 
         # Check for rate limit errors - these should return None immediately (no retry)
@@ -1245,7 +1255,7 @@ class OctopusAPI(ComponentBase):
             for error in data_as_json.get("errors", []):
                 error_code = error.get("extensions", {}).get("errorCode")
                 if error_code == "KT-CT-1199":
-                    msg = f'Warn: Octopus API: Rate limit error in request ({url}): {data_as_json["errors"]}'
+                    msg = f'Warn: OctopusAPI: Rate limit error in request ({url}): {data_as_json["errors"]}'
                     self.log(msg)
                     # Don't sleep if shutting down
                     if not self.api_stop:
@@ -1285,10 +1295,10 @@ class OctopusAPI(ComponentBase):
                     await self.save_octopus_cache()
                     return self.graphql_token
                 else:
-                    self.log("Warn: Octopus API: Failed to retrieve auth token")
+                    self.log("Warn: OctopusAPI: Failed to retrieve auth token")
                     return None
         except TimeoutError:
-            self.log(f"Failed to connect. Timeout of {self.api.timeout} exceeded.")
+            self.log(f"Warn: OctopusAPI: Failed to connect. Timeout of {self.api.timeout} exceeded.")
             return None
 
     async def async_graphql_query(self, query, request_context, returns_data=True, ignore_errors=False, _retry_count=0):
@@ -1299,7 +1309,7 @@ class OctopusAPI(ComponentBase):
         if token is None:
             self.failures_total += 1
             if returns_data:
-                self.log(f"Warn: Octopus API: Failed to retrieve data from graphql query {request_context} - token refresh failed")
+                self.log(f"Warn: OctopusAPI: Failed to retrieve data from graphql query {request_context} - token refresh failed")
             return None
         try:
             self.requests_total += 1
@@ -1316,12 +1326,12 @@ class OctopusAPI(ComponentBase):
                     for error in response_body.get("errors", []):
                         error_code = error.get("extensions", {}).get("errorCode")
                         if error_code in ("KT-CT-1139", "KT-CT-1111", "KT-CT-1143"):
-                            self.log(f"Octopus API: Kraken token invalid (error {error_code}), forcing refresh and retry")
+                            self.log(f"OctopusAPI: Kraken token invalid (error {error_code}), forcing refresh and retry")
                             self.graphql_token = None
                             retry_token = await self.async_refresh_token()
                             if retry_token is None:
                                 self.failures_total += 1
-                                self.log(f"Warn: Octopus API: Failed to refresh token for retry of graphql query {request_context}")
+                                self.log(f"Warn: OctopusAPI: Failed to refresh token for retry of graphql query {request_context}")
                                 return None
                             # Token is now refreshed and cached in self.graphql_token
                             # Retry the query with new token (_retry_count=1 prevents infinite loop)
@@ -1329,11 +1339,11 @@ class OctopusAPI(ComponentBase):
 
                 # Check for other errors (non-auth)
                 if response_body and "errors" in response_body and not ignore_errors:
-                    msg = f'Warn: Octopus API: Errors in request ({url}): {response_body["errors"]}'
+                    msg = f'Warn: OctopusAPI: Errors in request ({url}): {response_body["errors"]}'
                     self.log(msg)
                     self.failures_total += 1
                     if returns_data:
-                        self.log(f"Warn: Octopus API: Failed to retrieve data from graphql query {request_context}")
+                        self.log(f"Warn: OctopusAPI: Failed to retrieve data from graphql query {request_context}")
                     return None
 
                 if response_body and ("data" in response_body):
@@ -1343,7 +1353,7 @@ class OctopusAPI(ComponentBase):
                     if not ignore_errors:
                         self.failures_total += 1
                         if returns_data:
-                            self.log(f"Warn: Octopus API: Failed to retrieve data from graphql query {request_context}")
+                            self.log(f"Warn: OctopusAPI: Failed to retrieve data from graphql query {request_context}")
                     return None
         except TimeoutError:
             self.failures_total += 1
@@ -1357,7 +1367,7 @@ class OctopusAPI(ComponentBase):
         """
         result = None
         if device_id:
-            self.log("Octopus API: Fetching intelligent dispatches for device {}".format(device_id))
+            self.log("OctopusAPI: Fetching intelligent dispatches for device {}".format(device_id))
             device_result = await self.async_graphql_query(intelligent_device_query.format(account_id=account_id), "get-intelligent-devices", ignore_errors=True)
             intelligent_device = {}
 
@@ -1674,20 +1684,20 @@ class Octopus:
 
             # Cache is valid if: age < 30 minutes AND midnight_utc hasn't changed (to avoid stale data after midnight)
             if age.total_seconds() < (30 * 60) and cached_midnight == self.midnight_utc:
-                self.log("Return cached octopus data for {} age {} minutes".format(url, dp1(age.total_seconds() / 60)))
+                self.log("Octopus: Return cached octopus data for {} age {} minutes".format(url, dp1(age.total_seconds() / 60)))
                 return pdata
             elif cached_midnight != self.midnight_utc:
-                self.log("Cached octopus data for {} is stale (midnight crossed), re-downloading".format(url))
+                self.log("Octopus: Cached octopus data for {} is stale (midnight crossed), re-downloading".format(url))
 
         try:
             r = requests.get(url)
         except requests.exceptions.ConnectionError:
-            self.log("Warn: Unable to download Octopus data from URL {} (ConnectionError)".format(url))
+            self.log("Warn: Octopus: Unable to download Octopus data from URL {} (ConnectionError)".format(url))
             self.record_status("Warn: Unable to download Octopus free session data", debug=url, had_errors=True)
             return None
 
         if r.status_code not in [200, 201]:
-            self.log("Warn: Error downloading Octopus data from URL {}, code {}".format(url, r.status_code))
+            self.log("Warn: Octopus: Error downloading Octopus data from URL {}, code {}".format(url, r.status_code))
             self.record_status("Warn: Error downloading Octopus free session data", debug=url, had_errors=True)
             return None
 
@@ -1759,7 +1769,7 @@ class Octopus:
                     session = self.create_free_session_simple(start_hour, end_hour, period, day_num, month)
                     if session:
                         free_sessions.append(session)
-                        self.log(f"Legacy parser found session: {session['start']} to {session['end']}")
+                        self.log(f"Octopus: Legacy parser found session: {session['start']} to {session['end']}")
 
             # Legacy format support for older patterns
             if "Free Electricity:" in line:
@@ -1815,7 +1825,7 @@ class Octopus:
             return {"start": start_time.strftime(TIME_FORMAT), "end": end_time.strftime(TIME_FORMAT), "rate": 0.0}
 
         except Exception as e:
-            self.log(f"Error in create_free_session_simple: {e}")
+            self.log(f"Octopus: Error in create_free_session_simple: {e}")
             return None
 
     def download_octopus_rates(self, url):
@@ -1824,7 +1834,7 @@ class Octopus:
         Retry 3 times and then throw error
         """
 
-        self.log("Download Octopus rates from {}".format(url))
+        self.log("Octopus: Download Octopus rates from {}".format(url))
 
         # Check the cache first
         now = datetime.now()
@@ -1835,10 +1845,10 @@ class Octopus:
             age = now - stamp
             # Cache is valid if: age < 30 minutes AND midnight_utc hasn't changed (to avoid stale rates after midnight)
             if age.total_seconds() < (30 * 60) and cached_midnight == self.midnight_utc:
-                self.log("Return cached octopus data for {} age {} minutes".format(url, dp1(age.total_seconds() / 60)))
+                self.log("Octopus: Return cached octopus data for {} age {} minutes".format(url, dp1(age.total_seconds() / 60)))
                 return pdata
             elif cached_midnight != self.midnight_utc:
-                self.log("Cached octopus data for {} is stale (midnight crossed), re-downloading".format(url))
+                self.log("Octopus: Cached octopus data for {} is stale (midnight crossed), re-downloading".format(url))
 
         # Retry up to 3 minutes
         for retry in range(3):
@@ -1848,8 +1858,8 @@ class Octopus:
 
         # Download failed?
         if not pdata:
-            self.log("Warn: Unable to download Octopus data from URL {} (data empty)".format(url))
-            self.record_status("Warn: Unable to download Octopus data from cloud", debug=url, had_errors=True)
+            self.log("Warn: Octopus: Unable to download Octopus data from URL {} (data empty)".format(url))
+            self.record_status("Warn: Octopus: Unable to download Octopus data from cloud", debug=url, had_errors=True)
             if url in self.octopus_url_cache:
                 pdata = self.octopus_url_cache[url]["data"]
                 return pdata
@@ -1877,25 +1887,25 @@ class Octopus:
             try:
                 r = requests.get(url, headers={"accept": "application/json", "user-agent": "predbat/1.0"}, timeout=20)
             except requests.exceptions.ConnectionError:
-                self.log("Warn: Unable to download Octopus data from URL {} (ConnectionError)".format(url))
+                self.log("Warn: Octopus: Unable to download Octopus data from URL {} (ConnectionError)".format(url))
                 self.record_status("Warn: Unable to download Octopus data from cloud", debug=url, had_errors=True)
                 return {}
             if r.status_code not in [200, 201]:
-                self.log("Warn: Error downloading Octopus data from URL {}, code {}".format(url, r.status_code))
-                self.record_status("Warn: Error downloading Octopus data from cloud", debug=url, had_errors=True)
+                self.log("Warn: Octopus: Error downloading Octopus data from URL {}, code {}".format(url, r.status_code))
+                self.record_status("Warn: Octopus: Error downloading Octopus data from cloud", debug=url, had_errors=True)
                 return {}
             try:
                 data = r.json()
             except requests.exceptions.JSONDecodeError:
                 self.failures_total += 1
-                self.log("Warn: Error downloading Octopus data from URL {} (JSONDecodeError)".format(url))
-                self.record_status("Warn: Error downloading Octopus data from cloud", debug=url, had_errors=True)
+                self.log("Warn: Octopus: Error downloading Octopus data from URL {} (JSONDecodeError)".format(url))
+                self.record_status("Warn: Octopus: Error downloading Octopus data from cloud", debug=url, had_errors=True)
                 return {}
             if "results" in data:
                 mdata += data["results"]
             else:
-                self.log("Warn: Error downloading Octopus data from URL {} (No Results)".format(url))
-                self.record_status("Warn: Error downloading Octopus data from cloud", debug=url, had_errors=True)
+                self.log("Warn: Octopus: Error downloading Octopus data from URL {} (No Results)".format(url))
+                self.record_status("Warn: Octopus: Error downloading Octopus data from cloud", debug=url, had_errors=True)
                 return {}
             url = data.get("next", None)
             pages += 1
@@ -1917,7 +1927,7 @@ class Octopus:
                 slot["start"] = slot_start_date.strftime(TIME_FORMAT)
                 slot["end"] = slot_end_date.strftime(TIME_FORMAT)
                 octopus_slots.append(slot)
-                self.log("Car is charging now - added new IO slot {}".format(slot))
+                self.log("Octopus: Car is charging now - added new IO slot {}".format(slot))
         return octopus_slots
 
     def load_free_slot(self, octopus_free_slots, export=False, rate_replicate=None):
@@ -1941,7 +1951,7 @@ class Octopus:
                 except (ValueError, TypeError):
                     start = None
                     end = None
-                    self.log("Warn: Unable to decode Octopus free session start/end time {}".format(octopus_free_slot))
+                    self.log("Warn: Octopus: Unable to decode Octopus free session start/end time {}".format(octopus_free_slot))
 
             if start and end:
                 start_minutes = minutes_to_time(start, self.midnight_utc)
@@ -1979,9 +1989,9 @@ class Octopus:
                 except (ValueError, TypeError):
                     start = None
                     end = None
-                    self.log("Warn: Unable to decode Octopus saving session start/end time")
+                    self.log("Warn: Octopus: Unable to decode Octopus saving session start/end time {}".format(octopus_saving_slot))
             if state and (not start or not end):
-                self.log("Currently in saving session, assume current 30 minute slot")
+                self.log("Octopus: Currently in saving session, assume current 30 minute slot")
                 start_minutes = int(self.minutes_now / 30) * 30
                 end_minutes = start_minutes + 30
             elif start and end:
@@ -1989,7 +1999,7 @@ class Octopus:
                 end_minutes = min(minutes_to_time(end, self.midnight_utc), self.forecast_minutes + self.minutes_now)
 
             if start_minutes < (self.forecast_minutes + self.minutes_now):
-                self.log("Setting Octopus saving session in range {} - {} export {} rate {}".format(self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), export, rate))
+                self.log("Octopus: Setting Octopus saving session in range {} - {} export {} rate {}".format(self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), export, rate))
                 for minute in range(start_minutes, end_minutes):
                     if export:
                         if minute in self.rate_export:
@@ -2205,7 +2215,7 @@ class Octopus:
                         assumed_price = self.rate_import.get(start_minutes, self.rate_min)
 
                     self.log(
-                        "Octopus Intelligent slot at {}-{}, assumed price {}, amount {}, kWh location {}, source {}, octopus_slot_low_rate {}".format(
+                        "Octopus: Octopus Intelligent slot at {}-{}, assumed price {}, amount {}, kWh location {}, source {}, octopus_slot_low_rate {}".format(
                             self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), dp2(assumed_price), dp2(kwh), location, source, octopus_slot_low_rate
                         )
                     )
@@ -2213,7 +2223,7 @@ class Octopus:
         # Log daily slot counts for debugging
         for day_offset in sorted(slots_per_day.keys()):
             if slots_per_day[day_offset] > 0:
-                self.log("Octopus Intelligent slots for day {}: {} of {} max".format(day_offset, slots_per_day[day_offset], octopus_slot_max))
+                self.log("Octopus: Octopus Intelligent slots for day {}: {} of {} max".format(day_offset, slots_per_day[day_offset], octopus_slot_max))
 
         return rates
 
@@ -2231,7 +2241,7 @@ class Octopus:
             # and the sensor is replaced with an event - try to support the old settings and find the new events
 
             if self.debug_enable:
-                self.log("Fetch Octopus rates from {}".format(entity_id))
+                self.log("Octopus: Fetch Octopus rates from {}".format(entity_id))
 
             # Previous rates
             if "_current_rate" in entity_id:
@@ -2246,7 +2256,7 @@ class Octopus:
                     if data_import:
                         data_all += data_import
                     else:
-                        self.log("Warn: No Octopus data in sensor {} attribute 'all_rates'".format(prev_rate_id))
+                        self.log("Warn: Octopus: No Octopus data in sensor {} attribute 'all_rates'".format(prev_rate_id))
 
             # Current rates
             if "_current_rate" in entity_id:
@@ -2264,7 +2274,7 @@ class Octopus:
             if data_import:
                 data_all += data_import
             else:
-                self.log("Warn: No Octopus data in sensor {} attribute 'all_rates' / 'rates' / 'raw_today' / 'prices'".format(current_rate_id))
+                self.log("Warn: Octopus: No Octopus data in sensor {} attribute 'all_rates' / 'rates' / 'raw_today' / 'prices'".format(current_rate_id))
 
             # Next rates
             if "_current_rate" in entity_id:
@@ -2327,7 +2337,7 @@ class Octopus:
                             end_time = str2time(end)
                             diff_time = start_time - self.now_utc
                             if abs(diff_time.days) <= 3:
-                                self.log("Octopus free events code {} {}-{}".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M")))
+                                self.log("Octopus: Octopus free events code {} {}-{}".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M")))
                             octopus_free_slot = {}
                             octopus_free_slot["start"] = start
                             octopus_free_slot["end"] = end
@@ -2373,7 +2383,7 @@ class Octopus:
                         else:
                             saving_rate = saving_rate  # Use default if not specified
                         if code:  # Join the new Octopus saving event and send an alert
-                            self.log("Joining Octopus saving event code {} {}-{} at rate {} p/kWh".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
+                            self.log("Octopus: Joining Octopus saving event code {} {}-{} at rate {} p/kWh".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
                             entity_id_join = self.get_arg("octopus_saving_session_join", indirect=False)
                             if entity_id_join:
                                 # Join via selector
@@ -2400,7 +2410,7 @@ class Octopus:
                             end_time = str2time(end)
                             diff_time = start_time - self.now_utc
                             if abs(diff_time.days) <= 3:
-                                self.log("Joined Octopus saving session: {}-{} at rate {} p/kWh state {}".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate, state))
+                                self.log("Octopus: Joined Octopus saving session: {}-{} at rate {} p/kWh state {}".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate, state))
 
                                 # Save the slot
                                 octopus_saving_slot = {}
