@@ -933,6 +933,7 @@ def test_inverter_update(
 def test_auto_restart(test_name, my_predbat, ha, inv, dummy_items, service, expected, active=False, set_system_notify=None, expect_notify=False):
     print("**** Running Test: {} ****".format(test_name))
     failed = 0
+    prev_service_store_enable = ha.service_store_enable
     ha.service_store_enable = True
     ha.service_store = []
     my_predbat.restart_active = active
@@ -974,6 +975,7 @@ def test_auto_restart(test_name, my_predbat, ha, inv, dummy_items, service, expe
     if json.dumps(expected) != json.dumps(result_filtered):
         print("ERROR: Auto-restart service should be {} got {}".format(expected, result_filtered))
         failed = 1
+    ha.service_store_enable = prev_service_store_enable
     return failed
 
 
