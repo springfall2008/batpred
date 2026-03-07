@@ -71,6 +71,7 @@ dmypy.json
 *.bin
 profile.txt
 simulation_state.bin
+*.npz
 
 # Generated HTML files
 plan_*.html
