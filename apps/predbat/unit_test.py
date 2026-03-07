@@ -21,8 +21,8 @@ from tests.test_perf import run_perf_test
 from tests.test_model import run_model_tests
 from tests.test_execute import run_execute_tests
 from tests.test_octopus_slots import run_load_octopus_slots_tests
-from tests.test_fetch_config_options import test_fetch_config_options
 from tests.test_multi_car_iog import run_multi_car_iog_tests
+from tests.test_fetch_config_options import test_fetch_config_options
 from tests.test_multi_inverter import run_inverter_multi_tests
 from tests.test_window2minutes import test_window2minutes
 from tests.test_history_attribute import test_history_attribute
