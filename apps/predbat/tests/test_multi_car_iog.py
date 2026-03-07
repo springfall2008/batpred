@@ -25,7 +25,7 @@ def process_octopus_intelligent_slots(my_predbat):
     else:
         entity_id_list = []
 
-    # Process each car
+    # Process each car - match production: octopus_slots is a nested list [per-car slots]
     for car_n in range(min(len(entity_id_list), my_predbat.num_cars)):
         entity_id = entity_id_list[car_n]
         if not entity_id:
@@ -35,9 +35,9 @@ def process_octopus_intelligent_slots(my_predbat):
         planned = my_predbat.get_state_wrapper(entity_id=entity_id, attribute="planned_dispatches") or []
 
         if completed:
-            my_predbat.octopus_slots += completed
+            my_predbat.octopus_slots[car_n] += completed
         if planned:
-            my_predbat.octopus_slots += planned
+            my_predbat.octopus_slots[car_n] += planned
 
 
 def run_multi_car_iog_test(testname, my_predbat):
@@ -63,7 +63,8 @@ def run_multi_car_iog_test(testname, my_predbat):
     my_predbat.octopus_intelligent_charging = True
     my_predbat.octopus_intelligent_ignore_unplugged = False
     my_predbat.octopus_intelligent_consider_full = False
-    my_predbat.octopus_slots = []
+    # Match production: octopus_slots is a nested list, one sub-list per car
+    my_predbat.octopus_slots = [[] for _ in range(my_predbat.num_cars)]
 
     # Test 1: Single car config (backward compatibility)
     print("Test 1: Single car config (backward compatibility)")
@@ -85,17 +86,22 @@ def run_multi_car_iog_test(testname, my_predbat):
     )
 
     # Simulate the octopus intelligent slot processing from fetch_sensor_data
-    my_predbat.octopus_slots = []
+    my_predbat.octopus_slots = [[] for _ in range(my_predbat.num_cars)]
     process_octopus_intelligent_slots(my_predbat)
 
-    if len(my_predbat.octopus_slots) != 1:
-        print("ERROR: Expected 1 slot for single car, got {}".format(len(my_predbat.octopus_slots)))
+    # Car 0 should have 1 slot; car 1 (no entity) should be empty
+    if len(my_predbat.octopus_slots[0]) != 1:
+        print("ERROR: Expected 1 slot for car 0, got {}".format(len(my_predbat.octopus_slots[0])))
+        print("Slots: {}".format(my_predbat.octopus_slots))
+        failed = True
+    elif len(my_predbat.octopus_slots[1]) != 0:
+        print("ERROR: Expected 0 slots for car 1 (not configured), got {}".format(len(my_predbat.octopus_slots[1])))
         print("Slots: {}".format(my_predbat.octopus_slots))
         failed = True
 
     # Test 2: Multi-car config
     print("Test 2: Multi-car config with two cars")
-    my_predbat.octopus_slots = []
+    my_predbat.octopus_slots = [[] for _ in range(my_predbat.num_cars)]
     my_predbat.args["octopus_intelligent_slot"] = ["binary_sensor.octopus_energy_intelligent_dispatching_car1", "binary_sensor.octopus_energy_intelligent_dispatching_car2"]
 
     # Mock entity states for both cars
@@ -122,23 +128,31 @@ def run_multi_car_iog_test(testname, my_predbat):
     # Simulate the octopus intelligent slot processing
     process_octopus_intelligent_slots(my_predbat)
 
-    # Should have slots from both cars merged
-    if len(my_predbat.octopus_slots) != 2:
-        print("ERROR: Expected 2 slots (one from each car), got {}".format(len(my_predbat.octopus_slots)))
+    # Each car should have exactly 1 slot in its own sub-list
+    if len(my_predbat.octopus_slots[0]) != 1:
+        print("ERROR: Expected 1 slot for car 0, got {}".format(len(my_predbat.octopus_slots[0])))
+        print("Slots: {}".format(my_predbat.octopus_slots))
+        failed = True
+    elif len(my_predbat.octopus_slots[1]) != 1:
+        print("ERROR: Expected 1 slot for car 1, got {}".format(len(my_predbat.octopus_slots[1])))
         print("Slots: {}".format(my_predbat.octopus_slots))
         failed = True
 
-    # Test 3: Multi-car config with empty slot
+    # Test 3: Multi-car config with None/empty second entity
     print("Test 3: Multi-car config with one empty/None slot")
-    my_predbat.octopus_slots = []
+    my_predbat.octopus_slots = [[] for _ in range(my_predbat.num_cars)]
     my_predbat.args["octopus_intelligent_slot"] = ["binary_sensor.octopus_energy_intelligent_dispatching_car1", None]
 
     # Simulate the octopus intelligent slot processing
     process_octopus_intelligent_slots(my_predbat)
 
-    # Should have slots from first car only
-    if len(my_predbat.octopus_slots) != 1:
-        print("ERROR: Expected 1 slot (from first car only), got {}".format(len(my_predbat.octopus_slots)))
+    # Car 0 should have 1 slot; car 1 entity is None so skipped
+    if len(my_predbat.octopus_slots[0]) != 1:
+        print("ERROR: Expected 1 slot for car 0, got {}".format(len(my_predbat.octopus_slots[0])))
+        print("Slots: {}".format(my_predbat.octopus_slots))
+        failed = True
+    elif len(my_predbat.octopus_slots[1]) != 0:
+        print("ERROR: Expected 0 slots for car 1 (None entity), got {}".format(len(my_predbat.octopus_slots[1])))
         print("Slots: {}".format(my_predbat.octopus_slots))
         failed = True
 
