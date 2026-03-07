@@ -718,7 +718,7 @@ async def test_async_intelligent_update_sensor(my_predbat):
 
     # Test 1: No intelligent device (should return early)
     print("\n*** Test 1: No intelligent device (should return early) ***")
-    api.intelligent_device = None
+    api.intelligent_devices = {}
 
     dashboard_calls = []
 
@@ -726,7 +726,7 @@ async def test_async_intelligent_update_sensor(my_predbat):
         dashboard_calls.append({"entity": entity, "state": state, "attributes": attributes})
 
     api.dashboard_item = mock_dashboard_item
-    api.get_entity_name = lambda type, name: f"predbat.{name}"
+    api.get_entity_name = lambda root, name, index="": f"{root}.predbat.{name}"
 
     with patch.object(type(api), "now_utc_exact", new_callable=lambda: property(lambda self: fixed_time)):
         await api.async_intelligent_update_sensor("account123")
@@ -742,7 +742,16 @@ async def test_async_intelligent_update_sensor(my_predbat):
     active_start_str = (fixed_time - timedelta(minutes=30)).strftime(DATE_TIME_STR_FORMAT)
     active_end_str = (fixed_time + timedelta(minutes=30)).strftime(DATE_TIME_STR_FORMAT)
 
-    api.intelligent_device = {"planned_dispatches": [{"start": active_start_str, "end": active_end_str}], "completed_dispatches": [], "weekday_target_time": "07:30:00", "weekday_target_soc": 80, "weekend_target_time": "09:00:00", "weekend_target_soc": 100}
+    api.intelligent_devices = {
+        "test-device-abc123": {
+            "planned_dispatches": [{"start": active_start_str, "end": active_end_str}],
+            "completed_dispatches": [],
+            "weekday_target_time": "07:30:00",
+            "weekday_target_soc": 80,
+            "weekend_target_time": "09:00:00",
+            "weekend_target_soc": 100,
+        }
+    }
 
     dashboard_calls = []
 
@@ -762,7 +771,16 @@ async def test_async_intelligent_update_sensor(my_predbat):
     future_start_str = (fixed_time + timedelta(hours=2)).strftime(DATE_TIME_STR_FORMAT)
     future_end_str = (fixed_time + timedelta(hours=3)).strftime(DATE_TIME_STR_FORMAT)
 
-    api.intelligent_device = {"planned_dispatches": [{"start": future_start_str, "end": future_end_str}], "completed_dispatches": [], "weekday_target_time": "07:30:00", "weekday_target_soc": 80, "weekend_target_time": "09:00:00", "weekend_target_soc": 100}
+    api.intelligent_devices = {
+        "test-device-abc123": {
+            "planned_dispatches": [{"start": future_start_str, "end": future_end_str}],
+            "completed_dispatches": [],
+            "weekday_target_time": "07:30:00",
+            "weekday_target_soc": 80,
+            "weekend_target_time": "09:00:00",
+            "weekend_target_soc": 100,
+        }
+    }
 
     dashboard_calls = []
 
@@ -782,7 +800,9 @@ async def test_async_intelligent_update_sensor(my_predbat):
     past_start_str = (fixed_time - timedelta(hours=3)).strftime(DATE_TIME_STR_FORMAT)
     past_end_str = (fixed_time - timedelta(hours=2)).strftime(DATE_TIME_STR_FORMAT)
 
-    api.intelligent_device = {"planned_dispatches": [], "completed_dispatches": [{"start": past_start_str, "end": past_end_str}], "weekday_target_time": "07:30:00", "weekday_target_soc": 80, "weekend_target_time": "09:00:00", "weekend_target_soc": 100}
+    api.intelligent_devices = {
+        "test-device-abc123": {"planned_dispatches": [], "completed_dispatches": [{"start": past_start_str, "end": past_end_str}], "weekday_target_time": "07:30:00", "weekday_target_soc": 80, "weekend_target_time": "09:00:00", "weekend_target_soc": 100}
+    }
 
     dashboard_calls = []
 
@@ -801,7 +821,7 @@ async def test_async_intelligent_update_sensor(my_predbat):
     print("\n*** Test 5: Weekday target time/SOC ***")
     weekday_time = datetime(2024, 6, 12, 12, 0, 0, tzinfo=timezone.utc)  # Wednesday
 
-    api.intelligent_device = {"planned_dispatches": [], "completed_dispatches": [], "weekday_target_time": "07:30:00", "weekday_target_soc": 80, "weekend_target_time": "09:00:00", "weekend_target_soc": 100}
+    api.intelligent_devices = {"test-device-abc123": {"planned_dispatches": [], "completed_dispatches": [], "weekday_target_time": "07:30:00", "weekday_target_soc": 80, "weekend_target_time": "09:00:00", "weekend_target_soc": 100}}
 
     dashboard_calls = []
 
@@ -825,7 +845,7 @@ async def test_async_intelligent_update_sensor(my_predbat):
     print("\n*** Test 6: Weekend target time/SOC ***")
     weekend_time = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)  # Saturday
 
-    api.intelligent_device = {"planned_dispatches": [], "completed_dispatches": [], "weekday_target_time": "07:30:00", "weekday_target_soc": 80, "weekend_target_time": "09:00:00", "weekend_target_soc": 100}
+    api.intelligent_devices = {"test-device-abc123": {"planned_dispatches": [], "completed_dispatches": [], "weekday_target_time": "07:30:00", "weekday_target_soc": 80, "weekend_target_time": "09:00:00", "weekend_target_soc": 100}}
 
     dashboard_calls = []
 
@@ -852,13 +872,15 @@ async def test_async_intelligent_update_sensor(my_predbat):
     dispatch2_start = (fixed_time + timedelta(hours=2)).strftime(DATE_TIME_STR_FORMAT)
     dispatch2_end = (fixed_time + timedelta(hours=3)).strftime(DATE_TIME_STR_FORMAT)
 
-    api.intelligent_device = {
-        "planned_dispatches": [{"start": dispatch1_start, "end": dispatch1_end, "charge_kwh": 10.5}, {"start": dispatch2_start, "end": dispatch2_end, "charge_kwh": 15.0}],
-        "completed_dispatches": [{"start": past_start_str, "end": past_end_str, "charge_kwh": 8.0}],
-        "weekday_target_time": "07:30:00",
-        "weekday_target_soc": 80,
-        "weekend_target_time": "09:00:00",
-        "weekend_target_soc": 100,
+    api.intelligent_devices = {
+        "test-device-abc123": {
+            "planned_dispatches": [{"start": dispatch1_start, "end": dispatch1_end, "charge_kwh": 10.5}, {"start": dispatch2_start, "end": dispatch2_end, "charge_kwh": 15.0}],
+            "completed_dispatches": [{"start": past_start_str, "end": past_end_str, "charge_kwh": 8.0}],
+            "weekday_target_time": "07:30:00",
+            "weekday_target_soc": 80,
+            "weekend_target_time": "09:00:00",
+            "weekend_target_soc": 100,
+        }
     }
 
     dashboard_calls = []

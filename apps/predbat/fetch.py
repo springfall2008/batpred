@@ -669,7 +669,7 @@ class Fetch:
         self.io_adjusted = {}
         self.low_rates = []
         self.high_export_rates = []
-        self.octopus_slots = []
+        self.octopus_slots = [[] for _ in self.num_cars]
         self.cost_today_sofar = 0
         self.carbon_today_sofar = 0
         self.import_today = {}
@@ -892,10 +892,10 @@ class Fetch:
 
                 # Completed and planned slots - merge from all cars
                 if completed:
-                    self.octopus_slots += completed
+                    self.octopus_slots[car_n] += completed
                 if planned and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n]):
                     # We only count planned slots if the car is plugged in or we are ignoring unplugged cars
-                    self.octopus_slots += planned
+                    self.octopus_slots[car_n] += planned
 
                 # Extract vehicle data if we can get it
                 size = self.get_state_wrapper(entity_id=entity_id, attribute="vehicle_battery_size_in_kwh")
@@ -941,12 +941,12 @@ class Fetch:
 
             # Use octopus slots for charging - process for each car
             if self.octopus_intelligent_charging:
-                self.octopus_slots = self.add_now_to_octopus_slot(self.octopus_slots, self.now_utc)
                 for car_n in range(min(len(entity_id_list), self.num_cars)):
+                    self.octopus_slots[car_n] = self.add_now_to_octopus_slot(car_n, self.octopus_slots[car_n], self.now_utc)
                     if not entity_id_list[car_n]:
                         continue
                     if not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n]:
-                        self.car_charging_slots[car_n] = self.load_octopus_slots(self.octopus_slots, self.octopus_intelligent_consider_full)
+                        self.car_charging_slots[car_n] = self.load_octopus_slots(car_n, self.octopus_slots[car_n], self.octopus_intelligent_consider_full)
                         if self.car_charging_slots[car_n]:
                             self.log(
                                 "Car {} using Octopus Intelligent, charging planned - charging limit {}, ready time {} - battery size {}".format(
@@ -1015,7 +1015,8 @@ class Fetch:
             self.rate_scan(self.rate_import, print=False)
             self.rate_import, self.rate_import_replicated = self.rate_replicate(self.rate_import, self.io_adjusted, is_import=True)
             self.rate_import_no_io = self.rate_import.copy()
-            self.rate_import = self.rate_add_io_slots(self.rate_import, self.octopus_slots)
+            for car_n in range(self.num_cars):
+                self.rate_import = self.rate_add_io_slots(self.rate_import, self.octopus_slots[car_n])
             self.load_saving_slot(self.octopus_saving_slots, export=False, rate_replicate=self.rate_import_replicated)
             self.load_free_slot(self.octopus_free_slots, export=False, rate_replicate=self.rate_import_replicated)
             load_axle_slot(self, self.axle_sessions, export=False, rate_replicate=self.rate_import_replicated)
