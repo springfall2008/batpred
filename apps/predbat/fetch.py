@@ -940,6 +940,19 @@ class Fetch:
             if self.rate_import:
                 self.rate_scan(self.rate_import, print=False)
 
+            # Work out car SoC and reset next BEFORE processing IOG slots
+            # This must be done before load_octopus_slots is called to avoid IndexError
+            self.car_charging_soc = [0.0 for car_n in range(self.num_cars)]
+            self.car_charging_soc_next = [None for car_n in range(self.num_cars)]
+            for car_n in range(self.num_cars):
+                if car_n < len(self.car_charging_manual_soc) and self.car_charging_manual_soc[car_n]:
+                    car_postfix = "" if car_n == 0 else "_" + str(car_n)
+                    self.car_charging_soc[car_n] = self.get_arg("car_charging_manual_soc_kwh" + car_postfix, 0.0)
+                else:
+                    self.car_charging_soc[car_n] = (self.get_arg("car_charging_soc", 0.0, index=car_n) * self.car_charging_battery_size[car_n]) / 100.0
+            if self.num_cars:
+                self.log("Cars: SoC: {}kWh, Charge limit {}%, plan time {}, battery size {}kWh".format(self.car_charging_soc, self.car_charging_limit, self.car_charging_plan_time, self.car_charging_battery_size))
+
             # Use octopus slots for charging - process for each car
             if self.octopus_intelligent_charging:
                 for car_n in range(min(len(entity_id_list), self.num_cars)):
@@ -964,18 +977,6 @@ class Fetch:
         else:
             # Disable octopus charging if we don't have the slot sensor
             self.octopus_intelligent_charging = False
-
-        # Work out car SoC and reset next
-        self.car_charging_soc = [0.0 for car_n in range(self.num_cars)]
-        self.car_charging_soc_next = [None for car_n in range(self.num_cars)]
-        for car_n in range(self.num_cars):
-            if car_n < len(self.car_charging_manual_soc) and self.car_charging_manual_soc[car_n]:
-                car_postfix = "" if car_n == 0 else "_" + str(car_n)
-                self.car_charging_soc[car_n] = self.get_arg("car_charging_manual_soc_kwh" + car_postfix, 0.0)
-            else:
-                self.car_charging_soc[car_n] = (self.get_arg("car_charging_soc", 0.0, index=car_n) * self.car_charging_battery_size[car_n]) / 100.0
-        if self.num_cars:
-            self.log("Cars: SoC: {}kWh, Charge limit {}%, plan time {}, battery size {}kWh".format(self.car_charging_soc, self.car_charging_limit, self.car_charging_plan_time, self.car_charging_battery_size))
 
         if "rates_export_octopus_url" in self.args:
             # Fixed URL for rate export

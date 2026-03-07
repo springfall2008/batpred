@@ -2165,6 +2165,12 @@ class Octopus:
         if car_n >= self.num_cars:
             # Car not configured, just return the slots as they are (for export or other non-car use)
             return new_slots
+
+        if car_n >= len(self.car_charging_soc):
+            # Defensive check: ensure car_charging_soc is properly initialized
+            self.log("Warn: car_n {} is out of range for car_charging_soc (length {})".format(car_n, len(self.car_charging_soc)))
+            return new_slots
+
         octopus_slot_low_rate = self.get_arg("octopus_slot_low_rate", True)
         car_soc = self.car_charging_soc[car_n]
         limit = self.car_charging_limit[car_n]
