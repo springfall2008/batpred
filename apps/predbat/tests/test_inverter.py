@@ -93,6 +93,7 @@ def test_disable_charge_window(test_name, ha, inv, dummy_rest, prev_charge_start
         failed = True
     if ha.get_state("switch.inverter_button") != ("on" if expect_inverter_time_button_press else "off"):
         print("ERROR: Inverter time button press should be {} got {}".format("on" if expect_inverter_time_button_press else "off", ha.get_state("switch.inverter_button")))
+        failed = True
 
     # REST Mode
     inv.rest_api = "dummy"
@@ -151,7 +152,7 @@ def test_adjust_charge_window(
     print("Test: {}".format(test_name))
 
     inv.rest_data = None
-    inv.has_inverter_time_button_press = has_inverter_time_button_press
+    inv.inv_time_button_press = has_inverter_time_button_press
     ha.dummy_items["select.charge_start_time"] = prev_charge_start_time[:5] if short else prev_charge_start_time
     ha.dummy_items["select.charge_end_time"] = prev_charge_end_time[:5] if short else prev_charge_end_time
     ha.dummy_items["switch.scheduled_charge_enable"] = "on" if prev_enable_charge else "off"
@@ -179,6 +180,7 @@ def test_adjust_charge_window(
         failed = True
     if ha.get_state("switch.inverter_button") != ("on" if expect_inverter_time_button_press else "off"):
         print("ERROR: Inverter time button press should be {} got {}".format("on" if expect_inverter_time_button_press else "off", ha.get_state("switch.inverter_button")))
+        failed = True
 
     # Verify charge_start_time_minutes and charge_end_time_minutes if expected values provided
     if expect_charge_start_time_minutes is not None:
@@ -931,6 +933,7 @@ def test_inverter_update(
 def test_auto_restart(test_name, my_predbat, ha, inv, dummy_items, service, expected, active=False, set_system_notify=None, expect_notify=False):
     print("**** Running Test: {} ****".format(test_name))
     failed = 0
+    prev_service_store_enable = ha.service_store_enable
     ha.service_store_enable = True
     ha.service_store = []
     my_predbat.restart_active = active
@@ -972,6 +975,7 @@ def test_auto_restart(test_name, my_predbat, ha, inv, dummy_items, service, expe
     if json.dumps(expected) != json.dumps(result_filtered):
         print("ERROR: Auto-restart service should be {} got {}".format(expected, result_filtered))
         failed = 1
+    ha.service_store_enable = prev_service_store_enable
     return failed
 
 
@@ -1303,6 +1307,7 @@ def run_inverter_tests(my_predbat_dummy):
     my_predbat.load_user_config()
     my_predbat.fetch_config_options()
     my_predbat.forecast_minutes = 24 * 60
+    my_predbat.minutes_now = 12 * 60  # Pin to noon so time-dependent tests are deterministic
     my_predbat.ha_interface.history_enable = True
 
     failed = False
