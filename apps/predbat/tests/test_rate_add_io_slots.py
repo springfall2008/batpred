@@ -30,7 +30,7 @@ def run_rate_add_io_slots_test(testname, my_predbat, slots, octopus_slot_low_rat
         rates[minute] = 10.0
 
     # Run the function
-    result_rates = my_predbat.rate_add_io_slots(rates, slots)
+    result_rates = my_predbat.rate_add_io_slots(0, rates, slots)
 
     # Check that expected rates were applied
     for minute, expected_rate in expected_rates.items():

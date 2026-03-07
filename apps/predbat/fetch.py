@@ -912,6 +912,7 @@ class Fetch:
                     self.car_charging_battery_size[car_n] = size
                 if rate:
                     # Take the max as Octopus over reports
+                    self.log("Car {} rate from Octopus is {}kW and configured rate {}".format(car_n, rate, self.car_charging_rate[car_n]))
                     self.car_charging_rate[car_n] = max(rate, self.car_charging_rate[car_n])
 
                 # Get car charging limit again from car based on new battery size
@@ -1016,7 +1017,7 @@ class Fetch:
             self.rate_import, self.rate_import_replicated = self.rate_replicate(self.rate_import, self.io_adjusted, is_import=True)
             self.rate_import_no_io = self.rate_import.copy()
             for car_n in range(self.num_cars):
-                self.rate_import = self.rate_add_io_slots(self.rate_import, self.octopus_slots[car_n])
+                self.rate_import = self.rate_add_io_slots(car_n, self.rate_import, self.octopus_slots[car_n])
             self.load_saving_slot(self.octopus_saving_slots, export=False, rate_replicate=self.rate_import_replicated)
             self.load_free_slot(self.octopus_free_slots, export=False, rate_replicate=self.rate_import_replicated)
             load_axle_slot(self, self.axle_sessions, export=False, rate_replicate=self.rate_import_replicated)

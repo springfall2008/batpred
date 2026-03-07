@@ -777,7 +777,8 @@ class OctopusAPI(ComponentBase):
             daysOfWeek = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"]
             if target_time is None:
                 target_time = self.get_intelligent_target_time(device_id)
-            target_time = target_time[:5]  # HH:MM format
+            if target_time and len(target_time) > 5:
+                target_time = target_time[:5]  # HH:MM format
             if target_percentage is None:
                 target_percentage = self.get_intelligent_target_soc(device_id)
             self.log("OctopusAPI: Setting intelligent target device_id {} schedule time {} percentage {}".format(device_id, target_time, target_percentage))
@@ -1452,7 +1453,6 @@ class OctopusAPI(ComponentBase):
             ]
             """
 
-            planned = []
             if device_result:
                 chargePointVariants = device_result.get("chargePointVariants", [])
                 electricVehicles = device_result.get("electricVehicles", [])
@@ -1471,6 +1471,8 @@ class OctopusAPI(ComponentBase):
                         chargePointPowerInKw = None
                         IntelligentdeviceID = device.get("id", None)
                         device_setting_result = {}
+                        planned = []
+                        # Get previously completed dispatches, as we want to keep the old ones and merge
                         completed = self.get_intelligent_completed_dispatches(IntelligentdeviceID)
 
                         dispatch_result = await self.async_graphql_query(intelligent_dispatches_query.format(account_id=account_id, device_id=IntelligentdeviceID), "get-intelligent-dispatches", ignore_errors=True)
@@ -2099,7 +2101,7 @@ class Octopus:
                             self.load_scaling_dynamic[minute] = self.load_scaling_saving
                             rate_replicate[minute] = "saving"
 
-    def decode_octopus_slot(self, slot, raw=False):
+    def decode_octopus_slot(self, car_n, slot, raw=False):
         """
         Decode IOG slot
         """
@@ -2141,7 +2143,7 @@ class Octopus:
 
         # Create kWh if missing
         if kwh is None:
-            kwh = org_minutes * self.car_charging_rate[0] / 60.0
+            kwh = org_minutes * self.car_charging_rate[car_n] / 60.0
 
         try:
             kwh = abs(float(kwh))
@@ -2170,7 +2172,7 @@ class Octopus:
 
         # Decode the slots
         for slot in octopus_slots:
-            start_minutes, end_minutes, kwh, source, location = self.decode_octopus_slot(slot)
+            start_minutes, end_minutes, kwh, source, location = self.decode_octopus_slot(car_n, slot)
             if kwh > 0:
                 # Don't add overlapping slots, bug in Octopus API means that sometimes slots overlap
                 for current_slot in slots_decoded:
@@ -2245,7 +2247,7 @@ class Octopus:
                     new_slots.append(new_slot)
         return new_slots
 
-    def rate_add_io_slots(self, rates, octopus_slots):
+    def rate_add_io_slots(self, car_n, rates, octopus_slots):
         """
         # Add in any planned octopus slots
         # Octopus limits cheap slots to 6 hours (12 x 30-min slots) per 24-hour period
@@ -2264,7 +2266,7 @@ class Octopus:
         if octopus_slots:
             # Add in IO slots
             for slot in octopus_slots:
-                start_minutes, end_minutes, kwh, source, location = self.decode_octopus_slot(slot, raw=True)
+                start_minutes, end_minutes, kwh, source, location = self.decode_octopus_slot(car_n, slot, raw=True)
 
                 # Ignore bump-charge slots as their cost won't change
                 if source != "bump-charge" and (not location or location == "AT_HOME"):
