@@ -669,7 +669,7 @@ class Fetch:
         self.io_adjusted = {}
         self.low_rates = []
         self.high_export_rates = []
-        self.octopus_slots = [[] for _ in self.num_cars]
+        self.octopus_slots = [[] for _ in range(self.num_cars)]
         self.cost_today_sofar = 0
         self.carbon_today_sofar = 0
         self.import_today = {}

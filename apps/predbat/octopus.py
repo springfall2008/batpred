@@ -995,6 +995,10 @@ class OctopusAPI(ComponentBase):
             self.set_arg("octopus_intelligent_slot", slot_list)
             self.set_arg("octopus_ready_time", ready_list)
             self.set_arg("octopus_charge_limit", limit_list)
+            # Increase number of cars if we have more devices than the current limit to ensure all devices can be configured
+            num_cars = self.get_arg("num_cars", 0)
+            if num_cars < len(devices):
+                self.set_arg("num_cars", len(devices))
 
     async def async_get_saving_sessions(self, account_id):
         """
