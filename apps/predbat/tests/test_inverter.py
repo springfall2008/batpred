@@ -1303,6 +1303,7 @@ def run_inverter_tests(my_predbat_dummy):
     my_predbat.load_user_config()
     my_predbat.fetch_config_options()
     my_predbat.forecast_minutes = 24 * 60
+    my_predbat.minutes_now = 12 * 60  # Pin to noon so time-dependent tests are deterministic
     my_predbat.ha_interface.history_enable = True
 
     failed = False
