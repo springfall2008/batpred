@@ -336,7 +336,7 @@ function mdRenderAll(d) {
 mdRenderAll(MD_DATA);
 
 setInterval(function () {
-  fetch('/metrics/json')
+  fetch('./metrics/json')
     .then(function (r) { return r.json(); })
     .then(function (d) { MD_DATA = d; mdRenderAll(d); })
     .catch(function () {});
