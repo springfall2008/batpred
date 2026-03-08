@@ -39,7 +39,7 @@ import asyncio
 THIS_VERSION = "v8.34.1"
 
 # fmt: off
-PREDBAT_FILES = ["predbat.py", "const.py", "hass.py", "config.py", "prediction.py", "gecloud.py", "utils.py", "inverter.py", "ha.py", "download.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py", "execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "temperature.py", "web_mcp.py", "component_base.py", "axle.py", "solax.py", "solis.py", "unit_test.py", "load_ml_component.py", "load_predictor.py", "predbat_metrics.py"]
+PREDBAT_FILES = ["predbat.py", "const.py", "hass.py", "config.py", "prediction.py", "gecloud.py", "utils.py", "inverter.py", "ha.py", "download.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py", "execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "temperature.py", "web_mcp.py", "component_base.py", "axle.py", "solax.py", "solis.py", "unit_test.py", "load_ml_component.py", "load_predictor.py", "predbat_metrics.py", "web_metrics_dashboard.py"]
 # fmt: on
 
 from download import predbat_update_move, predbat_update_download, check_install
@@ -1517,18 +1517,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             except Exception as e:
                 self.log("Warning: Failed to initialize plugin system: {}".format(e))
                 self.plugin_system = None
-
-            # Register /metrics endpoints (no-ops when prometheus_client absent)
-            from predbat_metrics import PROMETHEUS_AVAILABLE, metrics_handler, metrics_json_handler
-            from web_metrics_dashboard import metrics_dashboard_handler
-
-            if PROMETHEUS_AVAILABLE:
-                web_component = self.components.get_component("web")
-                if web_component:
-                    web_component.register_endpoint("/metrics", metrics_handler, "GET")
-                    web_component.register_endpoint("/metrics/json", metrics_json_handler, "GET")
-                    web_component.register_endpoint("/metrics/dashboard", metrics_dashboard_handler, "GET")
-                    self.log("Metrics endpoints registered (/metrics, /metrics/json, /metrics/dashboard)")
 
             # Now start all sub-components (including web server which will pick up registered endpoints)
             if not self.components.start(phase=0):

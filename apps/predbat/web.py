@@ -73,6 +73,8 @@ from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA
 from predbat import THIS_VERSION
 from component_base import ComponentBase
 from config import APPS_SCHEMA
+from web_metrics_dashboard import get_metrics_dashboard_css, get_metrics_dashboard_body, FALLBACK_HTML
+from predbat_metrics import metrics_handler, metrics_json_handler, metrics, PROMETHEUS_AVAILABLE
 
 ROOT_YAML_KEY = "pred_bat"
 
@@ -163,6 +165,9 @@ class WebInterface(ComponentBase):
         app.router.add_get("/api/internals", self.html_api_internals)
         app.router.add_get("/api/internals/download", self.html_api_internals_download)
         app.router.add_get("/api/status", self.html_api_get_status)
+        app.router.add_get("/metrics", metrics_handler)
+        app.router.add_get("/metrics/json", metrics_json_handler)
+        app.router.add_get("/metrics_dashboard", self.html_metrics_dashboard)
 
         # Notify plugin system that web interface is ready
         if hasattr(self.base, "plugin_system") and self.base.plugin_system:
@@ -4435,6 +4440,26 @@ document.addEventListener('DOMContentLoaded', function() {
         except Exception as e:
             self.log(f"Error downloading file: {str(e)}")
             return web.Response(text=f"Error downloading file: {str(e)}", status=500)
+
+    async def html_metrics_dashboard(self, request):
+        """
+        Return the Metrics Dashboard page rendered inside the standard PredBat web shell.
+        """
+        self.default_page = "./metrics_dashboard"
+
+        if not PROMETHEUS_AVAILABLE:
+            return web.Response(text=FALLBACK_HTML, content_type="text/html")
+
+        import json as _json
+
+        data_json = _json.dumps(metrics().to_dict())
+
+        text = self.get_header("Predbat Metrics", refresh=30)
+        text += "<body>\n"
+        text += get_metrics_dashboard_css()
+        text += get_metrics_dashboard_body(data_json)
+        text += "</body></html>\n"
+        return web.Response(content_type="text/html", text=text)
 
     async def html_internals(self, request):
         """

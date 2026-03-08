@@ -141,9 +141,10 @@ class PredbatMetrics:
             if isinstance(metric, _NoOpMetric):
                 return {}
             try:
+                label_names = metric._labelnames
                 return {
-                    str(dict(labels)): child._value.get()
-                    for labels, child in metric._metrics.items()
+                    str(dict(zip(label_names, label_values))): child._value.get()
+                    for label_values, child in metric._metrics.items()
                 }
             except AttributeError:
                 return {}

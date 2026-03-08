@@ -7884,6 +7884,7 @@ setTimeout(function() {
 <a href='./apps_editor'>Editor</a>
 <a href='./browse'>Browse</a>
 <a href='./internals'>Internals</a>
+<a href='./metrics_dashboard'>Metrics</a>
 <a href='https://springfall2008.github.io/batpred/'>Docs</a>
 <div class="dark-mode-toggle">
     """
