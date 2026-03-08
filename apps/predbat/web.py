@@ -4454,7 +4454,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         data_json = _json.dumps(metrics().to_dict())
 
-        text = self.get_header("Predbat Metrics", refresh=30)
+        text = self.get_header("Predbat Metrics", refresh=0)
         text += "<body>\n"
         text += get_metrics_dashboard_css()
         text += get_metrics_dashboard_body(data_json)
