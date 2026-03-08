@@ -305,6 +305,56 @@ def test_fill_load_from_power_backwards_time():
     print("Test 6 PASSED")
 
 
+def test_fill_load_from_power_zero_glitch_at_minute_0():
+    """
+    Test the specific bug scenario where load_today briefly glitches to 0 at minute 0.
+    The sensor reading resets to 0 for one cycle, but load_power data is still valid.
+    fill_load_from_power should detect the zero period at minute 0 and fill it with
+    power-integrated data, restoring the correct current load estimate.
+
+    This is the scenario described in the bug report where current load glitches to 0
+    a few times a day. The fix is to recalculate load_minutes_now after fill_load_from_power.
+    """
+    print("\n=== Test 7: Zero glitch at minute 0 (bug fix verification) ===")
+
+    fetch = TestFetch()
+
+    # Simulate: sensor was accumulating fine (17.61 kWh by yesterday)
+    # At minute 0 (now), the load_today sensor glitched to 0
+    # Minutes 1-4 are also 0 (filled from the glitched reading)
+    # Minutes 5+ have the correct cumulative data
+    load_minutes = {}
+    load_minutes[0] = 0.0  # Glitch: should be ~17.61 kWh
+    load_minutes[1] = 0.0
+    load_minutes[2] = 0.0
+    load_minutes[3] = 0.0
+    load_minutes[4] = 0.0
+    # From minute 5 onwards, data is correct (10.0 kWh for testing)
+    for minute in range(5, 35):
+        load_minutes[minute] = 10.0 - (minute - 5) * (1.0 / 30.0)  # Slowly decreasing from 10.0
+    load_minutes[35] = 9.0
+
+    # Power data is still valid (sensor didn't glitch, ~3kW load)
+    load_power_data = {}
+    for minute in range(0, 35):
+        load_power_data[minute] = 3000.0  # 3 kW = 0.05 kWh/minute
+
+    result = fetch.fill_load_from_power(load_minutes, load_power_data)
+
+    # After fill_load_from_power, minute 0 should be non-zero
+    # (the power data filled the zero gap)
+    assert result[0] > 0.0, f"Minute 0 should be non-zero after power fill, got {result[0]}"
+
+    # Minute 0 should reflect the accumulated power consumption for the zero period
+    # 5 minutes at 3kW = 5 * 3/60 = 0.25 kWh
+    # So minute 0 should be approximately 0.25 kWh (power-integrated)
+    assert result[0] >= 0.1, f"Minute 0 should be at least 0.1 kWh from power fill, got {result[0]}"
+
+    print(f"✓ Zero glitch at minute 0 fixed: result[0] = {dp4(result[0])} kWh")
+    print(f"  (was 0.0 kWh, now restored from power data)")
+    print("Test 7 PASSED")
+
+
 def run_all_tests(my_predbat=None):
     """Run all tests"""
     print("\n" + "=" * 60)
@@ -318,6 +368,7 @@ def run_all_tests(my_predbat=None):
         test_fill_load_from_power_single_minute_period()
         test_fill_load_from_power_zero_load()
         test_fill_load_from_power_backwards_time()
+        test_fill_load_from_power_zero_glitch_at_minute_0()
 
         print("\n" + "=" * 60)
         print("✅ ALL TESTS PASSED")

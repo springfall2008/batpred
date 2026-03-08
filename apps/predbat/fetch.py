@@ -743,6 +743,11 @@ class Fetch:
                     self.log("Using load_power data to fill gaps in load_today data")
                     load_power_data, _ = self.minute_data_load(self.now_utc, "load_power", self.max_days_previous, required_unit="W", load_scaling=1.0, interpolate=True)
                     self.load_minutes = self.fill_load_from_power(self.load_minutes, load_power_data)
+                    # Recalculate load_minutes_now and load_last_period using the improved data from fill_load_from_power
+                    # This ensures that if the original load_today data had a transient zero or gap at minute 0,
+                    # the power-based fill is reflected in the current load estimate instead of leaving it at 0
+                    self.load_minutes_now = get_now_from_cumulative(self.load_minutes, self.minutes_now, backwards=True)
+                    self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
             else:
                 if self.load_forecast:
                     self.log("Using load forecast from load_forecast sensor")
