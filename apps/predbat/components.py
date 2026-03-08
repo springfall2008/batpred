@@ -204,6 +204,15 @@ COMPONENT_LIST = {
                 "required": False,
                 "config": "fox_inverter_sn",
             },
+            "auth_method": {
+                "required": False,
+                "default": "api_key",
+                "config": "fox_auth_method",
+            },
+            "token_expires_at": {
+                "required": False,
+                "config": "fox_token_expires_at",
+            },
         },
         "phase": 1,
     },
