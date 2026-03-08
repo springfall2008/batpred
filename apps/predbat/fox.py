@@ -24,6 +24,7 @@ import json
 import argparse
 import random
 from component_base import ComponentBase
+from oauth_mixin import OAuthMixin
 
 # Define TIME_FORMAT_HA locally to avoid dependency issues
 TIME_FORMAT_HA = "%Y-%m-%dT%H:%M:%S%z"
@@ -205,10 +206,10 @@ def validate_schedule(new_schedule, reserve, fdPwr_max):
     return result_schedule
 
 
-class FoxAPI(ComponentBase):
+class FoxAPI(ComponentBase, OAuthMixin):
     """Fox API client."""
 
-    def initialize(self, key, automatic, inverter_sn=None):
+    def initialize(self, key, automatic, inverter_sn=None, auth_method=None, token_expires_at=None):
         """Initialize the Fox API component"""
         self.key = key
         self.automatic = automatic
@@ -232,6 +233,9 @@ class FoxAPI(ComponentBase):
         self.rate_limit_errors_today = 0
         self.start_time_today = None
         self.last_midnight_utc = None
+
+        # Initialize OAuth support
+        self._init_oauth(auth_method, key, token_expires_at, "fox_ess")
 
         # Convert inverter_sn to list
         if inverter_sn is None:
@@ -1058,6 +1062,14 @@ class FoxAPI(ComponentBase):
         return devices
 
     def get_headers(self, path):
+        if self.auth_method == "oauth":
+            return {
+                "Authorization": f"Bearer {self.access_token}",
+                "Content-Type": "application/json",
+                "lang": FOX_LANG,
+            }
+
+        # API key auth: MD5 signature
         headers = {}
         token = self.key
         lang = FOX_LANG
@@ -1093,7 +1105,14 @@ class FoxAPI(ComponentBase):
         self.log("Fox: API Response failed after {} retries for {}".format(FOX_RETRIES, path))
         return result
 
-    async def request_get_func(self, path, post=False, datain=None):
+    async def request_get_func(self, path, post=False, datain=None, _retry_after_refresh=False):
+        # Check and refresh OAuth token before making request
+        if self.auth_method == "oauth" and not _retry_after_refresh:
+            token_ok = await self.check_and_refresh_oauth_token()
+            if not token_ok:
+                self.log("Warn: Fox: OAuth token refresh failed, skipping API call")
+                return None, False
+
         # Track API request
         self.requests_today += 1
 
@@ -1136,6 +1155,11 @@ class FoxAPI(ComponentBase):
             return None, False
 
         if status_code in [400, 401, 402, 403]:
+            # On 401 with OAuth: attempt one token refresh and retry
+            if status_code == 401 and self.auth_method == "oauth" and not _retry_after_refresh:
+                refreshed = await self.handle_oauth_401()
+                if refreshed:
+                    return await self.request_get_func(path, post=post, datain=datain, _retry_after_refresh=True)
             self.log("Warn: Fox: Authentication error with status code {} from {}".format(status_code, url))
             self.failures_total += 1
             record_api_call("fox", False, "auth_error")

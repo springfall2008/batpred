@@ -3003,6 +3003,7 @@ class MockFoxAPIForRequestTesting(FoxAPI):
         self.device_detail = {}
         self.local_tz = pytz.timezone("Europe/London")
         self.log_messages = []
+        self.auth_method = "password"
 
         # Rate limiting attributes
         self.requests_today = 0

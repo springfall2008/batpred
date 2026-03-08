@@ -100,6 +100,8 @@ from tests.test_component_base import test_component_base_all
 from tests.test_solis import run_solis_tests
 from tests.test_load_ml import test_load_ml
 from tests.test_temperature import test_temperature
+from tests.test_oauth_mixin import run_oauth_mixin_tests
+from tests.test_fox_oauth import run_fox_oauth_tests
 from tests.test_band_rate_text import test_band_rate_text
 
 
@@ -258,6 +260,9 @@ def main():
         # External Temperature API tests
         ("temperature", test_temperature, "External Temperature API tests (initialization, zone.home fallback, timezone conversion, caching)", False),
         ("band_rate_text", test_band_rate_text, "Band rate text tests (flat rate, Cosy, Flux import/export)", False),
+        # OAuth infrastructure tests
+        ("oauth_mixin", run_oauth_mixin_tests, "OAuth mixin tests (token refresh, expiry, 401 handling, env var fallback)", False),
+        ("fox_oauth", run_fox_oauth_tests, "Fox API OAuth tests (dual auth headers, 401 retry, initialize params)", False),
         ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", False),
         ("optimise_windows", run_optimise_all_windows_tests, "Optimise all windows tests", True),
         ("debug_cases", run_debug_cases, "Debug case file tests", True),

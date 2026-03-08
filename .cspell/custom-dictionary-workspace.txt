@@ -10,6 +10,7 @@ Alertfeed
 allclose
 Anson
 apexcharts
+apikey
 appdaemon
 appkey
 appsyaml
@@ -70,6 +71,7 @@ dateutil
 dayname
 daynumber
 daysymbol
+dedup
 dend
 denorm
 devcontainer
@@ -338,6 +340,7 @@ strptime
 substep
 sunspec
 sunsynk
+supabase
 syscmd
 tabindex
 tasmota
