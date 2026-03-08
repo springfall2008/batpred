@@ -1431,7 +1431,7 @@ class SolisAPI(ComponentBase):
                     "unit_of_measurement": battery_energy_discharged_unit,
                     "device_class": "energy",
                     "state_class": "total_increasing",
-                    "icon": "mdi:battery-charging",
+                    "icon": "mdi:battery-minus",
                 },
                 app="solis"
             )
