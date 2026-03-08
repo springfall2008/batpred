@@ -1363,6 +1363,40 @@ class SolisAPI(ComponentBase):
                 app="solis"
             )
 
+            # PV Voltage (from detail)
+            entity_id = f"sensor.{prefix}_solis_{inverter_sn_lower}_pv1_voltage"
+            pv_voltage = detail.get("uPv1")
+            pv_voltage_unit = detail.get("pvVoltageStr", "V")
+            self.dashboard_item(
+                entity_id,
+                state=pv_voltage,
+                attributes={
+                    "friendly_name": f"Solis {inverter_name} PV1 Voltage",
+                    "unit_of_measurement": pv_voltage_unit,
+                    "device_class": "voltage",
+                    "state_class": "measurement",
+                    "icon": "mdi:lightning-bolt",
+                },
+                app="solis"
+            )
+
+            # PV Voltage (from detail)
+            entity_id = f"sensor.{prefix}_solis_{inverter_sn_lower}_pv2_voltage"
+            pv_voltage = detail.get("uPv2")
+            pv_voltage_unit = detail.get("pvVoltageStr", "V")
+            self.dashboard_item(
+                entity_id,
+                state=pv_voltage,
+                attributes={
+                    "friendly_name": f"Solis {inverter_name} PV2 Voltage",
+                    "unit_of_measurement": pv_voltage_unit,
+                    "device_class": "voltage",
+                    "state_class": "measurement",
+                    "icon": "mdi:lightning-bolt",
+                },
+                app="solis"
+            )
+
             # Product Model
             entity_id = f"sensor.{prefix}_solis_{inverter_sn_lower}_product_model"
             product_model = detail.get("productModel")
