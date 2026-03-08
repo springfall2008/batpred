@@ -1388,6 +1388,188 @@ def test_fetch_pv_forecast_ha_sensors(my_predbat):
 
 
 # ============================================================================
+# 15-minute resolution tests
+# ============================================================================
+
+
+def test_fetch_pv_forecast_ha_sensors_15min_kwh(my_predbat):
+    """
+    Integration test: fetch_pv_forecast using HA sensors with 15-minute kWh resolution data.
+    Verifies that the energy totals are correct (not halved) when 15-minute data is used.
+    Each pv_estimate entry is in kWh for the 15-minute period.
+    """
+    print("  - test_fetch_pv_forecast_ha_sensors_15min_kwh")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.solcast_host = None
+        test_api.solar.solcast_api_key = None
+        test_api.solar.forecast_solar = None
+        test_api.solar.pv_forecast_today = "sensor.pv_forecast_today"
+        test_api.solar.pv_forecast_tomorrow = None
+
+        # 15-minute resolution data - pv_estimate is kWh per 15-min slot
+        # 4 slots of 0.25 kWh each = 1.0 kWh total (matching sensor state)
+        forecast_data_15min = [
+            {"period_start": "2025-06-15T10:00:00+0000", "pv_estimate": 0.25},
+            {"period_start": "2025-06-15T10:15:00+0000", "pv_estimate": 0.25},
+            {"period_start": "2025-06-15T10:30:00+0000", "pv_estimate": 0.25},
+            {"period_start": "2025-06-15T10:45:00+0000", "pv_estimate": 0.25},
+        ]
+        # Sensor state = total daily kWh = 1.0
+        test_api.set_mock_ha_state(
+            "sensor.pv_forecast_today",
+            {
+                "state": "1.0",
+                "detailedForecast": forecast_data_15min,
+            },
+        )
+
+        def create_mock_session(*args, **kwargs):
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
+
+        # Verify dashboard items were published
+        today_entity = f"sensor.{test_api.mock_base.prefix}_pv_today"
+        if today_entity not in test_api.dashboard_items:
+            print(f"ERROR: Expected {today_entity} to be published")
+            failed = True
+        else:
+            today_item = test_api.dashboard_items[today_entity]
+            total = today_item["attributes"].get("total", 0)
+            # Total should be 4 * 0.25 = 1.0 kWh, NOT 0.5 kWh (which would indicate the bug)
+            expected_total = 1.0
+            if abs(total - expected_total) > 0.05:
+                print(f"ERROR: Expected today total ~{expected_total} kWh with 15-min data, got {total} kWh (possible 15-min handling bug)")
+                failed = True
+            else:
+                print(f"  15-min kWh data: total={total} kWh (expected {expected_total}) - correct!")
+
+        # Verify forecast_raw entity was published
+        if f"sensor.{test_api.mock_base.prefix}_pv_forecast_raw" not in test_api.dashboard_items:
+            print(f"ERROR: Expected pv_forecast_raw entity to be published")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_fetch_pv_forecast_ha_sensors_15min_kw(my_predbat):
+    """
+    Integration test: fetch_pv_forecast using HA sensors with 15-minute kW resolution data.
+    Verifies that energy totals are correct when pv_estimate is in kW (new Solcast style)
+    with 15-minute period resolution.
+    """
+    print("  - test_fetch_pv_forecast_ha_sensors_15min_kw")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.solcast_host = None
+        test_api.solar.solcast_api_key = None
+        test_api.solar.forecast_solar = None
+        test_api.solar.pv_forecast_today = "sensor.pv_forecast_today"
+        test_api.solar.pv_forecast_tomorrow = None
+
+        # 15-minute resolution data - pv_estimate is kW (power), not kWh
+        # 4 slots of 1.0 kW each = 4 * 0.25h * 1.0 kW = 1.0 kWh total
+        # sum(pv_estimates) = 4.0, sensor state = 1.0 kWh => factor = 4.0
+        forecast_data_15min_kw = [
+            {"period_start": "2025-06-15T10:00:00+0000", "pv_estimate": 1.0},
+            {"period_start": "2025-06-15T10:15:00+0000", "pv_estimate": 1.0},
+            {"period_start": "2025-06-15T10:30:00+0000", "pv_estimate": 1.0},
+            {"period_start": "2025-06-15T10:45:00+0000", "pv_estimate": 1.0},
+        ]
+        # Sensor state = total daily kWh = 1.0
+        test_api.set_mock_ha_state(
+            "sensor.pv_forecast_today",
+            {
+                "state": "1.0",
+                "detailedForecast": forecast_data_15min_kw,
+            },
+        )
+
+        def create_mock_session(*args, **kwargs):
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
+
+        today_entity = f"sensor.{test_api.mock_base.prefix}_pv_today"
+        if today_entity not in test_api.dashboard_items:
+            print(f"ERROR: Expected {today_entity} to be published")
+            failed = True
+        else:
+            today_item = test_api.dashboard_items[today_entity]
+            total = today_item["attributes"].get("total", 0)
+            # Total should be 1.0 kWh (4 slots * 1.0 kW * 0.25h), NOT 0.5 kWh
+            expected_total = 1.0
+            if abs(total - expected_total) > 0.05:
+                print(f"ERROR: Expected today total ~{expected_total} kWh with 15-min kW data, got {total} kWh (possible 15-min handling bug)")
+                failed = True
+            else:
+                print(f"  15-min kW data: total={total} kWh (expected {expected_total}) - correct!")
+
+        if f"sensor.{test_api.mock_base.prefix}_pv_forecast_raw" not in test_api.dashboard_items:
+            print(f"ERROR: Expected pv_forecast_raw entity to be published")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_publish_pv_stats_15min_resolution(my_predbat):
+    """
+    Test publish_pv_stats with 15-minute period data correctly uses point_gap=15
+    and computes totals correctly.
+    """
+    print("  - test_publish_pv_stats_15min_resolution")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        # 15-minute resolution data - divide_by=1.0, period=15
+        # pv_estimate already in kWh per slot: 0.25 kWh each
+        pv_forecast_data = [
+            {"period_start": "2025-06-15T06:00:00+0000", "pv_estimate": 0.25},
+            {"period_start": "2025-06-15T06:15:00+0000", "pv_estimate": 0.25},
+            {"period_start": "2025-06-15T06:30:00+0000", "pv_estimate": 0.25},
+            {"period_start": "2025-06-15T06:45:00+0000", "pv_estimate": 0.25},
+            {"period_start": "2025-06-15T12:00:00+0000", "pv_estimate": 0.5},
+            {"period_start": "2025-06-15T12:15:00+0000", "pv_estimate": 0.5},
+        ]
+
+        test_api.solar.publish_pv_stats(pv_forecast_data, divide_by=1.0, period=15)
+
+        today_entity = f"sensor.{test_api.mock_base.prefix}_pv_today"
+        if today_entity not in test_api.dashboard_items:
+            print(f"ERROR: Expected {today_entity} to be published")
+            failed = True
+        else:
+            today_item = test_api.dashboard_items[today_entity]
+            total = today_item["attributes"].get("total", 0)
+            # Total = 4*0.25 + 2*0.5 = 1.0 + 1.0 = 2.0 kWh
+            expected_total = 2.0
+            if abs(total - expected_total) > 0.05:
+                print(f"ERROR: Expected today total ~{expected_total}, got {total}")
+                failed = True
+            else:
+                print(f"  publish_pv_stats 15-min: total={total} kWh (expected {expected_total}) - correct!")
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+# ============================================================================
 # Run Function Tests
 # ============================================================================
 
@@ -1658,5 +1840,10 @@ def run_solcast_tests(my_predbat):
     failed |= test_fetch_pv_forecast_solcast_direct(my_predbat)
     failed |= test_fetch_pv_forecast_forecast_solar(my_predbat)
     failed |= test_fetch_pv_forecast_ha_sensors(my_predbat)
+
+    # 15-minute resolution tests
+    failed |= test_fetch_pv_forecast_ha_sensors_15min_kwh(my_predbat)
+    failed |= test_fetch_pv_forecast_ha_sensors_15min_kw(my_predbat)
+    failed |= test_publish_pv_stats_15min_resolution(my_predbat)
 
     return failed

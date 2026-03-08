@@ -511,7 +511,7 @@ class SolarAPI(ComponentBase):
         power_now90 = 0
         power_nowCL = 0
 
-        point_gap = 30
+        point_gap = period
         for entry in pv_forecast_data:
             if "period_start" not in entry:
                 continue
@@ -887,12 +887,37 @@ class SolarAPI(ComponentBase):
             # We want to divide the data into single minute slots
             divide_by = dp2(30 * factor)
 
-            if factor != 1.0 and factor != 2.0:
+            # Valid factor values: 1.0 = kWh per slot (any interval), 2.0 = kW per 30-min slot, 4.0 = kW per 15-min slot
+            if factor not in [1.0, 2.0, 4.0]:
                 self.log("Warn: PV Forecast today adds up to {} kWh, but total sensors add up to {} kWh, this is unexpected and hence data maybe misleading (factor {})".format(pv_forecast_total_data, pv_forecast_total_sensor, factor))
             else:
                 self.log("PV Forecast today adds up to {} kWh, and total sensors add up to {} kWh, factor is {}".format(pv_forecast_total_data, pv_forecast_total_sensor, factor))
 
         if pv_forecast_data:
+            # Detect the actual period of the forecast data (e.g. 15 or 30 minutes)
+            # by examining the time difference between consecutive entries.
+            # This ensures 15-minute resolution data is handled correctly.
+            period = 30  # Default period in minutes
+            if len(pv_forecast_data) >= 2:
+                try:
+                    t0 = datetime.strptime(pv_forecast_data[0]["period_start"], TIME_FORMAT)
+                    t1 = datetime.strptime(pv_forecast_data[1]["period_start"], TIME_FORMAT)
+                    detected_period = int(abs((t1 - t0).total_seconds() / 60))
+                    if detected_period > 0:
+                        period = detected_period
+                except (ValueError, TypeError, KeyError):
+                    pass
+
+            # For the HA sensor path the divide_by was computed assuming 30-minute periods;
+            # recalculate it using the actual detected period so that the per-minute kWh
+            # values are correctly scaled regardless of the forecast resolution.
+            if not self.forecast_solar and not (self.solcast_host and self.solcast_api_key):
+                factor = divide_by / 30.0
+                divide_by = dp2(period * factor)
+
+            if period != 30:
+                self.log("PV Forecast data has {} minute resolution, adjusting calculations".format(period))
+
             pv_forecast_minute, _ = minute_data(
                 pv_forecast_data,
                 self.forecast_days,
@@ -902,7 +927,7 @@ class SolarAPI(ComponentBase):
                 backwards=False,
                 divide_by=divide_by,
                 scale=self.pv_scaling,
-                spreading=30,
+                spreading=period,
             )
             pv_forecast_minute10, _ = minute_data(
                 pv_forecast_data,
@@ -913,12 +938,12 @@ class SolarAPI(ComponentBase):
                 backwards=False,
                 divide_by=divide_by,
                 scale=self.pv_scaling,
-                spreading=30,
+                spreading=period,
             )
 
             # Run calibration on the data
-            pv_forecast_minute, pv_forecast_minute10, pv_forecast_data = self.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10, divide_by / 30.0, max_kwh)
-            self.publish_pv_stats(pv_forecast_data, divide_by / 30.0, 30)
+            pv_forecast_minute, pv_forecast_minute10, pv_forecast_data = self.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10, divide_by / period, max_kwh)
+            self.publish_pv_stats(pv_forecast_data, divide_by / period, period)
             self.pack_and_store_forecast(pv_forecast_minute, pv_forecast_minute10)
             self.update_success_timestamp()
             self.last_fetched_timestamp = self.now_utc_exact
