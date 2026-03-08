@@ -340,7 +340,6 @@ substep
 sunspec
 sunsynk
 supabase
-Supabase
 syscmd
 tabindex
 tasmota
