@@ -339,8 +339,8 @@ strptime
 substep
 sunspec
 sunsynk
-Supabase
 supabase
+Supabase
 syscmd
 tabindex
 tasmota
