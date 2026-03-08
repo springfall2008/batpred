@@ -38,14 +38,16 @@ async def test_octopus_events(my_predbat):
     print("\n*** Test 1: select_event for intelligent_target_time ***")
     api = OctopusAPI(my_predbat, key="test-key", account_id="test-account", automatic=False)
     api.commands = []
+    # Set up a test device so suffix_to_device_id can resolve the entity suffix
+    api.intelligent_devices = {"test-device-abc123": {}}
 
-    entity_id = api.get_entity_name("select", "intelligent_target_time")
+    entity_id = api.get_entity_name("select", "intelligent_target_time", index="abc123")
     await api.select_event(entity_id, "06:30")
 
     if len(api.commands) != 1:
         print(f"ERROR: Expected 1 command, got {len(api.commands)}")
         failed = True
-    elif api.commands[0] != {"command": "set_intelligent_target_time", "value": "06:30"}:
+    elif api.commands[0] != {"command": "set_intelligent_target_time", "value": "06:30", "device_id": "test-device-abc123"}:
         print(f"ERROR: Expected set_intelligent_target_time command, got {api.commands[0]}")
         failed = True
     else:
@@ -83,13 +85,13 @@ async def test_octopus_events(my_predbat):
     print("\n*** Test 4: number_event for intelligent_target_soc with valid value ***")
     api.commands = []
 
-    entity_id = api.get_entity_name("number", "intelligent_target_soc")
+    entity_id = api.get_entity_name("number", "intelligent_target_soc", index="abc123")
     await api.number_event(entity_id, 80)
 
     if len(api.commands) != 1:
         print(f"ERROR: Expected 1 command, got {len(api.commands)}")
         failed = True
-    elif api.commands[0] != {"command": "set_intelligent_target_percentage", "value": 80}:
+    elif api.commands[0] != {"command": "set_intelligent_target_percentage", "value": 80, "device_id": "test-device-abc123"}:
         print(f"ERROR: Expected set_intelligent_target_percentage command with value 80, got {api.commands[0]}")
         failed = True
     else:
@@ -99,13 +101,13 @@ async def test_octopus_events(my_predbat):
     print("\n*** Test 5: number_event with string value ***")
     api.commands = []
 
-    entity_id = api.get_entity_name("number", "intelligent_target_soc")
+    entity_id = api.get_entity_name("number", "intelligent_target_soc", index="abc123")
     await api.number_event(entity_id, "75")
 
     if len(api.commands) != 1:
         print(f"ERROR: Expected 1 command, got {len(api.commands)}")
         failed = True
-    elif api.commands[0] != {"command": "set_intelligent_target_percentage", "value": 75}:
+    elif api.commands[0] != {"command": "set_intelligent_target_percentage", "value": 75, "device_id": "test-device-abc123"}:
         print(f"ERROR: Expected set_intelligent_target_percentage command with value 75, got {api.commands[0]}")
         failed = True
     else:
@@ -115,7 +117,7 @@ async def test_octopus_events(my_predbat):
     print("\n*** Test 6: number_event with invalid value ***")
     api.commands = []
 
-    entity_id = api.get_entity_name("number", "intelligent_target_soc")
+    entity_id = api.get_entity_name("number", "intelligent_target_soc", index="abc123")
     await api.number_event(entity_id, "invalid")
 
     if len(api.commands) != 0:
@@ -153,11 +155,15 @@ async def test_octopus_events(my_predbat):
     api.commands = []
 
     # Queue multiple commands
-    await api.select_event(api.get_entity_name("select", "intelligent_target_time"), "05:30")
-    await api.number_event(api.get_entity_name("number", "intelligent_target_soc"), 90)
+    await api.select_event(api.get_entity_name("select", "intelligent_target_time", index="abc123"), "05:30")
+    await api.number_event(api.get_entity_name("number", "intelligent_target_soc", index="abc123"), 90)
     await api.select_event(api.get_entity_name("select", "saving_session_join"), "event-xyz")
 
-    expected_commands = [{"command": "set_intelligent_target_time", "value": "05:30"}, {"command": "set_intelligent_target_percentage", "value": 90}, {"command": "join_saving_session_event", "event_code": "event-xyz"}]
+    expected_commands = [
+        {"command": "set_intelligent_target_time", "value": "05:30", "device_id": "test-device-abc123"},
+        {"command": "set_intelligent_target_percentage", "value": 90, "device_id": "test-device-abc123"},
+        {"command": "join_saving_session_event", "event_code": "event-xyz"},
+    ]
 
     if len(api.commands) != 3:
         print(f"ERROR: Expected 3 commands, got {len(api.commands)}")

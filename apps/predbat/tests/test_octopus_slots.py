@@ -17,7 +17,7 @@ import json
 def run_load_octopus_slot_test(testname, my_predbat, slots, expected_slots, consider_full, car_soc, car_limit, car_loss):
     """
     Run a test for load_octopus_slot
-    octopus_slots = load_octopus_slots(self, octopus_slots, octopus_intelligent_consider_full)
+    octopus_slots = load_octopus_slots(self, car_n, octopus_slots, octopus_intelligent_consider_full)
     """
     failed = False
     print("**** Running Test: load_octopus_slot {} ****".format(testname))
@@ -27,7 +27,7 @@ def run_load_octopus_slot_test(testname, my_predbat, slots, expected_slots, cons
     my_predbat.car_charging_limit[0] = car_limit
     my_predbat.car_charging_loss = car_loss
 
-    result = my_predbat.load_octopus_slots(slots, consider_full)
+    result = my_predbat.load_octopus_slots(0, slots, consider_full)
     if json.dumps(result) != json.dumps(expected_slots):
         print("Test: {} failed consider_full: {} car_soc: {} car_limit: {} car_loss: {} minutes_now: {}".format(testname, consider_full, car_soc, car_limit, car_loss, my_predbat.minutes_now))
         print("ERROR: Slots should be:\n\n{}\ngot:\n{}".format(expected_slots, result))
@@ -151,7 +151,7 @@ def run_load_octopus_slots_tests(my_predbat):
         {"end": today_string + "18:00:00" + today_tz_offset, "start": today_string + "17:30:00" + today_tz_offset, "source": "null", "location": "AT_HOME"},
     ]
 
-    loaded_slots = my_predbat.load_octopus_slots(sample_bad, False)
+    loaded_slots = my_predbat.load_octopus_slots(0, sample_bad, False)
     expected_loaded = "[{'start': 870, 'end': 900, 'kwh': 1.29, 'average': 4, 'cost': 5.16, 'soc': 1.29}, {'start': 900, 'end': 930, 'kwh': 3.17, 'average': 4, 'cost': 12.68, 'soc': 4.46}, {'start': 930, 'end': 960, 'kwh': 3.18, 'average': 4, 'cost': 12.72, 'soc': 7.64}, {'start': 960, 'end': 990, 'kwh': 3.14, 'average': 4, 'cost': 12.56, 'soc': 10}, {'start': 990, 'end': 1050, 'kwh': 7.47, 'average': 4, 'cost': 29.88, 'soc': 10}, {'start': 1050, 'end': 1080, 'kwh': 3.0, 'average': 4, 'cost': 12.0, 'soc': 10}]"
     if str(loaded_slots) != expected_loaded:
         print("ERROR: Loaded slots should be {}\ngot {}".format(expected_loaded, loaded_slots))

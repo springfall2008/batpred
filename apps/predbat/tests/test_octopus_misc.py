@@ -56,7 +56,7 @@ async def test_octopus_set_intelligent_schedule(my_predbat):
     api = OctopusAPI(my_predbat, key="test-api-key", account_id="test-account", automatic=False)
 
     # Setup intelligent device
-    api.intelligent_device = {"device_id": "test-device-123", "weekday_target_time": "06:00", "weekday_target_soc": 80, "weekend_target_time": "08:00", "weekend_target_soc": 90}
+    api.intelligent_devices = {"test-device-123": {"weekday_target_time": "06:00", "weekday_target_soc": 80, "weekend_target_time": "08:00", "weekend_target_soc": 90}}
 
     # Mock async_graphql_query
     api.async_graphql_query = AsyncMock(return_value=None)
@@ -65,7 +65,7 @@ async def test_octopus_set_intelligent_schedule(my_predbat):
     target_time = "07:30"
     target_percentage = 85
 
-    await api.async_set_intelligent_target_schedule("test-account", target_percentage=target_percentage, target_time=target_time)
+    await api.async_set_intelligent_target_schedule("test-account", "test-device-123", target_percentage=target_percentage, target_time=target_time)
 
     # Verify async_graphql_query was called
     if api.async_graphql_query.call_count != 1:
@@ -93,17 +93,17 @@ async def test_octopus_set_intelligent_schedule(my_predbat):
             print("PASS: Mutation called with correct parameters")
 
     # Verify device cache was updated
-    if api.intelligent_device["weekday_target_time"] != "07:30":
-        print(f"ERROR: weekday_target_time not updated, got {api.intelligent_device['weekday_target_time']}")
+    if api.intelligent_devices["test-device-123"]["weekday_target_time"] != "07:30":
+        print(f"ERROR: weekday_target_time not updated, got {api.intelligent_devices['test-device-123']['weekday_target_time']}")
         failed = True
-    elif api.intelligent_device["weekend_target_time"] != "07:30":
-        print(f"ERROR: weekend_target_time not updated, got {api.intelligent_device['weekend_target_time']}")
+    elif api.intelligent_devices["test-device-123"]["weekend_target_time"] != "07:30":
+        print(f"ERROR: weekend_target_time not updated, got {api.intelligent_devices['test-device-123']['weekend_target_time']}")
         failed = True
-    elif api.intelligent_device["weekday_target_soc"] != 85:
-        print(f"ERROR: weekday_target_soc not updated, got {api.intelligent_device['weekday_target_soc']}")
+    elif api.intelligent_devices["test-device-123"]["weekday_target_soc"] != 85:
+        print(f"ERROR: weekday_target_soc not updated, got {api.intelligent_devices['test-device-123']['weekday_target_soc']}")
         failed = True
-    elif api.intelligent_device["weekend_target_soc"] != 85:
-        print(f"ERROR: weekend_target_soc not updated, got {api.intelligent_device['weekend_target_soc']}")
+    elif api.intelligent_devices["test-device-123"]["weekend_target_soc"] != 85:
+        print(f"ERROR: weekend_target_soc not updated, got {api.intelligent_devices['test-device-123']['weekend_target_soc']}")
         failed = True
     else:
         print("PASS: Device cache updated correctly")
@@ -113,14 +113,14 @@ async def test_octopus_set_intelligent_schedule(my_predbat):
     api2 = OctopusAPI(my_predbat, key="test-api-key-2", account_id="test-account-2", automatic=False)
 
     # Setup intelligent device with default values
-    api2.intelligent_device = {"device_id": "test-device-456", "weekday_target_time": "06:00:00", "weekday_target_soc": 75, "weekend_target_time": "08:00:00", "weekend_target_soc": 85}  # Test time format with seconds
+    api2.intelligent_devices = {"test-device-456": {"weekday_target_time": "06:00:00", "weekday_target_soc": 75, "weekend_target_time": "08:00:00", "weekend_target_soc": 85}}  # Test time format with seconds
 
     # Mock methods - get_intelligent_target_time/soc will return weekday values
     api2.async_graphql_query = AsyncMock(return_value=None)
 
     # Call without parameters - should use device defaults
     # Pass explicit values that match what the getters would return
-    await api2.async_set_intelligent_target_schedule("test-account-2", target_time="06:00:00", target_percentage=75)
+    await api2.async_set_intelligent_target_schedule("test-account-2", "test-device-456", target_time="06:00:00", target_percentage=75)
 
     # Verify mutation was called
     if api2.async_graphql_query.call_count != 1:
@@ -157,7 +157,7 @@ async def test_octopus_set_intelligent_schedule(my_predbat):
     api3 = OctopusAPI(my_predbat, key="test-api-key-3", account_id="test-account-3", automatic=False)
 
     # No intelligent device
-    api3.intelligent_device = None
+    api3.intelligent_devices = {}
     api3.async_graphql_query = AsyncMock(return_value=None)
 
     # Track log calls
@@ -170,7 +170,7 @@ async def test_octopus_set_intelligent_schedule(my_predbat):
 
     api3.log = capture_log
 
-    await api3.async_set_intelligent_target_schedule("test-account-3", target_percentage=80, target_time="07:00")
+    await api3.async_set_intelligent_target_schedule("test-account-3", "test-device-3", target_percentage=80, target_time="07:00")
 
     # Verify async_graphql_query was NOT called
     if api3.async_graphql_query.call_count != 0:
@@ -187,16 +187,12 @@ async def test_octopus_set_intelligent_schedule(my_predbat):
     else:
         print("PASS: Warning logged when no device found")
 
-    # Test 4: Fail gracefully when device has no device_id
-    print("\n*** Test 4: Fail gracefully when device has no device_id ***")
+    # Test 4: Fail gracefully when device_id not found in devices dict
+    print("\n*** Test 4: Fail gracefully when device_id not found ***")
     api4 = OctopusAPI(my_predbat, key="test-api-key-4", account_id="test-account-4", automatic=False)
 
-    # Device exists but no device_id
-    api4.intelligent_device = {
-        "weekday_target_time": "06:00",
-        "weekday_target_soc": 80
-        # No device_id
-    }
+    # Devices dict exists but requested device_id is not in it
+    api4.intelligent_devices = {"other-device": {"weekday_target_time": "06:00", "weekday_target_soc": 80}}
     api4.async_graphql_query = AsyncMock(return_value=None)
 
     # Track log calls
@@ -209,33 +205,33 @@ async def test_octopus_set_intelligent_schedule(my_predbat):
 
     api4.log = capture_log
 
-    await api4.async_set_intelligent_target_schedule("test-account-4", target_percentage=80, target_time="07:00")
+    await api4.async_set_intelligent_target_schedule("test-account-4", "nonexistent-device", target_percentage=80, target_time="07:00")
 
     # Verify async_graphql_query was NOT called
     if api4.async_graphql_query.call_count != 0:
-        print(f"ERROR: async_graphql_query should not be called when no device_id, got {api4.async_graphql_query.call_count} calls")
+        print(f"ERROR: async_graphql_query should not be called when device_id not found, got {api4.async_graphql_query.call_count} calls")
         failed = True
     else:
-        print("PASS: No API call when no device_id")
+        print("PASS: No API call when device_id not found")
 
     # Verify warning was logged
-    warning_logged = any("no intelligent device ID found" in msg for msg in log_messages)
+    warning_logged = any("nonexistent-device" in msg for msg in log_messages)
     if not warning_logged:
-        print(f"ERROR: Expected warning about no device_id, got logs: {log_messages}")
+        print(f"ERROR: Expected warning about missing device_id, got logs: {log_messages}")
         failed = True
     else:
-        print("PASS: Warning logged when no device_id found")
+        print("PASS: Warning logged when device_id not found")
 
     # Test 5: Verify time format truncation (HH:MM:SS -> HH:MM)
     print("\n*** Test 5: Verify time format truncation ***")
     api5 = OctopusAPI(my_predbat, key="test-api-key-5", account_id="test-account-5", automatic=False)
 
-    api5.intelligent_device = {"device_id": "test-device-789", "weekday_target_time": "06:00:00", "weekday_target_soc": 80, "weekend_target_time": "08:00:00", "weekend_target_soc": 90}
+    api5.intelligent_devices = {"test-device-789": {"weekday_target_time": "06:00:00", "weekday_target_soc": 80, "weekend_target_time": "08:00:00", "weekend_target_soc": 90}}
 
     api5.async_graphql_query = AsyncMock(return_value=None)
 
     # Provide time with seconds
-    await api5.async_set_intelligent_target_schedule("test-account-5", target_percentage=85, target_time="07:30:45")
+    await api5.async_set_intelligent_target_schedule("test-account-5", "test-device-789", target_percentage=85, target_time="07:30:45")
 
     call_args = api5.async_graphql_query.call_args
     mutation_query = call_args[0][0]
@@ -251,8 +247,8 @@ async def test_octopus_set_intelligent_schedule(my_predbat):
         print("PASS: Time correctly truncated to HH:MM format")
 
     # Verify cached time is also truncated
-    if api5.intelligent_device["weekday_target_time"] != "07:30":
-        print(f"ERROR: Cached time should be truncated, got {api5.intelligent_device['weekday_target_time']}")
+    if api5.intelligent_devices["test-device-789"]["weekday_target_time"] != "07:30":
+        print(f"ERROR: Cached time should be truncated, got {api5.intelligent_devices['test-device-789']['weekday_target_time']}")
         failed = True
     else:
         print("PASS: Cached time correctly truncated")
@@ -261,11 +257,11 @@ async def test_octopus_set_intelligent_schedule(my_predbat):
     print("\n*** Test 6: Verify returns_data=False in graphql call ***")
     api6 = OctopusAPI(my_predbat, key="test-api-key-6", account_id="test-account-6", automatic=False)
 
-    api6.intelligent_device = {"device_id": "test-device-999", "weekday_target_time": "06:00", "weekday_target_soc": 80, "weekend_target_time": "08:00", "weekend_target_soc": 90}
+    api6.intelligent_devices = {"test-device-999": {"weekday_target_time": "06:00", "weekday_target_soc": 80, "weekend_target_time": "08:00", "weekend_target_soc": 90}}
 
     api6.async_graphql_query = AsyncMock(return_value=None)
 
-    await api6.async_set_intelligent_target_schedule("test-account-6", target_percentage=85, target_time="07:00")
+    await api6.async_set_intelligent_target_schedule("test-account-6", "test-device-999", target_percentage=85, target_time="07:00")
 
     call_args = api6.async_graphql_query.call_args
     kwargs = call_args[1]
@@ -1128,7 +1124,7 @@ def test_octopus_get_intelligent_target_soc(my_predbat):
     api = OctopusAPI(my_predbat, key="test-api-key", account_id="test-account", automatic=False)
 
     # Setup intelligent device
-    api.intelligent_device = {"device_id": "test-device-123", "weekday_target_time": "06:00", "weekday_target_soc": 80, "weekend_target_time": "08:00", "weekend_target_soc": 90}
+    api.intelligent_devices = {"test-device-123": {"weekday_target_time": "06:00", "weekday_target_soc": 80, "weekend_target_time": "08:00", "weekend_target_soc": 90}}
 
     # Mock now_utc_exact to be a weekday (Monday = 0)
     from datetime import datetime
@@ -1139,7 +1135,7 @@ def test_octopus_get_intelligent_target_soc(my_predbat):
 
     with patch.object(type(api), "now_utc_exact", new_callable=PropertyMock) as mock_now:
         mock_now.return_value = monday
-        result = api.get_intelligent_target_soc()
+        result = api.get_intelligent_target_soc("test-device-123")
 
     if result != 80:
         print(f"ERROR: Expected weekday target 80, got {result}")
@@ -1151,14 +1147,14 @@ def test_octopus_get_intelligent_target_soc(my_predbat):
     print("\n*** Test 2: Get weekend target SoC (Saturday) ***")
     api2 = OctopusAPI(my_predbat, key="test-api-key-2", account_id="test-account-2", automatic=False)
 
-    api2.intelligent_device = {"device_id": "test-device-456", "weekday_target_time": "06:00", "weekday_target_soc": 75, "weekend_target_time": "09:00", "weekend_target_soc": 95}
+    api2.intelligent_devices = {"test-device-456": {"weekday_target_time": "06:00", "weekday_target_soc": 75, "weekend_target_time": "09:00", "weekend_target_soc": 95}}
 
     # Create a Saturday (weekday = 5)
     saturday = datetime(2025, 1, 11, 10, 0, 0)  # Saturday, Jan 11, 2025
 
     with patch.object(type(api2), "now_utc_exact", new_callable=PropertyMock) as mock_now:
         mock_now.return_value = saturday
-        result = api2.get_intelligent_target_soc()
+        result = api2.get_intelligent_target_soc("test-device-456")
 
     if result != 95:
         print(f"ERROR: Expected weekend target 95, got {result}")
@@ -1170,14 +1166,14 @@ def test_octopus_get_intelligent_target_soc(my_predbat):
     print("\n*** Test 3: Get weekend target SoC (Sunday) ***")
     api3 = OctopusAPI(my_predbat, key="test-api-key-3", account_id="test-account-3", automatic=False)
 
-    api3.intelligent_device = {"device_id": "test-device-789", "weekday_target_time": "06:00", "weekday_target_soc": 70, "weekend_target_time": "10:00", "weekend_target_soc": 100}
+    api3.intelligent_devices = {"test-device-789": {"weekday_target_time": "06:00", "weekday_target_soc": 70, "weekend_target_time": "10:00", "weekend_target_soc": 100}}
 
     # Create a Sunday (weekday = 6)
     sunday = datetime(2025, 1, 12, 10, 0, 0)  # Sunday, Jan 12, 2025
 
     with patch.object(type(api3), "now_utc_exact", new_callable=PropertyMock) as mock_now:
         mock_now.return_value = sunday
-        result = api3.get_intelligent_target_soc()
+        result = api3.get_intelligent_target_soc("test-device-789")
 
     if result != 100:
         print(f"ERROR: Expected weekend target 100, got {result}")
@@ -1190,9 +1186,9 @@ def test_octopus_get_intelligent_target_soc(my_predbat):
     api4 = OctopusAPI(my_predbat, key="test-api-key-4", account_id="test-account-4", automatic=False)
 
     # No intelligent device
-    api4.intelligent_device = None
+    api4.intelligent_devices = {}
 
-    result = api4.get_intelligent_target_soc()
+    result = api4.get_intelligent_target_soc("test-device-4")
 
     if result is not None:
         print(f"ERROR: Expected None for no device, got {result}")
@@ -1204,12 +1200,13 @@ def test_octopus_get_intelligent_target_soc(my_predbat):
     print("\n*** Test 5: Handle device with missing weekday_target_soc ***")
     api5 = OctopusAPI(my_predbat, key="test-api-key-5", account_id="test-account-5", automatic=False)
 
-    api5.intelligent_device = {
-        "device_id": "test-device-999",
-        "weekday_target_time": "06:00",
-        # Missing weekday_target_soc
-        "weekend_target_time": "08:00",
-        "weekend_target_soc": 85,
+    api5.intelligent_devices = {
+        "test-device-999": {
+            "weekday_target_time": "06:00",
+            # Missing weekday_target_soc
+            "weekend_target_time": "08:00",
+            "weekend_target_soc": 85,
+        }
     }
 
     # Mock weekday
@@ -1217,7 +1214,7 @@ def test_octopus_get_intelligent_target_soc(my_predbat):
 
     with patch.object(type(api5), "now_utc_exact", new_callable=PropertyMock) as mock_now:
         mock_now.return_value = tuesday
-        result = api5.get_intelligent_target_soc()
+        result = api5.get_intelligent_target_soc("test-device-999")
 
     if result is not None:
         print(f"ERROR: Expected None for missing weekday_target_soc, got {result}")
@@ -1229,12 +1226,13 @@ def test_octopus_get_intelligent_target_soc(my_predbat):
     print("\n*** Test 6: Handle device with missing weekend_target_soc ***")
     api6 = OctopusAPI(my_predbat, key="test-api-key-6", account_id="test-account-6", automatic=False)
 
-    api6.intelligent_device = {
-        "device_id": "test-device-888",
-        "weekday_target_time": "06:00",
-        "weekday_target_soc": 77,
-        "weekend_target_time": "08:00"
-        # Missing weekend_target_soc
+    api6.intelligent_devices = {
+        "test-device-888": {
+            "weekday_target_time": "06:00",
+            "weekday_target_soc": 77,
+            "weekend_target_time": "08:00"
+            # Missing weekend_target_soc
+        }
     }
 
     # Mock weekend (Saturday)
@@ -1242,7 +1240,7 @@ def test_octopus_get_intelligent_target_soc(my_predbat):
 
     with patch.object(type(api6), "now_utc_exact", new_callable=PropertyMock) as mock_now:
         mock_now.return_value = saturday2
-        result = api6.get_intelligent_target_soc()
+        result = api6.get_intelligent_target_soc("test-device-888")
 
     if result is not None:
         print(f"ERROR: Expected None for missing weekend_target_soc, got {result}")
@@ -1277,14 +1275,14 @@ def test_octopus_get_intelligent_target_time(my_predbat):
     print("\n*** Test 1: Get weekday target time ***")
     api = OctopusAPI(my_predbat, key="test-api-key", account_id="test-account", automatic=False)
 
-    api.intelligent_device = {"device_id": "test-device-123", "weekday_target_time": "06:30", "weekday_target_soc": 80, "weekend_target_time": "08:00", "weekend_target_soc": 90}
+    api.intelligent_devices = {"test-device-123": {"weekday_target_time": "06:30", "weekday_target_soc": 80, "weekend_target_time": "08:00", "weekend_target_soc": 90}}
 
     # Mock weekday (Monday)
     monday = datetime(2025, 1, 13, 10, 0, 0)  # Monday, Jan 13, 2025
 
     with patch.object(type(api), "now_utc_exact", new_callable=PropertyMock) as mock_now:
         mock_now.return_value = monday
-        result = api.get_intelligent_target_time()
+        result = api.get_intelligent_target_time("test-device-123")
 
     if result != "06:30":
         print(f"ERROR: Expected weekday target time '06:30', got {result}")
@@ -1296,14 +1294,14 @@ def test_octopus_get_intelligent_target_time(my_predbat):
     print("\n*** Test 2: Get weekend target time (Saturday) ***")
     api2 = OctopusAPI(my_predbat, key="test-api-key-2", account_id="test-account-2", automatic=False)
 
-    api2.intelligent_device = {"device_id": "test-device-456", "weekday_target_time": "06:30", "weekday_target_soc": 80, "weekend_target_time": "08:00", "weekend_target_soc": 90}
+    api2.intelligent_devices = {"test-device-456": {"weekday_target_time": "06:30", "weekday_target_soc": 80, "weekend_target_time": "08:00", "weekend_target_soc": 90}}
 
     # Mock Saturday
     saturday = datetime(2025, 1, 18, 10, 0, 0)  # Saturday, Jan 18, 2025
 
     with patch.object(type(api2), "now_utc_exact", new_callable=PropertyMock) as mock_now:
         mock_now.return_value = saturday
-        result = api2.get_intelligent_target_time()
+        result = api2.get_intelligent_target_time("test-device-456")
 
     if result != "08:00":
         print(f"ERROR: Expected weekend target time '08:00', got {result}")
@@ -1315,14 +1313,14 @@ def test_octopus_get_intelligent_target_time(my_predbat):
     print("\n*** Test 3: Get weekend target time (Sunday) ***")
     api3 = OctopusAPI(my_predbat, key="test-api-key-3", account_id="test-account-3", automatic=False)
 
-    api3.intelligent_device = {"device_id": "test-device-789", "weekday_target_time": "07:00", "weekday_target_soc": 85, "weekend_target_time": "09:30", "weekend_target_soc": 95}
+    api3.intelligent_devices = {"test-device-789": {"weekday_target_time": "07:00", "weekday_target_soc": 85, "weekend_target_time": "09:30", "weekend_target_soc": 95}}
 
     # Mock Sunday
     sunday = datetime(2025, 1, 19, 10, 0, 0)  # Sunday, Jan 19, 2025
 
     with patch.object(type(api3), "now_utc_exact", new_callable=PropertyMock) as mock_now:
         mock_now.return_value = sunday
-        result = api3.get_intelligent_target_time()
+        result = api3.get_intelligent_target_time("test-device-789")
 
     if result != "09:30":
         print(f"ERROR: Expected weekend target time '09:30', got {result}")
@@ -1334,13 +1332,13 @@ def test_octopus_get_intelligent_target_time(my_predbat):
     print("\n*** Test 4: Handle no intelligent device ***")
     api4 = OctopusAPI(my_predbat, key="test-api-key-4", account_id="test-account-4", automatic=False)
 
-    api4.intelligent_device = None
+    api4.intelligent_devices = {}
 
     monday2 = datetime(2025, 1, 13, 10, 0, 0)
 
     with patch.object(type(api4), "now_utc_exact", new_callable=PropertyMock) as mock_now:
         mock_now.return_value = monday2
-        result = api4.get_intelligent_target_time()
+        result = api4.get_intelligent_target_time("test-device-4")
 
     if result is not None:
         print(f"ERROR: Expected None when no device, got {result}")
@@ -1352,12 +1350,13 @@ def test_octopus_get_intelligent_target_time(my_predbat):
     print("\n*** Test 5: Handle missing weekday_target_time ***")
     api5 = OctopusAPI(my_predbat, key="test-api-key-5", account_id="test-account-5", automatic=False)
 
-    api5.intelligent_device = {
-        "device_id": "test-device-999",
-        "weekday_target_soc": 80,
-        "weekend_target_time": "08:00",
-        "weekend_target_soc": 90
-        # Missing weekday_target_time
+    api5.intelligent_devices = {
+        "test-device-999": {
+            "weekday_target_soc": 80,
+            "weekend_target_time": "08:00",
+            "weekend_target_soc": 90
+            # Missing weekday_target_time
+        }
     }
 
     # Mock weekday (Tuesday)
@@ -1365,7 +1364,7 @@ def test_octopus_get_intelligent_target_time(my_predbat):
 
     with patch.object(type(api5), "now_utc_exact", new_callable=PropertyMock) as mock_now:
         mock_now.return_value = tuesday
-        result = api5.get_intelligent_target_time()
+        result = api5.get_intelligent_target_time("test-device-999")
 
     if result is not None:
         print(f"ERROR: Expected None for missing weekday_target_time, got {result}")
@@ -1377,12 +1376,13 @@ def test_octopus_get_intelligent_target_time(my_predbat):
     print("\n*** Test 6: Handle missing weekend_target_time ***")
     api6 = OctopusAPI(my_predbat, key="test-api-key-6", account_id="test-account-6", automatic=False)
 
-    api6.intelligent_device = {
-        "device_id": "test-device-888",
-        "weekday_target_time": "06:00",
-        "weekday_target_soc": 80,
-        "weekend_target_soc": 90
-        # Missing weekend_target_time
+    api6.intelligent_devices = {
+        "test-device-888": {
+            "weekday_target_time": "06:00",
+            "weekday_target_soc": 80,
+            "weekend_target_soc": 90
+            # Missing weekend_target_time
+        }
     }
 
     # Mock weekend (Saturday)
@@ -1390,7 +1390,7 @@ def test_octopus_get_intelligent_target_time(my_predbat):
 
     with patch.object(type(api6), "now_utc_exact", new_callable=PropertyMock) as mock_now:
         mock_now.return_value = saturday2
-        result = api6.get_intelligent_target_time()
+        result = api6.get_intelligent_target_time("test-device-888")
 
     if result is not None:
         print(f"ERROR: Expected None for missing weekend_target_time, got {result}")
@@ -1423,9 +1423,9 @@ def test_octopus_get_intelligent_battery_size(my_predbat):
     print("\n*** Test 1: Get battery size when present ***")
     api = OctopusAPI(my_predbat, key="test-api-key", account_id="test-account", automatic=False)
 
-    api.intelligent_device = {"device_id": "test-device-123", "vehicle_battery_size_in_kwh": 75.5, "weekday_target_time": "06:30", "weekday_target_soc": 80}
+    api.intelligent_devices = {"test-device-123": {"vehicle_battery_size_in_kwh": 75.5, "weekday_target_time": "06:30", "weekday_target_soc": 80}}
 
-    result = api.get_intelligent_battery_size()
+    result = api.get_intelligent_battery_size("test-device-123")
 
     if result != 75.5:
         print(f"ERROR: Expected battery size 75.5, got {result}")
@@ -1437,9 +1437,9 @@ def test_octopus_get_intelligent_battery_size(my_predbat):
     print("\n*** Test 2: Handle no intelligent device ***")
     api2 = OctopusAPI(my_predbat, key="test-api-key-2", account_id="test-account-2", automatic=False)
 
-    api2.intelligent_device = None
+    api2.intelligent_devices = {}
 
-    result = api2.get_intelligent_battery_size()
+    result = api2.get_intelligent_battery_size("test-device-2")
 
     if result is not None:
         print(f"ERROR: Expected None when no device, got {result}")
@@ -1451,14 +1451,15 @@ def test_octopus_get_intelligent_battery_size(my_predbat):
     print("\n*** Test 3: Handle device without vehicle_battery_size_in_kwh ***")
     api3 = OctopusAPI(my_predbat, key="test-api-key-3", account_id="test-account-3", automatic=False)
 
-    api3.intelligent_device = {
-        "device_id": "test-device-789",
-        "weekday_target_time": "06:30",
-        "weekday_target_soc": 80
-        # Missing vehicle_battery_size_in_kwh
+    api3.intelligent_devices = {
+        "test-device-789": {
+            "weekday_target_time": "06:30",
+            "weekday_target_soc": 80
+            # Missing vehicle_battery_size_in_kwh
+        }
     }
 
-    result = api3.get_intelligent_battery_size()
+    result = api3.get_intelligent_battery_size("test-device-789")
 
     if result is not None:
         print(f"ERROR: Expected None for missing vehicle_battery_size_in_kwh, got {result}")
@@ -1471,8 +1472,8 @@ def test_octopus_get_intelligent_battery_size(my_predbat):
 
     # Test integer value
     api4a = OctopusAPI(my_predbat, key="test-api-key-4a", account_id="test-account-4a", automatic=False)
-    api4a.intelligent_device = {"device_id": "test-device", "vehicle_battery_size_in_kwh": 100}
-    result = api4a.get_intelligent_battery_size()
+    api4a.intelligent_devices = {"test-device": {"vehicle_battery_size_in_kwh": 100}}
+    result = api4a.get_intelligent_battery_size("test-device")
     if result != 100:
         print(f"ERROR: Expected integer battery size 100, got {result}")
         failed = True
@@ -1481,8 +1482,8 @@ def test_octopus_get_intelligent_battery_size(my_predbat):
 
     # Test zero value
     api4b = OctopusAPI(my_predbat, key="test-api-key-4b", account_id="test-account-4b", automatic=False)
-    api4b.intelligent_device = {"device_id": "test-device", "vehicle_battery_size_in_kwh": 0}
-    result = api4b.get_intelligent_battery_size()
+    api4b.intelligent_devices = {"test-device": {"vehicle_battery_size_in_kwh": 0}}
+    result = api4b.get_intelligent_battery_size("test-device")
     if result != 0:
         print(f"ERROR: Expected zero battery size, got {result}")
         failed = True
@@ -1491,8 +1492,8 @@ def test_octopus_get_intelligent_battery_size(my_predbat):
 
     # Test small float value
     api4c = OctopusAPI(my_predbat, key="test-api-key-4c", account_id="test-account-4c", automatic=False)
-    api4c.intelligent_device = {"device_id": "test-device", "vehicle_battery_size_in_kwh": 58.2}
-    result = api4c.get_intelligent_battery_size()
+    api4c.intelligent_devices = {"test-device": {"vehicle_battery_size_in_kwh": 58.2}}
+    result = api4c.get_intelligent_battery_size("test-device")
     if result != 58.2:
         print(f"ERROR: Expected float battery size 58.2, got {result}")
         failed = True
@@ -1525,23 +1526,24 @@ def test_octopus_get_intelligent_vehicle(my_predbat):
     print("\n*** Test 1: Get vehicle with all fields present ***")
     api = OctopusAPI(my_predbat, key="test-api-key", account_id="test-account", automatic=False)
 
-    api.intelligent_device = {
-        "device_id": "test-device-123",
-        "vehicle_battery_size_in_kwh": 75.5,
-        "charge_point_power_in_kw": 7.2,
-        "weekday_target_time": "06:30",
-        "weekday_target_soc": 80,
-        "weekend_target_time": "08:00",
-        "weekend_target_soc": 90,
-        "minimum_soc": 20,
-        "maximum_soc": 100,
-        "suspended": False,
-        "model": "Tesla Model 3",
-        "provider": "Tesla",
-        "status": "active",
+    api.intelligent_devices = {
+        "test-device-123": {
+            "vehicle_battery_size_in_kwh": 75.5,
+            "charge_point_power_in_kw": 7.2,
+            "weekday_target_time": "06:30",
+            "weekday_target_soc": 80,
+            "weekend_target_time": "08:00",
+            "weekend_target_soc": 90,
+            "minimum_soc": 20,
+            "maximum_soc": 100,
+            "suspended": False,
+            "model": "Tesla Model 3",
+            "provider": "Tesla",
+            "status": "active",
+        }
     }
 
-    result = api.get_intelligent_vehicle()
+    result = api.get_intelligent_vehicle("test-device-123")
 
     expected_keys = ["vehicleBatterySizeInKwh", "chargePointPowerInKw", "weekdayTargetTime", "weekdayTargetSoc", "weekendTargetTime", "weekendTargetSoc", "minimumSoc", "maximumSoc", "suspended", "model", "provider", "status"]
 
@@ -1573,9 +1575,9 @@ def test_octopus_get_intelligent_vehicle(my_predbat):
     print("\n*** Test 2: Handle no intelligent device ***")
     api2 = OctopusAPI(my_predbat, key="test-api-key-2", account_id="test-account-2", automatic=False)
 
-    api2.intelligent_device = None
+    api2.intelligent_devices = {}
 
-    result = api2.get_intelligent_vehicle()
+    result = api2.get_intelligent_vehicle("test-device-2")
 
     if not isinstance(result, dict):
         print(f"ERROR: Expected dict result, got {type(result)}")
@@ -1590,15 +1592,16 @@ def test_octopus_get_intelligent_vehicle(my_predbat):
     print("\n*** Test 3: Get vehicle with partial fields (None values excluded) ***")
     api3 = OctopusAPI(my_predbat, key="test-api-key-3", account_id="test-account-3", automatic=False)
 
-    api3.intelligent_device = {
-        "device_id": "test-device-789",
-        "vehicle_battery_size_in_kwh": 60.0,
-        "weekday_target_soc": 80,
-        "model": "Nissan Leaf"
-        # Other fields missing - should be excluded from result
+    api3.intelligent_devices = {
+        "test-device-789": {
+            "vehicle_battery_size_in_kwh": 60.0,
+            "weekday_target_soc": 80,
+            "model": "Nissan Leaf"
+            # Other fields missing - should be excluded from result
+        }
     }
 
-    result = api3.get_intelligent_vehicle()
+    result = api3.get_intelligent_vehicle("test-device-789")
 
     if not isinstance(result, dict):
         print(f"ERROR: Expected dict result, got {type(result)}")
@@ -1625,23 +1628,24 @@ def test_octopus_get_intelligent_vehicle(my_predbat):
     print("\n*** Test 4: Verify field name mapping ***")
     api4 = OctopusAPI(my_predbat, key="test-api-key-4", account_id="test-account-4", automatic=False)
 
-    api4.intelligent_device = {
-        "device_id": "test-device-999",
-        "vehicle_battery_size_in_kwh": 100,
-        "charge_point_power_in_kw": 11,
-        "weekday_target_time": "07:00",
-        "weekday_target_soc": 85,
-        "weekend_target_time": "09:00",
-        "weekend_target_soc": 95,
-        "minimum_soc": 10,
-        "maximum_soc": 100,
-        "suspended": True,
-        "model": "VW ID.3",
-        "provider": "VW",
-        "status": "suspended",
+    api4.intelligent_devices = {
+        "test-device-999": {
+            "vehicle_battery_size_in_kwh": 100,
+            "charge_point_power_in_kw": 11,
+            "weekday_target_time": "07:00",
+            "weekday_target_soc": 85,
+            "weekend_target_time": "09:00",
+            "weekend_target_soc": 95,
+            "minimum_soc": 10,
+            "maximum_soc": 100,
+            "suspended": True,
+            "model": "VW ID.3",
+            "provider": "VW",
+            "status": "suspended",
+        }
     }
 
-    result = api4.get_intelligent_vehicle()
+    result = api4.get_intelligent_vehicle("test-device-999")
 
     # Check snake_case -> camelCase conversion
     expected_mappings = {
@@ -1674,13 +1678,14 @@ def test_octopus_get_intelligent_vehicle(my_predbat):
     print("\n*** Test 5: Handle device with no vehicle fields ***")
     api5 = OctopusAPI(my_predbat, key="test-api-key-5", account_id="test-account-5", automatic=False)
 
-    api5.intelligent_device = {
-        "device_id": "test-device-555",
-        "some_other_field": "value"
-        # No vehicle-related fields
+    api5.intelligent_devices = {
+        "test-device-555": {
+            "some_other_field": "value"
+            # No vehicle-related fields
+        }
     }
 
-    result = api5.get_intelligent_vehicle()
+    result = api5.get_intelligent_vehicle("test-device-555")
 
     if not isinstance(result, dict):
         print(f"ERROR: Expected dict result, got {type(result)}")
@@ -1722,7 +1727,7 @@ async def test_octopus_run(my_predbat):
     api.load_octopus_cache = AsyncMock()
     api.async_get_account = AsyncMock()
     api.async_find_tariffs = AsyncMock()
-    api.async_update_intelligent_device = AsyncMock()
+    api.async_update_intelligent_devices = AsyncMock()
     api.fetch_tariffs = AsyncMock()
     api.async_get_saving_sessions = AsyncMock(return_value={"events": []})
     api.get_saving_session_data = MagicMock()
@@ -1746,8 +1751,8 @@ async def test_octopus_run(my_predbat):
     elif api.async_find_tariffs.call_count != 1:
         print(f"ERROR: Expected async_find_tariffs to be called once on first run, got {api.async_find_tariffs.call_count}")
         failed = True
-    elif api.async_update_intelligent_device.call_count != 1:
-        print(f"ERROR: Expected async_update_intelligent_device to be called once on first run, got {api.async_update_intelligent_device.call_count}")
+    elif api.async_update_intelligent_devices.call_count != 1:
+        print(f"ERROR: Expected async_update_intelligent_devices to be called once on first run, got {api.async_update_intelligent_devices.call_count}")
         failed = True
     elif api.fetch_tariffs.call_count != 1:
         print(f"ERROR: Expected fetch_tariffs to be called once on first run, got {api.fetch_tariffs.call_count}")
@@ -1774,7 +1779,7 @@ async def test_octopus_run(my_predbat):
     api2.load_octopus_cache = AsyncMock()
     api2.async_get_account = AsyncMock()
     api2.async_find_tariffs = AsyncMock()
-    api2.async_update_intelligent_device = AsyncMock()
+    api2.async_update_intelligent_devices = AsyncMock()
     api2.fetch_tariffs = AsyncMock()
     api2.async_get_saving_sessions = AsyncMock(return_value={})
     api2.get_saving_session_data = MagicMock()
@@ -1806,7 +1811,7 @@ async def test_octopus_run(my_predbat):
     api3.load_octopus_cache = AsyncMock()
     api3.async_get_account = AsyncMock()
     api3.async_find_tariffs = AsyncMock()
-    api3.async_update_intelligent_device = AsyncMock()
+    api3.async_update_intelligent_devices = AsyncMock()
     api3.fetch_tariffs = AsyncMock()
     api3.async_get_saving_sessions = AsyncMock(return_value={"events": []})
     api3.get_saving_session_data = MagicMock()
@@ -1820,8 +1825,8 @@ async def test_octopus_run(my_predbat):
         mock_datetime.now.return_value = datetime(2025, 1, 1, 10, 10, 0)
         result = await api3.run(seconds=0, first=False)
 
-    if api3.async_update_intelligent_device.call_count != 1:
-        print(f"ERROR: Expected async_update_intelligent_device to be called at 10-minute mark, got {api3.async_update_intelligent_device.call_count}")
+    if api3.async_update_intelligent_devices.call_count != 1:
+        print(f"ERROR: Expected async_update_intelligent_devices to be called at 10-minute mark, got {api3.async_update_intelligent_devices.call_count}")
         failed = True
     elif api3.fetch_tariffs.call_count != 1:
         print(f"ERROR: Expected fetch_tariffs to be called at 10-minute mark, got {api3.fetch_tariffs.call_count}")
@@ -1842,7 +1847,7 @@ async def test_octopus_run(my_predbat):
     api4.load_octopus_cache = AsyncMock()
     api4.async_get_account = AsyncMock()
     api4.async_find_tariffs = AsyncMock()
-    api4.async_update_intelligent_device = AsyncMock()
+    api4.async_update_intelligent_devices = AsyncMock()
     api4.fetch_tariffs = AsyncMock()
     api4.async_get_saving_sessions = AsyncMock(return_value={})
     api4.get_saving_session_data = MagicMock()
@@ -1871,7 +1876,7 @@ async def test_octopus_run(my_predbat):
     api5.load_octopus_cache = AsyncMock()
     api5.async_get_account = AsyncMock()
     api5.async_find_tariffs = AsyncMock()
-    api5.async_update_intelligent_device = AsyncMock()
+    api5.async_update_intelligent_devices = AsyncMock()
     api5.fetch_tariffs = AsyncMock()
     api5.async_get_saving_sessions = AsyncMock(return_value={})
     api5.get_saving_session_data = MagicMock()
@@ -1886,8 +1891,8 @@ async def test_octopus_run(my_predbat):
         result = await api5.run(seconds=0, first=False)
 
     # Because refresh=True, should still call 10-minute update methods
-    if api5.async_update_intelligent_device.call_count != 1:
-        print(f"ERROR: Expected async_update_intelligent_device to be called when commands processed, got {api5.async_update_intelligent_device.call_count}")
+    if api5.async_update_intelligent_devices.call_count != 1:
+        print(f"ERROR: Expected async_update_intelligent_devices to be called when commands processed, got {api5.async_update_intelligent_devices.call_count}")
         failed = True
     elif api5.fetch_tariffs.call_count != 1:
         print(f"ERROR: Expected fetch_tariffs to be called when commands processed, got {api5.fetch_tariffs.call_count}")
@@ -1902,7 +1907,7 @@ async def test_octopus_run(my_predbat):
     api6.load_octopus_cache = AsyncMock()
     api6.async_get_account = AsyncMock()
     api6.async_find_tariffs = AsyncMock()
-    api6.async_update_intelligent_device = AsyncMock()
+    api6.async_update_intelligent_devices = AsyncMock()
     api6.fetch_tariffs = AsyncMock()
     api6.async_get_saving_sessions = AsyncMock(return_value={})
     api6.get_saving_session_data = MagicMock()

@@ -346,7 +346,7 @@ class OctopusAPI(ComponentBase):
         self.tariffs = {}
         self.saving_sessions = {}
         self.saving_sessions_to_join = []
-        self.intelligent_device = {}
+        self.intelligent_devices = {}
         self.automatic = automatic
         self.commands = []
 
@@ -368,20 +368,33 @@ class OctopusAPI(ComponentBase):
         self.log("OctopusAPI: Initialized with account ID {} cache {} shared {}".format(self.account_id, self.user_cache_file, self.shared_cache_path))
 
     async def select_event(self, entity_id, value):
-        if entity_id == self.get_entity_name("select", "intelligent_target_time"):
-            self.commands.append({"command": "set_intelligent_target_time", "value": value})
+        suffix = self.get_entity_suffix(entity_id)
+        device_id = self.suffix_to_device_id(suffix)
+        if entity_id == self.get_entity_name("select", "intelligent_target_time", index=suffix) and device_id:
+            self.commands.append({"command": "set_intelligent_target_time", "value": value, "device_id": device_id})
         elif entity_id == self.get_entity_name("select", "saving_session_join"):
             self.commands.append({"command": "join_saving_session_event", "event_code": value})
 
+    def get_entity_suffix(self, entity_id):
+        """
+        Extract the index suffix from an entity ID
+        """
+        if "_" in entity_id:
+            return entity_id.split("_")[-1]
+        else:
+            return ""
+
     async def number_event(self, entity_id, value):
-        if entity_id == self.get_entity_name("number", "intelligent_target_soc"):
+        suffix = self.get_entity_suffix(entity_id)
+        device_id = self.suffix_to_device_id(suffix)
+        if entity_id == self.get_entity_name("number", "intelligent_target_soc", index=suffix) and device_id:
             # Set the target soc
             try:
                 value = int(value)
             except ValueError:
                 self.log("Error: OctopusAPI: Invalid value for intelligent target soc: {}".format(value))
                 return
-            self.commands.append({"command": "set_intelligent_target_percentage", "value": value})
+            self.commands.append({"command": "set_intelligent_target_percentage", "value": value, "device_id": device_id})
 
     async def switch_event(self, entity_id, service):
         pass
@@ -415,7 +428,7 @@ class OctopusAPI(ComponentBase):
 
         if first or refresh or (count_minutes % 10) == 0:
             # 10-minute update for intelligent device
-            await self.async_update_intelligent_device(self.account_id)
+            await self.async_update_intelligent_devices(self.account_id)
             await self.fetch_tariffs(self.tariffs)
             self.saving_sessions = await self.async_get_saving_sessions(self.account_id)
             self.get_saving_session_data()
@@ -447,11 +460,13 @@ class OctopusAPI(ComponentBase):
             command_name = command.get("command", "")
             if command_name == "set_intelligent_target_percentage":
                 value = command.get("value", None)
-                await self.async_set_intelligent_target_schedule(account_id, target_percentage=int(value))
+                device_id = command.get("device_id", None)
+                await self.async_set_intelligent_target_schedule(account_id, target_percentage=int(value), device_id=device_id)
                 done_command = True
             elif command_name == "set_intelligent_target_time":
                 value = command.get("value", None)
-                await self.async_set_intelligent_target_schedule(account_id, target_time=value)
+                device_id = command.get("device_id", None)
+                await self.async_set_intelligent_target_schedule(account_id, target_time=value, device_id=device_id)
                 done_command = True
             elif command_name == "join_saving_session_event":
                 event_code = command.get("event_code", None)
@@ -546,7 +561,7 @@ class OctopusAPI(ComponentBase):
             if data:
                 self.account_data = data.get("account_data", {})
                 self.saving_sessions = data.get("saving_sessions", {})
-                self.intelligent_device = data.get("intelligent_device", {})
+                self.intelligent_devices = data.get("intelligent_devices", {})
                 self.graphql_token = data.get("kraken_token")
 
         # Load tariffs from individual shared cache files
@@ -562,8 +577,8 @@ class OctopusAPI(ComponentBase):
             self.account_data = {}
         if self.saving_sessions is None:
             self.saving_sessions = {}
-        if self.intelligent_device is None:
-            self.intelligent_device = {}
+        if not isinstance(self.intelligent_devices, dict):
+            self.intelligent_devices = {}
 
     async def save_octopus_cache(self):
         """
@@ -574,7 +589,7 @@ class OctopusAPI(ComponentBase):
         octopus_cache = {}
         octopus_cache["account_data"] = self.account_data
         octopus_cache["saving_sessions"] = self.saving_sessions
-        octopus_cache["intelligent_device"] = self.intelligent_device
+        octopus_cache["intelligent_devices"] = self.intelligent_devices
         octopus_cache["kraken_token"] = self.graphql_token
         with open(self.user_cache_file, "w") as f:
             yaml.dump(octopus_cache, f)
@@ -673,7 +688,7 @@ class OctopusAPI(ComponentBase):
 
         return self.tariffs
 
-    async def async_update_intelligent_device(self, account_id):
+    async def async_update_intelligent_devices(self, account_id):
         """
         Update the intelligent device
         """
@@ -683,19 +698,51 @@ class OctopusAPI(ComponentBase):
             return
         deviceID = import_tariff.get("deviceID", None)
         if deviceID:
-            completed_dispatches = self.get_intelligent_completed_dispatches()
-            intelligent_device = await self.async_get_intelligent_device(account_id, deviceID, completed_dispatches)
-            if intelligent_device is not None:
-                if "completed_dispatches" in intelligent_device:
-                    self.intelligent_device = intelligent_device
-                    await self.fetch_previous_dispatch()
-        return self.intelligent_device
+            intelligent_devices = await self.async_get_intelligent_devices(account_id, deviceID)
+            if intelligent_devices:
+                # Update existing intelligent devices with new dispatch data.
+                # Always call fetch_previous_dispatch when completed dispatches are available to merge historical data.
+                for device_id in intelligent_devices:
+                    device = intelligent_devices[device_id]
+                    if "completed_dispatches" in device:
+                        self.intelligent_devices[device_id] = device
+                        await self.fetch_previous_dispatch(device_id)
+                    elif device_id not in self.intelligent_devices:
+                        # First time seeing this device with no completed dispatches yet
+                        self.intelligent_devices[device_id] = device
+        return self.intelligent_devices
 
-    async def fetch_previous_dispatch(self):
-        entity_id = self.get_entity_name("binary_sensor", "intelligent_dispatch")
+    def suffix_to_device_id(self, suffix):
+        """
+        Convert an index suffix back to a device ID
+        E.g. "12345" -> "smart-meter-12345"
+        This is a best-effort approach based on the assumption that the device ID ends with the suffix after a hyphen
+        """
+        for device_id in self.intelligent_devices:
+            if device_id.endswith(suffix):
+                return device_id
+        return None
+
+    def device_id_to_index_suffix(self, device_id):
+        """
+        Convert a device ID to an index suffix for entity naming
+        E.g. "smart-meter-12345" -> "12345"
+        """
+        if "-" in device_id:
+            return device_id.split("-")[-1]
+        else:
+            return device_id
+
+    async def fetch_previous_dispatch(self, device_id):
+        intelligent_device = self.intelligent_devices.get(device_id, None)
+        if intelligent_device is None:
+            return
+
+        index_suffix = self.device_id_to_index_suffix(device_id)
+        entity_id = self.get_entity_name("binary_sensor", "intelligent_dispatch", index=index_suffix)
         old_dispatches = self.get_state_wrapper(entity_id, attribute="completed_dispatches", default=[])
         if old_dispatches and isinstance(old_dispatches, list):
-            current_completed = self.intelligent_device.get("completed_dispatches", [])
+            current_completed = intelligent_device.get("completed_dispatches", [])
             for dispatch in old_dispatches:
                 if isinstance(dispatch, dict):
                     already_exists = False
@@ -709,7 +756,7 @@ class OctopusAPI(ComponentBase):
             current_completed = sorted(current_completed, key=lambda x: parse_date_time(x["start"]))
             # Prune completed dispatches for results older than 5 days
             current_completed = [x for x in current_completed if parse_date_time(x["start"]) > self.now_utc_exact - timedelta(days=5)]
-            self.intelligent_device["completed_dispatches"] = current_completed
+            intelligent_device["completed_dispatches"] = current_completed
 
     def join_saving_session_event(self, event_code):
         """
@@ -717,33 +764,34 @@ class OctopusAPI(ComponentBase):
         """
         self.commands.append({"command": "join_saving_session_event", "event_code": event_code})
 
-    async def async_set_intelligent_target_schedule(self, account_id, target_percentage=None, target_time=None):
+    async def async_set_intelligent_target_schedule(self, account_id, device_id, target_percentage=None, target_time=None):
         """
         Set the intelligent target schedule
         """
-        device = self.get_intelligent_device()
-        if not device:
+        devices = self.get_intelligent_devices()
+        if not devices:
             self.log("Warn: OctopusAPI: Try to set target schedule, but no intelligent device found")
             return
-        device_id = device.get("device_id", None)
-        if not device_id:
-            self.log("Warn: OctopusAPI: Try to set target schedule, but no intelligent device ID found")
-            return
-        daysOfWeek = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"]
-        if target_time is None:
-            target_time = self.get_intelligent_target_time()
-        target_time = target_time[:5]  # HH:MM format
-        if target_percentage is None:
-            target_percentage = self.get_intelligent_target_soc()
-        self.log("OctopusAPI: Setting intelligent target schedule time {} percentage {}".format(target_time, target_percentage))
-        schedule = ", ".join(list(map(lambda day: intelligent_settings_mutation_schedule.format(day_of_week=day, target_percentage=target_percentage, target_time=target_time), daysOfWeek)))
-        await self.async_graphql_query(intelligent_settings_mutation.format(device_id=device_id, schedules=schedule), "set-intelligent-target-time", returns_data=False)
+        device = devices.get(device_id, None)
+        if device:
+            daysOfWeek = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"]
+            if target_time is None:
+                target_time = self.get_intelligent_target_time(device_id)
+            if target_time and len(target_time) > 5:
+                target_time = target_time[:5]  # HH:MM format
+            if target_percentage is None:
+                target_percentage = self.get_intelligent_target_soc(device_id)
+            self.log("OctopusAPI: Setting intelligent target device_id {} schedule time {} percentage {}".format(device_id, target_time, target_percentage))
+            schedule = ", ".join(list(map(lambda day: intelligent_settings_mutation_schedule.format(day_of_week=day, target_percentage=target_percentage, target_time=target_time), daysOfWeek)))
+            await self.async_graphql_query(intelligent_settings_mutation.format(device_id=device_id, schedules=schedule), "set-intelligent-target-time", returns_data=False)
 
-        # Update cached data
-        device["weekend_target_time"] = target_time
-        device["weekend_target_soc"] = target_percentage
-        device["weekday_target_time"] = target_time
-        device["weekday_target_soc"] = target_percentage
+            # Update cached data
+            device["weekend_target_time"] = target_time
+            device["weekend_target_soc"] = target_percentage
+            device["weekday_target_time"] = target_time
+            device["weekday_target_soc"] = target_percentage
+        else:
+            self.log("Warn: OctopusAPI: Try to set target schedule, but no intelligent device ID {} found".format(device_id))
 
     async def async_join_saving_session_events(self, account_id, event_code):
         """
@@ -756,94 +804,108 @@ class OctopusAPI(ComponentBase):
             # Re-fetch the saving sessions if we have joined any
             self.saving_sessions = await self.async_get_saving_sessions(account_id)
 
-    def get_intelligent_device(self):
+    def get_intelligent_devices(self):
         """
         Get the intelligent device
         """
-        return self.intelligent_device
+        return self.intelligent_devices
 
-    def get_intelligent_completed_dispatches(self):
+    def get_intelligent_completed_dispatches(self, device_id):
         """
         Get the completed intelligent dispatches
         """
-        devices = self.get_intelligent_device()
+        devices = self.get_intelligent_devices()
+        completed_dispatches = []
         if devices:
-            return devices.get("completed_dispatches", [])
-        else:
-            return []
+            device = devices.get(device_id, None)
+            if device:
+                completed_dispatches = device.get("completed_dispatches", [])
+        return completed_dispatches
 
-    def get_intelligent_planned_dispatches(self):
+    def get_intelligent_planned_dispatches(self, device_id):
         """
         Get the intelligent dispatches
         """
-        devices = self.get_intelligent_device()
+        devices = self.get_intelligent_devices()
+        planned_dispatches = []
         if devices:
-            return devices.get("planned_dispatches", [])
-        else:
-            return []
+            device = devices.get(device_id, None)
+            if device:
+                planned_dispatches = device.get("planned_dispatches", [])
+        return planned_dispatches
 
-    def get_intelligent_vehicle(self):
+    def get_intelligent_vehicle(self, device_id):
         """
         Get the intelligent vehicle
         """
         vehicle = {}
 
-        devices = self.get_intelligent_device()
+        devices = self.get_intelligent_devices()
         if devices:
-            vehicle["vehicleBatterySizeInKwh"] = devices.get("vehicle_battery_size_in_kwh", None)
-            vehicle["chargePointPowerInKw"] = devices.get("charge_point_power_in_kw", None)
-            vehicle["weekdayTargetTime"] = devices.get("weekday_target_time", None)
-            vehicle["weekdayTargetSoc"] = devices.get("weekday_target_soc", None)
-            vehicle["weekendTargetTime"] = devices.get("weekend_target_time", None)
-            vehicle["weekendTargetSoc"] = devices.get("weekend_target_soc", None)
-            vehicle["minimumSoc"] = devices.get("minimum_soc", None)
-            vehicle["maximumSoc"] = devices.get("maximum_soc", None)
-            vehicle["suspended"] = devices.get("suspended", None)
-            vehicle["model"] = devices.get("model", None)
-            vehicle["provider"] = devices.get("provider", None)
-            vehicle["status"] = devices.get("status", None)
-            # Remove None's from the dictionary
-            vehicle = {k: v for k, v in vehicle.items() if v is not None}
+            device = devices.get(device_id, None)
+            if device:
+                vehicle["vehicleBatterySizeInKwh"] = device.get("vehicle_battery_size_in_kwh", None)
+                vehicle["chargePointPowerInKw"] = device.get("charge_point_power_in_kw", None)
+                vehicle["weekdayTargetTime"] = device.get("weekday_target_time", None)
+                vehicle["weekdayTargetSoc"] = device.get("weekday_target_soc", None)
+                vehicle["weekendTargetTime"] = device.get("weekend_target_time", None)
+                vehicle["weekendTargetSoc"] = device.get("weekend_target_soc", None)
+                vehicle["minimumSoc"] = device.get("minimum_soc", None)
+                vehicle["maximumSoc"] = device.get("maximum_soc", None)
+                vehicle["suspended"] = device.get("suspended", None)
+                vehicle["model"] = device.get("model", None)
+                vehicle["provider"] = device.get("provider", None)
+                vehicle["status"] = device.get("status", None)
+                # Remove None's from the dictionary
+                vehicle = {k: v for k, v in vehicle.items() if v is not None}
 
         return vehicle
 
-    def get_intelligent_battery_size(self):
+    def get_intelligent_battery_size(self, device_id):
         """
-        Get the intelligent battery size
+        Get the intelligent battery sizes
         """
-        devices = self.get_intelligent_device()
+        devices = self.get_intelligent_devices()
         if devices:
-            return devices.get("vehicle_battery_size_in_kwh", None)
+            device = devices.get(device_id, None)
+            if device:
+                return device.get("vehicle_battery_size_in_kwh", None)
+        return None
+
+    def get_intelligent_target_time(self, device_id):
+        """
+        Get the intelligent target times
+        """
+        devices = self.get_intelligent_devices()
+        if devices:
+            device = devices.get(device_id, None)
+            if device:
+                is_weekend = self.now_utc_exact.weekday() >= 5
+                return device.get("weekday_target_time" if not is_weekend else "weekend_target_time", None)
         else:
             return None
 
-    def get_intelligent_target_time(self):
+    def get_intelligent_target_soc(self, device_id):
         """
-        Get the intelligent target time
+        Get the intelligent target socs
         """
-        devices = self.get_intelligent_device()
+        devices = self.get_intelligent_devices()
         if devices:
-            is_weekend = self.now_utc_exact.weekday() >= 5
-            return devices.get("weekday_target_time" if not is_weekend else "weekend_target_time", None)
+            device = devices.get(device_id, None)
+            if device:
+                is_weekend = self.now_utc_exact.weekday() >= 5
+                return device.get("weekday_target_soc" if not is_weekend else "weekend_target_soc", None)
         else:
             return None
 
-    def get_intelligent_target_soc(self):
-        """
-        Get the intelligent target soc
-        """
-        devices = self.get_intelligent_device()
-        if devices:
-            is_weekend = self.now_utc_exact.weekday() >= 5
-            return devices.get("weekday_target_soc" if not is_weekend else "weekend_target_soc", None)
-        else:
-            return None
-
-    def get_entity_name(self, root, suffix):
+    def get_entity_name(self, root, suffix, index=""):
         """
         Get the entity name
         """
-        entity_name = root + ".predbat_octopus_" + self.account_id.replace("-", "_") + "_" + suffix
+        if index:
+            entity_name = root + ".predbat_octopus_" + self.account_id.replace("-", "_") + "_" + suffix + "_" + index
+        else:
+            entity_name = root + ".predbat_octopus_" + self.account_id.replace("-", "_") + "_" + suffix
         entity_name = entity_name.lower()
         return entity_name
 
@@ -921,11 +983,23 @@ class OctopusAPI(ComponentBase):
             self.set_arg("metric_octopus_{}".format(tariff), self.get_entity_name("sensor", tariff + "_rates"))
             if tariff == "import":
                 self.set_arg("metric_standing_charge", self.get_entity_name("sensor", tariff + "_standing"))
-        device = self.get_intelligent_device()
-        if device:
-            self.set_arg("octopus_intelligent_slot", self.get_entity_name("binary_sensor", "intelligent_dispatch"))
-            self.set_arg("octopus_ready_time", self.get_entity_name("select", "intelligent_target_time"))
-            self.set_arg("octopus_charge_limit", self.get_entity_name("number", "intelligent_target_soc"))
+        devices = self.get_intelligent_devices()
+        if devices:
+            slot_list = []
+            ready_list = []
+            limit_list = []
+            for device_id in devices:
+                index_suffix = self.device_id_to_index_suffix(device_id)
+                slot_list.append(self.get_entity_name("binary_sensor", "intelligent_dispatch", index=index_suffix))
+                ready_list.append(self.get_entity_name("select", "intelligent_target_time", index=index_suffix))
+                limit_list.append(self.get_entity_name("number", "intelligent_target_soc", index=index_suffix))
+            self.set_arg("octopus_intelligent_slot", slot_list)
+            self.set_arg("octopus_ready_time", ready_list)
+            self.set_arg("octopus_charge_limit", limit_list)
+            # Increase number of cars if we have more devices than the current limit to ensure all devices can be configured
+            num_cars = self.get_arg("num_cars", 0)
+            if num_cars < len(devices):
+                self.set_arg("num_cars", len(devices))
 
     async def async_get_saving_sessions(self, account_id):
         """
@@ -1361,19 +1435,25 @@ class OctopusAPI(ComponentBase):
 
         return None
 
-    async def async_get_intelligent_device(self, account_id, device_id, completed):
+    async def async_get_intelligent_devices(self, account_id, device_id):
         """
         Get the intelligent dispatches/device
         """
-        result = None
+        results = {}
         if device_id:
             self.log("OctopusAPI: Fetching intelligent dispatches for device {}".format(device_id))
             device_result = await self.async_graphql_query(intelligent_device_query.format(account_id=account_id), "get-intelligent-devices", ignore_errors=True)
             intelligent_device = {}
+            """
+            'devices':
+            [
+            {'id': '00000000-0002-4000-8020-0000000ea7d3', 'provider': 'JEDLIX_V2', 'deviceType': 'ELECTRIC_VEHICLES', 'status': {'current': 'LIVE'}, '__typename': 'SmartFlexVehicle', 'make': 'Mini', 'model': 'Cooper SE'},
+            {'id': '00000000-0002-4000-8020-0000000df503', 'provider': 'JEDLIX_V2', 'deviceType': 'ELECTRIC_VEHICLES', 'status': {'current': 'LIVE'}, '__typename': 'SmartFlexVehicle', 'make': 'BMW', 'model': 'iX3'},
+            {'id': '00000000-000a-4000-8020-07ffff4ce519', 'provider': 'OCTOPUS_ENERGY', 'deviceType': 'ELECTRICITY_METERS', 'status': {'current': 'LIVE'}, '__typename': 'SmartFlexDevice'}]}
+            ]
+            """
 
-            planned = []
             if device_result:
-                dispatch_result = await self.async_graphql_query(intelligent_dispatches_query.format(account_id=account_id, device_id=device_id), "get-intelligent-dispatches", ignore_errors=True)
                 chargePointVariants = device_result.get("chargePointVariants", [])
                 electricVehicles = device_result.get("electricVehicles", [])
                 devices = device_result.get("devices", [])
@@ -1391,7 +1471,11 @@ class OctopusAPI(ComponentBase):
                         chargePointPowerInKw = None
                         IntelligentdeviceID = device.get("id", None)
                         device_setting_result = {}
+                        planned = []
+                        # Get previously completed dispatches, as we want to keep the old ones and merge
+                        completed = self.get_intelligent_completed_dispatches(IntelligentdeviceID)
 
+                        dispatch_result = await self.async_graphql_query(intelligent_dispatches_query.format(account_id=account_id, device_id=IntelligentdeviceID), "get-intelligent-dispatches", ignore_errors=True)
                         if IntelligentdeviceID:
                             device_setting_data = await self.async_graphql_query(intelligent_settings_query.format(account_id=account_id, device_id=IntelligentdeviceID), "get-intelligent-settings")
                             if device_setting_data:
@@ -1406,7 +1490,7 @@ class OctopusAPI(ComponentBase):
                                         device_setting_result["minimum_soc"] = chargingPreferences.get("minimumSoc", None)
                                         device_setting_result["maximum_soc"] = chargingPreferences.get("maximumSoc", None)
                             else:
-                                return None
+                                continue
 
                         if isCharger:
                             for charger in chargePointVariants:
@@ -1543,45 +1627,52 @@ class OctopusAPI(ComponentBase):
                         completed = [x for x in completed if parse_date_time(x["start"]) > self.now_utc_exact - timedelta(days=5)]
                         # Store results
                         result = {**intelligent_device, **device_setting_result, "planned_dispatches": planned, "completed_dispatches": completed}
-        return result
+                        results[IntelligentdeviceID] = result
+        return results
 
     async def async_intelligent_update_sensor(self, account_id):
         """
         Update the intelligent device sensor
         """
-        intelligent_device = self.get_intelligent_device()
-        if not intelligent_device:
+        intelligent_devices = self.get_intelligent_devices()
+        if not intelligent_devices:
             return
-        planned = intelligent_device.get("planned_dispatches", [])
-        completed = intelligent_device.get("completed_dispatches", [])
 
-        active_event = False
-        for dispatch in planned + completed:
-            start = dispatch.get("start", None)
-            end = dispatch.get("end", None)
-            if start and end:
-                start = parse_date_time(start)
-                end = parse_date_time(end)
-                if start <= self.now_utc_exact and end > self.now_utc_exact:
-                    active_event = True
-        dispatch_attributes = {"friendly_name": "Octopus Intelligent Dispatches", "icon": "mdi:flash", **intelligent_device}
-        self.dashboard_item(self.get_entity_name("binary_sensor", "intelligent_dispatch"), "on" if active_event else "off", attributes=dispatch_attributes, app="octopus")
+        for device_id in intelligent_devices:
+            device = intelligent_devices[device_id]
+            device_index = self.device_id_to_index_suffix(device_id)
+            planned = device.get("planned_dispatches", [])
+            completed = device.get("completed_dispatches", [])
 
-        weekday_target_time = intelligent_device.get("weekday_target_time", None)
-        weekday_target_soc = intelligent_device.get("weekday_target_soc", None)
-        weekend_target_time = intelligent_device.get("weekend_target_time", None)
-        weekend_target_soc = intelligent_device.get("weekend_target_soc", None)
-        # Check if we are on a weekend?
-        if self.now_utc_exact.weekday() >= 5:
-            target_time = weekend_target_time
-            target_soc = weekend_target_soc
-        else:
-            target_time = weekday_target_time
-            target_soc = weekday_target_soc
-        if target_time:
-            target_time = target_time[:5]  # Only HH:MM
-        self.dashboard_item(self.get_entity_name("select", "intelligent_target_time"), target_time, attributes={"friendly_name": "Octopus Intelligent Target Time", "icon": "mdi:clock-outline", "options": OPTIONS_TIME}, app="octopus")
-        self.dashboard_item(self.get_entity_name("number", "intelligent_target_soc"), target_soc, attributes={"friendly_name": "Octopus Intelligent Target SOC", "icon": "mdi:battery-percent", "min": 0, "max": 100}, app="octopus")
+            active_event = False
+            for dispatch in planned + completed:
+                start = dispatch.get("start", None)
+                end = dispatch.get("end", None)
+                if start and end:
+                    start = parse_date_time(start)
+                    end = parse_date_time(end)
+                    if start <= self.now_utc_exact and end > self.now_utc_exact:
+                        active_event = True
+            dispatch_attributes = {"friendly_name": "Octopus Intelligent Dispatches", "icon": "mdi:flash", **device}
+            self.dashboard_item(self.get_entity_name("binary_sensor", "intelligent_dispatch", index=device_index), "on" if active_event else "off", attributes=dispatch_attributes, app="octopus")
+
+            weekday_target_time = device.get("weekday_target_time", None)
+            weekday_target_soc = device.get("weekday_target_soc", None)
+            weekend_target_time = device.get("weekend_target_time", None)
+            weekend_target_soc = device.get("weekend_target_soc", None)
+            # Check if we are on a weekend?
+            if self.now_utc_exact.weekday() >= 5:
+                target_time = weekend_target_time
+                target_soc = weekend_target_soc
+            else:
+                target_time = weekday_target_time
+                target_soc = weekday_target_soc
+            if target_time:
+                target_time = target_time[:5]  # Only HH:MM
+            self.dashboard_item(
+                self.get_entity_name("select", "intelligent_target_time", index=device_index), target_time, attributes={"friendly_name": "Octopus Intelligent Target Time", "icon": "mdi:clock-outline", "options": OPTIONS_TIME}, app="octopus"
+            )
+            self.dashboard_item(self.get_entity_name("number", "intelligent_target_soc", index=device_index), target_soc, attributes={"friendly_name": "Octopus Intelligent Target SOC", "icon": "mdi:battery-percent", "min": 0, "max": 100}, app="octopus")
 
     async def async_get_account(self, account_id):
         """
@@ -1913,21 +2004,20 @@ class Octopus:
         pdata, _ = minute_data(mdata, 3, self.midnight_utc, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
         return pdata
 
-    def add_now_to_octopus_slot(self, octopus_slots, now_utc):
+    def add_now_to_octopus_slot(self, car_n, octopus_slots, now_utc):
         """
         For intelligent charging, add in if the car is charging now as a low rate slot (workaround for Ohme)
         """
-        for car_n in range(self.num_cars):
-            if self.car_charging_now[car_n]:
-                minutes_start_slot = int(self.minutes_now / 30) * 30
-                minutes_end_slot = minutes_start_slot + 30
-                slot_start_date = self.midnight_utc + timedelta(minutes=minutes_start_slot)
-                slot_end_date = self.midnight_utc + timedelta(minutes=minutes_end_slot)
-                slot = {}
-                slot["start"] = slot_start_date.strftime(TIME_FORMAT)
-                slot["end"] = slot_end_date.strftime(TIME_FORMAT)
-                octopus_slots.append(slot)
-                self.log("Octopus: Car is charging now - added new IO slot {}".format(slot))
+        if car_n < len(self.car_charging_now) and self.car_charging_now[car_n]:
+            minutes_start_slot = int(self.minutes_now / 30) * 30
+            minutes_end_slot = minutes_start_slot + 30
+            slot_start_date = self.midnight_utc + timedelta(minutes=minutes_start_slot)
+            slot_end_date = self.midnight_utc + timedelta(minutes=minutes_end_slot)
+            slot = {}
+            slot["start"] = slot_start_date.strftime(TIME_FORMAT)
+            slot["end"] = slot_end_date.strftime(TIME_FORMAT)
+            octopus_slots.append(slot)
+            self.log("Octopus: Car is charging now - added new IO slot {}".format(slot))
         return octopus_slots
 
     def load_free_slot(self, octopus_free_slots, export=False, rate_replicate=None):
@@ -2011,7 +2101,7 @@ class Octopus:
                             self.load_scaling_dynamic[minute] = self.load_scaling_saving
                             rate_replicate[minute] = "saving"
 
-    def decode_octopus_slot(self, slot, raw=False):
+    def decode_octopus_slot(self, car_n, slot, raw=False):
         """
         Decode IOG slot
         """
@@ -2053,7 +2143,7 @@ class Octopus:
 
         # Create kWh if missing
         if kwh is None:
-            kwh = org_minutes * self.car_charging_rate[0] / 60.0
+            kwh = org_minutes * self.car_charging_rate[car_n] / 60.0
 
         try:
             kwh = abs(float(kwh))
@@ -2067,19 +2157,22 @@ class Octopus:
 
         return start_minutes, end_minutes, kwh, source, location
 
-    def load_octopus_slots(self, octopus_slots, octopus_intelligent_consider_full):
+    def load_octopus_slots(self, car_n, octopus_slots, octopus_intelligent_consider_full):
         """
         Turn octopus slots into charging plan
         """
         new_slots = []
+        if car_n >= self.num_cars:
+            # Car not configured, just return the slots as they are (for export or other non-car use)
+            return new_slots
         octopus_slot_low_rate = self.get_arg("octopus_slot_low_rate", True)
-        car_soc = self.car_charging_soc[0]
-        limit = self.car_charging_limit[0]
+        car_soc = self.car_charging_soc[car_n]
+        limit = self.car_charging_limit[car_n]
         slots_decoded = []
 
         # Decode the slots
         for slot in octopus_slots:
-            start_minutes, end_minutes, kwh, source, location = self.decode_octopus_slot(slot)
+            start_minutes, end_minutes, kwh, source, location = self.decode_octopus_slot(car_n, slot)
             if kwh > 0:
                 # Don't add overlapping slots, bug in Octopus API means that sometimes slots overlap
                 for current_slot in slots_decoded:
@@ -2154,7 +2247,7 @@ class Octopus:
                     new_slots.append(new_slot)
         return new_slots
 
-    def rate_add_io_slots(self, rates, octopus_slots):
+    def rate_add_io_slots(self, car_n, rates, octopus_slots):
         """
         # Add in any planned octopus slots
         # Octopus limits cheap slots to 6 hours (12 x 30-min slots) per 24-hour period
@@ -2173,7 +2266,7 @@ class Octopus:
         if octopus_slots:
             # Add in IO slots
             for slot in octopus_slots:
-                start_minutes, end_minutes, kwh, source, location = self.decode_octopus_slot(slot, raw=True)
+                start_minutes, end_minutes, kwh, source, location = self.decode_octopus_slot(car_n, slot, raw=True)
 
                 # Ignore bump-charge slots as their cost won't change
                 if source != "bump-charge" and (not location or location == "AT_HOME"):
@@ -2507,14 +2600,18 @@ async def test_octopus_api(api_key, account_id):  # pragma: no cover
     await octopus_api.run(0, True)
 
     # Fetch data
-    planned_dispatches = octopus_api.get_intelligent_planned_dispatches()
-    completed_dispatches = octopus_api.get_intelligent_completed_dispatches()
-    vehicle = octopus_api.get_intelligent_vehicle()
+    planned_dispatches = {}
+    completed_dispatches = {}
+    vehicles = {}
+    for dev_id in octopus_api.get_intelligent_devices():
+        planned_dispatches[dev_id] = octopus_api.get_intelligent_planned_dispatches(dev_id)
+        completed_dispatches[dev_id] = octopus_api.get_intelligent_completed_dispatches(dev_id)
+        vehicles[dev_id] = octopus_api.get_intelligent_vehicle(dev_id)
     available_events, joined_events = octopus_api.get_saving_session_data()
 
     print("Planned dispatches: {}".format(planned_dispatches))
     print("Completed dispatches: {}".format(completed_dispatches))
-    print("Vehicle: {}".format(vehicle))
+    print("Vehicles: {}".format(vehicles))
     print("Saving session available {}".format(available_events))
     print("Saving session joined {}".format(joined_events))
 

@@ -163,6 +163,7 @@ isoformat
 isort
 itemtype
 ivtime
+jedlix
 jsyaml
 kaiming
 killall

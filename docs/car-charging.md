@@ -92,12 +92,15 @@ The following `apps.yaml` configuration items are pre-defined with regular expre
 
 - **octopus_intelligent_slot** - Points to the Octopus Energy integration 'intelligent dispatching' sensor that indicates
 whether you are within an Octopus Energy "smart charge" slot, and provides the list of future planned charging activity.
+For **multiple IOG-enrolled vehicles**, set this to a list with one sensor per car (see [Multiple Electric Cars](#multiple-electric-cars)).
 
 - **octopus_ready_time** - Points to the Octopus Energy integration sensor that details when the car charging will be completed.<BR>
 *Note:* the Octopus Integration now provides [Octopus Intelligent target time](https://bottlecapdave.github.io/HomeAssistant-OctopusEnergy/entities/intelligent/#target-time-time) in two formats, either a 'select' entity or a 'time' entity.
 Predbat uses the time entity (time.octopus_energy_{{DEVICE_ID}}_intelligent_target_time) which is disabled by default, so you will need to enable the time entity and disable the matching select entity.
+For **multiple IOG-enrolled vehicles**, set this to a list with one sensor per car.
 
 - **octopus_charge_limit** - Points to the Octopus Energy integration sensor that provides the car charging limit.
+For **multiple IOG-enrolled vehicles**, set this to a list with one sensor per car.
 
 - **octopus_slot_low_rate** - Default is True, meaning any Octopus Intelligent Slot reported will be at the lowest rate if at home. If False the existing rates only will be used which is only suitable for tariffs other than IOG.
 
@@ -156,10 +159,44 @@ Multiple cars can be planned with Predbat, in which case you should set **num_ca
 
 - **car_charging_limit**, **car_charging_planned**, **car_charging_battery_size** and **car_charging_soc** must then be a list of values (i.e. 2 entries for 2 cars)
 
-- If you have Intelligent Octopus then Car 0 will be managed by the Octopus Energy integration, if it's enabled.
-
 - Each car will have its own Home Assistant slot sensor created e.g. **binary_sensor.predbat_car_charging_slot_1**,
 SoC planning sensor e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for car 1
+
+### Multiple cars with Octopus Intelligent Go (IOG)
+
+If you have **two or more EVs enrolled in Octopus Intelligent Go**, Predbat can track the scheduled dispatch slots for each car independently.
+
+If you use the Octopus Direct function inside Predbat then you can set **octopus_automatic** to True to automatically configure IOG cars.
+
+Otherwise if using Bottle Cap Dave's Octopus integration then set **octopus_intelligent_slot**, **octopus_ready_time** and **octopus_charge_limit**
+to lists with one entry per car in `apps.yaml`:
+
+```yaml
+  num_cars: 2
+
+  car_charging_exclusive:
+    - True
+    - True
+
+  octopus_intelligent_slot:
+    - 'binary_sensor.octopus_energy_{{DEVICE_ID_CAR1}}_intelligent_dispatching'
+    - 'binary_sensor.octopus_energy_{{DEVICE_ID_CAR2}}_intelligent_dispatching'
+
+  octopus_ready_time:
+    - 'time.octopus_energy_{{DEVICE_ID_CAR1}}_intelligent_target_time'
+    - 'time.octopus_energy_{{DEVICE_ID_CAR2}}_intelligent_target_time'
+
+  octopus_charge_limit:
+    - 'number.octopus_energy_{{DEVICE_ID_CAR1}}_intelligent_charge_target'
+    - 'number.octopus_energy_{{DEVICE_ID_CAR2}}_intelligent_charge_target'
+```
+
+Replace `{{DEVICE_ID_CAR1}}` and `{{DEVICE_ID_CAR2}}` with the actual device IDs shown in your Octopus Energy integration.
+Each entry in the list corresponds to the matching car index (car 0, car 1, …).
+If one car is not enrolled in IOG, you can leave its entry blank or omit it — that car's slots will simply not be populated from the Octopus Intelligent data,
+but Predbat will still plan for it using Predbat-led charging if configured.
+
+*Note:* The `octopus_slot_max` limit applies per-car, so with two cars on IOG each car is subject to its own slot-count cap.
 
 An excellent [worked example of setting up multiple car charging with Predbat](https://github.com/springfall2008/batpred/discussions/3001) is in the 'Show and tell' part of Predbat's GitHub.
 

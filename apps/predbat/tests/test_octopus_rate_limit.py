@@ -95,7 +95,7 @@ async def test_octopus_rate_limit(my_predbat):
                 }
             ],
         }
-        api.intelligent_device = existing_device.copy()
+        api.intelligent_devices = {"existing-device-123": existing_device.copy()}
 
         # Mock the graphql query to return None (simulating rate limit)
         api.async_graphql_query = AsyncMock(return_value=None)
@@ -109,11 +109,11 @@ async def test_octopus_rate_limit(my_predbat):
         }
 
         # Call update - should not override existing data when API fails
-        result = await api.async_update_intelligent_device("test-account")
+        result = await api.async_update_intelligent_devices("test-account")
 
         # Verify existing data is preserved
-        if api.intelligent_device != existing_device:
-            print(f"ERROR: Existing device data was modified. Expected {existing_device}, got {api.intelligent_device}")
+        if api.intelligent_devices.get("existing-device-123") != existing_device:
+            print(f"ERROR: Existing device data was modified. Expected {existing_device}, got {api.intelligent_devices.get('existing-device-123')}")
             failed = True
         else:
             print("PASS: Existing intelligent device data preserved when API returns None due to rate limit")
@@ -153,7 +153,7 @@ async def test_octopus_rate_limit(my_predbat):
             "device_id": "persistent-device",
             "completed_dispatches": [{"start": "2025-12-22T00:00:00Z", "end": "2025-12-22T04:00:00Z", "charge_in_kwh": 20.0}],
         }
-        api.intelligent_device = existing_device.copy()
+        api.intelligent_devices = {"persistent-device": existing_device.copy()}
         api.tariffs = {
             "import": {
                 "tariffCode": "INTELLI-VAR-22-10-14",
@@ -165,20 +165,20 @@ async def test_octopus_rate_limit(my_predbat):
         api.async_graphql_query = AsyncMock(return_value=None)
 
         # First call - should not override
-        await api.async_update_intelligent_device("test-account")
-        if api.intelligent_device != existing_device:
+        await api.async_update_intelligent_devices("test-account")
+        if api.intelligent_devices.get("persistent-device") != existing_device:
             print(f"ERROR: First failed update modified data")
             failed = True
 
         # Second call - should still not override
-        await api.async_update_intelligent_device("test-account")
-        if api.intelligent_device != existing_device:
+        await api.async_update_intelligent_devices("test-account")
+        if api.intelligent_devices.get("persistent-device") != existing_device:
             print(f"ERROR: Second failed update modified data")
             failed = True
 
         # Third call - should still not override
-        await api.async_update_intelligent_device("test-account")
-        if api.intelligent_device != existing_device:
+        await api.async_update_intelligent_devices("test-account")
+        if api.intelligent_devices.get("persistent-device") != existing_device:
             print(f"ERROR: Third failed update modified data")
             failed = True
         else:
@@ -193,7 +193,7 @@ async def test_octopus_rate_limit(my_predbat):
             "device_id": "old-device",
             "completed_dispatches": [{"start": "2025-12-21T00:00:00Z", "end": "2025-12-21T04:00:00Z", "charge_in_kwh": 10.0}],
         }
-        api.intelligent_device = existing_device.copy()
+        api.intelligent_devices = {"old-device": existing_device.copy()}
         api.tariffs = {
             "import": {
                 "tariffCode": "INTELLI-VAR-22-10-14",
@@ -203,9 +203,9 @@ async def test_octopus_rate_limit(my_predbat):
 
         # First call fails (rate limit)
         api.async_graphql_query = AsyncMock(return_value=None)
-        await api.async_update_intelligent_device("test-account")
+        await api.async_update_intelligent_devices("test-account")
 
-        if api.intelligent_device != existing_device:
+        if api.intelligent_devices.get("old-device") != existing_device:
             print(f"ERROR: Failed update modified data")
             failed = True
 
@@ -276,14 +276,14 @@ async def test_octopus_rate_limit(my_predbat):
         original_get_state_wrapper = my_predbat.get_state_wrapper
         my_predbat.get_state_wrapper = MagicMock(return_value=[])
 
-        result = await api.async_update_intelligent_device("test-account")
+        result = await api.async_update_intelligent_devices("test-account")
 
         # Restore original get_state_wrapper
         my_predbat.get_state_wrapper = original_get_state_wrapper
 
         # Verify data was updated after successful call
-        if result is None or api.intelligent_device.get("device_id") != "new-device-789":
-            print(f"ERROR: Successful update after rate limit did not update data. Got: {api.intelligent_device}")
+        if result is None or "new-device-789" not in api.intelligent_devices:
+            print(f"ERROR: Successful update after rate limit did not update data. Got: {api.intelligent_devices}")
             failed = True
         else:
             print("PASS: Data successfully updated after rate limit error resolved")
