@@ -1165,19 +1165,13 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
 
                     if isinstance(value, list):
                         if len(value) < required_entries:
-                            if optional_entries:
-                                # Fewer entries than num_cars is acceptable (e.g. only car 0 uses IOG)
-                                self.log("Info: Validation of apps.yaml found configuration item '{}' has {} entries, expected {} based on {} - this is acceptable if only some cars use this feature".format(name, len(value), required_entries, entries))
-                            else:
+                            if not optional_entries:
                                 self.log("Warn: Validation of apps.yaml found configuration item '{}' has {} entries, expected {} based on {}".format(name, len(value), required_entries, entries))
                                 self.arg_errors[name] = "Invalid number of entries, expected {}".format(required_entries)
                                 errors += 1
                                 continue
                     elif required_entries > 1:
-                        if optional_entries:
-                            # Single value with num_cars>1 is acceptable - applies to car 0 only
-                            self.log("Info: Validation of apps.yaml found configuration item '{}' is not a list but {} entries are configured - this is acceptable if only car 0 uses this feature".format(name, required_entries))
-                        else:
+                        if not optional_entries:
                             self.log("Warn: Validation of apps.yaml found configuration item '{}' is not a list, but requires {} entries based on {}".format(name, required_entries, entries))
                             self.arg_errors[name] = "Invalid type, expected list"
                             errors += 1
