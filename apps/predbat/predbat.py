@@ -664,7 +664,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.rate_slots = []
         self.low_rates = []
         self.high_export_rates = []
-        self.octopus_slots = [[] for _ in range(getattr(self, "num_cars", 1))]
+        self.octopus_slots = [[] for _ in range(8)]
         self.cost_today_sofar = 0
         self.carbon_today_sofar = 0
         self.import_today = {}
