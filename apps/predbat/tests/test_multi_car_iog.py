@@ -164,10 +164,110 @@ def run_multi_car_iog_test(testname, my_predbat):
     return failed
 
 
+def run_multi_car_iog_load_slots_test(testname, my_predbat):
+    """
+    Regression test for bug #3515: IndexError when load_octopus_slots is called for car 1
+    because car_charging_soc was not initialized before fetch_sensor_data_cars ran.
+
+    This test calls fetch_sensor_data_cars() directly (the function that contains the bug)
+    so it will reproduce the IndexError if the fix is ever reverted.
+    """
+    failed = False
+    print("**** Running Test: multi_car_iog {} ****".format(testname))
+
+    # Setup: two cars, both with IOG slots
+    my_predbat.num_cars = 2
+    my_predbat.car_charging_planned = [True, True]
+    my_predbat.car_charging_now = [False, False]
+    my_predbat.car_charging_plan_smart = [False, False]
+    my_predbat.car_charging_plan_max_price = [0, 0]
+    my_predbat.car_charging_plan_time = ["07:00:00", "07:00:00"]
+    my_predbat.car_charging_battery_size = [100.0, 80.0]
+    my_predbat.car_charging_limit = [100.0, 80.0]
+    my_predbat.car_charging_rate = [7.4, 7.4]
+    my_predbat.car_charging_slots = [[], []]
+    my_predbat.car_charging_exclusive = [True, True]
+    my_predbat.car_charging_manual_soc = [False, False]
+    my_predbat.octopus_intelligent_charging = True
+    my_predbat.octopus_intelligent_ignore_unplugged = False
+    my_predbat.octopus_intelligent_consider_full = False
+    # octopus_slots must be pre-initialised per production code in fetch_sensor_data
+    my_predbat.octopus_slots = [[] for _ in range(my_predbat.num_cars)]
+    # Ensure minutes_now is before the IOG slots so they are not filtered as past events.
+    # dynamic_load_car sets minutes_now=720 which would put slots at ~60-120 min in the "past".
+    my_predbat.minutes_now = 0
+
+    # apps.yaml config args needed by fetch_sensor_data_cars
+    my_predbat.args["car_charging_loss"] = 0.0  # loss = 1 - 0.0 = 1.0
+    my_predbat.args["car_charging_soc"] = [50.0, 50.0]  # 50% SoC for both cars
+
+    # Two IOG sensors - one per car
+    slot1_start = (my_predbat.now_utc + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S%z")
+    slot1_end = (my_predbat.now_utc + timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%S%z")
+    slot2_start = (my_predbat.now_utc + timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%S%z")
+    slot2_end = (my_predbat.now_utc + timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%S%z")
+
+    my_predbat.args["octopus_intelligent_slot"] = [
+        "binary_sensor.octopus_energy_intelligent_dispatching_car1",
+        "binary_sensor.octopus_energy_intelligent_dispatching_car2",
+    ]
+
+    my_predbat.ha_interface.set_state(
+        "binary_sensor.octopus_energy_intelligent_dispatching_car1",
+        "on",
+        attributes={
+            "completed_dispatches": [],
+            "planned_dispatches": [{"start": slot1_start, "end": slot1_end, "charge_in_kwh": 10.0, "source": "smart-charge", "location": "AT_HOME"}],
+            "vehicle_battery_size_in_kwh": 100.0,
+            "charge_point_power_in_kw": 7.4,
+        },
+    )
+    my_predbat.ha_interface.set_state(
+        "binary_sensor.octopus_energy_intelligent_dispatching_car2",
+        "on",
+        attributes={
+            "completed_dispatches": [],
+            "planned_dispatches": [{"start": slot2_start, "end": slot2_end, "charge_in_kwh": 8.0, "source": "smart-charge", "location": "AT_HOME"}],
+            "vehicle_battery_size_in_kwh": 80.0,
+            "charge_point_power_in_kw": 7.4,
+        },
+    )
+
+    # This is the real function that contained the bug - call it directly.
+    # Before the fix, car_charging_soc was initialized AFTER the IOG loop, so
+    # load_octopus_slots(car_n=1, ...) would raise IndexError: list index out of range.
+    try:
+        my_predbat.fetch_sensor_data_cars()
+    except IndexError as exc:
+        print("ERROR: fetch_sensor_data_cars raised IndexError (regression of bug #3515): {}".format(exc))
+        failed = True
+
+    if not failed:
+        # Both cars should have charging slots populated from their IOG dispatches
+        if not my_predbat.car_charging_slots[0]:
+            print("ERROR: Expected car 0 to have charging slots from IOG, got none")
+            failed = True
+        if not my_predbat.car_charging_slots[1]:
+            print("ERROR: Expected car 1 to have charging slots from IOG, got none")
+            failed = True
+        # car_charging_soc must be a 2-element list (not the old empty/wrong-length list)
+        if len(my_predbat.car_charging_soc) != 2:
+            print("ERROR: Expected car_charging_soc to have 2 entries, got {}".format(len(my_predbat.car_charging_soc)))
+            failed = True
+
+    if failed:
+        print("Test: {} FAILED".format(testname))
+    else:
+        print("Test: {} PASSED".format(testname))
+
+    return failed
+
+
 def run_multi_car_iog_tests(my_predbat):
     """
     Run all multi-car IOG tests
     """
     failed = False
     failed |= run_multi_car_iog_test("multi_car_iog_basic", my_predbat)
+    failed |= run_multi_car_iog_load_slots_test("multi_car_iog_load_slots_regression", my_predbat)
     return failed

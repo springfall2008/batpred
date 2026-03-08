@@ -193,8 +193,18 @@ to lists with one entry per car in `apps.yaml`:
 
 Replace `{{DEVICE_ID_CAR1}}` and `{{DEVICE_ID_CAR2}}` with the actual device IDs shown in your Octopus Energy integration.
 Each entry in the list corresponds to the matching car index (car 0, car 1, …).
-If one car is not enrolled in IOG, you can leave its entry blank or omit it — that car's slots will simply not be populated from the Octopus Intelligent data,
-but Predbat will still plan for it using Predbat-led charging if configured.
+
+**Only one car on IOG?** If you have `num_cars: 2` but only car 0 is enrolled in Octopus Intelligent Go, you do not need to provide a list.
+Just keep the single-sensor config (or provide a one-entry list) and car 1 will be managed by Predbat-led charging instead:
+
+```yaml
+  num_cars: 2
+
+  # Only car 0 uses IOG - a single entry is sufficient
+  octopus_intelligent_slot: 'binary_sensor.octopus_energy_{{DEVICE_ID_CAR1}}_intelligent_dispatching'
+  octopus_ready_time: 'time.octopus_energy_{{DEVICE_ID_CAR1}}_intelligent_target_time'
+  octopus_charge_limit: 'number.octopus_energy_{{DEVICE_ID_CAR1}}_intelligent_charge_target'
+```
 
 *Note:* The `octopus_slot_max` limit applies per-car, so with two cars on IOG each car is subject to its own slot-count cap.
 
