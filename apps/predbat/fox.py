@@ -23,24 +23,7 @@ import json
 import argparse
 import random
 from component_base import ComponentBase
-
-try:
-    from oauth_mixin import OAuthMixin
-except ImportError:
-    # Open source: OAuth mixin not available, provide no-op stub
-    class OAuthMixin:
-        def _init_oauth(self, *args, **kwargs):
-            self.auth_method = "api_key"
-            self.oauth_failed = False
-            self.access_token = None
-            self.token_expires_at = None
-
-        async def check_and_refresh_oauth_token(self):
-            return True
-
-        async def handle_oauth_401(self):
-            return False
-
+from oauth_mixin import OAuthMixin
 
 # Define TIME_FORMAT_HA locally to avoid dependency issues
 TIME_FORMAT_HA = "%Y-%m-%dT%H:%M:%S%z"
