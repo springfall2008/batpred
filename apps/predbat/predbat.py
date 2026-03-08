@@ -36,13 +36,14 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.34.1"
+THIS_VERSION = "v8.34.2"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "const.py", "hass.py", "config.py", "prediction.py", "gecloud.py", "utils.py", "inverter.py", "ha.py", "download.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py", "execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "temperature.py", "web_mcp.py", "component_base.py", "axle.py", "solax.py", "solis.py", "unit_test.py", "load_ml_component.py", "load_predictor.py", "oauth_mixin.py", "predbat_metrics.py", "web_metrics_dashboard.py"]
 # fmt: on
 
 from download import predbat_update_move, predbat_update_download, check_install
+from const import MINUTE_WATT
 
 # Only do the self-install/self-update logic if we are NOT compiled.
 if not IS_COMPILED:
@@ -739,13 +740,21 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         m.battery_soc_kwh.set(self.soc_kw)
         m.battery_soc_percent.set(self.soc_percent)
         m.battery_max_kwh.set(self.soc_max)
-        m.charge_rate_kw.set(self.charge_rate_now / 1000.0)
-        m.discharge_rate_kw.set(self.discharge_rate_now / 1000.0)
+        m.charge_rate_kw.set(self.charge_rate_now * MINUTE_WATT / 1000.0)
+        m.discharge_rate_kw.set(self.discharge_rate_now * MINUTE_WATT / 1000.0)
+        m.grid_power.set(self.grid_power / 1000.0)
+        m.battery_power.set(self.battery_power / 1000.0)
+        m.load_power.set(self.load_power / 1000.0)
+        m.pv_power.set(self.pv_power / 1000.0)
+
+        # Currency symbol
+        m.currency_symbol = self.currency_symbols[0]
 
         # Cost and savings
         m.cost_today.set(self.cost_today_sofar)
         m.savings_today_pvbat.set(self.savings_today_pvbat)
         m.savings_today_actual.set(self.savings_today_actual)
+        m.savings_today_predbat.set(self.savings_today_predbat)
 
         # Config validity
         m.config_valid.set(0 if self.arg_errors else 1)

@@ -1078,16 +1078,16 @@ class OctopusAPI(ComponentBase):
                         if response.status not in [200, 201, 400]:
                             self.failures_total += 1
                             self.log("Warn: OctopusAPI: Error downloading Octopus data from URL {}, code {}".format(url, response.status))
-                            record_api_call("octopus", False, "server_error")
+                            record_api_call("octopus_url", False, "server_error")
                             return {}
                         try:
                             data = await response.json()
                             self.last_success_timestamp = datetime.now(timezone.utc)
-                            record_api_call("octopus")
+                            record_api_call("octopus_url")
                         except (aiohttp.ContentTypeError, json.JSONDecodeError):
                             self.failures_total += 1
                             self.log("Warn: OctopusAPI: Error downloading Octopus data from URL {} (JSONDecodeError)".format(url))
-                            record_api_call("octopus", False, "decode_error")
+                            record_api_call("octopus_url", False, "decode_error")
                             return {}
 
                         if response.status == 400:
@@ -1428,6 +1428,7 @@ class OctopusAPI(ComponentBase):
 
                 if response_body and ("data" in response_body):
                     self.update_success_timestamp()
+                    record_api_call("octopus")
                     return response_body["data"]
                 else:
                     if not ignore_errors:

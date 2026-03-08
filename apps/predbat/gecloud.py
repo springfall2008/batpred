@@ -1524,12 +1524,15 @@ class GECloudData(ComponentBase):
                 async with session.get(url, headers=headers) as response:
                     if response.status not in [200, 201]:
                         self.log("Warn: GeCloud: Failed to get data from {} status code {}".format(url, response.status))
+                        record_api_call("givenergy", False, "server_error")
                         return {}, None
                     try:
                         data = await response.json()
                     except (aiohttp.ContentTypeError, json.JSONDecodeError) as e:
+                        record_api_call("givenergy", False, "decode_error")
                         return {}, None
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            record_api_call("givenergy", False, "connection_error")
             return {}, None
 
         if not data or "data" not in data:
@@ -1572,6 +1575,7 @@ class GECloudData(ComponentBase):
         self.ge_url_cache[url]["stamp"] = now_utc
         self.ge_url_cache[url]["data"] = mdata
         self.ge_url_cache[url]["next"] = url_next
+        record_api_call("givenergy")
         return mdata, url_next
 
     async def download_ge_data(self, now_utc):

@@ -20,6 +20,7 @@ from datetime import datetime, timedelta
 import asyncio
 import aiohttp
 from component_base import ComponentBase
+from predbat_metrics import record_api_call
 from utils import str2time, minutes_to_time, TIME_FORMAT
 
 
@@ -158,12 +159,16 @@ class AxleAPI(ComponentBase):
                     async with session.get(url, headers=headers) as response:
                         if response.status == 200:
                             try:
-                                return await response.json()
+                                data = await response.json()
+                                record_api_call("axle")
+                                return data
                             except Exception as e:
                                 self.log(f"Warn: AxleAPI: Failed to parse JSON response: {e}")
+                                record_api_call("axle", False, "decode_error")
                                 return None
                         else:
                             self.log(f"Warn: AxleAPI: Failed to fetch data, status code {response.status}")
+                            record_api_call("axle", False, "server_error")
                             return None
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 if attempt < max_retries - 1:
@@ -172,6 +177,7 @@ class AxleAPI(ComponentBase):
                     await asyncio.sleep(sleep_time)
                 else:
                     self.log(f"Warn: AxleAPI: Request failed after {max_retries} attempts: {e}")
+                    record_api_call("axle", False, "connection_error")
                     return None
         return None
 

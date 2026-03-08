@@ -110,7 +110,7 @@ def get_metrics_dashboard_body(data_json):
       <canvas id="mdSocChart" width="240" height="240"></canvas>
     </div>
     <div class="md-chart-box">
-      <canvas id="mdRateChart" height="120"></canvas>
+      <canvas id="mdPowerChart" height="200"></canvas>
     </div>
   </div>
 </section>
@@ -119,7 +119,7 @@ def get_metrics_dashboard_body(data_json):
 <section>
   <h2>Energy Today</h2>
   <div class="md-chart-box">
-    <canvas id="mdEnergyChart" height="100"></canvas>
+    <canvas id="mdEnergyChart" height="160"></canvas>
   </div>
 </section>
 
@@ -142,7 +142,7 @@ def get_metrics_dashboard_body(data_json):
 var MD_DATA = """
         + data_json
         + r""";
-var mdSocChart, mdRateChart, mdEnergyChart;
+var mdSocChart, mdPowerChart, mdEnergyChart;
 
 /* Read a CSS custom property from :root (works for --md-* vars defined above) */
 function mdVar(name) {
@@ -186,10 +186,12 @@ function mdRenderHealth(d) {
 }
 
 function mdRenderCost(d) {
+  var curr = d.currency_symbol || '\u00A3';
   var cards = [
-    {label:'Cost Today',       value: '\u00A3' + mdFmt(d.cost_today, 2),           cls: 'md-status-err'},
-    {label:'Savings (PV+Bat)', value: '\u00A3' + mdFmt(d.savings_today_pvbat, 2),  cls: 'md-status-ok'},
-    {label:'Savings (Actual)', value: '\u00A3' + mdFmt(d.savings_today_actual, 2), cls: 'md-status-ok'},
+    {label:'Cost Today',       value: curr + mdFmt(d.cost_today / 100, 2),           cls: 'md-status-err'},
+    {label:'Savings Yesterday (PV+Bat)', value: curr + mdFmt(d.savings_today_pvbat / 100, 2),  cls: 'md-status-ok'},
+    {label:'Savings Yesterday (PredBat)', value: curr + mdFmt(d.savings_today_predbat / 100, 2), cls: 'md-status-ok'},
+    {label:'Cost Yesterday (Actual)', value: curr + mdFmt(d.savings_today_actual / 100, 2), cls: 'md-status-ok'},
   ];
   var h = '';
   cards.forEach(function (c) {
@@ -233,19 +235,37 @@ function mdUpdateSOCChart(d) {
   mdSocChart.update();
 }
 
-function mdInitRateChart(d) {
-  var ctx = document.getElementById('mdRateChart').getContext('2d');
-  mdRateChart = new Chart(ctx, {
+function mdPowerData(d) {
+  var bp = d.battery_power || 0;
+  var gp = d.grid_power || 0;
+  return {
+    labels: ['Bat Charge', 'Bat Discharge', 'Load', 'PV', 'Grid Import', 'Grid Export'],
+    values: [
+      Math.max(0, -bp),
+      Math.max(0,  bp),
+      d.load_power || 0,
+      d.pv_power   || 0,
+      Math.max(0,  gp),
+      Math.max(0, -gp),
+    ],
+    colors: [mdVar('--md-green'), mdVar('--md-amber'), mdVar('--md-blue'), '#eab308', mdVar('--md-red'), '#0d9488'],
+  };
+}
+
+function mdInitPowerChart(d) {
+  var ctx = document.getElementById('mdPowerChart').getContext('2d');
+  var pd = mdPowerData(d);
+  mdPowerChart = new Chart(ctx, {
     type: 'bar',
     data: {
-      labels: ['Charge', 'Discharge'],
-      datasets: [{ data: [d.charge_rate_kw || 0, d.discharge_rate_kw || 0], backgroundColor: [mdVar('--md-green'), mdVar('--md-amber')], borderRadius: 4 }]
+      labels: pd.labels,
+      datasets: [{ data: pd.values, backgroundColor: pd.colors, borderRadius: 4 }]
     },
     options: {
       indexAxis: 'y', responsive: true, maintainAspectRatio: false,
       plugins: {legend:{display:false}},
       scales: {
-        x: {title:{display:true,text:'kW',color:mdVar('--md-muted')}, grid:{color:mdVar('--md-border')}, ticks:{color:mdVar('--md-muted')}},
+        x: {title:{display:true,text:'kW',color:mdVar('--md-muted')}, grid:{color:mdVar('--md-border')}, ticks:{color:mdVar('--md-muted')}, min: 0},
         y: {grid:{display:false}, ticks:{color:mdVar('--md-text')}}
       }
     }
@@ -272,10 +292,7 @@ function mdInitEnergyChart(d) {
 }
 
 function mdRenderAPI(d) {
-  var services = {};
-  for (var k in d.api_requests_total) { try { var o = eval('(' + k + ')'); services[o.service] = services[o.service] || {}; services[o.service].requests = d.api_requests_total[k]; } catch (e) {} }
-  for (var k in d.api_failures_total) { try { var o = eval('(' + k + ')'); if (o.service) { services[o.service] = services[o.service] || {}; services[o.service].failures = (services[o.service].failures || 0) + d.api_failures_total[k]; } } catch (e) {} }
-  for (var k in d.api_last_success_timestamp) { try { var o = eval('(' + k + ')'); services[o.service] = services[o.service] || {}; services[o.service].last = d.api_last_success_timestamp[k]; } catch (e) {} }
+  var services = d.api_services || {};
   var names = Object.keys(services).sort();
   if (names.length === 0) { document.getElementById('mdApiTable').innerHTML = '<div class="md-card" style="text-align:center;">No API calls recorded yet</div>'; return; }
   var h = '<table><thead><tr><th>Service</th><th>Requests</th><th>Failures</th><th>Last Success</th></tr></thead><tbody>';
@@ -283,7 +300,7 @@ function mdRenderAPI(d) {
     var s = services[n];
     h += '<tr><td>' + n + '</td><td>' + mdFmt(s.requests || 0, 0) + '</td>'
       + '<td class="' + ((s.failures || 0) > 0 ? 'md-status-warn' : '') + '">' + mdFmt(s.failures || 0, 0) + '</td>'
-      + '<td>' + mdAgo(s.last || 0) + '</td></tr>';
+      + '<td>' + mdAgo(s.last_success || 0) + '</td></tr>';
   });
   h += '</tbody></table>';
   document.getElementById('mdApiTable').innerHTML = h;
@@ -305,9 +322,9 @@ function mdRenderSolar(d) {
 
 function mdRebuildCharts(d) {
   if (mdSocChart)    { mdSocChart.destroy();    mdSocChart    = null; }
-  if (mdRateChart)   { mdRateChart.destroy();   mdRateChart   = null; }
+  if (mdPowerChart)  { mdPowerChart.destroy();  mdPowerChart  = null; }
   if (mdEnergyChart) { mdEnergyChart.destroy(); mdEnergyChart = null; }
-  mdInitSOCChart(d); mdInitRateChart(d); mdInitEnergyChart(d);
+  mdInitSOCChart(d); mdInitPowerChart(d); mdInitEnergyChart(d);
 }
 
 function mdRenderAll(d) {
@@ -316,11 +333,12 @@ function mdRenderAll(d) {
   mdRenderAPI(d);
   mdRenderSolar(d);
   if (!mdSocChart) {
-    mdInitSOCChart(d); mdInitRateChart(d); mdInitEnergyChart(d);
+    mdInitSOCChart(d); mdInitPowerChart(d); mdInitEnergyChart(d);
   } else {
     mdUpdateSOCChart(d);
-    mdRateChart.data.datasets[0].data = [d.charge_rate_kw || 0, d.discharge_rate_kw || 0];
-    mdRateChart.update();
+    var pd = mdPowerData(d);
+    mdPowerChart.data.datasets[0].data = pd.values;
+    mdPowerChart.update();
     mdEnergyChart.data.datasets[0].data = [d.load_today_kwh||0, d.import_today_kwh||0, d.export_today_kwh||0, d.pv_today_kwh||0];
     mdEnergyChart.update();
   }

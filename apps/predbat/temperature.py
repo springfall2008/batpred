@@ -20,6 +20,7 @@ import asyncio
 from datetime import datetime
 from utils import dp1
 from component_base import ComponentBase
+from predbat_metrics import record_api_call
 
 
 class TemperatureAPI(ComponentBase):
@@ -145,6 +146,7 @@ class TemperatureAPI(ComponentBase):
                         if response.status == 200:
                             data = await response.json()
                             self.log("TemperatureAPI: Successfully fetched temperature data from Open-Meteo API")
+                            record_api_call("temperature")
                             self.update_success_timestamp()
                             return data
                         else:
@@ -155,6 +157,7 @@ class TemperatureAPI(ComponentBase):
                                 await asyncio.sleep(sleep_time)
                             else:
                                 self.failures_total += 1
+                                record_api_call("temperature", False, "server_error")
                                 return None
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 if attempt < max_retries - 1:
@@ -164,10 +167,12 @@ class TemperatureAPI(ComponentBase):
                 else:
                     self.log("Warn: TemperatureAPI: Request failed after {} attempts: {}".format(max_retries, e))
                     self.failures_total += 1
+                    record_api_call("temperature", False, "connection_error")
                     return None
             except Exception as e:
                 self.log("Warn: TemperatureAPI: Unexpected error fetching temperature data: {}".format(e))
                 self.failures_total += 1
+                record_api_call("temperature", False, "connection_error")
                 return None
 
         return None

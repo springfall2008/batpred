@@ -18,6 +18,7 @@ from datetime import datetime, timezone, timedelta
 import aiohttp
 from const import TIME_FORMAT_HA
 from component_base import ComponentBase
+from predbat_metrics import record_api_call
 
 
 class CarbonAPI(ComponentBase):
@@ -63,6 +64,7 @@ class CarbonAPI(ComponentBase):
                                 data = await response.json()
                                 data_points = data.get("data", {}).get("data", [])
                                 if data_points:
+                                    record_api_call("carbon")
                                     self.update_success_timestamp()
                                     self.last_updated_timestamp = self.last_updated_time()
                                     for point in data_points:
@@ -84,12 +86,15 @@ class CarbonAPI(ComponentBase):
                                     self.log("Warn: Carbon API: No data points found in response for date {}".format(date))
                             except Exception as e:
                                 self.log(f"Warn: Carbon API: Failed to parse JSON response: {e}")
+                                record_api_call("carbon", False, "decode_error")
                         else:
                             self.failures_total += 1
                             self.log(f"Warn: Carbon API: Failed to fetch data, status code {response.status}")
+                            record_api_call("carbon", False, "server_error")
             except (aiohttp.ClientError, Exception) as e:
                 self.failures_total += 1
                 self.log(f"Warn: Carbon API: Request failed: {e}")
+                record_api_call("carbon", False, "connection_error")
         if collected_data:
             self.carbon_data_points = collected_data
             self.publish_carbon_data()

@@ -67,6 +67,9 @@ class PredbatMetrics:
     """
 
     def __init__(self):
+        # -- Currency (plain string, not a Prometheus metric) ------------------
+        self.currency_symbol = "\u00A3"  # default £, overridden by PredBat at runtime
+
         # -- Application health ------------------------------------------------
         self.up = _gauge("predbat_up", "Application is running", ["version"])
         self.errors_total = _counter("predbat_errors_total", "Total errors", ["type"])
@@ -92,9 +95,13 @@ class PredbatMetrics:
         self.battery_soc_percent = _gauge("predbat_battery_soc_percent", "Battery state of charge percentage")
         self.battery_soc_kwh = _gauge("predbat_battery_soc_kwh", "Battery state of charge in kWh")
         self.battery_max_kwh = _gauge("predbat_battery_max_kwh", "Battery maximum capacity in kWh")
-        self.charge_rate_kw = _gauge("predbat_charge_rate_kw", "Current charge rate in kW")
-        self.discharge_rate_kw = _gauge("predbat_discharge_rate_kw", "Current discharge rate in kW")
+        self.charge_rate_kw = _gauge("predbat_charge_rate_kw", "Current max charge rate in kW")
+        self.discharge_rate_kw = _gauge("predbat_discharge_rate_kw", "Current max discharge rate in kW")
         self.inverter_register_writes_total = _counter("predbat_inverter_register_writes_total", "Total inverter register writes")
+        self.grid_power = _gauge("predbat_grid_power", "Current grid power in kW (positive for import, negative for export)")
+        self.load_power = _gauge("predbat_load_power", "Current load power in kW")
+        self.pv_power = _gauge("predbat_pv_power", "Current PV power in kW")
+        self.battery_power = _gauge("predbat_battery_power", "Current battery power in kW (positive for discharge, negative for charge)")
 
         # -- Energy today ------------------------------------------------------
         self.load_today_kwh = _gauge("predbat_load_today_kwh", "Load energy today in kWh")
@@ -105,8 +112,9 @@ class PredbatMetrics:
 
         # -- Cost & savings ----------------------------------------------------
         self.cost_today = _gauge("predbat_cost_today", "Cost today in currency units")
-        self.savings_today_pvbat = _gauge("predbat_savings_today_pvbat", "PV/Battery system savings today")
-        self.savings_today_actual = _gauge("predbat_savings_today_actual", "Actual savings today")
+        self.savings_today_pvbat = _gauge("predbat_savings_today_pvbat", "PV/Battery system savings yesterday")
+        self.savings_today_actual = _gauge("predbat_savings_today_actual", "Actual cost yesterday")
+        self.savings_today_predbat = _gauge("predbat_savings_today_predbat", "PredBat savings yesterday")
 
         # -- IOG (Intelligent Octopus Go) --------------------------------------
         self.iog_action_latency_seconds = _histogram(
@@ -149,6 +157,35 @@ class PredbatMetrics:
             except AttributeError:
                 return {}
 
+        def _api_services(m):
+            """Build a pre-aggregated {service: {requests, failures, last_success}} dict."""
+            out = {}
+            if not isinstance(m.api_requests_total, _NoOpMetric):
+                try:
+                    for label_values, child in m.api_requests_total._metrics.items():
+                        svc = label_values[0]
+                        out.setdefault(svc, {"requests": 0, "failures": 0, "last_success": 0})
+                        out[svc]["requests"] += child._value.get()
+                except AttributeError:
+                    pass
+            if not isinstance(m.api_last_success_timestamp, _NoOpMetric):
+                try:
+                    for label_values, child in m.api_last_success_timestamp._metrics.items():
+                        svc = label_values[0]
+                        out.setdefault(svc, {"requests": 0, "failures": 0, "last_success": 0})
+                        out[svc]["last_success"] = child._value.get()
+                except AttributeError:
+                    pass
+            if not isinstance(m.api_failures_total, _NoOpMetric):
+                try:
+                    for label_values, child in m.api_failures_total._metrics.items():
+                        svc = label_values[0]
+                        out.setdefault(svc, {"requests": 0, "failures": 0, "last_success": 0})
+                        out[svc]["failures"] += child._value.get()
+                except AttributeError:
+                    pass
+            return out
+
         return {
             # Health
             "up": _labeled(self.up),
@@ -165,20 +202,25 @@ class PredbatMetrics:
             "battery_max_kwh": _val(self.battery_max_kwh),
             "charge_rate_kw": _val(self.charge_rate_kw),
             "discharge_rate_kw": _val(self.discharge_rate_kw),
+            "battery_power": _val(self.battery_power),
+            "grid_power": _val(self.grid_power),
+            "load_power": _val(self.load_power),
+            "pv_power": _val(self.pv_power),
             # Energy
             "load_today_kwh": _val(self.load_today_kwh),
             "import_today_kwh": _val(self.import_today_kwh),
             "export_today_kwh": _val(self.export_today_kwh),
             "pv_today_kwh": _val(self.pv_today_kwh),
             "data_age_days": _val(self.data_age_days),
+            # Currency symbol
+            "currency_symbol": self.currency_symbol,
             # Cost
             "cost_today": _val(self.cost_today),
             "savings_today_pvbat": _val(self.savings_today_pvbat),
             "savings_today_actual": _val(self.savings_today_actual),
-            # API (labeled)
-            "api_requests_total": _labeled(self.api_requests_total),
-            "api_failures_total": _labeled(self.api_failures_total),
-            "api_last_success_timestamp": _labeled(self.api_last_success_timestamp),
+            "savings_today_predbat": _val(self.savings_today_predbat),
+            # API (pre-aggregated per service - avoids JS key-parsing complexity)
+            "api_services": _api_services(self),
             # Solar
             "solcast_api_limit": _val(self.solcast_api_limit),
             "solcast_api_used": _val(self.solcast_api_used),
