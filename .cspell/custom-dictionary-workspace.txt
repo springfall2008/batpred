@@ -12,6 +12,7 @@ Anson
 apexcharts
 appdaemon
 appkey
+appsyaml
 argname
 ASHP
 asyncio
@@ -116,6 +117,7 @@ fontweight
 Forestfire
 foxess
 freephase
+fronius
 futurerate
 gecloud
 gekey
@@ -162,6 +164,7 @@ isoformat
 isort
 itemtype
 ivtime
+jedlix
 jsyaml
 kaiming
 killall
@@ -248,6 +251,7 @@ pdetails
 perc
 percnt
 PeterHaban
+photovoltaics
 pitem
 pkwh
 Plenticore
@@ -289,6 +293,7 @@ rowspan
 rstart
 rtype
 ruamel
+Rvrt
 saverestore
 savez
 scalarstring
@@ -312,6 +317,7 @@ socs
 sofar
 SolarEdge
 solarman
+solarnet
 Solax
 solaxcloud
 solaxmodbus
@@ -323,11 +329,13 @@ Southwell
 springfall
 starthour
 startminute
+startswith
 startt
 stdlib
 stepline
 strptime
 substep
+sunspec
 sunsynk
 syscmd
 tabindex
@@ -377,6 +385,7 @@ xload
 xticks
 yaxis
 yaxistooltip
+yday
 ylabel
 yuanzhi
 zappi

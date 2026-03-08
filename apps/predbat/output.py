@@ -564,14 +564,6 @@ class Output:
         """
         Turn the rate into some text
         """
-        import_cost_threshold = self.rate_import_cost_threshold
-        export_cost_threshold = self.rate_export_cost_threshold
-
-        if self.rate_best_cost_threshold_charge:
-            import_cost_threshold = self.rate_best_cost_threshold_charge
-        if self.rate_best_cost_threshold_export:
-            export_cost_threshold = self.rate_best_cost_threshold_export
-
         rate = dp2(rate)
 
         if not export:
@@ -581,14 +573,14 @@ class Output:
                 text = "free"
             elif rate < 0:
                 text = "negative"
-            elif rate <= import_cost_threshold * 0.5:
-                text = "very cheap"
-            elif rate <= import_cost_threshold:
-                text = "cheap"
-            elif rate <= (import_cost_threshold * 1.5):
-                text = "expensive"
             else:
-                text = "very expensive"
+                rate_frac = (rate - self.rate_min) / (self.rate_max - self.rate_min)
+                if rate_frac <= 0.33:
+                    text = "cheap"
+                elif rate_frac <= 0.67:
+                    text = "expensive"
+                else:
+                    text = "very expensive"
         else:
             if self.rate_export_min == self.rate_export_max:
                 text = "fixed"
@@ -596,14 +588,16 @@ class Output:
                 text = "zero"
             elif rate < 0:
                 text = "negative"
-            elif rate <= (export_cost_threshold * 0.5):
-                text = "very low"
-            elif rate < export_cost_threshold:
-                text = "low"
-            elif rate <= (export_cost_threshold * 1.5):
-                text = "good"
             else:
-                text = "very good"
+                rate_frac = (rate - self.rate_export_min) / (self.rate_export_max - self.rate_export_min)
+                if rate_frac <= 0.25:
+                    text = "very low"
+                elif rate_frac <= 0.5:
+                    text = "low"
+                elif rate_frac <= 0.75:
+                    text = "good"
+                else:
+                    text = "very good"
         return text
 
     def get_rate_text(self, minute, export=False, with_value=False):

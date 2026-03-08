@@ -494,6 +494,11 @@ Defaults to False so Predbat will control export of your inverter according to t
 
 To use the Axle VPP service only **axle_api_key** is required to be configured in `apps.yaml`, the other configuration options are optional.
 
+Energy usage during an event:
+
+- **input_number.predbat_load_scaling_saving** is applied to scale your predicted load for Axle export events.
+- **input_number.predbat_load_scaling_free** is applied to scale your predicted load for Axle import events.
+
 ## Grid Carbon intensity
 
 Predbat can also track Carbon intensity by linking it to an integration which provides this data.

@@ -98,13 +98,14 @@ class Plan:
 
         # Is the car currently planned to charge?
         load_car_slot = False
-        for car_n in range(0, self.num_cars):
-            for slot_n in range(0, len(self.car_charging_slots[car_n])):
-                slot = self.car_charging_slots[car_n][slot_n]
-                # Don't include the exact start minute as it may take a few for the load to filter through
-                if slot["start"] <= self.minutes_now < slot["end"]:
-                    load_car_slot = True
-                    self.log("Dynamic load adjust sees car {} charging now slot {}-{}, previous car slot {}".format(car_n + 1, slot["start"], slot["end"], self.load_last_car_slot))
+        if self.car_energy_reported_load:
+            for car_n in range(0, self.num_cars):
+                for slot_n in range(0, len(self.car_charging_slots[car_n])):
+                    slot = self.car_charging_slots[car_n][slot_n]
+                    # Don't include the exact start minute as it may take a few for the load to filter through
+                    if slot["start"] <= self.minutes_now < slot["end"]:
+                        load_car_slot = True
+                        self.log("Dynamic load adjust sees car {} charging now slot {}-{}, previous car slot {}".format(car_n + 1, slot["start"], slot["end"], self.load_last_car_slot))
         self.load_last_car_slot = load_car_slot
         self.dynamic_load_baseline = {}
         if self.metric_dynamic_load_adjust:
@@ -127,7 +128,11 @@ class Plan:
             if self.load_last_status == "high":
                 have_printed = False
                 for minute_absolute in range(minutes_now, minutes_end_slot, PREDICT_STEP):
-                    car_load = sum(in_car_slot(minute_absolute, self.num_cars, self.car_charging_slots))
+                    if not self.car_energy_reported_load:
+                        # If car energy is not reported as load then we should not attempt to adjust the load prediction based on car load.
+                        car_load = 0
+                    else:
+                        car_load = sum(in_car_slot(minute_absolute, self.num_cars, self.car_charging_slots))
                     load_last_period = self.load_last_period / 60 * PREDICT_STEP
                     load_last_period = max(load_last_period - car_load, 0)
                     if load_last_period > 0:
@@ -930,7 +935,7 @@ class Plan:
             self.minutes_now,
             forward=False,
             scale_today=self.load_inday_adjustment,
-            scale_fixed=1.0,
+            scale_fixed=self.load_scaling,
             type_load=True,
             load_forecast=self.load_forecast,
             load_scaling_dynamic=self.load_scaling_dynamic,
@@ -967,17 +972,32 @@ class Plan:
         # Creation prediction object
         self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10)
 
+        # Check if LoadML is active and disable thread pools as it causes lockup due to race conditions with NumPy
+        load_ml_comp = self.components.get_component("load_ml") if self.components else None
+        load_ml_calculating = False
+        if load_ml_comp:
+            load_ml_calculating = load_ml_comp.is_calculating()
+            self.log("LoadML is_calculating {}".format(load_ml_calculating))
+            if load_ml_calculating and self.pool:
+                self.log("Disabling thread pool as LoadML is calculating to avoid lockups")
+                self.pool.close()
+                self.pool.join()
+                self.pool = None
+
         # Create pool
         if not self.pool:
-            threads = self.get_arg("threads", "auto")
-            if threads == "auto":
-                self.log("Creating pool of {} processes to match your CPU count".format(cpu_count()))
-                self.pool = Pool(processes=cpu_count())
-            elif threads:
-                self.log("Creating pool of {} processes as per apps.yaml".format(int(threads)))
-                self.pool = Pool(processes=int(threads))
+            if load_ml_calculating:
+                self.log("Not using thread pool as LoadML is calculating to avoid lockups")
             else:
-                self.log("Not using threading as threads is set to 0 in apps.yaml")
+                threads = self.get_arg("threads", "auto")
+                if threads == "auto":
+                    self.log("Creating pool of {} processes to match your CPU count".format(cpu_count()))
+                    self.pool = Pool(processes=cpu_count())
+                elif threads:
+                    self.log("Creating pool of {} processes as per apps.yaml".format(int(threads)))
+                    self.pool = Pool(processes=int(threads))
+                else:
+                    self.log("Not using threading as threads is set to 0 in apps.yaml")
 
         # Simulate current settings to get initial data
         metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(

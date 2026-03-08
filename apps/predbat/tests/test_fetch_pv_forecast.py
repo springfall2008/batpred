@@ -109,30 +109,27 @@ def test_fetch_pv_forecast_with_relative_time():
     # Call fetch_pv_forecast
     pv_forecast_minute, pv_forecast_minute10 = fetch.fetch_pv_forecast()
 
-    # With a 120 minute offset (relative_time is 2 hours before midnight_utc):
-    # forecast minute 0 → output minute 120
-    # forecast minute 60 → output minute 180
-    # forecast minute 120 → output minute 240
-    # forecast minute 180 → output minute 300
-    # forecast minute 240 → output minute 360
+    # With the corrected formula (target = stored_minute - offset), a +120 min offset
+    # (relative_time is 2 hours before midnight_utc) shifts data BACK by 120 minutes:
+    # forecast minute 0   (= relative_time + 0   = midnight - 2h) → output minute -120
+    # forecast minute 60  (= midnight - 1h)                        → output minute  -60
+    # forecast minute 120 (= midnight exactly)                     → output minute    0
+    # forecast minute 180 (= 1h after midnight)                    → output minute   60
+    # forecast minute 240 (= 2h after midnight)                    → output minute  120
 
     # Verify the offset is correctly applied
-    assert pv_forecast_minute[120] == 0.0, f"Expected minute 120 to be 0.0, got {pv_forecast_minute[120]}"
-    assert pv_forecast_minute[180] == 0.5, f"Expected minute 180 to be 0.5, got {pv_forecast_minute[180]}"
-    assert pv_forecast_minute[240] == 1.0, f"Expected minute 240 to be 1.0, got {pv_forecast_minute[240]}"
-    assert pv_forecast_minute[300] == 1.5, f"Expected minute 300 to be 1.5, got {pv_forecast_minute[300]}"
-    assert pv_forecast_minute[360] == 2.0, f"Expected minute 360 to be 2.0, got {pv_forecast_minute[360]}"
+    assert pv_forecast_minute[0] == 1.0, f"Expected minute 0 to be 1.0, got {pv_forecast_minute.get(0)}"
+    assert pv_forecast_minute[60] == 1.5, f"Expected minute 60 to be 1.5, got {pv_forecast_minute.get(60)}"
+    assert pv_forecast_minute[120] == 2.0, f"Expected minute 120 to be 2.0, got {pv_forecast_minute.get(120)}"
 
     # Verify forecast10 data is also correctly offset
-    assert pv_forecast_minute10[120] == 0.0, f"Expected forecast10 minute 120 to be 0.0, got {pv_forecast_minute10[120]}"
-    assert pv_forecast_minute10[180] == 0.4, f"Expected forecast10 minute 180 to be 0.4, got {pv_forecast_minute10[180]}"
-    assert pv_forecast_minute10[240] == 0.8, f"Expected forecast10 minute 240 to be 0.8, got {pv_forecast_minute10[240]}"
-    assert pv_forecast_minute10[300] == 1.2, f"Expected forecast10 minute 300 to be 1.2, got {pv_forecast_minute10[300]}"
-    assert pv_forecast_minute10[360] == 1.6, f"Expected forecast10 minute 360 to be 1.6, got {pv_forecast_minute10[360]}"
+    assert pv_forecast_minute10[0] == 0.8, f"Expected forecast10 minute 0 to be 0.8, got {pv_forecast_minute10.get(0)}"
+    assert pv_forecast_minute10[60] == 1.2, f"Expected forecast10 minute 60 to be 1.2, got {pv_forecast_minute10.get(60)}"
+    assert pv_forecast_minute10[120] == 1.6, f"Expected forecast10 minute 120 to be 1.6, got {pv_forecast_minute10.get(120)}"
 
-    print(f"✓ Forecast data correctly offset by 120 minutes")
-    print(f"✓ pv_forecast_minute[120]={pv_forecast_minute[120]}, [180]={pv_forecast_minute[180]}, [240]={pv_forecast_minute[240]}")
-    print(f"✓ pv_forecast_minute10[120]={pv_forecast_minute10[120]}, [180]={pv_forecast_minute10[180]}, [240]={pv_forecast_minute10[240]}")
+    print(f"✓ Forecast data correctly shifted back by 120 minutes (stored_minute - offset)")
+    print(f"✓ pv_forecast_minute[0]={pv_forecast_minute[0]}, [60]={pv_forecast_minute[60]}, [120]={pv_forecast_minute[120]}")
+    print(f"✓ pv_forecast_minute10[0]={pv_forecast_minute10[0]}, [60]={pv_forecast_minute10[60]}, [120]={pv_forecast_minute10[120]}")
     print("Test 1 PASSED")
 
 
@@ -344,32 +341,27 @@ def test_fetch_pv_forecast_previous_day():
     # Call fetch_pv_forecast
     pv_forecast_minute, pv_forecast_minute10 = fetch.fetch_pv_forecast()
 
-    # Expected minute_offset = (midnight_utc - relative_time) = 24 hours = 1440 minutes
-    # So forecast data at minute 0 should map to minute 1440 in pv_forecast_minute
-    # forecast data at minute 1440 should map to minute 2880 in pv_forecast_minute
+    # With the corrected formula (target = stored_minute - offset), a +1440 min offset
+    # maps yesterday's stored minutes to today-relative minutes:
+    # forecast minute 0    (yesterday midnight)  → output minute -1440  (past, before today midnight)
+    # forecast minute 360  (yesterday 6am)       → output minute -1080  (past)
+    # forecast minute 720  (yesterday noon)      → output minute  -720  (past)
+    # forecast minute 1080 (yesterday 6pm)       → output minute  -360  (past)
+    # forecast minute 1440 (today midnight)      → output minute     0  ← first visible today slot
+    # forecast minute 1500 (today 1am)           → output minute    60
 
     # Verify the offset is correctly applied
-    # Yesterday's data (forecast minute 0) should appear at output minute 1440 (today midnight)
-    assert pv_forecast_minute[1440] == 0.0, f"Expected minute 1440 to be 0.0, got {pv_forecast_minute[1440]}"
-    # Yesterday 6am (forecast minute 360) should appear at output minute 1800
-    assert pv_forecast_minute[1800] == 0.5, f"Expected minute 1800 to be 0.5, got {pv_forecast_minute[1800]}"
-    # Yesterday noon (forecast minute 720) should appear at output minute 2160
-    assert pv_forecast_minute[2160] == 1.0, f"Expected minute 2160 to be 1.0, got {pv_forecast_minute[2160]}"
-    # Yesterday 6pm (forecast minute 1080) should appear at output minute 2520
-    assert pv_forecast_minute[2520] == 1.5, f"Expected minute 2520 to be 1.5, got {pv_forecast_minute[2520]}"
-    # Today midnight (forecast minute 1440) should appear at output minute 2880
-    assert pv_forecast_minute[2880] == 2.0, f"Expected minute 2880 to be 2.0, got {pv_forecast_minute[2880]}"
-    # Today 1am (forecast minute 1500) should appear at output minute 2940
-    assert pv_forecast_minute[2940] == 2.5, f"Expected minute 2940 to be 2.5, got {pv_forecast_minute[2940]}"
+    # Today midnight (forecast minute 1440) should appear at output minute 0
+    assert pv_forecast_minute[0] == 2.0, f"Expected minute 0 to be 2.0, got {pv_forecast_minute.get(0)}"
+    # Today 1am (forecast minute 1500) should appear at output minute 60
+    assert pv_forecast_minute[60] == 2.5, f"Expected minute 60 to be 2.5, got {pv_forecast_minute.get(60)}"
 
     # Verify forecast10 data
-    assert pv_forecast_minute10[1440] == 0.0, f"Expected forecast10 minute 1440 to be 0.0, got {pv_forecast_minute10[1440]}"
-    assert pv_forecast_minute10[1800] == 0.4, f"Expected forecast10 minute 1800 to be 0.4, got {pv_forecast_minute10[1800]}"
-    assert pv_forecast_minute10[2160] == 0.8, f"Expected forecast10 minute 2160 to be 0.8, got {pv_forecast_minute10[2160]}"
-    assert pv_forecast_minute10[2880] == 1.6, f"Expected forecast10 minute 2880 to be 1.6, got {pv_forecast_minute10[2880]}"
+    assert pv_forecast_minute10[0] == 1.6, f"Expected forecast10 minute 0 to be 1.6, got {pv_forecast_minute10.get(0)}"
+    assert pv_forecast_minute10[60] == 2.0, f"Expected forecast10 minute 60 to be 2.0, got {pv_forecast_minute10.get(60)}"
 
-    print(f"✓ Forecast data correctly offset by 1440 minutes (24 hours)")
-    print(f"✓ pv_forecast_minute[1440]={pv_forecast_minute[1440]}, [2160]={pv_forecast_minute[2160]}, [2880]={pv_forecast_minute[2880]}")
+    print(f"✓ Forecast data correctly shifted back by 1440 minutes (stored_minute - offset)")
+    print(f"✓ pv_forecast_minute[0]={pv_forecast_minute[0]}, [60]={pv_forecast_minute[60]}")
     print("Test 5 PASSED")
 
 
@@ -418,26 +410,27 @@ def test_fetch_pv_forecast_negative_offset():
     # Call fetch_pv_forecast
     pv_forecast_minute, pv_forecast_minute10 = fetch.fetch_pv_forecast()
 
-    # Expected minute_offset = (midnight_utc - relative_time) = -60 minutes
-    # So forecast data at minute 60 should map to minute 0 in pv_forecast_minute
-    # forecast data at minute 120 should map to minute 60 in pv_forecast_minute
-    # forecast data at minute 180 should map to minute 120 in pv_forecast_minute
-    # forecast data at minute 240 should map to minute 180 in pv_forecast_minute
+    # With the corrected formula (target = stored_minute - offset), a -60 min offset
+    # (relative_time is 1 hour AFTER midnight_utc) shifts data FORWARD by 60 minutes:
+    # forecast minute 60  (= relative_time + 1h = 2h after midnight) → output minute 120
+    # forecast minute 120 (= 3h after midnight)                      → output minute 180
+    # forecast minute 180 (= 4h after midnight)                      → output minute 240
+    # forecast minute 240 (= 5h after midnight)                      → output minute 300
 
     # Check that data is mapped correctly with negative offset
-    assert pv_forecast_minute[0] == 0.0, f"Expected minute 0 to be 0.0, got {pv_forecast_minute[0]}"
-    assert pv_forecast_minute[60] == 0.5, f"Expected minute 60 to be 0.5, got {pv_forecast_minute[60]}"
-    assert pv_forecast_minute[120] == 1.0, f"Expected minute 120 to be 1.0, got {pv_forecast_minute[120]}"
-    assert pv_forecast_minute[180] == 1.5, f"Expected minute 180 to be 1.5, got {pv_forecast_minute[180]}"
+    assert pv_forecast_minute[120] == 0.0, f"Expected minute 120 to be 0.0, got {pv_forecast_minute.get(120)}"
+    assert pv_forecast_minute[180] == 0.5, f"Expected minute 180 to be 0.5, got {pv_forecast_minute.get(180)}"
+    assert pv_forecast_minute[240] == 1.0, f"Expected minute 240 to be 1.0, got {pv_forecast_minute.get(240)}"
+    assert pv_forecast_minute[300] == 1.5, f"Expected minute 300 to be 1.5, got {pv_forecast_minute.get(300)}"
 
     # Verify forecast10 data
-    assert pv_forecast_minute10[0] == 0.0, f"Expected forecast10 minute 0 to be 0.0, got {pv_forecast_minute10[0]}"
-    assert pv_forecast_minute10[60] == 0.4, f"Expected forecast10 minute 60 to be 0.4, got {pv_forecast_minute10[60]}"
-    assert pv_forecast_minute10[120] == 0.8, f"Expected forecast10 minute 120 to be 0.8, got {pv_forecast_minute10[120]}"
-    assert pv_forecast_minute10[180] == 1.2, f"Expected forecast10 minute 180 to be 1.2, got {pv_forecast_minute10[180]}"
+    assert pv_forecast_minute10[120] == 0.0, f"Expected forecast10 minute 120 to be 0.0, got {pv_forecast_minute10.get(120)}"
+    assert pv_forecast_minute10[180] == 0.4, f"Expected forecast10 minute 180 to be 0.4, got {pv_forecast_minute10.get(180)}"
+    assert pv_forecast_minute10[240] == 0.8, f"Expected forecast10 minute 240 to be 0.8, got {pv_forecast_minute10.get(240)}"
+    assert pv_forecast_minute10[300] == 1.2, f"Expected forecast10 minute 300 to be 1.2, got {pv_forecast_minute10.get(300)}"
 
-    print(f"✓ Forecast data correctly offset by -60 minutes")
-    print(f"✓ pv_forecast_minute[0]={pv_forecast_minute[0]}, [60]={pv_forecast_minute[60]}, [120]={pv_forecast_minute[120]}")
+    print(f"✓ Forecast data correctly shifted forward by 60 minutes (stored_minute - (-60))")
+    print(f"✓ pv_forecast_minute[120]={pv_forecast_minute[120]}, [180]={pv_forecast_minute[180]}, [240]={pv_forecast_minute[240]}")
     print("Test 6 PASSED")
 
 

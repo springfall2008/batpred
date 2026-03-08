@@ -169,11 +169,11 @@ Note that the output data entity predbat.load_energy_h0 will be scaled according
 This can  be used to make the PV10% scenario take into account extra load usage and hence be more pessimistic while leaving the central scenario unchanged.
 The default is 1.1 meaning an extra 10% load is added. This will only have an impact if the PV 10% weighting is non-zero.
 
-**input_number.predbat_load_scaling_saving** is a percentage Scaling factor applied to historical load only during Octopus Saving sessions.
+**input_number.predbat_load_scaling_saving** is a percentage Scaling factor applied to historical load only during Octopus Saving session or Axle export events.
 This can be used to model your household cutting down on energy use inside a saving session (e.g. turning off a heat pump, deferring cooking until after the session, etc).
 The default is 1.0, i.e. no change to load in saving sessions.
 
-**input_number.predbat_load_scaling_free** is a percentage Scaling factor applied to historical load only during Free electricity sessions.
+**input_number.predbat_load_scaling_free** is a percentage Scaling factor applied to historical load only during Free electricity sessions and Axle import events.
 This can be used to model your household increasing house load in a free electricity session (e.g. extra washing, cooking, tumble dryer, etc).
 The default is 1.2, i.e. 20% extra load in free electricity sessions.
 
@@ -211,6 +211,7 @@ There are a number of configuration items in Home Assistant for Predbat to contr
 
 These are described in detail in [Car Charging](car-charging.md) and are listed here just for completeness:
 
+- **switch.predbat_car_energy_reported_load** - whether the car charger is inside the CT clamp (energy visible as house load)
 - **switch.predbat_car_charging_hold** - remove the historical car charging load from the house load
 - **input_number.predbat_car_charging_threshold** - power threshold above which Predbat assumes the car is being charged
 - **input_number.predbat_car_charging_energy_scale** - used to scale the **car_charging_energy** sensor in `apps.yaml`

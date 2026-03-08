@@ -372,7 +372,7 @@ class HAInterface(ComponentBase):
 
         # Check for timeout (neither success nor error was set)
         if result_holder.get("success") is None and not result_holder.get("error"):
-            self.log("Warn: Service call {}/{} timed out....".format(domain, service))
+            self.log("Warn: Service call {}/{} failed or timed out: result {}".format(domain, service, result_holder))
             return None
 
         success = result_holder.get("success", False)
@@ -587,6 +587,11 @@ class HAInterface(ComponentBase):
                     self.ws_pending_requests.clear()
                     if self.ws_command_queue:
                         self.log("Warn: {} queued commands dropped due to connection loss".format(len(self.ws_command_queue)))
+                        for dropped_cmd in self.ws_command_queue:
+                            dropped_domain, dropped_service, dropped_data, dropped_rr, dropped_event, dropped_result = dropped_cmd
+                            dropped_result["error"] = "connection_lost"
+                            dropped_result["success"] = False
+                            dropped_event.set()
                         self.ws_command_queue.clear()
 
             if not self.api_stop:
@@ -606,6 +611,9 @@ class HAInterface(ComponentBase):
         Get state from cached HA data
         """
         if entity_id:
+            if isinstance(entity_id, list):
+                self.log("Error: get_state called with list entity_id: {}, this should be a single entity string".format(entity_id))
+                return default
             self.db_mirror_list[entity_id.lower()] = True
 
         if not entity_id:
@@ -670,12 +678,12 @@ class HAInterface(ComponentBase):
                 if last_changed:
                     try:
                         last_changed = datetime.strptime(last_changed, TIME_FORMAT_HA_TZ)
-                    except (ValueError, TypeError) as e:
-                        self.log("Warn: Failed to parse last_changed time {} for entity {} : {}".format(last_changed, entity_id, e))
+                    except (ValueError, TypeError):
                         # Try fallback format without microseconds
                         try:
                             last_changed = datetime.strptime(last_changed, "%Y-%m-%dT%H:%M:%S%z")
-                        except (ValueError, TypeError):
+                        except (ValueError, TypeError) as e:
+                            self.log("Warn: Failed to parse last_changed time {} for entity {} : {}".format(last_changed, entity_id, e))
                             last_changed = datetime.now()
                 else:
                     last_changed = datetime.now()

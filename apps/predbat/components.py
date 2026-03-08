@@ -293,6 +293,7 @@ COMPONENT_LIST = {
             "load_ml_enable": {"required_true": True, "config": "load_ml_enable", "default": False},
             "load_ml_source": {"required": False, "config": "load_ml_source", "default": False},
             "load_ml_max_days_history": {"required": False, "config": "load_ml_max_days_history", "default": 28},
+            "load_ml_database_days": {"required": False, "config": "load_ml_database_days", "default": 90},
         },
         "phase": 1,
         "can_restart": True,

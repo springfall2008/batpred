@@ -8,10 +8,12 @@ This prediction is based on historical load patterns, time-of-day patterns, day-
 - [Overview](#overview)
 - [How the Neural Network Works](#how-the-neural-network-works)
 - [Configuration](#configuration)
+- [History Accumulation and the Database](#history-accumulation-and-the-database)
 - [Setup Instructions](#setup-instructions)
 - [Understanding the Model](#understanding-the-model)
 - [Monitoring and Troubleshooting](#monitoring-and-troubleshooting)
 - [Model Persistence](#model-persistence)
+- [Advanced Training Options](#advanced-training-options)
 
 ## Overview
 
@@ -24,9 +26,9 @@ The ML Load Prediction component uses a lightweight multi-layer perceptron (MLP)
 - Supports historical PV generation data as an input feature
 - Supports temperature forecast data for improved accuracy
 - Uses historical and future energy import/export rates as input features
-- Deep neural network with 4 hidden layers [512, 256, 128, 64 neurons]
+- Deep neural network with 3 hidden layers [512, 256, 64 neurons]
 - Optimized with He initialization and AdamW weight decay for robust training
-- Automatically trains on historical data (requires at least 1 day, recommended 7+ days, up to 28 days configurable)
+- Automatically trains on historical data (requires at least 1 day, recommended 7+ days; fetches up to `load_ml_max_days_history` days from HA and accumulates up to `load_ml_database_days` days in the on-disk database)
 - Fine-tunes periodically (every 2 hours) using full dataset to adapt to changing patterns
 - Time-weighted training prioritizes recent data while learning from historical patterns
 - Model persists across restarts
@@ -38,17 +40,21 @@ The ML Load Prediction component uses a lightweight multi-layer perceptron (MLP)
 
 The ML Load Predictor uses a deep multi-layer perceptron (MLP) with the following architecture:
 
-- **Input Layer**: 1444 features (288 load + 288 PV + 288 temperature + 288 import rates + 288 export rates + 4 time features)
-- **Hidden Layers**: 4 layers with [512, 256, 128, 64] neurons using ReLU activation
+- **Input Layer**: 1446 features (288 load + 288 PV + 288 temperature + 288 import rates + 288 export rates + 6 time features)
+- **Hidden Layers**: 3 layers with [512, 256, 64] neurons using ReLU activation
 - **Output Layer**: 1 neuron (predicts next 5-minute step)
-- **Total Parameters**: ~500,000 trainable weights
+- **Total Parameters**: ~889,000 trainable weights
 
 **Optimization Techniques:**
 
 - **He Initialization**: Weights initialized using He/Kaiming method (`std = sqrt(2/fan_in)`), optimized for ReLU activations
 - **AdamW Optimizer**: Adam optimization with weight decay (L2 regularization, default 0.01) to prevent overfitting
-- **Early Stopping**: Training halts if validation error stops improving (patience=5 epochs)
+- **Cosine LR Decay**: Learning rate decays from `lr_max` (0.001) to `lr_min` (0.0001) following a cosine curve over all epochs, reducing oscillation in late training
+- **Huber Loss**: Training uses Huber loss (δ=1.35 in normalised space) instead of MSE, which reduces the influence of individual spike events (e.g. EV charging) on the gradient
+- **Inverted Dropout**: Random neurons are dropped during training (default rate 0.1) to reduce overfitting; no scaling is needed at inference time
+- **Early Stopping**: Training halts when the EMA-smoothed combined metric `val_mae * 0.5 + |val_bias_median|` stops improving. The EMA (α=0.3) smooths out epoch-to-epoch noise caused by stochastic mini-batch sampling. Median bias (rather than mean) is used so a single outlier step cannot prematurely trigger a checkpoint
 - **Weighted Samples**: Recent data weighted more heavily (exponential decay over history period)
+- **Curriculum Learning**: Initial training begins with the oldest available data and progressively expands the window, so the model builds up general patterns before seeing the full history
 
 ### Input Features
 
@@ -75,10 +81,11 @@ The neural network uses several types of input features to make predictions:
    - Automatically extracted from your configured Octopus Energy tariffs or other rate sources
    - Particularly useful for homes that shift usage to cheaper rate periods
 
-5. **Cyclical Time Features** (4 features)
+5. **Cyclical Time Features** (6 features)
    - Sin/Cos encoding of minute-of-day (captures daily patterns with 5-min precision)
    - Sin/Cos encoding of day-of-week (captures weekly patterns)
-   - These features help the network understand that 23:55 is close to 00:05
+   - Sin/Cos encoding of day-of-year (captures seasonality — winter heating vs summer load profiles)
+   - These features help the network understand that 23:55 is close to 00:05, that Sunday is close to Monday, and that December is close to January
 
 ### Prediction Process
 
@@ -90,14 +97,14 @@ The model uses an autoregressive approach:
 4. Shifts the window forward and repeats
 5. Continues for 576 steps to cover 48 hours
 
-To prevent drift in long-range predictions, the model blends autoregressive predictions with historical daily patterns.
+To prevent drift in long-range predictions, the model blends autoregressive predictions with historical daily patterns. The blending uses **day-of-week-aware patterns**: separate average profiles are maintained for each of the 7 days of the week (Monday–Sunday), so the weekend fallback differs from weekday. If a particular day of the week has insufficient data (fewer than 2 complete observations per slot), the global all-days average is used instead.
 
 ### Training Process
 
 **Initial Training:**
 
-- Requires at least 1 day of historical data (7+ days recommended, up to 28 days configurable)
-- Fetches up to 28 days of load history by default (configurable via `load_ml_max_days_history`)
+- Requires at least 1 day of historical data (7+ days recommended, configurable via `load_ml_max_days_history`)
+- Fetches up to `load_ml_max_days_history` days (default: 28) from HA, then merges with accumulated database history (up to `load_ml_database_days`, default: 90 days)
 - Uses 100 epochs with early stopping (patience=5)
 - Batch size: 128 samples
 - AdamW optimizer with learning rate 0.001 and weight decay 0.01
@@ -108,16 +115,38 @@ To prevent drift in long-range predictions, the model blends autoregressive pred
 **Regularization:**
 
 - **Weight Decay**: L2 penalty (0.01) applied to network weights to prevent overfitting
-- **Early Stopping**: Training halts if validation error doesn't improve for 5 consecutive epochs, selecting the best results so far.
+- **Dropout**: 10% of hidden neurons are randomly dropped during each training forward pass (inverted dropout — no scaling needed at inference). Reduces over-reliance on any single neuron.
+- **Huber Loss**: The training loss function transitions from quadratic (for small errors) to linear (for large errors) at a threshold of δ=1.35 in normalised space. This makes gradient updates robust to spike events such as EV charging or tumble-dryer loads without requiring them to be filtered out of training data.
+- **Early Stopping**: Training halts when the EMA-smoothed combined metric `val_mae + 0.5 × |val_bias_median|` stops improving for more than `patience` consecutive epochs, selecting the best checkpoint seen so far. The EMA smoothing (α=0.3) prevents a single noisy epoch from triggering an early stop or a premature checkpoint. Median bias is used so that a single outlier sample in the validation set cannot dominate the stopping decision.
 - **Time-Weighted Samples**: Recent data has higher importance (7-day exponential decay constant)
     - Today's data: 100% weight
     - N days old: 37% weight (e^-1)
 
+### Curriculum Training (Initial Training Only)
+
+When the model is trained for the first time on a new or reset dataset, Predbat uses **curriculum learning** rather than a single pass over all available data.
+
+**How it works:**
+
+1. The available history is divided into progressively larger windows starting from the oldest data.
+2. The first pass trains on only the oldest `ml_curriculum_window_days` days (default 7 days), using the most recent 24 h of *that slice* as the validation holdout.
+3. Each subsequent pass expands the training window by `ml_curriculum_step_days` days (default 1 day), again validating on the last 24 h of the slice.
+4. After at most `ml_curriculum_max_passes` intermediate passes (default 4), the final pass trains on the complete dataset with the standard holdout window.
+
+**Why curriculum training?**
+
+Training directly on months of mixed data can make it hard for the network to spot long-run weekly cycles. By starting small and expanding, the model:
+
+- First learns the simplest daily patterns from old data
+- Progressively refines those patterns as newer data is added
+- Arrives at the final full-data pass with a much better initialisation than random weights would provide
+
 **Fine-tuning:**
 
-- Runs every 2 hours if enabled
-- Uses full available dataset (same as initial training, up to 28 days)
-- Uses 3 epochs to quickly adapt to recent changes
+- Runs once the model age reaches the retrain interval (default 2 hours) rather than on a fixed clock tick, so restarts do not reset the interval unnecessarily
+- Uses the full dataset (not curriculum) since the model is already well-initialised
+- Fetches from HA and merges with accumulated database history (up to `load_ml_database_days` total)
+- Uses 30 epochs with early stopping to quickly adapt to recent changes
 - Applies same time-weighted sampling to prioritize recent data
 - Preserves learned patterns while adapting to new ones
 - Same regularization techniques applied as initial training
@@ -130,7 +159,7 @@ Although fine-tuning uses up to 20 epochs (vs 100 for initial training), it stil
 
 - **Prevents catastrophic forgetting**: Using only recent data would cause the model to gradually forget older patterns
 - **Balances adaptation**: Time weighting ensures recent changes are prioritized while maintaining long-term pattern knowledge
-- **Handles seasonal patterns**: 28 days of history helps capture weekly cycles and early seasonal trends
+- **Handles seasonal patterns**: A deep history database (default 90 days) helps capture weekly cycles and seasonal trends
 - **Provides stability**: The model learns from a broader context, making predictions more robust
 
 With time-weighted sampling, training samples have these relative weights:
@@ -164,21 +193,51 @@ predbat:
   # Use the output data in Predbat (can be False to explore the use without using the data)
   load_ml_source: True
 
-  # Optional: Maximum days of historical data to use for training (default: 28)
+  # Optional: Maximum days of historical data to fetch from HA on each poll (default: 28)
   # load_ml_max_days_history: 28
+
+  # Optional: Number of days of history to accumulate in the on-disk database (default: 90)
+  # load_ml_database_days: 90
 ```
 
 **Configuration Parameter Details:**
 
 - `load_ml_enable`: Enables the ML component (required)
 - `load_ml_source`: When `true`, Predbat uses ML predictions for battery planning. Set to `false` to test predictions without affecting battery control
-- `load_ml_max_days_history`: Maximum days of historical data to fetch and train on
+- `load_ml_max_days_history`: Maximum days of historical data to fetch from Home Assistant on each poll (every 30 minutes)
     - **Default**: 28 days
-    - **Minimum**: 1 day (not recommended for production)
-    - **Recommended**: 7-28 days depending on your consumption patterns
+    - **Minimum**: 7 days
+    - **Recommended**: 28 days
+    - **Constraint**: Limited by your HA recorder retention period — you cannot fetch more history than HA has stored
     - **When to increase**: If you have very regular weekly patterns or want seasonal awareness
     - **When to decrease**: If your consumption patterns change frequently, or you have limited historical data storage
-    - **Note**: Training time increases slightly with more data, but fine-tuning remains fast (3 epochs)
+    - **Note**: Training time increases slightly with more data, but fine-tuning remains fast due to importance-weighted sampling
+- `load_ml_database_days`: Number of days of history to accumulate and persist in the on-disk database file (`predbat_ml_history.npz`)
+    - **Default**: 90 days
+    - **How it works**: See [History Accumulation and the Database](#history-accumulation-and-the-database) below
+    - **When to increase**: If you want the model to learn long-term seasonal patterns (e.g. summer vs winter)
+    - **When to decrease**: To save disk space, or if you prefer the model to forget older patterns faster
+    - **Disk usage**: Each day of history uses approximately 5.6 KB (5 channels × 288 steps/day × 4 bytes, plus minimal metadata/format overhead)
+
+### History Accumulation and the Database
+
+The ML component maintains two distinct layers of historical data:
+
+**Live fetch layer** (`load_ml_max_days_history`):
+Every 30 minutes the component fetches the most recent N days of sensor history from Home Assistant. This is limited by your HA recorder retention — if HA only stores 14 days then that is all you will get regardless of what `load_ml_max_days_history` is set to.
+
+**Accumulated database layer** (`load_ml_database_days`):
+After each successful fetch, the newly fetched data is *merged* with the existing in-memory dataset and saved to `predbat_ml_history.npz`. This means history accumulates over time, well beyond what a single HA fetch can provide. For example with a 14-day HA retention and `load_ml_database_days: 90` set, after 90 days of running the model will have 90 days of load history to train on — far more than HA alone could supply.
+
+**How the merge works:**
+Before each fetch the existing in-memory data is time-shifted forward so that all keys remain anchored to "minutes ago from now". Fresh data from HA is then merged on top, with the fresh values taking priority for the most recent period. Older keys that have shifted beyond `load_ml_database_days` are dropped.
+
+This means:
+
+- `load_ml_max_days_history` controls how much fresh data is pulled from HA each cycle (bounded by HA retention)
+- `load_ml_database_days` controls the total depth of the training dataset that accumulates on disk
+- Setting `load_ml_database_days` to 0 or leaving `load_ml_database_days` unset disables the database entirely — training only ever uses what HA currently has
+- The age reported in logs and the `training_days` attribute reflects the actual depth of the accumulated dataset, computed from the furthest key present in memory
 
 For best results:
 
@@ -239,7 +298,7 @@ Before enabling ML load prediction:
 1. Ensure you have a `load_today` sensor that tracks cumulative daily energy consumption
 2. Optionally configure `pv_today` if you have solar panels
 3. **Recommended**: Enable the Temperature component (Temperature Component in components documentation)
-4. Ensure you have at least 1 day of historical data (7+ days recommended, up to 28 days by default)
+4. Ensure you have at least 1 day of historical data (7+ days recommended); the database will accumulate history over time beyond what HA retains
 
 ### Step 2: Enable the Component
 
@@ -247,10 +306,17 @@ Add `load_ml_enable: true` to your `apps.yaml` and restart Predbat.
 
 ### Step 3: Wait for Initial Training
 
-On first run, the component will:
+On startup the component deliberately **defers initial training to the second run cycle**. This design keeps startup fast and avoids running a CPU-heavy training pass before the event loop is fully settled.
 
-1. Fetch historical load data (default: up to 28 days, configurable)
-2. Train the neural network (takes 1-5 minutes depending on data)
+What happens on each cycle:
+
+1. **Startup cycle** — load the history database (if present), fetch fresh data from HA, then return. No training yet.
+2. **Second cycle (≈ 5 minutes later)** — training fires for the first time because the model has never been trained (`last_train_time` is unset).
+
+The full initial training sequence is:
+
+1. Load the history database and merge with a fresh HA fetch
+2. Run curriculum training (progressive window expansion — see [Curriculum Training](#curriculum-training-initial-training-only))
 3. Validate the model
 4. Begin making predictions if validation passes
 
@@ -258,10 +324,13 @@ Check the Predbat logs for training progress:
 
 ```text
 ML Component: Starting initial training
-ML Predictor: Starting initial training with 100 epochs
-ML Predictor: Training complete, final val_mae=0.3245 kWh
-ML Component: Initial training completed, validation MAE=0.3245 kWh
+ML Predictor: Curriculum training - 4 passes, window 7.0→10.0 days + final full pass (full period)
+ML Predictor: Training complete, final val_mae=0.0051 kWh val_bias=+0.0010 kWh (+2.0%)
+ML Predictor: AR rollout over holdout: ar_mae=0.0135 kWh ar_bias=-0.0030 kWh (-6.2%) [drift vs teacher-forced: +0.0031 kWh]
+ML Component: Initial training completed, validation MAE=0.0051 kWh
 ```
+
+The **AR rollout** line shows how the model performs when predictions feed back into subsequent steps (autoregressive mode, as used in real predictions), compared to the teacher-forced validation MAE. A small drift (< 3× teacher-forced MAE) indicates the model handles its own outputs well.
 
 ### Step 4: Monitor Predictions
 
@@ -287,7 +356,7 @@ You can check model status in the Predbat logs or via the component status page 
 
 Good predictions require:
 
-1. **Sufficient Historical Data**: At least 7 days recommended for stable patterns (supports up to 28 days by default)
+1. **Sufficient Historical Data**: At least 7 days recommended for stable patterns; training uses the full accumulated database (up to `load_ml_database_days`, default 90 days) merged with recent HA history (up to `load_ml_max_days_history`, default 28 days)
 2. **Consistent Patterns**: Regular daily/weekly routines improve accuracy
 3. **Temperature Data**: Especially important for homes with electric heating/cooling (requires Temperature component)
 4. **Energy Rate Data**: Automatically included - helps model learn consumption patterns based on time-of-use tariffs
@@ -408,9 +477,13 @@ Access predictions via:
 
 ## Model Persistence
 
-The trained model is saved to disk as `predbat_ml_model.npz` in your Predbat config directory. This file contains:
+Two files are saved to your Predbat config directory:
 
-- **Network weights and biases**: All 4 hidden layers plus output layer
+### `predbat_ml_model.npz` — the trained neural network
+
+This file contains:
+
+- **Network weights and biases**: All 3 hidden layers plus output layer
 - **Optimizer state**: Adam momentum terms for continuing fine-tuning
 - **Normalization parameters**: Feature and target mean/standard deviation (updated via EMA each fine-tune cycle to track distribution drift)
 - **Training metadata**: Epochs trained, timestamp, model version, architecture details
@@ -418,6 +491,45 @@ The trained model is saved to disk as `predbat_ml_model.npz` in your Predbat con
 The model is automatically loaded on Predbat restart, allowing predictions to continue immediately without retraining. The EMA-updated normalization parameters are saved and restored with the model, so drift tracking is preserved across restarts.
 
 **Note**: If you update Predbat and the model architecture or version changes, the old model will be rejected and a new model will be trained from scratch. If the model becomes unstable, you can manually delete `predbat_ml_model.npz` to force retraining.
+
+### `predbat_ml_history.npz` — the accumulated history database
+
+This file is created when `load_ml_database_days` is set (default: 90). It contains:
+
+- **Five data channels**: load, PV, temperature, import rates, export rates — each stored as a dense float32 array covering `load_ml_database_days` days of 5-minute steps
+- **Metadata**: Save timestamp, schema version, step size, and data age — used on reload to correctly time-shift the stored data before merging with fresh HA data
+
+On startup the history database is loaded, time-shifted to align with the current time, then merged with a fresh fetch from HA. This means the training dataset immediately benefits from all accumulated history even before any new data arrives.
+
+Future PV forecast values (negative keys) are never persisted — they are always re-fetched fresh.
+
+**Resetting the database**: Delete `predbat_ml_history.npz` to discard all accumulated history and start fresh. The model file is independent and does not need to be deleted at the same time.
+
+---
+
+## Advanced Training Options
+
+The following internal parameters are set in `load_ml_component.py` and are not currently exposed as `apps.yaml` keys, but are documented here for reference. They can be changed by editing the component directly if needed.
+
+| Parameter | Default | Description |
+|---|---|---|
+| `ml_curriculum_window_days` | 7 | Size (days) of the initial training window in the first curriculum pass |
+| `ml_curriculum_step_days` | 1 | Days added to the training window for each subsequent curriculum pass |
+| `ml_curriculum_max_passes` | 4 | Maximum number of intermediate curriculum passes before the final full-data pass; `0` means unlimited |
+| `ml_dropout_rate` | 0.1 | Fraction of hidden neurons randomly dropped during training to reduce over-fitting |
+| `ml_weight_decay` | 0.01 | L2 regularization coefficient for AdamW (larger = more regularization) |
+| `ml_learning_rate` | 0.001 | Adam optimizer learning rate |
+| `ml_epochs_initial` | 100 | Max epochs for initial (full) training; early stopping usually fires first |
+| `ml_epochs_update` | 30 | Max epochs for each fine-tune cycle |
+| `ml_patience_initial` | 10 | Early-stopping patience (epochs) for initial training |
+| `ml_patience_update` | 10 | Early-stopping patience (epochs) for fine-tuning |
+| `ml_validation_threshold` | 2.0 | Maximum allowable validation MAE (kWh) before predictions are disabled |
+| `ml_max_model_age_hours` | 48 | Hours after which a model is considered stale and requires retraining |
+| `ml_time_decay_days` | 30 | Exponential time-decay constant for sample weighting (older samples get lower weight) |
+| `ml_validation_holdout_hours` | 24 | Hours of most-recent data held out for validation (not used in training) |
+| `ml_huber_delta` | 1.35 | Huber loss transition point in normalised target units; errors below this are penalised quadratically, above it linearly. Lower values make training more robust to spikes; higher values bring it closer to MSE |
+| `ml_ema_smoothing_alpha` | 0.3 | EMA alpha applied to the early-stopping metric across epochs (0 = no smoothing, 1 = no memory). Higher values react faster to per-epoch changes but are noisier |
+| `ml_lr_decay` | `"cosine"` | Learning rate schedule: `"cosine"` decays from `ml_learning_rate` to 10% of it over all epochs; `None` keeps it constant |
 
 ---
 

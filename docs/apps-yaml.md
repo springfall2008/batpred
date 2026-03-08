@@ -1338,10 +1338,14 @@ See the [Predbat Compare feature](compare.md) for details of how to define the t
 Predbat can include electric vehicle charging in its plan and manage the battery activity so that the battery isn't discharged into your car when the car is charging
 (although you can override this if you wish by setting the **switch.predbat_car_charging_from_battery** to True in Home Assistant).
 
+If your EV charger is wired **outside** the inverter's CT clamp (i.e. the inverter cannot see the car charging as part of house load),
+set **switch.predbat_car_energy_reported_load** to Off in Home Assistant. Predbat will automatically adjust its behaviour accordingly.
+
 Details of configuring `apps.yaml` for EV charging are described in [Configure apps.yaml for your car charging](car-charging.md#configure-appsyaml-for-your-car-charging), and a list of these configuration items is included below for completeness:
 
 - **num_cars** number of cars you want Predbat to plan for
 - **car_charging_exclusive** for multiple EV's to indicate if they can be charged independently or not
+- **car_energy_reported_load** - Set to False if your EV charger is wired outside the inverter's CT clamp (see [car charging documentation](car-charging.md#filtering-car-charging-energy-from-house-load))
 - **car_charging_energy** - Energy consumed by your EV charger
 - **octopus_intelligent_slot** - Octopus Energy integration 'intelligent dispatching' sensor that indicates
 whether you are within an Octopus Energy "smart charge" slot

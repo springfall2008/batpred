@@ -6289,6 +6289,11 @@ def get_plan_renderer_js():
                 return '<p style="color:red;">No plan data available</p>';
             }
 
+            // Store plan midnight reference so getMinutesFromTimeString can compute
+            // absolute minutes for next-day slots (e.g., tomorrow 00:00 = 1440 min,
+            // not 0 which is what a plain hours*60+minutes calculation would return).
+            window.planMidnightRef = jsonData.time || null;
+
             let html = '<table>';
             const cellStyle = 'style="padding: 4px;"';
 
@@ -6725,6 +6730,14 @@ def get_plan_renderer_js():
             // Try to parse as ISO timestamp first
             const date = new Date(timeStr);
             if (!isNaN(date.getTime())) {
+                // Use the plan midnight reference to compute absolute minutes so that
+                // next-day slots (e.g., tomorrow 00:00) return 1440 not 0.
+                // This makes the value comparable to the override times lists which
+                // are stored as minutes-from-today's-midnight (can exceed 1439).
+                if (window.planMidnightRef) {
+                    const midnight = new Date(window.planMidnightRef);
+                    return Math.round((date - midnight) / 60000);
+                }
                 return date.getHours() * 60 + date.getMinutes();
             }
             // Fallback to "Day HH:MM" format parsing
@@ -7049,8 +7062,20 @@ def get_header_html(title, calculating, default_page, arg_errors, THIS_VERSION, 
     """
 
     text = '<!doctype html><html><head><meta charset="utf-8"><title>{}</title>'.format(title)
+    text += '<link rel="icon" type="image/png" href="https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_light.png">'
 
     text += """
+<script>
+// Apply dark mode immediately before CSS is parsed to prevent flash of white
+if (localStorage.getItem('darkMode') === 'true') {
+    document.documentElement.classList.add('dark-mode');
+    document.addEventListener('DOMContentLoaded', function() {
+        if (document.body) {
+            document.body.classList.add('dark-mode');
+        }
+    });
+}
+</script>
 <link href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
 <style>
@@ -7060,12 +7085,19 @@ def get_header_html(title, calculating, default_page, arg_errors, THIS_VERSION, 
         height: 100%;
         border: 2px solid #ffffff;
     }
+    html.dark-mode, html.dark-mode body {
+        border-color: #121212;
+    }
     body {
         font-family: Arial, sans-serif;
         text-align: left;
         margin: 5px;
         background-color: #ffffff;
         color: #333;
+    }
+    html.dark-mode body {
+        background-color: #121212;
+        color: #e0e0e0;
     }
     h1 {
         color: #4CAF50;

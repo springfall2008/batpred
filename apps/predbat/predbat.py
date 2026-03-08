@@ -36,7 +36,7 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.33.4"
+THIS_VERSION = "v8.34.1"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "const.py", "hass.py", "config.py", "prediction.py", "gecloud.py", "utils.py", "inverter.py", "ha.py", "download.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py", "execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "temperature.py", "web_mcp.py", "component_base.py", "axle.py", "solax.py", "solis.py", "unit_test.py", "load_ml_component.py", "load_predictor.py", "predbat_metrics.py"]
@@ -492,7 +492,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.high_export_rates = []
         self.cost_today_sofar = 0
         self.carbon_today_sofar = 0
-        self.octopus_slots = []
         self.octopus_free_slots = []
         self.octopus_saving_slots = []
         self.car_charging_slots = []
@@ -565,6 +564,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.battery_rate_min = 0
         self.battery_rate_max_scaling = 1.0
         self.battery_rate_max_scaling_discharge = 1.0
+        self.car_energy_reported_load = False
         self.charge_rate_now = 0
         self.discharge_rate_now = 0
         self.car_charging_hold = False
@@ -626,7 +626,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.rate_slots = []
         self.low_rates = []
         self.high_export_rates = []
-        self.octopus_slots = []
         self.axle_sessions = []
         self.cost_today_sofar = 0
         self.carbon_today_sofar = 0
@@ -665,7 +664,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.rate_slots = []
         self.low_rates = []
         self.high_export_rates = []
-        self.octopus_slots = []
+        self.octopus_slots = [[] for _ in range(8)]
         self.cost_today_sofar = 0
         self.carbon_today_sofar = 0
         self.import_today = {}
@@ -1109,6 +1108,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
 
         files = predbat_update_download(version)
         if files:
+            # Notify before killing threads so the WebSocket is still healthy
+            if self.get_arg("set_system_notify"):
+                self.call_notify("Predbat: update to: {}".format(version))
+
             # Kill the current threads
             self.log("Kill current threads before update")
             self.stop_thread = True
@@ -1121,10 +1124,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                     self.log("Warn: Failed to close thread pool: {}".format(e))
                     self.log("Warn: " + traceback.format_exc())
                 self.pool = None
-
-            # Notify that we are about to update
-            if self.get_arg("set_system_notify"):
-                self.call_notify("Predbat: update to: {}".format(version))
 
             # Perform the update
             self.log("Perform the update.....")
@@ -1192,6 +1191,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                 expected_types = expected_type.split("|")
                 allowed = spec.get("allowed", None)
                 entries = spec.get("entries", None)
+                optional_entries = spec.get("optional_entries", False)
                 required_entries = None
                 matches = False
                 if entries is not None:
@@ -1202,15 +1202,17 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
 
                     if isinstance(value, list):
                         if len(value) < required_entries:
-                            self.log("Warn: Validation of apps.yaml found configuration item '{}' has {} entries, expected {} based on {}".format(name, len(value), required_entries, entries))
-                            self.arg_errors[name] = "Invalid number of entries, expected {}".format(required_entries)
+                            if not optional_entries:
+                                self.log("Warn: Validation of apps.yaml found configuration item '{}' has {} entries, expected {} based on {}".format(name, len(value), required_entries, entries))
+                                self.arg_errors[name] = "Invalid number of entries, expected {}".format(required_entries)
+                                errors += 1
+                                continue
+                    elif required_entries > 1:
+                        if not optional_entries:
+                            self.log("Warn: Validation of apps.yaml found configuration item '{}' is not a list, but requires {} entries based on {}".format(name, required_entries, entries))
+                            self.arg_errors[name] = "Invalid type, expected list"
                             errors += 1
                             continue
-                    elif required_entries > 1:
-                        self.log("Warn: Validation of apps.yaml found configuration item '{}' is not a list, but requires {} entries based on {}".format(name, required_entries, entries))
-                        self.arg_errors[name] = "Invalid type, expected list"
-                        errors += 1
-                        continue
 
                 for expected_type in expected_types:
                     if expected_type == "none":

@@ -236,11 +236,12 @@ async def test_fetch_entity_data_power_clamping():
         }
     }
 
+    inverter_sn_lower = inverter_sn.lower()
     # Set power values that would exceed max current when converted
     # Charge: 4800W / 48V = 100A, but max is 50A
-    api.dashboard_items[f"number.predbat_solis_{inverter_sn}_charge_slot1_power"] = {"state": "4800", "attributes": {}}
+    api.dashboard_items[f"number.predbat_solis_{inverter_sn_lower}_charge_slot1_power"] = {"state": "4800", "attributes": {}}
     # Discharge: 3000W / 48V = 62.5A, but max is 40A
-    api.dashboard_items[f"number.predbat_solis_{inverter_sn}_discharge_slot1_power"] = {"state": "3000", "attributes": {}}
+    api.dashboard_items[f"number.predbat_solis_{inverter_sn_lower}_discharge_slot1_power"] = {"state": "3000", "attributes": {}}
 
     # Call fetch_entity_data
     await api.fetch_entity_data(inverter_sn)
@@ -278,11 +279,12 @@ async def test_fetch_entity_data_invalid_values():
         }
     }
 
+    inverter_sn_lower = inverter_sn.lower()
     # Set invalid values
-    api.dashboard_items[f"number.predbat_solis_{inverter_sn}_charge_slot1_soc"] = {"state": "not_a_number", "attributes": {}}
-    api.dashboard_items[f"number.predbat_solis_{inverter_sn}_charge_slot1_power"] = {"state": "invalid", "attributes": {}}
-    api.dashboard_items[f"number.predbat_solis_{inverter_sn}_discharge_slot1_soc"] = {"state": None, "attributes": {}}  # None state
-    api.dashboard_items[f"number.predbat_solis_{inverter_sn}_discharge_slot1_power"] = {"state": "", "attributes": {}}  # Empty string
+    api.dashboard_items[f"number.predbat_solis_{inverter_sn_lower}_charge_slot1_soc"] = {"state": "not_a_number", "attributes": {}}
+    api.dashboard_items[f"number.predbat_solis_{inverter_sn_lower}_charge_slot1_power"] = {"state": "invalid", "attributes": {}}
+    api.dashboard_items[f"number.predbat_solis_{inverter_sn_lower}_discharge_slot1_soc"] = {"state": None, "attributes": {}}  # None state
+    api.dashboard_items[f"number.predbat_solis_{inverter_sn_lower}_discharge_slot1_power"] = {"state": "", "attributes": {}}  # Empty string
 
     # Call fetch_entity_data - should not crash
     await api.fetch_entity_data(inverter_sn)
@@ -1726,78 +1728,79 @@ async def test_publish_entities():
 
     # Verify key entities were created
     prefix = api.prefix
+    inverter_sn_lower = inverter_sn.lower()
 
     # Check some sensor entities
-    assert f"sensor.{prefix}_solis_{inverter_sn}_battery_soc" in api.dashboard_items, "Battery SOC sensor should be published"
-    battery_soc_item = api.dashboard_items[f"sensor.{prefix}_solis_{inverter_sn}_battery_soc"]
+    assert f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_soc" in api.dashboard_items, "Battery SOC sensor should be published"
+    battery_soc_item = api.dashboard_items[f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_soc"]
     assert battery_soc_item["state"] == 85, f"Battery SOC should be 85, got {battery_soc_item['state']}"
     assert battery_soc_item["attributes"]["unit_of_measurement"] == "%", "Battery SOC should have % unit"
 
     # Check charge slot 1 controls
-    assert f"switch.{prefix}_solis_{inverter_sn}_charge_slot1_enable" in api.dashboard_items, "Charge slot 1 enable switch should be published"
-    charge_enable = api.dashboard_items[f"switch.{prefix}_solis_{inverter_sn}_charge_slot1_enable"]
+    assert f"switch.{prefix}_solis_{inverter_sn_lower}_charge_slot1_enable" in api.dashboard_items, "Charge slot 1 enable switch should be published"
+    charge_enable = api.dashboard_items[f"switch.{prefix}_solis_{inverter_sn_lower}_charge_slot1_enable"]
     assert charge_enable["state"] == "on", "Charge slot 1 should be enabled"
 
-    assert f"select.{prefix}_solis_{inverter_sn}_charge_slot1_start_time" in api.dashboard_items, "Charge slot 1 start time should be published"
-    charge_start = api.dashboard_items[f"select.{prefix}_solis_{inverter_sn}_charge_slot1_start_time"]
+    assert f"select.{prefix}_solis_{inverter_sn_lower}_charge_slot1_start_time" in api.dashboard_items, "Charge slot 1 start time should be published"
+    charge_start = api.dashboard_items[f"select.{prefix}_solis_{inverter_sn_lower}_charge_slot1_start_time"]
     assert charge_start["state"] == "02:00:00", f"Charge start time should be 02:00:00, got {charge_start['state']}"
 
-    assert f"number.{prefix}_solis_{inverter_sn}_charge_slot1_soc" in api.dashboard_items, "Charge slot 1 SOC should be published"
-    charge_soc = api.dashboard_items[f"number.{prefix}_solis_{inverter_sn}_charge_slot1_soc"]
+    assert f"number.{prefix}_solis_{inverter_sn_lower}_charge_slot1_soc" in api.dashboard_items, "Charge slot 1 SOC should be published"
+    charge_soc = api.dashboard_items[f"number.{prefix}_solis_{inverter_sn_lower}_charge_slot1_soc"]
     assert charge_soc["state"] == 95, f"Charge SOC should be 95, got {charge_soc['state']}"
 
     # Check power conversion (amps to watts)
-    assert f"number.{prefix}_solis_{inverter_sn}_charge_slot1_power" in api.dashboard_items, "Charge slot 1 power should be published"
-    charge_power = api.dashboard_items[f"number.{prefix}_solis_{inverter_sn}_charge_slot1_power"]
+    assert f"number.{prefix}_solis_{inverter_sn_lower}_charge_slot1_power" in api.dashboard_items, "Charge slot 1 power should be published"
+    charge_power = api.dashboard_items[f"number.{prefix}_solis_{inverter_sn_lower}_charge_slot1_power"]
     expected_power = int(50 * api.nominal_voltage)  # 50A * 48.4V = 2420W
     assert charge_power["state"] == expected_power, f"Charge power should be {expected_power}W, got {charge_power['state']}"
     assert charge_power["attributes"]["unit_of_measurement"] == "W", "Charge power should have W unit"
 
     # Check discharge slot 1 controls
-    assert f"switch.{prefix}_solis_{inverter_sn}_discharge_slot1_enable" in api.dashboard_items, "Discharge slot 1 enable switch should be published"
-    discharge_enable = api.dashboard_items[f"switch.{prefix}_solis_{inverter_sn}_discharge_slot1_enable"]
+    assert f"switch.{prefix}_solis_{inverter_sn_lower}_discharge_slot1_enable" in api.dashboard_items, "Discharge slot 1 enable switch should be published"
+    discharge_enable = api.dashboard_items[f"switch.{prefix}_solis_{inverter_sn_lower}_discharge_slot1_enable"]
     assert discharge_enable["state"] == "on", "Discharge slot 1 should be enabled"
 
     # Check storage mode selector
-    assert f"select.{prefix}_solis_{inverter_sn}_storage_mode" in api.dashboard_items, "Storage mode selector should be published"
+    assert f"select.{prefix}_solis_{inverter_sn_lower}_storage_mode" in api.dashboard_items, "Storage mode selector should be published"
 
     # Check switches (battery reserve, grid charging, TOU, export)
-    assert f"switch.{prefix}_solis_{inverter_sn}_battery_reserve" in api.dashboard_items, "Battery reserve switch should be published"
-    assert f"switch.{prefix}_solis_{inverter_sn}_allow_grid_charging" in api.dashboard_items, "Grid charging switch should be published"
-    assert f"switch.{prefix}_solis_{inverter_sn}_time_of_use" in api.dashboard_items, "TOU switch should be published"
-    assert f"switch.{prefix}_solis_{inverter_sn}_allow_export" in api.dashboard_items, "Export switch should be published"
+    assert f"switch.{prefix}_solis_{inverter_sn_lower}_battery_reserve" in api.dashboard_items, "Battery reserve switch should be published"
+    assert f"switch.{prefix}_solis_{inverter_sn_lower}_allow_grid_charging" in api.dashboard_items, "Grid charging switch should be published"
+    assert f"switch.{prefix}_solis_{inverter_sn_lower}_time_of_use" in api.dashboard_items, "TOU switch should be published"
+    assert f"switch.{prefix}_solis_{inverter_sn_lower}_allow_export" in api.dashboard_items, "Export switch should be published"
 
     # Check SOC limit numbers
-    assert f"number.{prefix}_solis_{inverter_sn}_reserve_soc" in api.dashboard_items, "Reserve SOC should be published"
-    reserve_soc = api.dashboard_items[f"number.{prefix}_solis_{inverter_sn}_reserve_soc"]
+    assert f"number.{prefix}_solis_{inverter_sn_lower}_reserve_soc" in api.dashboard_items, "Reserve SOC should be published"
+    reserve_soc = api.dashboard_items[f"number.{prefix}_solis_{inverter_sn_lower}_reserve_soc"]
     assert reserve_soc["state"] == "10", f"Reserve SOC should be 10, got {reserve_soc['state']}"
 
     # Check max power numbers (converted from amps)
-    assert f"number.{prefix}_solis_{inverter_sn}_max_charge_power" in api.dashboard_items, "Max charge power should be published"
-    max_charge = api.dashboard_items[f"number.{prefix}_solis_{inverter_sn}_max_charge_power"]
+    assert f"number.{prefix}_solis_{inverter_sn_lower}_max_charge_power" in api.dashboard_items, "Max charge power should be published"
+    max_charge = api.dashboard_items[f"number.{prefix}_solis_{inverter_sn_lower}_max_charge_power"]
     expected_max_power = int(50 * api.nominal_voltage)  # 50A * 48.4V
     assert max_charge["state"] == expected_max_power, f"Max charge power should be {expected_max_power}W, got {max_charge['state']}"
 
     # Check battery capacity calculation (Ah to kWh)
-    assert f"sensor.{prefix}_solis_{inverter_sn}_battery_capacity" in api.dashboard_items, "Battery capacity should be published"
-    battery_cap = api.dashboard_items[f"sensor.{prefix}_solis_{inverter_sn}_battery_capacity"]
+    assert f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_capacity" in api.dashboard_items, "Battery capacity should be published"
+    battery_cap = api.dashboard_items[f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_capacity"]
     expected_kwh = round(100 * api.nominal_voltage / 1000.0, 2)  # 100Ah * 48.4V / 1000 = 4.84 kWh
     assert battery_cap["state"] == expected_kwh, f"Battery capacity should be {expected_kwh}kWh, got {battery_cap['state']}"
     assert battery_cap["attributes"]["unit_of_measurement"] == "kWh", "Battery capacity should have kWh unit"
 
     # Check that slot 2 entities are also published (even if disabled)
-    assert f"switch.{prefix}_solis_{inverter_sn}_charge_slot2_enable" in api.dashboard_items, "Charge slot 2 should be published"
-    charge2_enable = api.dashboard_items[f"switch.{prefix}_solis_{inverter_sn}_charge_slot2_enable"]
+    assert f"switch.{prefix}_solis_{inverter_sn_lower}_charge_slot2_enable" in api.dashboard_items, "Charge slot 2 should be published"
+    charge2_enable = api.dashboard_items[f"switch.{prefix}_solis_{inverter_sn_lower}_charge_slot2_enable"]
     assert charge2_enable["state"] == "off", "Charge slot 2 should be disabled"
 
     # Check detail API sensors
-    assert f"sensor.{prefix}_solis_{inverter_sn}_pv_power" in api.dashboard_items, "PV power should be published"
-    pv_power = api.dashboard_items[f"sensor.{prefix}_solis_{inverter_sn}_pv_power"]
+    assert f"sensor.{prefix}_solis_{inverter_sn_lower}_pv_power" in api.dashboard_items, "PV power should be published"
+    pv_power = api.dashboard_items[f"sensor.{prefix}_solis_{inverter_sn_lower}_pv_power"]
     assert pv_power["state"] == 2.5, f"PV power should be 2.5, got {pv_power['state']}"
 
-    assert f"sensor.{prefix}_solis_{inverter_sn}_battery_power" in api.dashboard_items, "Battery power should be published"
-    assert f"sensor.{prefix}_solis_{inverter_sn}_load_power" in api.dashboard_items, "Load power should be published"
-    assert f"sensor.{prefix}_solis_{inverter_sn}_grid_power" in api.dashboard_items, "Grid power should be published"
+    assert f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_power" in api.dashboard_items, "Battery power should be published"
+    assert f"sensor.{prefix}_solis_{inverter_sn_lower}_load_power" in api.dashboard_items, "Load power should be published"
+    assert f"sensor.{prefix}_solis_{inverter_sn_lower}_grid_power" in api.dashboard_items, "Grid power should be published"
 
     print(f"PASSED: publish_entities created {len(api.dashboard_items)} entities correctly")
     return False

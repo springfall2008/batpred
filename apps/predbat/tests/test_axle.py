@@ -130,6 +130,7 @@ def test_axle(my_predbat=None):
         ("history_cleanup", _test_axle_history_cleanup, "History cleanup old events"),
         ("fetch_sessions", _test_axle_fetch_sessions, "Fetch sessions from API"),
         ("load_slot_export", _test_axle_load_slot_export, "Load slot export integration"),
+        ("load_slot_import", _test_axle_load_slot_import, "Load slot import integration"),
         ("active_function", _test_axle_active_function, "Active status checking"),
     ]
 
@@ -879,6 +880,7 @@ def _test_axle_load_slot_export(my_predbat=None):
             self.rate_import = {}
             self.load_scaling_dynamic = {}
             self.load_scaling_saving = 0.5
+            self.load_scaling_free = 0.0
 
         def log(self, message):
             print(f"  [LOG] {message}")
@@ -927,10 +929,13 @@ def _test_axle_load_slot_export(my_predbat=None):
         actual_rate = base.rate_export[minute]
         assert actual_rate == expected_rate, f"Rate at minute {minute} should be {expected_rate}, got {actual_rate}"
         assert rate_replicate.get(minute) == "saving", f"Minute {minute} should be marked as 'saving' in rate_replicate"
+        assert base.load_scaling_dynamic.get(minute) == base.load_scaling_saving, f"load_scaling_dynamic at minute {minute} should be {base.load_scaling_saving}, got {base.load_scaling_dynamic.get(minute)}"
 
     # Verify rates outside the event period were NOT modified
     assert base.rate_export[start_minutes - 1] == 5.0, "Rate before event should be unchanged"
     assert base.rate_export[end_minutes] == 5.0, "Rate at end_minutes (not inclusive) should be unchanged"
+    assert base.load_scaling_dynamic.get(start_minutes - 1) is None, "load_scaling_dynamic before event should be unchanged"
+    assert base.load_scaling_dynamic.get(end_minutes) is None, "load_scaling_dynamic after event should be unchanged"
 
     # Verify the event was logged
     print("  ✓ Export rates increased by 100p/kWh for 2-hour period (14:00-16:00)")
@@ -938,6 +943,89 @@ def _test_axle_load_slot_export(my_predbat=None):
     print(f"  ✓ Rate at 13:59 unchanged: {base.rate_export[start_minutes - 1]}")
     print(f"  ✓ Rate at 16:00 unchanged: {base.rate_export[end_minutes]}")
     print(f"  ✓ {len(rate_replicate)} minutes marked as 'saving' events")
+    print(f"  ✓ load_scaling_saving ({base.load_scaling_saving}) applied to {len(base.load_scaling_dynamic)} minutes in export event")
+
+    return False
+
+
+def _test_axle_load_slot_import(my_predbat=None):
+    """
+    Test that load_axle_slot decreases import rates by pence_per_kwh and applies load_scaling_free for import events
+    """
+    from axle import load_axle_slot
+    from datetime import datetime, timezone
+
+    print("Testing load_axle_slot import rate decrease...")
+
+    class MockBase:
+        def __init__(self):
+            self.midnight_utc = datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+            self.now_utc = datetime(2024, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+            self.minutes_now = 10 * 60  # 10:00 AM
+            self.forecast_minutes = 24 * 60  # 24 hours
+            self.prefix = "predbat"
+
+            # Initialize rate_import with base rates for each minute
+            self.rate_import = {}
+            for minute in range(self.forecast_minutes):
+                self.rate_import[minute] = 30.0  # Base rate of 30p/kWh
+
+            self.rate_export = {}
+            self.load_scaling_dynamic = {}
+            self.load_scaling_saving = 0.5
+            self.load_scaling_free = 0.0
+
+        def log(self, message):
+            print(f"  [LOG] {message}")
+
+        def time_abs_str(self, minutes):
+            return f"{minutes//60:02d}:{minutes%60:02d}"
+
+        def get_arg(self, name, indirect=True):
+            return None
+
+    base = MockBase()
+
+    start_time = "2024-01-01T02:00:00+00:00"
+    end_time = "2024-01-01T04:00:00+00:00"
+
+    axle_sessions = [
+        {
+            "start_time": start_time,
+            "end_time": end_time,
+            "import_export": "import",
+            "pence_per_kwh": 10.0,
+        }
+    ]
+
+    start_minutes = 2 * 60  # 02:00 = 120 minutes
+    end_minutes = 4 * 60  # 04:00 = 240 minutes
+
+    original_rate = base.rate_import[start_minutes]
+
+    rate_replicate = {}
+    load_axle_slot(base, axle_sessions, export=False, rate_replicate=rate_replicate)
+
+    # Verify import rates were decreased by pence_per_kwh during the event period
+    for minute in range(start_minutes, end_minutes):
+        expected_rate = original_rate - 10.0  # 30.0 - 10.0 = 20.0
+        actual_rate = base.rate_import[minute]
+        assert actual_rate == expected_rate, f"Import rate at minute {minute} should be {expected_rate}, got {actual_rate}"
+        assert rate_replicate.get(minute) == "saving", f"Minute {minute} should be marked as 'saving' in rate_replicate"
+        assert base.load_scaling_dynamic.get(minute) == base.load_scaling_free, f"load_scaling_dynamic at minute {minute} should be {base.load_scaling_free}, got {base.load_scaling_dynamic.get(minute)}"
+
+    # Verify outside the event period were NOT modified
+    assert base.rate_import[start_minutes - 1] == 30.0, "Import rate before event should be unchanged"
+    assert base.rate_import[end_minutes] == 30.0, "Import rate at end_minutes (not inclusive) should be unchanged"
+    assert base.load_scaling_dynamic.get(start_minutes - 1) is None, "load_scaling_dynamic before event should be unchanged"
+    assert base.load_scaling_dynamic.get(end_minutes) is None, "load_scaling_dynamic after event should be unchanged"
+
+    print("  ✓ Import rates decreased by 10p/kWh for 2-hour period (02:00-04:00)")
+    print(f"  ✓ Rate at 02:00 changed from {original_rate} to {base.rate_import[start_minutes]}")
+    print(f"  ✓ Rate at 01:59 unchanged: {base.rate_import[start_minutes - 1]}")
+    print(f"  ✓ Rate at 04:00 unchanged: {base.rate_import[end_minutes]}")
+    print(f"  ✓ {len(rate_replicate)} minutes marked as 'saving' events")
+    print(f"  ✓ load_scaling_free ({base.load_scaling_free}) applied to {len(base.load_scaling_dynamic)} minutes in import event")
 
     return False
 
@@ -992,27 +1080,4 @@ def _test_axle_active_function(my_predbat=None):
     assert result is False, "fetch_axle_active should return False when axle_session is not configured"
 
     print("✓ fetch_axle_active function test passed")
-
-
-# Run all tests
-if __name__ == "__main__":
-    print("\n=== Axle API Component Tests ===\n")
-
-    test_axle_initialization()
-    test_axle_fetch_with_active_event()
-    test_axle_fetch_with_future_event()
-    test_axle_fetch_with_past_event()
-    test_axle_fetch_no_event()
-    test_axle_http_error()
-    test_axle_request_exception()
-    test_axle_retry_success_after_failure()
-    test_axle_json_parse_error()
-    test_axle_datetime_parsing_variations()
-    test_axle_run_method()
-    test_axle_history_loading()
-    test_axle_history_cleanup()
-    test_axle_fetch_sessions()
-    test_axle_load_slot_export()
-    test_axle_active_function()
-
-    print("\n=== All Axle API tests passed! ===\n")
+    return False

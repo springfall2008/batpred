@@ -33,7 +33,15 @@ high battery charge levels when the car was charged previously (e.g. last week).
 
 *TIP:* Check the house load being reported by your inverter when your car is charging. If it doesn't include the car charging load then there is no need to follow these steps below (and if you do, you'll artificially deflate your house load).
 
-- **switch.predbat_car_charging_hold** - A switch that when turned on (the default) tells Predbat to remove car charging data from your historical house load so that Predbat's battery prediction plan is not distorted by previous car charging.
+- **switch.predbat_car_energy_reported_load** - A switch (default On) that tells Predbat whether your EV charger is on the **house-load side of the CT clamp** (i.e. the inverter 'sees' the car charging as part of house load).
+
+    - **On (default)** - The car charger is inside the CT clamp and its energy is reported as part of the house load. Predbat will attempt to strip car charging energy from historical load data (via **switch.predbat_car_charging_hold**) and will prevent the battery from discharging into the car when **switch.predbat_car_charging_from_battery** is Off.
+    - **Off** - The car charger is wired outside the CT clamp (e.g. directly to the grid connection). The inverter cannot see the car charging load directly. In this case Predbat will:
+        - Automatically disable **switch.predbat_car_charging_hold** (no need to strip car data from house load, as it was never included).
+        - Automatically set **switch.predbat_car_charging_from_battery** to On in the model (the battery cannot discharge into the car anyway as it is on a separate circuit).
+        - Model that any export from the battery/PV may flow into the car rather than the grid, and so conservatively not credit that energy with export income.
+
+- **switch.predbat_car_charging_hold** - A switch that when turned on (the default) tells Predbat to remove car charging data from your historical house load so that Predbat's battery prediction plan is not distorted by previous car charging. This switch is automatically overridden to Off when **switch.predbat_car_energy_reported_load** is Off, since the car load is not in the house load data.
 
 If you are getting [erroneous house load predictions in your plan](faq.md#why-is-my-house-load-lower-than-expected-or-zero) then check this setting and **car_charging_energy** or **input_number.predbat_car_charging_threshold** are set correctly.
 
@@ -84,12 +92,15 @@ The following `apps.yaml` configuration items are pre-defined with regular expre
 
 - **octopus_intelligent_slot** - Points to the Octopus Energy integration 'intelligent dispatching' sensor that indicates
 whether you are within an Octopus Energy "smart charge" slot, and provides the list of future planned charging activity.
+For **multiple IOG-enrolled vehicles**, set this to a list with one sensor per car (see [Multiple Electric Cars](#multiple-electric-cars)).
 
 - **octopus_ready_time** - Points to the Octopus Energy integration sensor that details when the car charging will be completed.<BR>
 *Note:* the Octopus Integration now provides [Octopus Intelligent target time](https://bottlecapdave.github.io/HomeAssistant-OctopusEnergy/entities/intelligent/#target-time-time) in two formats, either a 'select' entity or a 'time' entity.
 Predbat uses the time entity (time.octopus_energy_{{DEVICE_ID}}_intelligent_target_time) which is disabled by default, so you will need to enable the time entity and disable the matching select entity.
+For **multiple IOG-enrolled vehicles**, set this to a list with one sensor per car.
 
 - **octopus_charge_limit** - Points to the Octopus Energy integration sensor that provides the car charging limit.
+For **multiple IOG-enrolled vehicles**, set this to a list with one sensor per car.
 
 - **octopus_slot_low_rate** - Default is True, meaning any Octopus Intelligent Slot reported will be at the lowest rate if at home. If False the existing rates only will be used which is only suitable for tariffs other than IOG.
 
@@ -148,10 +159,54 @@ Multiple cars can be planned with Predbat, in which case you should set **num_ca
 
 - **car_charging_limit**, **car_charging_planned**, **car_charging_battery_size** and **car_charging_soc** must then be a list of values (i.e. 2 entries for 2 cars)
 
-- If you have Intelligent Octopus then Car 0 will be managed by the Octopus Energy integration, if it's enabled.
-
 - Each car will have its own Home Assistant slot sensor created e.g. **binary_sensor.predbat_car_charging_slot_1**,
 SoC planning sensor e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for car 1
+
+### Multiple cars with Octopus Intelligent Go (IOG)
+
+If you have **two or more EVs enrolled in Octopus Intelligent Go**, Predbat can track the scheduled dispatch slots for each car independently.
+
+If you use the Octopus Direct function inside Predbat then you can set **octopus_automatic** to True to automatically configure IOG cars.
+
+Otherwise if using Bottle Cap Dave's Octopus integration then set **octopus_intelligent_slot**, **octopus_ready_time** and **octopus_charge_limit**
+to lists with one entry per car in `apps.yaml`:
+
+```yaml
+  num_cars: 2
+
+  car_charging_exclusive:
+    - True
+    - True
+
+  octopus_intelligent_slot:
+    - 'binary_sensor.octopus_energy_{{DEVICE_ID_CAR1}}_intelligent_dispatching'
+    - 'binary_sensor.octopus_energy_{{DEVICE_ID_CAR2}}_intelligent_dispatching'
+
+  octopus_ready_time:
+    - 'time.octopus_energy_{{DEVICE_ID_CAR1}}_intelligent_target_time'
+    - 'time.octopus_energy_{{DEVICE_ID_CAR2}}_intelligent_target_time'
+
+  octopus_charge_limit:
+    - 'number.octopus_energy_{{DEVICE_ID_CAR1}}_intelligent_charge_target'
+    - 'number.octopus_energy_{{DEVICE_ID_CAR2}}_intelligent_charge_target'
+```
+
+Replace `{{DEVICE_ID_CAR1}}` and `{{DEVICE_ID_CAR2}}` with the actual device IDs shown in your Octopus Energy integration.
+Each entry in the list corresponds to the matching car index (car 0, car 1, …).
+
+**Only one car on IOG?** If you have `num_cars: 2` but only car 0 is enrolled in Octopus Intelligent Go, you do not need to provide a list.
+Just keep the single-sensor config (or provide a one-entry list) and car 1 will be managed by Predbat-led charging instead:
+
+```yaml
+  num_cars: 2
+
+  # Only car 0 uses IOG - a single entry is sufficient
+  octopus_intelligent_slot: 'binary_sensor.octopus_energy_{{DEVICE_ID_CAR1}}_intelligent_dispatching'
+  octopus_ready_time: 'time.octopus_energy_{{DEVICE_ID_CAR1}}_intelligent_target_time'
+  octopus_charge_limit: 'number.octopus_energy_{{DEVICE_ID_CAR1}}_intelligent_charge_target'
+```
+
+*Note:* The `octopus_slot_max` limit applies per-car, so with two cars on IOG each car is subject to its own slot-count cap.
 
 An excellent [worked example of setting up multiple car charging with Predbat](https://github.com/springfall2008/batpred/discussions/3001) is in the 'Show and tell' part of Predbat's GitHub.
 
@@ -304,6 +359,8 @@ When set to Off home battery discharge will be prevented when your car charges, 
 This is achieved by setting the battery discharge rate to 0 during car charging and to the maximum otherwise.
 The home battery can still charge from the grid/solar in either case. Only use this if Predbat knows your car charging plan,
 e.g. you are using Intelligent Octopus or you use the car slots in Predbat to control your car charging.
+
+  *NOTE:* If **switch.predbat_car_energy_reported_load** is set to Off (car outside the CT clamp), this setting has no effect as the battery cannot supply the car directly. Predbat will automatically treat the car as being supplied from the grid/export.
 
 - **input_number.predbat_car_charging_loss** gives the percentage amount of energy lost when charging the car (load in the home vs energy added to the battery).
 A good setting is 0.08 which is 8%.

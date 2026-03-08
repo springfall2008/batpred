@@ -171,7 +171,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
 
     if my_predbat.num_cars > 0 and my_predbat.octopus_slots:
         if reload_octopus_slots:
-            my_predbat.car_charging_slots[0] = my_predbat.load_octopus_slots(my_predbat.octopus_slots, my_predbat.octopus_intelligent_consider_full)
+            my_predbat.car_charging_slots[0] = my_predbat.load_octopus_slots(0, my_predbat.octopus_slots[0], my_predbat.octopus_intelligent_consider_full)
             print("Re-loaded car charging slots {}".format(my_predbat.car_charging_slots[0]))
         else:
             print("Current car charging slots {}".format(my_predbat.car_charging_slots[0]))

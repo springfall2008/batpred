@@ -39,6 +39,7 @@ To setup the inverter with Predbat you will need to:
    | [Givenergy/Octopus No Home Assistant](#givenergy-octopus-cloud-direct---no-home-assistant) | n/a | [ge_cloud_octopus_standalone.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ge_cloud_octopus_standalone.yaml) |
    | [Fox](#fox) | [Foxess](https://github.com/nathanmarlor/foxess_modbus/) | [fox.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fox.yaml) |
    | [Fox Cloud](#fox-cloud) | Predbat | [fox_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/fox_cloud.yaml) |
+   | [Fronius GEN24](#fronius-gen24) | [Fronius](https://www.home-assistant.io/integrations/fronius/) + [fronius-modbus-control](https://github.com/knackerbrot/fronius-modbus-control) | [fronius.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fronius.yaml) |
    | [Growatt with Solar Assistant](#growatt-with-solar-assistant) | [Solar Assistant](https://solar-assistant.io/help/home-assistant/setup) | [spa.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_spa.yaml) or [sph.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_sph.yaml) |
    | [Huawei](#huawei) | [Huawei Solar](https://github.com/wlcrs/huawei_solar) | [huawei.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/huawei.yaml) |
    | [Kostal Plenticore](#kostal-plenticore) | [Kostal Plenticore](https://www.home-assistant.io/integrations/kostal_plenticore) | [kostal.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/kostal.yaml) |
@@ -229,6 +230,254 @@ Thanks to the work of @PeterHaban, for this Predbat configuration for Fox ESS in
 - Predbat now has a built-in Fox cloud integration. Today it requires a battery that supports the scheduler mode to function.
 
 See the components documentation for details [Components - Fox cloud](components.md#fox-ess-api-fox)
+
+## Fronius GEN24
+
+The Fronius GEN24 does not expose a native REST or MQTT control API that Predbat can use directly. Instead, control is implemented via a bridge layer: Predbat signals mode changes by toggling `input_boolean` helpers, Home Assistant automations watch those helpers and call a Python script via `shell_command`, and the Python script writes the appropriate Modbus registers to the inverter over TCP.
+
+Copy the template [fronius.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fronius.yaml) over the top of your `apps.yaml` and modify it for your system.
+
+### Prerequisites
+
+- Install the [Fronius integration](https://www.home-assistant.io/integrations/fronius/) in Home Assistant and confirm that inverter and battery sensors are appearing.
+- Download `fronius_battery_control.py` from [fronius-modbus-control](https://github.com/knackerbrot/fronius-modbus-control) and place it in your HA config directory (e.g. `/config/fronius_battery_control.py`). Follow the [Prerequisites](https://github.com/knackerbrot/fronius-modbus-control#prerequisites) and [Safety Warning](https://github.com/knackerbrot/fronius-modbus-control#%EF%B8%8F-safety-warning) sections in the fronius-modbus-control README to configure your inverter's Modbus settings before proceeding.
+
+> **Warning:** This script writes directly to inverter Modbus registers. Read the
+> [safety warnings](https://github.com/knackerbrot/fronius-modbus-control#safety) in the
+> fronius-modbus-control README before proceeding.
+
+### Step 1 — Create HA helpers
+
+Create the following helpers in Home Assistant (Settings → Devices & Services → Helpers).
+
+**Input booleans** (toggle type):
+
+| Entity ID | Name |
+|---|---|
+| `input_boolean.predbat_charge_start` | Predbat Charge Start |
+| `input_boolean.predbat_charge_freeze` | Predbat Charge Freeze |
+| `input_boolean.predbat_discharge_start` | Predbat Discharge Start |
+| `input_boolean.predbat_discharge_freeze` | Predbat Discharge Freeze |
+
+**Input numbers** (number type, unit: W):
+
+| Entity ID | Name | Min | Max | Step |
+|---|---|---|---|---|
+| `input_number.predbat_charge_rate` | Predbat Charge Rate | 0 | 10000 | 100 |
+| `input_number.predbat_discharge_rate` | Predbat Discharge Rate | 0 | 10000 | 100 |
+
+**Input numbers** (number type, unit: %):
+
+| Entity ID | Name | Min | Max | Step |
+|---|---|---|---|---|
+| `input_number.predbat_reserve` | Predbat Reserve | 4 | 100 | 1 |
+| `input_number.predbat_charge_limit` | Predbat Charge Limit | 4 | 100 | 1 |
+
+### Step 2 — Create a template sensor for battery SoC in kWh
+
+Predbat requires a `soc_kw` sensor that reports battery state of charge in kWh. Add the following to your `configuration.yaml` (or a split template file):
+
+```yaml
+template:
+  - sensor:
+      - name: "Home Battery State of Charge kWh"
+        unique_id: home_battery_soc_kwh
+        unit_of_measurement: "kWh"
+        state_class: measurement
+        device_class: energy
+        state: >
+          {{ (states('sensor.YOUR_BATTERY_SOC_PERCENT') | float(0) / 100)
+             * YOUR_BATTERY_CAPACITY_KWH | round(2) }}
+```
+
+Replace `sensor.YOUR_BATTERY_SOC_PERCENT` with your battery's SoC entity (e.g. `sensor.byd_battery_box_premium_hv_state_of_charge`) and `YOUR_BATTERY_CAPACITY_KWH` with your usable battery capacity in kWh (e.g. `10.0`). Update `soc_kw` in `apps.yaml` to match the entity ID of this new sensor (it will be `sensor.home_battery_state_of_charge_kwh`).
+
+### Step 3 — Configure shell_command and create utility meters
+
+Add the following to your `configuration.yaml`. Replace `192.168.1.100` with the IP address of your Fronius inverter:
+
+```yaml
+shell_command:
+  fronius_force_charge: >
+    python3 /config/fronius_battery_control.py
+    --host 192.168.1.100
+    --mode force_charge
+    --power {{ charge_power }}
+    --revert-time 900
+
+  fronius_force_discharge: >
+    python3 /config/fronius_battery_control.py
+    --host 192.168.1.100
+    --mode force_discharge
+    --power {{ discharge_power }}
+    --revert-time 900
+
+  fronius_charge_freeze: >
+    python3 /config/fronius_battery_control.py
+    --host 192.168.1.100
+    --mode charge_freeze
+    --revert-time 900
+
+  fronius_discharge_freeze: >
+    python3 /config/fronius_battery_control.py
+    --host 192.168.1.100
+    --mode discharge_freeze
+    --revert-time 900
+
+  fronius_reset: >
+    python3 /config/fronius_battery_control.py
+    --host 192.168.1.100
+    --mode reset
+```
+
+The `--revert-time 900` flag instructs the inverter to revert to automatic mode after 15 minutes if no further commands are received. Predbat re-issues commands every 5 minutes, so this acts as a safety fallback.
+
+Also create daily [utility meter](https://www.home-assistant.io/integrations/utility_meter/) helpers for the energy sensors that Predbat requires. Add the following to `configuration.yaml`:
+
+```yaml
+utility_meter:
+  daily_home_energy_use:
+    source: sensor.solarnet_energy_consumed
+    name: Daily Home Energy Use
+    cycle: daily
+  daily_grid_draw_energy:
+    source: sensor.solarnet_energy_real_consumed
+    name: Daily Grid Draw Energy
+    cycle: daily
+  daily_grid_feed_in_energy:
+    source: sensor.solarnet_energy_real_produced
+    name: Daily Grid Feed-in Energy
+    cycle: daily
+  daily_solar_energy:
+    source: sensor.solarnet_energy_year
+    name: Daily Solar Energy
+    cycle: daily
+```
+
+**Note:** The exact source sensor names depend on your Fronius integration version and configuration. Check the entities available under the Fronius integration in Home Assistant and use the cumulative energy (kWh) sensors for your system. The names above are examples — yours may differ.
+
+Restart Home Assistant after making these changes to `configuration.yaml`.
+
+### Step 4 — Create bridge automations
+
+These automations watch the `input_boolean` helpers and call the shell commands. Add them via Settings → Automations, or paste the YAML directly into your `automations.yaml`.
+
+```yaml
+- alias: "Predbat Bridge — Force Charge"
+  trigger:
+    - platform: state
+      entity_id: input_boolean.predbat_charge_start
+      to: "on"
+  action:
+    - service: shell_command.fronius_force_charge
+      data:
+        charge_power: "{{ states('input_number.predbat_charge_rate') | int }}"
+
+- alias: "Predbat Bridge — Charge Freeze"
+  trigger:
+    - platform: state
+      entity_id: input_boolean.predbat_charge_freeze
+      to: "on"
+  action:
+    - service: shell_command.fronius_charge_freeze
+
+- alias: "Predbat Bridge — Force Discharge"
+  trigger:
+    - platform: state
+      entity_id: input_boolean.predbat_discharge_start
+      to: "on"
+  action:
+    - service: shell_command.fronius_force_discharge
+      data:
+        discharge_power: "{{ states('input_number.predbat_discharge_rate') | int }}"
+
+- alias: "Predbat Bridge — Discharge Freeze"
+  trigger:
+    - platform: state
+      entity_id: input_boolean.predbat_discharge_freeze
+      to: "on"
+  action:
+    - service: shell_command.fronius_discharge_freeze
+
+- alias: "Predbat Bridge — Reset (any mode off)"
+  trigger:
+    - platform: state
+      entity_id:
+        - input_boolean.predbat_charge_start
+        - input_boolean.predbat_charge_freeze
+        - input_boolean.predbat_discharge_start
+        - input_boolean.predbat_discharge_freeze
+      to: "off"
+  condition:
+    - condition: state
+      entity_id: input_boolean.predbat_charge_start
+      state: "off"
+    - condition: state
+      entity_id: input_boolean.predbat_charge_freeze
+      state: "off"
+    - condition: state
+      entity_id: input_boolean.predbat_discharge_start
+      state: "off"
+    - condition: state
+      entity_id: input_boolean.predbat_discharge_freeze
+      state: "off"
+  action:
+    - service: shell_command.fronius_reset
+
+- alias: "Predbat Bridge — Keep Alive"
+  trigger:
+    - platform: time_pattern
+      minutes: "/5"
+  action:
+    - choose:
+        - conditions:
+            - condition: state
+              entity_id: input_boolean.predbat_charge_start
+              state: "on"
+          sequence:
+            - service: shell_command.fronius_force_charge
+              data:
+                charge_power: "{{ states('input_number.predbat_charge_rate') | int }}"
+        - conditions:
+            - condition: state
+              entity_id: input_boolean.predbat_charge_freeze
+              state: "on"
+          sequence:
+            - service: shell_command.fronius_charge_freeze
+        - conditions:
+            - condition: state
+              entity_id: input_boolean.predbat_discharge_start
+              state: "on"
+          sequence:
+            - service: shell_command.fronius_force_discharge
+              data:
+                discharge_power: "{{ states('input_number.predbat_discharge_rate') | int }}"
+        - conditions:
+            - condition: state
+              entity_id: input_boolean.predbat_discharge_freeze
+              state: "on"
+          sequence:
+            - service: shell_command.fronius_discharge_freeze
+```
+
+The keep-alive automation re-issues the active command every 5 minutes. This is necessary because the Fronius inverter's `RvrtTms` register causes it to silently revert to automatic mode if control commands are not periodically refreshed. See the [fronius-modbus-control README](https://github.com/knackerbrot/fronius-modbus-control#the-rvrttms-gotcha) for more detail.
+
+### Step 5 — Configure apps.yaml
+
+Edit `apps.yaml`:
+
+- Set `soc_percent` to your battery's SoC entity (varies by battery model)
+- Set `soc_kw` to the template sensor created in Step 2
+- Set `soc_max`, `battery_rate_max`, `inverter_limit`, `inverter_limit_charge` and `inverter_limit_discharge` for your system
+- Set `export_limit` if your grid connection has a software export cap
+- Configure your energy rates — see [Energy Rates](../energy-rates/)
+- Delete the `template: True` line to allow Predbat to start
+
+### Fronius Notes
+
+- The Fronius integration provides power sensors named `sensor.solarnet_power_battery`, `sensor.solarnet_power_photovoltaics`, `sensor.solarnet_power_load` and `sensor.solarnet_power_grid`. These entity names are standard for the HA Fronius integration and should not need changing.
+- The `grid_power_invert: true` and `load_power_invert: true` settings in the template are required because Fronius reports these values with the opposite sign convention to what Predbat expects.
+- If your inverter has a `RvrtTms` register that is stuck at a non-zero value from a previous session, battery control commands may revert unexpectedly. See the [fronius-modbus-control README](https://github.com/knackerbrot/fronius-modbus-control#the-rvrttms-gotcha) for how to resolve this.
 
 ## Growatt with Solar Assistant
 
@@ -707,10 +956,8 @@ Although LuxPower inverters have the *Charge first / Charge priority* feature, P
 
  Set up your LuxPower Integration as follows:
 
-    - - If you have not already done so, set up the blueprint for changing the refresh interval as described in the LuxPython_DEV README.
-    - In the LUX Refresh Interval automation set the refresh interval to **20 seconds**. Freeze Charging relies on frequent state updates; intervals above 30 seconds may result in delayed or missed AC arbitration.
-
----
+- If you have not already done so, set up the blueprint for changing the refresh interval as described in the LuxPython_DEV README.
+- In the LUX Refresh Interval automation set the refresh interval to **20 seconds**. Freeze Charging relies on frequent state updates; intervals above 30 seconds may result in delayed or missed AC arbitration.
 
 - In your `apps.yaml` file:
 
@@ -900,8 +1147,6 @@ mode: single
 ---
 
 - Create the **Freeze Charge Exit** automation to cleanly restore inverter state when Freeze Charging ends.
-
-  <!-- cspell:ignore startswith -->
 
   ```yaml
   alias: LuxPower Freeze Charge Exit
@@ -2611,7 +2856,7 @@ Or the custom method where you can define all the parameter values passed to the
       soc: "{target_soc}"
       charge_start_time: "{charge_start_time}"
       charge_end_time: "{charge_end_time}"
-```text
+```
 
 You can also call more than one service e.g:
 
@@ -2635,7 +2880,7 @@ If however, you want the service to be called on each Predbat run then you shoul
       power: "{power}"
       soc: "{target_soc}"
       repeat: True
-```text
+```
 
 #### charge_start_service
 
