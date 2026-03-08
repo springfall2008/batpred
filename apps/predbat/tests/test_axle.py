@@ -114,6 +114,7 @@ def test_axle(my_predbat=None):
     # Sub-test registry - each entry is (key, function, description)
     sub_tests = [
         ("initialization", _test_axle_initialization, "Axle API initialization"),
+        ("list_api_key", _test_axle_list_api_key_validation, "List API key validation and error logging"),
         ("active_event", _test_axle_fetch_with_active_event, "Fetch with active event"),
         ("duplicate_event", _test_axle_duplicate_event_detection, "Duplicate event detection"),
         ("notify_config", _test_axle_fetch_with_notify_config, "Notification config control"),
@@ -174,11 +175,37 @@ def _test_axle_initialization(my_predbat=None):
     assert axle.pence_per_kwh == 150, "Pence per kWh not set correctly"
     assert axle.failures_total == 0, "Failures should be 0 on init"
     assert axle.last_updated_timestamp is None, "Last updated should be None on init"
+    assert axle.updated_at is None, "updated_at should be None on init"
     assert axle.current_event["start_time"] is None, "Current event should be None on init"
     assert axle.event_history == [], "Event history should be empty on init"
     assert axle.history_loaded is False, "History should not be loaded on init"
 
     print("  ✓ Initialization successful")
+    return False
+
+
+def _test_axle_list_api_key_validation(my_predbat=None):
+    """Test that a list-type API key (incorrect YAML format) is handled with clear error logging"""
+    print("Test: Axle API list API key validation")
+
+    # Case 1: api_key is a non-empty list (most common misconfiguration)
+    axle = MockAxleAPI()
+    axle.initialize(api_key=["correct_key_as_list"], pence_per_kwh=100, automatic=False)
+
+    assert axle.api_key == "correct_key_as_list", "Should use first element of list as fallback"
+    assert any("list" in msg.lower() for msg in axle.log_messages), "Should log error about list type"
+    assert any("axle_api_key" in msg for msg in axle.log_messages), "Should mention axle_api_key in error"
+    assert any("fallback" in msg.lower() for msg in axle.log_messages), "Should log fallback warning"
+
+    # Case 2: api_key is an empty list
+    axle2 = MockAxleAPI()
+    axle2.initialize(api_key=[], pence_per_kwh=100, automatic=False)
+
+    assert axle2.api_key is None, "Empty list should result in None api_key"
+    assert any("list" in msg.lower() for msg in axle2.log_messages), "Should log error about list type"
+    assert any("missing or invalid" in msg.lower() for msg in axle2.log_messages), "Should log invalid key error"
+
+    print("  ✓ List API key validation works correctly")
     return False
 
 
