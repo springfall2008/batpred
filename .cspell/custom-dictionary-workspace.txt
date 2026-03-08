@@ -13,6 +13,7 @@ apexcharts
 apikey
 appdaemon
 appkey
+appsyaml
 argname
 ASHP
 asyncio
@@ -165,6 +166,7 @@ isoformat
 isort
 itemtype
 ivtime
+jedlix
 jsyaml
 kaiming
 killall
@@ -329,6 +331,7 @@ Southwell
 springfall
 starthour
 startminute
+startswith
 startt
 stdlib
 stepline

@@ -956,10 +956,8 @@ Although LuxPower inverters have the *Charge first / Charge priority* feature, P
 
  Set up your LuxPower Integration as follows:
 
-    - - If you have not already done so, set up the blueprint for changing the refresh interval as described in the LuxPython_DEV README.
-    - In the LUX Refresh Interval automation set the refresh interval to **20 seconds**. Freeze Charging relies on frequent state updates; intervals above 30 seconds may result in delayed or missed AC arbitration.
-
----
+- If you have not already done so, set up the blueprint for changing the refresh interval as described in the LuxPython_DEV README.
+- In the LUX Refresh Interval automation set the refresh interval to **20 seconds**. Freeze Charging relies on frequent state updates; intervals above 30 seconds may result in delayed or missed AC arbitration.
 
 - In your `apps.yaml` file:
 
@@ -1149,8 +1147,6 @@ mode: single
 ---
 
 - Create the **Freeze Charge Exit** automation to cleanly restore inverter state when Freeze Charging ends.
-
-  <!-- cspell:ignore startswith -->
 
   ```yaml
   alias: LuxPower Freeze Charge Exit

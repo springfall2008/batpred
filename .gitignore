@@ -51,7 +51,6 @@ coverage/venv/
 .venv/
 venv/
 coverage/temp_octopus/
-.coverage
 .pytest_cache/
 .tox/
 .nox/
@@ -72,6 +71,7 @@ dmypy.json
 *.bin
 profile.txt
 simulation_state.bin
+*.npz
 
 # Generated HTML files
 plan_*.html

@@ -1402,6 +1402,40 @@ class SolisAPI(ComponentBase):
                 app="solis"
             )
 
+            # Battery Daily Energy Charged (from detail)
+            entity_id = f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_energy_charged_today"
+            battery_energy_charged = detail.get("batteryTodayChargeEnergy")
+            battery_energy_charged_unit = detail.get("batteryTodayChargeEnergyStr", "kWh")
+            self.dashboard_item(
+                entity_id,
+                state=battery_energy_charged,
+                attributes={
+                    "friendly_name": f"Solis {inverter_name} Battery Energy Charged Today",
+                    "unit_of_measurement": battery_energy_charged_unit,
+                    "device_class": "energy",
+                    "state_class": "total_increasing",
+                    "icon": "mdi:battery-charging",
+                },
+                app="solis"
+            )
+
+            # Battery Daily Energy Discharged (from detail)
+            entity_id = f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_energy_discharged_today"
+            battery_energy_discharged = detail.get("batteryTodayDischargeEnergy")
+            battery_energy_discharged_unit = detail.get("batteryTodayDischargeEnergyStr", "kWh")
+            self.dashboard_item(
+                entity_id,
+                state=battery_energy_discharged,
+                attributes={
+                    "friendly_name": f"Solis {inverter_name} Battery Energy Discharged Today",
+                    "unit_of_measurement": battery_energy_discharged_unit,
+                    "device_class": "energy",
+                    "state_class": "total_increasing",
+                    "icon": "mdi:battery-minus",
+                },
+                app="solis"
+            )
+
             # Battery Voltage (from detail)
             entity_id = f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_voltage"
             battery_voltage = detail.get("batteryVoltage")
