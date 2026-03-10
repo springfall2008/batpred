@@ -192,7 +192,7 @@ def _test_axle_list_api_key_validation(my_predbat=None):
     axle = MockAxleAPI()
     axle.initialize(api_key=["correct_key_as_list"], pence_per_kwh=100, automatic=False)
 
-    assert axle.api_key == None, "Should failed to allow a list as an API key"
+    assert axle.api_key is None, "Should failed to allow a list as an API key"
 
     # Case 2: api_key is an empty list
     axle2 = MockAxleAPI()
