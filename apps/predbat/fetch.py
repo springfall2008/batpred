@@ -19,7 +19,7 @@ dictionaries for use by the prediction engine.
 """
 
 from datetime import datetime, timedelta
-from utils import minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative
+from utils import minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative, interpolate_sparse_data
 from const import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_CONTROL_SOC, PREDBAT_MODE_CONTROL_CHARGEDISCHARGE, PREDBAT_MODE_CONTROL_CHARGE, PREDBAT_MODE_MONITOR
 from predbat_metrics import metrics
 from futurerate import FutureRate
@@ -728,6 +728,8 @@ class Fetch:
             if ("load_power" in self.args) and self.get_arg("load_power_fill_enable", True):
                 # Use power data to make load data more accurate
                 self.log("Using load_power data to fill gaps in load_today data")
+                # Interpolate sparse cumulative data to prevent false gap detection in fill_load_from_power
+                self.load_minutes = interpolate_sparse_data(self.load_minutes)
                 load_power_data, _ = self.minute_data_load(self.now_utc, "load_power", self.max_days_previous, required_unit="W", load_scaling=1.0, interpolate=True)
                 self.load_minutes = self.fill_load_from_power(self.load_minutes, load_power_data)
         else:
@@ -741,6 +743,8 @@ class Fetch:
                 if ("load_power" in self.args) and self.get_arg("load_power_fill_enable", True):
                     # Use power data to make load data more accurate
                     self.log("Using load_power data to fill gaps in load_today data")
+                    # Interpolate sparse cumulative data to prevent false gap detection in fill_load_from_power
+                    self.load_minutes = interpolate_sparse_data(self.load_minutes)
                     load_power_data, _ = self.minute_data_load(self.now_utc, "load_power", self.max_days_previous, required_unit="W", load_scaling=1.0, interpolate=True)
                     self.load_minutes = self.fill_load_from_power(self.load_minutes, load_power_data)
             else:

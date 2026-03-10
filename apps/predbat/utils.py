@@ -664,6 +664,56 @@ def clean_incrementing_reverse(data, max_increment=0):
     return new_data
 
 
+def interpolate_sparse_data(data):
+    """
+    Linearly interpolate a sparse cumulative dict to fill every minute index.
+
+    Takes a dict mapping minute indices to cumulative values (as produced by
+    clean_incrementing_reverse) where only a fraction of minute keys have
+    real values. Returns a new dict with an entry at every minute from 0 to
+    max(keys), with values linearly interpolated between known data points.
+
+    Skips interpolation across midnight resets (where value drops by more than
+    50% of the current value).
+    """
+    if not data:
+        return data
+
+    known_keys = sorted(data.keys())
+    if len(known_keys) <= 1:
+        return data
+
+    new_data = {}
+    for i in range(len(known_keys) - 1):
+        k0 = known_keys[i]
+        k1 = known_keys[i + 1]
+        v0 = data[k0]
+        v1 = data[k1]
+
+        new_data[k0] = v0
+
+        gap = k1 - k0
+        if gap <= 1:
+            continue
+
+        # Detect midnight reset: value drops by more than 50% of current value
+        if v0 > 0 and (v0 - v1) > 0.5 * v0:
+            # Don't interpolate across reset, just carry v0 forward then jump
+            for m in range(k0 + 1, k1):
+                new_data[m] = v0
+            continue
+
+        # Linear interpolation
+        for m in range(k0 + 1, k1):
+            frac = (m - k0) / gap
+            new_data[m] = v0 + (v1 - v0) * frac
+
+    # Include the last known key
+    new_data[known_keys[-1]] = data[known_keys[-1]]
+
+    return new_data
+
+
 def format_time_ago(last_updated):
     """
     Format a timestamp to show how many minutes ago it was updated
