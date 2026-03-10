@@ -9,10 +9,6 @@ rendered inside the standard PredBat navigation shell.
 Dark/light mode is derived automatically from the ``body.dark-mode`` class used
 by the rest of the PredBat web UI - no separate theme toggle is needed.
 """
-
-from predbat_metrics import PROMETHEUS_AVAILABLE, metrics
-
-
 def get_metrics_dashboard_css():
     """Return scoped CSS for the metrics dashboard component."""
     return """<style>
@@ -363,30 +359,3 @@ setInterval(function () {
 </script>
 """
     )
-FALLBACK_HTML = """<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>PredBat Metrics</title>
-<style>body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#0f172a;color:#e2e8f0;text-align:center;}</style>
-</head><body><div><h1>Metrics Dashboard Unavailable</h1>
-<p><code>prometheus_client</code> is not installed.</p>
-<p>Install it with: <code>pip install prometheus_client</code></p></div></body></html>"""
-
-
-async def metrics_dashboard_handler(request):
-    """Serve the self-contained metrics dashboard at ``/metrics_dashboard``."""
-    import json
-    from aiohttp import web
-
-    if not PROMETHEUS_AVAILABLE:
-        return web.Response(text=FALLBACK_HTML, content_type="text/html")
-
-    data_json = json.dumps(metrics().to_dict())
-    html = (
-        "<!DOCTYPE html><html lang='en'><head>"
-        "<meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>"
-        "<title>PredBat Metrics</title>"
-        + get_metrics_dashboard_css()
-        + "</head><body style='background:var(--md-bg)'>"
-        + get_metrics_dashboard_body(data_json)
-        + "</body></html>"
-    )
-    return web.Response(text=html, content_type="text/html")
