@@ -903,7 +903,10 @@ class SolarAPI(ComponentBase):
                     t0 = datetime.strptime(pv_forecast_data[0]["period_start"], TIME_FORMAT)
                     t1 = datetime.strptime(pv_forecast_data[1]["period_start"], TIME_FORMAT)
                     detected_period = int(abs((t1 - t0).total_seconds() / 60))
-                    if detected_period > 0:
+                    # Sanity-check: only accept periods in the plausible range for forecast data.
+                    # Values outside 5–60 minutes (e.g. 1440 if the first two entries span a day
+                    # boundary when multiple sensor days are concatenated) are treated as invalid.
+                    if 5 <= detected_period <= 60:
                         period = detected_period
                 except (ValueError, TypeError, KeyError):
                     pass
