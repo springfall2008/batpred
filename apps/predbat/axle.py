@@ -29,18 +29,8 @@ class AxleAPI(ComponentBase):
 
     def initialize(self, api_key, pence_per_kwh, automatic):
         """Initialize the AxleAPI component"""
-        if isinstance(api_key, list):
-            self.log("Error: AxleAPI: axle_api_key is configured as a list but must be a plain string.")
-            self.log("Error: AxleAPI: Incorrect format in apps.yaml:  axle_api_key:")
-            self.log("Error: AxleAPI:   - 'your-key-here'")
-            self.log("Error: AxleAPI: Correct format:  axle_api_key: 'your-key-here'")
-            if api_key:
-                api_key = api_key[0]
-                self.log("Warn: AxleAPI: Using first element of the list as a fallback. Please fix your configuration.")
-            else:
-                api_key = None
         if not isinstance(api_key, str) or not api_key:
-            self.log("Error: AxleAPI: axle_api_key is missing or invalid. Axle Energy integration will not function correctly.")
+            self.log("Error: AxleAPI: axle_api_key is missing or invalid, you must set it to a string (not a list or number). Axle Energy integration will not function correctly.")
             api_key = None
         self.api_key = api_key
         self.pence_per_kwh = pence_per_kwh
