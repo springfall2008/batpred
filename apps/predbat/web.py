@@ -73,7 +73,7 @@ from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA
 from predbat import THIS_VERSION
 from component_base import ComponentBase
 from config import APPS_SCHEMA
-from web_metrics_dashboard import get_metrics_dashboard_css, get_metrics_dashboard_body, FALLBACK_HTML
+from web_metrics_dashboard import get_metrics_dashboard_css, get_metrics_dashboard_body
 from predbat_metrics import metrics_handler, metrics_json_handler, metrics, PROMETHEUS_AVAILABLE
 
 ROOT_YAML_KEY = "pred_bat"
@@ -303,9 +303,7 @@ class WebInterface(ComponentBase):
                     <!-- House to Grid path -->
                     <path id="house-grid-path" d="M340,230 L390,270" stroke="transparent" fill="none" />
                 </defs>
-        """.format(
-            dp0(load_power)
-        )
+        """.format(dp0(load_power))
         # Draw arrows and labels
         if pv_generating:
             # Calculate animation speed based on power flow - faster for higher power
@@ -326,9 +324,7 @@ class WebInterface(ComponentBase):
                 <circle r="2" fill="#2196F3" opacity="0.4">
                     <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M200,100 L250,150" />
                 </circle>
-            """.format(
-                dp0(pv_power), pv_speed, pv_speed, pv_speed
-            )
+            """.format(dp0(pv_power), pv_speed, pv_speed, pv_speed)
         else:
             # Make the PV to House line dashed if not generating
             html += """
@@ -336,9 +332,7 @@ class WebInterface(ComponentBase):
                 <line x1="200" y1="100" x2="250" y2="150" stroke="#2196F3" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#pv-arrow)" />
                 <text x="250" y="120" text-anchor="middle" fill="#2196F3">{} W</text>
                 <!-- No moving dot when PV is not generating -->
-            """.format(
-                dp0(pv_power)
-            )
+            """.format(dp0(pv_power))
         if battery_charging:
             # Calculate animation speed based on power flow - faster for higher power
             battery_speed = max(0.5, min(3.0, 2.0 - (abs(battery_power) / 3000)))
@@ -358,9 +352,7 @@ class WebInterface(ComponentBase):
                 <circle r="2" fill="#FF9800" opacity="0.4">
                     <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M200,300 L250,250" />
                 </circle>
-            """.format(
-                dp0(battery_power), battery_speed, battery_speed, battery_speed
-            )
+            """.format(dp0(battery_power), battery_speed, battery_speed, battery_speed)
         else:
             # Calculate animation speed based on power flow - faster for higher power
             battery_speed = max(0.5, min(3.0, 2.0 - (abs(battery_power) / 3000)))
@@ -380,9 +372,7 @@ class WebInterface(ComponentBase):
                 <circle r="2" fill="#FF9800" opacity="0.4">
                     <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M265,235 L215,275" />
                 </circle>
-            """.format(
-                dp0(battery_power), battery_speed, battery_speed, battery_speed
-            )
+            """.format(dp0(battery_power), battery_speed, battery_speed, battery_speed)
 
         if grid_importing:
             # Calculate animation speed based on power flow - faster for higher power
@@ -403,9 +393,7 @@ class WebInterface(ComponentBase):
                 <circle r="2" fill="#4CAF50" opacity="0.4">
                     <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M410,290 L355,240" />
                 </circle>
-            """.format(
-                dp0(grid_power), grid_speed, grid_speed, grid_speed
-            )
+            """.format(dp0(grid_power), grid_speed, grid_speed, grid_speed)
         else:
             # Calculate animation speed based on power flow - faster for higher power
             grid_speed = max(0.5, min(3.0, 2.0 - (abs(grid_power) / 3000)))
@@ -425,9 +413,7 @@ class WebInterface(ComponentBase):
                 <circle r="2" fill="#4CAF50" opacity="0.4">
                     <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M340,230 L390,270" />
                 </circle>
-            """.format(
-                dp0(grid_power), grid_speed, grid_speed, grid_speed
-            )
+            """.format(dp0(grid_power), grid_speed, grid_speed, grid_speed)
         html += """
                 <!-- Arrowhead Marker -->
                 <defs>
@@ -812,9 +798,7 @@ class WebInterface(ComponentBase):
             <a href="{}" class="button" style="display: inline-block; padding: 8px 15px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">
                 <span class="mdi mdi-arrow-left" style="margin-right: 5px;"></span>Back
             </a>
-        </div>""".format(
-            self.default_page
-        )
+        </div>""".format(self.default_page)
 
         # Collect available attributes for all selected entities
         entity_attributes_map = {}
@@ -862,9 +846,7 @@ class WebInterface(ComponentBase):
                 <input type="hidden" name="days" value="{}" />
                 <button type="submit" style="margin-top: 10px; padding: 8px 16px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">Update Chart</button>
             </form>
-        </div>""".format(
-            days
-        )
+        </div>""".format(days)
 
         # Add days selector
         text += """<div style="margin-bottom: 20px;">
@@ -4448,7 +4430,17 @@ document.addEventListener('DOMContentLoaded', function() {
         self.default_page = "./metrics_dashboard"
 
         if not PROMETHEUS_AVAILABLE:
-            return web.Response(text=FALLBACK_HTML, content_type="text/html")
+            text = self.get_header("Predbat Metrics", refresh=0)
+            text += "<body>\n"
+            text += """<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh;text-align:center;padding:2rem;">
+<h1>Metrics Dashboard Unavailable</h1>
+<p><code>prometheus_client</code> is not installed.</p>
+<p>Install it with: <code>pip install prometheus_client</code></p>
+<p style="margin-top:1.5rem;"><a href="./dash" style="padding:10px 20px;background:#4CAF50;color:white;text-decoration:none;border-radius:4px;font-size:16px;">&larr; Back to Dashboard</a></p>
+</div>
+"""
+            text += "</body></html>\n"
+            return web.Response(text=text, content_type="text/html")
 
         import json as _json
 
