@@ -262,7 +262,12 @@ class AxleAPI(ComponentBase):
                 ) as response:
                     if response.status == 200:
                         data = await response.json()
-                        self.partner_token = data.get("access_token")
+                        token = data.get("access_token")
+                        if not token:
+                            self.log("Warn: AxleAPI: Auth response missing access_token")
+                            record_api_call("axle", False, "auth_failed")
+                            return None
+                        self.partner_token = token
                         # Cache for 50 minutes (tokens typically last 60 min)
                         self.partner_token_expiry = datetime.now(timezone.utc) + timedelta(minutes=50)
                         self.log("AxleAPI: Partner token obtained successfully")
