@@ -330,6 +330,122 @@ def test_previous_days_modal_filter(my_predbat):
     else:
         print("Partial day (<16h gaps) correctly filled from {} kWh to {} kWh (proportional)".format(dp2(initial_day2_total), dp2(day2_filled_total)))
 
+    # Test 6: Overnight zeros with load_data_point_minutes → NOT filled
+    print("Test 6: Overnight zeros with sensor data points → gaps skipped")
+
+    my_predbat.days_previous = [1]
+    my_predbat.days_previous_weight = [1.0]
+    my_predbat.load_minutes_age = 1
+    my_predbat.load_filter_modal = False
+
+    test_data = {}
+    # Day 1: 12 hours active (1 kWh/hour), 12 hours zero consumption
+    step_increment = 1.0 / 60
+    running_total = 0
+
+    # First 12 hours: active consumption
+    for minute in range(0, 12 * 60):
+        running_total += step_increment
+        test_data[24 * 60 - minute - 1] = dp4(running_total)
+    # Last 12 hours: zero consumption (sensor online but no usage)
+    for minute in range(12 * 60, 24 * 60):
+        test_data[24 * 60 - minute - 1] = dp4(running_total)
+
+    initial_data_sum = dp2(add_incrementing_sensor_total(test_data))
+
+    # Set up load_data_point_minutes covering full day (sensor was active throughout)
+    my_predbat.load_data_point_minutes = set(range(0, 24 * 60))
+
+    my_predbat.previous_days_modal_filter(test_data)
+
+    final_data_sum = dp2(add_incrementing_sensor_total(test_data))
+
+    # With sensor data points covering the whole day, gaps should be SKIPPED
+    # Total should remain at 12 kWh (not inflated to 18 kWh)
+    if final_data_sum != initial_data_sum:
+        print("ERROR: Expected total to stay at {} kWh (sensor active), got {} kWh".format(initial_data_sum, final_data_sum))
+        failed = True
+    else:
+        print("Correctly skipped gap filling: total stayed at {} kWh".format(final_data_sum))
+
+    # Test 7: 12h gap with NO data points in gap → IS filled
+    print("Test 7: Gap with no sensor data points → gap filled")
+
+    my_predbat.days_previous = [1]
+    my_predbat.days_previous_weight = [1.0]
+    my_predbat.load_minutes_age = 1
+    my_predbat.load_filter_modal = False
+
+    test_data = {}
+    step_increment = 1.0 / 60
+    running_total = 0
+
+    # First 12 hours: active consumption
+    for minute in range(0, 12 * 60):
+        running_total += step_increment
+        test_data[24 * 60 - minute - 1] = dp4(running_total)
+    # Last 12 hours: zero (sensor offline - no data)
+    for minute in range(12 * 60, 24 * 60):
+        test_data[24 * 60 - minute - 1] = dp4(running_total)
+
+    initial_data_sum = dp2(add_incrementing_sensor_total(test_data))
+
+    # Set load_data_point_minutes to only the non-gap region (minutes 720-1439 backward)
+    # The gap is at backward minutes 0-719 (recent zero-consumption period, sensor offline)
+    # Data points exist only at minutes 720-1439 (earlier period with actual consumption)
+    my_predbat.load_data_point_minutes = set(range(12 * 60, 24 * 60))
+
+    my_predbat.previous_days_modal_filter(test_data)
+
+    final_data_sum = dp2(add_incrementing_sensor_total(test_data))
+
+    # Gap should be filled since sensor was offline during the gap period
+    expected_final_total = 18.0
+    if final_data_sum != expected_final_total:
+        print("ERROR: Expected gap filling to produce {} kWh, got {} kWh".format(expected_final_total, final_data_sum))
+        failed = True
+    else:
+        print("Correctly filled gap (sensor offline): {} kWh → {} kWh".format(initial_data_sum, final_data_sum))
+
+    # Test 8: No load_data_point_minutes attribute → existing behavior unchanged
+    print("Test 8: No load_data_point_minutes → backward compat (gaps filled)")
+
+    my_predbat.days_previous = [1]
+    my_predbat.days_previous_weight = [1.0]
+    my_predbat.load_minutes_age = 1
+    my_predbat.load_filter_modal = False
+
+    test_data = {}
+    step_increment = 1.0 / 60
+    running_total = 0
+
+    for minute in range(0, 12 * 60):
+        running_total += step_increment
+        test_data[24 * 60 - minute - 1] = dp4(running_total)
+    for minute in range(12 * 60, 24 * 60):
+        test_data[24 * 60 - minute - 1] = dp4(running_total)
+
+    initial_data_sum = dp2(add_incrementing_sensor_total(test_data))
+
+    # Remove load_data_point_minutes entirely
+    if hasattr(my_predbat, "load_data_point_minutes"):
+        delattr(my_predbat, "load_data_point_minutes")
+
+    my_predbat.previous_days_modal_filter(test_data)
+
+    final_data_sum = dp2(add_incrementing_sensor_total(test_data))
+
+    # Without the attribute, gaps should be filled as before
+    expected_final_total = 18.0
+    if final_data_sum != expected_final_total:
+        print("ERROR: Expected backward-compat gap filling to produce {} kWh, got {} kWh".format(expected_final_total, final_data_sum))
+        failed = True
+    else:
+        print("Backward compat correct: gaps filled as before, {} kWh → {} kWh".format(initial_data_sum, final_data_sum))
+
+    # Restore load_minutes_age for other tests
+    my_predbat.load_minutes_age = 7
+
     # Restore original get_arg method
     my_predbat.get_arg = original_get_arg
 

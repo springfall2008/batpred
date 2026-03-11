@@ -315,6 +315,7 @@ def minute_data(
     max_increment=MAX_INCREMENT,
     interpolate=False,
     debug=False,
+    data_point_minutes=None,
 ):
     """
     Turns data from HA into a hash of data indexed by minute with the data being the value
@@ -467,6 +468,8 @@ def minute_data(
                 timed_to = to_time - now
 
         minutes = int(timed.total_seconds() / 60)
+        if data_point_minutes is not None and minute_min <= minutes <= minute_max:
+            data_point_minutes.add(minutes)
         if to_time:
             minutes_to = int(timed_to.total_seconds() / 60)
             minutes_delta = (timed_to.total_seconds() - timed.total_seconds()) / 60.0

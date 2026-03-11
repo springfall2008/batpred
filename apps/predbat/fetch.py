@@ -436,6 +436,20 @@ class Fetch:
             num_gaps += gap_minutes
             gap_list.append((gap_start_minute_previous, gap_minutes))
 
+        # Filter false-positive gaps where sensor was actively reporting
+        if hasattr(self, "load_data_point_minutes") and self.load_data_point_minutes:
+            filtered_gaps = []
+            for gap_start, gap_minutes_len in gap_list:
+                gap_data_count = sum(1 for m in self.load_data_point_minutes if gap_start <= m < gap_start + gap_minutes_len)
+                # Need at least 1 data point per hour (min 2) to consider sensor "active"
+                min_data_points = max(gap_minutes_len // 60, 2)
+                if gap_data_count >= min_data_points:
+                    self.log("Info: Skipping gap at minute {} ({} min) - sensor active ({} of {} points)".format(gap_start, gap_minutes_len, gap_data_count, min_data_points))
+                else:
+                    filtered_gaps.append((gap_start, gap_minutes_len))
+            gap_list = filtered_gaps
+            num_gaps = sum(g[1] for g in gap_list)
+
         # Work out total number of gap_minutes
         if num_gaps > 0:
             self.log("Warn: Found {} gaps in load_today totalling {} minutes to fill using average data".format(len(gap_list), num_gaps))
@@ -588,7 +602,7 @@ class Fetch:
 
         return import_today
 
-    def minute_data_load(self, now_utc, entity_name, max_days_previous, load_scaling=1.0, required_unit=None, interpolate=False, pad=True):
+    def minute_data_load(self, now_utc, entity_name, max_days_previous, load_scaling=1.0, required_unit=None, interpolate=False, pad=True, data_point_minutes=None):
         """
         Download one or more entities for load data
         """
@@ -639,6 +653,7 @@ class Fetch:
                     accumulate=load_minutes,
                     required_unit=required_unit,
                     interpolate=interpolate,
+                    data_point_minutes=data_point_minutes,
                 )
             else:
                 if history is None:
@@ -680,6 +695,7 @@ class Fetch:
         self.pv_today = {}
         self.load_minutes = {}
         self.load_minutes_age = 0
+        self.load_data_point_minutes = set()
         self.load_forecast = {}
         self.load_forecast_array = []
         self.pv_forecast_minute = {}
@@ -733,7 +749,7 @@ class Fetch:
         else:
             # Load data
             if "load_today" in self.args:
-                self.load_minutes, self.load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous, required_unit="kWh", load_scaling=1.0, interpolate=True)
+                self.load_minutes, self.load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous, required_unit="kWh", load_scaling=1.0, interpolate=True, data_point_minutes=self.load_data_point_minutes)
                 self.log("Found {} load_today datapoints going back {} days".format(len(self.load_minutes), self.load_minutes_age))
                 self.load_minutes_now = get_now_from_cumulative(self.load_minutes, self.minutes_now, backwards=True)
                 self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
@@ -1283,7 +1299,7 @@ class Fetch:
 
         age = now_utc - oldest_data_time
         self.load_minutes_age = age.days
-        self.load_minutes, _ = minute_data(mdata, self.max_days_previous, now_utc, "consumption", "last_updated", backwards=True, smoothing=True, scale=1.0, clean_increment=True, interpolate=True)
+        self.load_minutes, _ = minute_data(mdata, self.max_days_previous, now_utc, "consumption", "last_updated", backwards=True, smoothing=True, scale=1.0, clean_increment=True, interpolate=True, data_point_minutes=self.load_data_point_minutes)
         self.import_today, _ = minute_data(mdata, self.max_days_previous, now_utc, "import", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
         self.export_today, _ = minute_data(mdata, self.max_days_previous, now_utc, "export", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
         self.pv_today, _ = minute_data(mdata, self.max_days_previous, now_utc, "pv", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
