@@ -26,6 +26,7 @@ import requests
 import traceback
 import threading
 import time
+import copy
 from utils import str2time
 from const import TIME_FORMAT_HA, TIMEOUT, TIME_FORMAT_HA_TZ
 from component_base import ComponentBase
@@ -99,6 +100,16 @@ class HAHistory(ComponentBase):
                 if tracked:
                     self.update_entity(entity_id, history_data)
                 result = [history_data]
+
+        if result is not None:
+
+            # Returning result itself is not thread-safe, as it introduces a race condition -- it can be accessed
+            # during calls to update_entity, where it may e.g. appear to be empty during the sort().
+            # Hence, return a copy, while holding the history_lock to ensure result isn't modified during the copy.
+
+            with self.history_lock:
+                result = copy.deepcopy(result)
+
 
         return result
 

@@ -315,6 +315,7 @@ def minute_data(
     max_increment=MAX_INCREMENT,
     interpolate=False,
     debug=False,
+    can_modify_history=False,
 ):
     """
     Turns data from HA into a hash of data indexed by minute with the data being the value
@@ -335,7 +336,8 @@ def minute_data(
     if not history:
         return mdata, io_adjusted
 
-    history = copy.deepcopy(history)  # Copy to avoid modifying original history
+    if not can_modify_history:
+        history = copy.deepcopy(history)  # Copy to avoid modifying original history
 
     # Glitch filter, cleans glitches in the data and removes bad values, only for incrementing data
     if clean_increment and backwards:
