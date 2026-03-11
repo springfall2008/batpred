@@ -36,6 +36,8 @@ batteryb
 beforeunload
 bierner
 brickatius
+byok
+BYOK
 calib
 Cantarell
 cexxxx
@@ -53,6 +55,7 @@ compareform
 configform
 Consolas
 coro
+creds
 crosscharge
 customisation
 Customise
