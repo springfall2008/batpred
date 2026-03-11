@@ -373,10 +373,9 @@ def test_sparse_data_inflates_without_interpolation():
     print(f"  Result energy: {dp4(actual_energy)} kWh, ratio: {dp4(inflation_ratio)}x")
     print(f"  Minutes with non-monotonic anomalies: {len(period_errors)}")
 
-    # Document the behavior: sparse data may or may not inflate depending on
-    # alignment, but the distribution within periods IS distorted because the
-    # sparse gaps cause incorrect cumulative values at sub-period resolution
-    print("PASSED (sparse data behavior documented)")
+    # Sparse data should produce measurable distortion compared to expected energy
+    assert inflation_ratio > 1.05 or len(period_errors) > 0, f"Expected sparse data to show distortion, got ratio={dp4(inflation_ratio)}x, anomalies={len(period_errors)}"
+    print("PASSED")
 
 
 def test_sparse_misaligned_boundaries_cause_inflation():
