@@ -6,6 +6,7 @@ afci
 AIO
 AIO's
 aiohttp
+aiomqtt
 Alertfeed
 allclose
 Anson
@@ -169,6 +170,7 @@ ivtime
 jedlix
 jsyaml
 kaiming
+keepalive
 killall
 kopt
 Kostal
