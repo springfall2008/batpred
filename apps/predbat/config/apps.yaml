@@ -217,6 +217,12 @@ pred_bat:
     - 7500
     - 7500
 
+  # If you have a hybrid inverter with DC-coupled batteries, solar can charge the battery
+  # faster than the AC inverter limit allows. Set this to the max DC charge rate in watts.
+  # Defaults to battery_rate_max if not set.
+  #battery_rate_max_charge_dc:
+  #  - 10000
+  
   # Export limit is a software limit set on your inverter that prevents exporting above a given level
   # When enabled Predbat will model this limit
   #export_limit:

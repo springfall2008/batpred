@@ -923,6 +923,25 @@ During a force export period if the generated solar exceeds the inverter limit o
 If this setting is True then the inverter can end up charging the battery from PV while still in Force Export mode.
 If this setting if False then the inverter will not charge the battery and the excess PV will be lost.
 
+### **battery_rate_max_charge_dc**
+
+One per inverter (optional).
+
+Controls the way Predbat models your hybrid inverter's DC-coupled solar charging. This does not change the way the inverter is controlled.
+
+On a hybrid inverter, solar panels are connected directly to the DC bus. This means the battery can charge from solar at a higher rate than the AC inverter limit would otherwise allow, because the energy never passes through the AC stage. By default Predbat uses `inverter_limit` to cap all battery charging, which underestimates how fast the battery can fill from solar and can cause Predbat to plan more overnight grid charging than is actually necessary.
+
+When set, Predbat will use this value (in watts) as the maximum battery charge rate during ECO mode when solar is available, instead of the AC `inverter_limit`. Grid charging and discharge are unaffected.
+
+The value to use is the maximum DC charge rate of your battery — typically the sum of the maximum charge rates across all battery units. For example, two SigenStor BAT 10.0 units each rated at 4,600W would be set to 9,200W.
+
+```yaml
+  battery_rate_max_charge_dc:
+    - 9200
+```
+
+NB: This setting is only relevant for hybrid inverters (`inverter_hybrid: true`). For AC-coupled inverters all charging passes through the AC stage and the `inverter_limit` applies regardless.
+
 ## Controlling the Inverter
 
 There are a few different ways to control your inverter:
