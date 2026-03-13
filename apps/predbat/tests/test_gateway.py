@@ -205,6 +205,51 @@ class TestCommandFormat:
         assert parsed["target_soc"] == 10
 
 
+class TestEMSEntities:
+    def test_ems_aggregate_entities(self):
+        """EMS type produces aggregate entities."""
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_ems_test"
+        status.timestamp = 1741789200
+        status.schema_version = 1
+        status.dongle_count = 1
+
+        inv = status.inverters.add()
+        inv.type = pb.INVERTER_TYPE_GIVENERGY_EMS
+        inv.serial = "EM1234"
+        inv.connected = True
+        inv.active = True
+
+        inv.ems.num_inverters = 2
+        inv.ems.total_soc = 60
+        inv.ems.total_charge_w = 3000
+        inv.ems.total_pv_w = 5000
+        inv.ems.total_grid_w = -1000
+        inv.ems.total_load_w = 4000
+
+        sub0 = inv.ems.sub_inverters.add()
+        sub0.soc = 55
+        sub0.battery_w = 1500
+        sub0.pv_w = 2500
+        sub1 = inv.ems.sub_inverters.add()
+        sub1.soc = 65
+        sub1.battery_w = 1500
+        sub1.pv_w = 2500
+
+        from gateway import GatewayMQTT
+
+        entities = GatewayMQTT.decode_telemetry(status.SerializeToString())
+
+        # EMS aggregate entities
+        assert entities.get("predbat_gateway_ems_total_soc") == 60
+        assert entities.get("predbat_gateway_ems_total_pv") == 5000
+        assert entities.get("predbat_gateway_ems_total_load") == 4000
+        # Per-sub-inverter
+        assert entities.get("predbat_gateway_sub0_soc") == 55
+        assert entities.get("predbat_gateway_sub1_soc") == 65
+        assert entities.get("predbat_gateway_sub0_battery_power") == 1500
+
+
 class TestTokenRefresh:
     def test_jwt_expiry_extraction(self):
         """Extract exp claim from a JWT without verification."""

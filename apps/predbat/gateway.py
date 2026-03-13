@@ -511,6 +511,24 @@ class GatewayMQTT(ComponentBase):
             if obj is not None:
                 entities[entity_name] = obj
 
+        # EMS aggregate entities (when type is GIVENERGY_EMS)
+        if inv.type == pb.INVERTER_TYPE_GIVENERGY_EMS and inv.ems.num_inverters > 0:
+            entities["predbat_gateway_ems_total_soc"] = inv.ems.total_soc
+            entities["predbat_gateway_ems_total_charge"] = inv.ems.total_charge_w
+            entities["predbat_gateway_ems_total_discharge"] = inv.ems.total_discharge_w
+            entities["predbat_gateway_ems_total_grid"] = inv.ems.total_grid_w
+            entities["predbat_gateway_ems_total_pv"] = inv.ems.total_pv_w
+            entities["predbat_gateway_ems_total_load"] = inv.ems.total_load_w
+
+            # Per-sub-inverter entities
+            for idx, sub in enumerate(inv.ems.sub_inverters):
+                prefix = f"predbat_gateway_sub{idx}"
+                entities[f"{prefix}_soc"] = sub.soc
+                entities[f"{prefix}_battery_power"] = sub.battery_w
+                entities[f"{prefix}_pv_power"] = sub.pv_w
+                entities[f"{prefix}_grid_power"] = sub.grid_w
+                entities[f"{prefix}_temp"] = sub.temp_c
+
         return entities
 
     @staticmethod
