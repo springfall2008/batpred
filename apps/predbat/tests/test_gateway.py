@@ -7,6 +7,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from proto import gateway_status_pb2 as pb
 
+import importlib.util
+
+HAS_AIOMQTT = importlib.util.find_spec("aiomqtt") is not None
+
 
 class TestProtobufDecode:
     """Test protobuf telemetry → entity mapping."""
@@ -284,3 +288,42 @@ class TestTokenRefresh:
         # Token expiring in 2 hours — does not need refresh
         exp_later = int(time_mod.time()) + 7200
         assert GatewayMQTT.token_needs_refresh(exp_later) is False
+
+
+class TestMQTTIntegration:
+    """Integration tests for MQTT plan publishing format."""
+
+    @pytest.mark.skipif(not HAS_AIOMQTT, reason="aiomqtt not installed")
+    def test_plan_publish_format(self):
+        """Plan published to /schedule topic is valid protobuf."""
+        from gateway import GatewayMQTT
+
+        entries = [
+            {
+                "enabled": True,
+                "start_hour": 1,
+                "start_minute": 30,
+                "end_hour": 4,
+                "end_minute": 30,
+                "mode": 1,
+                "power_w": 3000,
+                "target_soc": 100,
+                "days_of_week": 0x7F,
+                "use_native": True,
+            }
+        ]
+
+        data = GatewayMQTT.build_execution_plan(entries, plan_version=1, timezone="Europe/London")
+
+        # Verify the protobuf is valid and can be decoded
+        plan = pb.ExecutionPlan()
+        plan.ParseFromString(data)
+        assert plan.entries[0].start_hour == 1
+        assert plan.entries[0].use_native is True
+        assert plan.timezone == "Europe/London"
+
+        # Verify plan_version is monotonically increasing
+        data2 = GatewayMQTT.build_execution_plan(entries, plan_version=2, timezone="Europe/London")
+        plan2 = pb.ExecutionPlan()
+        plan2.ParseFromString(data2)
+        assert plan2.plan_version > plan.plan_version
