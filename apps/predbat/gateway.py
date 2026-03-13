@@ -63,9 +63,6 @@ ENTITY_MAP = {
     "schedule.discharge_end": "predbat_gateway_discharge_end",
 }
 
-# Token refresh threshold — refresh when less than 2 hours remaining
-_TOKEN_REFRESH_THRESHOLD = 2 * 60 * 60
-
 # Plan re-publish interval (seconds)
 _PLAN_REPUBLISH_INTERVAL = 5 * 60
 
@@ -99,7 +96,7 @@ class GatewayMQTT(ComponentBase):
         self.mqtt_token_expires_at = 0
 
         # MQTT topic strings
-        self._topic_base = f"gw/{gateway_device_id}" if gateway_device_id else "gw/unknown"
+        self._topic_base = f"predbat/devices/{gateway_device_id}" if gateway_device_id else "predbat/devices/unknown"
         self.topic_status = f"{self._topic_base}/status"
         self.topic_online = f"{self._topic_base}/online"
         self.topic_schedule = f"{self._topic_base}/schedule"
@@ -115,6 +112,7 @@ class GatewayMQTT(ComponentBase):
         self._last_plan_publish_time = 0
         self._plan_version = 0
         self._refresh_in_progress = False
+        self._error_count = 0
 
     async def run(self, seconds, first):
         """Component run loop — called every 60 seconds by ComponentBase.start().
@@ -161,7 +159,7 @@ class GatewayMQTT(ComponentBase):
             if self._last_plan_data and self._mqtt_connected:
                 elapsed = time.time() - self._last_plan_publish_time
                 if elapsed > _PLAN_REPUBLISH_INTERVAL:
-                    await self._publish_raw(self.topic_schedule, self._last_plan_data)
+                    await self._publish_raw(self.topic_schedule, self._last_plan_data, retain=True)
                     self._last_plan_publish_time = time.time()
                     self.log("Info: GatewayMQTT: Re-published execution plan (stale)")
 
@@ -214,6 +212,7 @@ class GatewayMQTT(ComponentBase):
                 self.log("Info: GatewayMQTT: MQTT loop cancelled")
                 break
             except Exception as e:
+                self._error_count += 1
                 self.log(f"Warn: GatewayMQTT: MQTT connection error: {e}")
                 self._mqtt_connected = False
                 self._mqtt_client = None
@@ -252,6 +251,7 @@ class GatewayMQTT(ComponentBase):
                         attributes={"friendly_name": "Gateway Online"},
                     )
         except Exception as e:
+            self._error_count += 1
             self.log(f"Warn: GatewayMQTT: Error handling message on {topic}: {e}")
             self.log(f"Warn: {traceback.format_exc()}")
 
@@ -267,6 +267,10 @@ class GatewayMQTT(ComponentBase):
 
         self._last_telemetry_time = time.time()
         self.update_success_timestamp()
+
+        if not self.api_started:
+            self.api_started = True
+            self.log("Info: GatewayMQTT: First telemetry received, API started")
 
         for entity_name, value in entities.items():
             self.set_state_wrapper(
@@ -288,7 +292,7 @@ class GatewayMQTT(ComponentBase):
         self._last_plan_publish_time = time.time()
 
         if self._mqtt_connected:
-            await self._publish_raw(self.topic_schedule, data)
+            await self._publish_raw(self.topic_schedule, data, retain=True)
             self.log(f"Info: GatewayMQTT: Published execution plan v{self._plan_version} ({len(plan_entries)} entries)")
         else:
             self.log("Warn: GatewayMQTT: Not connected — plan queued for next publish")
@@ -308,15 +312,16 @@ class GatewayMQTT(ComponentBase):
         else:
             self.log(f"Warn: GatewayMQTT: Not connected — cannot publish command: {command}")
 
-    async def _publish_raw(self, topic, payload):
+    async def _publish_raw(self, topic, payload, retain=False):
         """Publish raw bytes to an MQTT topic.
 
         Args:
             topic: MQTT topic string.
             payload: Bytes to publish.
+            retain: Whether to set the retain flag.
         """
         if self._mqtt_client and self._mqtt_connected:
-            await self._mqtt_client.publish(topic, payload, qos=1)
+            await self._mqtt_client.publish(topic, payload, qos=1, retain=retain)
 
     def is_alive(self):
         """Check if the gateway component is alive and receiving data.
@@ -340,6 +345,10 @@ class GatewayMQTT(ComponentBase):
             return False
 
         return (time.time() - self._last_telemetry_time) < _TELEMETRY_STALE_THRESHOLD
+
+    def get_error_count(self):
+        """Return the cumulative error count (decode failures, MQTT disconnects, publish failures)."""
+        return self._error_count
 
     async def select_event(self, entity_id, value):
         """Handle select entity changes (e.g. mode selection).
@@ -437,7 +446,7 @@ class GatewayMQTT(ComponentBase):
                 self.log("Warn: GatewayMQTT: Token refresh skipped — missing env vars or instance_id")
                 return
 
-            url = f"{supabase_url}/functions/v1/gateway-token-refresh"
+            url = f"{supabase_url}/functions/v1/refresh-mqtt-token"
             headers = {
                 "Authorization": f"Bearer {supabase_key}",
                 "Content-Type": "application/json",
