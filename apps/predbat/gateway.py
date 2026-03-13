@@ -446,14 +446,14 @@ class GatewayMQTT(ComponentBase):
                 self.log("Warn: GatewayMQTT: Token refresh skipped — missing env vars or instance_id")
                 return
 
-            url = f"{supabase_url}/functions/v1/refresh-mqtt-token"
+            url = f"{supabase_url}/functions/v1/oauth-refresh"
             headers = {
                 "Authorization": f"Bearer {supabase_key}",
                 "Content-Type": "application/json",
             }
             payload = {
                 "instance_id": instance_id,
-                "refresh_token": self.mqtt_refresh_token,
+                "provider": "predbat_gateway",
             }
 
             self.log("Info: GatewayMQTT: Refreshing MQTT token")
