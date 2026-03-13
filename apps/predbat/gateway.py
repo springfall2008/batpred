@@ -77,7 +77,7 @@ class GatewayMQTT(ComponentBase):
     Instance methods handle MQTT lifecycle and ComponentBase integration.
     """
 
-    def initialize(self, gateway_device_id=None, mqtt_host=None, mqtt_port=8883, mqtt_token=None, mqtt_refresh_token=None, **kwargs):
+    def initialize(self, gateway_device_id=None, mqtt_host=None, mqtt_port=8883, mqtt_token=None, **kwargs):
         """Initialize gateway configuration and build MQTT topic strings.
 
         Args:
@@ -85,14 +85,12 @@ class GatewayMQTT(ComponentBase):
             mqtt_host: MQTT broker hostname.
             mqtt_port: MQTT broker port (default 8883 for TLS).
             mqtt_token: JWT access token for MQTT authentication.
-            mqtt_refresh_token: Refresh token for token renewal.
             **kwargs: Additional keyword arguments (ignored).
         """
         self.gateway_device_id = gateway_device_id
         self.mqtt_host = mqtt_host
         self.mqtt_port = mqtt_port
         self.mqtt_token = mqtt_token
-        self.mqtt_refresh_token = mqtt_refresh_token
         self.mqtt_token_expires_at = 0
 
         # MQTT topic strings
@@ -420,12 +418,10 @@ class GatewayMQTT(ComponentBase):
     async def _check_token_refresh(self):
         """Check if the MQTT JWT token needs refreshing and refresh if needed.
 
-        Uses the Supabase edge function (same pattern as OAuthMixin) to
-        obtain a new access token before the current one expires.
+        Uses the oauth-refresh edge function (same pattern as OAuthMixin) to
+        obtain a new access token before the current one expires. The refresh
+        token is held server-side in instance secrets.
         """
-        if not self.mqtt_refresh_token:
-            return
-
         # Extract expiry from JWT if not yet known
         if not self.mqtt_token_expires_at and self.mqtt_token:
             self.mqtt_token_expires_at = self.extract_jwt_expiry(self.mqtt_token)
@@ -469,8 +465,6 @@ class GatewayMQTT(ComponentBase):
 
             if data.get("success"):
                 self.mqtt_token = data["access_token"]
-                if data.get("refresh_token"):
-                    self.mqtt_refresh_token = data["refresh_token"]
                 if data.get("expires_at"):
                     try:
                         if isinstance(data["expires_at"], (int, float)):

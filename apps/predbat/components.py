@@ -317,7 +317,6 @@ COMPONENT_LIST = {
             "mqtt_host": {"required": True, "config": "gateway_mqtt_host"},
             "mqtt_port": {"required": False, "config": "gateway_mqtt_port", "default": 8883},
             "mqtt_token": {"required": True, "config": "gateway_mqtt_token"},
-            "mqtt_refresh_token": {"required": False, "config": "gateway_mqtt_refresh_token"},
         },
         "phase": 1,
         "can_restart": True,
