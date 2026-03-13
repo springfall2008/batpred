@@ -31,6 +31,7 @@ from web import WebInterface
 from ha import HAInterface, HAHistory
 from db_manager import DatabaseManager
 from fox import FoxAPI
+from gateway import GatewayMQTT
 from web_mcp import PredbatMCPServer
 from load_ml_component import LoadMLComponent
 from datetime import datetime, timezone, timedelta
@@ -303,6 +304,20 @@ COMPONENT_LIST = {
             "load_ml_source": {"required": False, "config": "load_ml_source", "default": False},
             "load_ml_max_days_history": {"required": False, "config": "load_ml_max_days_history", "default": 28},
             "load_ml_database_days": {"required": False, "config": "load_ml_database_days", "default": 90},
+        },
+        "phase": 1,
+        "can_restart": True,
+    },
+    "gateway": {
+        "class": GatewayMQTT,
+        "name": "PredBat Gateway",
+        "event_filter": "predbat_gateway_",
+        "args": {
+            "gateway_device_id": {"required": True, "config": "gateway_device_id"},
+            "mqtt_host": {"required": True, "config": "gateway_mqtt_host"},
+            "mqtt_port": {"required": False, "config": "gateway_mqtt_port", "default": 8883},
+            "mqtt_token": {"required": True, "config": "gateway_mqtt_token"},
+            "mqtt_refresh_token": {"required": False, "config": "gateway_mqtt_refresh_token"},
         },
         "phase": 1,
         "can_restart": True,
