@@ -417,7 +417,11 @@ class GatewayMQTT(ComponentBase):
         if not self.mqtt_refresh_token:
             return
 
-        if self.mqtt_token_expires_at and time.time() < (self.mqtt_token_expires_at - _TOKEN_REFRESH_THRESHOLD):
+        # Extract expiry from JWT if not yet known
+        if not self.mqtt_token_expires_at and self.mqtt_token:
+            self.mqtt_token_expires_at = self.extract_jwt_expiry(self.mqtt_token)
+
+        if self.mqtt_token_expires_at and not self.token_needs_refresh(self.mqtt_token_expires_at):
             return
 
         if self._refresh_in_progress:
@@ -540,6 +544,41 @@ class GatewayMQTT(ComponentBase):
             pe.use_native = entry_dict.get("use_native", False)
 
         return plan.SerializeToString()
+
+    @staticmethod
+    def extract_jwt_expiry(jwt_token):
+        """Extract the exp claim from a JWT without verifying signature.
+
+        Args:
+            jwt_token: JWT string (header.payload.signature).
+
+        Returns:
+            Unix timestamp of expiry, or 0 if parsing fails.
+        """
+        import base64
+
+        try:
+            parts = jwt_token.split(".")
+            if len(parts) != 3:
+                return 0
+            # Add padding
+            payload_b64 = parts[1] + "=" * (4 - len(parts[1]) % 4)
+            payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+            return payload.get("exp", 0)
+        except Exception:
+            return 0
+
+    @staticmethod
+    def token_needs_refresh(exp_epoch):
+        """Check if token should be refreshed (1 hour before expiry).
+
+        Args:
+            exp_epoch: Unix timestamp of token expiry.
+
+        Returns:
+            True if token expires within 1 hour.
+        """
+        return (exp_epoch - int(time.time())) < 3600
 
     @staticmethod
     def build_command(command, **kwargs):

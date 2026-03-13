@@ -203,3 +203,39 @@ class TestCommandFormat:
         parsed = json.loads(cmd)
         assert parsed["command"] == "set_reserve"
         assert parsed["target_soc"] == 10
+
+
+class TestTokenRefresh:
+    def test_jwt_expiry_extraction(self):
+        """Extract exp claim from a JWT without verification."""
+        from gateway import GatewayMQTT
+        import base64
+        import json as json_mod
+
+        # Build a fake JWT with exp claim
+        header = base64.urlsafe_b64encode(json_mod.dumps({"alg": "RS256"}).encode()).rstrip(b"=")
+        payload = base64.urlsafe_b64encode(json_mod.dumps({"exp": 1741789200, "sub": "test"}).encode()).rstrip(b"=")
+        fake_jwt = f"{header.decode()}.{payload.decode()}.fake_signature"
+
+        exp = GatewayMQTT.extract_jwt_expiry(fake_jwt)
+        assert exp == 1741789200
+
+    def test_jwt_expiry_invalid_token(self):
+        """Invalid JWT returns 0."""
+        from gateway import GatewayMQTT
+
+        assert GatewayMQTT.extract_jwt_expiry("not-a-jwt") == 0
+        assert GatewayMQTT.extract_jwt_expiry("") == 0
+
+    def test_token_needs_refresh(self):
+        """Token should be refreshed 1 hour before expiry."""
+        from gateway import GatewayMQTT
+        import time as time_mod
+
+        # Token expiring in 30 minutes — needs refresh
+        exp_soon = int(time_mod.time()) + 1800
+        assert GatewayMQTT.token_needs_refresh(exp_soon) is True
+
+        # Token expiring in 2 hours — does not need refresh
+        exp_later = int(time_mod.time()) + 7200
+        assert GatewayMQTT.token_needs_refresh(exp_later) is False
