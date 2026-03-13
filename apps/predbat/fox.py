@@ -1062,18 +1062,23 @@ class FoxAPI(ComponentBase, OAuthMixin):
         return devices
 
     def get_headers(self, path):
+        timestamp = str(round(time.time() * 1000))
+
         if self.auth_method == "oauth":
+            # OAuth requires BOTH Bearer header AND MD5 signature (using access_token as the key)
+            signature = rf"{path}\r\n{self.access_token}\r\n{timestamp}"
             return {
                 "Authorization": f"Bearer {self.access_token}",
                 "Content-Type": "application/json",
                 "lang": FOX_LANG,
+                "timestamp": timestamp,
+                "signature": hashlib.md5(signature.encode("UTF-8")).hexdigest(),
             }
 
         # API key auth: MD5 signature
         headers = {}
         token = self.key
         lang = FOX_LANG
-        timestamp = str(round(time.time() * 1000))
         headers["token"] = token
         headers["lang"] = lang
         headers["timestamp"] = timestamp
