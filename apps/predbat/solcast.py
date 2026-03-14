@@ -260,8 +260,8 @@ class SolarAPI(ComponentBase):
                 self.log("Warn: Forecast Solar data for lat {} lon {} could not be downloaded, check your Forecast Solar cloud settings, got {}".format(lat, lon, data))
                 continue
 
-            #current_time = info.get("time", None)
-            #current_time_stamp = datetime.strptime(current_time, TIME_FORMAT)
+            # current_time = info.get("time", None)
+            # current_time_stamp = datetime.strptime(current_time, TIME_FORMAT)
 
             period_start_stamp = None
             forecast_watt_data = {}
@@ -657,7 +657,7 @@ class SolarAPI(ComponentBase):
         pv_today_hist = self.base.minute_data_import_export(days, self.now_utc, "pv_today", required_unit="kWh")
         pv_today_hist_max_minute = max(pv_today_hist.keys()) if pv_today_hist else 0
         pv_today_hist_days = int(pv_today_hist_max_minute / (24 * 60)) if pv_today_hist else 0
-        # turn pv_today_hist into pv_power_hist by working out the increment for each minute, starting 
+        # turn pv_today_hist into pv_power_hist by working out the increment for each minute, starting
         current_value = None
         pv_power_hist = {}
         for minute in range(pv_today_hist_max_minute - 5, -5, -5):
@@ -671,7 +671,6 @@ class SolarAPI(ComponentBase):
         pv_forecast, pv_forecast_hist_days = history_attribute_to_minute_data(
             self.now_utc_exact, prune_today(history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", days, required=False)), self.now_utc_exact, self.midnight_utc, prune=False, intermediate=True)
         )
-    
 
         hist_days = min(pv_today_hist_days, pv_forecast_hist_days)
         enabled_calibration = True
@@ -768,7 +767,11 @@ class SolarAPI(ComponentBase):
         m.pv_scaling_best.set(best_day_scaling)
         m.pv_scaling_total.set(total_adjustment)
 
-        self.log("PV Calibration: PV production: {} kWh, Total forecast: {} kWh, adjustment {}x max_hist {}kW max_forecast {}kW slot adjustments {}, max_kwh {}, divide_by {}".format(dp2(total_production), dp2(total_forecast), total_adjustment, dp2(max_pv_power_hist), dp2(max_pv_power_forecast), slot_adjustment, max_kwh, divide_by))
+        self.log(
+            "PV Calibration: PV production: {} kWh, Total forecast: {} kWh, adjustment {}x max_hist {}kW max_forecast {}kW slot adjustments {}, max_kwh {}, divide_by {}".format(
+                dp2(total_production), dp2(total_forecast), total_adjustment, dp2(max_pv_power_hist), dp2(max_pv_power_forecast), slot_adjustment, max_kwh, divide_by
+            )
+        )
 
         pv_forecast_minute_adjusted = {}
         for minute in range(0, max(pv_forecast_minute.keys()) + 1):
@@ -779,7 +782,7 @@ class SolarAPI(ComponentBase):
         pv_estimateCL = {}
         pv_estimate10 = {}
         pv_estimate90 = {}
-        # The after scaling cap will be applied, but remember that the input data is 
+        # The after scaling cap will be applied, but remember that the input data is
         capped_data = max(max_pv_power_hist, max_pv_power_forecast) / 60 * self.plan_interval_minutes
         capped_data = min(max_kwh / 60 * self.plan_interval_minutes, capped_data)
         for minute in range(0, max(pv_forecast_minute.keys()) + 1, self.plan_interval_minutes):
