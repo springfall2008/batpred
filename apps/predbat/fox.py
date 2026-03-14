@@ -209,7 +209,7 @@ def validate_schedule(new_schedule, reserve, fdPwr_max):
 class FoxAPI(ComponentBase, OAuthMixin):
     """Fox API client."""
 
-    def initialize(self, key, automatic, inverter_sn=None, auth_method=None, token_expires_at=None):
+    def initialize(self, key, automatic, inverter_sn=None, auth_method=None, token_expires_at=None, token_hash=None):
         """Initialize the Fox API component"""
         self.key = key
         self.automatic = automatic
@@ -236,6 +236,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
 
         # Initialize OAuth support
         self._init_oauth(auth_method, key, token_expires_at, "fox_ess")
+        self.token_hash = token_hash or ""
 
         # Convert inverter_sn to list
         if inverter_sn is None:

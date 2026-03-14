@@ -213,6 +213,10 @@ COMPONENT_LIST = {
                 "required": False,
                 "config": "fox_token_expires_at",
             },
+            "token_hash": {
+                "required": False,
+                "config": "fox_token_hash",
+            },
         },
         "phase": 1,
     },

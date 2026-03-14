@@ -51,10 +51,6 @@ class OAuthMixin:
             self.access_token = None
             self.token_expires_at = None
 
-    def _set_token_hash(self, token_hash):
-        """Set token hash from config (e.g. fox_token_hash from output_mapping)."""
-        self.token_hash = token_hash or ""
-
     def _parse_expiry(self, token_expires_at):
         """Parse ISO timestamp to epoch seconds."""
         if not token_expires_at:
