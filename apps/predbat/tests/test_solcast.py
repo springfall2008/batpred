@@ -58,6 +58,10 @@ class MockBase:
         """Track dashboard_item calls"""
         self.dashboard_items[entity_id] = {"state": state, "attributes": attributes}
 
+    def minute_data_import_export(self, max_days_previous, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True):
+        """Return empty history - no historical PV data in tests"""
+        return {}
+
     def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=False):
         """Mock get_state_wrapper"""
         if entity_id in self.mock_ha_states:
@@ -501,7 +505,7 @@ def test_cache_get_url_metrics_forecast_solar(my_predbat):
 
     test_api = create_test_solar_api()
     try:
-        mock_data = {"result": {"watt_hours_period": {}}, "message": {"info": {"time": "2025-06-15T12:00:00+0000"}}}
+        mock_data = {"result": {"watts": {}}, "message": {"info": {"time": "2025-06-15T12:00:00+0000"}}}
         test_api.set_mock_response("forecast.solar", mock_data, 200)
 
         url = "https://api.forecast.solar/estimate/51.5/-0.1/30/0/3"
@@ -706,7 +710,7 @@ def test_download_forecast_solar_data(my_predbat):
         # Mock response - using TIME_FORMAT compatible timestamps
         forecast_response = {
             "result": {
-                "watt_hours_period": {
+                "watts": {
                     "2025-06-15T12:00:00+0000": 500,
                     "2025-06-15T12:30:00+0000": 600,
                     "2025-06-15T13:00:00+0000": 700,
@@ -769,7 +773,7 @@ def test_download_forecast_solar_data_with_postcode(my_predbat):
 
         forecast_response = {
             "result": {
-                "watt_hours_period": {
+                "watts": {
                     "2025-06-15T12:00:00+0000": 500,
                 }
             },
@@ -825,7 +829,7 @@ def test_download_forecast_solar_data_personal_api(my_predbat):
             }
         ]
 
-        forecast_response = {"result": {"watt_hours_period": {"2025-06-15T12:00:00+0000": 500}}, "message": {"info": {"time": "2025-06-15T11:30:00+0000"}}}
+        forecast_response = {"result": {"watts": {"2025-06-15T12:00:00+0000": 500}}, "message": {"info": {"time": "2025-06-15T11:30:00+0000"}}}
         test_api.set_mock_response("forecast.solar", forecast_response, 200)
 
         def create_mock_session(*args, **kwargs):
@@ -1296,7 +1300,7 @@ def test_fetch_pv_forecast_forecast_solar(my_predbat):
 
         forecast_response = {
             "result": {
-                "watt_hours_period": {
+                "watts": {
                     "2025-06-15T12:00:00+0000": 500,
                     "2025-06-15T12:30:00+0000": 600,
                 }
