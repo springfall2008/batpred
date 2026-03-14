@@ -102,9 +102,9 @@ class HAHistory(ComponentBase):
                 result = [history_data]
 
         if result is not None:
-            # Returning result itself is not thread-safe, as it introduces a race condition -- it can be accessed
-            # during calls to update_entity, where it may e.g. appear to be empty during the sort().
-            # Hence, return a copy, while holding the history_lock to ensure result isn't modified during the copy.
+            # Do not return the internal cached structures directly: callers could mutate the list or observe
+            # concurrent updates performed by other threads without holding history_lock, leading to cache
+            # corruption or inconsistent snapshots. Instead, take history_lock and return a deep copy.
 
             with self.history_lock:
                 result = copy.deepcopy(result)
