@@ -303,7 +303,9 @@ class WebInterface(ComponentBase):
                     <!-- House to Grid path -->
                     <path id="house-grid-path" d="M340,230 L390,270" stroke="transparent" fill="none" />
                 </defs>
-        """.format(dp0(load_power))
+        """.format(
+            dp0(load_power)
+        )
         # Draw arrows and labels
         if pv_generating:
             # Calculate animation speed based on power flow - faster for higher power
@@ -324,7 +326,9 @@ class WebInterface(ComponentBase):
                 <circle r="2" fill="#2196F3" opacity="0.4">
                     <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M200,100 L250,150" />
                 </circle>
-            """.format(dp0(pv_power), pv_speed, pv_speed, pv_speed)
+            """.format(
+                dp0(pv_power), pv_speed, pv_speed, pv_speed
+            )
         else:
             # Make the PV to House line dashed if not generating
             html += """
@@ -332,7 +336,9 @@ class WebInterface(ComponentBase):
                 <line x1="200" y1="100" x2="250" y2="150" stroke="#2196F3" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#pv-arrow)" />
                 <text x="250" y="120" text-anchor="middle" fill="#2196F3">{} W</text>
                 <!-- No moving dot when PV is not generating -->
-            """.format(dp0(pv_power))
+            """.format(
+                dp0(pv_power)
+            )
         if battery_charging:
             # Calculate animation speed based on power flow - faster for higher power
             battery_speed = max(0.5, min(3.0, 2.0 - (abs(battery_power) / 3000)))
@@ -352,7 +358,9 @@ class WebInterface(ComponentBase):
                 <circle r="2" fill="#FF9800" opacity="0.4">
                     <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M200,300 L250,250" />
                 </circle>
-            """.format(dp0(battery_power), battery_speed, battery_speed, battery_speed)
+            """.format(
+                dp0(battery_power), battery_speed, battery_speed, battery_speed
+            )
         else:
             # Calculate animation speed based on power flow - faster for higher power
             battery_speed = max(0.5, min(3.0, 2.0 - (abs(battery_power) / 3000)))
@@ -372,7 +380,9 @@ class WebInterface(ComponentBase):
                 <circle r="2" fill="#FF9800" opacity="0.4">
                     <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M265,235 L215,275" />
                 </circle>
-            """.format(dp0(battery_power), battery_speed, battery_speed, battery_speed)
+            """.format(
+                dp0(battery_power), battery_speed, battery_speed, battery_speed
+            )
 
         if grid_importing:
             # Calculate animation speed based on power flow - faster for higher power
@@ -393,7 +403,9 @@ class WebInterface(ComponentBase):
                 <circle r="2" fill="#4CAF50" opacity="0.4">
                     <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M410,290 L355,240" />
                 </circle>
-            """.format(dp0(grid_power), grid_speed, grid_speed, grid_speed)
+            """.format(
+                dp0(grid_power), grid_speed, grid_speed, grid_speed
+            )
         else:
             # Calculate animation speed based on power flow - faster for higher power
             grid_speed = max(0.5, min(3.0, 2.0 - (abs(grid_power) / 3000)))
@@ -413,7 +425,9 @@ class WebInterface(ComponentBase):
                 <circle r="2" fill="#4CAF50" opacity="0.4">
                     <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M340,230 L390,270" />
                 </circle>
-            """.format(dp0(grid_power), grid_speed, grid_speed, grid_speed)
+            """.format(
+                dp0(grid_power), grid_speed, grid_speed, grid_speed
+            )
         html += """
                 <!-- Arrowhead Marker -->
                 <defs>
@@ -798,7 +812,9 @@ class WebInterface(ComponentBase):
             <a href="{}" class="button" style="display: inline-block; padding: 8px 15px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">
                 <span class="mdi mdi-arrow-left" style="margin-right: 5px;"></span>Back
             </a>
-        </div>""".format(self.default_page)
+        </div>""".format(
+            self.default_page
+        )
 
         # Collect available attributes for all selected entities
         entity_attributes_map = {}
@@ -846,7 +862,9 @@ class WebInterface(ComponentBase):
                 <input type="hidden" name="days" value="{}" />
                 <button type="submit" style="margin-top: 10px; padding: 8px 16px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">Update Chart</button>
             </form>
-        </div>""".format(days)
+        </div>""".format(
+            days
+        )
 
         # Add days selector
         text += """<div style="margin-bottom: 20px;">
