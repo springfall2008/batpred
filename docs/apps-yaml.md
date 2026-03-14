@@ -940,7 +940,13 @@ The value to use is the maximum DC charge rate of your battery — typically the
     - 9200
 ```
 
-NB: This setting is only relevant for hybrid inverters (`inverter_hybrid: true`). For AC-coupled inverters all charging passes through the AC stage and the `inverter_limit` applies regardless.
+**battery_loss_dc** (optional, hybrid inverters only) sets the round-trip energy loss fraction for DC solar charging. DC charging bypasses the AC conversion stage so the efficiency is higher than for AC grid charging (`battery_loss`). A typical value is 0.02 (2% loss, ~98% efficient). If not set, Predbat uses `battery_loss` for the DC path.
+
+```yaml
+  battery_loss_dc: 0.02
+```
+
+NB: Both settings are only relevant for hybrid inverters (`inverter_hybrid: true`). For AC-coupled inverters all charging passes through the AC stage and `inverter_limit` applies regardless.
 
 ## Controlling the Inverter
 

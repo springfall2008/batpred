@@ -74,6 +74,13 @@ pred_bat:
   charge_limit:
     - number.sigen_plant_ess_charge_cut_off_state_of_charge
 
+  # If you have a hybrid inverter with DC-coupled batteries, solar can charge the battery
+  # faster than the AC inverter limit allows. Set this to the max DC charge rate in watts.
+  # Defaults to battery_rate_max if not set.
+  battery_rate_max_charge_dc:
+    - 9200 # 2 x BAT 10
+  battery_loss_dc: 0.02
+
   # Services to control the inverter
   charge_start_service:
     - service: input_select.select_option

@@ -172,6 +172,8 @@ class Prediction:
             self.battery_rate_max_scaling_discharge = base.battery_rate_max_scaling_discharge
             self.battery_loss = base.battery_loss
             self.battery_loss_discharge = base.battery_loss_discharge
+            self.battery_loss_dc = base.battery_loss_dc
+            self.battery_rate_max_charge_dc = base.battery_rate_max_charge_dc
             self.best_soc_keep = base.best_soc_keep
             self.best_soc_keep_weight = base.best_soc_keep_weight
             self.best_soc_min = base.best_soc_min
@@ -982,8 +984,10 @@ class Prediction:
             if battery_draw > 0:
                 soc = max(soc - battery_draw / battery_loss_discharge, reserve_expected)
             else:
-                soc = min(soc - battery_draw * battery_loss, soc_max)
-            soc = round(soc, 6)
+                if inverter_hybrid and battery_state == "e+" and pv_now > 0:
+                    soc = min(soc - battery_draw * self.battery_loss_dc, soc_max)
+                else:
+                    soc = min(soc - battery_draw * battery_loss, soc_max)
 
             # Iboost finally count
             if self.iboost_enable:

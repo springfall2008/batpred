@@ -99,6 +99,16 @@ or set it to 'auto' (the default) to use one thread per CPU. It is recommended y
 
 **input_number.predbat_battery_loss_discharge** is an assumed percentage figure for energy lost whilst discharging the battery, the default 0.03 is 3%.
 
+**battery_loss_dc** (apps.yaml only, hybrid inverters only)
+
+On a hybrid inverter, solar power reaches the battery via the DC bus without passing through the AC conversion stage. This means the round-trip efficiency for solar charging is higher than for AC grid charging. battery_loss_dc lets you tell Predbat about this difference.
+
+Set it in apps.yaml as a loss fraction (the same format as battery_loss):
+
+battery_loss_dc: 0.02
+
+If not set, Predbat uses battery_loss for the DC solar charging path, which is correct but slightly pessimistic. A typical value for DC-coupled solar charging is 0.02 (2%). Your grid charging loss (battery_loss) is typically 0.04-0.05.  This setting only has an effect when inverter_hybrid is True.
+
 **input_number.predbat_inverter_loss** is an assumed percentage figure for  energy lost during the conversion within the inverter from DC to AC or AC to DC, the default 0.04 is 4%.
 
 _TIP:_ Make sure you set the losses correctly, they are decimal percentages, so don't set them to '4' thinking it'll be 4%, Predbat will take this as being 400% and your plan will be very strange!

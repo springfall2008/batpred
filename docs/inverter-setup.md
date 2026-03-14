@@ -1692,6 +1692,24 @@ Add the following automations to `automations.yaml` (or configure via the UI):
   mode: single
 ```
 
+DC charge rate configuration
+
+The Sigenergy SigenStor system is a hybrid inverter. Solar panels connect
+directly to the DC bus, which means the battery can charge from solar faster
+than the AC inverter_limit would otherwise allow.
+
+Add the following to your apps.yaml:
+
+```yaml
+battery_rate_max_charge_dc:
+  - 9200
+battery_loss_dc: 0.02
+```
+
+Without battery_rate_max_charge_dc, Predbat caps solar battery charging at inverter_limit (your AC output ceiling), predicting more solar clipping than actually occurs. This leads Predbat to plan a higher overnight grid charge than necessary, costing money on Agile-style tariffs.
+
+Set battery_rate_max_charge_dc to the sum of your battery units DC charge ratings. SigenStor BAT 10.0 is rated at 4600W DC per unit. Two units = 9200W.
+
 *Note:* Some Sigenergy Predbat users have reported that their Sigenergy modbus integration has created some of the entities that Predbat requires with different names
 so you may need to adapt the above automations and `apps.yaml` (or rename your entities) to match:
 
