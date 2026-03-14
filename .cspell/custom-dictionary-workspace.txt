@@ -37,7 +37,6 @@ beforeunload
 bierner
 brickatius
 byok
-BYOK
 calib
 Cantarell
 cexxxx
