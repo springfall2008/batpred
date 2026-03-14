@@ -654,7 +654,7 @@ class SolarAPI(ComponentBase):
         self.log("PV Calibration: Fetching PV data for calibration")
 
         days = 10
-        pv_today_hist = self.base.minute_data_import_export(days, self.now_utc, "pv_today", required_unit="kWh")
+        pv_today_hist = self.base.minute_data_import_export(days, self.now_utc, "pv_today", required_unit="kWh", pad=False)
         pv_today_hist_max_minute = max(pv_today_hist.keys()) if pv_today_hist else 0
         pv_today_hist_days = int(pv_today_hist_max_minute / (24 * 60)) if pv_today_hist else 0
         # turn pv_today_hist into pv_power_hist by working out the increment for each minute, starting
