@@ -59,6 +59,7 @@ from web_helper import (
     get_entity_control_css,
     get_entity_css,
     get_entity_js,
+    get_refresh_inverter_js,
     get_restart_button_js,
     get_browse_css,
     get_entity_detailed_row_js,
@@ -151,6 +152,7 @@ class WebInterface(ComponentBase):
         app.router.add_post("/plan_override", self.html_plan_override)
         app.router.add_post("/rate_override", self.html_rate_override)
         app.router.add_post("/restart", self.html_restart)
+        app.router.add_post("/inverter_refresh", self.html_inverter_refresh)
         app.router.add_get("/api/state", self.html_api_get_state)
         app.router.add_get("/api/ping", self.html_api_ping)
         app.router.add_post("/api/state", self.html_api_post_state)
@@ -525,6 +527,14 @@ class WebInterface(ComponentBase):
         toggle_class = "toggle-switch active" if read_only else "toggle-switch"
         text += f'<button class="{toggle_class}" type="button" onclick="toggleSwitch(this, \'set_read_only\')"></button>'
         text += "</form></td></tr>\n"
+
+        # Editable Predbat Active field
+        predbat_active, ignore = self.get_ha_config("active", None)
+        text += "<tr><td>Predbat Active</td><td>"
+        text += f'<form style="display: inline;" method="post" action="./dash">'
+        toggle_class = "toggle-switch active" if predbat_active else "toggle-switch"
+        text += f'<button class="{toggle_class}" type="button" onclick="toggleSwitch(this, \'active\')"></button>'
+        text += "</form></td></tr>\n"
         if self.arg_errors:
             count_errors = len(self.arg_errors)
             text += "<tr><td>Config</td><td bgcolor=#ff7777>apps.yaml has {} errors</td></tr>\n".format(count_errors)
@@ -550,6 +560,12 @@ class WebInterface(ComponentBase):
 
         # Add power flow diagram
         text += "<h2>Power Flow</h2>\n"
+        text += """<div style="margin-bottom: 8px; display: flex; align-items: center; gap: 10px;">
+            <button id="inverterRefreshBtn" onclick="refreshInverterData()" style="background-color: #2196F3; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold;">Refresh</button>
+            <span id="inverterRefreshStatus" style="font-size: 13px; color: #666;"></span>
+        </div>
+        """
+        text += get_refresh_inverter_js()
         text += self.get_power_flow_diagram()
 
         # Text description of the plan
@@ -2365,7 +2381,7 @@ chart.render();
                     # Update mode - it's a select type
                     entity_id = f"select.{self.prefix}_{key}"
                     await self.base.ha_interface.set_state_external(entity_id, value)
-                elif key in ["debug_enable", "set_read_only"]:
+                elif key in ["debug_enable", "set_read_only", "active"]:
                     # Update switches - convert to boolean
                     entity_id = f"switch.{self.prefix}_{key}"
                     bool_value = value == "on"
@@ -3945,6 +3961,18 @@ document.addEventListener('DOMContentLoaded', function() {
 
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
+
+    async def html_inverter_refresh(self, request):
+        """
+        Handle inverter refresh request by resetting the last fetch time
+        """
+        try:
+            self.log("Inverter refresh requested from web interface")
+            self.base.inverter_data_last_fetch = None
+            return web.json_response({"success": True, "message": "Inverter refresh initiated"})
+        except Exception as e:
+            self.log(f"ERROR: Failed to initiate inverter refresh: {str(e)}")
+            return web.json_response({"success": False, "message": str(e)}, status=500)
 
     async def html_restart(self, request):
         """

@@ -20,6 +20,58 @@ navigation menus.
 """
 
 
+def get_refresh_inverter_js():
+    """
+    Returns CSS and JavaScript code for refreshing inverter data.
+    """
+    return """
+        <style>
+        @keyframes inverterStatusFadeOut {
+            0%   { opacity: 1; }
+            60%  { opacity: 1; }
+            100% { opacity: 0; }
+        }
+        #inverterRefreshStatus {
+            display: inline-block;
+            font-size: 13px;
+            color: #666;
+        }
+        #inverterRefreshStatus.fade-out {
+            animation: inverterStatusFadeOut 4s forwards;
+        }
+        </style>
+        <script>
+        function refreshInverterData() {
+            var btn = document.getElementById('inverterRefreshBtn');
+            var status = document.getElementById('inverterRefreshStatus');
+            btn.disabled = true;
+            btn.style.backgroundColor = '#90CAF9';
+            btn.textContent = 'Refreshing\u2026';
+            status.className = '';
+            status.style.color = '#666';
+            status.textContent = '';
+            fetch('./inverter_refresh', {method: 'POST'})
+                .then(function(r) { return r.json(); })
+                .then(function(d) {
+                    status.style.color = '#4CAF50';
+                    status.textContent = 'Done \u2014 reloading in 20s\u2026';
+                    setTimeout(function() { status.classList.add('fade-out'); }, 100);
+                    setTimeout(function() { location.reload(); }, 20000);
+                })
+                .catch(function(e) {
+                    btn.disabled = false;
+                    btn.style.backgroundColor = '#2196F3';
+                    btn.textContent = 'Refresh';
+                    status.style.color = '#f44336';
+                    status.textContent = 'Refresh failed';
+                    setTimeout(function() { status.classList.add('fade-out'); }, 2000);
+                    console.error('Refresh failed:', e);
+                });
+        }
+        </script>
+    """
+
+
 def get_restart_button_js():
     # Add JavaScript for restart functionality
     text = """
