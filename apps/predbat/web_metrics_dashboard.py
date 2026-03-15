@@ -241,8 +241,8 @@ function mdPowerData(d) {
       Math.max(0,  bp),
       d.load_power || 0,
       d.pv_power   || 0,
-      Math.max(0,  gp),
       Math.max(0, -gp),
+      Math.max(0, gp),
     ],
     colors: [mdVar('--md-green'), mdVar('--md-amber'), mdVar('--md-blue'), '#eab308', mdVar('--md-red'), '#0d9488'],
   };
