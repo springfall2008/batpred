@@ -6335,7 +6335,7 @@ def get_plan_renderer_js():
                 // Time cell with dropdown (if editable)
                 const timeDisplay = formatTimeDisplay(row.time);
                 if (editable) {
-                    html += renderTimeCell(row.time, timeDisplay, overrides);
+                    html += renderTimeCell(row.time, timeDisplay, overrides, row.slot_minute);
                 } else {
                     html += `<td id=time bgcolor=#FFFFFF>${timeDisplay}</td>`;
                 }
@@ -6350,7 +6350,7 @@ def get_plan_renderer_js():
                     importText = `<b>${importText}</b>`;
                 }
                 if (editable) {
-                    html += renderRateCell(row.import_rate, row.rate_color_import, 'import', row.time, timeDisplay, overrides, importText);
+                    html += renderRateCell(row.import_rate, row.rate_color_import, 'import', row.time, timeDisplay, overrides, importText, row.slot_minute);
                 } else {
                     html += `<td id=import ${cellStyle} bgcolor=${row.rate_color_import || '#FFFFFF'}>${importText}</td>`;
                 }
@@ -6361,7 +6361,7 @@ def get_plan_renderer_js():
                     exportText += ` (${row.export_rate_adjusted.toFixed(2)})`;
                 }
                 if (editable) {
-                    html += renderRateCell(row.export_rate, row.rate_color_export, 'export', row.time, timeDisplay, overrides, exportText);
+                    html += renderRateCell(row.export_rate, row.rate_color_export, 'export', row.time, timeDisplay, overrides, exportText, row.slot_minute);
                 } else {
                     html += `<td id=export ${cellStyle} bgcolor=${row.rate_color_export || '#FFFFFF'}>${exportText}</td>`;
                 }
@@ -6400,7 +6400,7 @@ def get_plan_renderer_js():
 
                 // Load forecast (with 10% value in brackets if debug mode)
                 if (editable) {
-                    html += renderLoadCell(row.time, timeDisplay, row.load_forecast, row.load_forecast10, row.load_color, showDebug, overrides, jsonData.manual_load_value !== undefined ? jsonData.manual_load_value : 0.5);
+                    html += renderLoadCell(row.time, timeDisplay, row.load_forecast, row.load_forecast10, row.load_color, showDebug, overrides, jsonData.manual_load_value !== undefined ? jsonData.manual_load_value : 0.5, row.slot_minute);
                 } else {
                     let loadText = row.load_forecast !== undefined ? row.load_forecast : '';
                     if (showDebug && row.load_forecast10 > 0) {
@@ -6436,7 +6436,7 @@ def get_plan_renderer_js():
                 // SOC
                 const socSym = row.soc_sym || (row.soc_change > 0 ? '&nearr;' : (row.soc_change < 0 ? '&searr;' : '&rarr;'));
                 if (editable) {
-                    html += renderSocCell(row.time, timeDisplay, row.soc_percent, row.soc_color, socSym, overrides);
+                    html += renderSocCell(row.time, timeDisplay, row.soc_percent, row.soc_color, socSym, overrides, row.slot_minute);
                 } else {
                     html += `<td id=soc bgcolor=${row.soc_color || '#FFFFFF'}>${row.soc_percent}${socSym}</td>`;
                 }
@@ -6531,9 +6531,9 @@ def get_plan_renderer_js():
     }
 
     // Render time cell (simple, no highlighting - that's moved to state column)
-    function renderTimeCell(timeStr, timeDisplay, overrides) {
+    function renderTimeCell(timeStr, timeDisplay, overrides, slotMinute) {
         const dropdownId = `dropdown_${dropdownCounter++}`;
-        const minutesFromMidnight = getMinutesFromTimeString(timeStr);
+        const minutesFromMidnight = slotMinute !== undefined ? slotMinute : getMinutesFromTimeString(timeStr);
 
         const manualTimes = overrides.manual_charge_times.concat(
             overrides.manual_export_times,
@@ -6596,7 +6596,7 @@ def get_plan_renderer_js():
     function renderStateCell(row, timeDisplay, overrides) {
         const cellStyle = 'style="padding: 4px;"';
         const timeStr = row.time;
-        const minutesFromMidnight = getMinutesFromTimeString(timeStr);
+        const minutesFromMidnight = row.slot_minute !== undefined ? row.slot_minute : getMinutesFromTimeString(timeStr);
 
         // Determine background color based on override type (prioritize manual overrides over default state color)
         let bgColor = row.state_color || '#FFFFFF';
@@ -6635,10 +6635,10 @@ def get_plan_renderer_js():
     }
 
     // Render rate cell with dropdown for manual rate overrides
-    function renderRateCell(rate, bgColor, type, timeStr, timeDisplay, overrides, displayText) {
+    function renderRateCell(rate, bgColor, type, timeStr, timeDisplay, overrides, displayText, slotMinute) {
         const cellStyle = 'style="padding: 4px;"';
         const dropdownId = `dropdown_${dropdownCounter++}`;
-        const minutesFromMidnight = getMinutesFromTimeString(timeStr);
+        const minutesFromMidnight = slotMinute !== undefined ? slotMinute : getMinutesFromTimeString(timeStr);
         const overrideList = type === 'import' ? overrides.manual_import_rates : overrides.manual_export_rates;
         const override = overrideList.find(r => r.minutes === minutesFromMidnight);
         const isOverride = override !== undefined;
@@ -6664,9 +6664,9 @@ def get_plan_renderer_js():
     }
 
     // Render load cell with dropdown for load adjustments
-    function renderLoadCell(timeStr, timeDisplay, loadValue, loadValue10, bgColor, showDebug, overrides, manualLoadValue) {
+    function renderLoadCell(timeStr, timeDisplay, loadValue, loadValue10, bgColor, showDebug, overrides, manualLoadValue, slotMinute) {
         const dropdownId = `dropdown_${dropdownCounter++}`;
-        const minutesFromMidnight = getMinutesFromTimeString(timeStr);
+        const minutesFromMidnight = slotMinute !== undefined ? slotMinute : getMinutesFromTimeString(timeStr);
         const isOverride = overrides.manual_load_adjust.some(r => r.minutes === minutesFromMidnight);
 
         // Add 10% value in brackets if debug mode
@@ -6691,9 +6691,9 @@ def get_plan_renderer_js():
     }
 
     // Render SOC cell with dropdown for manual SOC targets
-    function renderSocCell(timeStr, timeDisplay, socValue, bgColor, socSym, overrides) {
+    function renderSocCell(timeStr, timeDisplay, socValue, bgColor, socSym, overrides, slotMinute) {
         const dropdownId = `dropdown_${dropdownCounter++}`;
-        const minutesFromMidnight = getMinutesFromTimeString(timeStr);
+        const minutesFromMidnight = slotMinute !== undefined ? slotMinute : getMinutesFromTimeString(timeStr);
         const isOverride = overrides.manual_soc.some(r => r.minutes === minutesFromMidnight);
 
         let html = `<td id=soc data-minute="${minutesFromMidnight}" bgcolor=${bgColor} onclick="toggleForceDropdown('${dropdownId}')" class="clickable-time-cell">`;
