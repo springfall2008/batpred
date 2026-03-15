@@ -3161,8 +3161,8 @@ chart.render();
                 compare_hist[id] = {}
                 result = self.base.comparison.get_comparison(id)
                 if result:
-                    compare_hist[id]["cost"] = history_attribute(self.get_history_wrapper(result["entity_id"], 28), daily=True, pounds=True)
-                    compare_hist[id]["metric"] = history_attribute(self.get_history_wrapper(result["entity_id"], 28), state_key="metric", attributes=True, daily=True, pounds=True)
+                    compare_hist[id]["cost"] = history_attribute(self.get_history_wrapper(result["entity_id"], 28, required=False), daily=True, pounds=True)
+                    compare_hist[id]["metric"] = history_attribute(self.get_history_wrapper(result["entity_id"], 28, required=False), state_key="metric", attributes=True, daily=True, pounds=True)
 
         compare_list = self.get_arg("compare_list", [])
 
