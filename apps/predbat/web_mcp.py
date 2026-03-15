@@ -1090,7 +1090,8 @@ class MCPServerWrapper:
             read_only, _ = self.base.get_ha_config("set_read_only", None)
             predbat_mode, _ = self.base.get_ha_config("mode", None)
             num_cars, _ = self.base.get_ha_config("num_cars", None)
-            last_updated = self.base.get_state_wrapper("predbat.status", attribute="last_updated", default=None)
+            status_entity = self.prefix + ".status"
+            last_updated = self.base.get_state_wrapper(status_entity, attribute="last_updated", default=None)
             soc_percent = calc_percent_limit(self.base.soc_kw, self.base.soc_max)
             grid_power = self.base.grid_power
             battery_power = self.base.battery_power
@@ -1098,7 +1099,7 @@ class MCPServerWrapper:
             load_power = self.base.load_power
             status_data = {
                 "is_running": self.base.is_running(),
-                "status": self.base.get_state_wrapper("predbat.status"),
+                "status": self.base.get_state_wrapper(status_entity),
                 "current_soc": self.base.soc_kw,
                 "soc_max": self.base.soc_max,
                 "soc_percent": soc_percent,

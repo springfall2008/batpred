@@ -1092,6 +1092,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
 
         gc.collect()
 
+        # Schedule inverter update for 30 seconds time to allow the inverter to process the changes we just made before we fetch the data again
+        # This allows the power flow to update for the user more quickly.
+        self.inverter_data_last_fetch = datetime.now() - timedelta(seconds=INVERTER_QUICK_UPDATE_SECONDS) + timedelta(seconds=30)
+
     async def async_download_predbat_version(self, version):
         """
         Sync wrapper for async download_predbat_version
@@ -1482,10 +1486,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                 return False
 
         # Read predbat.status
-        predbat_error = self.get_state_wrapper("predbat.status", attribute="error", default=True)
+        status_entity = self.prefix + ".status"
+        predbat_error = self.get_state_wrapper(status_entity, attribute="error", default=True)
         if predbat_error is None or predbat_error:
             return False
-        predbat_last_updated = self.get_state_wrapper("predbat.status", attribute="last_updated", default=None)
+        predbat_last_updated = self.get_state_wrapper(status_entity, attribute="last_updated", default=None)
         if predbat_last_updated is None:
             return False
 

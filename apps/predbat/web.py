@@ -460,7 +460,7 @@ class WebInterface(ComponentBase):
 
         return html
 
-    def get_status_html(self, status, version):
+    def get_status_html(self, version):
         text = ""
         if not self.base.dashboard_index:
             text += "<h2>Loading please wait...</h2>"
@@ -484,13 +484,20 @@ class WebInterface(ComponentBase):
             self.log("Error checking if Predbat is running: {}".format(e))
             is_running = False
 
-        last_updated = self.get_state_wrapper("predbat.status", attribute="last_updated", default=None)
+        status_entity = self.prefix + ".status"
+        last_updated = self.get_state_wrapper(status_entity, attribute="last_updated", default=None)
+        status = self.get_state_wrapper(status_entity, default="Unknown")
+        detail = self.get_state_wrapper(status_entity, attribute="detail", default="")
+        debug = self.get_state_wrapper(status_entity, attribute="debug", default="")
+        status_full = status + " " + detail
+        debug_escaped = str(debug).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+        debug_title = ' title="{}"'.format(debug_escaped) if debug else ""
         if status and (("Warn:" in status) or ("Error:" in status)):
-            text += "<tr><td>Status</td><td bgcolor=#ff7777>{}</td></tr>\n".format(status)
+            text += "<tr><td>Status</td><td bgcolor=#ff7777{}>{}</td></tr>\n".format(debug_title, status_full)
         elif not is_running:
-            text += "<tr><td colspan='2' bgcolor='#ff7777'>{} (unhealthy)</td></tr>\n".format(status)
+            text += "<tr><td colspan='2' bgcolor='#ff7777'{}>{} (unhealthy)</td></tr>\n".format(debug_title, status_full)
         else:
-            text += "<tr><td>Status</td><td>{}</td></tr>\n".format(status)
+            text += "<tr><td>Status</td><td{}>{}</td></tr>\n".format(debug_title, status)
         text += "<tr><td>Last Updated</td><td>{}</td></tr>\n".format(last_updated)
         text += "<tr><td>Version</td><td>{}</td></tr>\n".format(version)
 
@@ -2340,7 +2347,7 @@ chart.render();
         text += get_dashboard_css()
         text += get_dashboard_collapsible_js()
         text += "<body>\n"
-        text += self.get_status_html(self.base.current_status, THIS_VERSION)
+        text += self.get_status_html(THIS_VERSION)
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
