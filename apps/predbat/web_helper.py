@@ -6530,7 +6530,7 @@ def get_plan_renderer_js():
         }
     }
 
-    // Render time cell (simple, no highlighting - that's moved to state column)
+    // Render time cell (simple, with subtle override-based highlighting; main state highlighting is in the state column)
     function renderTimeCell(timeStr, timeDisplay, overrides, slotMinute) {
         const dropdownId = `dropdown_${dropdownCounter++}`;
         const minutesFromMidnight = slotMinute !== undefined ? slotMinute : getMinutesFromTimeString(timeStr);
