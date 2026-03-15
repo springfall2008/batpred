@@ -840,7 +840,7 @@ class GECloudDirect(ComponentBase):
                     ac_coupled = True
                     break
         entity_id = "switch.{}_inverter_hybrid".format(self.prefix)
-        self.log("GECloud: Detected inverter model {} indicate ac_coupled={}, setting {} to {}".format(model_name, ac_coupled, entity_id, "off" if ac_coupled else "on"))
+        self.log("GECloud: Detected inverter model {} indicates ac_coupled={}, setting {} to {}".format(model_name, ac_coupled, entity_id, "off" if ac_coupled else "on"))
         await self.base.ha_interface.set_state_external(entity_id, not ac_coupled)
 
         self.log("GECloud: Automatic configuration complete")
