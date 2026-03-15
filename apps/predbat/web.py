@@ -2605,13 +2605,14 @@ chart.render();
             text += self.render_chart(series_data, "kW", "ML Load & PV Power with Temperature", now_str, extra_yaxis=secondary_axis)
         elif chart == "Savings":
             # Get daily savings data (historical)
-            savings_predbat_hist = history_attribute(self.get_history_wrapper(self.prefix + ".savings_yesterday_predbat", 28, required=False), daily=True, offset_days=-1, pounds=True)
-            savings_pvbat_hist = history_attribute(self.get_history_wrapper(self.prefix + ".savings_yesterday_pvbat", 28, required=False), daily=True, offset_days=-1, pounds=True)
-            cost_yesterday_hist = history_attribute(self.get_history_wrapper(self.prefix + ".cost_yesterday", 28, required=False), daily=True, offset_days=-1, pounds=True)
+            # first=False ensures we use the last (most recent) update per day, not a stale midnight echo
+            savings_predbat_hist = history_attribute(self.get_history_wrapper(self.prefix + ".savings_yesterday_predbat", 28, required=False), daily=True, offset_days=-1, pounds=True, first=False)
+            savings_pvbat_hist = history_attribute(self.get_history_wrapper(self.prefix + ".savings_yesterday_pvbat", 28, required=False), daily=True, offset_days=-1, pounds=True, first=False)
+            cost_yesterday_hist = history_attribute(self.get_history_wrapper(self.prefix + ".cost_yesterday", 28, required=False), daily=True, offset_days=-1, pounds=True, first=False)
 
             # Get cumulative/total savings over time (historical)
-            savings_total_predbat_hist = history_attribute(self.get_history_wrapper(self.prefix + ".savings_total_predbat", 28, required=False), daily=True, pounds=True)
-            savings_total_pvbat_hist = history_attribute(self.get_history_wrapper(self.prefix + ".savings_total_pvbat", 28, required=False), daily=True, pounds=True)
+            savings_total_predbat_hist = history_attribute(self.get_history_wrapper(self.prefix + ".savings_total_predbat", 28, required=False), daily=True, pounds=True, first=False)
+            savings_total_pvbat_hist = history_attribute(self.get_history_wrapper(self.prefix + ".savings_total_pvbat", 28, required=False), daily=True, pounds=True, first=False)
 
             series_data = [
                 # Daily savings (bars) on primary axis
