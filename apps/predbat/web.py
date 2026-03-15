@@ -499,7 +499,7 @@ class WebInterface(ComponentBase):
         elif not is_running:
             text += "<tr><td colspan='2' bgcolor='#ff7777'{}>{} (unhealthy)</td></tr>\n".format(debug_title, status_full)
         else:
-            text += "<tr><td>Status</td><td{}>{}</td></tr>\n".format(debug_title, status)
+            text += "<tr><td>Status</td><td{}>{}</td></tr>\n".format(debug_title, status_full)
         text += "<tr><td>Last Updated</td><td>{}</td></tr>\n".format(last_updated)
         text += "<tr><td>Version</td><td>{}</td></tr>\n".format(version)
 
