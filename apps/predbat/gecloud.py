@@ -400,7 +400,7 @@ class GECloudDirect(ComponentBase):
 
                 self.dashboard_item(entity_name + "_battery_size", capacity, attributes=attribute_table.get("battery_size", {}), app="gecloud")
                 self.dashboard_item(entity_name + "_max_charge_rate", max_charge_rate, attributes=attribute_table.get("max_charge_rate", {}), app="gecloud")
-                self.dashboard_item(entity_name + "_battery_dod", dod, attributes=attribute_table.get("_battery_dod", {}), app="gecloud")
+                self.dashboard_item(entity_name + "_battery_dod", dod, attributes=attribute_table.get("battery_dod", {}), app="gecloud")
                 model_attr = attribute_table.get("model", {}).copy()
                 model_attr["details"] = device_info
                 self.dashboard_item(entity_name + "_model", model, attributes=model_attr, app="gecloud")
@@ -826,7 +826,7 @@ class GECloudDirect(ComponentBase):
             self.set_arg("load_power", [f"sensor.{self.prefix}_gecloud_{ems}_consumption_power"] + [0 for _ in range(num_inverters - 1)])
             self.set_arg("grid_power", [f"sensor.{self.prefix}_gecloud_{ems}_grid_power"] + [0 for _ in range(num_inverters - 1)])
 
-        # Determine the model of the inverter, if at least one inverter as _AC in the name then we assume AC coupled and turn off the hybrid switch
+        # Determine the model of the inverter, if at least one inverter has AC or AIO in the name then we assume AC coupled and turn off the hybrid switch
         # First fetch "model"
         ac_coupled = False
         model_name = "Unknown"
