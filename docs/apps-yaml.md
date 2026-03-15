@@ -913,8 +913,8 @@ The **givtcp_rest** line should be commented out/deleted on anything but GivTCP 
 
 or
 
-- **charge_rate_percent** - Battery charge rate entity in percent of maximum rate (0-100)
-- **discharge_rate_percent** - Battery discharge max rate entity in percent of maximum rate (0-100)
+- **charge_rate_percent** - Battery charge rate entity in percent of maximum battery charge rate (0-100)
+- **discharge_rate_percent** - Battery discharge rate entity in percent of maximum battery discharge rate (0-100)
 
 or
 
