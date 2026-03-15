@@ -914,6 +914,7 @@ class MCPServerWrapper:
     def __init__(self, base, log_func=None):
         """Initialize the MCP server wrapper"""
         self.base = base
+        self.prefix = base.prefix
         self.log = log_func or print
         self.is_running = False
         self.plan_interval_minutes = base.plan_interval_minutes
