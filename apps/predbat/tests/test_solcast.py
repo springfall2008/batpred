@@ -1861,9 +1861,7 @@ def test_pv_calibration_power_conversion(my_predbat):
         pv_forecast_minute10 = {m: 0.04 for m in range(total_minutes)}
         pv_forecast_data = [{"period_start": base.midnight_utc.strftime("%Y-%m-%dT%H:%M:%S+0000"), "pv_estimate": 0.05}]
 
-        adj_minute, adj_minute10, adj_data = solar.pv_calibration(
-            pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=5.0
-        )
+        adj_minute, adj_minute10, adj_data = solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=5.0)
 
         # Returned minute data must be non-negative
         if any(v < 0 for v in adj_minute.values()):
@@ -1929,7 +1927,7 @@ def test_pv_calibration_capped_data_clamp(my_predbat):
         pv_forecast_minute10 = {m: 2.0 / 60 for m in range(total_minutes)}
 
         # Build forecast data entries — one per plan_interval over 1 day
-        from datetime import datetime, timedelta
+        from datetime import timedelta
         import pytz
 
         midnight = base.midnight_utc.replace(tzinfo=pytz.utc)
@@ -1939,9 +1937,7 @@ def test_pv_calibration_capped_data_clamp(my_predbat):
             pv_forecast_data.append({"period_start": ts.strftime("%Y-%m-%dT%H:%M:%S+0000"), "pv_estimate": 3.0 * plan_interval / 60})
 
         max_kwh = 2.0  # panel peak output cap in kW
-        adj_minute, adj_minute10, adj_data = solar.pv_calibration(
-            pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=max_kwh
-        )
+        adj_minute, adj_minute10, adj_data = solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=max_kwh)
 
         # capped_data = min(max(max_pv_power_hist, max_pv_power_forecast), max_kwh) * plan_interval / 60
         # max_pv_power_hist ≈ 1 kW (per minute), max_pv_power_forecast ≈ 3/60 kW per minute
