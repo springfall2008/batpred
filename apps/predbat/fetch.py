@@ -1838,7 +1838,7 @@ class Fetch:
         # Use ML Model for load prediction
         load_ml_forecast = self.get_state_wrapper("sensor." + self.prefix + "_load_ml_forecast", attribute="results")
         if load_ml_forecast:
-            self.log("Loading ML load forecast from sensor.sensor.{}_load_ml_forecast".format(self.prefix))
+            self.log("Loading ML load forecast from sensor.{}_load_ml_forecast".format(self.prefix))
             # Convert format from dict to array
             if isinstance(load_ml_forecast, dict):
                 data_array = []
@@ -1860,7 +1860,7 @@ class Fetch:
                 )
 
                 if load_forecast:
-                    self.log("Loaded the ML load forecast; now {}kWh to midnight {}kwh".format(load_forecast.get(self.minutes_now, 0), load_forecast.get(24 * 60 - PREDICT_STEP, 0)))
+                    self.log("Loaded the ML load forecast; load so far today {}kWh, load today at midnight {}kWh".format(dp1(load_forecast.get(self.minutes_now, 0)), dp1(load_forecast.get(24 * 60 - PREDICT_STEP, 0))))
                     return load_forecast
         return {}
 
