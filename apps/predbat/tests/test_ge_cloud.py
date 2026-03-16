@@ -218,6 +218,7 @@ def test_ge_cloud(my_predbat=None):
         ("cache_corrupt", _test_load_ge_cache_corrupt_file, "Cache corrupt file"),
         ("regname_to_ha", _test_regname_to_ha, "Regname to HA conversion"),
         ("get_data", _test_get_data, "Get data method"),
+        ("filter_data", _test_filter_data, "Filter data method"),
     ]
 
     # Run all sub-tests
@@ -3076,6 +3077,100 @@ def _test_get_data(my_predbat):
         return 1
     if oldest != test_time:
         print("ERROR: Expected oldest_data_time, got {}".format(oldest))
+        return 1
+
+    return 0
+
+
+def _test_filter_data(my_predbat):
+    """Test GECloudData.filter_data() method"""
+    ge_data = MockGECloudData()
+
+    # Test 1: Strictly increasing values — all kept
+    mdata = [
+        {"last_updated": "T1", "consumption": 100},
+        {"last_updated": "T2", "consumption": 110},
+        {"last_updated": "T3", "consumption": 120},
+    ]
+    result = ge_data.filter_data(mdata, "consumption")
+    if len(result) != 3:
+        print("ERROR test1: Expected 3 items, got {}".format(len(result)))
+        return 1
+    if [r["consumption"] for r in result] != [100, 110, 120]:
+        print("ERROR test1: Expected [100, 110, 120], got {}".format([r["consumption"] for r in result]))
+        return 1
+
+    # Test 2: Flat/duplicate values — first kept, intermediates dropped, last always kept
+    mdata = [
+        {"last_updated": "T1", "consumption": 100},
+        {"last_updated": "T2", "consumption": 100},
+        {"last_updated": "T3", "consumption": 100},
+    ]
+    result = ge_data.filter_data(mdata, "consumption")
+    if len(result) != 2:
+        print("ERROR test2: Expected 2 items (first and last), got {}".format(len(result)))
+        return 1
+    if result[0]["last_updated"] != "T1" or result[-1]["last_updated"] != "T3":
+        print("ERROR test2: Expected T1 and T3, got {} and {}".format(result[0]["last_updated"], result[-1]["last_updated"]))
+        return 1
+
+    # Test 3: Decrementing values — skipped unless last
+    mdata = [
+        {"last_updated": "T1", "consumption": 110},
+        {"last_updated": "T2", "consumption": 100},
+        {"last_updated": "T3", "consumption": 120},
+    ]
+    result = ge_data.filter_data(mdata, "consumption")
+    # T1 kept (increase from -1), T2 skipped (decrease), T3 kept (increase from 110)
+    if len(result) != 2:
+        print("ERROR test3: Expected 2 items, got {}".format(len(result)))
+        return 1
+    if result[0]["last_updated"] != "T1" or result[1]["last_updated"] != "T3":
+        print("ERROR test3: Expected T1 and T3, got {} and {}".format(result[0]["last_updated"], result[1]["last_updated"]))
+        return 1
+
+    # Test 4: Last item always kept even when it decrements (the bug-fix case)
+    mdata = [
+        {"last_updated": "T1", "consumption": 100},
+        {"last_updated": "T2", "consumption": 99},
+    ]
+    result = ge_data.filter_data(mdata, "consumption")
+    if len(result) != 2:
+        print("ERROR test4: Expected 2 items (both kept), got {}".format(len(result)))
+        return 1
+    if result[0]["last_updated"] != "T1" or result[1]["last_updated"] != "T2":
+        print("ERROR test4: Expected T1 and T2, got {} and {}".format(result[0]["last_updated"], result[1]["last_updated"]))
+        return 1
+
+    # Test 5: Empty input — returns empty list
+    result = ge_data.filter_data([], "consumption")
+    if result != []:
+        print("ERROR test5: Expected [], got {}".format(result))
+        return 1
+
+    # Test 6: Items missing the measurement key — skipped
+    mdata = [
+        {"last_updated": "T1", "import": 50},
+        {"last_updated": "T2", "consumption": 100},
+    ]
+    result = ge_data.filter_data(mdata, "consumption")
+    if len(result) != 1 or result[0]["last_updated"] != "T2":
+        print("ERROR test6: Expected only T2, got {}".format(result))
+        return 1
+
+    # Test 7: Different measurement key (e.g. import)
+    mdata = [
+        {"last_updated": "T1", "import": 10},
+        {"last_updated": "T2", "import": 20},
+        {"last_updated": "T3", "import": 15},
+    ]
+    result = ge_data.filter_data(mdata, "import")
+    # T1 kept, T2 kept (increase), T3 kept (last, even though decrease)
+    if len(result) != 3:
+        print("ERROR test7: Expected 3 items, got {}".format(len(result)))
+        return 1
+    if result[-1]["last_updated"] != "T3":
+        print("ERROR test7: Expected last item T3, got {}".format(result[-1]["last_updated"]))
         return 1
 
     return 0
