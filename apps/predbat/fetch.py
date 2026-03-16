@@ -286,6 +286,12 @@ class Fetch:
 
         # Fill zero periods with integrated power data
         if zero_periods:
+            self.log("Warn: Found {} periods of zero load with power data, filling using power integration".format(len(zero_periods)))
+            # Print the first 5 periods for debugging
+            for i, (period_start, period_end, base_value) in enumerate(zero_periods[:5]):
+                start_timestamp = self.now_utc - timedelta(minutes=period_start)
+                self.log("Zero load period starting at {} ({} minutes) for {} minutes with base value {}".format(start_timestamp.strftime(TIME_FORMAT), period_start, period_end - period_start + 1, base_value))
+
             for period_start, period_end, base_value in zero_periods:
                 # Integrate power data over this period
                 # First calculate total energy consumed in this period
@@ -439,6 +445,10 @@ class Fetch:
         # Work out total number of gap_minutes
         if num_gaps > 0:
             self.log("Warn: Found {} gaps in load_today totalling {} minutes to fill using average data".format(len(gap_list), num_gaps))
+            # Print the first 5 gaps for debugging
+            for i, (gap_start, gap_length) in enumerate(gap_list[:5]):
+                gap_start_timestamp = self.now_utc - timedelta(minutes=gap_start)
+                self.log("Gap starting at {} ({} minutes) for {} minutes".format(gap_start_timestamp.strftime(TIME_FORMAT), gap_start, gap_length))
 
         # Do the filling
         for gap in gap_list:
@@ -1286,10 +1296,10 @@ class Fetch:
 
         age = now_utc - oldest_data_time
         self.load_minutes_age = age.days
-        self.load_minutes, _ = minute_data(mdata, self.max_days_previous, now_utc, "consumption", "last_updated", backwards=True, smoothing=True, scale=1.0, clean_increment=True, interpolate=True)
-        self.import_today, _ = minute_data(mdata, self.max_days_previous, now_utc, "import", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
-        self.export_today, _ = minute_data(mdata, self.max_days_previous, now_utc, "export", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
-        self.pv_today, _ = minute_data(mdata, self.max_days_previous, now_utc, "pv", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
+        self.load_minutes, _ = minute_data(ge_cloud_data.filter_data(mdata, "consumption"), self.max_days_previous, now_utc, "consumption", "last_updated", backwards=True, smoothing=True, scale=1.0, clean_increment=True, interpolate=True)
+        self.import_today, _ = minute_data(ge_cloud_data.filter_data(mdata, "import"), self.max_days_previous, now_utc, "import", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
+        self.export_today, _ = minute_data(ge_cloud_data.filter_data(mdata, "export"), self.max_days_previous, now_utc, "export", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
+        self.pv_today, _ = minute_data(ge_cloud_data.filter_data(mdata, "pv"), self.max_days_previous, now_utc, "pv", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
 
         self.load_minutes_now = get_now_from_cumulative(self.load_minutes, self.minutes_now, backwards=True)
         self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP

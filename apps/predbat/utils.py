@@ -486,7 +486,8 @@ def minute_data(
         if to_time:
             minute = minutes
             if minute == minutes_to:
-                mdata[minute] = state
+                if minute >= minute_min and minute <= minute_max:
+                    mdata[minute] = state
             else:
                 if smoothing:
                     near_midnight = (last_updated_time.time() < time(0, 6)) or (last_updated_time.time() > time(23, 58))
@@ -581,7 +582,8 @@ def minute_data(
                 step = (last_sample_value - last_but_one_minute_sample) / sample_gap
                 if step > 0:
                     for minute in range(last_sample_minute):
-                        mdata[minute] = dp4(last_sample_value + step * (last_sample_minute - minute))
+                        if minute >= minute_min and minute <= minute_max:
+                            mdata[minute] = dp4(last_sample_value + step * (last_sample_minute - minute))
 
         # Fill from last sample until now
         for minute in range(60 * 24 * days):
@@ -591,11 +593,12 @@ def minute_data(
                 rindex = 60 * 24 * days - minute - 1
 
             if rindex not in mdata:
-                mdata[rindex] = newest_state
+                if rindex >= minute_min and rindex <= minute_max:
+                    mdata[rindex] = newest_state
             else:
                 break
 
-        # Fill gaps before the first value
+        # Find the first value
         state = 0
         for minute in range(60 * 24 * days):
             if backwards:
@@ -613,7 +616,8 @@ def minute_data(
             else:
                 rindex = minute
             state = mdata.get(rindex, state)
-            mdata[rindex] = state
+            if rindex >= minute_min and rindex <= minute_max:
+                mdata[rindex] = state
 
     # Reverse data with smoothing
     if clean_increment:
@@ -625,7 +629,8 @@ def minute_data(
             if minute in mdata:
                 mdata[minute] += accumulate.get(minute, 0)
             else:
-                mdata[minute] = accumulate.get(minute, 0)
+                if minute >= minute_min and minute <= minute_max:
+                    mdata[minute] = accumulate.get(minute, 0)
 
     if adjust_key:
         io_adjusted = adata

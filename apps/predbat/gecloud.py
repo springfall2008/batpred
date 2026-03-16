@@ -1587,6 +1587,13 @@ class GECloudData(ComponentBase):
                 continue
             last_time = this_time
 
+            # Skip duplicate data points, where this data point is the same as the previous one to save space
+            # Always keep the last sample in the dataset so we have the most recent totals
+            if len(mdata) > 0 and item is not darray[-1]:
+                last_data = mdata[-1]
+                if last_data["consumption"] == item["total"]["consumption"] and last_data["import"] == item["total"]["grid"]["import"] and last_data["export"] == item["total"]["grid"]["export"] and last_data["pv"] == item["total"]["solar"]:
+                    continue
+
             new_data["last_updated"] = item["time"]
             new_data["consumption"] = item["total"]["consumption"]
             new_data["import"] = item["total"]["grid"]["import"]
@@ -1665,6 +1672,24 @@ class GECloudData(ComponentBase):
         self.save_ge_cache()
         self.ge_url_cache = {}
         return True
+
+    def filter_data(self, mdata, measurement):
+        """
+        Filter the GECloudData data for a specific measurement (consumption, import, export, pv)
+        Remove duplicate data points where the measurement value is the same or less than the previous data point to save space, but always keep the most recent data point
+
+        This allows for smooth interpolation of the data for each measurement while keeping the dataset size manageable, especially for long time periods where values may not change frequently.
+        """
+        result = []
+        prev_value = -1
+        for item in mdata:
+            if measurement in item:
+                current_value = item[measurement]
+                # Only keep this data point if the value has changed from the previous data point, or if this is the most recent data point
+                if current_value > prev_value:
+                    result.append({"last_updated": item["last_updated"], measurement: current_value})
+                    prev_value = current_value
+        return result
 
     def get_data(self):
         """
