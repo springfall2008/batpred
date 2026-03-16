@@ -727,7 +727,7 @@ class Output:
         if export_window_n >= 0:
             target_export = self.export_window_best[export_window_n].get("target", self.export_limits_best[export_window_n])
             if self.export_limits_best[export_window_n] == 99:
-                text = "freeze exporting to {}% for the next {}".format(target_export, self.duration_string(self.export_window_best[export_window_n]["end"] - minutes_now))
+                text = "freeze exporting for the next {}".format(self.duration_string(self.export_window_best[export_window_n]["end"] - minutes_now))  # don't include target % for freeze exporting as (the 99%) is meaningless
             else:
                 text = "force exporting to {}% for the next {}".format(target_export, self.duration_string(self.export_window_best[export_window_n]["end"] - minutes_now))
         elif charge_window_n >= 0:
