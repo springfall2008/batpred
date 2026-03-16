@@ -1587,13 +1587,6 @@ class GECloudData(ComponentBase):
                 continue
             last_time = this_time
 
-            # Skip duplicate data points, where this data point is the same as the previous one to save space
-            # Always keep the last sample in the dataset so we have the most recent totals
-            if len(mdata) > 0 and item is not darray[-1]:
-                last_data = mdata[-1]
-                if last_data["consumption"] == item["total"]["consumption"] and last_data["import"] == item["total"]["grid"]["import"] and last_data["export"] == item["total"]["grid"]["export"] and last_data["pv"] == item["total"]["solar"]:
-                    continue
-
             new_data["last_updated"] = item["time"]
             new_data["consumption"] = item["total"]["consumption"]
             new_data["import"] = item["total"]["grid"]["import"]
