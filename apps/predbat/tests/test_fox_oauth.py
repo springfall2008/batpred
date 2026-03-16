@@ -98,7 +98,7 @@ def test_get_headers_api_key():
 
 
 def test_get_headers_oauth():
-    """get_headers returns Bearer token for OAuth mode."""
+    """get_headers returns Bearer token + MD5 signature for OAuth mode."""
     failed = False
     fox = MockFoxOAuth(auth_method="oauth", key="oauth-access-token-xyz")
 
@@ -113,18 +113,28 @@ def test_get_headers_oauth():
     if headers.get("lang") != FOX_LANG:
         print(f"ERROR: lang header should be '{FOX_LANG}'")
         failed = True
-    if "signature" in headers:
-        print("ERROR: OAuth mode should NOT have signature header")
+    # Fox ESS requires signature even with OAuth — using access_token as the key
+    if "signature" not in headers:
+        print("ERROR: OAuth mode should have signature header")
+        failed = True
+    if "timestamp" not in headers:
+        print("ERROR: OAuth mode should have timestamp header")
         failed = True
     if "token" in headers:
         print("ERROR: OAuth mode should NOT have token header")
         failed = True
-    if "timestamp" in headers:
-        print("ERROR: OAuth mode should NOT have timestamp header")
+
+    # Verify MD5 signature uses access_token (not API key)
+    path = "/op/v0/device/list"
+    ts = headers["timestamp"]
+    expected_sig_input = rf"{path}\r\n{fox.access_token}\r\n{ts}"
+    expected_sig = hashlib.md5(expected_sig_input.encode("UTF-8")).hexdigest()
+    if headers["signature"] != expected_sig:
+        print(f"ERROR: OAuth MD5 signature mismatch")
         failed = True
 
     if not failed:
-        print("PASS: get_headers returns Bearer token for OAuth mode")
+        print("PASS: get_headers returns Bearer + signature for OAuth mode")
     return failed
 
 

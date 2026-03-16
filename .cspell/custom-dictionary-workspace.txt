@@ -36,6 +36,7 @@ batteryb
 beforeunload
 bierner
 brickatius
+byok
 calib
 Cantarell
 cexxxx
@@ -53,6 +54,7 @@ compareform
 configform
 Consolas
 coro
+creds
 crosscharge
 customisation
 Customise
@@ -181,6 +183,7 @@ kwargs
 kwhb
 labelcolor
 labelnames
+larr
 linebreak
 linestyle
 loadml

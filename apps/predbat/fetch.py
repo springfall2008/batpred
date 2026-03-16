@@ -577,6 +577,7 @@ class Fetch:
                     clean_increment=increment,
                     accumulate=import_today,
                     required_unit=required_unit,
+                    can_modify_history=True,  # history is not accessed after this point, so minute_data can freely modify it
                 )
             else:
                 if history is None:
@@ -639,6 +640,7 @@ class Fetch:
                     accumulate=load_minutes,
                     required_unit=required_unit,
                     interpolate=interpolate,
+                    can_modify_history=True,  # history is not accessed after this point, so minute_data can freely modify it
                 )
             else:
                 if history is None:
@@ -855,6 +857,7 @@ class Fetch:
                 divide_by=1.0,
                 scale=1.0,
                 required_unit="kWh",
+                can_modify_history=True,  # soc_kwh_data is not accessed after this point, so minute_data can freely modify it
             )
 
         # Fetch sensor data for cars, e.g. car plan, car energy, car sessions etc.

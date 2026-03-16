@@ -79,6 +79,7 @@ def run_test_web_if(my_predbat):
             ("POST", "/plan_override"),
             ("POST", "/rate_override"),
             ("POST", "/restart"),
+            ("POST", "/inverter_refresh"),
             ("GET", "/api/state"),
             ("GET", "/api/ping"),
             ("POST", "/api/state"),
@@ -258,6 +259,20 @@ def run_test_web_if(my_predbat):
             accessed_endpoints.add(("POST", "/restart"))
         else:
             print("ERROR: Unexpected response from /restart: {} - {}".format(res.status_code, res.text))
+            failed = 1
+
+        # Test /inverter_refresh POST
+        print("Test POST /inverter_refresh")
+        address = "http://127.0.0.1:5052/inverter_refresh"
+        my_predbat.inverter_data_last_fetch = "sentinel"  # Set to something non-None first
+        res = requests.post(address, data={})
+        if res.status_code in [200]:
+            accessed_endpoints.add(("POST", "/inverter_refresh"))
+            if my_predbat.inverter_data_last_fetch is not None:
+                print("ERROR: /inverter_refresh did not reset inverter_data_last_fetch to None")
+                failed = 1
+        else:
+            print("ERROR: Unexpected response from /inverter_refresh: {} - {}".format(res.status_code, res.text))
             failed = 1
 
         # Test /component_restart POST

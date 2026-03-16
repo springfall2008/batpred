@@ -20,6 +20,58 @@ navigation menus.
 """
 
 
+def get_refresh_inverter_js():
+    """
+    Returns CSS and JavaScript code for refreshing inverter data.
+    """
+    return """
+        <style>
+        @keyframes inverterStatusFadeOut {
+            0%   { opacity: 1; }
+            60%  { opacity: 1; }
+            100% { opacity: 0; }
+        }
+        #inverterRefreshStatus {
+            display: inline-block;
+            font-size: 13px;
+            color: #666;
+        }
+        #inverterRefreshStatus.fade-out {
+            animation: inverterStatusFadeOut 4s forwards;
+        }
+        </style>
+        <script>
+        function refreshInverterData() {
+            var btn = document.getElementById('inverterRefreshBtn');
+            var status = document.getElementById('inverterRefreshStatus');
+            btn.disabled = true;
+            btn.style.backgroundColor = '#90CAF9';
+            btn.textContent = 'Refreshing\u2026';
+            status.className = '';
+            status.style.color = '#666';
+            status.textContent = '';
+            fetch('./inverter_refresh', {method: 'POST'})
+                .then(function(r) { return r.json(); })
+                .then(function(d) {
+                    status.style.color = '#4CAF50';
+                    status.textContent = 'Done \u2014 reloading in 20s\u2026';
+                    setTimeout(function() { status.classList.add('fade-out'); }, 100);
+                    setTimeout(function() { location.reload(); }, 20000);
+                })
+                .catch(function(e) {
+                    btn.disabled = false;
+                    btn.style.backgroundColor = '#2196F3';
+                    btn.textContent = 'Refresh';
+                    status.style.color = '#f44336';
+                    status.textContent = 'Refresh failed';
+                    setTimeout(function() { status.classList.add('fade-out'); }, 2000);
+                    console.error('Refresh failed:', e);
+                });
+        }
+        </script>
+    """
+
+
 def get_restart_button_js():
     # Add JavaScript for restart functionality
     text = """
@@ -6335,7 +6387,7 @@ def get_plan_renderer_js():
                 // Time cell with dropdown (if editable)
                 const timeDisplay = formatTimeDisplay(row.time);
                 if (editable) {
-                    html += renderTimeCell(row.time, timeDisplay, overrides);
+                    html += renderTimeCell(row.time, timeDisplay, overrides, row.slot_minute);
                 } else {
                     html += `<td id=time bgcolor=#FFFFFF>${timeDisplay}</td>`;
                 }
@@ -6350,7 +6402,7 @@ def get_plan_renderer_js():
                     importText = `<b>${importText}</b>`;
                 }
                 if (editable) {
-                    html += renderRateCell(row.import_rate, row.rate_color_import, 'import', row.time, timeDisplay, overrides, importText);
+                    html += renderRateCell(row.import_rate, row.rate_color_import, 'import', row.time, timeDisplay, overrides, importText, row.slot_minute);
                 } else {
                     html += `<td id=import ${cellStyle} bgcolor=${row.rate_color_import || '#FFFFFF'}>${importText}</td>`;
                 }
@@ -6361,7 +6413,7 @@ def get_plan_renderer_js():
                     exportText += ` (${row.export_rate_adjusted.toFixed(2)})`;
                 }
                 if (editable) {
-                    html += renderRateCell(row.export_rate, row.rate_color_export, 'export', row.time, timeDisplay, overrides, exportText);
+                    html += renderRateCell(row.export_rate, row.rate_color_export, 'export', row.time, timeDisplay, overrides, exportText, row.slot_minute);
                 } else {
                     html += `<td id=export ${cellStyle} bgcolor=${row.rate_color_export || '#FFFFFF'}>${exportText}</td>`;
                 }
@@ -6400,7 +6452,7 @@ def get_plan_renderer_js():
 
                 // Load forecast (with 10% value in brackets if debug mode)
                 if (editable) {
-                    html += renderLoadCell(row.time, timeDisplay, row.load_forecast, row.load_forecast10, row.load_color, showDebug, overrides, jsonData.manual_load_value !== undefined ? jsonData.manual_load_value : 0.5);
+                    html += renderLoadCell(row.time, timeDisplay, row.load_forecast, row.load_forecast10, row.load_color, showDebug, overrides, jsonData.manual_load_value !== undefined ? jsonData.manual_load_value : 0.5, row.slot_minute);
                 } else {
                     let loadText = row.load_forecast !== undefined ? row.load_forecast : '';
                     if (showDebug && row.load_forecast10 > 0) {
@@ -6436,7 +6488,7 @@ def get_plan_renderer_js():
                 // SOC
                 const socSym = row.soc_sym || (row.soc_change > 0 ? '&nearr;' : (row.soc_change < 0 ? '&searr;' : '&rarr;'));
                 if (editable) {
-                    html += renderSocCell(row.time, timeDisplay, row.soc_percent, row.soc_color, socSym, overrides);
+                    html += renderSocCell(row.time, timeDisplay, row.soc_percent, row.soc_color, socSym, overrides, row.slot_minute);
                 } else {
                     html += `<td id=soc bgcolor=${row.soc_color || '#FFFFFF'}>${row.soc_percent}${socSym}</td>`;
                 }
@@ -6530,10 +6582,10 @@ def get_plan_renderer_js():
         }
     }
 
-    // Render time cell (simple, no highlighting - that's moved to state column)
-    function renderTimeCell(timeStr, timeDisplay, overrides) {
+    // Render time cell (simple, with subtle override-based highlighting; main state highlighting is in the state column)
+    function renderTimeCell(timeStr, timeDisplay, overrides, slotMinute) {
         const dropdownId = `dropdown_${dropdownCounter++}`;
-        const minutesFromMidnight = getMinutesFromTimeString(timeStr);
+        const minutesFromMidnight = slotMinute !== undefined ? slotMinute : getMinutesFromTimeString(timeStr);
 
         const manualTimes = overrides.manual_charge_times.concat(
             overrides.manual_export_times,
@@ -6596,7 +6648,7 @@ def get_plan_renderer_js():
     function renderStateCell(row, timeDisplay, overrides) {
         const cellStyle = 'style="padding: 4px;"';
         const timeStr = row.time;
-        const minutesFromMidnight = getMinutesFromTimeString(timeStr);
+        const minutesFromMidnight = row.slot_minute !== undefined ? row.slot_minute : getMinutesFromTimeString(timeStr);
 
         // Determine background color based on override type (prioritize manual overrides over default state color)
         let bgColor = row.state_color || '#FFFFFF';
@@ -6635,10 +6687,10 @@ def get_plan_renderer_js():
     }
 
     // Render rate cell with dropdown for manual rate overrides
-    function renderRateCell(rate, bgColor, type, timeStr, timeDisplay, overrides, displayText) {
+    function renderRateCell(rate, bgColor, type, timeStr, timeDisplay, overrides, displayText, slotMinute) {
         const cellStyle = 'style="padding: 4px;"';
         const dropdownId = `dropdown_${dropdownCounter++}`;
-        const minutesFromMidnight = getMinutesFromTimeString(timeStr);
+        const minutesFromMidnight = slotMinute !== undefined ? slotMinute : getMinutesFromTimeString(timeStr);
         const overrideList = type === 'import' ? overrides.manual_import_rates : overrides.manual_export_rates;
         const override = overrideList.find(r => r.minutes === minutesFromMidnight);
         const isOverride = override !== undefined;
@@ -6664,9 +6716,9 @@ def get_plan_renderer_js():
     }
 
     // Render load cell with dropdown for load adjustments
-    function renderLoadCell(timeStr, timeDisplay, loadValue, loadValue10, bgColor, showDebug, overrides, manualLoadValue) {
+    function renderLoadCell(timeStr, timeDisplay, loadValue, loadValue10, bgColor, showDebug, overrides, manualLoadValue, slotMinute) {
         const dropdownId = `dropdown_${dropdownCounter++}`;
-        const minutesFromMidnight = getMinutesFromTimeString(timeStr);
+        const minutesFromMidnight = slotMinute !== undefined ? slotMinute : getMinutesFromTimeString(timeStr);
         const isOverride = overrides.manual_load_adjust.some(r => r.minutes === minutesFromMidnight);
 
         // Add 10% value in brackets if debug mode
@@ -6691,9 +6743,9 @@ def get_plan_renderer_js():
     }
 
     // Render SOC cell with dropdown for manual SOC targets
-    function renderSocCell(timeStr, timeDisplay, socValue, bgColor, socSym, overrides) {
+    function renderSocCell(timeStr, timeDisplay, socValue, bgColor, socSym, overrides, slotMinute) {
         const dropdownId = `dropdown_${dropdownCounter++}`;
-        const minutesFromMidnight = getMinutesFromTimeString(timeStr);
+        const minutesFromMidnight = slotMinute !== undefined ? slotMinute : getMinutesFromTimeString(timeStr);
         const isOverride = overrides.manual_soc.some(r => r.minutes === minutesFromMidnight);
 
         let html = `<td id=soc data-minute="${minutesFromMidnight}" bgcolor=${bgColor} onclick="toggleForceDropdown('${dropdownId}')" class="clickable-time-cell">`;
@@ -7526,7 +7578,7 @@ def get_menu_html(calculating, default_page, arg_errors, THIS_VERSION, battery_s
     # Define status icon based on calculating state
     status_icon = ""
     if calculating:
-        status_icon = '<span class="mdi mdi-sync mdi-spin calculating-icon" style="color: #4CAF50; font-size: 24px; margin-left: 10px; margin-right: 10px;" title="Calculation in progress..."></span>'
+        status_icon = '<span class="mdi mdi-autorenew mdi-spin calculating-icon" style="color: #4CAF50; font-size: 24px; margin-left: 10px; margin-right: 10px;" title="Calculation in progress..."></span>'
     else:
         status_icon = '<span class="mdi mdi-check-circle idle-icon" style="color: #4CAF50; font-size: 24px; margin-left: 10px; margin-right: 10px;" title="System idle"></span>'
 
@@ -7769,7 +7821,7 @@ function updateLiveStatus() {
             const statusIcon = document.getElementById('status-icon');
             if (statusIcon) {
                 if (data.calculating) {
-                    statusIcon.innerHTML = '<span class="mdi mdi-sync mdi-spin calculating-icon" style="color: #4CAF50; font-size: 24px; margin-left: 10px; margin-right: 10px;" title="Calculation in progress..."></span>';
+                    statusIcon.innerHTML = '<span class="mdi mdi-autorenew mdi-spin calculating-icon" style="color: #4CAF50; font-size: 24px; margin-left: 10px; margin-right: 10px;" title="Calculation in progress..."></span>';
                 } else {
                     statusIcon.innerHTML = '<span class="mdi mdi-check-circle idle-icon" style="color: #4CAF50; font-size: 24px; margin-left: 10px; margin-right: 10px;" title="System idle"></span>';
                 }

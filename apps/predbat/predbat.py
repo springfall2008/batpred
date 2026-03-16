@@ -36,7 +36,7 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.34.2"
+THIS_VERSION = "v8.34.4"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "const.py", "hass.py", "config.py", "prediction.py", "gecloud.py", "utils.py", "inverter.py", "ha.py", "download.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py", "execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "temperature.py", "web_mcp.py", "component_base.py", "axle.py", "solax.py", "solis.py", "unit_test.py", "load_ml_component.py", "load_predictor.py", "oauth_mixin.py", "predbat_metrics.py", "web_metrics_dashboard.py"]
@@ -1092,6 +1092,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
 
         gc.collect()
 
+        # Schedule inverter update for 30 seconds time to allow the inverter to process the changes we just made before we fetch the data again
+        # This allows the power flow to update for the user more quickly.
+        self.inverter_data_last_fetch = datetime.now() - timedelta(seconds=INVERTER_QUICK_UPDATE_SECONDS) + timedelta(seconds=30)
+
     async def async_download_predbat_version(self, version):
         """
         Sync wrapper for async download_predbat_version
@@ -1482,10 +1486,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                 return False
 
         # Read predbat.status
-        predbat_error = self.get_state_wrapper("predbat.status", attribute="error", default=True)
+        status_entity = self.prefix + ".status"
+        predbat_error = self.get_state_wrapper(status_entity, attribute="error", default=True)
         if predbat_error is None or predbat_error:
             return False
-        predbat_last_updated = self.get_state_wrapper("predbat.status", attribute="last_updated", default=None)
+        predbat_last_updated = self.get_state_wrapper(status_entity, attribute="last_updated", default=None)
         if predbat_last_updated is None:
             return False
 
@@ -1653,20 +1658,24 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                 self.prediction_started = False
         elif not self.prediction_started:
             time_now = datetime.now()
-            if self.inverter_data_last_fetch:
-                tdiff = time_now - self.inverter_data_last_fetch
-                if tdiff.total_seconds() >= INVERTER_QUICK_UPDATE_SECONDS:
-                    # Perform quick update of inverter data for the dashboard only
-                    self.prediction_started = True
-                    try:
-                        self.quick_inverter_data_update()
-                    except Exception as e:
-                        self.log("Error: Exception raised {}".format(e))
-                        self.log("Error: " + traceback.format_exc())
-                        self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc(), had_errors=True)
-                        raise e
-                    finally:
-                        self.prediction_started = False
+            inverter_data_last_fetch = self.inverter_data_last_fetch
+            if inverter_data_last_fetch is None:
+                # If we have never fetched inverter data, set the last fetch time to the past to trigger an update
+                inverter_data_last_fetch = time_now - timedelta(hours=24)
+            # Find the time since we last fetched inverter data and if it is greater than the quick update threshold, perform a quick update of the inverter data.
+            tdiff = time_now - inverter_data_last_fetch
+            if tdiff.total_seconds() >= INVERTER_QUICK_UPDATE_SECONDS:
+                # Perform quick update of inverter data for the dashboard only
+                self.prediction_started = True
+                try:
+                    self.quick_inverter_data_update()
+                except Exception as e:
+                    self.log("Error: Exception raised {}".format(e))
+                    self.log("Error: " + traceback.format_exc())
+                    self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc(), had_errors=True)
+                    raise e
+                finally:
+                    self.prediction_started = False
 
     def check_entity_refresh(self):
         """

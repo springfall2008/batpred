@@ -209,7 +209,7 @@ def validate_schedule(new_schedule, reserve, fdPwr_max):
 class FoxAPI(ComponentBase, OAuthMixin):
     """Fox API client."""
 
-    def initialize(self, key, automatic, inverter_sn=None, auth_method=None, token_expires_at=None):
+    def initialize(self, key, automatic, inverter_sn=None, auth_method=None, token_expires_at=None, token_hash=None):
         """Initialize the Fox API component"""
         self.key = key
         self.automatic = automatic
@@ -236,6 +236,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
 
         # Initialize OAuth support
         self._init_oauth(auth_method, key, token_expires_at, "fox_ess")
+        self.token_hash = token_hash or ""
 
         # Convert inverter_sn to list
         if inverter_sn is None:
@@ -1062,18 +1063,23 @@ class FoxAPI(ComponentBase, OAuthMixin):
         return devices
 
     def get_headers(self, path):
+        timestamp = str(round(time.time() * 1000))
+
         if self.auth_method == "oauth":
+            # OAuth requires BOTH Bearer header AND MD5 signature (using access_token as the key)
+            signature = rf"{path}\r\n{self.access_token}\r\n{timestamp}"
             return {
                 "Authorization": f"Bearer {self.access_token}",
                 "Content-Type": "application/json",
                 "lang": FOX_LANG,
+                "timestamp": timestamp,
+                "signature": hashlib.md5(signature.encode("UTF-8")).hexdigest(),
             }
 
         # API key auth: MD5 signature
         headers = {}
         token = self.key
         lang = FOX_LANG
-        timestamp = str(round(time.time() * 1000))
         headers["token"] = token
         headers["lang"] = lang
         headers["timestamp"] = timestamp
