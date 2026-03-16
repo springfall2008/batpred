@@ -1686,7 +1686,7 @@ class GECloudData(ComponentBase):
             if measurement in item:
                 current_value = item[measurement]
                 # Only keep this data point if the value has changed from the previous data point, or if this is the most recent data point
-                if current_value > prev_value:
+                if current_value > prev_value or item is mdata[-1]:
                     result.append({"last_updated": item["last_updated"], measurement: current_value})
                     prev_value = current_value
         return result
