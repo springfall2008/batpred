@@ -109,7 +109,7 @@ especially if you have a small battery. If you set it to zero then Predbat may n
 
 ## In the power flow diagram my grid power is flowing in the wrong direction
 
-To reverse the direction of your [grid power entity](apps-yaml.md#power-data) in the Predbat web console, you may need to set '**grid_power_invert** to True if your **grid_power** is positive when importing.
+To reverse the direction of your [grid power entity](apps-yaml.md#power-data) in the Predbat web console, you may need to set '**grid_power_invert** to true if your **grid_power** is positive when importing.
 
 ## My plan is freeze charging or holding at 100% battery a lot
 
