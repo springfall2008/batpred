@@ -116,7 +116,7 @@ If you do not set an import or export rate for a particular tariff then your exi
     - id: 'iflux'
       name: 'Intelligent Flux import/export'
       rates_import_octopus_url: 'https://api.octopus.energy/v1/products/INTELLI-FLUX-IMPORT-23-07-14/electricity-tariffs/E-1R-INTELLI-FLUX-IMPORT-23-07-14-{dno_region}/standard-unit-rates/'
-      rates_export_octopus_url: 'https://api.octopus.energy/v1/products/INTELLI-FLUX-EXPORT-23-07-14/electricity-tariffs/E-1R-INTELLI-FLUX-EXPORT-23-07-14-{dno_region}/standard-unit-rates/'
+      rates_export_octopus_url: 'https://api.octopus.energy/v1/products/INTELLI-FLUX-IMPORT-23-07-14/electricity-tariffs/E-1R-INTELLI-FLUX-IMPORT-23-07-14-{dno_region}/standard-unit-rates/'
 ```
 
 ## Running a comparison
