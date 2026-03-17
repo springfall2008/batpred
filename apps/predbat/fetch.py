@@ -2116,10 +2116,11 @@ class Fetch:
         battery_rate_max_charge_dc_w = self.get_arg("battery_rate_max_charge_dc", None)
         if battery_rate_max_charge_dc_w is not None:
             if isinstance(battery_rate_max_charge_dc_w, list):
-                battery_rate_max_charge_dc_w = battery_rate_max_charge_dc_w[0]
-            self.battery_rate_max_charge_dc = float(battery_rate_max_charge_dc_w) / MINUTE_WATT
+                self.battery_rate_max_charge_dc = sum(float(v) for v in battery_rate_max_charge_dc_w) / MINUTE_WATT
+            else:
+                self.battery_rate_max_charge_dc = float(battery_rate_max_charge_dc_w) / MINUTE_WATT
         else:
-            self.battery_rate_max_charge_dc = None  # Falls back to battery_rate_max_charge in prediction.py
+            self.battery_rate_max_charge_dc = None
         self.best_soc_step = 0.25
         self.metric_cloud_enable = self.get_arg("metric_cloud_enable")
         self.metric_load_divergence_enable = self.get_arg("metric_load_divergence_enable")

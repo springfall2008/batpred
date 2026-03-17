@@ -158,7 +158,6 @@ class Prediction:
             self.export_limit = base.export_limit
             self.battery_rate_min = base.battery_rate_min
             self.battery_rate_max_charge = base.battery_rate_max_charge
-            self.battery_rate_max_charge_dc = getattr(base, "battery_rate_max_charge_dc", base.battery_rate_max_charge)
             self.battery_rate_max_discharge = base.battery_rate_max_discharge
             self.battery_rate_max_charge_scaled = base.battery_rate_max_charge_scaled
             self.battery_rate_max_discharge_scaled = base.battery_rate_max_discharge_scaled
@@ -173,7 +172,7 @@ class Prediction:
             self.battery_loss = base.battery_loss
             self.battery_loss_discharge = base.battery_loss_discharge
             self.battery_loss_dc = base.battery_loss_dc
-            self.battery_rate_max_charge_dc = base.battery_rate_max_charge_dc
+            self.battery_rate_max_charge_dc = base.battery_rate_max_charge_dc if base.battery_rate_max_charge_dc is not None else base.battery_rate_max_charge
             self.best_soc_keep = base.best_soc_keep
             self.best_soc_keep_weight = base.best_soc_keep_weight
             self.best_soc_min = base.best_soc_min
@@ -521,6 +520,7 @@ class Prediction:
         reserve_percent = calc_percent_limit(reserve, soc_max)
         battery_loss = self.battery_loss
         battery_loss_discharge = self.battery_loss_discharge
+        battery_loss_dc = self.battery_loss_dc
         battery_temperature_prediction = self.battery_temperature_prediction
         all_active_keep = self.all_active_keep
         best_soc_keep_weight = self.best_soc_keep_weight
@@ -532,7 +532,7 @@ class Prediction:
         set_charge_window = self.set_charge_window
         set_export_window = self.set_export_window
         battery_rate_max_charge = self.battery_rate_max_charge
-        battery_rate_max_charge_dc = getattr(self, "battery_rate_max_charge_dc", battery_rate_max_charge)
+        battery_rate_max_charge_dc = self.battery_rate_max_charge_dc
         battery_rate_max_discharge = self.battery_rate_max_discharge
         battery_rate_min = self.battery_rate_min
         carbon_intensity = self.carbon_intensity
@@ -985,9 +985,10 @@ class Prediction:
                 soc = max(soc - battery_draw / battery_loss_discharge, reserve_expected)
             else:
                 if inverter_hybrid and battery_state == "e+" and pv_now > 0:
-                    soc = min(soc - battery_draw * self.battery_loss_dc, soc_max)
+                    soc = min(soc - battery_draw * battery_loss_dc, soc_max)
                 else:
                     soc = min(soc - battery_draw * battery_loss, soc_max)
+            soc = round(soc, 6)
 
             # Iboost finally count
             if self.iboost_enable:
