@@ -219,7 +219,7 @@ pred_bat:
 
   # If you have a hybrid inverter with DC-coupled batteries, solar can charge the battery
   # faster than the AC inverter limit allows. Set this to the max DC charge rate in watts.
-  # Defaults to battery_rate_max if not set.
+  # Defaults to battery_rate_max_charge (effective max charge rate including inverter/battery caps) if not set.
   #battery_rate_max_charge_dc:
   #  - 10000
   #battery_loss_dc: 0.02

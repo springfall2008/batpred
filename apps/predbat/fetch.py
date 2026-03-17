@@ -2119,9 +2119,24 @@ class Fetch:
         battery_rate_max_charge_dc_w = self.get_arg("battery_rate_max_charge_dc", None)
         if battery_rate_max_charge_dc_w is not None:
             if isinstance(battery_rate_max_charge_dc_w, list):
-                self.battery_rate_max_charge_dc = sum(float(v) for v in battery_rate_max_charge_dc_w) / MINUTE_WATT
+                total_w = 0.0
+                for v in battery_rate_max_charge_dc_w:
+                    if v is None:
+                        continue
+                    try:
+                        total_w += float(v)
+                    except (TypeError, ValueError):
+                        self.log("Warn: Ignoring non-numeric battery_rate_max_charge_dc value: {}".format(v))
+                if total_w > 0.0:
+                    self.battery_rate_max_charge_dc = total_w / MINUTE_WATT
+                else:
+                    self.battery_rate_max_charge_dc = None
             else:
-                self.battery_rate_max_charge_dc = float(battery_rate_max_charge_dc_w) / MINUTE_WATT
+                try:
+                    self.battery_rate_max_charge_dc = float(battery_rate_max_charge_dc_w) / MINUTE_WATT
+                except (TypeError, ValueError):
+                    self.log("Warn: Invalid battery_rate_max_charge_dc value: {}".format(battery_rate_max_charge_dc_w))
+                    self.battery_rate_max_charge_dc = None
         else:
             self.battery_rate_max_charge_dc = None
         self.best_soc_step = 0.25
