@@ -253,7 +253,7 @@ Create the following helpers in Home Assistant (Settings → Devices & Services 
 **Input booleans** (toggle type):
 
 | Entity ID | Name |
-|---|---|
+| --- | --- |
 | `input_boolean.predbat_charge_start` | Predbat Charge Start |
 | `input_boolean.predbat_charge_freeze` | Predbat Charge Freeze |
 | `input_boolean.predbat_discharge_start` | Predbat Discharge Start |
@@ -262,14 +262,14 @@ Create the following helpers in Home Assistant (Settings → Devices & Services 
 **Input numbers** (number type, unit: W):
 
 | Entity ID | Name | Min | Max | Step |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | `input_number.predbat_charge_rate` | Predbat Charge Rate | 0 | 10000 | 100 |
 | `input_number.predbat_discharge_rate` | Predbat Discharge Rate | 0 | 10000 | 100 |
 
 **Input numbers** (number type, unit: %):
 
 | Entity ID | Name | Min | Max | Step |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | `input_number.predbat_reserve` | Predbat Reserve | 4 | 100 | 1 |
 | `input_number.predbat_charge_limit` | Predbat Charge Limit | 4 | 100 | 1 |
 
