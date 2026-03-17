@@ -8,6 +8,7 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+from const import MINUTE_WATT
 from tests.test_infra import MockConfigProvider
 
 
@@ -311,6 +312,103 @@ def test_fetch_config_options(my_predbat):
     assert my_predbat.forecast_minutes == 25 * 60, "forecast_minutes should be 1500"
 
     print("✓ Forecast calculations test passed")
+
+    # Test 12: battery_rate_max_charge_dc config parsing
+    print("\n*** Test 12: battery_rate_max_charge_dc config parsing ***")
+
+    # Reset mode to avoid side effects from test 11
+    mock_config.config["mode"] = "Control charge & discharge"
+    mock_config.config["forecast_hours"] = 48
+    mock_config.config["days_previous"] = [7]
+
+    # 12a: Not set → None (DC path is opt-in, no behaviour change for existing installs)
+    mock_config.config.pop("battery_rate_max_charge_dc", None)
+    my_predbat.fetch_config_options()
+    assert my_predbat.battery_rate_max_charge_dc is None, "battery_rate_max_charge_dc should be None when not configured (opt-in)"
+    print("  ✓ Not set → None")
+
+    # 12b: Single scalar W → converted to kWh/min
+    mock_config.config["battery_rate_max_charge_dc"] = 9200
+    my_predbat.fetch_config_options()
+    expected = 9200 / MINUTE_WATT
+    assert my_predbat.battery_rate_max_charge_dc == expected, f"Scalar 9200W should convert to {expected} kWh/min, got {my_predbat.battery_rate_max_charge_dc}"
+    print("  ✓ Scalar 9200W → converted to kWh/min")
+
+    # 12c: Single-element list → summed and converted
+    mock_config.config["battery_rate_max_charge_dc"] = [9200]
+    my_predbat.fetch_config_options()
+    assert my_predbat.battery_rate_max_charge_dc == expected, f"List [9200] should convert to {expected} kWh/min, got {my_predbat.battery_rate_max_charge_dc}"
+    print("  ✓ Single-element list [9200] → summed and converted")
+
+    # 12d: Multi-element list → summed across all inverters (regression: was wrongly taking [0] only)
+    mock_config.config["battery_rate_max_charge_dc"] = [4600, 4600]
+    my_predbat.fetch_config_options()
+    assert my_predbat.battery_rate_max_charge_dc == expected, f"List [4600, 4600] should sum to 9200W = {expected} kWh/min, got {my_predbat.battery_rate_max_charge_dc}"
+    print("  ✓ Multi-element list [4600, 4600] → summed across inverters")
+
+    # 12e: List with a None element → None skipped, rest summed
+    mock_config.config["battery_rate_max_charge_dc"] = [9200, None]
+    my_predbat.fetch_config_options()
+    assert my_predbat.battery_rate_max_charge_dc == expected, f"List [9200, None] should skip None and give {expected} kWh/min, got {my_predbat.battery_rate_max_charge_dc}"
+    print("  ✓ List with None element → None skipped, rest summed")
+
+    # 12f: All-None list → None
+    mock_config.config["battery_rate_max_charge_dc"] = [None, None]
+    my_predbat.fetch_config_options()
+    assert my_predbat.battery_rate_max_charge_dc is None, f"All-None list should result in None, got {my_predbat.battery_rate_max_charge_dc}"
+    print("  ✓ All-None list → None")
+
+    # 12g: Non-numeric element alongside valid element → bad value skipped, rest summed
+    mock_config.config["battery_rate_max_charge_dc"] = ["bad", 4600]
+    my_predbat.fetch_config_options()
+    expected_partial = 4600 / MINUTE_WATT
+    assert my_predbat.battery_rate_max_charge_dc == expected_partial, f"List ['bad', 4600] should skip 'bad' and give {expected_partial} kWh/min, got {my_predbat.battery_rate_max_charge_dc}"
+    print("  ✓ Non-numeric list element → skipped, rest summed")
+
+    # 12h: Invalid scalar → None fallback
+    mock_config.config["battery_rate_max_charge_dc"] = "not_a_number"
+    my_predbat.fetch_config_options()
+    assert my_predbat.battery_rate_max_charge_dc is None, f"Invalid scalar should fall back to None, got {my_predbat.battery_rate_max_charge_dc}"
+    print("  ✓ Invalid scalar → None fallback")
+
+    # Clean up
+    mock_config.config.pop("battery_rate_max_charge_dc", None)
+    print("✓ battery_rate_max_charge_dc config parsing tests passed")
+
+    # Test 13: battery_loss_dc config parsing
+    print("\n*** Test 13: battery_loss_dc config parsing ***")
+
+    # 13a: Not set → defaults to battery_loss (AC efficiency, no DC-specific config)
+    mock_config.config.pop("battery_loss_dc", None)
+    my_predbat.fetch_config_options()
+    assert my_predbat.battery_loss_dc == my_predbat.battery_loss, f"battery_loss_dc should default to battery_loss ({my_predbat.battery_loss}) when not set, got {my_predbat.battery_loss_dc}"
+    print("  ✓ Not set → defaults to battery_loss")
+
+    # 13b: Explicitly set → parsed as 1.0 - configured_value (loss fraction)
+    mock_config.config["battery_loss_dc"] = 0.02
+    my_predbat.fetch_config_options()
+    expected_dc = 1.0 - 0.02
+    assert abs(my_predbat.battery_loss_dc - expected_dc) < 1e-9, f"battery_loss_dc 0.02 should give efficiency {expected_dc}, got {my_predbat.battery_loss_dc}"
+    print("  ✓ Explicitly set 0.02 → parsed as 1.0 - 0.02 = 0.98")
+
+    # 13c: Zero loss → 1.0 (lossless / perfectly efficient DC path)
+    mock_config.config["battery_loss_dc"] = 0.0
+    my_predbat.fetch_config_options()
+    assert my_predbat.battery_loss_dc == 1.0, f"battery_loss_dc 0.0 should give efficiency 1.0 (lossless), got {my_predbat.battery_loss_dc}"
+    print("  ✓ Zero loss (0.0) → 1.0 (lossless)")
+
+    # 13d: battery_loss_dc and battery_loss are parsed independently
+    mock_config.config["battery_loss_dc"] = 0.02  # DC: 2% loss → 98% efficient
+    # battery_loss is set to 0.05 (5% loss) by MockConfigProvider default → 95% efficient
+    my_predbat.fetch_config_options()
+    assert my_predbat.battery_loss == 0.95, f"battery_loss should be 0.95 (1 - 0.05), got {my_predbat.battery_loss}"
+    assert my_predbat.battery_loss_dc == 0.98, f"battery_loss_dc should be 0.98 (1 - 0.02), got {my_predbat.battery_loss_dc}"
+    assert my_predbat.battery_loss != my_predbat.battery_loss_dc, "battery_loss and battery_loss_dc should be independent when both configured"
+    print("  ✓ battery_loss and battery_loss_dc are independent")
+
+    # Clean up
+    mock_config.config.pop("battery_loss_dc", None)
+    print("✓ battery_loss_dc config parsing tests passed")
 
     # Restore original methods
     my_predbat.get_arg = original_get_arg

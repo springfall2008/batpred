@@ -172,7 +172,7 @@ class Prediction:
             self.battery_loss = base.battery_loss
             self.battery_loss_discharge = base.battery_loss_discharge
             self.battery_loss_dc = base.battery_loss_dc
-            self.battery_rate_max_charge_dc = base.battery_rate_max_charge_dc if base.battery_rate_max_charge_dc is not None else base.battery_rate_max_charge
+            self.battery_rate_max_charge_dc = base.battery_rate_max_charge_dc
             self.best_soc_keep = base.best_soc_keep
             self.best_soc_keep_weight = base.best_soc_keep_weight
             self.best_soc_min = base.best_soc_min
@@ -903,7 +903,7 @@ class Prediction:
                     battery_draw = min(diff, discharge_rate_now_curve_step, inverter_limit, battery_to_min)
                     battery_state = "e-"
                 else:
-                    if inverter_hybrid and pv_now > 0:
+                    if inverter_hybrid and pv_now > 0 and battery_rate_max_charge_dc is not None:
                         # Hybrid inverter with solar: battery can charge via DC bus, bypassing AC inverter limit
                         dc_charge_curve = (
                             get_charge_rate_curve_cached(soc, battery_rate_max_charge_dc, soc_max, battery_rate_max_charge_dc, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_charge_curve_tuple)
@@ -984,7 +984,7 @@ class Prediction:
             if battery_draw > 0:
                 soc = max(soc - battery_draw / battery_loss_discharge, reserve_expected)
             else:
-                if inverter_hybrid and battery_state == "e+" and pv_now > 0:
+                if inverter_hybrid and battery_state == "e+" and pv_now > 0 and battery_rate_max_charge_dc is not None:
                     soc = min(soc - battery_draw * battery_loss_dc, soc_max)
                 else:
                     soc = min(soc - battery_draw * battery_loss, soc_max)
