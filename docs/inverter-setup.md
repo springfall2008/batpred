@@ -1692,7 +1692,7 @@ Add the following automations to `automations.yaml` (or configure via the UI):
   mode: single
 ```
 
-DC charge rate configuration
+### DC charge rate configuration
 
 The Sigenergy SigenStor system is a hybrid inverter. Solar panels connect
 directly to the DC bus, which means the battery can charge from solar faster
