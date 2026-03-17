@@ -1680,6 +1680,8 @@ class GECloudData(ComponentBase):
 
         This allows for smooth interpolation of the data for each measurement while keeping the dataset size manageable, especially for long time periods where values may not change frequently.
         """
+        if not mdata:
+            return []
         result = []
         prev_value = -1
         for item in mdata:
