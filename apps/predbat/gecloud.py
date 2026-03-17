@@ -200,6 +200,7 @@ attribute_table = {
     "max_charge_rate": {"friendly_name": "Max Charge Rate", "icon": "mdi:battery", "unit_of_measurement": "W", "device_class": "power"},
     "battery_size": {"friendly_name": "Battery Size", "icon": "mdi:battery", "unit_of_measurement": "kWh", "device_class": "energy"},
     "battery_dod": {"friendly_name": "Battery Depth of Discharge", "icon": "mdi:battery", "unit_of_measurement": "*", "device_class": "battery"},
+    "model": {"friendly_name": "Model", "icon": "mdi:information", "unit_of_measurement": None},
 }
 
 BASE_TIME = datetime.strptime("00:00", "%H:%M")
@@ -385,6 +386,8 @@ class GECloudDirect(ComponentBase):
                 cap = info.get("battery", {}).get("nominal_capacity", None)
                 volt = info.get("battery", {}).get("nominal_voltage", None)
                 dod = info.get("battery", {}).get("depth_of_discharge", None)
+                model = info.get("model", "Unknown")
+                max_charge_rate = info.get("max_charge_rate", 0)
 
                 capacity = None
                 if cap and volt:
@@ -393,12 +396,14 @@ class GECloudDirect(ComponentBase):
                     except (ValueError, TypeError):
                         pass
 
-                max_charge_rate = info.get("max_charge_rate", 0)
                 self.log("GECloud: Update data for device {} battery capacity {} max charge rate {}".format(device, capacity, max_charge_rate))
 
                 self.dashboard_item(entity_name + "_battery_size", capacity, attributes=attribute_table.get("battery_size", {}), app="gecloud")
                 self.dashboard_item(entity_name + "_max_charge_rate", max_charge_rate, attributes=attribute_table.get("max_charge_rate", {}), app="gecloud")
-                self.dashboard_item(entity_name + "_battery_dod", dod, attributes=attribute_table.get("_battery_dod", {}), app="gecloud")
+                self.dashboard_item(entity_name + "_battery_dod", dod, attributes=attribute_table.get("battery_dod", {}), app="gecloud")
+                model_attr = attribute_table.get("model", {}).copy()
+                model_attr["details"] = device_info
+                self.dashboard_item(entity_name + "_model", model, attributes=model_attr, app="gecloud")
                 self.dashboard_item(entity_name + "_last_updated", last_updated, attributes=attribute_table.get("time", {}), app="gecloud")
 
     async def publish_evc_data(self, serial, evc_data):
@@ -740,6 +745,7 @@ class GECloudDirect(ComponentBase):
 
         self.set_arg("inverter_type", ["GEC" for _ in range(num_inverters)])
         self.set_arg("num_inverters", num_inverters)
+        self.set_arg("inverter_mode", [f"switch.{self.prefix}_gecloud_{device}_enable_eco_mode" for device in batteries])
         self.set_arg("load_today", [f"sensor.{self.prefix}_gecloud_{device}_consumption_today" for device in batteries])
         self.set_arg("import_today", [f"sensor.{self.prefix}_gecloud_{device}_grid_import_today" for device in batteries])
         self.set_arg("export_today", [f"sensor.{self.prefix}_gecloud_{device}_grid_export_today" for device in batteries])
@@ -819,6 +825,23 @@ class GECloudDirect(ComponentBase):
             self.set_arg("pv_power", [f"sensor.{self.prefix}_gecloud_{ems}_solar_power"] + [0 for _ in range(num_inverters - 1)])
             self.set_arg("load_power", [f"sensor.{self.prefix}_gecloud_{ems}_consumption_power"] + [0 for _ in range(num_inverters - 1)])
             self.set_arg("grid_power", [f"sensor.{self.prefix}_gecloud_{ems}_grid_power"] + [0 for _ in range(num_inverters - 1)])
+
+        # Determine the model of the inverter, if at least one inverter has AC or AIO in the name then we assume AC coupled and turn off the hybrid switch
+        # First fetch "model"
+        ac_coupled = False
+        model_name = "Unknown"
+        for device_serial in batteries_real:
+            device = self.info.get(device_serial, {})
+            info = device.get("info", {})
+            model = info.get("model", "").lower()
+            if model:
+                model_name = info["model"]
+                if ("ac" in model) or ("aio" in model):
+                    ac_coupled = True
+                    break
+        entity_id = "switch.{}_inverter_hybrid".format(self.prefix)
+        self.log("GECloud: Detected inverter model {} indicates ac_coupled={}, setting {} to {}".format(model_name, ac_coupled, entity_id, "off" if ac_coupled else "on"))
+        await self.base.ha_interface.set_state_external(entity_id, not ac_coupled)
 
         self.log("GECloud: Automatic configuration complete")
 

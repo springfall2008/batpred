@@ -42,6 +42,7 @@ class OAuthMixin:
         self.provider_name = provider_name
         self.oauth_failed = False
         self._refresh_in_progress = False
+        self.token_hash = ""  # server-computed hash, echoed to oauth-refresh for dedup
 
         if self.auth_method == "oauth":
             self.access_token = key  # In OAuth mode, 'key' config holds the access_token
@@ -115,6 +116,7 @@ class OAuthMixin:
             payload = {
                 "instance_id": instance_id,
                 "provider": self.provider_name,
+                "token_hash": self.token_hash,
             }
 
             self.log(f"Info: Refreshing OAuth token for {self.provider_name}")
@@ -131,6 +133,7 @@ class OAuthMixin:
             if data.get("success"):
                 self.access_token = data["access_token"]
                 self.token_expires_at = self._parse_expiry(data.get("expires_at"))
+                self.token_hash = data.get("token_hash", self.token_hash)
                 self.log(f"Info: OAuth token refreshed for {self.provider_name}, expires at {data.get('expires_at')}")
                 return True
             else:

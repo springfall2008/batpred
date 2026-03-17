@@ -494,6 +494,49 @@ def test_adjust_inverter_mode(test_name, ha, inv, dummy_rest, prev_mode, mode, e
     return failed
 
 
+def test_adjust_ge_eco_toggle(test_name, ha, inv, prev_eco_state, force_export, expect_eco_state=None):
+    """
+    Test adjust_inverter_mode with inv_has_ge_eco_toggle=True (e.g. GivEnergy Cloud / GEC inverter type).
+
+    The eco toggle is a switch entity. When force_export=True the switch is turned off (eco disabled),
+    when force_export=False the switch is turned on (eco enabled).
+    """
+    failed = False
+    if expect_eco_state is None:
+        expect_eco_state = "off" if force_export else "on"
+
+    print("Test: {} prev_eco={} force_export={} expect_eco={}".format(test_name, prev_eco_state, force_export, expect_eco_state))
+
+    # Save original state so we can restore after the test
+    orig_has_ge_eco_toggle = inv.inv_has_ge_eco_toggle
+    orig_has_ge_inverter_mode = inv.inv_has_ge_inverter_mode
+    orig_inverter_mode_arg = inv.base.args.get("inverter_mode")
+
+    # Configure inverter for GEC-style eco toggle
+    inv.inv_has_ge_eco_toggle = True
+    inv.inv_has_ge_inverter_mode = False
+    inv.rest_data = None
+    inv.rest_api = None
+
+    # Point inverter_mode arg at a switch entity (the eco toggle)
+    inv.base.args["inverter_mode"] = "switch.enable_eco_mode"
+    ha.dummy_items["switch.enable_eco_mode"] = prev_eco_state
+
+    inv.adjust_inverter_mode(force_export, False)
+
+    actual_state = ha.get_state("switch.enable_eco_mode")
+    if actual_state != expect_eco_state:
+        print("ERROR: ECO toggle switch should be '{}' got '{}'".format(expect_eco_state, actual_state))
+        failed = True
+
+    # Restore original inverter state
+    inv.inv_has_ge_eco_toggle = orig_has_ge_eco_toggle
+    inv.inv_has_ge_inverter_mode = orig_has_ge_inverter_mode
+    inv.base.args["inverter_mode"] = orig_inverter_mode_arg
+
+    return failed
+
+
 def test_adjust_battery_target(test_name, ha, inv, dummy_rest, prev_soc, soc, isCharging, isExporting, expect_soc=None, has_inv_time_button_press=False, expect_button_press=False):
     """
     Test the adjust_battery_target function
@@ -1575,6 +1618,15 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_adjust_inverter_mode("adjust_mode_eco3", ha, inv, dummy_rest, "Eco (Paused)", "Eco", "Eco (Paused)")
     failed |= test_adjust_inverter_mode("adjust_mode_export1", ha, inv, dummy_rest, "Eco (Paused)", "Timed Export", "Timed Export")
     failed |= test_adjust_inverter_mode("adjust_mode_export2", ha, inv, dummy_rest, "Timed Export", "Timed Export", "Timed Export")
+    if failed:
+        return failed
+
+    # Test GE eco toggle mode (inv_has_ge_eco_toggle=True, used by GEC inverter type)
+    # force_export=False -> eco switch "on"; force_export=True -> eco switch "off"
+    failed |= test_adjust_ge_eco_toggle("eco_toggle_enable_eco", ha, inv, "off", False, "on")
+    failed |= test_adjust_ge_eco_toggle("eco_toggle_force_export", ha, inv, "on", True, "off")
+    failed |= test_adjust_ge_eco_toggle("eco_toggle_no_change_eco", ha, inv, "on", False, "on")
+    failed |= test_adjust_ge_eco_toggle("eco_toggle_no_change_export", ha, inv, "off", True, "off")
     if failed:
         return failed
 

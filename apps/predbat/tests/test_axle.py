@@ -45,6 +45,16 @@ class MockAxleAPI(AxleAPI):
         self._now_utc = datetime.now(timezone.utc)
         self._state_store = {}  # Mock state storage
 
+        # Managed mode defaults
+        self.managed_mode = False
+        self.site_id = None
+        self.partner_username = None
+        self.partner_password = None
+        self.api_base_url = "https://api.axle.energy"
+        self.partner_token = None
+        self.partner_token_expiry = None
+        self.automatic = False
+
     @property
     def now_utc(self):
         """Mock now_utc property"""
@@ -133,6 +143,15 @@ def test_axle(my_predbat=None):
         ("load_slot_export", _test_axle_load_slot_export, "Load slot export integration"),
         ("load_slot_import", _test_axle_load_slot_import, "Load slot import integration"),
         ("active_function", _test_axle_active_function, "Active status checking"),
+        ("managed_init", _test_axle_managed_initialization, "Managed mode initialization"),
+        ("managed_price_curve", _test_axle_managed_price_curve_processing, "Managed mode price curve processing"),
+        ("managed_dedup", _test_axle_managed_event_dedup, "Managed mode event deduplication"),
+        ("managed_future", _test_axle_managed_future_events, "Managed mode future events"),
+        ("managed_publish", _test_axle_managed_publish, "Managed mode publish attributes"),
+        ("managed_no_creds", _test_axle_managed_disabled_without_creds, "Managed mode disabled without credentials"),
+        ("managed_token", _test_axle_managed_get_partner_token, "Managed mode partner token auth"),
+        ("managed_fetch_e2e", _test_axle_managed_fetch_end_to_end, "Managed mode end-to-end fetch"),
+        ("managed_token_retry", _test_axle_managed_token_retry, "Managed mode token invalidation and retry"),
     ]
 
     # Run all sub-tests
@@ -1102,4 +1121,438 @@ def _test_axle_active_function(my_predbat=None):
     assert result is False, "fetch_axle_active should return False when axle_session is not configured"
 
     print("✓ fetch_axle_active function test passed")
+    return False
+
+
+def _test_axle_managed_initialization(my_predbat=None):
+    """Test managed mode initialization with valid and missing params"""
+    print("Test: Managed mode initialization")
+
+    # Valid managed mode config
+    axle = MockAxleAPI()
+    axle.initialize(api_key=None, pence_per_kwh=100, automatic=False, managed_mode=True, site_id="site_123", partner_username="user@test.com", partner_password="secret", api_base_url="https://api-sandbox.axle.energy")
+    assert axle.managed_mode is True, "managed_mode should be True"
+    assert axle.site_id == "site_123"
+    assert axle.partner_username == "user@test.com"
+    assert axle.partner_password == "secret"
+    assert axle.api_base_url == "https://api-sandbox.axle.energy"
+    assert axle.api_key is None, "api_key should be None in managed mode"
+    print("  ✓ Valid managed mode initialization")
+
+    # Missing site_id should disable managed mode
+    axle2 = MockAxleAPI()
+    axle2.initialize(api_key=None, pence_per_kwh=100, automatic=False, managed_mode=True, site_id=None, partner_username="user@test.com", partner_password="secret")
+    assert axle2.managed_mode is False, "managed_mode should be False when site_id missing"
+    assert any("site_id" in msg for msg in axle2.log_messages), "Should log missing site_id"
+    print("  ✓ Missing site_id disables managed mode")
+
+    # Missing all managed params
+    axle3 = MockAxleAPI()
+    axle3.initialize(api_key=None, pence_per_kwh=100, automatic=False, managed_mode=True)
+    assert axle3.managed_mode is False, "managed_mode should be False when all params missing"
+    assert any("partner_username" in msg for msg in axle3.log_messages)
+    assert any("partner_password" in msg for msg in axle3.log_messages)
+    print("  ✓ Missing all params disables managed mode")
+
+    return False
+
+
+def _test_axle_managed_price_curve_processing(my_predbat=None):
+    """Test price curve GBP/MWh to p/kWh conversion and session creation"""
+    print("Test: Managed mode price curve processing")
+
+    axle = MockAxleAPI()
+    axle.initialize(api_key=None, pence_per_kwh=100, automatic=False, managed_mode=True, site_id="site_123", partner_username="user@test.com", partner_password="secret")
+
+    now = datetime(2025, 12, 20, 14, 0, 0, tzinfo=timezone.utc)
+    axle._now_utc = now
+
+    # Mock price curve data (GBP/MWh)
+    price_curve = {
+        "half_hourly_traded_prices": [
+            {"start_timestamp": "2025-12-20T14:00:00Z", "price_gbp_per_mwh": 50.0},
+            {"start_timestamp": "2025-12-20T14:30:00Z", "price_gbp_per_mwh": -20.0},
+            {"start_timestamp": "2025-12-20T15:00:00Z", "price_gbp_per_mwh": None},  # Should be skipped
+        ]
+    }
+
+    axle._process_price_curve(price_curve)
+
+    # 2 valid slots × 2 directions = 4 events
+    assert len(axle.event_history) == 4, f"Expected 4 events, got {len(axle.event_history)}"
+
+    # Check first slot: 50 GBP/MWh = 5.0 p/kWh
+    export_events = [e for e in axle.event_history if e["import_export"] == "export"]
+    import_events = [e for e in axle.event_history if e["import_export"] == "import"]
+    assert len(export_events) == 2
+    assert len(import_events) == 2
+
+    # First export: 50 GBP/MWh → 5.0 p/kWh
+    first_export = [e for e in export_events if "14:00:00" in e["start_time"]][0]
+    assert first_export["pence_per_kwh"] == 5.0, f"Expected 5.0, got {first_export['pence_per_kwh']}"
+
+    # First import: negated → -5.0 p/kWh
+    first_import = [e for e in import_events if "14:00:00" in e["start_time"]][0]
+    assert first_import["pence_per_kwh"] == -5.0, f"Expected -5.0, got {first_import['pence_per_kwh']}"
+
+    # Second slot: -20 GBP/MWh = -2.0 p/kWh (negative wholesale price)
+    second_export = [e for e in export_events if "14:30:00" in e["start_time"]][0]
+    assert second_export["pence_per_kwh"] == -2.0, f"Expected -2.0, got {second_export['pence_per_kwh']}"
+
+    second_import = [e for e in import_events if "14:30:00" in e["start_time"]][0]
+    assert second_import["pence_per_kwh"] == 2.0, f"Expected 2.0, got {second_import['pence_per_kwh']}"
+
+    # Null price slot should be skipped
+    null_events = [e for e in axle.event_history if "15:00:00" in e.get("start_time", "")]
+    assert len(null_events) == 0, "Null price slots should be skipped"
+
+    print("  ✓ Price curve conversion correct (GBP/MWh → p/kWh)")
+    print("  ✓ Export and import sessions created per slot")
+    print("  ✓ Null prices skipped")
+    return False
+
+
+def _test_axle_managed_event_dedup(my_predbat=None):
+    """Test event deduplication by start_time and import_export direction"""
+    print("Test: Managed mode event deduplication")
+
+    axle = MockAxleAPI()
+    axle.initialize(api_key=None, pence_per_kwh=100, automatic=False, managed_mode=True, site_id="site_123", partner_username="user@test.com", partner_password="secret")
+
+    now = datetime(2025, 12, 20, 14, 0, 0, tzinfo=timezone.utc)
+    axle._now_utc = now
+
+    # Add an export event
+    event1 = {
+        "start_time": "2025-12-20T14:00:00+0000",
+        "end_time": "2025-12-20T14:30:00+0000",
+        "import_export": "export",
+        "pence_per_kwh": 5.0,
+    }
+    axle.add_event_to_history(event1, allow_future=True)
+    assert len(axle.event_history) == 1
+
+    # Add import at same time — should NOT be deduped (different direction)
+    event2 = {
+        "start_time": "2025-12-20T14:00:00+0000",
+        "end_time": "2025-12-20T14:30:00+0000",
+        "import_export": "import",
+        "pence_per_kwh": -5.0,
+    }
+    axle.add_event_to_history(event2, allow_future=True)
+    assert len(axle.event_history) == 2, "Different directions should not dedup"
+
+    # Add duplicate export at same time — SHOULD be deduped (same start + direction)
+    event3 = {
+        "start_time": "2025-12-20T14:00:00+0000",
+        "end_time": "2025-12-20T14:30:00+0000",
+        "import_export": "export",
+        "pence_per_kwh": 6.0,  # Updated price
+    }
+    axle.add_event_to_history(event3, allow_future=True)
+    assert len(axle.event_history) == 2, "Same start_time + direction should dedup"
+    # Price should be updated
+    export_event = [e for e in axle.event_history if e["import_export"] == "export"][0]
+    assert export_event["pence_per_kwh"] == 6.0, "Deduped event should have updated price"
+
+    print("  ✓ Different directions at same time are kept separately")
+    print("  ✓ Same direction at same time is deduped with update")
+    return False
+
+
+def _test_axle_managed_future_events(my_predbat=None):
+    """Test that managed mode allows future events via allow_future=True"""
+    print("Test: Managed mode future events")
+
+    axle = MockAxleAPI()
+    axle.initialize(api_key=None, pence_per_kwh=100, automatic=False, managed_mode=True, site_id="site_123", partner_username="user@test.com", partner_password="secret")
+
+    now = datetime(2025, 12, 20, 14, 0, 0, tzinfo=timezone.utc)
+    axle._now_utc = now
+
+    # Future event (tomorrow)
+    future_event = {
+        "start_time": "2025-12-21T14:00:00+0000",
+        "end_time": "2025-12-21T14:30:00+0000",
+        "import_export": "export",
+        "pence_per_kwh": 5.0,
+    }
+
+    # Without allow_future, should be rejected
+    axle.add_event_to_history(future_event, allow_future=False)
+    assert len(axle.event_history) == 0, "Future event should be rejected without allow_future"
+
+    # With allow_future, should be accepted
+    axle.add_event_to_history(future_event, allow_future=True)
+    assert len(axle.event_history) == 1, "Future event should be accepted with allow_future"
+
+    print("  ✓ Future events rejected without allow_future")
+    print("  ✓ Future events accepted with allow_future")
+    return False
+
+
+def _test_axle_managed_publish(my_predbat=None):
+    """Test that managed_mode attribute appears in published sensor"""
+    print("Test: Managed mode publish attributes")
+
+    # Test BYOK mode
+    axle_byok = MockAxleAPI()
+    axle_byok.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
+    axle_byok.publish_axle_event()
+
+    sensor = axle_byok.dashboard_items["binary_sensor.predbat_axle_event"]
+    assert sensor["attributes"]["managed_mode"] is False, "BYOK should have managed_mode=False"
+
+    # Test managed mode
+    axle_managed = MockAxleAPI()
+    axle_managed.initialize(api_key=None, pence_per_kwh=100, automatic=False, managed_mode=True, site_id="site_123", partner_username="user@test.com", partner_password="secret")
+    axle_managed.publish_axle_event()
+
+    sensor = axle_managed.dashboard_items["binary_sensor.predbat_axle_event"]
+    assert sensor["attributes"]["managed_mode"] is True, "Managed should have managed_mode=True"
+
+    print("  ✓ managed_mode attribute correctly set in sensor")
+    return False
+
+
+def _test_axle_managed_disabled_without_creds(my_predbat=None):
+    """Test managed mode falls back to disabled when credentials are missing"""
+    print("Test: Managed mode disabled without credentials")
+
+    axle = MockAxleAPI()
+    axle.initialize(
+        api_key=None,
+        pence_per_kwh=100,
+        automatic=False,
+        managed_mode=True,
+        site_id="site_123",
+        partner_username=None,
+        partner_password=None,
+    )
+
+    assert axle.managed_mode is False, "Should disable managed mode without credentials"
+    assert any("partner_username" in msg for msg in axle.log_messages)
+    assert any("partner_password" in msg for msg in axle.log_messages)
+
+    # BYOK mode warning only appears when managed_mode was False from the start
+    # (elif branch). When managed was True but failed, only the managed error is logged.
+    axle2 = MockAxleAPI()
+    axle2.initialize(api_key=None, pence_per_kwh=100, automatic=False, managed_mode=False)
+    assert any("BYOK" in msg for msg in axle2.log_messages), "Should warn about BYOK needing api_key"
+
+    print("  ✓ Managed mode disabled when credentials missing")
+    print("  ✓ BYOK warning logged when managed_mode=False and no api_key")
+    return False
+
+
+def _test_axle_managed_get_partner_token(my_predbat=None):
+    """Test _get_partner_token: success, caching, missing token, and auth failure"""
+    print("Test: Managed mode partner token auth")
+
+    axle = MockAxleAPI()
+    axle.initialize(api_key=None, pence_per_kwh=100, automatic=False, managed_mode=True, site_id="site_123", partner_username="user@test.com", partner_password="secret")
+
+    # Test 1: Successful token fetch
+    auth_response = create_aiohttp_mock_response(status=200, json_data={"access_token": "tok_abc123"})
+    auth_session = create_aiohttp_mock_session(mock_response=auth_response)
+
+    with patch("aiohttp.ClientSession", return_value=auth_session):
+        token = run_async(axle._get_partner_token())
+
+    assert token == "tok_abc123", f"Expected tok_abc123, got {token}"
+    assert axle.partner_token == "tok_abc123"
+    assert axle.partner_token_expiry is not None
+    print("  ✓ Token fetched successfully")
+
+    # Test 2: Cached token returned without HTTP call
+    call_count = [0]
+    original_return = auth_session.__aenter__
+
+    async def counting_aenter(*args):
+        call_count[0] += 1
+        return await original_return(*args)
+
+    auth_session.__aenter__ = counting_aenter
+
+    with patch("aiohttp.ClientSession", return_value=auth_session):
+        token2 = run_async(axle._get_partner_token())
+
+    assert token2 == "tok_abc123", "Should return cached token"
+    assert call_count[0] == 0, "Should not make HTTP call for cached token"
+    print("  ✓ Cached token returned without HTTP call")
+
+    # Test 3: Auth response missing access_token
+    axle2 = MockAxleAPI()
+    axle2.initialize(api_key=None, pence_per_kwh=100, automatic=False, managed_mode=True, site_id="site_123", partner_username="user@test.com", partner_password="secret")
+
+    empty_token_response = create_aiohttp_mock_response(status=200, json_data={"token_type": "bearer"})
+    empty_token_session = create_aiohttp_mock_session(mock_response=empty_token_response)
+
+    with patch("aiohttp.ClientSession", return_value=empty_token_session):
+        token3 = run_async(axle2._get_partner_token())
+
+    assert token3 is None, "Should return None when access_token missing from response"
+    assert axle2.partner_token is None, "Should not cache empty token"
+    assert any("missing access_token" in msg for msg in axle2.log_messages), "Should log missing token warning"
+    print("  ✓ Missing access_token handled correctly")
+
+    # Test 4: Auth failure (401)
+    axle3 = MockAxleAPI()
+    axle3.initialize(api_key=None, pence_per_kwh=100, automatic=False, managed_mode=True, site_id="site_123", partner_username="user@test.com", partner_password="bad_pass")
+
+    fail_response = create_aiohttp_mock_response(status=401)
+    fail_session = create_aiohttp_mock_session(mock_response=fail_response)
+
+    with patch("aiohttp.ClientSession", return_value=fail_session):
+        token4 = run_async(axle3._get_partner_token())
+
+    assert token4 is None, "Should return None on auth failure"
+    assert any("auth failed" in msg for msg in axle3.log_messages), "Should log auth failure"
+    print("  ✓ Auth failure returns None")
+
+    return False
+
+
+def _test_axle_managed_fetch_end_to_end(my_predbat=None):
+    """Test full managed fetch: auth -> price curve -> sessions created"""
+    print("Test: Managed mode end-to-end fetch")
+
+    axle = MockAxleAPI()
+    axle.initialize(api_key=None, pence_per_kwh=100, automatic=False, managed_mode=True, site_id="site_123", partner_username="user@test.com", partner_password="secret")
+
+    now = datetime(2025, 12, 20, 14, 15, 0, tzinfo=timezone.utc)
+    axle._now_utc = now
+
+    # Auth response (POST)
+    auth_json = {"access_token": "tok_managed_123"}
+    # Price curve response (GET)
+    price_curve_json = {
+        "half_hourly_traded_prices": [
+            {"start_timestamp": "2025-12-20T14:00:00Z", "price_gbp_per_mwh": 80.0},
+            {"start_timestamp": "2025-12-20T14:30:00Z", "price_gbp_per_mwh": 60.0},
+        ]
+    }
+
+    # We need POST to return auth, GET to return price curve
+    # The mock session uses the same response for both, so we use side_effect on ClientSession
+    call_order = [0]
+
+    def session_factory(*args, **kwargs):
+        call_order[0] += 1
+        if call_order[0] == 1:
+            # First session: auth (POST)
+            return create_aiohttp_mock_session(mock_response=create_aiohttp_mock_response(status=200, json_data=auth_json))
+        else:
+            # Second session: price curve (GET)
+            return create_aiohttp_mock_session(mock_response=create_aiohttp_mock_response(status=200, json_data=price_curve_json))
+
+    with patch("aiohttp.ClientSession", side_effect=session_factory):
+        run_async(axle.fetch_axle_event())
+
+    # Should have 4 events: 2 slots × 2 directions
+    assert len(axle.event_history) == 4, f"Expected 4 events, got {len(axle.event_history)}"
+
+    # Check conversion: 80 GBP/MWh = 8.0 p/kWh
+    export_events = [e for e in axle.event_history if e["import_export"] == "export"]
+    import_events = [e for e in axle.event_history if e["import_export"] == "import"]
+    assert len(export_events) == 2
+    assert len(import_events) == 2
+
+    first_export = [e for e in export_events if "14:00:00" in e["start_time"]][0]
+    assert first_export["pence_per_kwh"] == 8.0
+
+    # Sensor should be published
+    sensor_id = "binary_sensor.predbat_axle_event"
+    assert sensor_id in axle.dashboard_items, "Sensor should be published"
+    sensor = axle.dashboard_items[sensor_id]
+    assert sensor["attributes"]["managed_mode"] is True
+
+    # Current event should be the active export slot (14:00 is active at 14:15)
+    assert axle.current_event["import_export"] == "export"
+    assert "14:00:00" in axle.current_event["start_time"]
+
+    assert axle.failures_total == 0
+    assert any("Price curve processed successfully" in msg for msg in axle.log_messages)
+
+    print("  ✓ Auth + price curve fetch works end-to-end")
+    print("  ✓ Sessions created with correct prices")
+    print("  ✓ Current event set to active export slot")
+    return False
+
+
+def _test_axle_managed_token_retry(my_predbat=None):
+    """Test token invalidation and retry when price curve fetch fails"""
+    print("Test: Managed mode token invalidation and retry")
+
+    axle = MockAxleAPI()
+    axle.initialize(api_key=None, pence_per_kwh=100, automatic=False, managed_mode=True, site_id="site_123", partner_username="user@test.com", partner_password="secret")
+
+    now = datetime(2025, 12, 20, 14, 0, 0, tzinfo=timezone.utc)
+    axle._now_utc = now
+
+    auth_json = {"access_token": "tok_fresh_456"}
+    price_curve_json = {
+        "half_hourly_traded_prices": [
+            {"start_timestamp": "2025-12-20T14:00:00Z", "price_gbp_per_mwh": 50.0},
+        ]
+    }
+
+    # Sequence: auth OK -> price curve 401 (fail) -> auth OK (re-auth) -> price curve OK
+    call_order = [0]
+
+    def session_factory(*args, **kwargs):
+        call_order[0] += 1
+        if call_order[0] == 1:
+            # First auth
+            return create_aiohttp_mock_session(mock_response=create_aiohttp_mock_response(status=200, json_data=auth_json))
+        elif call_order[0] == 2:
+            # Price curve fails with 401 (client error, no retry in _request_with_retry)
+            return create_aiohttp_mock_session(mock_response=create_aiohttp_mock_response(status=401))
+        elif call_order[0] == 3:
+            # Re-auth after token invalidation
+            return create_aiohttp_mock_session(mock_response=create_aiohttp_mock_response(status=200, json_data=auth_json))
+        else:
+            # Retry price curve succeeds
+            return create_aiohttp_mock_session(mock_response=create_aiohttp_mock_response(status=200, json_data=price_curve_json))
+
+    with patch("aiohttp.ClientSession", side_effect=session_factory):
+        with patch("asyncio.sleep"):
+            run_async(axle.fetch_axle_event())
+
+    # Should succeed after retry: 1 slot × 2 directions = 2 events
+    assert len(axle.event_history) == 2, f"Expected 2 events after token retry, got {len(axle.event_history)}"
+    assert axle.partner_token == "tok_fresh_456"
+
+    # Verify token was invalidated and re-fetched
+    assert call_order[0] == 4, f"Expected 4 HTTP calls (auth, fail, re-auth, success), got {call_order[0]}"
+    assert any("Price curve processed successfully" in msg for msg in axle.log_messages)
+
+    print("  ✓ Token invalidated after price curve failure")
+    print("  ✓ Re-auth and retry succeeds")
+
+    # Test 2: Both attempts fail — should record failure
+    axle2 = MockAxleAPI()
+    axle2.initialize(api_key=None, pence_per_kwh=100, automatic=False, managed_mode=True, site_id="site_123", partner_username="user@test.com", partner_password="secret")
+    axle2._now_utc = now
+
+    call_order2 = [0]
+
+    def session_factory_all_fail(*args, **kwargs):
+        call_order2[0] += 1
+        if call_order2[0] in (1, 3):
+            # Auth succeeds
+            return create_aiohttp_mock_session(mock_response=create_aiohttp_mock_response(status=200, json_data=auth_json))
+        else:
+            # Price curve always fails
+            return create_aiohttp_mock_session(mock_response=create_aiohttp_mock_response(status=401))
+
+    with patch("aiohttp.ClientSession", side_effect=session_factory_all_fail):
+        with patch("asyncio.sleep"):
+            run_async(axle2.fetch_axle_event())
+
+    assert axle2.failures_total == 1, f"Expected 1 failure, got {axle2.failures_total}"
+    assert len(axle2.event_history) == 0, "No events should be created on complete failure"
+    assert any("No price curve data after retry" in msg for msg in axle2.log_messages)
+    print("  ✓ Complete failure after retry records failure correctly")
+
     return False

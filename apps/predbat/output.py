@@ -1494,6 +1494,7 @@ class Output:
             # Json row
             json_row = {}
             json_row["time"] = rate_start.strftime(TIME_FORMAT)
+            json_row["slot_minute"] = minute  # aligned slot minute used by the override system
             json_row["import_rate"] = rate_value_import
             json_row["export_rate"] = rate_value_export
             # Add adjusted rates (always included for client-side debug toggle)
