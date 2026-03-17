@@ -1648,6 +1648,10 @@ async def test_publish_entities():
         "inverterTemperature": 35.2,
         "batteryPower": 1.5,
         "batteryPowerStr": "kW",
+        "batteryTodayChargeEnergy": 5.2,
+        "batteryTodayChargeEnergyStr": "kWh",
+        "batteryTodayDischargeEnergy": 3.8,
+        "batteryTodayDischargeEnergyStr": "kWh",
         "batteryVoltage": 52.3,
         "batteryVoltageStr": "V",
         "batteryCurrent": 28.7,
@@ -1656,6 +1660,9 @@ async def test_publish_entities():
         "familyLoadPowerStr": "kW",
         "psum": -1.2,
         "psumStr": "kW",
+        "uPv1": 285.3,
+        "uPv2": 272.1,
+        "pvVoltageStr": "V",
     }
 
     # Setup cached CID values
@@ -1801,6 +1808,26 @@ async def test_publish_entities():
     assert f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_power" in api.dashboard_items, "Battery power should be published"
     assert f"sensor.{prefix}_solis_{inverter_sn_lower}_load_power" in api.dashboard_items, "Load power should be published"
     assert f"sensor.{prefix}_solis_{inverter_sn_lower}_grid_power" in api.dashboard_items, "Grid power should be published"
+
+    # Check battery energy charged/discharged today sensors
+    assert f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_energy_charged_today" in api.dashboard_items, "Battery energy charged today should be published"
+    charged_today = api.dashboard_items[f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_energy_charged_today"]
+    assert charged_today["state"] == 5.2, f"Battery energy charged today should be 5.2, got {charged_today['state']}"
+
+    assert f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_energy_discharged_today" in api.dashboard_items, "Battery energy discharged today should be published"
+    discharged_today = api.dashboard_items[f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_energy_discharged_today"]
+    assert discharged_today["state"] == 3.8, f"Battery energy discharged today should be 3.8, got {discharged_today['state']}"
+
+    # Check PV voltage sensors
+    assert f"sensor.{prefix}_solis_{inverter_sn_lower}_pv1_voltage" in api.dashboard_items, "PV1 voltage should be published"
+    pv1_voltage = api.dashboard_items[f"sensor.{prefix}_solis_{inverter_sn_lower}_pv1_voltage"]
+    assert pv1_voltage["state"] == 285.3, f"PV1 voltage should be 285.3, got {pv1_voltage['state']}"
+    assert pv1_voltage["attributes"]["unit_of_measurement"] == "V", "PV1 voltage should have V unit"
+
+    assert f"sensor.{prefix}_solis_{inverter_sn_lower}_pv2_voltage" in api.dashboard_items, "PV2 voltage should be published"
+    pv2_voltage = api.dashboard_items[f"sensor.{prefix}_solis_{inverter_sn_lower}_pv2_voltage"]
+    assert pv2_voltage["state"] == 272.1, f"PV2 voltage should be 272.1, got {pv2_voltage['state']}"
+    assert pv2_voltage["attributes"]["unit_of_measurement"] == "V", "PV2 voltage should have V unit"
 
     print(f"PASSED: publish_entities created {len(api.dashboard_items)} entities correctly")
     return False

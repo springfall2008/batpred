@@ -50,12 +50,8 @@ pred_bat:
     - sensor.growatt_spa_pv_energy
   battery_voltage:
     - sensor.growatt_spa_battery_voltage
-
-  # This is disabled by default in the Solax integration so it must be manually enabled.
   inverter_time:
     - sensor.date_time
-
-  # This is disabled by default in the Solax integration so it must be manually enabled.
   battery_power:
     - sensor.growatt_spa_battery_power
   pv_power:
@@ -63,14 +59,12 @@ pred_bat:
   soc_percent:
     - sensor.growatt_spa_battery_state_of_charge
 
-#  reserve:
-#    - number.growatt_spa_grid_first_stop_discharge
+  reserve:
+    - number.growatt_spa_load_first_stop_discharge
+    - number.growatt_spa_grid_first_stop_discharge
 
   battery_min_soc:
     - number.growatt_spa_grid_first_stop_discharge
-
-#  energy_control_switch:
-    - select.growatt_spa_work_mode_priority
 
   # Service for start/stop
   charge_start_service:
@@ -85,6 +79,22 @@ pred_bat:
     service: select.select_option
     entity_id: select.growatt_spa_work_mode_priority
     option: "Grid first"
+
+  charge_start_time:
+    - select.growatt_spa_battery_first_slot_1_start
+  charge_end_time:
+    - select.growatt_spa_battery_first_slot_1_end
+  charge_limit:
+    - number.growatt_spa_battery_first_stop_charge
+  scheduled_charge_enable:
+    - switch.growatt_spa_battery_first_slot_1_enabled
+
+  discharge_start_time:
+    - select.growatt_spa_grid_first_slot_1_start
+  discharge_end_time:
+    - select.growatt_spa_grid_first_slot_1_end
+  scheduled_discharge_enable:
+    - switch.growatt_spa_grid_first_slot_1_enabled
 
   # Inverter max AC limit (one per inverter)
   # If you have a second inverter for PV only please add the two values together

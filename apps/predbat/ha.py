@@ -26,6 +26,7 @@ import requests
 import traceback
 import threading
 import time
+import copy
 from utils import str2time
 from const import TIME_FORMAT_HA, TIMEOUT, TIME_FORMAT_HA_TZ
 from component_base import ComponentBase
@@ -99,6 +100,14 @@ class HAHistory(ComponentBase):
                 if tracked:
                     self.update_entity(entity_id, history_data)
                 result = [history_data]
+
+        if result is not None:
+            # Do not return the internal cached structures directly: callers could mutate the list or observe
+            # concurrent updates performed by other threads without holding history_lock, leading to cache
+            # corruption or inconsistent snapshots. Instead, take history_lock and return a deep copy.
+
+            with self.history_lock:
+                result = copy.deepcopy(result)
 
         return result
 
@@ -611,6 +620,9 @@ class HAInterface(ComponentBase):
         Get state from cached HA data
         """
         if entity_id:
+            if isinstance(entity_id, list):
+                self.log("Error: get_state called with list entity_id: {}, this should be a single entity string".format(entity_id))
+                return default
             self.db_mirror_list[entity_id.lower()] = True
 
         if not entity_id:

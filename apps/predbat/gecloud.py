@@ -15,6 +15,7 @@ management via the GivEnergy Cloud REST API.
 import aiohttp
 from datetime import timedelta, datetime
 from utils import str2time, dp1
+from predbat_metrics import record_api_call
 import asyncio
 import json
 import random
@@ -199,6 +200,7 @@ attribute_table = {
     "max_charge_rate": {"friendly_name": "Max Charge Rate", "icon": "mdi:battery", "unit_of_measurement": "W", "device_class": "power"},
     "battery_size": {"friendly_name": "Battery Size", "icon": "mdi:battery", "unit_of_measurement": "kWh", "device_class": "energy"},
     "battery_dod": {"friendly_name": "Battery Depth of Discharge", "icon": "mdi:battery", "unit_of_measurement": "*", "device_class": "battery"},
+    "model": {"friendly_name": "Model", "icon": "mdi:information", "unit_of_measurement": None},
 }
 
 BASE_TIME = datetime.strptime("00:00", "%H:%M")
@@ -384,6 +386,8 @@ class GECloudDirect(ComponentBase):
                 cap = info.get("battery", {}).get("nominal_capacity", None)
                 volt = info.get("battery", {}).get("nominal_voltage", None)
                 dod = info.get("battery", {}).get("depth_of_discharge", None)
+                model = info.get("model", "Unknown")
+                max_charge_rate = info.get("max_charge_rate", 0)
 
                 capacity = None
                 if cap and volt:
@@ -392,12 +396,14 @@ class GECloudDirect(ComponentBase):
                     except (ValueError, TypeError):
                         pass
 
-                max_charge_rate = info.get("max_charge_rate", 0)
                 self.log("GECloud: Update data for device {} battery capacity {} max charge rate {}".format(device, capacity, max_charge_rate))
 
                 self.dashboard_item(entity_name + "_battery_size", capacity, attributes=attribute_table.get("battery_size", {}), app="gecloud")
                 self.dashboard_item(entity_name + "_max_charge_rate", max_charge_rate, attributes=attribute_table.get("max_charge_rate", {}), app="gecloud")
-                self.dashboard_item(entity_name + "_battery_dod", dod, attributes=attribute_table.get("_battery_dod", {}), app="gecloud")
+                self.dashboard_item(entity_name + "_battery_dod", dod, attributes=attribute_table.get("battery_dod", {}), app="gecloud")
+                model_attr = attribute_table.get("model", {}).copy()
+                model_attr["details"] = device_info
+                self.dashboard_item(entity_name + "_model", model, attributes=model_attr, app="gecloud")
                 self.dashboard_item(entity_name + "_last_updated", last_updated, attributes=attribute_table.get("time", {}), app="gecloud")
 
     async def publish_evc_data(self, serial, evc_data):
@@ -739,6 +745,7 @@ class GECloudDirect(ComponentBase):
 
         self.set_arg("inverter_type", ["GEC" for _ in range(num_inverters)])
         self.set_arg("num_inverters", num_inverters)
+        self.set_arg("inverter_mode", [f"switch.{self.prefix}_gecloud_{device}_enable_eco_mode" for device in batteries])
         self.set_arg("load_today", [f"sensor.{self.prefix}_gecloud_{device}_consumption_today" for device in batteries])
         self.set_arg("import_today", [f"sensor.{self.prefix}_gecloud_{device}_grid_import_today" for device in batteries])
         self.set_arg("export_today", [f"sensor.{self.prefix}_gecloud_{device}_grid_export_today" for device in batteries])
@@ -818,6 +825,23 @@ class GECloudDirect(ComponentBase):
             self.set_arg("pv_power", [f"sensor.{self.prefix}_gecloud_{ems}_solar_power"] + [0 for _ in range(num_inverters - 1)])
             self.set_arg("load_power", [f"sensor.{self.prefix}_gecloud_{ems}_consumption_power"] + [0 for _ in range(num_inverters - 1)])
             self.set_arg("grid_power", [f"sensor.{self.prefix}_gecloud_{ems}_grid_power"] + [0 for _ in range(num_inverters - 1)])
+
+        # Determine the model of the inverter, if at least one inverter has AC or AIO in the name then we assume AC coupled and turn off the hybrid switch
+        # First fetch "model"
+        ac_coupled = False
+        model_name = "Unknown"
+        for device_serial in batteries_real:
+            device = self.info.get(device_serial, {})
+            info = device.get("info", {})
+            model = info.get("model", "").lower()
+            if model:
+                model_name = info["model"]
+                if ("ac" in model) or ("aio" in model):
+                    ac_coupled = True
+                    break
+        entity_id = "switch.{}_inverter_hybrid".format(self.prefix)
+        self.log("GECloud: Detected inverter model {} indicates ac_coupled={}, setting {} to {}".format(model_name, ac_coupled, entity_id, "off" if ac_coupled else "on"))
+        await self.base.ha_interface.set_state_external(entity_id, not ac_coupled)
 
         self.log("GECloud: Automatic configuration complete")
 
@@ -1376,6 +1400,7 @@ class GECloudDirect(ComponentBase):
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             self.log(f"Warn: GECloud: Exception during request to {url}: {e}")
             self.failures_total += 1
+            record_api_call("givenergy", False, "connection_error")
             return None
 
         # Check data
@@ -1387,20 +1412,24 @@ class GECloudDirect(ComponentBase):
             if data is None:
                 data = {}
             self.update_success_timestamp()
+            record_api_call("givenergy")
             return data
         elif status in [401, 403, 404, 422]:
             # Unauthorized
             self.failures_total += 1
             self.log("Warn: GECloud: Failed to get data from {} code {}".format(endpoint, status))
+            record_api_call("givenergy", False, "auth_error")
             return {}
         elif status == 429:
             # Rate limiting so wait up to 30 seconds
             self.failures_total += 1
+            record_api_call("givenergy", False, "rate_limit")
             await asyncio.sleep(random.random() * 30)
             return None
         else:
             self.failures_total += 1
             self.log("Warn: GECloud: Failed to get data from {} code {}".format(endpoint, status))
+            record_api_call("givenergy", False, "server_error")
         return None
 
 
@@ -1518,12 +1547,15 @@ class GECloudData(ComponentBase):
                 async with session.get(url, headers=headers) as response:
                     if response.status not in [200, 201]:
                         self.log("Warn: GeCloud: Failed to get data from {} status code {}".format(url, response.status))
+                        record_api_call("givenergy", False, "server_error")
                         return {}, None
                     try:
                         data = await response.json()
                     except (aiohttp.ContentTypeError, json.JSONDecodeError) as e:
+                        record_api_call("givenergy", False, "decode_error")
                         return {}, None
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            record_api_call("givenergy", False, "connection_error")
             return {}, None
 
         if not data or "data" not in data:
@@ -1555,6 +1587,13 @@ class GECloudData(ComponentBase):
                 continue
             last_time = this_time
 
+            # Skip duplicate data points, where this data point is the same as the previous one to save space
+            # Always keep the last sample in the dataset so we have the most recent totals
+            if len(mdata) > 0 and item is not darray[-1]:
+                last_data = mdata[-1]
+                if last_data["consumption"] == item["total"]["consumption"] and last_data["import"] == item["total"]["grid"]["import"] and last_data["export"] == item["total"]["grid"]["export"] and last_data["pv"] == item["total"]["solar"]:
+                    continue
+
             new_data["last_updated"] = item["time"]
             new_data["consumption"] = item["total"]["consumption"]
             new_data["import"] = item["total"]["grid"]["import"]
@@ -1566,6 +1605,7 @@ class GECloudData(ComponentBase):
         self.ge_url_cache[url]["stamp"] = now_utc
         self.ge_url_cache[url]["data"] = mdata
         self.ge_url_cache[url]["next"] = url_next
+        record_api_call("givenergy")
         return mdata, url_next
 
     async def download_ge_data(self, now_utc):
@@ -1632,6 +1672,26 @@ class GECloudData(ComponentBase):
         self.save_ge_cache()
         self.ge_url_cache = {}
         return True
+
+    def filter_data(self, mdata, measurement):
+        """
+        Filter the GECloudData data for a specific measurement (consumption, import, export, pv)
+        Remove duplicate data points where the measurement value is the same or less than the previous data point to save space, but always keep the most recent data point
+
+        This allows for smooth interpolation of the data for each measurement while keeping the dataset size manageable, especially for long time periods where values may not change frequently.
+        """
+        if not mdata:
+            return []
+        result = []
+        prev_value = -1
+        for item in mdata:
+            if measurement in item:
+                current_value = item[measurement]
+                # Only keep this data point if the value has changed from the previous data point, or if this is the most recent data point
+                if current_value > prev_value or item is mdata[-1]:
+                    result.append({"last_updated": item["last_updated"], measurement: current_value})
+                    prev_value = current_value
+        return result
 
     def get_data(self):
         """

@@ -46,7 +46,7 @@ def test_add_now_to_octopus_slot(my_predbat):
     now_utc = my_predbat.midnight_utc + timedelta(minutes=my_predbat.minutes_now)
     octopus_slots = []
 
-    result = my_predbat.add_now_to_octopus_slot(octopus_slots, now_utc)
+    result = my_predbat.add_now_to_octopus_slot(0, octopus_slots, now_utc)
 
     # Should have one slot added
     if len(result) != 1:
@@ -75,7 +75,7 @@ def test_add_now_to_octopus_slot(my_predbat):
     my_predbat.car_charging_now = [False]
     octopus_slots = []
 
-    result = my_predbat.add_now_to_octopus_slot(octopus_slots, now_utc)
+    result = my_predbat.add_now_to_octopus_slot(0, octopus_slots, now_utc)
 
     if len(result) != 0:
         print("ERROR: Expected 0 slots when car not charging, got {}".format(len(result)))
@@ -93,7 +93,13 @@ def test_add_now_to_octopus_slot(my_predbat):
     now_utc = my_predbat.midnight_utc + timedelta(minutes=my_predbat.minutes_now)
     octopus_slots = []
 
-    result = my_predbat.add_now_to_octopus_slot(octopus_slots, now_utc)
+    result = my_predbat.add_now_to_octopus_slot(1, octopus_slots, now_utc)
+    if len(result) != 0:
+        print("ERROR: Expected 0 slots for car 1 which is not charging, got {}".format(len(result)))
+        failed = True
+
+    result = my_predbat.add_now_to_octopus_slot(0, octopus_slots, now_utc)
+    result = my_predbat.add_now_to_octopus_slot(2, result, now_utc)
 
     # Should have two slots (one for each charging car)
     if len(result) != 2:
@@ -126,7 +132,7 @@ def test_add_now_to_octopus_slot(my_predbat):
     now_utc = my_predbat.midnight_utc + timedelta(minutes=my_predbat.minutes_now)
     octopus_slots = []
 
-    result = my_predbat.add_now_to_octopus_slot(octopus_slots, now_utc)
+    result = my_predbat.add_now_to_octopus_slot(0, octopus_slots, now_utc)
 
     if len(result) != 1:
         print("ERROR: Expected 1 slot, got {}".format(len(result)))
@@ -156,7 +162,7 @@ def test_add_now_to_octopus_slot(my_predbat):
     now_utc = my_predbat.midnight_utc + timedelta(minutes=my_predbat.minutes_now)
     octopus_slots = []
 
-    result = my_predbat.add_now_to_octopus_slot(octopus_slots, now_utc)
+    result = my_predbat.add_now_to_octopus_slot(0, octopus_slots, now_utc)
 
     if len(result) != 1:
         print("ERROR: Expected 1 slot, got {}".format(len(result)))
@@ -186,7 +192,7 @@ def test_add_now_to_octopus_slot(my_predbat):
     now_utc = my_predbat.midnight_utc + timedelta(minutes=my_predbat.minutes_now)
     octopus_slots = []
 
-    result = my_predbat.add_now_to_octopus_slot(octopus_slots, now_utc)
+    result = my_predbat.add_now_to_octopus_slot(0, octopus_slots, now_utc)
 
     if len(result) != 1:
         print("ERROR: Expected 1 slot, got {}".format(len(result)))
@@ -216,7 +222,7 @@ def test_add_now_to_octopus_slot(my_predbat):
     now_utc = my_predbat.midnight_utc + timedelta(minutes=my_predbat.minutes_now)
     octopus_slots = []
 
-    result = my_predbat.add_now_to_octopus_slot(octopus_slots, now_utc)
+    result = my_predbat.add_now_to_octopus_slot(0, octopus_slots, now_utc)
 
     if len(result) != 1:
         print("ERROR: Expected 1 slot, got {}".format(len(result)))
@@ -249,7 +255,7 @@ def test_add_now_to_octopus_slot(my_predbat):
     existing_slot = {"start": "2025-01-15T08:00:00+00:00", "end": "2025-01-15T09:00:00+00:00"}
     octopus_slots = [existing_slot]
 
-    result = my_predbat.add_now_to_octopus_slot(octopus_slots, now_utc)
+    result = my_predbat.add_now_to_octopus_slot(0, octopus_slots, now_utc)
 
     if len(result) != 2:
         print("ERROR: Expected 2 slots (1 existing + 1 new), got {}".format(len(result)))
@@ -269,7 +275,7 @@ def test_add_now_to_octopus_slot(my_predbat):
     my_predbat.car_charging_now = []
 
     octopus_slots = []
-    result = my_predbat.add_now_to_octopus_slot(octopus_slots, now_utc)
+    result = my_predbat.add_now_to_octopus_slot(0, octopus_slots, now_utc)
 
     if len(result) != 0:
         print("ERROR: Expected 0 slots with no cars, got {}".format(len(result)))
@@ -284,7 +290,7 @@ def test_add_now_to_octopus_slot(my_predbat):
     my_predbat.car_charging_now = [False, False, False]
 
     octopus_slots = []
-    result = my_predbat.add_now_to_octopus_slot(octopus_slots, now_utc)
+    result = my_predbat.add_now_to_octopus_slot(0, octopus_slots, now_utc)
 
     if len(result) != 0:
         print("ERROR: Expected 0 slots when no cars charging, got {}".format(len(result)))
@@ -302,7 +308,8 @@ def test_add_now_to_octopus_slot(my_predbat):
     now_utc = my_predbat.midnight_utc + timedelta(minutes=my_predbat.minutes_now)
     octopus_slots = []
 
-    result = my_predbat.add_now_to_octopus_slot(octopus_slots, now_utc)
+    result = my_predbat.add_now_to_octopus_slot(0, octopus_slots, now_utc)
+    result = my_predbat.add_now_to_octopus_slot(1, result, now_utc)
 
     if len(result) != 2:
         print("ERROR: Expected 2 slots for 2 charging cars, got {}".format(len(result)))

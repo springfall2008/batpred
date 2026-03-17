@@ -1491,8 +1491,19 @@ class LoadPredictor:
         max_kwh_per_chunk = self.max_load_kw * CHUNK_MINUTES / 60.0
         baseline_floor = 0.01 * CHUNK_STEPS
 
+        # Precompute max historical energy per day-of-week for capping
+        max_energy_by_dow = {}
+        for dow in range(7):
+            pattern = daily_patterns.get(dow, {})
+            max_energy_by_dow[dow] = max(pattern.values()) if pattern else max_kwh_per_chunk
+
         # Blending: model weight decreases linearly from 1.0 to blend_floor
         blend_floor = 0.5
+
+        # Seed previous value from the most recent historical chunk for the step-to-step cap
+        prev_energy_value = lookback_buffer[0] if lookback_buffer else baseline_floor
+
+        self.log("ML Predictor: Starting autoregressive prediction loop for {} steps ({} hours), prev_energy value {} max_dow {}".format(PREDICT_HORIZON, PREDICT_HORIZON * CHUNK_MINUTES / 60, prev_energy_value, max_energy_by_dow))
 
         for step_idx in range(PREDICT_HORIZON):
             # Target time: start of the step_idx-th future chunk (newer/recent edge).
@@ -1548,9 +1559,16 @@ class LoadPredictor:
             model_weight = 1.0 - progress * (1.0 - blend_floor)
             energy_value = model_weight * model_pred + (1.0 - model_weight) * hist_value
 
+            # Cap final value to 5x the maximum historical energy seen for this day-of-week
+            energy_value = min(energy_value, 5 * max_energy_by_dow[day_of_week])
+
+            # Cap to 5x the previous step's value to prevent sudden autoregressive jumps
+            energy_value = min(energy_value, 5 * prev_energy_value)
+
             # Re-apply hard constraints after blending
             energy_value = max(baseline_floor, min(energy_value, max_kwh_per_chunk))
 
+            prev_energy_value = energy_value
             predictions_energy.append(energy_value)
 
             # Shift lookback buffers: insert new prediction at front, drop oldest

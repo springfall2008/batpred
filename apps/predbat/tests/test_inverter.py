@@ -93,6 +93,7 @@ def test_disable_charge_window(test_name, ha, inv, dummy_rest, prev_charge_start
         failed = True
     if ha.get_state("switch.inverter_button") != ("on" if expect_inverter_time_button_press else "off"):
         print("ERROR: Inverter time button press should be {} got {}".format("on" if expect_inverter_time_button_press else "off", ha.get_state("switch.inverter_button")))
+        failed = True
 
     # REST Mode
     inv.rest_api = "dummy"
@@ -151,7 +152,7 @@ def test_adjust_charge_window(
     print("Test: {}".format(test_name))
 
     inv.rest_data = None
-    inv.has_inverter_time_button_press = has_inverter_time_button_press
+    inv.inv_time_button_press = has_inverter_time_button_press
     ha.dummy_items["select.charge_start_time"] = prev_charge_start_time[:5] if short else prev_charge_start_time
     ha.dummy_items["select.charge_end_time"] = prev_charge_end_time[:5] if short else prev_charge_end_time
     ha.dummy_items["switch.scheduled_charge_enable"] = "on" if prev_enable_charge else "off"
@@ -179,6 +180,7 @@ def test_adjust_charge_window(
         failed = True
     if ha.get_state("switch.inverter_button") != ("on" if expect_inverter_time_button_press else "off"):
         print("ERROR: Inverter time button press should be {} got {}".format("on" if expect_inverter_time_button_press else "off", ha.get_state("switch.inverter_button")))
+        failed = True
 
     # Verify charge_start_time_minutes and charge_end_time_minutes if expected values provided
     if expect_charge_start_time_minutes is not None:
@@ -488,6 +490,49 @@ def test_adjust_inverter_mode(test_name, ha, inv, dummy_rest, prev_mode, mode, e
     if json.dumps(expect_data) != json.dumps(rest_command):
         print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
         failed = True
+
+    return failed
+
+
+def test_adjust_ge_eco_toggle(test_name, ha, inv, prev_eco_state, force_export, expect_eco_state=None):
+    """
+    Test adjust_inverter_mode with inv_has_ge_eco_toggle=True (e.g. GivEnergy Cloud / GEC inverter type).
+
+    The eco toggle is a switch entity. When force_export=True the switch is turned off (eco disabled),
+    when force_export=False the switch is turned on (eco enabled).
+    """
+    failed = False
+    if expect_eco_state is None:
+        expect_eco_state = "off" if force_export else "on"
+
+    print("Test: {} prev_eco={} force_export={} expect_eco={}".format(test_name, prev_eco_state, force_export, expect_eco_state))
+
+    # Save original state so we can restore after the test
+    orig_has_ge_eco_toggle = inv.inv_has_ge_eco_toggle
+    orig_has_ge_inverter_mode = inv.inv_has_ge_inverter_mode
+    orig_inverter_mode_arg = inv.base.args.get("inverter_mode")
+
+    # Configure inverter for GEC-style eco toggle
+    inv.inv_has_ge_eco_toggle = True
+    inv.inv_has_ge_inverter_mode = False
+    inv.rest_data = None
+    inv.rest_api = None
+
+    # Point inverter_mode arg at a switch entity (the eco toggle)
+    inv.base.args["inverter_mode"] = "switch.enable_eco_mode"
+    ha.dummy_items["switch.enable_eco_mode"] = prev_eco_state
+
+    inv.adjust_inverter_mode(force_export, False)
+
+    actual_state = ha.get_state("switch.enable_eco_mode")
+    if actual_state != expect_eco_state:
+        print("ERROR: ECO toggle switch should be '{}' got '{}'".format(expect_eco_state, actual_state))
+        failed = True
+
+    # Restore original inverter state
+    inv.inv_has_ge_eco_toggle = orig_has_ge_eco_toggle
+    inv.inv_has_ge_inverter_mode = orig_has_ge_inverter_mode
+    inv.base.args["inverter_mode"] = orig_inverter_mode_arg
 
     return failed
 
@@ -931,6 +976,7 @@ def test_inverter_update(
 def test_auto_restart(test_name, my_predbat, ha, inv, dummy_items, service, expected, active=False, set_system_notify=None, expect_notify=False):
     print("**** Running Test: {} ****".format(test_name))
     failed = 0
+    prev_service_store_enable = ha.service_store_enable
     ha.service_store_enable = True
     ha.service_store = []
     my_predbat.restart_active = active
@@ -972,6 +1018,7 @@ def test_auto_restart(test_name, my_predbat, ha, inv, dummy_items, service, expe
     if json.dumps(expected) != json.dumps(result_filtered):
         print("ERROR: Auto-restart service should be {} got {}".format(expected, result_filtered))
         failed = 1
+    ha.service_store_enable = prev_service_store_enable
     return failed
 
 
@@ -1303,6 +1350,7 @@ def run_inverter_tests(my_predbat_dummy):
     my_predbat.load_user_config()
     my_predbat.fetch_config_options()
     my_predbat.forecast_minutes = 24 * 60
+    my_predbat.minutes_now = 12 * 60  # Pin to noon so time-dependent tests are deterministic
     my_predbat.ha_interface.history_enable = True
 
     failed = False
@@ -1570,6 +1618,15 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_adjust_inverter_mode("adjust_mode_eco3", ha, inv, dummy_rest, "Eco (Paused)", "Eco", "Eco (Paused)")
     failed |= test_adjust_inverter_mode("adjust_mode_export1", ha, inv, dummy_rest, "Eco (Paused)", "Timed Export", "Timed Export")
     failed |= test_adjust_inverter_mode("adjust_mode_export2", ha, inv, dummy_rest, "Timed Export", "Timed Export", "Timed Export")
+    if failed:
+        return failed
+
+    # Test GE eco toggle mode (inv_has_ge_eco_toggle=True, used by GEC inverter type)
+    # force_export=False -> eco switch "on"; force_export=True -> eco switch "off"
+    failed |= test_adjust_ge_eco_toggle("eco_toggle_enable_eco", ha, inv, "off", False, "on")
+    failed |= test_adjust_ge_eco_toggle("eco_toggle_force_export", ha, inv, "on", True, "off")
+    failed |= test_adjust_ge_eco_toggle("eco_toggle_no_change_eco", ha, inv, "on", False, "on")
+    failed |= test_adjust_ge_eco_toggle("eco_toggle_no_change_export", ha, inv, "off", True, "off")
     if failed:
         return failed
 

@@ -204,6 +204,19 @@ COMPONENT_LIST = {
                 "required": False,
                 "config": "fox_inverter_sn",
             },
+            "auth_method": {
+                "required": False,
+                "default": "api_key",
+                "config": "fox_auth_method",
+            },
+            "token_expires_at": {
+                "required": False,
+                "config": "fox_token_expires_at",
+            },
+            "token_hash": {
+                "required": False,
+                "config": "fox_token_hash",
+            },
         },
         "phase": 1,
     },
@@ -245,10 +258,16 @@ COMPONENT_LIST = {
         "name": "Axle Energy",
         "event_filter": "predbat_axle_",
         "args": {
-            "api_key": {"required": True, "config": "axle_api_key"},
+            "api_key": {"required": False, "config": "axle_api_key"},
             "pence_per_kwh": {"required": False, "config": "axle_pence_per_kwh", "default": 100},
             "automatic": {"required": False, "config": "axle_automatic", "default": True},
+            "managed_mode": {"required": False, "config": "axle_managed_mode", "default": False},
+            "site_id": {"required": False, "config": "axle_site_id"},
+            "partner_username": {"required": False, "config": "axle_partner_username"},
+            "partner_password": {"required": False, "config": "axle_partner_password"},
+            "api_base_url": {"required": False, "config": "axle_api_base_url", "default": "https://api.axle.energy"},
         },
+        "required_or": ["api_key", "managed_mode"],
         "phase": 1,
     },
     "solax": {

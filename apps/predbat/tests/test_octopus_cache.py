@@ -53,7 +53,7 @@ async def test_octopus_cache(my_predbat):
         # Set up test data
         api.account_data = {"account": {"number": "A-12345678", "electricityAgreements": [{"meterPoint": {"mpan": "1234567890123"}}]}}
         api.saving_sessions = {"events": [{"id": "event1", "startAt": "2024-06-15T18:00:00+00:00"}], "account": {"hasJoinedCampaign": True}}
-        api.intelligent_device = {"device_id": "device123", "planned_dispatches": [{"start": "2024-06-15T23:00:00+00:00", "end": "2024-06-16T05:00:00+00:00"}]}
+        api.intelligent_devices = {"device123": {"planned_dispatches": [{"start": "2024-06-15T23:00:00+00:00", "end": "2024-06-16T05:00:00+00:00"}]}}
         api.graphql_token = "test-token-12345"
         api.tariffs = {}
 
@@ -82,8 +82,8 @@ async def test_octopus_cache(my_predbat):
             elif api2.saving_sessions != api.saving_sessions:
                 print("ERROR: saving_sessions mismatch. Expected: {}, Got: {}".format(api.saving_sessions, api2.saving_sessions))
                 failed = True
-            elif api2.intelligent_device != api.intelligent_device:
-                print("ERROR: intelligent_device mismatch. Expected: {}, Got: {}".format(api.intelligent_device, api2.intelligent_device))
+            elif api2.intelligent_devices != api.intelligent_devices:
+                print("ERROR: intelligent_devices mismatch. Expected: {}, Got: {}".format(api.intelligent_devices, api2.intelligent_devices))
                 failed = True
             elif api2.graphql_token != api.graphql_token:
                 print("ERROR: graphql_token mismatch. Expected: {}, Got: {}".format(api.graphql_token, api2.graphql_token))
@@ -108,8 +108,8 @@ async def test_octopus_cache(my_predbat):
         elif api3.saving_sessions != {}:
             print("ERROR: Expected empty saving_sessions, got: {}".format(api3.saving_sessions))
             failed = True
-        elif api3.intelligent_device != {}:
-            print("ERROR: Expected empty intelligent_device, got: {}".format(api3.intelligent_device))
+        elif api3.intelligent_devices != {}:
+            print("ERROR: Expected empty intelligent_devices, got: {}".format(api3.intelligent_devices))
             failed = True
         elif api3.tariffs != {}:
             print("ERROR: Expected empty tariffs, got: {}".format(api3.tariffs))
@@ -128,7 +128,7 @@ async def test_octopus_cache(my_predbat):
         # Set up tariff data
         api4.account_data = {}
         api4.saving_sessions = {}
-        api4.intelligent_device = {}
+        api4.intelligent_devices = {}
         api4.graphql_token = None
         api4.tariffs = {"import": {"tariffCode": "E-1R-AGILE-24-01-01-A", "productCode": "AGILE-24-01-01", "deviceID": "device-import", "data": [{"value_inc_vat": 25.0}], "standing": [{"value_inc_vat": 0.5}]}}
 
@@ -182,7 +182,7 @@ async def test_octopus_cache(my_predbat):
         # Set data to None
         api6.account_data = None
         api6.saving_sessions = None
-        api6.intelligent_device = None
+        api6.intelligent_devices = None
         api6.graphql_token = None
         api6.tariffs = {}
 
@@ -203,8 +203,8 @@ async def test_octopus_cache(my_predbat):
         elif api7.saving_sessions != {}:
             print("ERROR: Expected empty dict for None saving_sessions, got: {}".format(api7.saving_sessions))
             failed = True
-        elif api7.intelligent_device != {}:
-            print("ERROR: Expected empty dict for None intelligent_device, got: {}".format(api7.intelligent_device))
+        elif api7.intelligent_devices != {}:
+            print("ERROR: Expected empty dict for None intelligent_devices, got: {}".format(api7.intelligent_devices))
             failed = True
         else:
             print("PASS: None values handled correctly")
@@ -223,7 +223,7 @@ async def test_octopus_cache(my_predbat):
 
         api9.account_data = {"account": {"number": "A-87654321"}}
         api9.saving_sessions = {"events": []}
-        api9.intelligent_device = {"device_id": "device-multi"}
+        api9.intelligent_devices = {"device-multi": {}}
         api9.graphql_token = None
         api9.tariffs = {
             "import": {"productCode": "AGILE-24-01-01", "tariffCode": "E-1R-AGILE-24-01-01-A", "data": [{"value_inc_vat": 25.0}]},
@@ -247,8 +247,8 @@ async def test_octopus_cache(my_predbat):
                 if "saving_sessions" not in loaded_cache or loaded_cache["saving_sessions"] != api9.saving_sessions:
                     print("ERROR: saving_sessions missing or incorrect in user cache")
                     failed = True
-                if "intelligent_device" not in loaded_cache or loaded_cache["intelligent_device"] != api9.intelligent_device:
-                    print("ERROR: intelligent_device missing or incorrect in user cache")
+                if "intelligent_devices" not in loaded_cache or loaded_cache["intelligent_devices"] != api9.intelligent_devices:
+                    print("ERROR: intelligent_devices missing or incorrect in user cache")
                     failed = True
 
     finally:

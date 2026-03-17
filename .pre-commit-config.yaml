@@ -42,3 +42,6 @@ repos:
   - id: cspell
     additional_dependencies:
     - "@cspell/dict-en-gb"
+exclude: |
+  ^\.venv/|
+  \.backup$

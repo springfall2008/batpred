@@ -15,6 +15,7 @@ import json
 import time
 import copy
 from datetime import datetime, timedelta, UTC
+from predbat_metrics import record_api_call
 from component_base import ComponentBase
 
 
@@ -234,6 +235,17 @@ class SolisAPI(ComponentBase):
 
         self.log(f"Solis API: Initialized with inverter_sn={self.inverter_sn} automatic={automatic}")
 
+    # ==================== Helper Methods ====================
+
+    def find_inverter_by_sn(self, sn_from_entity_id):
+        """Return the original-case serial number that matches sn_from_entity_id case-insensitively.
+
+        HA normalises entity IDs to lowercase, so serial numbers containing uppercase hex digits
+        (A-F) would never match self.inverter_sn via a plain 'in' check.  This method does a
+        case-insensitive search and returns the canonical (API-casing) SN, or None if not found.
+        """
+        return next((sn for sn in self.inverter_sn if sn.lower() == sn_from_entity_id.lower()), None)
+
     # ==================== Authentication Methods ====================
 
     def _digest(self, body):
@@ -294,6 +306,8 @@ class SolisAPI(ComponentBase):
                     # Check HTTP status
                     if response.status != 200:
                         error_text = await response.text()
+                        reason = "auth_error" if response.status in (401, 403) else "server_error"
+                        record_api_call("solis", False, reason)
                         raise SolisAPIError(f"HTTP error: {error_text}", status_code=response.status)
 
                     # Parse JSON response
@@ -304,14 +318,18 @@ class SolisAPI(ComponentBase):
                     if str(code) != "0":
                         error_msg = response_json.get("msg", "Unknown error")
                         error_detail = SOLIS_API_CODES.get(str(code), f"Unknown code: {code}")
+                        record_api_call("solis", False, "server_error")
                         raise SolisAPIError(f"API error: {error_msg} ({error_detail} - {response_json})", response_code=str(code))
 
                     # Return data field
+                    record_api_call("solis")
                     return response_json.get("data")
 
         except asyncio.TimeoutError as err:
+            record_api_call("solis", False, "connection_error")
             raise SolisAPIError(f"Timeout accessing {url}") from err
         except aiohttp.ClientError as err:
+            record_api_call("solis", False, "connection_error")
             raise SolisAPIError(f"Network error accessing {url}: {str(err)}") from err
 
     async def _with_retry(self, operation, max_retry_time=SOLIS_MAX_RETRY_TIME):
@@ -1345,6 +1363,40 @@ class SolisAPI(ComponentBase):
                 app="solis"
             )
 
+            # PV Voltage (from detail)
+            entity_id = f"sensor.{prefix}_solis_{inverter_sn_lower}_pv1_voltage"
+            pv_voltage = detail.get("uPv1")
+            pv_voltage_unit = detail.get("pvVoltageStr", "V")
+            self.dashboard_item(
+                entity_id,
+                state=pv_voltage,
+                attributes={
+                    "friendly_name": f"Solis {inverter_name} PV1 Voltage",
+                    "unit_of_measurement": pv_voltage_unit,
+                    "device_class": "voltage",
+                    "state_class": "measurement",
+                    "icon": "mdi:lightning-bolt",
+                },
+                app="solis"
+            )
+
+            # PV Voltage (from detail)
+            entity_id = f"sensor.{prefix}_solis_{inverter_sn_lower}_pv2_voltage"
+            pv_voltage = detail.get("uPv2")
+            pv_voltage_unit = detail.get("pvVoltageStr", "V")
+            self.dashboard_item(
+                entity_id,
+                state=pv_voltage,
+                attributes={
+                    "friendly_name": f"Solis {inverter_name} PV2 Voltage",
+                    "unit_of_measurement": pv_voltage_unit,
+                    "device_class": "voltage",
+                    "state_class": "measurement",
+                    "icon": "mdi:lightning-bolt",
+                },
+                app="solis"
+            )
+
             # Product Model
             entity_id = f"sensor.{prefix}_solis_{inverter_sn_lower}_product_model"
             product_model = detail.get("productModel")
@@ -1387,6 +1439,40 @@ class SolisAPI(ComponentBase):
                     "device_class": "power",
                     "state_class": "measurement",
                     "icon": "mdi:battery-charging",
+                },
+                app="solis"
+            )
+
+            # Battery Daily Energy Charged (from detail)
+            entity_id = f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_energy_charged_today"
+            battery_energy_charged = detail.get("batteryTodayChargeEnergy")
+            battery_energy_charged_unit = detail.get("batteryTodayChargeEnergyStr", "kWh")
+            self.dashboard_item(
+                entity_id,
+                state=battery_energy_charged,
+                attributes={
+                    "friendly_name": f"Solis {inverter_name} Battery Energy Charged Today",
+                    "unit_of_measurement": battery_energy_charged_unit,
+                    "device_class": "energy",
+                    "state_class": "total_increasing",
+                    "icon": "mdi:battery-charging",
+                },
+                app="solis"
+            )
+
+            # Battery Daily Energy Discharged (from detail)
+            entity_id = f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_energy_discharged_today"
+            battery_energy_discharged = detail.get("batteryTodayDischargeEnergy")
+            battery_energy_discharged_unit = detail.get("batteryTodayDischargeEnergyStr", "kWh")
+            self.dashboard_item(
+                entity_id,
+                state=battery_energy_discharged,
+                attributes={
+                    "friendly_name": f"Solis {inverter_name} Battery Energy Discharged Today",
+                    "unit_of_measurement": battery_energy_discharged_unit,
+                    "device_class": "energy",
+                    "state_class": "total_increasing",
+                    "icon": "mdi:battery-minus",
                 },
                 app="solis"
             )
@@ -1930,6 +2016,24 @@ class SolisAPI(ComponentBase):
                 except (ValueError, TypeError):
                     self.log("Warn: Failed to convert battery capacity for {}: {}".format(inverter_sn, battery_capacity_ah))  # Debug log
 
+            # Data logger timestamp from inverterDetail API (shows when the data logger last reported to SolisCloud)
+            data_timestamp_ms = detail.get("dataTimestamp")
+            if data_timestamp_ms is not None:
+                try:
+                    data_timestamp_dt = datetime.fromtimestamp(int(data_timestamp_ms) / 1000, tz=UTC)
+                    self.dashboard_item(
+                        f"sensor.{prefix}_solis_{inverter_sn_lower}_data_timestamp",
+                        state=data_timestamp_dt.isoformat(),
+                        attributes={
+                            "friendly_name": f"Solis {inverter_name} Data Logger Timestamp",
+                            "device_class": "timestamp",
+                            "icon": "mdi:clock-check-outline",
+                        },
+                        app="solis"
+                    )
+                except (ValueError, TypeError, OSError):
+                    self.log(f"Warn: Failed to parse dataTimestamp for {inverter_sn}: {data_timestamp_ms}")
+
     # ==================== Control Methods ====================
 
     async def set_storage_mode_if_needed(self, inverter_sn, mode):
@@ -2004,9 +2108,11 @@ class SolisAPI(ComponentBase):
             inverter_sn = parts[0]
             field = "_".join(parts[1:])
 
-            # Validate inverter exists
-            if inverter_sn not in self.inverter_sn:
-                self.log(f"Warn: Solis API: Unknown inverter {inverter_sn} in select_event")
+            # Validate inverter exists (case-insensitive: HA normalises entity IDs to lowercase,
+            # so SNs containing uppercase hex digits A-F would never match otherwise)
+            inverter_sn = self.find_inverter_by_sn(inverter_sn)
+            if inverter_sn is None:
+                self.log(f"Warn: Solis API: Unknown inverter {parts[0]} in select_event")
                 return
 
             # Handle storage mode
@@ -2123,9 +2229,11 @@ class SolisAPI(ComponentBase):
             inverter_sn = parts[0]
             field = "_".join(parts[1:])
 
-            # Validate inverter exists
-            if inverter_sn not in self.inverter_sn:
-                self.log(f"Warn: Solis API: Unknown inverter {inverter_sn} in number_event")
+            # Validate inverter exists (case-insensitive: HA normalises entity IDs to lowercase,
+            # so SNs containing uppercase hex digits A-F would never match otherwise)
+            inverter_sn = self.find_inverter_by_sn(inverter_sn)
+            if inverter_sn is None:
+                self.log(f"Warn: Solis API: Unknown inverter {parts[0]} in number_event")
                 return
 
             # Convert value to string for API
@@ -2324,9 +2432,11 @@ class SolisAPI(ComponentBase):
             inverter_sn = parts[0]
             field = "_".join(parts[1:])
 
-            # Validate inverter exists
-            if inverter_sn not in self.inverter_sn:
-                self.log(f"Warn: Solis API: Unknown inverter {inverter_sn} in switch_event")
+            # Validate inverter exists (case-insensitive: HA normalises entity IDs to lowercase,
+            # so SNs containing uppercase hex digits A-F would never match otherwise)
+            inverter_sn = self.find_inverter_by_sn(inverter_sn)
+            if inverter_sn is None:
+                self.log(f"Warn: Solis API: Unknown inverter {parts[0]} in switch_event")
                 return
 
             # Handle charge slot enables

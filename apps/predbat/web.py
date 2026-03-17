@@ -59,6 +59,7 @@ from web_helper import (
     get_entity_control_css,
     get_entity_css,
     get_entity_js,
+    get_refresh_inverter_js,
     get_restart_button_js,
     get_browse_css,
     get_entity_detailed_row_js,
@@ -73,6 +74,8 @@ from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA
 from predbat import THIS_VERSION
 from component_base import ComponentBase
 from config import APPS_SCHEMA
+from web_metrics_dashboard import get_metrics_dashboard_css, get_metrics_dashboard_body
+from predbat_metrics import metrics_handler, metrics_json_handler, metrics, PROMETHEUS_AVAILABLE
 
 ROOT_YAML_KEY = "pred_bat"
 
@@ -149,6 +152,7 @@ class WebInterface(ComponentBase):
         app.router.add_post("/plan_override", self.html_plan_override)
         app.router.add_post("/rate_override", self.html_rate_override)
         app.router.add_post("/restart", self.html_restart)
+        app.router.add_post("/inverter_refresh", self.html_inverter_refresh)
         app.router.add_get("/api/state", self.html_api_get_state)
         app.router.add_get("/api/ping", self.html_api_ping)
         app.router.add_post("/api/state", self.html_api_post_state)
@@ -163,6 +167,9 @@ class WebInterface(ComponentBase):
         app.router.add_get("/api/internals", self.html_api_internals)
         app.router.add_get("/api/internals/download", self.html_api_internals_download)
         app.router.add_get("/api/status", self.html_api_get_status)
+        app.router.add_get("/metrics", metrics_handler)
+        app.router.add_get("/metrics/json", metrics_json_handler)
+        app.router.add_get("/metrics_dashboard", self.html_metrics_dashboard)
 
         # Notify plugin system that web interface is ready
         if hasattr(self.base, "plugin_system") and self.base.plugin_system:
@@ -455,7 +462,7 @@ class WebInterface(ComponentBase):
 
         return html
 
-    def get_status_html(self, status, version):
+    def get_status_html(self, version):
         text = ""
         if not self.base.dashboard_index:
             text += "<h2>Loading please wait...</h2>"
@@ -479,13 +486,20 @@ class WebInterface(ComponentBase):
             self.log("Error checking if Predbat is running: {}".format(e))
             is_running = False
 
-        last_updated = self.get_state_wrapper("predbat.status", attribute="last_updated", default=None)
+        status_entity = self.prefix + ".status"
+        last_updated = self.get_state_wrapper(status_entity, attribute="last_updated", default=None)
+        status = self.get_state_wrapper(status_entity, default="Unknown")
+        detail = self.get_state_wrapper(status_entity, attribute="detail", default="")
+        debug = self.get_state_wrapper(status_entity, attribute="debug", default="")
+        status_full = status + " " + detail
+        debug_escaped = str(debug).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+        debug_title = ' title="{}"'.format(debug_escaped) if debug else ""
         if status and (("Warn:" in status) or ("Error:" in status)):
-            text += "<tr><td>Status</td><td bgcolor=#ff7777>{}</td></tr>\n".format(status)
+            text += "<tr><td>Status</td><td bgcolor=#ff7777{}>{}</td></tr>\n".format(debug_title, status_full)
         elif not is_running:
-            text += "<tr><td colspan='2' bgcolor='#ff7777'>{} (unhealthy)</td></tr>\n".format(status)
+            text += "<tr><td colspan='2' bgcolor='#ff7777'{}>{} (unhealthy)</td></tr>\n".format(debug_title, status_full)
         else:
-            text += "<tr><td>Status</td><td>{}</td></tr>\n".format(status)
+            text += "<tr><td>Status</td><td{}>{}</td></tr>\n".format(debug_title, status_full)
         text += "<tr><td>Last Updated</td><td>{}</td></tr>\n".format(last_updated)
         text += "<tr><td>Version</td><td>{}</td></tr>\n".format(version)
 
@@ -513,6 +527,14 @@ class WebInterface(ComponentBase):
         toggle_class = "toggle-switch active" if read_only else "toggle-switch"
         text += f'<button class="{toggle_class}" type="button" onclick="toggleSwitch(this, \'set_read_only\')"></button>'
         text += "</form></td></tr>\n"
+
+        # Editable Predbat Active field
+        predbat_active, ignore = self.get_ha_config("active", None)
+        text += "<tr><td>Predbat Active</td><td>"
+        text += f'<form style="display: inline;" method="post" action="./dash">'
+        toggle_class = "toggle-switch active" if predbat_active else "toggle-switch"
+        text += f'<button class="{toggle_class}" type="button" onclick="toggleSwitch(this, \'active\')"></button>'
+        text += "</form></td></tr>\n"
         if self.arg_errors:
             count_errors = len(self.arg_errors)
             text += "<tr><td>Config</td><td bgcolor=#ff7777>apps.yaml has {} errors</td></tr>\n".format(count_errors)
@@ -538,6 +560,12 @@ class WebInterface(ComponentBase):
 
         # Add power flow diagram
         text += "<h2>Power Flow</h2>\n"
+        text += """<div style="margin-bottom: 8px; display: flex; align-items: center; gap: 10px;">
+            <button id="inverterRefreshBtn" onclick="refreshInverterData()" style="background-color: #2196F3; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold;">Refresh</button>
+            <span id="inverterRefreshStatus" style="font-size: 13px; color: #666;"></span>
+        </div>
+        """
+        text += get_refresh_inverter_js()
         text += self.get_power_flow_diagram()
 
         # Text description of the plan
@@ -2335,7 +2363,7 @@ chart.render();
         text += get_dashboard_css()
         text += get_dashboard_collapsible_js()
         text += "<body>\n"
-        text += self.get_status_html(self.base.current_status, THIS_VERSION)
+        text += self.get_status_html(THIS_VERSION)
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
@@ -2353,7 +2381,7 @@ chart.render();
                     # Update mode - it's a select type
                     entity_id = f"select.{self.prefix}_{key}"
                     await self.base.ha_interface.set_state_external(entity_id, value)
-                elif key in ["debug_enable", "set_read_only"]:
+                elif key in ["debug_enable", "set_read_only", "active"]:
                     # Update switches - convert to boolean
                     entity_id = f"switch.{self.prefix}_{key}"
                     bool_value = value == "on"
@@ -2600,13 +2628,14 @@ chart.render();
             text += self.render_chart(series_data, "kW", "ML Load & PV Power with Temperature", now_str, extra_yaxis=secondary_axis)
         elif chart == "Savings":
             # Get daily savings data (historical)
-            savings_predbat_hist = history_attribute(self.get_history_wrapper(self.prefix + ".savings_yesterday_predbat", 28, required=False), daily=True, offset_days=-1, pounds=True)
-            savings_pvbat_hist = history_attribute(self.get_history_wrapper(self.prefix + ".savings_yesterday_pvbat", 28, required=False), daily=True, offset_days=-1, pounds=True)
-            cost_yesterday_hist = history_attribute(self.get_history_wrapper(self.prefix + ".cost_yesterday", 28, required=False), daily=True, offset_days=-1, pounds=True)
+            # first=False ensures we use the last (most recent) update per day, not a stale midnight echo
+            savings_predbat_hist = history_attribute(self.get_history_wrapper(self.prefix + ".savings_yesterday_predbat", 28, required=False), daily=True, offset_days=-1, pounds=True, first=False)
+            savings_pvbat_hist = history_attribute(self.get_history_wrapper(self.prefix + ".savings_yesterday_pvbat", 28, required=False), daily=True, offset_days=-1, pounds=True, first=False)
+            cost_yesterday_hist = history_attribute(self.get_history_wrapper(self.prefix + ".cost_yesterday", 28, required=False), daily=True, offset_days=-1, pounds=True, first=False)
 
             # Get cumulative/total savings over time (historical)
-            savings_total_predbat_hist = history_attribute(self.get_history_wrapper(self.prefix + ".savings_total_predbat", 28, required=False), daily=True, pounds=True)
-            savings_total_pvbat_hist = history_attribute(self.get_history_wrapper(self.prefix + ".savings_total_pvbat", 28, required=False), daily=True, pounds=True)
+            savings_total_predbat_hist = history_attribute(self.get_history_wrapper(self.prefix + ".savings_total_predbat", 28, required=False), daily=True, pounds=True, first=False)
+            savings_total_pvbat_hist = history_attribute(self.get_history_wrapper(self.prefix + ".savings_total_pvbat", 28, required=False), daily=True, pounds=True, first=False)
 
             series_data = [
                 # Daily savings (bars) on primary axis
@@ -3132,8 +3161,8 @@ chart.render();
                 compare_hist[id] = {}
                 result = self.base.comparison.get_comparison(id)
                 if result:
-                    compare_hist[id]["cost"] = history_attribute(self.get_history_wrapper(result["entity_id"], 28), daily=True, pounds=True)
-                    compare_hist[id]["metric"] = history_attribute(self.get_history_wrapper(result["entity_id"], 28), state_key="metric", attributes=True, daily=True, pounds=True)
+                    compare_hist[id]["cost"] = history_attribute(self.get_history_wrapper(result["entity_id"], 28, required=False), daily=True, pounds=True)
+                    compare_hist[id]["metric"] = history_attribute(self.get_history_wrapper(result["entity_id"], 28, required=False), state_key="metric", attributes=True, daily=True, pounds=True)
 
         compare_list = self.get_arg("compare_list", [])
 
@@ -3934,6 +3963,18 @@ document.addEventListener('DOMContentLoaded', function() {
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
+    async def html_inverter_refresh(self, request):
+        """
+        Handle inverter refresh request by resetting the last fetch time
+        """
+        try:
+            self.log("Inverter refresh requested from web interface")
+            self.base.inverter_data_last_fetch = None
+            return web.json_response({"success": True, "message": "Inverter refresh initiated"})
+        except Exception as e:
+            self.log(f"ERROR: Failed to initiate inverter refresh: {str(e)}")
+            return web.json_response({"success": False, "message": str(e)}, status=500)
+
     async def html_restart(self, request):
         """
         Handle restart request by setting fatal_error to trigger restart
@@ -4435,6 +4476,36 @@ document.addEventListener('DOMContentLoaded', function() {
         except Exception as e:
             self.log(f"Error downloading file: {str(e)}")
             return web.Response(text=f"Error downloading file: {str(e)}", status=500)
+
+    async def html_metrics_dashboard(self, request):
+        """
+        Return the Metrics Dashboard page rendered inside the standard PredBat web shell.
+        """
+        self.default_page = "./metrics_dashboard"
+
+        if not PROMETHEUS_AVAILABLE:
+            text = self.get_header("Predbat Metrics", refresh=0)
+            text += "<body>\n"
+            text += """<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh;text-align:center;padding:2rem;">
+<h1>Metrics Dashboard Unavailable</h1>
+<p><code>prometheus_client</code> is not installed.</p>
+<p>Install it with: <code>pip install prometheus_client</code></p>
+<p style="margin-top:1.5rem;"><a href="./dash" style="padding:10px 20px;background:#4CAF50;color:white;text-decoration:none;border-radius:4px;font-size:16px;">&larr; Back to Dashboard</a></p>
+</div>
+"""
+            text += "</body></html>\n"
+            return web.Response(text=text, content_type="text/html")
+
+        import json as _json
+
+        data_json = _json.dumps(metrics().to_dict())
+
+        text = self.get_header("Predbat Metrics", refresh=0)
+        text += "<body>\n"
+        text += get_metrics_dashboard_css()
+        text += get_metrics_dashboard_body(data_json)
+        text += "</body></html>\n"
+        return web.Response(content_type="text/html", text=text)
 
     async def html_internals(self, request):
         """

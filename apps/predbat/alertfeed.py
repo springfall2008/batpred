@@ -22,6 +22,7 @@ from datetime import datetime
 from utils import str2time, dp1
 import xml.etree.ElementTree as etree
 from component_base import ComponentBase
+from predbat_metrics import record_api_call
 
 
 class AlertFeed(ComponentBase):
@@ -260,6 +261,7 @@ class AlertFeed(ComponentBase):
                     status_code = response.status
                     if status_code not in [200, 201]:
                         self.log("Warn: AlertFeed: Error downloading weather alert data from URL {}, error code {}".format(url, status_code))
+                        record_api_call("alertfeed", False, "server_error")
                         return None
 
                     text = await response.text()
@@ -269,10 +271,12 @@ class AlertFeed(ComponentBase):
                     self.alert_cache[url] = {}
                     self.alert_cache[url]["stamp"] = now
                     self.alert_cache[url]["data"] = text
+                    record_api_call("alertfeed")
                     self.update_success_timestamp()
                     return text
         except (aiohttp.ClientError, Exception) as e:
             self.log("Warn: AlertFeed: Exception downloading weather alert data from URL {}: {}".format(url, e))
+            record_api_call("alertfeed", False, "connection_error")
             return None
 
     def parse_alert_data(self, xml):

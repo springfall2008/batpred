@@ -36,13 +36,14 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.33.10"
+THIS_VERSION = "v8.34.5"
 
 # fmt: off
-PREDBAT_FILES = ["predbat.py", "const.py", "hass.py", "config.py", "prediction.py", "gecloud.py", "utils.py", "inverter.py", "ha.py", "download.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py", "execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "temperature.py", "web_mcp.py", "component_base.py", "axle.py", "solax.py", "solis.py", "unit_test.py", "load_ml_component.py", "load_predictor.py"]
+PREDBAT_FILES = ["predbat.py", "const.py", "hass.py", "config.py", "prediction.py", "gecloud.py", "utils.py", "inverter.py", "ha.py", "download.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py", "execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "temperature.py", "web_mcp.py", "component_base.py", "axle.py", "solax.py", "solis.py", "unit_test.py", "load_ml_component.py", "load_predictor.py", "oauth_mixin.py", "predbat_metrics.py", "web_metrics_dashboard.py"]
 # fmt: on
 
 from download import predbat_update_move, predbat_update_download, check_install
+from const import MINUTE_WATT
 
 # Only do the self-install/self-update logic if we are NOT compiled.
 if not IS_COMPILED:
@@ -492,7 +493,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.high_export_rates = []
         self.cost_today_sofar = 0
         self.carbon_today_sofar = 0
-        self.octopus_slots = []
         self.octopus_free_slots = []
         self.octopus_saving_slots = []
         self.car_charging_slots = []
@@ -627,7 +627,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.rate_slots = []
         self.low_rates = []
         self.high_export_rates = []
-        self.octopus_slots = []
         self.axle_sessions = []
         self.cost_today_sofar = 0
         self.carbon_today_sofar = 0
@@ -666,7 +665,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.rate_slots = []
         self.low_rates = []
         self.high_export_rates = []
-        self.octopus_slots = []
+        self.octopus_slots = [[] for _ in range(8)]
         self.cost_today_sofar = 0
         self.carbon_today_sofar = 0
         self.import_today = {}
@@ -723,6 +722,48 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.log("--------------- PredBat - update at {} with clock skew {} minutes, minutes now {}".format(now_utc, skew, self.minutes_now))
 
     # @profile
+    def _emit_snapshot_metrics(self):
+        """Emit point-in-time metrics after each update cycle."""
+        from predbat_metrics import metrics
+
+        m = metrics()
+
+        m.up.labels(version=THIS_VERSION).set(1)
+        m.last_update_timestamp.set_to_current_time()
+
+        # Plan age
+        if self.plan_last_updated:
+            plan_age = self.now_utc - self.plan_last_updated
+            m.plan_age_minutes.set(plan_age.total_seconds() / 60.0)
+
+        # Battery state
+        m.battery_soc_kwh.set(self.soc_kw)
+        m.battery_soc_percent.set(self.soc_percent)
+        m.battery_max_kwh.set(self.soc_max)
+        m.charge_rate_kw.set(self.charge_rate_now * MINUTE_WATT / 1000.0)
+        m.discharge_rate_kw.set(self.discharge_rate_now * MINUTE_WATT / 1000.0)
+        m.grid_power.set(self.grid_power / 1000.0)
+        m.battery_power.set(self.battery_power / 1000.0)
+        m.load_power.set(self.load_power / 1000.0)
+        m.pv_power.set(self.pv_power / 1000.0)
+
+        # Currency symbol
+        m.currency_symbol = self.currency_symbols[0]
+
+        # Cost and savings
+        m.cost_today.set(self.cost_today_sofar)
+        m.savings_today_pvbat.set(self.savings_today_pvbat)
+        m.savings_today_actual.set(self.savings_today_actual)
+        m.savings_today_predbat.set(self.savings_today_predbat)
+
+        # Config validity
+        m.config_valid.set(0 if self.arg_errors else 1)
+        m.config_warnings.set(len(self.arg_errors) if self.arg_errors else 0)
+
+        # Errors
+        if self.had_errors:
+            m.errors_total.labels(type="general").inc()
+
     def update_pred(self, scheduled=True):
         """
         Update the prediction state, everything is called from here right now
@@ -1027,6 +1068,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         if self.plugin_system:
             self.plugin_system.call_hooks("on_update")
 
+        # Emit snapshot metrics (no-ops when prometheus_client absent)
+        self._emit_snapshot_metrics()
+
         if self.comparison:
             if (scheduled and self.minutes_now < RUN_EVERY) or self.get_arg("compare_active", False):
                 # Compare tariffs either when triggered or daily at midnight
@@ -1047,6 +1091,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             self.pv_forecast_minute10_step = {}
 
         gc.collect()
+
+        # Schedule inverter update for 30 seconds time to allow the inverter to process the changes we just made before we fetch the data again
+        # This allows the power flow to update for the user more quickly.
+        self.inverter_data_last_fetch = datetime.now() - timedelta(seconds=INVERTER_QUICK_UPDATE_SECONDS) + timedelta(seconds=30)
 
     async def async_download_predbat_version(self, version):
         """
@@ -1156,6 +1204,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                 expected_types = expected_type.split("|")
                 allowed = spec.get("allowed", None)
                 entries = spec.get("entries", None)
+                optional_entries = spec.get("optional_entries", False)
                 required_entries = None
                 matches = False
                 if entries is not None:
@@ -1166,15 +1215,17 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
 
                     if isinstance(value, list):
                         if len(value) < required_entries:
-                            self.log("Warn: Validation of apps.yaml found configuration item '{}' has {} entries, expected {} based on {}".format(name, len(value), required_entries, entries))
-                            self.arg_errors[name] = "Invalid number of entries, expected {}".format(required_entries)
+                            if not optional_entries:
+                                self.log("Warn: Validation of apps.yaml found configuration item '{}' has {} entries, expected {} based on {}".format(name, len(value), required_entries, entries))
+                                self.arg_errors[name] = "Invalid number of entries, expected {}".format(required_entries)
+                                errors += 1
+                                continue
+                    elif required_entries > 1:
+                        if not optional_entries:
+                            self.log("Warn: Validation of apps.yaml found configuration item '{}' is not a list, but requires {} entries based on {}".format(name, required_entries, entries))
+                            self.arg_errors[name] = "Invalid type, expected list"
                             errors += 1
                             continue
-                    elif required_entries > 1:
-                        self.log("Warn: Validation of apps.yaml found configuration item '{}' is not a list, but requires {} entries based on {}".format(name, required_entries, entries))
-                        self.arg_errors[name] = "Invalid type, expected list"
-                        errors += 1
-                        continue
 
                 for expected_type in expected_types:
                     if expected_type == "none":
@@ -1435,10 +1486,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                 return False
 
         # Read predbat.status
-        predbat_error = self.get_state_wrapper("predbat.status", attribute="error", default=True)
+        status_entity = self.prefix + ".status"
+        predbat_error = self.get_state_wrapper(status_entity, attribute="error", default=True)
         if predbat_error is None or predbat_error:
             return False
-        predbat_last_updated = self.get_state_wrapper("predbat.status", attribute="last_updated", default=None)
+        predbat_last_updated = self.get_state_wrapper(status_entity, attribute="last_updated", default=None)
         if predbat_last_updated is None:
             return False
 
@@ -1606,20 +1658,24 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                 self.prediction_started = False
         elif not self.prediction_started:
             time_now = datetime.now()
-            if self.inverter_data_last_fetch:
-                tdiff = time_now - self.inverter_data_last_fetch
-                if tdiff.total_seconds() >= INVERTER_QUICK_UPDATE_SECONDS:
-                    # Perform quick update of inverter data for the dashboard only
-                    self.prediction_started = True
-                    try:
-                        self.quick_inverter_data_update()
-                    except Exception as e:
-                        self.log("Error: Exception raised {}".format(e))
-                        self.log("Error: " + traceback.format_exc())
-                        self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc(), had_errors=True)
-                        raise e
-                    finally:
-                        self.prediction_started = False
+            inverter_data_last_fetch = self.inverter_data_last_fetch
+            if inverter_data_last_fetch is None:
+                # If we have never fetched inverter data, set the last fetch time to the past to trigger an update
+                inverter_data_last_fetch = time_now - timedelta(hours=24)
+            # Find the time since we last fetched inverter data and if it is greater than the quick update threshold, perform a quick update of the inverter data.
+            tdiff = time_now - inverter_data_last_fetch
+            if tdiff.total_seconds() >= INVERTER_QUICK_UPDATE_SECONDS:
+                # Perform quick update of inverter data for the dashboard only
+                self.prediction_started = True
+                try:
+                    self.quick_inverter_data_update()
+                except Exception as e:
+                    self.log("Error: Exception raised {}".format(e))
+                    self.log("Error: " + traceback.format_exc())
+                    self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc(), had_errors=True)
+                    raise e
+                finally:
+                    self.prediction_started = False
 
     def check_entity_refresh(self):
         """
