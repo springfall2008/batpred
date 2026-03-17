@@ -84,7 +84,7 @@ class CarbonAPI(ComponentBase):
                                               collected_data.append({"from": from_time.strftime(TIME_FORMAT_HA), "to": to_time.strftime(TIME_FORMAT_HA), "intensity": intensity})
                                     else:
                                         self.failures_total += 1
-                                        self.log("Warn: Carbon API: No data points found in response for postcode {} and date {}".format(postcode, date))                   
+                                        self.log("Warn: Carbon API: No data points found in response for postcode {} and date {}".format(postcode, date))
                                 else:  # Carbon API returns 200 but no data if the postcode or date can't be found
                                     self.failures_total += 1
                                     self.log("Error: Carbon API: No carbon data returned for postcode {} and date {}".format(postcode, date))
