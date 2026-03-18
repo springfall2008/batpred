@@ -1529,7 +1529,7 @@ Skews the setting of the discharge slot registers vs the predicted start time
 Default value 1.0. Multiple battery size scales can be entered, one per inverter on separate lines.
 
 This setting is used to scale the battery-reported SoC kWh to make it appear bigger or larger than it is.
-As the GivEnergy inverters treat all batteries attached to an inverter as in effect one giant battery,
+With GivEnergy inverters (and possibly other inverters) they treat all batteries attached to an inverter as in effect one giant battery,
 if you have multiple batteries on an inverter that need scaling you should enter a composite scaling value for all batteries attached to the inverter.
 
 *TIP:* If you have a GivEnergy 2.6 or 5.2kWh battery then it will have an 80% depth of discharge but it will falsely report its capacity as being the 100% size,
@@ -1640,7 +1640,9 @@ If the battery_charge_power_curve option is *not* set in `apps.yaml` and Predbat
 or an edit being made to `apps.yaml`), then Predbat will automatically calculate the charging curve for you from historical battery charging information.
 
 You should look at the [Predbat logfile](output-data.md#predbat-logfile) to find the predicted battery charging curve and copy/paste it into your `apps.yaml` file.
-The logfile will also include a recommendation for how to set your **battery_rate_max_scaling** setting in HA.
+
+The logfile *may* also include a recommendation for how to set your **input_number.battery_rate_max_scaling**/**_scaling_discharge** setting in HA if predbat detects that your inverter is charging/discharging at a different maximum rate than is configured in `apps.yaml`.<BR>
+If you don't get such a message then Predbat didn't detect any charge/discharge rate discrepancy.
 
 The YouTube video [charging curve and low power charging](https://youtu.be/L2vY_Vj6pQg)
 explains how the curve works and shows how Predbat automatically creates it.
