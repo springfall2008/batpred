@@ -120,7 +120,7 @@ metric_octopus_gas is (as above) only required to be configured if you are using
 
 If you do not have an export rate or are not on the Octopus Go tariff, then the appropriate lines can be commented out in apps.yaml.
 
-NOTE: Predbat using the Octopus integration rates relies upon the day rate events being enabled (see above) and the events and the sensor found by metric_octopus_xxx in `apps.yaml` being similarly named.<BR>
+Note: Predbat using the Octopus integration rates relies upon the day rate events being enabled (see above) and the events and the sensor found by metric_octopus_xxx in `apps.yaml` being similarly named.<BR>
 There have been occasions with some Octopus Integration installations where the event name is as above but the sensor name has a different prefix, e.g. sensor.electricity_METER_NUMBER_current_rate and not sensor.octopus_energy_electricity_METER_NUMBER_current_rate.<BR>
 If this is the case then the sensor must be renamed to the correct format so that Predbat can function correctly.
 
@@ -150,7 +150,7 @@ Like the electricity rates, this is set in the `apps.yaml` template to a regular
 
 When a saving session is available it will be automatically joined by Predbat and should then appear as a joined session within the next 30 minutes.
 
-NOTE: Predbat automatically joining the saving session relies upon the event being enabled and Predbat being able to find the saving session event as 'event.octopus_energy_ACCOUNT_ID_octoplus_saving_session_events' - there have been occasions
+Note: Predbat automatically joining the saving session relies upon the event being enabled and Predbat being able to find the saving session event as 'event.octopus_energy_ACCOUNT_ID_octoplus_saving_session_events' - there have been occasions
 with some Octopus Integration installations where the event name is different.  If this is the case then the event must be renamed to the correct format that Predbat can function correctly.
 
 In the Predbat plan, for joined saving sessions the energy rates for import and export will be overridden by adding the assumed saving rate to your normal rate.

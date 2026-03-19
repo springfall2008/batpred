@@ -1756,7 +1756,7 @@ chart.render();
 
             # Get query parameters
             args = request.query
-            filter_type = args.get("filter", "warnings")  # all, warnings, errors
+            filter_type = args.get("filter", "warnings")  # all, info, warnings, errors
             since_line = int(args.get("since", 0))  # Line number to start from
             max_lines = int(args.get("max_lines", 1024))  # Maximum lines to return
             search_term = args.get("search", "").lower().strip()  # Search term
@@ -1782,16 +1782,19 @@ chart.render();
 
                 # Apply log level filtering first
                 include_line = False
-                line_type = "info"
+                line_type = "log"
 
-                if "error" in line_lower:
+                if "error" in line_lower:  # any error log lines will appear on all, info, warning and error tabs
                     line_type = "error"
                     include_line = True
-                elif "warn" in line_lower:
+                elif "warn" in line_lower:  # warning log lines appear on all and warning tabs
                     line_type = "warning"
                     include_line = filter_type in ["all", "warnings"]
-                else:
+                elif "info" in line_lower:  # info log lines appear on all and info tabs
                     line_type = "info"
+                    include_line = filter_type in ["all", "info"]
+                else:  # all other log lines appear on just the all tab
+                    line_type = "log"
                     include_line = filter_type == "all"
 
                 # Apply search filter if search term is provided
@@ -2114,6 +2117,7 @@ chart.render();
         args = request.query
         errors = False
         warnings = False
+        info = False
 
         if "errors" in args or (not args and self.default_log == "errors"):
             errors = True
@@ -2121,9 +2125,12 @@ chart.render();
         elif "warnings" in args or (not args and self.default_log == "warnings"):
             warnings = True
             self.default_log = "warnings"
+        elif "info" in args or (not args and self.default_log == "info"):
+            info = True
+            self.default_log = "info"
         elif "all" in args or (not args and self.default_log == "all"):
             self.default_log = "all"
-        else:
+        else:  # if no log type parameter specified, open in warnings tab by default
             self.default_log = "warnings"
             warnings = True
 
@@ -2134,16 +2141,25 @@ chart.render();
 
         if errors:
             active_all = ""
+            active_info = ""
             active_warnings = ""
             active_errors = "active"
             filter_type = "errors"
         elif warnings:
             active_all = ""
+            active_info = ""
             active_warnings = "active"
             active_errors = ""
             filter_type = "warnings"
+        elif info:
+            active_all = ""
+            active_info = "active"
+            active_warnings = ""
+            active_errors = ""
+            filter_type = "info"
         else:
             active_all = "active"
+            active_info = ""
             active_warnings = ""
             active_errors = ""
             filter_type = "all"
@@ -2151,6 +2167,7 @@ chart.render();
         text += '<div class="log-menu">'
         text += "<h3>Logfile</h3> "
         text += f'<a href="./log?all" class="{active_all}">All</a>'
+        text += f'<a href="./log?info" class="{active_info}">Info</a>'
         text += f'<a href="./log?warnings" class="{active_warnings}">Warnings</a>'
         text += f'<a href="./log?errors" class="{active_errors}">Errors</a>'
         text += '<a href="./debug_log">Download</a>'

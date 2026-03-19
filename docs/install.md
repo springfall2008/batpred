@@ -72,7 +72,7 @@ Go to settings, Apps, select Install app, three dots on the top right, Repositor
 '<https://github.com/springfall2008/predbat_addon>' to the list and click close. Now refresh the list and find Predbat, click on it and click 'install'.
 Ensure 'start on boot' is enabled and click 'start'.
 
-**NOTE:** Throughout the rest of the Predbat documentation you will find reference to the Predbat configuration file `apps.yaml` and the Predbat logfile.
+**Note:** Throughout the rest of the Predbat documentation you will find reference to the Predbat configuration file `apps.yaml` and the Predbat logfile.
 
 These are located under the Home Assistant directory `/addon_configs/6adb4f0d_predbat` which contains:
 

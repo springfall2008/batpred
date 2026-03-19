@@ -266,7 +266,7 @@ In future versions of Predbat, AppDaemon will be removed.
   ha_key: 'xxxxxxxxxxx'
 ```
 
-**NOTE:** It's recommended to store `ha_key` in `secrets.yaml` and reference it as `ha_key: !secret ha_key` - see [Storing secrets](#storing-secrets).
+**Note:** It's recommended to store `ha_key` in `secrets.yaml` and reference it as `ha_key: !secret ha_key` - see [Storing secrets](#storing-secrets).
 
 *TIP:* You can replace *homeassistant.local* with the IP address of your Home Assistant server if you have it set to a fixed IP address.
 This will remove the need for a DNS lookup of the IP address every time Predbat talks to Home Assistant and may improve reliability as a result.
@@ -422,7 +422,7 @@ you will need to wait until you have a few days of history established (at least
   ge_cloud_data: true
 ```
 
-**NOTE:** It's recommended to store `ge_cloud_key` in `secrets.yaml` and reference it as `ge_cloud_key: !secret givenergy_api_key` - see [Storing secrets](#storing-secrets).
+**Note:** It's recommended to store `ge_cloud_key` in `secrets.yaml` and reference it as `ge_cloud_key: !secret givenergy_api_key` - see [Storing secrets](#storing-secrets).
 
 ### SolaX Cloud Direct
 
@@ -453,7 +453,7 @@ If you set **solax_automatic** to `true`, Predbat will automatically discover yo
   solax_enable_controls: true
 ```
 
-**NOTE:** It's **strongly recommended** to store `solax_client_id` and `solax_client_secret` in `secrets.yaml` and reference them as:
+**Note:** It's **strongly recommended** to store `solax_client_id` and `solax_client_secret` in `secrets.yaml` and reference them as:
 
 ```yaml
   solax_client_id: !secret solax_client_id
@@ -605,7 +605,7 @@ Add the following to your `apps.yaml` to configure the Solis Cloud integration:
 - `solis_base_url` - Solis Cloud API base URL (optional, auto-detects region)
 - `solis_control_enable` - Enable/disable control commands (default: `true`, set to `false` for monitoring only)
 
-**NOTE:** It's strongly recommended to store `api_key` and `api_secret` in `secrets.yaml` and reference them as `!secret solis_api_key` - see [Storing secrets](#storing-secrets).
+**Note:** It's strongly recommended to store `api_key` and `api_secret` in `secrets.yaml` and reference them as `!secret solis_api_key` - see [Storing secrets](#storing-secrets).
 
 #### Important notes (Solis)
 
@@ -778,7 +778,7 @@ Edit if necessary if you have non-standard sensor names:
 If you have an AC-coupled inverter then enter the Home Assistant sensor for your PV inverter.<BR>
 If you don't have any PV panels, comment or delete this line out of `apps.yaml`.
 
-Note: these '_today' entity names must all be *energy* sensors recording electricity measured over a time period, NOT *power* sensors which measure instantaneous power.  They must increase during the day and not have any gaps or reduce in value (other than at midnight).
+**Note:**: these '_today' entity names must all be *energy* sensors recording electricity measured over a time period, NOT *power* sensors which measure instantaneous power.  They must increase during the day and not have any gaps or reduce in value (other than at midnight).
 
 The **load_power_fill_enable** feature helps to improve the accuracy of historical load data by using instantaneous power readings to fill gaps and smooth
 out load_today sensors that update infrequently (e.g., sensors that increment in kWh units may only update every hour). This preprocessing happens before
@@ -1300,7 +1300,7 @@ Uncomment the following Solcast cloud interface settings in `apps.yaml` and set 
   solcast_poll_hours: 8
 ```
 
-**NOTE:** It's recommended to store `solcast_api_key` in `secrets.yaml` and reference it as `solcast_api_key: !secret solcast_api_key` - see [Storing secrets](#storing-secrets).
+**Note:** It's recommended to store `solcast_api_key` in `secrets.yaml` and reference it as `solcast_api_key: !secret solcast_api_key` - see [Storing secrets](#storing-secrets).
 
 Note that by default the Solcast API will be used to download all sites (up to 2 for hobby accounts), if you want to override this set your sites manually using
 **solcast_sites** as an array of site IDs:

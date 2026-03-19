@@ -2254,7 +2254,7 @@ class Fetch:
         self.balance_inverters_threshold_discharge = max(self.get_arg("balance_inverters_threshold_discharge"), 1.0)
 
         if self.set_read_only:
-            self.log("NOTE: Read-only mode is enabled, the inverter controls will not be used!!")
+            self.log("Info: Read-only mode is enabled, the inverter controls will not be used!!")
 
         # Enable load filtering
         self.load_filter_modal = self.get_arg("load_filter_modal")

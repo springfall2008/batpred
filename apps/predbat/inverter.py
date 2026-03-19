@@ -1000,32 +1000,32 @@ class Inverter:
                                     text += "    {} : {}\n".format(key, final_curve[key])
                                     first = False
                             if self.base.battery_charge_power_curve_auto:
-                                self.log("Curve automatically computed as:\n" + text)
+                                self.log("Info: Curve automatically computed as:\n" + text)
                             else:
-                                self.log("{} curve can be entered into apps.yaml or set to auto:\n".format(curve_type) + text)
+                                self.log("Info: {} curve can be entered into apps.yaml or set to auto:\n".format(curve_type) + text)
                             rate_scaling = round(rate_scaling, 2)
                             if discharge:
                                 if rate_scaling != self.base.battery_rate_max_scaling_discharge:
-                                    self.log("Consider setting in HA: input_number.battery_rate_max_scaling_discharge: {} - currently {}".format(rate_scaling, self.base.battery_rate_max_scaling_discharge))
+                                    self.log("Info: Consider setting in HA: input_number.battery_rate_max_scaling_discharge: {} - currently {}".format(rate_scaling, self.base.battery_rate_max_scaling_discharge))
                             else:
                                 if rate_scaling != self.base.battery_rate_max_scaling:
-                                    self.log("Consider setting in HA: input_number.battery_rate_max_scaling: {} - currently {}".format(rate_scaling, self.base.battery_rate_max_scaling))
+                                    self.log("Info: Consider setting in HA: input_number.battery_rate_max_scaling: {} - currently {}".format(rate_scaling, self.base.battery_rate_max_scaling))
                             return final_curve
                         else:
-                            self.log("Note: Found incorrect battery {} curve (was 0), maybe try again when you have more data.".format(curve_type))
+                            self.log("Info: Found incorrect battery {} curve (was 0), maybe try again when you have more data.".format(curve_type))
                     else:
-                        self.log("Note: Found incomplete battery {} curve (no data points), maybe try again when you have more data.".format(curve_type))
+                        self.log("Warn: Found incomplete battery {} curve (no data points), maybe try again when you have more data.".format(curve_type))
                 else:
                     self.log(
-                        "Note: Cannot find battery {} curve (no full rate {} curve found for battery to {}), one of the required settings for {}, {}_rate, battery_power and predbat.status do not have history, check apps.yaml".format(
+                        "Warn: Cannot find battery {} curve (no full rate {} curve found for battery to {}), one of the required settings for {}, {}_rate, battery_power and predbat.status do not have history, check apps.yaml".format(
                             curve_type, curve_type, curve_label, soc_label, curve_type
                         )
                     )
             else:
-                self.log("Note: Cannot find battery {} curve (missing history), one of the required settings for {}, {}_rate, battery_power and predbat.status do not have history, check apps.yaml".format(curve_type, soc_label, curve_type))
-                self.log("Note: Sensor history data lengths: {} {}, {}_rate {}, battery_power {}, predbat_status {}".format(soc_label, len(soc_kwh), curve_type, len(charge_rate), len(battery_power), len(predbat_status)))
+                self.log("Warn: Cannot find battery {} curve (missing history), one of the required settings for {}, {}_rate, battery_power and predbat.status do not have history, check apps.yaml".format(curve_type, soc_label, curve_type))
+                self.log("Warn: Sensor history data lengths: {} {}, {}_rate {}, battery_power {}, predbat_status {}".format(soc_label, len(soc_kwh), curve_type, len(charge_rate), len(battery_power), len(predbat_status)))
         else:
-            self.log("Note: Cannot find battery {} curve (settings missing), one of the required settings for {}, {}_rate and battery_power are missing from apps.yaml".format(curve_type, soc_label, curve_type))
+            self.log("Warn: Cannot find battery {} curve (settings missing), one of the required settings for {}, {}_rate and battery_power are missing from apps.yaml".format(curve_type, soc_label, curve_type))
         return {}
 
     def create_entity(self, entity_name, value, uom=None, device_class="None"):

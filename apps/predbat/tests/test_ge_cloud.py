@@ -371,7 +371,7 @@ def _test_async_get_inverter_data_timeout(my_predbat):
 def _test_async_get_inverter_data_json_error(my_predbat):
     """Test JSON decode error
 
-    NOTE: Potential bug found in gecloud.py lines 1323-1341:
+    Note: Potential bug found in gecloud.py lines 1323-1341:
     When JSONDecodeError occurs, data is set to None (line 1325), but then at
     line 1339-1341, if status_code is 200 and data is None, it returns {} instead
     of None. This means JSON errors are silently ignored and treated as successful
@@ -1852,7 +1852,7 @@ def _test_async_write_inverter_setting_success(my_predbat):
 def _test_async_write_inverter_setting_failure(my_predbat):
     """Test writing inverter setting failure
 
-    NOTE: Potential bug found in gecloud.py lines 938-939:
+    Note: Potential bug found in gecloud.py lines 938-939:
     When response has no 'success' key, data is not set to None, so function returns
     the error response instead of None and doesn't retry. Should missing 'success' key
     trigger retries like {"success": False} does?
@@ -1981,7 +1981,7 @@ def _test_number_event(my_predbat):
 def _test_select_event(my_predbat):
     """Test select event handler with options validation
 
-    NOTE: Potential bug found in gecloud.py line 324:
+    Note: Potential bug found in gecloud.py line 324:
     Code calls validation.startswith() without checking if validation is None first.
     Should check 'if validation and validation.startswith...' to avoid AttributeError.
     """
@@ -3043,7 +3043,7 @@ def _test_load_ge_cache_corrupt_file(my_predbat):
 
 def _test_regname_to_ha(my_predbat):
     """Test register name to HA entity conversion"""
-    # NOTE: Potential bug found - dots are NOT replaced with underscores
+    # Note: Potential bug found - dots are NOT replaced with underscores
     # This could create invalid HA entity names if register names contain dots
     test_cases = [
         ("Battery SOC", "battery_soc"),

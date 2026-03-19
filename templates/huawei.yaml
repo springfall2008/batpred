@@ -278,7 +278,7 @@ pred_bat:
   # Set import and export entity to point to the Octopus Energy plugin import and export sensors
   # automatically matches your meter number assuming you have only one (no need to edit the below)
   # Will be ignored if you don't have the sensor but will error if you do have one and it's incorrect
-  # NOTE: To get detailed energy rates you need to go in and manually enable the following events in HA
+  # Note: To get detailed energy rates you need to go in and manually enable the following events in HA
   #       event.octopus_energy_electricity_xxxxxxxx_previous_day_rates
   #       event.octopus_energy_electricity_xxxxxxxx_current_day_rates
   #       event.octopus_energy_electricity_xxxxxxxx_next_day_rates

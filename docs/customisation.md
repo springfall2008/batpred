@@ -39,7 +39,7 @@ If the **switch.predbat_set_read_only** is set to On then this prevents Predbat 
 Predbat will continue making and updating its prediction plan every 10 minutes (by default), but no inverter changes will be made.
 This is useful if you want to override what Predbat is planning to do (e.g. your own automation), or whilst you are learning how Predbat works before turning it on 'in anger'.
 
-_NOTE: Changing the Predbat mode or the read-only switch will cause Predbat to reset the inverter settings to default, this will disable both charge and discharge, reset charge and discharge rates to full power and reset the reserve to the default setting_
+**Note:** _Changing the Predbat mode or the read-only switch will cause Predbat to reset the inverter settings to default, this will disable both charge and discharge, reset charge and discharge rates to full power and reset the reserve to the default setting_
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/43faa962-6b8a-495a-88f8-f762aa1d55b8)
 
@@ -250,7 +250,7 @@ This can help to slightly improve the plan for tariffs like Agile but can make i
 
 **switch.predbat_calculate_second_pass** (_expert mode_) When turned On causes Predbat to perform a second pass optimisation across all the charge and export windows in time order.
 
-NOTE: This feature is quite slow so may need a higher-performance machine so is turned Off by default.
+Note: This feature is quite slow so may need a higher-performance machine so is turned Off by default.
 
 This can help to slightly improve the plan for tariffs like Agile but can make it worse in some fixed rate tariffs in which you want to force export late.
 
@@ -645,7 +645,7 @@ data:
 
 All the other **select.predbat_manual_XX** controls operate in a similar way.
 
-_NOTE_: once you select a day/time slot from any of the **select.predbat_manual_XX** selectors the selected time slot is immediately marked on the drop-down and you can then make another change.
+**Note:**: once you select a day/time slot from any of the **select.predbat_manual_XX** selectors the selected time slot is immediately marked on the drop-down and you can then make another change.
 Predbat still has to update the plan which it will be doing so in the background, and this can take a few minutes to run (depending on the speed and power of the device you are running Home Assistant on),
 so don't be surprised why the [Predbat plan](predbat-plan-card.md) doesn't change immediately - remember you can see the date/time the plan was last updated on the first row of the plan.
 

@@ -25,7 +25,7 @@ Another option is to include a link on your dashboard using an entities card:
 
 If you are not using the Predbat app then you may be able to access the Web Interface directly on port 5052 (e.g. with a Docker Container or native on your Linux/MAC).  The port number can be changed by setting [web_port in apps.yaml](apps-yaml.md#web-interface).
 
-**NOTE:** The Predbat web interface will not work with the AppDaemon or the Predbat-appdaemon installation methods.
+**Note:** The Predbat web interface will not work with the AppDaemon or the Predbat-appdaemon installation methods.
 
 ## Web Interface Views
 
@@ -120,15 +120,15 @@ Predbat writes detailed logging, status and progress activity information to a l
 
 By default the Log view opens in the Warnings tab which shows a filtered list of Warnings and Errors in the Predbat logfile.
 
-The Errors tab shows a filtered list of logfile Errors, and the All tab shows all entries in the Predbat logfile.
+The Errors tab shows a filtered list of logfile Errors, the Info tab shows a filtered list of Info logfile entries, and the All tab shows all entries in the Predbat logfile.
 
-Normal log messages are coloured Green, Warnings are Orange, and Errors in Red.  The Logfile view shows newest entries at the top and auto-refreshes so as Predbat is executing the most recent logs will appear at the top and the log will scroll downwards.
+Normal and info log messages are coloured Green, Warnings are Orange, and Errors in Red.  The Logfile view shows newest entries at the top and auto-refreshes so as Predbat is executing the most recent logs will appear at the top and the log will scroll downwards.
 
 The Download tab gives the ability to download the logfile.
 
 Further details about the Predbat logfile and its location is [described in the output data document](output-data.md#predbat-logfile).
 
-#### Config View
+### Config View
 
 The Config view provides a way to see and change all of Predbat's configuration entities in Home Assistant.  For each entity is displayed the name, entity type, the current entity value and Predbat's default value for that entity.
 

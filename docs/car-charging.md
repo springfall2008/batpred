@@ -234,7 +234,7 @@ When **ohme_automatic_octopus_intelligent** is set to `true` then Predbat is aut
   ohme_automatic_octopus_intelligent: true
 ```
 
-**NOTE:** It's recommended to store `ohme_password` in `secrets.yaml` and reference it as `ohme_password: !secret ohme_password` - see [Storing secrets](apps-yaml.md#storing-secrets).
+**Note:** It's recommended to store `ohme_password` in `secrets.yaml` and reference it as `ohme_password: !secret ohme_password` - see [Storing secrets](apps-yaml.md#storing-secrets).
 
 ## Car Charging Planning
 
@@ -340,7 +340,7 @@ actions:
 mode: single
 ```
 
-NOTE: [Multiple cars](car-charging.md#multiple-electric-cars) can be planned with Predbat.
+Note: [Multiple cars](car-charging.md#multiple-electric-cars) can be planned with Predbat.
 
 ## Additional Car charging configurations
 
@@ -350,7 +350,7 @@ This is achieved by setting the battery discharge rate to 0 during car charging 
 The home battery can still charge from the grid/solar in either case. Only use this if Predbat knows your car charging plan,
 e.g. you are using Intelligent Octopus or you use the car slots in Predbat to control your car charging.
 
-  *NOTE:* If **switch.predbat_car_energy_reported_load** is set to Off (car outside the CT clamp), this setting has no effect as the battery cannot supply the car directly. Predbat will automatically treat the car as being supplied from the grid/export.
+  *Note:* If **switch.predbat_car_energy_reported_load** is set to Off (car outside the CT clamp), this setting has no effect as the battery cannot supply the car directly. Predbat will automatically treat the car as being supplied from the grid/export.
 
 - **input_number.predbat_car_charging_loss** gives the percentage amount of energy lost when charging the car (load in the home vs energy added to the battery).
 A good setting is 0.08 which is 8%.
