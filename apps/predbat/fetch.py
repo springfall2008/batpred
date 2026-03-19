@@ -562,7 +562,7 @@ class Fetch:
                 self.log("Warn: No history data found for {} : {}".format(entity_id, exc))
                 history = []
 
-            if history and len(history) > 0:
+            if history and len(history) > 0 and len(history[0]) > 0:
                 item = history[0][0]
                 try:
                     last_updated_time = str2time(item["last_updated"])
