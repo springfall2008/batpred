@@ -10,7 +10,7 @@ pred_bat:
   prefix: predbat
 
   # XXX: This is a configuration template, delete this line once you edit your configuration
-  template: True
+  template: true
 
   # Timezone to work in
   timezone: Europe/London
@@ -502,13 +502,14 @@ pred_bat:
   # Multiple triggers can be set at once so in total you could use too much energy if all run
   # Creates an entity called 'binary_sensor.predbat_export_trigger_<name>' which will be turned On when the condition is valid
   # connect this to your automation to start whatever you want to trigger
-  export_triggers:
-     - name: 'large'
-       minutes: 60
-       energy: 1.0
-     - name: 'small'
-       minutes: 15
-       energy: 0.25
+  #
+  # export_triggers:
+  #   - name: 'large'
+  #     minutes: 60
+  #     energy: 1.0
+  #   - name: 'small'
+  #     minutes: 15
+  #     energy: 0.25
 
   # If you have a sensor that gives the energy consumed by your solar diverter then add it here
   # this will make the predictions more accurate. It should be an incrementing sensor, it can reset at midnight or not

@@ -18,6 +18,15 @@ This section of the documentation describes what the different configuration ite
 When you edit `apps.yaml`, the change will automatically be detected and Predbat will be reloaded with the updated file.
 You don't need to restart the Predbat or AppDaemon app for your edits to take effect.
 
+## Templates
+
+You can find template configurations in the following location: <https://github.com/springfall2008/batpred/tree/main/templates>
+
+The GivEnergy GivTCP template will be installed by default but if you are using another inverter please copy [the correct template for your inverter](inverter-setup.md) into the directory
+where your `apps.yaml` is stored, replacing the existing `apps.yaml` file, and modify it from there.
+
+Please read [Inverter Setup](inverter-setup.md) for inverter control software and details of setting `apps.yaml` for non-GivEnergy inverters.
+
 ## Warning! apps.yaml file format
 
 When editing the `apps.yaml` file you must ensure that the file remains correctly formatted.  YAML files are especially finicky about how the file contents are indented
@@ -65,14 +74,70 @@ The indentation of children being two spaces indented from their parents and the
 
 NB: the sequence of entries in `apps.yaml` doesn't matter, as long as the YAML itself is structured correctly you can move things and edit things anywhere in the file.
 
-## Templates
+## Configuration items, entities, lists and regular expressions
 
-You can find template configurations in the following location: <https://github.com/springfall2008/batpred/tree/main/templates>
+In the `apps.yaml` template you will see different configuration entries for Predbat:
 
-The GivEnergy GivTCP template will be installed by default but if you are using another inverter please copy [the correct template for your inverter](inverter-setup.md) into the directory
-where your `apps.yaml` is stored, replacing the existing `apps.yaml` file, and modify it from there.
+- There are entries setting the Predbat configuration item to a fixed value, e.g.:
 
-Please read [Inverter Setup](inverter-setup.md) for inverter control software and details of setting `apps.yaml` for non-GivEnergy inverters
+```yaml
+  template: true
+
+  load_filter_threshold: 30
+```
+
+sets the configuration item **template** to the value `true` and **load_filter_threshold** to the value `30`.
+
+- Entries where the Predbat configuration item is set to point to a Home Assistant sensor name, e.g.:
+
+```yaml
+  battery_temperature_history: sensor.givtcp_battery_stack_1_bms_temperature
+```
+
+sets the configuration item **battery_temperature_history** to the Home Assistant sensor name `sensor.givtcp_battery_stack_1_bms_temperature`.  You should verify that the sensor name is correct and matches your HA setup.
+
+- Entries where the Predbat configuration item is a list of values, e.g.:
+
+```yaml
+  givtcp_rest:
+    - 'http://homeassistant.local:6345'
+    - 'http://homeassistant.local:6346'
+```
+
+note the list items appear on separate lines beneath the configuration item name, with each entry being indented by two spaces, a dash, a space and then the configuration value.
+
+- Entries where the predbat configuration item includes a variable name set earlier in `apps.yaml` that is then expanded, e.g.:
+
+```yaml
+  dno_region: "A"
+  compare_list:
+    - id: 'igo_fixed'
+      name: 'Intelligent GO import/Fixed export'
+      rates_import_octopus_url: 'https://api.octopus.energy/v1/products/INTELLI-VAR-24-10-29/electricity-tariffs/E-1R-INTELLI-VAR-24-10-29-{dno_region}/standard-unit-rates/'
+      rates_export_octopus_url: 'https://api.octopus.energy/v1/products/OUTGOING-VAR-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-24-10-26-{dno_region}/standard-unit-rates/'
+```
+
+the configuration item **dno_region** is firstly set to `A` and then that region name is expanded in the configuration of the Octopus URL's.
+
+- Entries that are regular expressions that are used to link Predbat to Home Assistant entity names where the entity name isn't precisely known.  They're used for example for connecting Predbat to the Solcast integration where the sensor names may vary, and to the Octopus integration where the sensor names contain your account id or MPAN (and are thus not fixed):
+
+```yaml
+  metric_octopus_import: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_rate)'
+```
+
+in this configuration item, the 're:()' denotes a regular expression and **metric_octopus_import** will be set to a Home Assistant sensor name that:
+
+- starts with 'sensor.'
+- then optionally next contains 'octopus_energy_'
+- then has to contain 'electricity_'
+- then contains a string of numbers and letters (that's the `[0-9a-z]` bit) followed by an underscore, another string of numbers and letters
+- and finally ends with '_current_rate'
+
+As another example, the configuration entry for the Solcast day 3 forecast follows the same approach of matching a sensor name that starts with 'sensor.', has an optional 'solcast_', an optional 'pv_forecast_', then has 'forecast_' and must end with either 'day_3' or 'd3':
+
+```yaml
+  pv_forecast_d3: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_3|d3))
+```
 
 ## Checking your apps.yaml
 
@@ -1206,7 +1271,15 @@ As described in the [Predbat installation instructions](install.md#solcast-insta
 in order to predict solar generation and battery charging which can be provided by the Solcast integration.
 
 By default, the template `apps.yaml` is pre-configured to use the [Solcast forecast integration](install.md#solcast-home-assistant-integration-method) for Home Assistant.
-The `apps.yaml` contains regular expressions for the following configuration items that should auto-discover the Solcast forecast entity names.
+The `apps.yaml` contains regular expressions for the following configuration items that should auto-discover the Solcast forecast entity names:
+
+```yaml
+  pv_forecast_today: re:(sensor.(solcast_|)(pv_forecast_|)forecast_today)
+  pv_forecast_tomorrow: re:(sensor.(solcast_|)(pv_forecast_|)forecast_tomorrow)
+  pv_forecast_d3: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_3|d3))
+  pv_forecast_d4: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_4|d4))
+```
+
 They are unlikely to need changing although a few people have reported their entity names don't contain 'solcast' so worth checking, or editing if you have non-standard names:
 
 - **pv_forecast_today** - Entity name for today's Solcast forecast
@@ -1214,7 +1287,7 @@ They are unlikely to need changing although a few people have reported their ent
 - **pv_forecast_d3** - Entity name for Solcast's forecast for the day after tomorrow
 - **pv_forecast_d4** - Entity name for Solcast's forecast for two days after tomorrow
 
-Sensors for d5, d6 & d7 are supported, but not that useful so are not pre-defined in the template.
+Sensors for d5, d6 & d7 are supported by Predbat, but not that useful so are not pre-defined in the template.
 
 If you do not have a PV array then comment out or delete these Solcast lines from `apps.yaml`.
 
@@ -1256,11 +1329,9 @@ If you have multiple PV arrays connected to hybrid inverters or you have AC-coup
 If however, you have a mixed PV array setup with some PV that does not feed into the inverters that Predbat is managing
 (e.g. hybrid GE inverters with older firmware but a separate older FIT array that directly feeds AC into the house),
 then it's recommended that Solcast is only configured for the PV connected to the inverters that Predbat is managing.<BR>
-NB: Gen2, Gen3 and Gen1 hybrid inverters with the 'fast performance' firmware can charge their batteries from excess AC that would be exported,
-so for these inverters, you should configure Solcast with your total solar generation capability.
+NB: Gen2, Gen3 and Gen1 hybrid inverters with the 'fast performance' firmware can charge their batteries from excess AC that would be exported, so for these inverters, you should configure Solcast with your total solar generation capability.
 
-Solcast produces 3 forecasted PV estimates, the 'central' (50% or most likely to occur) PV forecast, the '10%' (1 in 10 more cloud coverage 'worst case') PV forecast,
-and the '90%' (1 in 10 less cloud coverage 'best case') PV forecast.<BR>
+Solcast produces 3 forecasted PV estimates, the 'central' (50% or most likely to occur) PV forecast, the '10%' (1 in 10 more cloud coverage 'worst case') PV forecast, and the '90%' (1 in 10 less cloud coverage 'best case') PV forecast.<BR>
 By default, Predbat will use the central (PV50) estimate and apply to it the **input_number.predbat_pv_metric10_weight** weighting of the 10% (worst case) estimate.
 You can thus adjust the metric10_weight to be more pessimistic about the solar forecast.
 
@@ -1268,9 +1339,8 @@ Predbat models cloud coverage by using the difference between the PV and PV10 fo
 this modulates the PV output predictions up and down over the plan slot duration as if there were passing clouds.
 This can have an impact on planning, especially for things like freeze charging which could assume the PV will cover the house load but it might not due to clouds.
 
-- **pv_estimate** in `apps.yaml` can be used to configure Predbat to always use the 10% forecast by setting the configuration item to '10',
-or '90' to always use the 90% PV estimate (not recommended!).<BR>
-Set to blank or delete / comment out the line to use the default central estimate.
+- **pv_estimate** in `apps.yaml` can be used to configure Predbat to always use the 10% forecast by setting the configuration item to '10', or '90' to always use the 90% PV estimate (not recommended!).<BR>
+Set to blank or delete / comment out the line to use the default central (PV50) estimate.
 
 If **pv_estimate** is set to 10 then **input_number.predbat_pv_metric10_weight** in Home Assistant should be set to 1.0.
 
