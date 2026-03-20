@@ -648,6 +648,8 @@ def clean_incrementing_reverse(data, max_increment=0):
     resets (where it goes back to 0) and make it always increment
     """
     new_data = {}
+    if not data:
+        return new_data
     length = max(data) + 1
 
     increment = 0
