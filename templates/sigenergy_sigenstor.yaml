@@ -76,7 +76,7 @@ pred_bat:
 
   # If you have a hybrid inverter with DC-coupled batteries, solar can charge the battery
   # faster than the AC inverter limit allows. Set this to the max DC charge rate in watts.
-  # Defaults to battery_rate_max if not set.
+  # If not set, Predbat uses the normal AC charge limit (battery_rate_max_charge) and falls back to the existing ECO behavior capped by inverter_limit.
   battery_rate_max_charge_dc:
     - 9200 # 2 x BAT 10
   battery_loss_dc: 0.02
