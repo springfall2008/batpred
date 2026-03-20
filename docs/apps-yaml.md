@@ -925,19 +925,31 @@ If this setting if False then the inverter will not charge the battery and the e
 
 ### **battery_rate_max_charge_dc**
 
-One per inverter (optional).
+Optional, system-wide limit for DC solar charging.  
 
-Controls the way Predbat models your hybrid inverter's DC-coupled solar charging. This does not change the way the inverter is controlled.
+Controls the way Predbat models your hybrid inverter's DC-coupled solar charging. This does not change the way the inverter is controlled.  
 
-On a hybrid inverter, solar panels are connected directly to the DC bus. This means the battery can charge from solar at a higher rate than the AC inverter limit would otherwise allow, because the energy never passes through the AC stage. By default Predbat uses `inverter_limit` to cap all battery charging, which underestimates how fast the battery can fill from solar and can cause Predbat to plan more overnight grid charging than is actually necessary.
+On a hybrid inverter, solar panels are connected directly to the DC bus. This means the battery can charge from solar at a higher rate than the AC inverter limit would otherwise allow, because the energy never passes through the AC stage. By default Predbat uses `inverter_limit` to cap all battery charging, which underestimates how fast the battery can fill from solar and can cause Predbat to plan more overnight grid charging than is actually necessary.  
 
-When set, Predbat will use this value (in watts) as the maximum battery charge rate during ECO mode when solar is available, instead of the AC `inverter_limit`. Grid charging and discharge are unaffected.
+When set, Predbat will treat the configured value as the maximum total battery DC charge rate (in watts) during ECO mode when solar is available, instead of the AC `inverter_limit`. If you provide a YAML list, Predbat will sum the entries to obtain a single system-wide limit. Grid charging and discharge are unaffected.  
 
-The value to use is the maximum DC charge rate of your battery — typically the sum of the maximum charge rates across all battery units. For example, two SigenStor BAT 10.0 units each rated at 4,600W would be set to 9,200W.
+The value to use is the maximum DC charge rate of your battery system — typically the sum of the maximum charge rates across all battery units. For convenience you can either:  
+
+- provide the total as a single scalar value, or  
+- provide a list of per-battery-module values that will be summed.  
+
+For example, two SigenStor BAT 10.0 units each rated at 4,600W have a combined DC charge rate of 9,200W:  
 
 ```yaml
-  battery_rate_max_charge_dc:
-    - 9200
+
+Single scalar value (total DC charge rate)
+battery_rate_max_charge_dc: 9200
+
+Equivalent list of per-module values that will be summed
+
+battery_rate_max_charge_dc:
+- 4600
+- 4600
 ```
 
 **battery_loss_dc** (optional, hybrid inverters only) sets the charging energy loss fraction (i.e. 1 − charging efficiency) for DC solar charging. DC charging bypasses the AC conversion stage so the efficiency is higher than for AC grid charging (`battery_loss`). A typical value is 0.02 (2% loss, ~98% efficient). If not set, Predbat uses `battery_loss` for the DC charging path.

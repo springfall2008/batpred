@@ -2133,7 +2133,12 @@ class Fetch:
                     self.battery_rate_max_charge_dc = None
             else:
                 try:
-                    self.battery_rate_max_charge_dc = float(battery_rate_max_charge_dc_w) / MINUTE_WATT
+                    battery_rate_max_charge_dc_w = float(battery_rate_max_charge_dc_w)
+                    if battery_rate_max_charge_dc_w > 0.0:
+                        self.battery_rate_max_charge_dc = battery_rate_max_charge_dc_w / MINUTE_WATT
+                    else:
+                        self.log("Warn: Ignoring non-positive battery_rate_max_charge_dc value: {}".format(battery_rate_max_charge_dc_w))
+                        self.battery_rate_max_charge_dc = None
                 except (TypeError, ValueError):
                     self.log("Warn: Invalid battery_rate_max_charge_dc value: {}".format(battery_rate_max_charge_dc_w))
                     self.battery_rate_max_charge_dc = None
@@ -2149,7 +2154,11 @@ class Fetch:
         self.battery_loss_discharge = 1.0 - self.get_arg("battery_loss_discharge")
         battery_loss_dc_arg = self.get_arg("battery_loss_dc", None)
         if battery_loss_dc_arg is not None:
-            self.battery_loss_dc = 1.0 - float(battery_loss_dc_arg)
+            try:
+                self.battery_loss_dc = 1.0 - float(battery_loss_dc_arg)
+            except (TypeError, ValueError):
+                self.log("Warn: Invalid battery_loss_dc value: {}".format(battery_loss_dc_arg))
+                self.battery_loss_dc = self.battery_loss
         else:
             self.battery_loss_dc = self.battery_loss
         self.inverter_loss = 1.0 - self.get_arg("inverter_loss")
