@@ -67,8 +67,9 @@ def test_previous_days_modal_filter(my_predbat):
 
     print("Total filled data: {} kWh".format(dp2(total_filled_data)))
 
-    # With load_minutes_age=7, all 7 days will be filled with 24kWh default each
-    expected_total_days = my_predbat.load_minutes_age  # All days up to load_minutes_age
+    # With days_previous=[1, 2], only max(days_previous)=2 days will be filled with 24kWh default each
+    # (load_minutes_age is not used to extend gap scanning beyond max(days_previous))
+    expected_total_days = max(my_predbat.days_previous)
     if total_filled_data != expected_total_per_day * expected_total_days:
         print("ERROR: Expected gap filling to add approximately {} kWh ({}days * {}kWh), got {} kWh".format(expected_total_per_day * expected_total_days, expected_total_days, expected_total_per_day, total_filled_data))
         for minute in range(0, min(data_length, 300), 30):

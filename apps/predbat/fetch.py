@@ -378,7 +378,7 @@ class Fetch:
         days_list = self.days_previous.copy()
         # Sort days list in numerical order with highest number day first
         days_list.sort(reverse=True)
-        max_days = max(max(days_list), self.load_minutes_age)
+        max_days = max(days_list)
         for days in range(1, max_days + 1):
             sum_day = 0
             full_days = 24 * 60 * (days - 1)
