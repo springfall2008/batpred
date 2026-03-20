@@ -735,6 +735,7 @@ class SolarAPI(ComponentBase):
             average_day_scaling += scaling_factor
             self.log("PV Calibration: Past day {} had {} kWh of forecast PV, and actual {} kWh PV generation".format(day, dp2(past_day_forecast[day]), dp2(past_day_actual[day])))
         average_day_scaling = dp4(average_day_scaling / len(past_day_forecast)) if past_day_forecast else 1.0
+        average_day_scaling = min(max(average_day_scaling, 0.1), 2.0)
 
         # Now adjust worst and best day scaling through by average scaling so they are just a factor on the average day, and clamp to sensible values to prevent extreme outliers from causing crazy forecasts.
         worst_day_scaling = dp4(worst_day_scaling / average_day_scaling)
