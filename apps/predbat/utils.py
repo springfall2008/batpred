@@ -8,9 +8,18 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+
+"""Utility functions for data processing, time manipulation, and calculations.
+
+Provides helpers for parsing Home Assistant history data into per-minute
+dictionaries, time string parsing, data filtering/pruning, rounding,
+and historical data extraction from incrementing energy counters.
+"""
+
 from datetime import datetime, timedelta, timezone, time
 from functools import lru_cache
 from const import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, MAX_INCREMENT, TIME_FORMAT_DAILY
+import copy
 
 DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
@@ -306,6 +315,7 @@ def minute_data(
     max_increment=MAX_INCREMENT,
     interpolate=False,
     debug=False,
+    can_modify_history=False,
 ):
     """
     Turns data from HA into a hash of data indexed by minute with the data being the value
@@ -325,6 +335,9 @@ def minute_data(
     # Check history is valid, if not empty return
     if not history:
         return mdata, io_adjusted
+
+    if not can_modify_history:
+        history = copy.deepcopy(history)  # Copy to avoid modifying original history
 
     # Glitch filter, cleans glitches in the data and removes bad values, only for incrementing data
     if clean_increment and backwards:
@@ -384,6 +397,9 @@ def minute_data(
         try:
             state = float(state) * scale
             last_updated_time = str2time(item[last_updated_key])
+            # Truncate sub-minute precision: a timestamp of 23:30:04 should land on the 23:30 minute boundary,
+            # not be floored to 23:31 due to int() truncation of the elapsed seconds.
+            last_updated_time = last_updated_time.replace(second=0, microsecond=0)
         except (ValueError, TypeError):
             continue
 
@@ -470,7 +486,8 @@ def minute_data(
         if to_time:
             minute = minutes
             if minute == minutes_to:
-                mdata[minute] = state
+                if minute >= minute_min and minute <= minute_max:
+                    mdata[minute] = state
             else:
                 if smoothing:
                     near_midnight = (last_updated_time.time() < time(0, 6)) or (last_updated_time.time() > time(23, 58))
@@ -508,16 +525,26 @@ def minute_data(
                             minute += 1
                             index += 1
                 else:
-                    while minute < minutes_to:
-                        if minute >= minute_min and minute <= minute_max:
-                            if backwards:
+                    if backwards:
+                        # In backwards (oldest-first) mode, this item's `state` became active AT `minutes`.
+                        # Write the current state at the transition minute, then fill the older period
+                        # (minutes+1 to minutes_to inclusive) with `last_state` (the previous value).
+                        if minutes >= minute_min and minutes <= minute_max:
+                            mdata[minutes] = state
+                        minute = minutes + 1
+                        while minute <= minutes_to:
+                            if minute >= minute_min and minute <= minute_max:
                                 mdata[minute] = last_state
-                            else:
+                                if adjusted:
+                                    adata[minute] = True
+                            minute += 1
+                    else:
+                        while minute < minutes_to:
+                            if minute >= minute_min and minute <= minute_max:
                                 mdata[minute] = state
-
-                            if adjusted:
-                                adata[minute] = True
-                        minute += 1
+                                if adjusted:
+                                    adata[minute] = True
+                            minute += 1
         else:
             if spreading:
                 for minute in range(minutes, minutes + spreading):
@@ -555,7 +582,8 @@ def minute_data(
                 step = (last_sample_value - last_but_one_minute_sample) / sample_gap
                 if step > 0:
                     for minute in range(last_sample_minute):
-                        mdata[minute] = dp4(last_sample_value + step * (last_sample_minute - minute))
+                        if minute >= minute_min and minute <= minute_max:
+                            mdata[minute] = dp4(last_sample_value + step * (last_sample_minute - minute))
 
         # Fill from last sample until now
         for minute in range(60 * 24 * days):
@@ -565,11 +593,12 @@ def minute_data(
                 rindex = 60 * 24 * days - minute - 1
 
             if rindex not in mdata:
-                mdata[rindex] = newest_state
+                if rindex >= minute_min and rindex <= minute_max:
+                    mdata[rindex] = newest_state
             else:
                 break
 
-        # Fill gaps before the first value
+        # Find the first value
         state = 0
         for minute in range(60 * 24 * days):
             if backwards:
@@ -587,7 +616,8 @@ def minute_data(
             else:
                 rindex = minute
             state = mdata.get(rindex, state)
-            mdata[rindex] = state
+            if rindex >= minute_min and rindex <= minute_max:
+                mdata[rindex] = state
 
     # Reverse data with smoothing
     if clean_increment:
@@ -599,7 +629,8 @@ def minute_data(
             if minute in mdata:
                 mdata[minute] += accumulate.get(minute, 0)
             else:
-                mdata[minute] = accumulate.get(minute, 0)
+                if minute >= minute_min and minute <= minute_max:
+                    mdata[minute] = accumulate.get(minute, 0)
 
     if adjust_key:
         io_adjusted = adata

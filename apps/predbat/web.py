@@ -10,6 +10,14 @@
 #
 # This code creates a web server and serves up the Predbat web pages
 
+
+"""Built-in web dashboard server.
+
+Provides the PredBat web interface using aiohttp, serving dashboard pages,
+configuration editors, entity browsers, plan visualisations, and REST API
+endpoints. Includes 50+ HTTP routes for monitoring and control.
+"""
+
 from aiohttp import web
 import asyncio
 import os
@@ -26,12 +34,14 @@ import threading
 import io
 from io import StringIO
 import hashlib
+import copy
 from ruamel.yaml import YAML
 from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 
 from web_helper import (
     get_header_html,
     get_plan_css,
+    get_plan_renderer_js,
     get_editor_js,
     get_editor_css,
     get_log_css,
@@ -49,6 +59,7 @@ from web_helper import (
     get_entity_control_css,
     get_entity_css,
     get_entity_js,
+    get_refresh_inverter_js,
     get_restart_button_js,
     get_browse_css,
     get_entity_detailed_row_js,
@@ -63,11 +74,20 @@ from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA
 from predbat import THIS_VERSION
 from component_base import ComponentBase
 from config import APPS_SCHEMA
+from web_metrics_dashboard import get_metrics_dashboard_css, get_metrics_dashboard_body
+from predbat_metrics import metrics_handler, metrics_json_handler, metrics, PROMETHEUS_AVAILABLE
 
 ROOT_YAML_KEY = "pred_bat"
 
 
 class WebInterface(ComponentBase):
+    """Built-in web dashboard server using aiohttp.
+
+    Serves the PredBat dashboard with 50+ HTTP routes for monitoring,
+    configuration, entity browsing, plan visualisation, and REST API
+    endpoints. Supports plugin endpoint registration.
+    """
+
     def initialize(self, web_port):
         self.default_page = "./dash"
         self.web_port = web_port
@@ -132,10 +152,12 @@ class WebInterface(ComponentBase):
         app.router.add_post("/plan_override", self.html_plan_override)
         app.router.add_post("/rate_override", self.html_rate_override)
         app.router.add_post("/restart", self.html_restart)
+        app.router.add_post("/inverter_refresh", self.html_inverter_refresh)
         app.router.add_get("/api/state", self.html_api_get_state)
         app.router.add_get("/api/ping", self.html_api_ping)
         app.router.add_post("/api/state", self.html_api_post_state)
         app.router.add_post("/api/service", self.html_api_post_service)
+        app.router.add_get("/api/plan_data", self.html_api_plan_data)
         app.router.add_get("/api/log", self.html_api_get_log)
         app.router.add_get("/api/entities", self.html_api_get_entities)
         app.router.add_post("/api/login", self.html_api_login)
@@ -145,6 +167,9 @@ class WebInterface(ComponentBase):
         app.router.add_get("/api/internals", self.html_api_internals)
         app.router.add_get("/api/internals/download", self.html_api_internals_download)
         app.router.add_get("/api/status", self.html_api_get_status)
+        app.router.add_get("/metrics", metrics_handler)
+        app.router.add_get("/metrics/json", metrics_json_handler)
+        app.router.add_get("/metrics_dashboard", self.html_metrics_dashboard)
 
         # Notify plugin system that web interface is ready
         if hasattr(self.base, "plugin_system") and self.base.plugin_system:
@@ -437,7 +462,7 @@ class WebInterface(ComponentBase):
 
         return html
 
-    def get_status_html(self, status, version):
+    def get_status_html(self, version):
         text = ""
         if not self.base.dashboard_index:
             text += "<h2>Loading please wait...</h2>"
@@ -461,13 +486,20 @@ class WebInterface(ComponentBase):
             self.log("Error checking if Predbat is running: {}".format(e))
             is_running = False
 
-        last_updated = self.get_state_wrapper("predbat.status", attribute="last_updated", default=None)
+        status_entity = self.prefix + ".status"
+        last_updated = self.get_state_wrapper(status_entity, attribute="last_updated", default=None)
+        status = self.get_state_wrapper(status_entity, default="Unknown")
+        detail = self.get_state_wrapper(status_entity, attribute="detail", default="")
+        debug = self.get_state_wrapper(status_entity, attribute="debug", default="")
+        status_full = status + " " + detail
+        debug_escaped = str(debug).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+        debug_title = ' title="{}"'.format(debug_escaped) if debug else ""
         if status and (("Warn:" in status) or ("Error:" in status)):
-            text += "<tr><td>Status</td><td bgcolor=#ff7777>{}</td></tr>\n".format(status)
+            text += "<tr><td>Status</td><td bgcolor=#ff7777{}>{}</td></tr>\n".format(debug_title, status_full)
         elif not is_running:
-            text += "<tr><td colspan='2' bgcolor='#ff7777'>{} (unhealthy)</td></tr>\n".format(status)
+            text += "<tr><td colspan='2' bgcolor='#ff7777'{}>{} (unhealthy)</td></tr>\n".format(debug_title, status_full)
         else:
-            text += "<tr><td>Status</td><td>{}</td></tr>\n".format(status)
+            text += "<tr><td>Status</td><td{}>{}</td></tr>\n".format(debug_title, status_full)
         text += "<tr><td>Last Updated</td><td>{}</td></tr>\n".format(last_updated)
         text += "<tr><td>Version</td><td>{}</td></tr>\n".format(version)
 
@@ -495,6 +527,14 @@ class WebInterface(ComponentBase):
         toggle_class = "toggle-switch active" if read_only else "toggle-switch"
         text += f'<button class="{toggle_class}" type="button" onclick="toggleSwitch(this, \'set_read_only\')"></button>'
         text += "</form></td></tr>\n"
+
+        # Editable Predbat Active field
+        predbat_active, ignore = self.get_ha_config("active", None)
+        text += "<tr><td>Predbat Active</td><td>"
+        text += f'<form style="display: inline;" method="post" action="./dash">'
+        toggle_class = "toggle-switch active" if predbat_active else "toggle-switch"
+        text += f'<button class="{toggle_class}" type="button" onclick="toggleSwitch(this, \'active\')"></button>'
+        text += "</form></td></tr>\n"
         if self.arg_errors:
             count_errors = len(self.arg_errors)
             text += "<tr><td>Config</td><td bgcolor=#ff7777>apps.yaml has {} errors</td></tr>\n".format(count_errors)
@@ -520,6 +560,12 @@ class WebInterface(ComponentBase):
 
         # Add power flow diagram
         text += "<h2>Power Flow</h2>\n"
+        text += """<div style="margin-bottom: 8px; display: flex; align-items: center; gap: 10px;">
+            <button id="inverterRefreshBtn" onclick="refreshInverterData()" style="background-color: #2196F3; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold;">Refresh</button>
+            <span id="inverterRefreshStatus" style="font-size: 13px; color: #666;"></span>
+        </div>
+        """
+        text += get_refresh_inverter_js()
         text += self.get_power_flow_diagram()
 
         # Text description of the plan
@@ -696,13 +742,13 @@ class WebInterface(ComponentBase):
         """
         Get history for an entity including the current state
         """
-        history = self.get_history_wrapper(entity_id, days, required=False, tracked=False)
+        history = copy.deepcopy(self.get_history_wrapper(entity_id, days, required=False, tracked=False))  # Copy to avoid modifying original history
         current_value = self.get_state_wrapper(entity_id=entity_id, attribute=attribute)
         if current_value is not None:
             if not history:
                 history = [[]]
                 if attribute:
-                    history[0].append({"attributes": {attribute: current_value}, "last_updated": (self.now_utc - timedelta(days=days)).strftime(TIME_FORMAT_HA)})
+                    history[0].append({"attributes": {attribute: current_value}, "last_updated": (self.now_now_utc - timedelta(days=days)).strftime(TIME_FORMAT_HA)})
                 else:
                     history[0].append({"state": current_value, "last_updated": (self.now_utc - timedelta(days=days)).strftime(TIME_FORMAT_HA)})
             if attribute:
@@ -710,6 +756,28 @@ class WebInterface(ComponentBase):
             else:
                 history[0].append({"state": current_value, "last_updated": self.now_utc.strftime(TIME_FORMAT_HA)})
 
+        return history
+
+    def get_history_with_now_attrs(self, entity_id, days):
+        """
+        Get history for an entity and append a record at now_utc containing all current
+        attributes. This keeps chart series up-to-date when entities publish infrequently.
+
+        Args:
+            entity_id: HA entity ID
+            days: Number of days of history to fetch
+
+        Returns:
+            History list [[records...]] with current attributes appended at self.now_utc
+        """
+        history = copy.deepcopy(self.get_history_wrapper(entity_id, days, required=False, tracked=False))
+        current_state = self.get_state_wrapper(entity_id, raw=True)
+        if current_state and isinstance(current_state, dict) and "attributes" in current_state:
+            curr_record = {"state": current_state.get("state"), "attributes": current_state["attributes"], "last_updated": self.now_utc.strftime(TIME_FORMAT_HA)}
+            if history and isinstance(history, list) and len(history) > 0:
+                history[0].append(curr_record)
+            else:
+                history = [[curr_record]]
         return history
 
     def get_entity_attributes(self, entity_id):
@@ -1857,307 +1925,183 @@ chart.render();
         else:
             return web.Response(content_type="application/json", text='{"result": "error"}')
 
-    async def html_plan(self, request):
+    async def html_api_plan_data(self, request):
         """
-        Return the Predbat plan as an HTML page
+        JSON API - Return plan data for all three views
+        Supports conditional fetch: if client's last_received is newer than all server data, returns {unchanged: true}
         """
-        self.default_page = "./plan"
+        # Get client's newest data timestamp from query parameters
+        client_newest_timestamp = request.rel_url.query.get("newest_timestamp")
+        client_overrides_hash = request.rel_url.query.get("overrides_hash")
 
-        # Get the view parameter from the request
-        args = request.query
-        view = args.get("view", "plan")  # Default to 'plan' view
+        # Fetch plan data
+        plan_entity = self.prefix + ".plan_html"
+        yesterday_entity = self.prefix + ".cost_yesterday"
+        baseline_entity = self.prefix + ".savings_yesterday_predbat"
 
-        text = self.get_header("Predbat Plan", refresh=30)
+        # Get JSON data (with timestamps embedded in the JSON)
+        plan_json = self.get_state_wrapper(entity_id=plan_entity, attribute="raw", default=None)
+        plan_timestamp = plan_json.get("timestamp", None) if plan_json else None
 
-        if not self.base.dashboard_index:
-            text += "<body>"
-            text += "<h2>Loading please wait...</h2>"
-            text += "</body></html>\n"
-            return web.Response(content_type="text/html", text=text)
+        yesterday_json = self.get_state_wrapper(entity_id=yesterday_entity, attribute="json", default=None)
+        yesterday_timestamp = yesterday_json.get("timestamp", None) if yesterday_json else None
 
-        """ The table html_plan is already generated in the base class and is in the format
-        <table><tr><tr><th><b>Time</b></th><th><b>Import p (w/loss)</b></th><th><b>Export p (w/loss)</b></th><th colspan=2><b>State</b></th><th><b>Limit %</b></th><th><b>PV kWh (10%)</b></th><th><b>Load kWh (10%)</b></th><th><b>Clip kWh</b></th><th><b>XLoad kWh</b></th><th><b>Car kWh</b></th><th><b>SoC %</b></th><th><b>Cost</b></th><th><b>Total</b></th><th><b>CO2 g/kWh</b></th><th><b>CO2 kg</b></th></tr><tr style="color:black"><td bgcolor=#FFFFFF>Sun 16:00</td><td style="padding: 4px;" bgcolor=#3AEE85><b>7.00 (7.52)</b> </td><td style="padding: 4px;" bgcolor=#FFFFAA>15.00 (13.97) </td><td colspan=2 style="padding: 4px;" bgcolor=#3AEE85>Chrg&nearr;</td><td bgcolor=#FFFFFF> 95 (95)</td><td bgcolor=#FFAAAA>0.83 (0.45)&#9728;</td><td bgcolor=#FFFF00>0.47 (0.57)</td><td bgcolor=#FFFFFF>&#9866;</td><td bgcolor=#FFFF00>0.42</td><td bgcolor=FFFF00>3.84</td><td bgcolor=#3AEE85>92&nearr;</td><td bgcolor=#F18261>+26 p  &nearr;</td><td bgcolor=#FFFFFF>&#163;1.06</td><td bgcolor=#90EE90>57 </td><td bgcolor=#FFAA00> 3.39 &nearr; </td></tr>
-        <tr style="color:black"><td bgcolor=#FFFFFF>Sun 16:30</td><td style="padding: 4px;" bgcolor=#3AEE85><b>7.00 (7.52)</b> </td><td style="padding: 4px;" bgcolor=#FFFFAA>15.00 (13.97) </td><td colspan=2 style="padding: 4px;" rowspan=2 bgcolor=#EEEEEE>FrzChrg&rarr;</td><td rowspan=2 bgcolor=#FFFFFF> 95 (4)</td><td bgcolor=#FFAAAA>0.84 (0.46)&#9728;</td><td bgcolor=#F18261>0.54 (0.64)</td><td bgcolor=#FFFFFF>&#9866;</td><td bgcolor=#FFFF00>0.47</td><td bgcolor=FFFF00>3.84</td><td bgcolor=#3AEE85>95&rarr;</td><td bgcolor=#F18261>+24 p  &nearr;</td><td bgcolor=#FFFFFF>&#163;1.33</td><td bgcolor=#90EE90>60 </td><td bgcolor=#FFAA00> 3.6 &nearr; </td></tr>
-        </table>
-        """
-        text += get_plan_css()
+        baseline_json = self.get_state_wrapper(entity_id=baseline_entity, attribute="json", default=None)
+        baseline_timestamp = baseline_json.get("timestamp", None) if baseline_json else None
 
-        # Add view switcher buttons
-        text += '<div style="margin-bottom: 15px; display: flex; gap: 8px;">'
-
-        # Determine active button styling
-        plan_active = "background-color: #4CAF50; color: white;" if view == "plan" else "background-color: #f0f0f0; color: black;"
-        yesterday_active = "background-color: #4CAF50; color: white;" if view == "yesterday" else "background-color: #f0f0f0; color: black;"
-        baseline_active = "background-color: #4CAF50; color: white;" if view == "baseline" else "background-color: #f0f0f0; color: black;"
-
-        text += f'<a href="./plan?view=plan" style="padding: 6px 12px; text-decoration: none; border-radius: 3px; font-size: 14px; border: 1px solid #ddd; {plan_active}">Plan</a>'
-        text += f'<a href="./plan?view=yesterday" style="padding: 6px 12px; text-decoration: none; border-radius: 3px; font-size: 14px; border: 1px solid #ddd; {yesterday_active}">History</a>'
-        text += f'<a href="./plan?view=baseline" style="padding: 6px 12px; text-decoration: none; border-radius: 3px; font-size: 14px; border: 1px solid #ddd; {baseline_active}">Yesterday Without Predbat</a>'
-        text += "</div>"
-
-        # Select the appropriate HTML plan based on the view
-        if view == "yesterday":
-            html_plan = self.get_state_wrapper(entity_id=self.prefix + ".cost_yesterday", attribute="html", default="<p>No yesterday plan available</p>")
-            # Don't process buttons for yesterday view - just display the plan
-            text += html_plan + "</body></html>\n"
-            return web.Response(content_type="text/html", text=text)
-        elif view == "baseline":
-            html_plan = self.get_state_wrapper(entity_id=self.prefix + ".savings_yesterday_predbat", attribute="html", default="<p>No baseline plan available</p>")
-            # Don't process buttons for baseline view - just display the plan
-            text += html_plan + "</body></html>\n"
-            return web.Response(content_type="text/html", text=text)
-        else:
-            # Default to plan view with editing capabilities
-            html_plan = self.get_state_wrapper(entity_id=self.prefix + ".plan_html", attribute="html", default="<p>No plan available</p>")
-
-        # Process HTML table to add buttons to time cells (only for plan view)
-        # Regular expression to find time cells in the table
-        time_pattern = r"<td id=time.*?>((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{2}:\d{2})</td>"
-        import_pattern = r"<td id=import data-minute=(\S+) data-rate=(\S+)(.*?)>(.*?)</td>"
-        export_pattern = r"<td id=export data-minute=(\S+) data-rate=(\S+)(.*?)>(.*?)</td>"
-        load_pattern = r"<td id=load data-minute=(\S+) (.*?)>(.*?)</td>"
-        soc_pattern = r"<td id=soc data-minute=(\S+)(.*?)>(.*?)</td>"
-
-        # Counter for creating unique IDs for dropdowns
-        dropdown_counter = 0
-
+        # Get current manual overrides
         manual_charge_times = self.base.manual_times("manual_charge")
         manual_export_times = self.base.manual_times("manual_export")
         manual_freeze_charge_times = self.base.manual_times("manual_freeze_charge")
         manual_freeze_export_times = self.base.manual_times("manual_freeze_export")
         manual_demand_times = self.base.manual_times("manual_demand")
-        manual_all_times = manual_charge_times + manual_export_times + manual_demand_times + manual_freeze_charge_times + manual_freeze_export_times
         manual_import_rates = self.base.manual_rates("manual_import_rates")
         manual_export_rates = self.base.manual_rates("manual_export_rates")
         manual_load_adjust = self.base.manual_rates("manual_load_adjust")
         manual_soc_keep = self.base.manual_rates("manual_soc")
 
-        # Function to replace time cells with cells containing dropdowns
-        def add_button_to_time(match):
-            nonlocal dropdown_counter
-            time_text = match.group(1)
-            dropdown_id = f"dropdown_{dropdown_counter}"
-            dropdown_counter += 1
+        # Convert manual rates dicts to list format for JavaScript
+        manual_import_rates_list = [{"minutes": k, "rate": v} for k, v in manual_import_rates.items()]
+        manual_export_rates_list = [{"minutes": k, "rate": v} for k, v in manual_export_rates.items()]
+        manual_load_adjust_list = [{"minutes": k, "adjustment": v} for k, v in manual_load_adjust.items()]
+        manual_soc_list = [{"minutes": k, "target": v} for k, v in manual_soc_keep.items()]
 
-            now_utc = self.now_utc
-            time_stamp = get_override_time_from_string(now_utc, time_text, self.plan_interval_minutes)
-            if time_stamp is None:
-                return match.group(0)
+        # Build overrides object
+        overrides = {
+            "manual_charge_times": manual_charge_times,
+            "manual_export_times": manual_export_times,
+            "manual_freeze_charge_times": manual_freeze_charge_times,
+            "manual_freeze_export_times": manual_freeze_export_times,
+            "manual_demand_times": manual_demand_times,
+            "manual_import_rates": manual_import_rates_list,
+            "manual_export_rates": manual_export_rates_list,
+            "manual_load_adjust": manual_load_adjust_list,
+            "manual_soc": manual_soc_list,
+        }
 
-            minutes_from_midnight = (time_stamp - self.midnight_utc).total_seconds() / 60
-            in_override = False
-            cell_bg_color = "#FFFFFF"
-            override_class = ""
-            if minutes_from_midnight in manual_charge_times:
-                in_override = True
-                cell_bg_color = "#3AEE85"  # Matches auto charging green
-                override_class = "override-charge"
-            elif minutes_from_midnight in manual_export_times:
-                in_override = True
-                cell_bg_color = "#FFFF00"  # Matches export yellow
-                override_class = "override-export"
-            elif minutes_from_midnight in manual_demand_times:
-                in_override = True
-                cell_bg_color = "#F18261"  # Matches high-cost demand red
-                override_class = "override-demand"
-            elif minutes_from_midnight in manual_freeze_charge_times:
-                in_override = True
-                cell_bg_color = "#C0C0C0"  # Matches freeze charging grey
-                override_class = "override-freeze-charge"
-            elif minutes_from_midnight in manual_freeze_export_times:
-                in_override = True
-                cell_bg_color = "#AAAAAA"  # Matches freeze exporting dark grey
-                override_class = "override-freeze-export"
+        # Calculate hash of overrides for change detection
+        overrides_json = json.dumps(overrides, sort_keys=True)
+        overrides_hash = hashlib.md5(overrides_json.encode()).hexdigest()
 
-            # Create clickable cell and dropdown HTML
-            button_html = f"""<td bgcolor={cell_bg_color} onclick="toggleForceDropdown('{dropdown_id}')" class="clickable-time-cell {override_class}">
-                {time_text}
-                <div class="dropdown">
-                    <div id="{dropdown_id}" class="dropdown-content">
-            """
+        # Find the newest timestamp among all data sources
+        newest_timestamp = None
+        for ts in [plan_timestamp, yesterday_timestamp, baseline_timestamp]:
+            if ts:
+                if newest_timestamp is None or ts > newest_timestamp:
+                    newest_timestamp = ts
 
-            if minutes_from_midnight in manual_all_times:
-                button_html += f"""<a onclick="handleTimeOverride('{time_text}', 'Clear')">Clear</a>"""
-            if minutes_from_midnight not in manual_demand_times:
-                button_html += f"""<a onclick="handleTimeOverride('{time_text}', 'Manual Demand')">Manual Demand</a>"""
-            if minutes_from_midnight not in manual_charge_times:
-                button_html += f"""<a onclick="handleTimeOverride('{time_text}', 'Manual Charge')">Manual Charge</a>"""
-            if minutes_from_midnight not in manual_export_times:
-                button_html += f"""<a onclick="handleTimeOverride('{time_text}', 'Manual Export')">Manual Export</a>"""
-            if minutes_from_midnight not in manual_freeze_charge_times:
-                button_html += f"""<a onclick="handleTimeOverride('{time_text}', 'Manual Freeze Charge')">Manual Freeze Charge</a>"""
-            if minutes_from_midnight not in manual_freeze_export_times:
-                button_html += f"""<a onclick="handleTimeOverride('{time_text}', 'Manual Freeze Export')">Manual Freeze Export</a>"""
-            button_html += f"""
-                    </div>
-                </div>
-            </td>"""
+        # Check if data has changed - compare client's newest timestamp with server's newest
+        data_unchanged = False
+        if client_newest_timestamp and newest_timestamp:
+            # Client has data and server has data - compare timestamps
+            # If client's newest is >= server's newest, and overrides match, nothing changed
+            timestamp_match = client_newest_timestamp >= newest_timestamp
+            overrides_match = client_overrides_hash == overrides_hash
+            data_unchanged = timestamp_match and overrides_match
+        elif not newest_timestamp:
+            # No server data available yet
+            data_unchanged = True
 
-            return button_html
+        if data_unchanged:
+            return web.json_response({"unchanged": True, "overrides_hash": overrides_hash})
 
-        def add_button_to_export(match):
-            return add_button_to_import(match, is_import=False)
+        # Build full response with data
+        response_data = {"unchanged": False, "plan": plan_json, "yesterday": yesterday_json, "baseline": baseline_json, "overrides": overrides, "overrides_hash": overrides_hash}
 
-        def add_button_to_import(match, is_import=True):
-            """
-            Add import rate button to import cells
-            """
-            nonlocal dropdown_counter
-            dropdown_id = f"dropdown_{dropdown_counter}"
-            input_id = f"rate_input_{dropdown_counter}"
-            dropdown_counter += 1
+        return web.json_response(response_data)
 
-            import_minute = match.group(1)
-            import_rate = match.group(2).strip()
-            import_tag = match.group(3).strip()
-            import_rate_text = match.group(4).strip()
-            import_minute_to_time = self.midnight_utc + timedelta(minutes=int(import_minute))
-            import_minute_str = import_minute_to_time.strftime("%a %H:%M")
-            override_active = False
-            if is_import:
-                if int(import_minute) in manual_import_rates:
-                    override_active = True
-                    import_rate = manual_import_rates[int(import_minute)]
-            elif int(import_minute) in manual_export_rates:
-                override_active = True
-                import_rate = manual_export_rates[int(import_minute)]
+    async def html_plan(self, request):
+        """
+        Return the Predbat plan as an HTML page with client-side JSON rendering
+        """
+        self.default_page = "./plan"
 
-            button_html = f"""<td {import_tag} class="clickable-time-cell {'override-active' if override_active else ''}" onclick="toggleForceDropdown('{dropdown_id}')">
-                {import_rate_text}
-                <div class="dropdown">
-                    <div id="{dropdown_id}" class="dropdown-content">
-            """
-            if override_active:
-                action = "Clear Import" if is_import else "Clear Export"
-                button_html += f"""<a onclick="handleRateOverride('{import_minute_str}', '{import_rate}', '{action}', true)">{action}</a>"""
-            else:
-                # Add input field for custom rate entry
-                default_rate = self.get_arg("manual_import_value", 0.0) if is_import else self.get_arg("manual_export_value", 0.0)
-                action = "Set Import" if is_import else "Set Export"
-                button_html += f"""
-                    <div style="padding: 12px 16px;">
-                        <label style="display: block; margin-bottom: 5px; color: inherit;">{action} {import_minute_str} Rate:</label>
-                        <input type="number" id="{input_id}" step="0.1" value="{default_rate}"
-                               style="width: 80px; padding: 4px; margin-bottom: 8px; border-radius: 3px;">
-                        <br>
-                        <button onclick="handleRateOverride('{import_minute_str}', document.getElementById('{input_id}').value, '{action}', false)"
-                                style="padding: 6px 12px; border-radius: 3px; font-size: 12px;">
-                            Set Rate
-                        </button>
-                    </div>
-                """
-            button_html += f"""
-                    </div>
-                </div>
-            </td>"""
+        # Disable page refresh - JavaScript will handle updates
+        text = self.get_header("Predbat Plan", refresh=5 * 60)  # Set a long refresh interval just in case, but JS will handle it
 
-            return button_html
+        # Add CSS
+        text += get_plan_css()
 
-        def add_button_to_load(match):
-            """
-            Add load rate button to load cells
-            """
-            nonlocal dropdown_counter
-            dropdown_id = f"dropdown_{dropdown_counter}"
-            input_id = f"load_input_{dropdown_counter}"
-            dropdown_counter += 1
+        # Add warning/error divs
+        text += '<div id="staleWarning" style="display:none; padding:10px; background:#fff3cd; color:#856404; border:1px solid #ffc107; margin-bottom:10px;">&#9888;&#65039; Plan data is stale (last updated >15 minutes ago)</div>'
+        text += '<div id="planError" style="display:none; padding:10px; background:#fee; color:#c00; border:1px solid #c00; margin-bottom:10px;"></div>'
 
-            load_minute = match.group(1)
-            load_tag = match.group(2).strip()
-            load_text = match.group(3).strip()
-            load_minute_to_time = self.midnight_utc + timedelta(minutes=int(load_minute))
-            load_minute_str = load_minute_to_time.strftime("%a %H:%M")
-            override_active = False
-            if int(load_minute) in manual_load_adjust:
-                override_active = True
-                load_adjust = manual_load_adjust[int(load_minute)]
+        # Add view switcher buttons
+        text += '<div style="margin-bottom: 15px; display: flex; gap: 8px; align-items: center;">'
+        text += '<button class="view-button" data-view="plan" onclick="switchView(\'plan\')" style="padding: 6px 12px; border-radius: 3px; font-size: 14px; border: 1px solid #ddd; background-color: #4CAF50; color: white; cursor: pointer;">Plan</button>'
+        text += '<button class="view-button" data-view="yesterday" onclick="switchView(\'yesterday\')" style="padding: 6px 12px; border-radius: 3px; font-size: 14px; border: 1px solid #ddd; background-color: #f0f0f0; color: black; cursor: pointer;">History</button>'
+        text += '<button class="view-button" data-view="baseline" onclick="switchView(\'baseline\')" style="padding: 6px 12px; border-radius: 3px; font-size: 14px; border: 1px solid #ddd; background-color: #f0f0f0; color: black; cursor: pointer;">Yesterday Without Predbat</button>'
+        text += '<span id="planTimestamp" style="margin-left: 16px; font-size: 13px; color: #666;"></span>'
+        text += '<label id="debugToggleLabel" style="margin-left: auto;"><input type="checkbox" id="debugToggle" onchange="onDebugToggleChange()"> Show Debug</label>'
+        text += "</div>"
 
-            button_html = f"""<td {load_tag} class="clickable-time-cell {'override-active' if override_active else ''}" onclick="toggleForceDropdown('{dropdown_id}')">
-                {load_text}
-                <div class="dropdown">
-                    <div id="{dropdown_id}" class="dropdown-content">
-            """
-            if override_active:
-                action = "Clear Load"
-                button_html += f"""<a onclick="handleLoadOverride('{load_minute_str}', '{load_adjust}', '{action}', true)">{action}</a>"""
-            else:
-                # Add input field for custom rate entry
-                default_adjust = self.get_arg("manual_load_value", 0.0)
-                action = "Set Load"
-                button_html += f"""
-                    <div style="padding: 12px 16px;">
-                        <label style="display: block; margin-bottom: 5px; color: inherit;">{action} {load_minute_str} Adjustment:</label>
-                        <input type="number" id="{input_id}" step="0.1" value="{default_adjust}"
-                               style="width: 80px; padding: 4px; margin-bottom: 8px; border-radius: 3px;">
-                        <br>
-                        <button onclick="handleLoadOverride('{load_minute_str}', document.getElementById('{input_id}').value, '{action}', false)"
-                                style="padding: 6px 12px; border-radius: 3px; font-size: 12px;">
-                            Set Load Adjustment
-                        </button>
-                    </div>
-                """
-            button_html += f"""
-                    </div>
-                </div>
-            </td>"""
+        # Add plan container
+        text += '<div id="planContainer"></div>'
 
-            return button_html
+        # Fetch all three JSON datasets
+        plan_json = self.get_state_wrapper(entity_id=self.prefix + ".plan_html", attribute="raw", default=None)
+        yesterday_json = self.get_state_wrapper(entity_id=self.prefix + ".cost_yesterday", attribute="json", default=None)
+        baseline_json = self.get_state_wrapper(entity_id=self.prefix + ".savings_yesterday_predbat", attribute="json", default=None)
 
-        def add_button_to_soc(match):
-            """
-            Add SOC button to limit cells
-            """
-            nonlocal dropdown_counter
-            dropdown_id = f"dropdown_{dropdown_counter}"
-            input_id = f"soc_input_{dropdown_counter}"
-            dropdown_counter += 1
+        # Fetch override data
+        manual_charge_times = self.base.manual_times("manual_charge")
+        manual_export_times = self.base.manual_times("manual_export")
+        manual_freeze_charge_times = self.base.manual_times("manual_freeze_charge")
+        manual_freeze_export_times = self.base.manual_times("manual_freeze_export")
+        manual_demand_times = self.base.manual_times("manual_demand")
+        manual_import_rates = self.base.manual_rates("manual_import_rates")
+        manual_export_rates = self.base.manual_rates("manual_export_rates")
+        manual_load_adjust = self.base.manual_rates("manual_load_adjust")
+        manual_soc_keep = self.base.manual_rates("manual_soc")
 
-            soc_minute = match.group(1)
-            soc_tag = match.group(2).strip()
-            soc_text = match.group(3).strip()
-            soc_minute_to_time = self.midnight_utc + timedelta(minutes=int(soc_minute))
-            soc_minute_str = soc_minute_to_time.strftime("%a %H:%M")
-            soc_target = manual_soc_keep.get(int(soc_minute), 0)
+        # Convert manual rates dicts to list format for JavaScript
+        manual_import_rates_list = [{"minutes": k, "rate": v} for k, v in manual_import_rates.items()]
+        manual_export_rates_list = [{"minutes": k, "rate": v} for k, v in manual_export_rates.items()]
+        manual_load_adjust_list = [{"minutes": k, "adjustment": v} for k, v in manual_load_adjust.items()]
+        manual_soc_list = [{"minutes": k, "target": v} for k, v in manual_soc_keep.items()]
 
-            button_html = f"""<td {soc_tag} class="clickable-time-cell {'override-active' if soc_target > 0 else ''}" onclick="toggleForceDropdown('{dropdown_id}')">
-                {soc_text}
-                <div class="dropdown">
-                    <div id="{dropdown_id}" class="dropdown-content">
-            """
-            if soc_target > 0:
-                action = "Clear SOC"
-                button_html += f"""<a onclick="handleSocOverride('{soc_minute_str}', '{soc_target}', '{action}', true)">{action}</a>"""
-            else:
-                # Add input field for custom SOC entry
-                default_soc = self.get_arg("manual_soc_value", 100)
-                action = "Set SOC"
-                button_html += f"""
-                    <div style="padding: 12px 16px;">
-                        <label style="display: block; margin-bottom: 5px; color: inherit;">{action} {soc_minute_str} Target (%):</label>
-                        <input type="number" id="{input_id}" step="1" min="0" max="100" value="{default_soc}"
-                               style="width: 80px; padding: 4px; margin-bottom: 8px; border-radius: 3px;">
-                        <br>
-                        <button onclick="handleSocOverride('{soc_minute_str}', document.getElementById('{input_id}').value, '{action}', false)"
-                                style="padding: 6px 12px; border-radius: 3px; font-size: 12px;">
-                            Set SOC Target
-                        </button>
-                    </div>
-                """
-            button_html += f"""
-                    </div>
-                </div>
-            </td>"""
+        # Build overrides object
+        overrides = {
+            "manual_charge_times": manual_charge_times,
+            "manual_export_times": manual_export_times,
+            "manual_freeze_charge_times": manual_freeze_charge_times,
+            "manual_freeze_export_times": manual_freeze_export_times,
+            "manual_demand_times": manual_demand_times,
+            "manual_import_rates": manual_import_rates_list,
+            "manual_export_rates": manual_export_rates_list,
+            "manual_load_adjust": manual_load_adjust_list,
+            "manual_soc": manual_soc_list,
+        }
 
-            return button_html
+        # Calculate hash of overrides for change detection
+        overrides_json = json.dumps(overrides, sort_keys=True)
+        overrides_hash = hashlib.md5(overrides_json.encode()).hexdigest()
 
-        # Process the HTML plan to add buttons to time cells
-        processed_html = re.sub(time_pattern, add_button_to_time, html_plan)
-        processed_html = re.sub(import_pattern, add_button_to_import, processed_html)
-        processed_html = re.sub(export_pattern, add_button_to_export, processed_html)
-        processed_html = re.sub(load_pattern, add_button_to_load, processed_html)
-        processed_html = re.sub(soc_pattern, add_button_to_soc, processed_html)
+        # Embed initial data in script tags
+        text += "<script>"
+        text += f"window.planData = {json.dumps(plan_json)};"
+        text += f"window.yesterdayData = {json.dumps(yesterday_json)};"
+        text += f"window.baselineData = {json.dumps(baseline_json)};"
+        text += f"window.overridesData = {json.dumps(overrides)};"
+        text += f"window.overridesHash = {json.dumps(overrides_hash)};"
+        text += "</script>"
 
-        text += processed_html + "</body></html>\n"
+        # Include renderer JavaScript (which declares newestDataTimestamp variable)
+        text += get_plan_renderer_js()
+
+        # Initialize newestDataTimestamp from the initial data loaded, and start automatic updates
+        text += "<script>"
+        text += "// Find newest timestamp from initial data\n"
+        text += "const initialTimestamps = [];\n"
+        text += "if (window.planData && window.planData.timestamp) initialTimestamps.push(window.planData.timestamp);\n"
+        text += "if (window.yesterdayData && window.yesterdayData.timestamp) initialTimestamps.push(window.yesterdayData.timestamp);\n"
+        text += "if (window.baselineData && window.baselineData.timestamp) initialTimestamps.push(window.baselineData.timestamp);\n"
+        text += "if (initialTimestamps.length > 0) newestDataTimestamp = initialTimestamps.reduce((a, b) => a > b ? a : b);\n"
+        text += "window.addEventListener('load', function() { updateTimestampDisplay(); startPlanUpdates(); });\n"
+        text += "window.addEventListener('resize', adjustResponsiveSizes);\n"
+        text += "</script>"
+
+        text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
     async def html_log(self, request):
@@ -2378,9 +2322,9 @@ chart.render();
         Return the Predbat debug yaml data
         """
         yaml_debug = self.base.create_debug_yaml(write_file=False)
-        return await self.html_file("predbat_debug.yaml", yaml_debug)
+        return await self.html_file("predbat_debug.yaml.txt", yaml_debug)
 
-    async def html_file_load(self, filename):
+    async def html_file_load(self, filename, also_file=None, as_file=None):
         """
         Load a file and serve it up
         """
@@ -2388,13 +2332,20 @@ chart.render();
         if os.path.exists(filename):
             with open(filename, "r") as f:
                 data = f.read()
-        return await self.html_file(filename, data)
+        if also_file and os.path.exists(also_file):
+            with open(also_file, "r") as f:
+                data2 = f.read()
+                if data2 and data:
+                    data = data + "\n" + data2
+                elif data2:
+                    data = data2
+        return await self.html_file(as_file or filename, data)
 
     async def html_debug_log(self, request):
-        return await self.html_file_load("predbat.log")
+        return await self.html_file_load("predbat.1.log", also_file="predbat.log", as_file="predbat.log")
 
     async def html_debug_apps(self, request):
-        return await self.html_file_load("apps.yaml")
+        return await self.html_file_load("apps.yaml", as_file="apps.yaml.txt")
 
     async def html_debug_plan(self, request):
         html_plan = self.get_state_wrapper(entity_id=self.prefix + ".plan_html", attribute="html", default="<p>No plan available</p>")
@@ -2412,7 +2363,7 @@ chart.render();
         text += get_dashboard_css()
         text += get_dashboard_collapsible_js()
         text += "<body>\n"
-        text += self.get_status_html(self.base.current_status, THIS_VERSION)
+        text += self.get_status_html(THIS_VERSION)
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
@@ -2430,7 +2381,7 @@ chart.render();
                     # Update mode - it's a select type
                     entity_id = f"select.{self.prefix}_{key}"
                     await self.base.ha_interface.set_state_external(entity_id, value)
-                elif key in ["debug_enable", "set_read_only"]:
+                elif key in ["debug_enable", "set_read_only", "active"]:
                     # Update switches - convert to boolean
                     entity_id = f"switch.{self.prefix}_{key}"
                     bool_value = value == "on"
@@ -2592,14 +2543,11 @@ chart.render();
             ]
             text += self.render_chart(series_data, "kW", "Solar Forecast", now_str)
         elif chart == "LoadML":
+            load_today_history = self.get_history_with_now_attrs("sensor." + self.prefix + "_load_ml_stats", 7)
             # Get historical load data for last 24 hours
-            load_today = prune_today(history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_stats", 1, required=False), attributes=True, state_key="load_today"), self.now_utc, self.midnight_utc, prune=False)
-            load_today_h1 = prune_today(
-                history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_stats", 1, required=False), attributes=True, state_key="load_today_h1"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60 * 1
-            )
-            load_today_h8 = prune_today(
-                history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_stats", 1, required=False), attributes=True, state_key="load_today_h8"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60 * 8
-            )
+            load_today = prune_today(history_attribute(load_today_history, attributes=True, state_key="load_today"), self.now_utc, self.midnight_utc, prune=False)
+            load_today_h1 = prune_today(history_attribute(load_today_history, attributes=True, state_key="load_today_h1"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60 * 1)
+            load_today_h8 = prune_today(history_attribute(load_today_history, attributes=True, state_key="load_today_h8"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60 * 8)
 
             # Get ML forecast from load_forecast_ml entity results
             load_ml_forecast = self.get_entity_results("sensor." + self.prefix + "_load_ml_forecast")
@@ -2620,13 +2568,11 @@ chart.render();
             load_ml_forecast_energy = self.get_entity_results("sensor." + self.prefix + "_load_ml_forecast")
             load_ml_forecast_power = {}
 
-            power_today = prune_today(history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_stats", 7, required=False), attributes=True, state_key="power_today"), self.now_utc, self.midnight_utc, prune=False)
-            power_today_h1 = prune_today(
-                history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_stats", 7, required=False), attributes=True, state_key="power_today_h1"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60 * 1
-            )
-            power_today_h8 = prune_today(
-                history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_stats", 7, required=False), attributes=True, state_key="power_today_h8"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60 * 8
-            )
+            # Fetch stats history once and append current attributes at now_utc
+            power_today_history = self.get_history_with_now_attrs("sensor." + self.prefix + "_load_ml_stats", 7)
+            power_today = prune_today(history_attribute(power_today_history, attributes=True, state_key="power_today"), self.now_utc, self.midnight_utc, prune=False)
+            power_today_h1 = prune_today(history_attribute(power_today_history, attributes=True, state_key="power_today_h1"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60 * 1)
+            power_today_h8 = prune_today(history_attribute(power_today_history, attributes=True, state_key="power_today_h8"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60 * 8)
 
             # Sort timestamps and calculate deltas to get energy per interval
             if load_ml_forecast_energy:
@@ -2682,13 +2628,14 @@ chart.render();
             text += self.render_chart(series_data, "kW", "ML Load & PV Power with Temperature", now_str, extra_yaxis=secondary_axis)
         elif chart == "Savings":
             # Get daily savings data (historical)
-            savings_predbat_hist = history_attribute(self.get_history_wrapper(self.prefix + ".savings_yesterday_predbat", 28, required=False), daily=True, offset_days=-1, pounds=True)
-            savings_pvbat_hist = history_attribute(self.get_history_wrapper(self.prefix + ".savings_yesterday_pvbat", 28, required=False), daily=True, offset_days=-1, pounds=True)
-            cost_yesterday_hist = history_attribute(self.get_history_wrapper(self.prefix + ".cost_yesterday", 28, required=False), daily=True, offset_days=-1, pounds=True)
+            # first=False ensures we use the last (most recent) update per day, not a stale midnight echo
+            savings_predbat_hist = history_attribute(self.get_history_wrapper(self.prefix + ".savings_yesterday_predbat", 28, required=False), daily=True, offset_days=-1, pounds=True, first=False)
+            savings_pvbat_hist = history_attribute(self.get_history_wrapper(self.prefix + ".savings_yesterday_pvbat", 28, required=False), daily=True, offset_days=-1, pounds=True, first=False)
+            cost_yesterday_hist = history_attribute(self.get_history_wrapper(self.prefix + ".cost_yesterday", 28, required=False), daily=True, offset_days=-1, pounds=True, first=False)
 
             # Get cumulative/total savings over time (historical)
-            savings_total_predbat_hist = history_attribute(self.get_history_wrapper(self.prefix + ".savings_total_predbat", 28, required=False), daily=True, pounds=True)
-            savings_total_pvbat_hist = history_attribute(self.get_history_wrapper(self.prefix + ".savings_total_pvbat", 28, required=False), daily=True, pounds=True)
+            savings_total_predbat_hist = history_attribute(self.get_history_wrapper(self.prefix + ".savings_total_predbat", 28, required=False), daily=True, pounds=True, first=False)
+            savings_total_pvbat_hist = history_attribute(self.get_history_wrapper(self.prefix + ".savings_total_pvbat", 28, required=False), daily=True, pounds=True, first=False)
 
             series_data = [
                 # Daily savings (bars) on primary axis
@@ -3019,7 +2966,7 @@ chart.render();
                 return web.json_response({"success": False, "message": f"Error writing to apps.yaml: {str(e)}"})
 
         except ImportError:
-            return web.json_response({"success": False, "message": "ruamel.yaml library not available, update Predbat add-on first."})
+            return web.json_response({"success": False, "message": "ruamel.yaml library not available, update Predbat app first."})
         except Exception as e:
             return web.json_response({"success": False, "message": f"Unexpected error: {str(e)}"})
 
@@ -3214,8 +3161,8 @@ chart.render();
                 compare_hist[id] = {}
                 result = self.base.comparison.get_comparison(id)
                 if result:
-                    compare_hist[id]["cost"] = history_attribute(self.get_history_wrapper(result["entity_id"], 28), daily=True, pounds=True)
-                    compare_hist[id]["metric"] = history_attribute(self.get_history_wrapper(result["entity_id"], 28), state_key="metric", attributes=True, daily=True, pounds=True)
+                    compare_hist[id]["cost"] = history_attribute(self.get_history_wrapper(result["entity_id"], 28, required=False), daily=True, pounds=True)
+                    compare_hist[id]["metric"] = history_attribute(self.get_history_wrapper(result["entity_id"], 28, required=False), state_key="metric", attributes=True, daily=True, pounds=True)
 
         compare_list = self.get_arg("compare_list", [])
 
@@ -3592,15 +3539,25 @@ chart.render();
             if minutes_from_now >= 48 * 60:
                 return web.json_response({"success": False, "message": "Override time must be within 48 hours from now."}, status=400)
 
+            # Calculate minutes from midnight for looking up existing rates
+            minutes_from_midnight = int((override_time - self.midnight_utc).total_seconds() / 60)
+
             selection_option = "{}={}".format(override_time.strftime("%a %H:%M"), rate)
-            clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), rate)
+
+            # For clear operations, we need to use the actual stored rate value, not the passed rate
             if action == "Clear Import":
+                manual_import_rates = self.base.manual_rates("manual_import_rates")
+                actual_rate = manual_import_rates.get(minutes_from_midnight, rate)
+                clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), actual_rate)
                 await self.base.async_manual_select("manual_import_rates", clear_option)
             elif action == "Set Import":
                 item = self.base.config_index.get("manual_import_value", {})
                 await self.base.ha_interface.set_state_external(item.get("entity", None), rate)
                 await self.base.async_manual_select("manual_import_rates", selection_option)
             elif action == "Clear Export":
+                manual_export_rates = self.base.manual_rates("manual_export_rates")
+                actual_rate = manual_export_rates.get(minutes_from_midnight, rate)
+                clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), actual_rate)
                 await self.base.async_manual_select("manual_export_rates", clear_option)
             elif action == "Set Export":
                 item = self.base.config_index.get("manual_export_value", {})
@@ -3611,12 +3568,18 @@ chart.render();
                 await self.base.ha_interface.set_state_external(item.get("entity", None), rate)
                 await self.base.async_manual_select("manual_load_adjust", selection_option)
             elif action == "Clear Load":
+                manual_load_adjust = self.base.manual_rates("manual_load_adjust")
+                actual_rate = manual_load_adjust.get(minutes_from_midnight, rate)
+                clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), actual_rate)
                 await self.base.async_manual_select("manual_load_adjust", clear_option)
             elif action == "Set SOC":
                 item = self.base.config_index.get("manual_soc_value", {})
                 await self.base.ha_interface.set_state_external(item.get("entity", None), rate)
                 await self.base.async_manual_select("manual_soc", selection_option)
             elif action == "Clear SOC":
+                manual_soc = self.base.manual_rates("manual_soc")
+                actual_rate = manual_soc.get(minutes_from_midnight, rate)
+                clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), actual_rate)
                 await self.base.async_manual_select("manual_soc", clear_option)
             else:
                 self.log("ERROR: Unknown action for rate override")
@@ -4000,6 +3963,18 @@ document.addEventListener('DOMContentLoaded', function() {
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
+    async def html_inverter_refresh(self, request):
+        """
+        Handle inverter refresh request by resetting the last fetch time
+        """
+        try:
+            self.log("Inverter refresh requested from web interface")
+            self.base.inverter_data_last_fetch = None
+            return web.json_response({"success": True, "message": "Inverter refresh initiated"})
+        except Exception as e:
+            self.log(f"ERROR: Failed to initiate inverter refresh: {str(e)}")
+            return web.json_response({"success": False, "message": str(e)}, status=500)
+
     async def html_restart(self, request):
         """
         Handle restart request by setting fatal_error to trigger restart
@@ -4196,8 +4171,6 @@ document.addEventListener('DOMContentLoaded', function() {
                             converted_value = new_value
                         else:
                             # Try JSON first, then fall back to YAML
-                            import json
-
                             try:
                                 converted_value = json.loads(str(new_value))
                             except json.JSONDecodeError:
@@ -4504,6 +4477,36 @@ document.addEventListener('DOMContentLoaded', function() {
             self.log(f"Error downloading file: {str(e)}")
             return web.Response(text=f"Error downloading file: {str(e)}", status=500)
 
+    async def html_metrics_dashboard(self, request):
+        """
+        Return the Metrics Dashboard page rendered inside the standard PredBat web shell.
+        """
+        self.default_page = "./metrics_dashboard"
+
+        if not PROMETHEUS_AVAILABLE:
+            text = self.get_header("Predbat Metrics", refresh=0)
+            text += "<body>\n"
+            text += """<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh;text-align:center;padding:2rem;">
+<h1>Metrics Dashboard Unavailable</h1>
+<p><code>prometheus_client</code> is not installed.</p>
+<p>Install it with: <code>pip install prometheus_client</code></p>
+<p style="margin-top:1.5rem;"><a href="./dash" style="padding:10px 20px;background:#4CAF50;color:white;text-decoration:none;border-radius:4px;font-size:16px;">&larr; Back to Dashboard</a></p>
+</div>
+"""
+            text += "</body></html>\n"
+            return web.Response(text=text, content_type="text/html")
+
+        import json as _json
+
+        data_json = _json.dumps(metrics().to_dict())
+
+        text = self.get_header("Predbat Metrics", refresh=0)
+        text += "<body>\n"
+        text += get_metrics_dashboard_css()
+        text += get_metrics_dashboard_body(data_json)
+        text += "</body></html>\n"
+        return web.Response(content_type="text/html", text=text)
+
     async def html_internals(self, request):
         """
         Return the Internals page showing the class hierarchy and object inspection
@@ -4645,8 +4648,6 @@ document.addEventListener('DOMContentLoaded', function() {
         """
         Extract asyncio tasks from a thread's frame if it's running an event loop
         """
-        import asyncio
-
         tasks_info = []
 
         try:

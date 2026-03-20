@@ -55,6 +55,20 @@ class MockGECloudDirect(GECloudDirect):
         self.gateway_device = None
         self._now_utc_exact = datetime.now()
 
+        # Mock base with ha_interface for set_state_external calls
+        class MockHAInterface:
+            def __init__(self):
+                self.external_states = {}
+
+            async def set_state_external(self, entity_id, state):
+                self.external_states[entity_id] = state
+
+        class MockBase:
+            def __init__(self):
+                self.ha_interface = MockHAInterface()
+
+        self.base = MockBase()
+
     @property
     def now_utc_exact(self):
         """Mock now_utc_exact property"""
@@ -192,6 +206,7 @@ def test_ge_cloud(my_predbat=None):
         ("publish_registers", _test_publish_registers, "Publish registers"),
         ("publish_evc_data", _test_publish_evc_data, "Publish EVC data"),
         ("automatic_config", _test_async_automatic_config, "Automatic config"),
+        ("hybrid_detection", _test_hybrid_detection, "Hybrid inverter detection"),
         ("enable_defaults", _test_enable_default_options, "Enable default options"),
         ("download_single", _test_download_ge_data_single_day, "Download single day"),
         ("download_multi", _test_download_ge_data_multi_day, "Download multi-day"),
@@ -203,6 +218,7 @@ def test_ge_cloud(my_predbat=None):
         ("cache_corrupt", _test_load_ge_cache_corrupt_file, "Cache corrupt file"),
         ("regname_to_ha", _test_regname_to_ha, "Regname to HA conversion"),
         ("get_data", _test_get_data, "Get data method"),
+        ("filter_data", _test_filter_data, "Filter data method"),
     ]
 
     # Run all sub-tests
@@ -2098,7 +2114,7 @@ def _test_publish_info(my_predbat):
     ge_cloud = MockGECloudDirect()
     ge_cloud.config_args["prefix"] = "predbat"
 
-    info_data = {"info": {"battery": {"nominal_capacity": 186, "nominal_voltage": 51.2}, "max_charge_rate": 6000}}
+    info_data = {"info": {"battery": {"nominal_capacity": 186, "nominal_voltage": 51.2, "depth_of_discharge": 0.9}, "model": "GIV-HY3.6", "max_charge_rate": 6000}}
 
     ge_cloud.info["test123"] = info_data
     run_async(ge_cloud.publish_info("test123", info_data))
@@ -2110,6 +2126,26 @@ def _test_publish_info(my_predbat):
         return 1
     if ge_cloud.dashboard_items["sensor.predbat_gecloud_test123_battery_size"]["state"] != 9.52:
         print("ERROR: Expected battery size=9.52, got {}".format(ge_cloud.dashboard_items["sensor.predbat_gecloud_test123_battery_size"]["state"]))
+        return 1
+
+    # Check model entity is published with the model name and device_info as details attribute
+    model_entity = "sensor.predbat_gecloud_test123_model"
+    if model_entity not in ge_cloud.dashboard_items:
+        print("ERROR: Expected model entity to be published")
+        return 1
+    if ge_cloud.dashboard_items[model_entity]["state"] != "GIV-HY3.6":
+        print("ERROR: Expected model=GIV-HY3.6, got {}".format(ge_cloud.dashboard_items[model_entity]["state"]))
+        return 1
+    if ge_cloud.dashboard_items[model_entity]["attributes"].get("details") != info_data:
+        print("ERROR: Expected model details attribute to contain the full device_info")
+        return 1
+
+    # Check model entity uses unknown fallback when model key is absent
+    ge_cloud.dashboard_items.clear()
+    info_no_model = {"info": {"battery": {"nominal_capacity": 186, "nominal_voltage": 51.2}, "max_charge_rate": 6000}}
+    run_async(ge_cloud.publish_info("test123", info_no_model))
+    if ge_cloud.dashboard_items.get(model_entity, {}).get("state") != "Unknown":
+        print("ERROR: Expected model='Unknown' when model key absent, got {}".format(ge_cloud.dashboard_items.get(model_entity, {}).get("state")))
         return 1
 
     return 0
@@ -2253,6 +2289,9 @@ def _test_async_automatic_config(my_predbat):
         assert ge.config_args.get("ge_cloud_serial") == "BATTERY001", "ge_cloud_serial should be first battery"
         assert ge.config_args.get("givtcp_rest") is None, "givtcp_rest should be None"
 
+        # Verify eco mode toggle is configured as inverter_mode
+        assert ge.config_args.get("inverter_mode") == ["switch.predbat_gecloud_BATTERY001_enable_eco_mode"], "inverter_mode should point to eco toggle switch"
+
         # Verify sensor entities
         assert ge.config_args.get("load_today") == ["sensor.predbat_gecloud_BATTERY001_consumption_today"]
         assert ge.config_args.get("import_today") == ["sensor.predbat_gecloud_BATTERY001_grid_import_today"]
@@ -2298,6 +2337,7 @@ def _test_async_automatic_config(my_predbat):
         assert ge.config_args.get("discharge_target_soc") is None, "discharge_target_soc should be None"
         assert ge.config_args.get("charge_rate_percent") is None, "charge_rate_percent should be None"
         assert ge.config_args.get("discharge_rate_percent") is None, "discharge_rate_percent should be None"
+        assert ge.config_args.get("inverter_mode") == ["switch.predbat_gecloud_BATTERY002_enable_eco_mode"], "inverter_mode should point to eco toggle switch"
 
         # Test 3: Multiple batteries
         ge.config_args = {}
@@ -2312,6 +2352,7 @@ def _test_async_automatic_config(my_predbat):
         assert len(ge.config_args.get("load_today")) == 2, "load_today should have 2 entries"
         assert ge.config_args.get("load_today")[0] == "sensor.predbat_gecloud_BATTERY001_consumption_today"
         assert ge.config_args.get("load_today")[1] == "sensor.predbat_gecloud_BATTERY002_consumption_today"
+        assert ge.config_args.get("inverter_mode") == ["switch.predbat_gecloud_BATTERY001_enable_eco_mode", "switch.predbat_gecloud_BATTERY002_enable_eco_mode"], "inverter_mode should have 2 eco toggle entries"
 
         # Test 4: EMS configuration
         ge.config_args = {}
@@ -2379,6 +2420,54 @@ def _test_async_automatic_config(my_predbat):
         # EMS produces data for all inverters, so additional inverters get 0
         assert ge.config_args.get("battery_power") == ["sensor.predbat_gecloud_EMS001_battery_power", 0], "Second inverter should get 0 for battery_power"
         assert ge.config_args.get("pv_power") == ["sensor.predbat_gecloud_EMS001_solar_power", 0], "Second inverter should get 0 for pv_power"
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_hybrid_detection(my_predbat):
+    """Test hybrid vs AC-coupled inverter detection in async_automatic_config"""
+
+    async def test():
+        hybrid_entity = "switch.predbat_inverter_hybrid"
+
+        # Helper to run auto_config with given battery info and return the entity state
+        async def run(batteries_info):
+            ge = MockGECloudDirect()
+            ge.settings = {serial: {} for serial in batteries_info}
+            ge.info = {serial: {"info": {"model": model}} for serial, model in batteries_info.items()}
+            devices = {"ems": None, "gateway": None, "battery": list(batteries_info.keys())}
+            await ge.async_automatic_config(devices)
+            return ge.base.ha_interface.external_states.get(hybrid_entity)
+
+        # Standard hybrid inverter (no 'ac' or 'aio') -> switch ON (not ac_coupled)
+        state = await run({"INV001": "GIV-HY3.6"})
+        assert state is True, "Hybrid (GIV-HY3.6) should set inverter_hybrid ON, got {}".format(state)
+
+        # AC-coupled inverter ('ac' in model name) -> switch OFF
+        state = await run({"INV001": "GIV-AC3.0"})
+        assert state is False, "AC-coupled model should set inverter_hybrid OFF, got {}".format(state)
+
+        # All-In-One inverter ('aio' substring in model) -> switch OFF
+        state = await run({"INV001": "GIV-AIO3.6"})
+        assert state is False, "AIO model should set inverter_hybrid OFF, got {}".format(state)
+
+        # Mixed fleet: first is hybrid, second is AC-coupled -> detects AC-coupled (breaks early)
+        state = await run({"INV001": "GIV-HY3.6", "INV002": "GIV-AC3.0"})
+        # INV001 is hybrid (no ac/aio), INV002 has 'ac'. Loop hits INV001 first with no match,
+        # then INV002 triggers ac_coupled=True — result depends on iteration order.
+        # The dict preserves insertion order in Python 3.7+, so INV001 runs first without break,
+        # then INV002 triggers ac_coupled and breaks -> False.
+        assert state is False, "Fleet with an AC model should set inverter_hybrid OFF, got {}".format(state)
+
+        # Unknown/missing model (empty string) -> no match, stays hybrid
+        state = await run({"INV001": ""})
+        assert state is True, "Unknown/empty model should default to hybrid (ON), got {}".format(state)
+
+        # Model string is case-insensitive: uppercase 'AC' should still flag ac_coupled
+        state = await run({"INV001": "GIV-AC3.0-RACK"})
+        assert state is False, "Model with uppercase AC should set inverter_hybrid OFF, got {}".format(state)
 
         return 0
 
@@ -2988,6 +3077,100 @@ def _test_get_data(my_predbat):
         return 1
     if oldest != test_time:
         print("ERROR: Expected oldest_data_time, got {}".format(oldest))
+        return 1
+
+    return 0
+
+
+def _test_filter_data(my_predbat):
+    """Test GECloudData.filter_data() method"""
+    ge_data = MockGECloudData()
+
+    # Test 1: Strictly increasing values — all kept
+    mdata = [
+        {"last_updated": "T1", "consumption": 100},
+        {"last_updated": "T2", "consumption": 110},
+        {"last_updated": "T3", "consumption": 120},
+    ]
+    result = ge_data.filter_data(mdata, "consumption")
+    if len(result) != 3:
+        print("ERROR test1: Expected 3 items, got {}".format(len(result)))
+        return 1
+    if [r["consumption"] for r in result] != [100, 110, 120]:
+        print("ERROR test1: Expected [100, 110, 120], got {}".format([r["consumption"] for r in result]))
+        return 1
+
+    # Test 2: Flat/duplicate values — first kept, intermediates dropped, last always kept
+    mdata = [
+        {"last_updated": "T1", "consumption": 100},
+        {"last_updated": "T2", "consumption": 100},
+        {"last_updated": "T3", "consumption": 100},
+    ]
+    result = ge_data.filter_data(mdata, "consumption")
+    if len(result) != 2:
+        print("ERROR test2: Expected 2 items (first and last), got {}".format(len(result)))
+        return 1
+    if result[0]["last_updated"] != "T1" or result[-1]["last_updated"] != "T3":
+        print("ERROR test2: Expected T1 and T3, got {} and {}".format(result[0]["last_updated"], result[-1]["last_updated"]))
+        return 1
+
+    # Test 3: Decrementing values — skipped unless last
+    mdata = [
+        {"last_updated": "T1", "consumption": 110},
+        {"last_updated": "T2", "consumption": 100},
+        {"last_updated": "T3", "consumption": 120},
+    ]
+    result = ge_data.filter_data(mdata, "consumption")
+    # T1 kept (increase from -1), T2 skipped (decrease), T3 kept (increase from 110)
+    if len(result) != 2:
+        print("ERROR test3: Expected 2 items, got {}".format(len(result)))
+        return 1
+    if result[0]["last_updated"] != "T1" or result[1]["last_updated"] != "T3":
+        print("ERROR test3: Expected T1 and T3, got {} and {}".format(result[0]["last_updated"], result[1]["last_updated"]))
+        return 1
+
+    # Test 4: Last item always kept even when it decrements (the bug-fix case)
+    mdata = [
+        {"last_updated": "T1", "consumption": 100},
+        {"last_updated": "T2", "consumption": 99},
+    ]
+    result = ge_data.filter_data(mdata, "consumption")
+    if len(result) != 2:
+        print("ERROR test4: Expected 2 items (both kept), got {}".format(len(result)))
+        return 1
+    if result[0]["last_updated"] != "T1" or result[1]["last_updated"] != "T2":
+        print("ERROR test4: Expected T1 and T2, got {} and {}".format(result[0]["last_updated"], result[1]["last_updated"]))
+        return 1
+
+    # Test 5: Empty input — returns empty list
+    result = ge_data.filter_data([], "consumption")
+    if result != []:
+        print("ERROR test5: Expected [], got {}".format(result))
+        return 1
+
+    # Test 6: Items missing the measurement key — skipped
+    mdata = [
+        {"last_updated": "T1", "import": 50},
+        {"last_updated": "T2", "consumption": 100},
+    ]
+    result = ge_data.filter_data(mdata, "consumption")
+    if len(result) != 1 or result[0]["last_updated"] != "T2":
+        print("ERROR test6: Expected only T2, got {}".format(result))
+        return 1
+
+    # Test 7: Different measurement key (e.g. import)
+    mdata = [
+        {"last_updated": "T1", "import": 10},
+        {"last_updated": "T2", "import": 20},
+        {"last_updated": "T3", "import": 15},
+    ]
+    result = ge_data.filter_data(mdata, "import")
+    # T1 kept, T2 kept (increase), T3 kept (last, even though decrease)
+    if len(result) != 3:
+        print("ERROR test7: Expected 3 items, got {}".format(len(result)))
+        return 1
+    if result[-1]["last_updated"] != "T3":
+        print("ERROR test7: Expected last item T3, got {}".format(result[-1]["last_updated"]))
         return 1
 
     return 0

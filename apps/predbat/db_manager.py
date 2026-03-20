@@ -7,6 +7,14 @@
 # This module handles all SQL Lite database operations.
 # -----------------------------------------------------------------------------
 
+
+"""Async database manager with IPC queue.
+
+Wraps DatabaseEngine in an async-safe ComponentBase with thread-bridged
+IPC queue for database operations. Ensures thread-safe access to SQLite
+from multiple async contexts.
+"""
+
 from datetime import timedelta, datetime, timezone
 import asyncio
 import time
@@ -19,6 +27,13 @@ IPC_TIMEOUT = 60.0  # Seconds to wait for IPC response
 
 
 class DatabaseManager(ComponentBase):
+    """Async database manager with IPC queue.
+
+    Wraps DatabaseEngine in thread-bridged IPC for async-safe database
+    operations. Processes get_history, set_state, get_all_entities, and
+    get_state commands from the queue.
+    """
+
     def initialize(self, db_enable, db_days):
         self.db_days = db_days
         self.db_queue = []

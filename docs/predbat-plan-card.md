@@ -142,14 +142,12 @@ If the cost for the slot is 10p or more it will be coloured Orangey-Red, &frac12
 otherwise, it will be coloured White.
 
 - **Total** - The total cumulative cost so far for 'today' at the start of the slot, including the standing charge.
-At midnight tonight this cumulative cost will be reset to the daily standing charge (or zero if metric_standing_charge wasn't set in `apps.yaml`).<BR>
-Due to the way Predbat works, the total cost is always reported (in Predbat output entities, this HTML plan, in the [Apex charts](creating-charts.md), etc)
-as starting from midnight today and adding on from there.<BR>
+At midnight tonight this cumulative cost will be incremented by the daily standing charge (or zero if metric_standing_charge wasn't set in `apps.yaml`).<BR>
+Due to the way Predbat works, the total cost is always reported (in Predbat output entities, this HTML plan, in the [Apex charts](creating-charts.md), etc) as starting from midnight today and adding on from there into the future - it does NOT reset to zero at midnight.<BR>
 Looking at the sample Predbat plan above as an example, the plan starts at 10:00 with the total cost today already being £3.13. The house load is then fully met through the day and evening
 by the battery (with some PV top-up charging) so the total cost remains constant at £3.13.<BR>
 In the 22:30 and 23:00 slots there is a little grid import, and then at 23:30 there's grid import and the battery starts to be charged.
-As you can see the Total continues to increase in the plan past midnight with each Total being
-the Total from the preceding slot plus the Cost estimate from the preceding slot - a reminder that Total gives the running total *at the start* of the slot.<BR>
+As you can see the Total continues to increase in the plan past midnight with each Total being the Total from the preceding slot plus the Cost estimate from the preceding slot - a reminder that Total gives the running total *at the start* of the slot.<BR>
 The total cost is always coloured White.
 
 - **CO2 (g/kWh)** - The estimated CO2 Carbon intensity emitted by the grid when generating electricity at the start of the slot.
@@ -209,6 +207,8 @@ to tailor how the Predbat plan looks and is highly recommended if you want to ch
 
 - Change the sequence of columns and which columns are shown in the plan
 - Restyle the columns, or retain the Predbat original colour scheme
+- Add end of day total row
+- Reset Total Cost to zero at the start of each new day
 - Easily change Predbat's planned activity for a slot by clicking on the slot time, then selecting Demand, Charge, Export, Freeze Charge or Freeze Export
 - Apply custom light/dark themes
 - Show the weather forecast alongside the plan

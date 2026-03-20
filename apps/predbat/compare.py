@@ -4,6 +4,15 @@
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 
+
+"""Tariff comparison engine.
+
+Runs optimisation scenarios across different energy tariffs to compare
+costs, enabling users to evaluate whether switching tariffs would reduce
+their energy bills. Loads tariff definitions from YAML and generates
+per-tariff plan visualisations.
+"""
+
 import os
 from datetime import datetime
 from utils import dp0, dp2
@@ -17,6 +26,13 @@ import copy
 
 
 class Compare:
+    """Tariff comparison engine.
+
+    Runs optimisation scenarios across different energy tariffs loaded
+    from YAML configuration, generating per-tariff plans and cost
+    comparisons to evaluate tariff switching decisions.
+    """
+
     def __init__(self, my_predbat):
         self.pb = my_predbat
         self.log = self.pb.log

@@ -1,3 +1,10 @@
+"""Future energy rate prediction from Nord Pool and similar APIs.
+
+Fetches wholesale energy prices and calibrates them against actual retail
+tariff rates to predict future import/export prices beyond the current
+Octopus tariff period.
+"""
+
 from datetime import datetime, timedelta
 import requests
 import json
@@ -10,6 +17,12 @@ TIME_FORMAT_NORD = "%d-%m-%YT%H:%M:%S%z"
 
 
 class FutureRate:
+    """Future energy rate prediction from Nord Pool wholesale prices.
+
+    Fetches wholesale prices and calibrates them against actual retail
+    rates to predict import/export prices beyond the current tariff period.
+    """
+
     def __init__(self, base):
         self.base = base
         self.record_status = base.record_status

@@ -7,6 +7,14 @@
 # This module handles all SQL Lite database operations.
 # -----------------------------------------------------------------------------
 
+
+"""SQLite database engine for entity state persistence.
+
+Provides the DatabaseEngine class that manages a local SQLite database
+for storing entity states and history, with automatic pruning of old
+data and deduplication of unchanged states.
+"""
+
 import sqlite3
 import json
 from datetime import datetime, timedelta
@@ -15,6 +23,13 @@ TIME_FORMAT_DB = "%Y-%m-%dT%H:%M:%S.%f"
 
 
 class DatabaseEngine:
+    """SQLite database engine for entity state persistence.
+
+    Manages a local SQLite database for storing entity states and history
+    with automatic pruning, deduplication, and keep-level classification
+    (Intra-hour, Hourly, Daily).
+    """
+
     def __init__(self, base, db_days):
         self.base = base
         self.log = base.log

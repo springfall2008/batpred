@@ -1,7 +1,9 @@
 aiohttp
 coverage
 matplotlib
+numpy==2.3.5
 pre-commit
+prometheus-client
 pyjwt
 pytz
 requests

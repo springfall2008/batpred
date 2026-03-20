@@ -163,6 +163,7 @@ def run_execute_test(
     soc_kw=0,
     soc_max=10,
     car_charging_from_battery=False,
+    car_energy_reported_load=True,
     read_only=False,
     set_read_only_axle=False,
     set_soc_enable=True,
@@ -284,6 +285,7 @@ def run_execute_test(
     my_predbat.set_export_freeze = True
     my_predbat.set_discharge_during_charge = set_discharge_during_charge
     my_predbat.car_charging_from_battery = car_charging_from_battery
+    my_predbat.car_energy_reported_load = car_energy_reported_load
     my_predbat.car_charging_soc[0] = car_soc
 
     # Shift on plan?
@@ -1826,8 +1828,27 @@ def run_execute_tests(my_predbat):
         set_export_window=True,
         soc_kw=100,
         assert_status="Exporting",
-        car_slot=charge_window_best,
+        car_slot=charge_window_best_slot,
         car_charging_from_battery=True,
+        assert_force_export=True,
+        assert_discharge_start_time_minutes=my_predbat.minutes_now,
+        assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
+        assert_immediate_soc_target=0,
+    )
+    if failed:
+        return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "discharge_car_full_bat2",
+        export_window_best=export_window_best,
+        export_limits_best=export_limits_best,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=100,
+        assert_status="Exporting",
+        car_slot=charge_window_best_slot,
+        car_charging_from_battery=False,
         assert_force_export=True,
         assert_discharge_start_time_minutes=my_predbat.minutes_now,
         assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
@@ -1847,6 +1868,22 @@ def run_execute_tests(my_predbat):
         car_slot=charge_window_best_slot,
         assert_immediate_soc_target=100,
         car_charging_from_battery=False,
+    )
+    if failed:
+        return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "no_discharge_car_demand1b",
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=100,
+        assert_status="Demand",
+        assert_pause_discharge=False,
+        car_slot=charge_window_best_slot,
+        assert_immediate_soc_target=100,
+        car_charging_from_battery=False,
+        car_energy_reported_load=False,
     )
     if failed:
         return failed

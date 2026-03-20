@@ -7,6 +7,14 @@
 # Credits to: https://github.com/dan-r/ohmepy for the original code.
 # -----------------------------------------------------------------------------
 
+
+"""Ohme EV charger integration.
+
+Provides monitoring and control of Ohme EV chargers including charge
+session tracking, mode control (smart/max/paused), and integration with
+Octopus Intelligent dispatch for coordinated EV charging.
+"""
+
 import asyncio
 import json
 from enum import Enum
@@ -20,6 +28,7 @@ from typing import Any, Dict, List, Union
 from datetime import timedelta, timezone
 from const import TIME_FORMAT_HA
 from component_base import ComponentBase
+from predbat_metrics import record_api_call
 
 GOOGLE_API_KEY = "AIzaSyC8ZeZngm33tpOXLpbXeKfwtyZ1WrkbdBY"  # cspell:disable-line
 VERSION = "1.5.1"
@@ -501,6 +510,10 @@ class OhmeApiClient:
             text = await resp.text()
             msg = f"Warn:Ohme API response error: {url}, {resp.status}; {text}"
             self.log(msg)
+            if resp.status in (401, 403):
+                record_api_call("ohme", False, "auth_error")
+            else:
+                record_api_call("ohme", False, "server_error")
             raise ApiException(msg)
 
     async def _make_request(
@@ -518,23 +531,29 @@ class OhmeApiClient:
             self._close_session = True
 
         async with asyncio.timeout(self._timeout):
-            async with self._session.request(
-                method=method,
-                url=f"https://api.ohme.io{url}",
-                data=json.dumps(data) if data and method in {"PUT", "POST"} else data,
-                headers={
-                    "Authorization": f"Firebase {self._token}",
-                    "Content-Type": "application/json",
-                    "User-Agent": f"ohmepy/{VERSION}",
-                },
-            ) as resp:
-                # self.log("Info: %s request to %s, status code %s" % (method, url, resp.status))
-                await self._handle_api_error(url, resp)
+            try:
+                async with self._session.request(
+                    method=method,
+                    url=f"https://api.ohme.io{url}",
+                    data=json.dumps(data) if data and method in {"PUT", "POST"} else data,
+                    headers={
+                        "Authorization": f"Firebase {self._token}",
+                        "Content-Type": "application/json",
+                        "User-Agent": f"ohmepy/{VERSION}",
+                    },
+                ) as resp:
+                    # self.log("Info: %s request to %s, status code %s" % (method, url, resp.status))
+                    await self._handle_api_error(url, resp)
 
-                if skip_json and method == "POST":
-                    return await resp.text()
-
-                return await resp.json() if method != "PUT" else True
+                    if skip_json and method == "POST":
+                        result = await resp.text()
+                    else:
+                        result = await resp.json() if method != "PUT" else True
+                    record_api_call("ohme")
+                    return result
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                record_api_call("ohme", False, "connection_error")
+                raise ApiException(f"Ohme connection error: {e}") from e
 
     def _charge_in_progress(self) -> bool:
         """Is a charge in progress? Used to determine if schedule or session should be adjusted."""

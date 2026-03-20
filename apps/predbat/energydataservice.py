@@ -1,8 +1,21 @@
+"""Danish Energi Data Service integration for electricity rates.
+
+Reads hourly electricity rates from the Energi Data Service Home Assistant
+integration sensor, applies tariff adjustments, and converts to per-minute
+rate dictionaries.
+"""
+
 from datetime import datetime
 from utils import dp4
 
 
 class Energidataservice:
+    """Danish Energi Data Service integration for hourly electricity rates.
+
+    Reads rates from HA sensor attributes, applies tariff adjustments,
+    and converts to per-minute rate dictionaries.
+    """
+
     def fetch_energidataservice_rates(self, entity_id, adjust_key=None):
         """
         Read Energi Data Service attributes, add tariffs, and expand to per-minute values

@@ -75,11 +75,11 @@ This component is always enabled and required for Predbat to function.
 
 | Option | Type | Required | Default | Config Key | Description |
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
-| `ha_url` | String | No | `http://supervisor/core` | `ha_url` | Home Assistant API URL (the default is for when using an HA add-on) |
-| `ha_key` | String | No | Auto-detected | `ha_key` | Home Assistant access token (auto-detected when running as add-on) |
-| `db_enable` | Boolean | No | False | `db_enable` | Enable database integration |
-| `db_mirror_ha` | Boolean | No | False | `db_mirror_ha` | Copy Home Assistant data into Predbat's database |
-| `db_primary` | Boolean | No | False | `db_primary` | Use Predbat's database instead of Home Assistant for the primary data source |
+| `ha_url` | String | No | `http://supervisor/core` | `ha_url` | Home Assistant API URL (the default is for when using an HA app) |
+| `ha_key` | String | No | Auto-detected | `ha_key` | Home Assistant access token (auto-detected when running as app) |
+| `db_enable` | Boolean | No | false | `db_enable` | Enable database integration |
+| `db_mirror_ha` | Boolean | No | false | `db_mirror_ha` | Copy Home Assistant data into Predbat's database |
+| `db_primary` | Boolean | No | false | `db_primary` | Use Predbat's database instead of Home Assistant for the primary data source |
 
 ---
 
@@ -118,7 +118,7 @@ Provides a built-in web server that lets you view and manage Predbat through you
 
 #### How to access (web)
 
-If you use Predbat as a Home Assistant add on then click 'Open Web UI' from the add-on or add Predbat Web UI to your side bar.
+If you use Predbat as a Home Assistant app then click 'Open Web UI' from the app or add Predbat Web UI to your side bar.
 If you run Predbat outside then you can access it from the port as configured:  `http://homename:5052`
 
 ---
@@ -147,7 +147,7 @@ The MCP server requires a secret key for authentication. Keep this secret secure
 
 | Option | Type | Required | Default | Config Key | Description |
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
-| `mcp_enable` | Boolean | Yes | False | `mcp_enable` | Set to `true` to enable the MCP server |
+| `mcp_enable` | Boolean | Yes | false | `mcp_enable` | Set to `true` to enable the MCP server |
 | `mcp_secret` | String | No | `predbat_mcp_secret` | `mcp_secret` | Secret key for authentication - change this! |
 | `mcp_port` | Integer | No | 8199 | `mcp_port` | Port number for the MCP server |
 
@@ -209,7 +209,7 @@ Connects directly to the GivEnergy Cloud to control your GivEnergy inverter and 
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `ge_cloud_direct` | Boolean | Yes | - | `ge_cloud_direct` | Set to `true` to enable GivEnergy Cloud control |
 | `api_key` | String | Yes | - | `ge_cloud_key` | Your GivEnergy Cloud API key |
-| `automatic` | Boolean | No | False | `ge_cloud_automatic` | Set to `true` to automatically configured Predbat to use GivEnergy Cloud direct (no additional apps.yaml changes required) |
+| `automatic` | Boolean | No | false | `ge_cloud_automatic` | Set to `true` to automatically configured Predbat to use GivEnergy Cloud direct (no additional apps.yaml changes required) |
 
 #### How to get your API key (gecloud)
 
@@ -271,7 +271,7 @@ Connects to your Octopus Energy account to automatically download your tariff ra
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `key` | String | Yes | - | `octopus_api_key` | Your Octopus Energy API key |
 | `account_id` | String | Yes | - | `octopus_api_account` | Your Octopus Energy account number (starts with A-) |
-| `automatic` | Boolean | No | True | `octopus_automatic` | Set to `true` to automatically configure Predbat to use this Component (no need to update apps.yaml) |
+| `automatic` | Boolean | No | true | `octopus_automatic` | Set to `true` to automatically configure Predbat to use this Component (no need to update apps.yaml) |
 
 #### How to get your API credentials (octopus)
 
@@ -312,7 +312,7 @@ Select control my battery for 'Events Only'.
 - Binary sensor (default name `binary_sensor.predbat_axle_event`) is `on` when an event is currently active, `off` otherwise
 - Current event details and event history are available as sensor attributes ('event_current' and 'event_history')
 - Alert notification sent when Predbat adds a new Axle VPP event to the Predbat plan
-- When **axle_control** is enabled (set to True in `apps.yaml`), Predbat will enter read-only mode during active VPP events (default is False)
+- When **axle_control** is enabled (set to `true` in `apps.yaml`), Predbat will enter read-only mode during active VPP events (default is `false`)
     - Read-only mode prevents Predbat from controlling the inverter while VPP events are running
     - Status will show as "Read-Only (Axle)" when this feature is active
 
@@ -322,8 +322,8 @@ Select control my battery for 'Events Only'.
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `api_key` | String | Yes | - | `axle_api_key` | Your Axle Energy API key from the VPP portal |
 | `pence_per_kwh` | Integer | No | 100 | `axle_pence_per_kwh` | Payment rate in pence per kWh for VPP events |
-| `automatic` | Bool | No | True | `axle_automatic` | When enabled use the default Axle event entity name (**binary_sensor.predbat_axle_event**) |
-| `control` | Bool | No | False | `axle_control` | When enabled puts Predbat into Read-Only mode during Axle events |
+| `automatic` | Bool | No | true | `axle_automatic` | When enabled use the default Axle event entity name (**binary_sensor.predbat_axle_event**) |
+| `control` | Bool | No | false | `axle_control` | When enabled puts Predbat into Read-Only mode during Axle events |
 
 #### How to get your API credentials (axle)
 
@@ -385,8 +385,8 @@ It publishes comprehensive sensors for battery status, energy totals, and provid
 | `client_secret` | String | Yes | - | `solax_client_secret` | Your SolaX Cloud API client secret |
 | `region` | String | No | 'eu' | `solax_region` | API region: 'eu', 'us', or 'cn' |
 | `plant_id` | String | No | None | `solax_plant_id` | Optional: Filter to specific plant ID |
-| `automatic` | Boolean | No | False | `solax_automatic` | Auto-configure all entities and inverters |
-| `enable_controls` | Boolean | No | True | `solax_enable_controls` | Enable inverter control (false for read-only) |
+| `automatic` | Boolean | No | false | `solax_automatic` | Auto-configure all entities and inverters |
+| `enable_controls` | Boolean | No | true | `solax_enable_controls` | Enable inverter control (false for read-only) |
 
 **Security Note:** Store `solax_client_id` and especially `solax_client_secret` in `secrets.yaml`:
 
@@ -514,7 +514,7 @@ Integrates with Fox ESS inverters for monitoring and controlling Fox ESS battery
 | Option | Type | Required | Default | Config Key | Description |
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `key` | String | Yes | - | `fox_key` | Your Fox ESS API key |
-| `automatic` | Boolean | No | False | `fox_automatic` | Set to `true` to automatically configured Predbat to use the Fox inverter (no manual apps.yaml updates required) |
+| `automatic` | Boolean | No | false | `fox_automatic` | Set to `true` to automatically configured Predbat to use the Fox inverter (no manual apps.yaml updates required) |
 
 ---
 
@@ -549,9 +549,9 @@ Integrates with Solis inverters for monitoring and controlling Solis battery sys
 | `api_key` | String | Yes | - | `solis_api_key` | Your Solis Cloud API Key (KeyId) |
 | `api_secret` | String | Yes | - | `solis_api_secret` | Your Solis Cloud API Secret (KeySecret) |
 | `inverter_sn` | String/List | No | - | `solis_inverter_sn` | Inverter serial number(s) - Leave unset to see all. Single string or list of strings for multiple inverters |
-| `automatic` | Boolean | No | False | `solis_automatic` | Set to `true` to automatically configure Predbat to use the Solis inverter (no manual apps.yaml sensor updates required) |
+| `automatic` | Boolean | No | false | `solis_automatic` | Set to `true` to automatically configure Predbat to use the Solis inverter (no manual apps.yaml sensor updates required) |
 | `base_url` | String | No | Auto-detected | `solis_base_url` | Solis Cloud API base URL (automatically selects correct region) |
-| `control_enable` | Boolean | No | True | `solis_control_enable` | Enable/disable control commands (set to false for monitoring only) |
+| `control_enable` | Boolean | No | true | `solis_control_enable` | Enable/disable control commands (set to false for monitoring only) |
 
 ---
 
@@ -615,7 +615,7 @@ Note: To use the carbon data in Predbat you also have to turn on **switch.predba
 | Option | Type | Required | Default | Config Key | Description |
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `postcode` | String | Yes | - | `carbon_postcode` | Your UK postcode for regional carbon intensity data |
-| `automatic` | Boolean | No | False | `carbon_automatic` | Set to `true` to automatically point Predbat to the carbon data |
+| `automatic` | Boolean | No | false | `carbon_automatic` | Set to `true` to automatically point Predbat to the carbon data |
 
 ---
 
@@ -648,7 +648,7 @@ This temperature data is used by the ML Load Prediction component to improve loa
 
 | Option | Type | Required | Default | Config Key | Description |
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
-| `temperature_enable` | Boolean | Yes | False | `temperature_enable` | Set to `true` to enable temperature forecasts |
+| `temperature_enable` | Boolean | Yes | false | `temperature_enable` | Set to `true` to enable temperature forecasts |
 | `temperature_url` | String | No | Open-Meteo API URL | `temperature_url` | API URL with LATITUDE/LONGITUDE placeholders |
 | `temperature_latitude` | Float | No | Uses zone.home | `temperature_latitude` | Latitude for temperature forecast location |
 | `temperature_longitude` | Float | No | Uses zone.home | `temperature_longitude` | Longitude for temperature forecast location |
@@ -709,22 +709,30 @@ For a detailed explanation of how the neural network works and comprehensive con
 
 | Option | Type | Required | Default | Config Key | Description |
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
-| `load_ml_enable` | Boolean | Yes | False | `load_ml_enable` | Set to `True` to enable ML load prediction |
-| `load_ml_source` | Boolean | Yes | False | `load_ml_source` | Set to `True` to use the ML load prediction in Predbat |
+| `load_ml_enable` | Boolean | Yes | false | `load_ml_enable` | Set to `true` to enable ML load prediction |
+| `load_ml_source` | Boolean | No | false | `load_ml_source` | Set to `true` to use ML predictions in Predbat battery planning |
+| `load_ml_max_days_history` | Integer | No | 28 | `load_ml_max_days_history` | Maximum days of load history to fetch from HA on each poll (bounded by HA recorder retention) |
+| `load_ml_database_days` | Integer | No | 90 | `load_ml_database_days` | Days of history to accumulate in the on-disk database (`predbat_ml_history.npz`); set to 0 to disable the database |
 
-Note: load_today, pv_today and car_charging_energy apps.yaml configuration items are also used, but these should already be set in Predbat.
+Note: `load_today`, `pv_today` and `car_charging_energy` apps.yaml configuration items are also used, but these should already be set in Predbat.
 
 #### Configuration example (load_ml)
 
 ```yaml
 predbat:
   # Enable ML load prediction
-  load_ml_enable: True
+  load_ml_enable: true
   # Use the data in Predbat, can be false while exploring the predictions but not using them
-  load_ml_source: True
+  load_ml_source: true
+
+  # Optional: days of history to fetch from HA each poll (default 28, limited by HA retention)
+  # load_ml_max_days_history: 28
+
+  # Optional: days of history to accumulate on disk for training (default 90)
+  # load_ml_database_days: 90
 
   # Optional but recommended: enable temperature forecasts
-  temperature_enable: true  
+  temperature_enable: true
 ```
 
 #### Understanding model status (load_ml)

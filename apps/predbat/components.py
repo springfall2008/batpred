@@ -9,6 +9,14 @@
 # pylint: disable=attribute-defined-outside-init
 
 
+"""Component registry and lifecycle manager.
+
+Defines COMPONENT_LIST mapping all available components to their classes
+and configuration requirements, and provides the Components class for
+initialising, starting, stopping, and restarting components in the correct
+phase order. Routes HA events to components based on entity prefix filtering.
+"""
+
 from solcast import SolarAPI
 from gecloud import GECloudDirect, GECloudData
 from ohme import OhmeAPI
@@ -35,12 +43,11 @@ COMPONENT_LIST = {
         "class": DatabaseManager,
         "name": "Database Manager",
         "args": {
-            "db_enable": {"required": True, "config": "db_enable"},
+            "db_enable": {"required_true": True, "config": "db_enable"},
             "db_days": {"required": False, "config": "db_days", "default": 30},
         },
         "can_restart": False,
         "phase": 0,
-        "new": True,
     },
     "ha": {
         "class": HAInterface,
@@ -55,7 +62,7 @@ COMPONENT_LIST = {
         "can_restart": False,
         "phase": 0,
     },
-    "ha_history": {"class": HAHistory, "name": "Home Assistant History", "args": {}, "can_restart": False, "phase": 0, "new": True},
+    "ha_history": {"class": HAHistory, "name": "Home Assistant History", "args": {}, "can_restart": False, "phase": 0},
     "web": {
         "class": WebInterface,
         "name": "Web Interface",
@@ -197,6 +204,19 @@ COMPONENT_LIST = {
                 "required": False,
                 "config": "fox_inverter_sn",
             },
+            "auth_method": {
+                "required": False,
+                "default": "api_key",
+                "config": "fox_auth_method",
+            },
+            "token_expires_at": {
+                "required": False,
+                "config": "fox_token_expires_at",
+            },
+            "token_hash": {
+                "required": False,
+                "config": "fox_token_hash",
+            },
         },
         "phase": 1,
     },
@@ -229,7 +249,7 @@ COMPONENT_LIST = {
             "temperature_enable": {"required_true": True, "config": "temperature_enable", "default": False},
             "temperature_latitude": {"required": False, "config": "temperature_latitude", "default": None},
             "temperature_longitude": {"required": False, "config": "temperature_longitude", "default": None},
-            "temperature_url": {"required": False, "config": "temperature_url", "default": "https://api.open-meteo.com/v1/forecast?latitude=LATITUDE&longitude=LONGITUDE&hourly=temperature_2m&current=temperature_2m&past_days=7"},
+            "temperature_url": {"required": False, "config": "temperature_url", "default": "https://api.open-meteo.com/v1/forecast?latitude=LATITUDE&longitude=LONGITUDE&hourly=temperature_2m&current=temperature_2m&past_days=28"},
         },
         "phase": 1,
     },
@@ -238,10 +258,16 @@ COMPONENT_LIST = {
         "name": "Axle Energy",
         "event_filter": "predbat_axle_",
         "args": {
-            "api_key": {"required": True, "config": "axle_api_key"},
+            "api_key": {"required": False, "config": "axle_api_key"},
             "pence_per_kwh": {"required": False, "config": "axle_pence_per_kwh", "default": 100},
             "automatic": {"required": False, "config": "axle_automatic", "default": True},
+            "managed_mode": {"required": False, "config": "axle_managed_mode", "default": False},
+            "site_id": {"required": False, "config": "axle_site_id"},
+            "partner_username": {"required": False, "config": "axle_partner_username"},
+            "partner_password": {"required": False, "config": "axle_partner_password"},
+            "api_base_url": {"required": False, "config": "axle_api_base_url", "default": "https://api.axle.energy"},
         },
+        "required_or": ["api_key", "managed_mode"],
         "phase": 1,
     },
     "solax": {
@@ -285,6 +311,8 @@ COMPONENT_LIST = {
         "args": {
             "load_ml_enable": {"required_true": True, "config": "load_ml_enable", "default": False},
             "load_ml_source": {"required": False, "config": "load_ml_source", "default": False},
+            "load_ml_max_days_history": {"required": False, "config": "load_ml_max_days_history", "default": 28},
+            "load_ml_database_days": {"required": False, "config": "load_ml_database_days", "default": 90},
         },
         "phase": 1,
         "can_restart": True,
@@ -293,6 +321,13 @@ COMPONENT_LIST = {
 
 
 class Components:
+    """Central component registry and lifecycle manager.
+
+    Initialises, starts, stops, and restarts components in correct phase
+    order. Routes HA events (select, switch, number) to components based
+    on entity prefix filtering.
+    """
+
     def __init__(self, base):
         self.components = {}
         self.component_tasks = {}

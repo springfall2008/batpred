@@ -45,7 +45,7 @@ async def test_octopus_fetch_previous_dispatch(my_predbat):
     api = OctopusAPI(my_predbat, key="test-key", account_id="test-account", automatic=False)
 
     # Set up current dispatches (recent - within 5 days)
-    api.intelligent_device = {"completed_dispatches": [create_dispatch((now - timedelta(days=1)).strftime(DATE_TIME_STR_FORMAT), (now - timedelta(days=1) + timedelta(hours=6)).strftime(DATE_TIME_STR_FORMAT), 15.5)]}
+    api.intelligent_devices = {"test-device-abc123": {"completed_dispatches": [create_dispatch((now - timedelta(days=1)).strftime(DATE_TIME_STR_FORMAT), (now - timedelta(days=1) + timedelta(hours=6)).strftime(DATE_TIME_STR_FORMAT), 15.5)]}}
 
     # Set up old dispatches from entity state (recent - within 5 days)
     old_dispatches = [
@@ -56,9 +56,9 @@ async def test_octopus_fetch_previous_dispatch(my_predbat):
     # Mock get_state_wrapper to return old dispatches
     api.get_state_wrapper = Mock(return_value=old_dispatches)
 
-    await api.fetch_previous_dispatch()
+    await api.fetch_previous_dispatch("test-device-abc123")
 
-    completed = api.intelligent_device.get("completed_dispatches", [])
+    completed = api.intelligent_devices.get("test-device-abc123", {}).get("completed_dispatches", [])
 
     if len(completed) != 3:
         print(f"ERROR: Expected 3 dispatches after merge, got {len(completed)}")
@@ -82,11 +82,13 @@ async def test_octopus_fetch_previous_dispatch(my_predbat):
     print("\n*** Test 2: Skip dispatches that already exist ***")
     api = OctopusAPI(my_predbat, key="test-key", account_id="test-account", automatic=False)
 
-    api.intelligent_device = {
-        "completed_dispatches": [
-            create_dispatch((now - timedelta(days=1)).strftime(DATE_TIME_STR_FORMAT), (now - timedelta(days=1) + timedelta(hours=6)).strftime(DATE_TIME_STR_FORMAT), 15.5),
-            create_dispatch((now - timedelta(days=2)).strftime(DATE_TIME_STR_FORMAT), (now - timedelta(days=2) + timedelta(hours=6)).strftime(DATE_TIME_STR_FORMAT), 12.3),
-        ]
+    api.intelligent_devices = {
+        "test-device-abc123": {
+            "completed_dispatches": [
+                create_dispatch((now - timedelta(days=1)).strftime(DATE_TIME_STR_FORMAT), (now - timedelta(days=1) + timedelta(hours=6)).strftime(DATE_TIME_STR_FORMAT), 15.5),
+                create_dispatch((now - timedelta(days=2)).strftime(DATE_TIME_STR_FORMAT), (now - timedelta(days=2) + timedelta(hours=6)).strftime(DATE_TIME_STR_FORMAT), 12.3),
+            ]
+        }
     }
 
     # Old dispatches contains one that already exists
@@ -97,9 +99,9 @@ async def test_octopus_fetch_previous_dispatch(my_predbat):
 
     api.get_state_wrapper = Mock(return_value=old_dispatches)
 
-    await api.fetch_previous_dispatch()
+    await api.fetch_previous_dispatch("test-device-abc123")
 
-    completed = api.intelligent_device.get("completed_dispatches", [])
+    completed = api.intelligent_devices.get("test-device-abc123", {}).get("completed_dispatches", [])
 
     if len(completed) != 3:
         print(f"ERROR: Expected 3 dispatches (duplicate skipped), got {len(completed)}")
@@ -111,13 +113,13 @@ async def test_octopus_fetch_previous_dispatch(my_predbat):
     print("\n*** Test 3: Handle empty old dispatches list ***")
     api = OctopusAPI(my_predbat, key="test-key", account_id="test-account", automatic=False)
 
-    api.intelligent_device = {"completed_dispatches": [create_dispatch((now - timedelta(days=1)).strftime(DATE_TIME_STR_FORMAT), (now - timedelta(days=1) + timedelta(hours=6)).strftime(DATE_TIME_STR_FORMAT), 15.5)]}
+    api.intelligent_devices = {"test-device-abc123": {"completed_dispatches": [create_dispatch((now - timedelta(days=1)).strftime(DATE_TIME_STR_FORMAT), (now - timedelta(days=1) + timedelta(hours=6)).strftime(DATE_TIME_STR_FORMAT), 15.5)]}}
 
     api.get_state_wrapper = Mock(return_value=[])
 
-    await api.fetch_previous_dispatch()
+    await api.fetch_previous_dispatch("test-device-abc123")
 
-    completed = api.intelligent_device.get("completed_dispatches", [])
+    completed = api.intelligent_devices.get("test-device-abc123", {}).get("completed_dispatches", [])
 
     if len(completed) != 1:
         print(f"ERROR: Expected 1 dispatch (no change), got {len(completed)}")
@@ -129,15 +131,15 @@ async def test_octopus_fetch_previous_dispatch(my_predbat):
     print("\n*** Test 4: Handle empty current dispatches list ***")
     api = OctopusAPI(my_predbat, key="test-key", account_id="test-account", automatic=False)
 
-    api.intelligent_device = {"completed_dispatches": []}
+    api.intelligent_devices = {"test-device-abc123": {"completed_dispatches": []}}
 
     old_dispatches = [create_dispatch((now - timedelta(days=2)).strftime(DATE_TIME_STR_FORMAT), (now - timedelta(days=2) + timedelta(hours=6)).strftime(DATE_TIME_STR_FORMAT), 12.3)]
 
     api.get_state_wrapper = Mock(return_value=old_dispatches)
 
-    await api.fetch_previous_dispatch()
+    await api.fetch_previous_dispatch("test-device-abc123")
 
-    completed = api.intelligent_device.get("completed_dispatches", [])
+    completed = api.intelligent_devices.get("test-device-abc123", {}).get("completed_dispatches", [])
 
     if len(completed) != 1:
         print(f"ERROR: Expected 1 dispatch from old list, got {len(completed)}")
@@ -149,13 +151,13 @@ async def test_octopus_fetch_previous_dispatch(my_predbat):
     print("\n*** Test 5: Handle None old dispatches ***")
     api = OctopusAPI(my_predbat, key="test-key", account_id="test-account", automatic=False)
 
-    api.intelligent_device = {"completed_dispatches": [create_dispatch((now - timedelta(days=1)).strftime(DATE_TIME_STR_FORMAT), (now - timedelta(days=1) + timedelta(hours=6)).strftime(DATE_TIME_STR_FORMAT), 15.5)]}
+    api.intelligent_devices = {"test-device-abc123": {"completed_dispatches": [create_dispatch((now - timedelta(days=1)).strftime(DATE_TIME_STR_FORMAT), (now - timedelta(days=1) + timedelta(hours=6)).strftime(DATE_TIME_STR_FORMAT), 15.5)]}}
 
     api.get_state_wrapper = Mock(return_value=None)
 
-    await api.fetch_previous_dispatch()
+    await api.fetch_previous_dispatch("test-device-abc123")
 
-    completed = api.intelligent_device.get("completed_dispatches", [])
+    completed = api.intelligent_devices.get("test-device-abc123", {}).get("completed_dispatches", [])
 
     if len(completed) != 1:
         print(f"ERROR: Expected 1 dispatch (no change), got {len(completed)}")
@@ -167,7 +169,7 @@ async def test_octopus_fetch_previous_dispatch(my_predbat):
     print("\n*** Test 6: Skip dispatches missing required fields ***")
     api = OctopusAPI(my_predbat, key="test-key", account_id="test-account", automatic=False)
 
-    api.intelligent_device = {"completed_dispatches": []}
+    api.intelligent_devices = {"test-device-abc123": {"completed_dispatches": []}}
 
     old_dispatches = [
         {"start": (now - timedelta(days=2)).strftime(DATE_TIME_STR_FORMAT), "end": (now - timedelta(days=2) + timedelta(hours=6)).strftime(DATE_TIME_STR_FORMAT)},  # Missing charge_in_kwh
@@ -178,9 +180,9 @@ async def test_octopus_fetch_previous_dispatch(my_predbat):
 
     api.get_state_wrapper = Mock(return_value=old_dispatches)
 
-    await api.fetch_previous_dispatch()
+    await api.fetch_previous_dispatch("test-device-abc123")
 
-    completed = api.intelligent_device.get("completed_dispatches", [])
+    completed = api.intelligent_devices.get("test-device-abc123", {}).get("completed_dispatches", [])
 
     if len(completed) != 1:
         print(f"ERROR: Expected 1 valid dispatch, got {len(completed)}")
@@ -192,7 +194,7 @@ async def test_octopus_fetch_previous_dispatch(my_predbat):
     print("\n*** Test 7: Skip non-dict items in old dispatches ***")
     api = OctopusAPI(my_predbat, key="test-key", account_id="test-account", automatic=False)
 
-    api.intelligent_device = {"completed_dispatches": []}
+    api.intelligent_devices = {"test-device-abc123": {"completed_dispatches": []}}
 
     old_dispatches = [
         "not a dict",
@@ -205,9 +207,9 @@ async def test_octopus_fetch_previous_dispatch(my_predbat):
 
     api.get_state_wrapper = Mock(return_value=old_dispatches)
 
-    await api.fetch_previous_dispatch()
+    await api.fetch_previous_dispatch("test-device-abc123")
 
-    completed = api.intelligent_device.get("completed_dispatches", [])
+    completed = api.intelligent_devices.get("test-device-abc123", {}).get("completed_dispatches", [])
 
     if len(completed) != 2:
         print(f"ERROR: Expected 2 valid dispatches (non-dict skipped), got {len(completed)}")
@@ -219,11 +221,13 @@ async def test_octopus_fetch_previous_dispatch(my_predbat):
     print("\n*** Test 8: Dispatches sorted by start time ***")
     api = OctopusAPI(my_predbat, key="test-key", account_id="test-account", automatic=False)
 
-    api.intelligent_device = {
-        "completed_dispatches": [
-            create_dispatch((now - timedelta(days=1)).strftime(DATE_TIME_STR_FORMAT), (now - timedelta(days=1) + timedelta(hours=6)).strftime(DATE_TIME_STR_FORMAT), 15.5),
-            create_dispatch((now - timedelta(days=3)).strftime(DATE_TIME_STR_FORMAT), (now - timedelta(days=3) + timedelta(hours=6)).strftime(DATE_TIME_STR_FORMAT), 14.7),
-        ]
+    api.intelligent_devices = {
+        "test-device-abc123": {
+            "completed_dispatches": [
+                create_dispatch((now - timedelta(days=1)).strftime(DATE_TIME_STR_FORMAT), (now - timedelta(days=1) + timedelta(hours=6)).strftime(DATE_TIME_STR_FORMAT), 15.5),
+                create_dispatch((now - timedelta(days=3)).strftime(DATE_TIME_STR_FORMAT), (now - timedelta(days=3) + timedelta(hours=6)).strftime(DATE_TIME_STR_FORMAT), 14.7),
+            ]
+        }
     }
 
     old_dispatches = [
@@ -234,9 +238,9 @@ async def test_octopus_fetch_previous_dispatch(my_predbat):
 
     api.get_state_wrapper = Mock(return_value=old_dispatches)
 
-    await api.fetch_previous_dispatch()
+    await api.fetch_previous_dispatch("test-device-abc123")
 
-    completed = api.intelligent_device.get("completed_dispatches", [])
+    completed = api.intelligent_devices.get("test-device-abc123", {}).get("completed_dispatches", [])
 
     if len(completed) != 5:
         print(f"ERROR: Expected 5 dispatches after merge, got {len(completed)}")
@@ -261,7 +265,7 @@ async def test_octopus_fetch_previous_dispatch(my_predbat):
     print("\n*** Test 9: Handle invalid date formats gracefully ***")
     api = OctopusAPI(my_predbat, key="test-key", account_id="test-account", automatic=False)
 
-    api.intelligent_device = {"completed_dispatches": [create_dispatch((now - timedelta(days=1)).strftime(DATE_TIME_STR_FORMAT), (now - timedelta(days=1) + timedelta(hours=6)).strftime(DATE_TIME_STR_FORMAT), 15.5)]}
+    api.intelligent_devices = {"test-device-abc123": {"completed_dispatches": [create_dispatch((now - timedelta(days=1)).strftime(DATE_TIME_STR_FORMAT), (now - timedelta(days=1) + timedelta(hours=6)).strftime(DATE_TIME_STR_FORMAT), 15.5)]}}
 
     # Only include dispatches with valid dates - the function doesn't add invalid ones
     # because the comparison check uses parse_date_time which returns None for invalid dates
@@ -270,9 +274,9 @@ async def test_octopus_fetch_previous_dispatch(my_predbat):
     api.get_state_wrapper = Mock(return_value=old_dispatches)
 
     # Should not crash with valid dates
-    await api.fetch_previous_dispatch()
+    await api.fetch_previous_dispatch("test-device-abc123")
 
-    completed = api.intelligent_device.get("completed_dispatches", [])
+    completed = api.intelligent_devices.get("test-device-abc123", {}).get("completed_dispatches", [])
 
     # Should have both dispatches
     if len(completed) != 2:
@@ -285,14 +289,14 @@ async def test_octopus_fetch_previous_dispatch(my_predbat):
     print("\n*** Test 10: get_state_wrapper called with correct parameters ***")
     api = OctopusAPI(my_predbat, key="test-key", account_id="A-12345678", automatic=False)
 
-    api.intelligent_device = {"completed_dispatches": []}
+    api.intelligent_devices = {"test-device-abc123": {"completed_dispatches": []}}
 
     mock_get_state = Mock(return_value=[])
     api.get_state_wrapper = mock_get_state
 
-    await api.fetch_previous_dispatch()
+    await api.fetch_previous_dispatch("test-device-abc123")
 
-    expected_entity_id = api.get_entity_name("binary_sensor", "intelligent_dispatch")
+    expected_entity_id = api.get_entity_name("binary_sensor", "intelligent_dispatch", index="abc123")
 
     if mock_get_state.call_count != 1:
         print(f"ERROR: Expected get_state_wrapper to be called once, was called {mock_get_state.call_count} times")
@@ -325,16 +329,16 @@ async def test_octopus_fetch_previous_dispatch(my_predbat):
     old3 = create_dispatch((now - timedelta(days=30)).strftime(DATE_TIME_STR_FORMAT), (now - timedelta(days=30) + timedelta(hours=6)).strftime(DATE_TIME_STR_FORMAT), 10.0)
 
     # Set current dispatches with mix of old and recent
-    api.intelligent_device = {"completed_dispatches": [recent1, old1]}
+    api.intelligent_devices = {"test-device-abc123": {"completed_dispatches": [recent1, old1]}}
 
     # Old dispatches from entity state also mix of old and recent
     old_dispatches = [recent2, old2, recent3, old3]
 
     api.get_state_wrapper = Mock(return_value=old_dispatches)
 
-    await api.fetch_previous_dispatch()
+    await api.fetch_previous_dispatch("test-device-abc123")
 
-    completed = api.intelligent_device.get("completed_dispatches", [])
+    completed = api.intelligent_devices.get("test-device-abc123", {}).get("completed_dispatches", [])
 
     # Should only have recent dispatches (3 total)
     if len(completed) != 3:

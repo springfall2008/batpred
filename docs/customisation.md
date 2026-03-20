@@ -138,9 +138,8 @@ This setting will not impact the real calculated costs and is only used for plan
 
 ## Scaling and weight options
 
-**switch.predbat_metric_dynamic_load_adjust** is a toggle that when enabled allows Predbat to take into account your energy consumption within the last 5 minutes.
-If the load is above what your battery can deliver the plan is updated to predict this load will continue during the current slot, this preventing
-and type of forced export in the plan.
+**switch.predbat_metric_dynamic_load_adjust** (default False) is a toggle that when enabled allows Predbat to take into account your energy consumption within the last 5 minutes.
+If the load is above what your battery can deliver the plan is updated to predict this load will continue during the current slot, thus preventing forced export in the plan.
 If car charging is planned but the load indicates that the car is not charging then Predbat will assume the car will no longer charge during this slot thus allowing the plan to include potential export.
 
 **input_number.predbat_battery_rate_max_scaling** is a percentage factor to adjust your maximum charge rate from that reported by the inverter.
@@ -170,11 +169,11 @@ Note that the output data entity predbat.load_energy_h0 will be scaled according
 This can  be used to make the PV10% scenario take into account extra load usage and hence be more pessimistic while leaving the central scenario unchanged.
 The default is 1.1 meaning an extra 10% load is added. This will only have an impact if the PV 10% weighting is non-zero.
 
-**input_number.predbat_load_scaling_saving** is a percentage Scaling factor applied to historical load only during Octopus Saving sessions.
+**input_number.predbat_load_scaling_saving** is a percentage Scaling factor applied to historical load only during Octopus Saving session or Axle export events.
 This can be used to model your household cutting down on energy use inside a saving session (e.g. turning off a heat pump, deferring cooking until after the session, etc).
 The default is 1.0, i.e. no change to load in saving sessions.
 
-**input_number.predbat_load_scaling_free** is a percentage Scaling factor applied to historical load only during Free electricity sessions.
+**input_number.predbat_load_scaling_free** is a percentage Scaling factor applied to historical load only during Free electricity sessions and Axle import events.
 This can be used to model your household increasing house load in a free electricity session (e.g. extra washing, cooking, tumble dryer, etc).
 The default is 1.2, i.e. 20% extra load in free electricity sessions.
 
@@ -191,9 +190,13 @@ A value of 0.1 assumes that 1 in every 10 times we will get the Solcast 10% scen
 Predbat estimates solar generation for each half-hour slot to be a pv_metric10_weight weighting of the Solcast 10% PV forecast to the Solcast Median forecast.<BR>
 A value of 0.15 (the default) is recommended.
 
-**switch.predbat_metric_pv_calibration_enable** When turned On (the default), Predbat will use historical actual solar generation data to calibrate your PV production estimates on a slot duration (default 30 minute) basis.<BR>
+**switch.predbat_metric_pv_calibration_enable** When turned On (the default), Predbat will use your historical solar generation data to calibrate your PV production estimates on a slot duration (default 30 minute) basis.<BR>
 This can be useful to adjust for your systems real performance.<BR>
-Do not use if you are using the [Solcast integration and have turned on the integration's auto dampening](https://github.com/BJReplay/ha-solcast-solar?tab=readme-ov-file#dampening-configuration).
+Do not use if you are using the [Solcast integration and have turned on the integration's auto dampening](https://github.com/BJReplay/ha-solcast-solar?tab=readme-ov-file#dampening-configuration).<BR>
+Predbat relies upon your solar generation being accurate so if your export generation can be curtailed by your solar inverter or your electricity supplier in periods when there is excess electricity in the grid,
+then you must turn PV calibration Off as otherwise Predbat will model the chopped solar generation as a PV calibration factor and will significantly reduce your forecast PV generation, leading to a very inaccurate plan.
+
+Note: If you change the PV calibration enable switch (to On or Off), you will need to restart Predbat for the change to take effect.
 
 ## Historical load data
 
@@ -210,6 +213,7 @@ There are a number of configuration items in Home Assistant for Predbat to contr
 
 These are described in detail in [Car Charging](car-charging.md) and are listed here just for completeness:
 
+- **switch.predbat_car_energy_reported_load** - whether the car charger is inside the CT clamp (energy visible as house load)
 - **switch.predbat_car_charging_hold** - remove the historical car charging load from the house load
 - **input_number.predbat_car_charging_threshold** - power threshold above which Predbat assumes the car is being charged
 - **input_number.predbat_car_charging_energy_scale** - used to scale the **car_charging_energy** sensor in `apps.yaml`
@@ -338,7 +342,7 @@ NB: this can lead to higher costs and to some export if solar generation is bett
 not yet published, best used for variable rate tariffs such as Agile export where the rates are not published until 4pm.
 If you set this to a negative value then Predbat will assume unpublished export rates are lower by the given amount.
 
-**switch.predbat_calculate_inday_adjustment** (_expert mode_) Set to On by default. When turned on, will calculate the difference between today's actual load and today's predicated load and adjust the rest of the day's usage prediction accordingly.
+**switch.predbat_calculate_inday_adjustment** Set to On by default. When turned on, will calculate the difference between today's actual load and today's predicated load and adjust the rest of the day's usage prediction accordingly.
 A scale factor can be set with **input_number.predbat_metric_inday_adjust_damping** (_expert mode_) (default 0.95) to either scale up or down the impact of the in-day adjustment (lower numbers scale down its impact).
 The in-day adjustment factor can be seen in **predbat.load_inday_adjustment** and charted with the [In-Day Adjustment chart](creating-charts.md).
 
@@ -363,7 +367,7 @@ Set the list of [devices to notify](apps-yaml.md#notify_devices) in `apps.yaml`.
 
 **switch.predbat_set_charge_low_power** Enables low-power charging mode where the max charge rate will be automatically determined by Predbat to be the
 lowest possible rate to meet the charge target. This is only really effective for charge windows longer than a single slot.
-If this setting is turned on, it is strongly recommended that you create a [battery_power_charge_curve in apps.yaml](apps-yaml.md#workarounds)
+If this setting is turned on, it is strongly recommended that you create a [battery_power_charge_curve in apps.yaml](apps-yaml.md#battery-chargedischarge-curves)
 as otherwise the low power charge may not reach the charge target in time.
 This setting is off by default.
 
@@ -483,7 +487,7 @@ Higher values will generate plans with more solar diversion while lower values w
 A value of 0 means all diverted energy should be ignored in planning (assumed to be zero value).
 
 - **switch.predbat_iboost_energy_subtract** When turned On (the default) energy reported by the **iboost_energy_today** sensor configured in `apps.yaml` will be subtracted from your historical load data to improve the accuracy of predictions.
-If you are using PredAI you will also need to subtract this data inside PredAI configuration.
+If you are using PredAI you will also need to subtract this data inside the PredAI configuration.
 
 Different boost modes can be selected:
 
@@ -645,6 +649,9 @@ _NOTE_: once you select a day/time slot from any of the **select.predbat_manual_
 Predbat still has to update the plan which it will be doing so in the background, and this can take a few minutes to run (depending on the speed and power of the device you are running Home Assistant on),
 so don't be surprised why the [Predbat plan](predbat-plan-card.md) doesn't change immediately - remember you can see the date/time the plan was last updated on the first row of the plan.
 
+As an alternative to selecting day/time slots from the **select.predbat_manual_xx** drop down lists, you can select a time slot then select the mode you want Predbat to be in from the [Predbat plan shown in the Web Console](web-interface.md#plan-view).
+This might be easier to use than the selector controls.
+
 _CAUTION: If you leave Predbat turned off for a long period of time then the override timeslots could end up repeating when you restart_
 
 The **select.predbat_manual_export** selector can be used to manually force Predbat to export within a slot. If you set a force export then this takes priority over force charging.
@@ -678,7 +685,10 @@ This is useful when you know you need a certain battery level at a particular ti
 
 The SoC target percentage will be that configured in **input_number.predbat_manual_soc_value** (default 100%) which can be adjusted prior to making a selection.
 
-For example, if you want the battery to be at 100% by 05:30, select that time slot. Predbat will plan charging to ensure the battery reaches the target SOC by that time.
+For example, if you want the battery to be at 100% by 05:30, select that time slot. Predbat will plan charging to ensure the battery reaches the target SoC by that time.
+
+Note that the manual SoC target is a _minimum_ SoC level for that time slot.
+If based upon your predicted load, solar generation and energy costs Predbat determines that your battery needs to be charged to a higher SoC level to minimise your costs, Predbat will charge to that required level.
 
 If this selector is used in an automation you can set the time and SoC together by making a selection in the format HH:MM=percentage e.g. 05:30=100
 
@@ -732,10 +742,7 @@ mode: single
 
 You can either manually update Predbat to a new (or old) version or set Predbat to automatically update itself.
 
-These are described in detail in [Updating Predbat](install.md#updating-predbat) and are listed here just for completeness:
-
-- **switch.predbat_car_charging_hold** - remove the historical car charging load from the house load
-- **input_number.predbat_car_charging_threshold** - power threshold above which Predbat assumes the car is being charged
+These are described in detail in [Updating Predbat](install.md#predbat-built-in-update) and are listed here just for completeness:
 
 - **select.predbat_update** - List of Predbat software versions you can select to update Predbat to
 - **switch.predbat_auto_update** - When On, Predbat will automatically update itself as new releases are published on GitHub.

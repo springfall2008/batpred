@@ -8,6 +8,16 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+
+"""Base inverter abstraction layer.
+
+Provides the unified Inverter class that abstracts control of different
+inverter brands (GivEnergy, Fox ESS, Solis, SolaX, etc.) behind a common
+interface. Handles charge/discharge rate control, window programming,
+target SoC setting, and reserve management via both REST API and Home
+Assistant entity writes with polling validation.
+"""
+
 import os
 import time
 import pytz
@@ -21,6 +31,14 @@ TIME_FORMAT_HMS = "%H:%M:%S"
 
 
 class Inverter:
+    """Unified inverter control abstraction for multiple brands.
+
+    Provides a common interface for controlling GivEnergy, Fox ESS, Solis,
+    SolaX, and other inverter brands. Handles charge/discharge rate control,
+    window programming, target SoC setting, and reserve management via both
+    REST API and Home Assistant entity writes with polling validation.
+    """
+
     def self_test(self, minutes_now):
         self.base.log(f"======= INVERTER CONTROL SELF TEST START - REST={self.rest_api} ========")
         self.adjust_battery_target(99, False)
@@ -213,6 +231,7 @@ class Inverter:
         self.inv_support_charge_freeze = INVERTER_DEF[self.inverter_type]["support_charge_freeze"]
         self.inv_support_discharge_freeze = INVERTER_DEF[self.inverter_type]["support_discharge_freeze"]
         self.inv_has_ge_inverter_mode = INVERTER_DEF[self.inverter_type]["has_ge_inverter_mode"]
+        self.inv_has_ge_eco_toggle = INVERTER_DEF[self.inverter_type].get("has_ge_eco_toggle", False)
         self.inv_num_load_entities = INVERTER_DEF[self.inverter_type]["num_load_entities"]
         self.inv_write_and_poll_sleep = INVERTER_DEF[self.inverter_type]["write_and_poll_sleep"]
         self.inv_has_idle_time = INVERTER_DEF[self.inverter_type]["has_idle_time"]
@@ -333,7 +352,7 @@ class Inverter:
                         self.in_calibration = True
 
             if self.in_calibration:
-                self.log("Warn: Inverter is in calibration mode {}, Predbat will not function correctly and will be disabled".format(soc_force_adjust))
+                self.log("Warn: Inverter {} is in calibration mode '{}', Predbat will not function correctly and will be disabled".format(self.id, soc_force_adjust))
 
             # Max battery rate
             if "Invertor_Max_Bat_Rate" in idetails:
@@ -511,7 +530,7 @@ class Inverter:
             self.base.args["charge_rate"][id] = self.create_entity("charge_rate", max_charge, uom="W", device_class="power")
             self.base.args["discharge_rate"][id] = self.create_entity("discharge_rate", max_discharge, uom="W", device_class="power")
 
-        if not self.inv_has_ge_inverter_mode and not self.inv_has_fox_inverter_mode:
+        if not self.inv_has_ge_inverter_mode and not self.inv_has_fox_inverter_mode and not self.inv_has_ge_eco_toggle:
             self.create_missing_arg("inverter_mode", "Eco")
             self.base.args["inverter_mode"][id] = self.create_entity("inverter_mode", "Eco")
 
@@ -577,7 +596,7 @@ class Inverter:
                 for minute in battery_power:
                     battery_power[minute] = -battery_power[minute]
             min_len = min(len(soc_percent), len(battery_power))
-            self.log("Find battery size has {} days of data, max days {}".format(min_len / 60 / 24.0, self.base.max_days_previous))
+            self.log("Find battery size has {} days of data, max days {}".format(dp0(min_len / 60 / 24.0), self.base.max_days_previous))
 
             estimate_battery_sizes = []
 
@@ -667,7 +686,7 @@ class Inverter:
                         percent_change = clipped_end_soc - clipped_start_soc
 
                         self.log(
-                            "Charging clipped start at {} percent {} end {} percent {}, percent change {}".format(
+                            "Charging clipped start at {} with SoC {}%, end at {} with SoC {}%; SoC change {}%".format(
                                 clipped_start_minute,
                                 clipped_start_soc,
                                 clipped_end_minute,
@@ -685,7 +704,7 @@ class Inverter:
                                 power_added += minute_power / 60.0  # W to Wh
                                 sample_count += 1
 
-                            self.log("  Power added over {} samples is {} Wh".format(sample_count, power_added))
+                            self.log("  Power added over {} samples is {}kWh".format(sample_count, dp1(power_added / 1000)))
 
                             if power_added > 0:
                                 estimated_battery_size = (power_added / percent_change) * 100.0 / 1000.0  # Convert Wh to kWh
@@ -698,7 +717,7 @@ class Inverter:
                 average_battery_size = dp2(average_battery_size)
                 # Add in charging loss factor, assume the inverter loss is not counted in the charge rate sensor (as it's AC side)
                 average_battery_size *= self.base.battery_loss * self.base.inverter_loss
-                self.log("Estimated battery size is {} kWh from {} samples (assumed charging loss factor {})".format(average_battery_size, len(estimate_battery_sizes), self.base.battery_loss * self.base.inverter_loss))
+                self.log("Estimated battery size is {}kWh from {} samples (assumed charging loss factor {})".format(dp2(average_battery_size), len(estimate_battery_sizes), dp1(self.base.battery_loss * self.base.inverter_loss)))
                 return average_battery_size
             else:
                 self.log("Warn: Unable to find any suitable charge periods to estimate battery size")
@@ -1101,14 +1120,15 @@ class Inverter:
         else:
             self.soc_percent = calc_percent_limit(self.soc_kw, self.soc_max)
 
-        if self.rest_data and ("Power" in self.rest_data):
+        if self.rest_data and ("Power" in self.rest_data) and not self.base.get_arg("givtcp_rest_power_ignore", default=False, index=self.id):
             pdetails = self.rest_data["Power"]
             if "Power" in pdetails:
                 ppdetails = pdetails["Power"]
+                # self.log("DEBUG: Power details from REST: {}".format(ppdetails))
                 self.battery_power = float(ppdetails.get("Battery_Power", 0.0))
                 self.pv_power = float(ppdetails.get("PV_Power", 0.0))
-                self.load_power = float(ppdetails.get("Load_Power", 0.0))
                 self.grid_power = float(ppdetails.get("Grid_Power", 0.0))
+                self.load_power = float(ppdetails.get("Load_Power", 0.0))
                 if self.rest_v3:
                     self.battery_voltage = float(ppdetails.get("Battery_Voltage", 0.0))
                 else:
@@ -1143,7 +1163,16 @@ class Inverter:
         if not quiet:
             self.base.log(
                 "Inverter {} SoC: {}kW {}%, current charge rate {}W, current discharge rate {}W, current battery power {}W, current battery voltage {}V, grid power {}W, load power {}W, PV Power {}W".format(
-                    self.id, dp2(self.soc_kw), self.soc_percent, dp0(self.charge_rate_now * MINUTE_WATT), dp0(self.discharge_rate_now * MINUTE_WATT), self.battery_power, self.battery_voltage, self.grid_power, self.load_power, self.pv_power
+                    self.id,
+                    dp2(self.soc_kw),
+                    self.soc_percent,
+                    dp0(self.charge_rate_now * MINUTE_WATT),
+                    dp0(self.discharge_rate_now * MINUTE_WATT),
+                    dp0(self.battery_power),
+                    dp1(self.battery_voltage),
+                    dp0(self.grid_power),
+                    dp0(self.load_power),
+                    dp0(self.pv_power),
                 )
             )
 
@@ -1708,7 +1737,11 @@ class Inverter:
             if isinstance(new_value, str):
                 matched = current_state == new_value
             else:
-                matched = abs(float(current_state) - new_value) <= fuzzy
+                try:
+                    current_state = float(current_state)
+                except (ValueError, TypeError):
+                    current_state = 0.0
+                matched = abs(current_state - new_value) <= fuzzy
 
         if retry == 0:
             self.base.log(f"Inverter {self.id} write_and_poll_value: No write needed for {name}: {new_value} == {current_state} fuzzy {fuzzy}")
@@ -1882,7 +1915,7 @@ class Inverter:
                 self.sleep(30)
             old_inverter_mode = self.base.get_arg("inverter_mode", index=self.id)
 
-        if not self.inv_has_fox_inverter_mode:
+        if not self.inv_has_fox_inverter_mode and not self.inv_has_ge_eco_toggle:
             # For the purpose of this function consider Eco Paused as the same as Eco (it's a difference in reserve setting)
             if old_inverter_mode == "Eco (Paused)":
                 old_inverter_mode = "Eco"
@@ -1890,6 +1923,11 @@ class Inverter:
         if self.inv_has_fox_inverter_mode:
             # For fox we only use selfuse as the rest is done by schedule
             new_inverter_mode = "SelfUse"
+        elif self.inv_has_ge_eco_toggle:
+            if force_export:
+                new_inverter_mode = "off"
+            else:
+                new_inverter_mode = "on"
         else:
             # Force export or Eco mode?
             if force_export:
@@ -1899,11 +1937,19 @@ class Inverter:
 
         # Change inverter mode
         if old_inverter_mode != new_inverter_mode:
+            self.log("Inverter {} current mode is {} and new target is {} has_ge_eco_toggle {}".format(self.id, old_inverter_mode, new_inverter_mode, self.inv_has_ge_eco_toggle))
             if self.rest_data:
                 self.rest_setBatteryMode(new_inverter_mode)
             else:
                 entity_id = self.base.get_arg("inverter_mode", indirect=False, index=self.id)
-                self.write_and_poll_option("inverter_mode", entity_id, new_inverter_mode)
+                if self.inv_has_ge_eco_toggle:
+                    # GE has an eco toggle rather than a mode, so we write the opposite of the force export to the eco toggle
+                    if entity_id:
+                        self.write_and_poll_switch("inverter_mode", entity_id, new_inverter_mode == "on")
+                    else:
+                        self.log("Warn: Inverter {} adjust_inverter_mode: No entity_id for ECO Toggle, inverter_mode should be set to xxx_enable_eco_mode".format(self.id))
+                else:
+                    self.write_and_poll_option("inverter_mode", entity_id, new_inverter_mode)
 
             # Notify
             if self.base.set_inverter_notify:

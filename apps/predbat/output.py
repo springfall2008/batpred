@@ -8,6 +8,14 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+
+"""Output and sensor publishing module.
+
+Publishes prediction results, plans, rates, status, and metrics as Home
+Assistant entities. Generates HTML plan visualisations, car charging
+schedules, rate window sensors, and financial metric summaries.
+"""
+
 import math
 from datetime import datetime, timedelta
 from config import THIS_VERSION
@@ -17,6 +25,13 @@ from prediction import Prediction
 
 
 class Output:
+    """Output and sensor publishing mixin.
+
+    Publishes prediction results, plans, rates, status, and metrics as
+    Home Assistant entities. Generates HTML plan visualisations, car
+    charging schedules, and financial metric summaries.
+    """
+
     def publish_car_plan(self):
         """
         Publish the car charging plan
@@ -549,14 +564,6 @@ class Output:
         """
         Turn the rate into some text
         """
-        import_cost_threshold = self.rate_import_cost_threshold
-        export_cost_threshold = self.rate_export_cost_threshold
-
-        if self.rate_best_cost_threshold_charge:
-            import_cost_threshold = self.rate_best_cost_threshold_charge
-        if self.rate_best_cost_threshold_export:
-            export_cost_threshold = self.rate_best_cost_threshold_export
-
         rate = dp2(rate)
 
         if not export:
@@ -566,14 +573,14 @@ class Output:
                 text = "free"
             elif rate < 0:
                 text = "negative"
-            elif rate <= import_cost_threshold * 0.5:
-                text = "very cheap"
-            elif rate <= import_cost_threshold:
-                text = "cheap"
-            elif rate <= (import_cost_threshold * 1.5):
-                text = "expensive"
             else:
-                text = "very expensive"
+                rate_frac = (rate - self.rate_min) / (self.rate_max - self.rate_min)
+                if rate_frac <= 0.33:
+                    text = "cheap"
+                elif rate_frac <= 0.67:
+                    text = "expensive"
+                else:
+                    text = "very expensive"
         else:
             if self.rate_export_min == self.rate_export_max:
                 text = "fixed"
@@ -581,14 +588,16 @@ class Output:
                 text = "zero"
             elif rate < 0:
                 text = "negative"
-            elif rate <= (export_cost_threshold * 0.5):
-                text = "very low"
-            elif rate < export_cost_threshold:
-                text = "low"
-            elif rate <= (export_cost_threshold * 1.5):
-                text = "good"
             else:
-                text = "very good"
+                rate_frac = (rate - self.rate_export_min) / (self.rate_export_max - self.rate_export_min)
+                if rate_frac <= 0.25:
+                    text = "very low"
+                elif rate_frac <= 0.5:
+                    text = "low"
+                elif rate_frac <= 0.75:
+                    text = "good"
+                else:
+                    text = "very good"
         return text
 
     def get_rate_text(self, minute, export=False, with_value=False):
@@ -712,7 +721,7 @@ class Output:
         if export_window_n >= 0:
             target_export = self.export_window_best[export_window_n].get("target", self.export_limits_best[export_window_n])
             if self.export_limits_best[export_window_n] == 99:
-                text = "freeze exporting to {}% for the next {}".format(target_export, self.duration_string(self.export_window_best[export_window_n]["end"] - minutes_now))
+                text = "freeze exporting for the next {}".format(self.duration_string(self.export_window_best[export_window_n]["end"] - minutes_now))  # don't include target % for freeze exporting as (the 99%) is meaningless
             else:
                 text = "force exporting to {}% for the next {}".format(target_export, self.duration_string(self.export_window_best[export_window_n]["end"] - minutes_now))
         elif charge_window_n >= 0:
@@ -988,6 +997,7 @@ class Output:
         raw_plan["num_cars"] = self.num_cars
         raw_plan["iboost_enable"] = self.iboost_enable
         raw_plan["carbon_enable"] = self.carbon_enable
+        raw_plan["manual_load_value"] = self.get_arg("manual_load_value", 0.5)
 
         rate_start = self.midnight_utc
         for minute in range(minute_now_align, end_plan, self.plan_interval_minutes):
@@ -1484,12 +1494,42 @@ class Output:
             # Json row
             json_row = {}
             json_row["time"] = rate_start.strftime(TIME_FORMAT)
+            json_row["slot_minute"] = minute  # aligned slot minute used by the override system
             json_row["import_rate"] = rate_value_import
             json_row["export_rate"] = rate_value_export
+            # Add adjusted rates (always included for client-side debug toggle)
+            json_row["import_rate_adjusted"] = dp2(rate_value_import / self.battery_loss / self.inverter_loss + self.metric_battery_cycle)
+            json_row["export_rate_adjusted"] = dp2(rate_value_export * self.battery_loss_discharge * self.inverter_loss - self.metric_battery_cycle)
             json_row["state"] = raw_state
             json_row["state_target"] = raw_state_target
             json_row["state_override"] = raw_state_override
             json_row["state_html"] = state
+
+            # Parse state_html to extract structured data for client-side rendering
+            if split and "</td><td" in state:
+                # Extract two states from split cell HTML
+                parts = state.split("</td><td")
+                state_text1 = parts[0]
+                # Extract bgcolor from second part (e.g., "bgcolor=#FFFF00 style=...")
+                import re
+
+                bgcolor_match = re.search(r"bgcolor=(#[A-F0-9]{6})", parts[1], re.IGNORECASE)
+                state2_color = bgcolor_match.group(1) if bgcolor_match else "#FFFFFF"
+                # Extract text after the closing ">"
+                text_match = re.search(r">(.+)$", parts[1])
+                state_text2 = text_match.group(1) if text_match else ""
+                json_row["state_text"] = state_text1
+                json_row["state_color"] = state_color
+                json_row["state2_text"] = state_text2
+                json_row["state2_color"] = state2_color
+            else:
+                # Single state cell
+                json_row["state_text"] = state
+                json_row["state_color"] = state_color
+                json_row["state2_text"] = None
+                json_row["state2_color"] = None
+
+            json_row["show_limit"] = show_limit
             json_row["pv_forecast"] = raw_pv_forecast
             json_row["pv_forecast10"] = pv_forecast10
             json_row["pv_forecast_total"] = raw_pv_total
@@ -1497,22 +1537,44 @@ class Output:
             json_row["load_forecast10"] = load_forecast10
             json_row["load_forecast_total"] = raw_load_total
             json_row["clipped"] = clipped_change
+
+            # Add color information for client-side rendering
+            json_row["rate_color_import"] = rate_color_import
+            json_row["rate_color_export"] = rate_color_export
+            json_row["pv_color"] = pv_color
+            json_row["load_color"] = load_color
+            json_row["soc_color"] = soc_color
+            json_row["cost_color"] = cost_color
+            json_row["clipped_color"] = clipped_color
+
             if self.load_forecast:
                 json_row["extra_load"] = raw_extra_forecast
                 json_row["extra_load_total"] = raw_extra_forecast_total
+                json_row["extra_color"] = extra_color
             if self.num_cars > 0:
                 json_row["car_charging"] = car_charging_kwh
+                json_row["car_color"] = car_color
             if self.iboost_enable:
                 json_row["iboost"] = iboost_amount
                 json_row["iboost_change"] = iboost_change
+                json_row["iboost_color"] = iboost_color
             json_row["soc_percent"] = soc_percent
             json_row["soc_change"] = dp2(soc_change)
+            json_row["soc_sym"] = soc_sym
             json_row["cost_change"] = dp2(metric_change / 100.0)
             json_row["total_cost"] = dp2(metric_end / 100.0)
             if self.carbon_enable:
                 json_row["carbon_intensity"] = carbon_intensity
                 json_row["carbon_change"] = carbon_change
                 json_row["total_carbon"] = dp2(carbon_amount_end / 1000.0)
+                json_row["carbon_intensity_color"] = carbon_intensity_color
+                json_row["carbon_color"] = carbon_color
+            # Add rowspan hints for client-side rendering
+            json_row["rowspan_state"] = rowspan if start_span else 0
+            json_row["skip_state_cell"] = in_span and not start_span
+            json_row["rowspan_limit"] = rowspan if start_span else 0
+            json_row["skip_limit_cell"] = in_span and not start_span
+            json_row["split"] = split
             raw_plan["rows"].append(json_row)
 
         # End of plan costs
@@ -1552,10 +1614,9 @@ class Output:
         totals["total_cost"] = dp2(metric_end / 100.0)
         totals["pv_forecast"] = dp2(pv_total)
         totals["load_forecast"] = dp2(load_total)
-        if plan_debug:
-            clipped_amount_end = self.predict_clipped_best.get(minute_relative_slot_end, clipped_amount)
-            totals["clipped"] = dp2(clipped_amount_end)
-        if plan_debug and self.load_forecast:
+        clipped_amount_end = self.predict_clipped_best.get(minute_relative_slot_end, clipped_amount)
+        totals["clipped"] = dp2(clipped_amount_end)
+        if self.load_forecast:
             totals["extra_load"] = dp2(xload_total)
         if self.num_cars > 0:
             totals["car_charging"] = dp2(car_total)
@@ -1566,6 +1627,9 @@ class Output:
             totals["carbon_intensity"] = carbon_intensity
             totals["total_carbon"] = dp2(carbon_amount_end / 1000.0)
         raw_plan["totals"] = totals
+
+        # Add timestamp to the plan data
+        raw_plan["timestamp"] = self.now_utc_real.isoformat()
 
         if publish:
             self.dashboard_item(self.prefix + ".plan_html", state="", attributes={"text": self.text_plan, "html": html, "raw": raw_plan, "friendly_name": "Plan in HTML", "icon": "mdi:web-box"})

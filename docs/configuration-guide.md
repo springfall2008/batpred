@@ -4,8 +4,8 @@ First, get the basics set up, ensure you have the [inverter controls configured]
 you have [configured apps.yaml](apps-yaml.md) to your setup, and the [solar forecast](install.md#solcast-install) is in place.
 Make sure your [energy rates](energy-rates.md) are configured correctly for import and export.
 
-If you have an EV try to set up the [car charging sensor](apps-yaml.md#car-charging-integration) correctly so Predbat can tell what part of your historical load is EV charging.
-You might want to also set the [car charging plan](apps-yaml.md#planned-car-charging) so you can predict when your car is plugged in and how much it will charge.
+If you have an EV try to set up the [car charging sensor](car-charging.md#filtering-car-charging-energy-from-house-load) correctly so Predbat can tell what part of your historical load is EV charging.
+You might want to also set the [car charging plan](car-charging.md#planned-car-charging) so you can predict when your car is plugged in and how much it will charge.
 
 It is recommended that you [create a dashboard page](output-data.md#displaying-output-data) with all the required entities to control Predbat.
 
@@ -42,18 +42,18 @@ In this scenario, you will want to charge overnight based on the next day's sola
 
 Recommended settings - these must be changed in Home Assistant once Predbat is running:
 
-| Item |  Value  | Comment  |
-|---------|---------------|-------------|
+| Item | Value | Comment |
+| ------- | ------------- | ----------- |
 | select.predbat_mode | Control Charge | You want Predbat to calculate and control charging |
-| input_number.predbat_best_soc_keep |  2.0  | Tweak this to control what battery level you want to keep as a backup in case you use more energy |
+| input_number.predbat_best_soc_keep | 2.0 | Tweak this to control what battery level you want to keep as a backup in case you use more energy |
 
 If you are using expert mode then these options may be worth reviewing:
 
-| Item |  Value  | Comment  |
-|---------|---------------|-------------|
+| Item | Value | Comment |
+| ------- | ------------- | ----------- |
 | input_number.predbat_forecast_plan_hours | 24 | If you set this to 24 then you will have quicker updates, the cycle repeats itself anyhow |
-| input_number.predbat_metric_min_improvement | 0  | Charge less if it's cost neutral |
-| input_number.predbat_metric_min_improvement_export  | 3 | Export only if there is a profit |
+| input_number.predbat_metric_min_improvement | 0 | Charge less if it's cost neutral |
+| input_number.predbat_metric_min_improvement_export | 3 | Export only if there is a profit |
 
 You should set **select.predbat_mode** to 'Control charge'
 
@@ -61,20 +61,20 @@ You should set **select.predbat_mode** to 'Control charge'
 
 Follow the instructions from the _Cheap Night rate_ above, but you will also want to have automatic export occurring when the export rates are profitable.
 
-| Item |  Value  | Comment  |
-|---------|---------------|-------------|
-| select.predbat_mode  | Control Charge & Discharge | You want Predbat to calculate and control charging and discharging |
-| input_number.predbat_best_soc_keep |  2.0  | Tweak this to control what battery level you want to keep as a backup in case you use more energy |
+| Item | Value | Comment |
+| ------- | ------------- | ----------- |
+| select.predbat_mode | Control Charge & Discharge | You want Predbat to calculate and control charging and discharging |
+| input_number.predbat_best_soc_keep | 2.0 | Tweak this to control what battery level you want to keep as a backup in case you use more energy |
 
 If you are using expert mode then these options may be worth reviewing, otherwise, ignore this:
 
-| Item |  Value  | Comment  |
-|---------|---------------|-------------|
-| input_number.predbat_forecast_plan_hours  | 24 | If you set this to 24 then you will have quicker updates, the cycle repeats itself anyhow |
-| input_number.predbat_metric_min_improvement  | 0 | Charge less if it's cost neutral |
-| input_number.predbat_metric_min_improvement_export  | 3 | Export only if there is a profit |
-| input_number.predbat_metric_battery_cycle  | 0-2 | Higher numbers mean less charging and discharging but higher costs |
-| input_number.predbat_best_soc_min |  0 | Can be set to non-zero if you want to force a minimum charge level |
+| Item | Value | Comment |
+| ------- | ------------- | ----------- |
+| input_number.predbat_forecast_plan_hours | 24 | If you set this to 24 then you will have quicker updates, the cycle repeats itself anyhow |
+| input_number.predbat_metric_min_improvement | 0 | Charge less if it's cost neutral |
+| input_number.predbat_metric_min_improvement_export | 3 | Export only if there is a profit |
+| input_number.predbat_metric_battery_cycle | 0-2 | Higher numbers mean less charging and discharging but higher costs |
+| input_number.predbat_best_soc_min | 0 | Can be set to non-zero if you want to force a minimum charge level |
 
 You should set **select.predbat_mode** to 'Control charge & discharge'
 
@@ -90,20 +90,20 @@ Follow the instructions from the _Cheap Night_ rate above, but also you will wan
 
 Recommended settings - these must be changed in Home Assistant once Predbat is running:
 
-| Item |  Value  | Comment  |
-|---------|---------------|-------------|
-| select.predbat_mode  | Control Charge & Discharge | You want Predbat to calculate and control charging and discharging |
-| input_number.predbat_best_soc_keep |  0  | Use the full battery |
+| Item | Value | Comment |
+| ------- | ------------- | ----------- |
+| select.predbat_mode | Control Charge & Discharge | You want Predbat to calculate and control charging and discharging |
+| input_number.predbat_best_soc_keep | 0 | Use the full battery |
 
 If you are using expert mode then these options may be worth reviewing, otherwise, ignore this:
 
-| Item |  Value  | Comment  |
-|---------|---------------|-------------|
-| input_number.predbat_forecast_plan_hours  | 24 | If you set this to 24 then you will have quicker updates, the cycle repeats itself anyhow |
-| input_number.predbat_metric_min_improvement  | 0  | Charge less if it's cost neutral |
-| input_number.predbat_metric_min_improvement_export  | 3 | Export only if there is a profit |
-| input_number.predbat_metric_battery_cycle  | 0-2  | Higher numbers mean less charging and discharging but higher costs |
-| input_number.predbat_best_soc_min |  0  | Don't use non-zero otherwise all slots will be force charging |
+| Item | Value | Comment |
+| ------- | ------------- | ----------- |
+| input_number.predbat_forecast_plan_hours | 24 | If you set this to 24 then you will have quicker updates, the cycle repeats itself anyhow |
+| input_number.predbat_metric_min_improvement | 0 | Charge less if it's cost neutral |
+| input_number.predbat_metric_min_improvement_export | 3 | Export only if there is a profit |
+| input_number.predbat_metric_battery_cycle | 0-2 | Higher numbers mean less charging and discharging but higher costs |
+| input_number.predbat_best_soc_min | 0 | Don't use non-zero otherwise all slots will be force charging |
 
 You should set **select.predbat_mode** to 'Control charge & discharge'
 
@@ -111,19 +111,19 @@ You should set **select.predbat_mode** to 'Control charge & discharge'
 
 Recommended settings - these must be changed in Home Assistant once Predbat is running:
 
-| Item |  Value  | Comment  |
-|---------|---------------|-------------|
-| select.predbat_mode  | Control Charge & Discharge | You want Predbat to calculate and control charging and discharging |
-| input_number.predbat_best_soc_keep |  0  | Use the full battery |
+| Item | Value | Comment |
+| ------- | ------------- | ----------- |
+| select.predbat_mode | Control Charge & Discharge | You want Predbat to calculate and control charging and discharging |
+| input_number.predbat_best_soc_keep | 0 | Use the full battery |
 
 If you are using expert mode then these options may be worth reviewing, otherwise, ignore this:
 
-| Item |  Value  | Comment  |
-|---------|---------------|-------------|
-| input_number.predbat_forecast_plan_hours  | 24-48 | If you set this to 24 then you will have quicker updates, going to 36/48 for a longer plan |
-| input_number.predbat_metric_min_improvement  | 0  | Charge less if it's cost neutral |
-| input_number.predbat_metric_min_improvement_export  | 3 | Export only if there is a profit |
-| input_number.predbat_metric_battery_cycle  | 0-2  | Higher numbers mean less charging and discharging but higher costs |
-| input_number.predbat_best_soc_min |  0  | Don't use non-zero otherwise all slots will be force charging |
+| Item | Value | Comment |
+| ------- | ------------- | ----------- |
+| input_number.predbat_forecast_plan_hours | 24-48 | If you set this to 24 then you will have quicker updates, going to 36/48 for a longer plan |
+| input_number.predbat_metric_min_improvement | 0 | Charge less if it's cost neutral |
+| input_number.predbat_metric_min_improvement_export | 3 | Export only if there is a profit |
+| input_number.predbat_metric_battery_cycle | 0-2 | Higher numbers mean less charging and discharging but higher costs |
+| input_number.predbat_best_soc_min | 0 | Don't use non-zero otherwise all slots will be force charging |
 
 You should set **select.predbat_mode** to 'Control charge & discharge'

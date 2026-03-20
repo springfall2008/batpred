@@ -705,6 +705,94 @@ def test_hainterface_socketloop_update_pending(my_predbat=None):
     return failed
 
 
+def test_hainterface_socketloop_connection_drop_unblocks_queued_command(my_predbat=None):
+    """Regression test for #3460: socketLoop cleanup sets events for items in ws_command_queue.
+
+    Simulates a connection drop (CLOSED message) while there is a command sitting in
+    ws_command_queue (not yet sent/dispatched).  Before the fix, the queue was cleared
+    with .clear() and waiting callers were left blocked for the full 2-minute timeout.
+    After the fix, each dropped entry has its event set with error='connection_lost'.
+    """
+    print("\n=== Testing #3460: socketLoop connection-drop unblocks queued command ===")
+    failed = 0
+
+    import threading
+
+    mock_base = MockBase()
+    ha_interface = create_ha_interface(mock_base, ha_key="test_key", ha_url="http://localhost:8123")
+
+    mock_ws = MagicMock()
+    mock_ws.send_json = AsyncMock()
+
+    # Inject a pre-queued command *before* socketLoop gets a chance to send it.
+    # We do this by loading the queue before the CLOSED message is processed.
+    pre_queued_event = threading.Event()
+    pre_queued_result = {"response": None, "success": None, "error": None}
+    pre_queued_cmd = ("notify", "notify", {"message": "test"}, False, pre_queued_event, pre_queued_result)
+
+    # We'll inject the command after auth_ok so the queue infrastructure is live,
+    # but before a CLOSED message triggers the cleanup.
+    injected = [False]
+
+    async def mock_receive():
+        if not injected[0]:
+            injected[0] = True
+            # Inject the queued command
+            with ha_interface.ws_pending_lock:
+                ha_interface.ws_command_queue.append(pre_queued_cmd)
+            # Return auth_ok to complete startup
+            return create_mock_websocket_message(WSMsgType.TEXT, {"type": "auth_ok"})
+        # Immediately return CLOSED to trigger the connection-drop cleanup
+        return create_mock_websocket_message(WSMsgType.CLOSED, None)
+
+    mock_ws.receive = mock_receive
+
+    async def mock_sleep(delay):
+        ha_interface.api_stop = True
+
+    with patch("ha.ClientSession") as mock_session_class:
+        mock_session = MagicMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock()
+        mock_session.ws_connect = MagicMock()
+        mock_session.ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
+        mock_session.ws_connect.return_value.__aexit__ = AsyncMock()
+        mock_session_class.return_value = mock_session
+
+        with patch("ha.asyncio.sleep", new=mock_sleep):
+            run_async(ha_interface.socketLoop())
+
+    # The event must have been set by the cleanup path
+    if not pre_queued_event.is_set():
+        print("ERROR: threading.Event for queued command was not set after connection drop")
+        failed += 1
+    else:
+        print("✓ threading.Event set when connection dropped with command in queue")
+
+    # The error must be 'connection_lost'
+    if pre_queued_result.get("error") != "connection_lost":
+        print(f"ERROR: Expected error='connection_lost', got {pre_queued_result.get('error')!r}")
+        failed += 1
+    else:
+        print("✓ result_holder error set to 'connection_lost'")
+
+    # success must be False
+    if pre_queued_result.get("success") is not False:
+        print(f"ERROR: Expected success=False, got {pre_queued_result.get('success')!r}")
+        failed += 1
+    else:
+        print("✓ result_holder success set to False")
+
+    # The queue must be empty after cleanup
+    if ha_interface.ws_command_queue:
+        print("ERROR: ws_command_queue should be empty after connection drop cleanup")
+        failed += 1
+    else:
+        print("✓ ws_command_queue cleared after connection drop")
+
+    return failed
+
+
 def test_hainterface_socketloop_service_register(my_predbat=None):
     """Test socketLoop() fires service_registered events"""
     print("\n=== Testing HAInterface socketLoop() service_registered ===")
@@ -784,6 +872,7 @@ def run_hainterface_websocket_tests(my_predbat):
     failed += test_hainterface_socketloop_exception_in_startup(my_predbat)
     failed += test_hainterface_socketloop_update_pending(my_predbat)
     failed += test_hainterface_socketloop_service_register(my_predbat)
+    failed += test_hainterface_socketloop_connection_drop_unblocks_queued_command(my_predbat)
 
     print("\n" + "=" * 80)
     if failed == 0:

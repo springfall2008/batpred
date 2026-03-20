@@ -21,14 +21,15 @@
 			},
 			"extensions": [
 				"ms-python.python",
-                "ms-python.black-formatter",
-                "ms-python.isort",
-                "ms-python.flake8",
+				"ms-python.black-formatter",
+				"ms-python.isort",
+				"ms-python.flake8",
 				"sourcery.sourcery",
 				"njpwerner.autodocstring",
 				"streetsidesoftware.code-spell-checker",
 				"bierner.markdown-preview-github-styles",
-				"DavidAnson.vscode-markdownlint"
+				"DavidAnson.vscode-markdownlint",
+				"eamodio.gitlens"
 			]
 		}
 	},

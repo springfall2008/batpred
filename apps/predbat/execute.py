@@ -1,3 +1,9 @@
+"""Execution module for applying optimised charge/discharge plans to inverters.
+
+Handles the translation of PredBat's optimised plan into concrete inverter
+control actions. Manages charge window programming, discharge/export scheduling,
+reserve level adjustments, and multi-inverter balancing.
+"""
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
 # Copyright Trefor Southwell 2026 - All Rights Reserved
@@ -11,6 +17,7 @@
 from datetime import timedelta, datetime
 from const import MINUTE_WATT
 from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate
+from predbat_metrics import metrics
 from inverter import Inverter
 import time
 
@@ -20,6 +27,13 @@ Execute Predbat plan
 
 
 class Execute:
+    """Execution mixin for applying optimised plans to physical inverters.
+
+    Translates the best charge/discharge plan into concrete inverter
+    control actions including window programming, rate setting, reserve
+    adjustment, and multi-inverter balancing.
+    """
+
     def execute_plan(self):
         status_extra = ""  # extra status text added to Predbat notifications
         status_hold_car = ""  # car hold status text
@@ -254,6 +268,8 @@ class Execute:
                                     if latency < 600:  # 10 minutes
                                         self.iog_last_action_latency_seconds = latency
                                         self.iog_last_action_status = "success"
+                                        metrics().iog_action_latency_seconds.observe(latency)
+                                        metrics().iog_actions_total.labels(status="success").inc()
                                         self.log("IOG action latency: {:.1f} seconds from slot start".format(latency))
 
                                 inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
@@ -411,13 +427,13 @@ class Execute:
 
             # Car charging from battery disable?
             carHolding = False
-            if self.set_charge_window and not self.car_charging_from_battery:
+            if self.set_charge_window and not self.car_charging_from_battery and self.car_energy_reported_load:
                 for car_n in range(self.num_cars):
                     if self.car_charging_slots[car_n]:
                         window = self.car_charging_slots[car_n][0]
                         if self.car_charging_soc[car_n] >= self.car_charging_limit[car_n]:
                             self.log("Car {} is already charged, ignoring additional charging slot from {} - {}".format(car_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"])))
-                        elif self.minutes_now >= window["start"] and self.minutes_now < window["end"] and window["kwh"] > 0:
+                        elif self.minutes_now >= window["start"] and self.minutes_now < window["end"] and window.get("kwh", 0) > 0:
                             self.log("Car charging from battery is off, next slot for car {} is {} - {}".format(car_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"])))
                             # Don't disable discharge during force charge/discharge slots but otherwise turn it off to prevent
                             # from draining the battery
@@ -587,6 +603,8 @@ class Execute:
 
             # Count register writes
             self.log("Inverter {} count register writes {}".format(inverter.id, inverter.count_register_writes))
+            if inverter.count_register_writes > 0:
+                metrics().inverter_register_writes_total.inc(inverter.count_register_writes)
             self.count_inverter_writes[inverter.id] += inverter.count_register_writes
             inverter.count_register_writes = 0
 
@@ -800,7 +818,7 @@ class Execute:
 
         if self.debug_enable:
             self.log(
-                "Found {} inverters totals: min reserve {}%, current reserve {}%, soc_max {}%, SoC {}%, charge rate {}kW, discharge rate {}kW, battery_rate_min {}W, ac limit {}kW, export limit {}kW, loss charge {}%, loss discharge {}%, inverter loss {}%".format(
+                "Found {} inverters totals: min reserve {}%, current reserve {}%, soc_max {}%, SoC {}%, charge rate {}kW, discharge rate {}kW, battery_rate_min {}W, AC limit {}kW, export limit {}kW, loss charge {}%, loss discharge {}%, inverter loss {}%".format(
                     len(self.inverters),
                     self.reserve,
                     self.reserve_current,

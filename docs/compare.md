@@ -37,6 +37,8 @@ Look through that page to find the right URL for usage charges in your DNO area
 
 (For area A)
 
+Check the tariff results for the final URL, and in particular the *valid_from* and *valid_to* dates in the first few records returned.  These should be showing tariff prices for a few days in the future and for today.  If they do not, and the records are all for dates in the past then Octopus have expired the tariff and you'll need to repeat the process to find the correct tariff URL.
+
 As well as Octopus rate URLs (rates_import_octopus_url/rates_export_octopus_url) you can use manual rates (rates_import/rates_export),
 Octopus integration rates (metric_octopus_import/metric_octopus_export) and Energi Data service rates (metric_energidataservice_import/metric_energidataservice_export).
 
@@ -114,7 +116,7 @@ If you do not set an import or export rate for a particular tariff then your exi
     - id: 'iflux'
       name: 'Intelligent Flux import/export'
       rates_import_octopus_url: 'https://api.octopus.energy/v1/products/INTELLI-FLUX-IMPORT-23-07-14/electricity-tariffs/E-1R-INTELLI-FLUX-IMPORT-23-07-14-{dno_region}/standard-unit-rates/'
-      rates_export_octopus_url: 'https://api.octopus.energy/v1/products/INTELLI-FLUX-EXPORT-23-07-14/electricity-tariffs/E-1R-INTELLI-FLUX-EXPORT-23-07-14-{dno_region}/standard-unit-rates/'
+      rates_export_octopus_url: 'https://api.octopus.energy/v1/products/INTELLI-FLUX-IMPORT-23-07-14/electricity-tariffs/E-1R-INTELLI-FLUX-IMPORT-23-07-14-{dno_region}/standard-unit-rates/'
 ```
 
 ## Running a comparison

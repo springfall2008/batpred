@@ -6,7 +6,7 @@ The Predbat Web Interface provides an easy to use way to see and change differen
 
 ## Accessing the Web Interface
 
-If you are running the Predbat add-on then the Predbat Web Interface can be accessed by clicking 'Open Web UI' on the add-on screen (arrowed):
+If you are running the Predbat app then the Predbat Web Interface can be accessed by clicking 'Open Web UI' on the app screen (arrowed):
 
 ![image](images/predbat-addon-web-interface.png)
 
@@ -23,7 +23,7 @@ Another option is to include a link on your dashboard using an entities card:
         icon: mdi:bat
 ```
 
-If you are not using the Predbat Add-on then you may be able to access the Web Interface directly on port 5052 (e.g. with a Docker Container or native on your Linux/MAC).  The port number can be changed by setting [web_port in apps.yaml](apps-yaml.md#web-interface).
+If you are not using the Predbat app then you may be able to access the Web Interface directly on port 5052 (e.g. with a Docker Container or native on your Linux/MAC).  The port number can be changed by setting [web_port in apps.yaml](apps-yaml.md#web-interface).
 
 **NOTE:** The Predbat web interface will not work with the AppDaemon or the Predbat-appdaemon installation methods.
 
@@ -33,7 +33,7 @@ A number of different views of Predbat are available and you can change your vie
 
 ### Dash View
 
-The initial view is the Dash view which gives a summary of Predbat's status and mode, some easy-to-access debug options (see below), a text summary of Predbat's plan, and then all the output entities that Predbat creates.
+The initial view is the Dash view which gives a summary of Predbat's status and mode, some easy-to-access debug options (see below), a power flow diagram showing power flowing in and out of your home, a text summary of Predbat's plan, and then all the output entities that Predbat creates.
 
 ![image](images/web-interface-dash-view.png)
 
@@ -51,7 +51,7 @@ This is because GitHub does not accept .yaml file attachments.
 
 Underneath the Debug panel is the Power Flow diagram.  The Power Flow gives an 'instantaneous Power' snapshot of your PV generation, Battery charge/discharge, Grid import/export and House consumption using the **power_xx** entities defined in `apps.yaml`.
 
-Note these are a view of what is happening right now on your inverter and are not the same as the
+Note these are a snapshot view of what is happening right now on your inverter and are not the same as the
 'Energy Today' sensors in `apps.yaml` (load_today, import_today, export_today and pv_today) which give accumulated energy so far today and for the days_previous days history.
 
 Beneath that is the plan textual description panel which gives a brief summary of current battery level, forthcoming import rates, solar generation, planned charging, discharging and export activity.
@@ -98,7 +98,9 @@ The chart also shows where charging is planned under the Base and Best scenarios
 - **Rates** - Shows historic and future import and export rates along with historic hourly and today pence per kWh so you can see where you have earned or spent the most on electricity during today
 - **InDay** - Shows Predbat's predicted house load for today, the actual house load that has occurred so far today, and then Predbat's adjusted house load prediction based on the variance of today's actual load to predicted load
 - **PV** - Shows today's predicted solar generation under the PV, PV10 and PV90 scenarios alongside today's actual solar generation
-- **PV7** - Similar to the PV chart but shows actual solar generation and forecast for the last 7 days including today
+- **PV7** - Similar to the PV chart, but shows actual solar generation and forecast for the last 7 days including today
+- **Load ML** - Shows the correlation between your actual house load and the [Load ML predictions](load-ml.md), charting current prediction, the 1 hour in the future prediction, and the 8 hours future prediction
+- **LoadMLPower** - Similar to the Load ML chart, but also plots actual PV production, predicted PV production and temperature predictions.
 
 Example PV chart:
 
@@ -160,7 +162,7 @@ You can restart individual Predbat components if required.
 
 ### Editor View
 
-The editor view allows you to edit apps.yaml as text directly within the web interface. If you make a syntax error then the error will be highlighted and save
+The editor view allows you to edit `apps.yaml` as text directly within the web interface. If you make a syntax error then the error will be highlighted and save
 will be disabled pending a fix.
 
 <img alt="image of Predbat Editor view" src="https://github.com/user-attachments/assets/17383694-2300-4c81-996e-63970671b903" />
@@ -170,6 +172,14 @@ will be disabled pending a fix.
 The Browse view gives a simple file system browser to enable you to view any of the configuration, output and code files in the directory that Predbat is installed in.
 
 You can navigate around subfolders and view files, but not make any changes using the Browse view.
+
+### Internals View
+
+The Internals view gives a view of Predbat's internal operations.
+
+It gives the hierarchy of threads, and their status; and the Predbat code object hierarchy.
+
+These are intended for debugging and developer activities, in normal use you can ignore this view!
 
 ### Docs View
 

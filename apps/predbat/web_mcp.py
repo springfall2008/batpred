@@ -914,6 +914,7 @@ class MCPServerWrapper:
     def __init__(self, base, log_func=None):
         """Initialize the MCP server wrapper"""
         self.base = base
+        self.prefix = base.prefix
         self.log = log_func or print
         self.is_running = False
         self.plan_interval_minutes = base.plan_interval_minutes
@@ -948,7 +949,7 @@ class MCPServerWrapper:
     async def _execute_get_plan(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Execute the get_plan tool"""
         try:
-            raw_plan = self.base.get_state_wrapper(self.prefix + ".plan_html", attribute="raw", default=None)
+            raw_plan = self.base.get_state_wrapper(self.base.prefix + ".plan_html", attribute="raw", default=None)
             # Check if we have plan data available
             if not raw_plan:
                 return {"success": False, "error": "No plan data available", "data": None}
@@ -967,23 +968,29 @@ class MCPServerWrapper:
             entities = self.base.dashboard_values
             returned_entities = []
             for entity in entities:
-                entity_id = entity.get("entity_id", "")
+                if isinstance(entity, str):
+                    entity_id = entity
+                else:
+                    entity_id = entity.get("entity_id", "")
                 if filter:
                     if not re.search(filter, entity_id):
                         continue
-                value = {
-                    "entity_id": entity.get("entity_id"),
-                    "state": entity.get("state"),
-                    "friendly_name": entity.get("friendly_name"),
-                }
-                if "unit_of_measurement" in entity:
-                    value["unit_of_measurement"] = entity.get("unit_of_measurement")
-                if "device_class" in entity:
-                    value["device_class"] = entity.get("device_class")
-                if "state_class" in entity:
-                    value["state_class"] = entity.get("state_class")
-                if "icon" in entity:
-                    value["icon"] = entity.get("icon")
+                if isinstance(entity, str):
+                    value = {"entity_id": entity_id}
+                else:
+                    value = {
+                        "entity_id": entity.get("entity_id"),
+                        "state": entity.get("state"),
+                        "friendly_name": entity.get("friendly_name"),
+                    }
+                    if "unit_of_measurement" in entity:
+                        value["unit_of_measurement"] = entity.get("unit_of_measurement")
+                    if "device_class" in entity:
+                        value["device_class"] = entity.get("device_class")
+                    if "state_class" in entity:
+                        value["state_class"] = entity.get("state_class")
+                    if "icon" in entity:
+                        value["icon"] = entity.get("icon")
                 returned_entities.append(value)
             return {"success": True, "error": None, "data": returned_entities, "timestamp": datetime.now().isoformat(), "description": "The current Predbat entities and their states"}
 
@@ -1084,7 +1091,8 @@ class MCPServerWrapper:
             read_only, _ = self.base.get_ha_config("set_read_only", None)
             predbat_mode, _ = self.base.get_ha_config("mode", None)
             num_cars, _ = self.base.get_ha_config("num_cars", None)
-            last_updated = self.base.get_state_wrapper("predbat.status", attribute="last_updated", default=None)
+            status_entity = self.prefix + ".status"
+            last_updated = self.base.get_state_wrapper(status_entity, attribute="last_updated", default=None)
             soc_percent = calc_percent_limit(self.base.soc_kw, self.base.soc_max)
             grid_power = self.base.grid_power
             battery_power = self.base.battery_power
@@ -1092,7 +1100,7 @@ class MCPServerWrapper:
             load_power = self.base.load_power
             status_data = {
                 "is_running": self.base.is_running(),
-                "status": self.base.get_state_wrapper("predbat.status"),
+                "status": self.base.get_state_wrapper(status_entity),
                 "current_soc": self.base.soc_kw,
                 "soc_max": self.base.soc_max,
                 "soc_percent": soc_percent,
@@ -1185,8 +1193,7 @@ class MCPServerWrapper:
 
     async def _handle_initialize(self, params):
         """Handle MCP initialize request"""
-        tools = await self._handle_tools_list(params)
-        return {"protocolVersion": "2024-11-05", "capabilities": {"tools": tools["tools"]}, "serverInfo": {"name": "Predbat MCP Server", "version": "1.0.1"}}
+        return {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}}, "serverInfo": {"name": "Predbat MCP Server", "version": "1.0.1"}}
 
     async def _handle_tools_list(self, params):
         """Handle MCP tools/list request"""

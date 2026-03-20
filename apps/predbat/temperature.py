@@ -8,14 +8,27 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+
+"""Weather forecast and temperature data from Open-Meteo API.
+
+Fetches hourly temperature forecasts for battery temperature prediction
+and adjustment curve calculations.
+"""
+
 import aiohttp
 import asyncio
 from datetime import datetime
 from utils import dp1
 from component_base import ComponentBase
+from predbat_metrics import record_api_call
 
 
 class TemperatureAPI(ComponentBase):
+    """Weather forecast component using Open-Meteo API.
+
+    Fetches hourly temperature forecasts for battery temperature prediction
+    and charge/discharge rate adjustment calculations.
+    """
     def initialize(self, temperature_enable, temperature_latitude, temperature_longitude, temperature_url):
         """Initialize the Temperature API component"""
         self.temperature_enable = temperature_enable
@@ -133,6 +146,7 @@ class TemperatureAPI(ComponentBase):
                         if response.status == 200:
                             data = await response.json()
                             self.log("TemperatureAPI: Successfully fetched temperature data from Open-Meteo API")
+                            record_api_call("temperature")
                             self.update_success_timestamp()
                             return data
                         else:
@@ -143,6 +157,7 @@ class TemperatureAPI(ComponentBase):
                                 await asyncio.sleep(sleep_time)
                             else:
                                 self.failures_total += 1
+                                record_api_call("temperature", False, "server_error")
                                 return None
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 if attempt < max_retries - 1:
@@ -152,10 +167,12 @@ class TemperatureAPI(ComponentBase):
                 else:
                     self.log("Warn: TemperatureAPI: Request failed after {} attempts: {}".format(max_retries, e))
                     self.failures_total += 1
+                    record_api_call("temperature", False, "connection_error")
                     return None
             except Exception as e:
                 self.log("Warn: TemperatureAPI: Unexpected error fetching temperature data: {}".format(e))
                 self.failures_total += 1
+                record_api_call("temperature", False, "connection_error")
                 return None
 
         return None
@@ -208,6 +225,8 @@ class TemperatureAPI(ComponentBase):
                     "last_updated": last_updated_str,
                     "results": forecast,
                     "timezone_offset": timezone_offset,
+                    "device_class": "temperature",
+                    "state_class": "measurement",
                     "data_points": len(forecast)
                 },
                 app="temperature"

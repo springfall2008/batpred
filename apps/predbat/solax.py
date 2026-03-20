@@ -8,6 +8,14 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+
+"""SolaX Cloud API integration.
+
+Cloud API client for SolaX inverters with OAuth-style authentication.
+Supports multi-plant configurations, working mode control, and battery
+schedule management via the SolaX OpenAPI.
+"""
+
 import aiohttp
 import asyncio
 import json

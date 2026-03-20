@@ -10,8 +10,10 @@ Alertfeed
 allclose
 Anson
 apexcharts
+apikey
 appdaemon
 appkey
+appsyaml
 argname
 ASHP
 asyncio
@@ -25,6 +27,7 @@ axvspan
 backprop
 Backpropagate
 backpropagation
+backsteps
 Basepath
 Batpred
 battemperature
@@ -33,6 +36,7 @@ batteryb
 beforeunload
 bierner
 brickatius
+byok
 calib
 Cantarell
 cexxxx
@@ -50,6 +54,7 @@ compareform
 configform
 Consolas
 coro
+creds
 crosscharge
 customisation
 Customise
@@ -64,9 +69,11 @@ datalog
 datap
 datapoints
 datas
+dateutil
 dayname
 daynumber
 daysymbol
+dedup
 dend
 denorm
 devcontainer
@@ -114,6 +121,7 @@ fontweight
 Forestfire
 foxess
 freephase
+fronius
 futurerate
 gecloud
 gekey
@@ -160,7 +168,9 @@ isoformat
 isort
 itemtype
 ivtime
+jedlix
 jsyaml
+kaiming
 killall
 kopt
 Kostal
@@ -172,6 +182,8 @@ kvarh
 kwargs
 kwhb
 labelcolor
+labelnames
+larr
 linebreak
 linestyle
 loadml
@@ -225,6 +237,7 @@ nord
 Nordpool
 nosc
 nrgheat
+numpy
 octo
 octoplus
 octopoints
@@ -237,12 +250,14 @@ oninput
 onmouseout
 onmouseover
 openweathermap
+overfitting
 ownerapi
 pdata
 pdetails
 perc
 percnt
 PeterHaban
+photovoltaics
 pitem
 pkwh
 Plenticore
@@ -284,6 +299,7 @@ rowspan
 rstart
 rtype
 ruamel
+Rvrt
 saverestore
 savez
 scalarstring
@@ -307,6 +323,7 @@ socs
 sofar
 SolarEdge
 solarman
+solarnet
 Solax
 solaxcloud
 solaxmodbus
@@ -318,11 +335,15 @@ Southwell
 springfall
 starthour
 startminute
+startswith
 startt
 stdlib
 stepline
 strptime
+substep
+sunspec
 sunsynk
+supabase
 syscmd
 tabindex
 tasmota
@@ -371,6 +392,7 @@ xload
 xticks
 yaxis
 yaxistooltip
+yday
 ylabel
 yuanzhi
 zappi

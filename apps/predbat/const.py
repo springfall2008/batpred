@@ -8,6 +8,13 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+
+"""Global constants and default values used throughout PredBat.
+
+Defines time formats, prediction intervals, retry limits, conversion factors,
+mode options, and other constants shared across all modules.
+"""
+
 from datetime import datetime, timedelta
 
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
