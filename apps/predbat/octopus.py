@@ -2307,6 +2307,7 @@ class Octopus:
                                     slots_per_day[day_offset] += 1
                                     slots_added_set.add(slot_start)
                                     rates[minute] = assumed_price
+
                             else:
                                 # For minutes within a 30-min slot, only apply if the slot was added
                                 if slot_start in slots_added_set:
