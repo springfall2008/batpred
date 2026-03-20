@@ -77,9 +77,9 @@ def test_basic_save_load(test_dir):
     rate_import = {0: 10.0, 30: 15.0, 60: 20.0, 90: 25.0}
     rate_export = {0: 5.0, 30: 7.5, 60: 10.0, 90: 12.5}
 
-    # Save rates with freeze at minute 60  
+    # Save rates with freeze at minute 60
     success = store.save_rates(today, rate_import, rate_export, freeze_before_minute=60)
-    
+
     if not success:
         print("  ERROR: Failed to save rates")
         return True

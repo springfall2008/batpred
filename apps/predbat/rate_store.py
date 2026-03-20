@@ -15,7 +15,7 @@ to prevent retrospective changes to historical cost calculations.
 """
 
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 from persistent_store import PersistentStore
 
 
@@ -155,4 +155,3 @@ class RateStore(PersistentStore):
             Number of files removed
         """
         return self.cleanup(self.save_dir, "rates_*.json", retention_days)
-

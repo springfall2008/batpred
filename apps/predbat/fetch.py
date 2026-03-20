@@ -911,7 +911,7 @@ class Fetch:
         if self.rate_store:
             today = datetime.now()
             stored_import, stored_export = self.rate_store.load_rates(today)
-            
+
             if stored_import or stored_export:
                 # Merge frozen past rates into current rate tables
                 for minute in range(0, self.minutes_now):
@@ -919,11 +919,12 @@ class Fetch:
                         self.rate_import[minute] = stored_import[minute]
                     if stored_export and minute in stored_export:
                         self.rate_export[minute] = stored_export[minute]
-                
-                self.log("Loaded {} frozen import rates and {} frozen export rates from storage".format(
-                    len([m for m in stored_import.keys() if m < self.minutes_now]) if stored_import else 0,
-                    len([m for m in stored_export.keys() if m < self.minutes_now]) if stored_export else 0
-                ))
+
+                self.log(
+                    "Loaded {} frozen import rates and {} frozen export rates from storage".format(
+                        len([m for m in stored_import.keys() if m < self.minutes_now]) if stored_import else 0, len([m for m in stored_export.keys() if m < self.minutes_now]) if stored_export else 0
+                    )
+                )
 
         # Replicate and scan import rates
         if self.rate_import:
