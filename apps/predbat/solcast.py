@@ -645,7 +645,7 @@ class SolarAPI(ComponentBase):
                     },
                 )
 
-    def pv_calibration(self, pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10, divide_by, max_kwh):
+    def pv_calibration(self, pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10, divide_by, max_kwh, forecast_days):
         """
         Perform PV calibration based on historical data and forecast data.
         This will adjust the forecast data based on historical PV production and forecast data.
@@ -653,8 +653,8 @@ class SolarAPI(ComponentBase):
         """
         self.log("PV Calibration: Fetching PV data for calibration")
 
-        days = 10
-        pv_today_hist = self.base.minute_data_import_export(days, self.now_utc, "pv_today", required_unit="kWh", pad=False)
+        days = 7
+        pv_today_hist = self.base.minute_data_import_export(days + 1, self.now_utc, "pv_today", required_unit="kWh", pad=False)
         pv_today_hist_max_minute = max(pv_today_hist.keys()) if pv_today_hist else 0
         pv_today_hist_days = int(pv_today_hist_max_minute / (24 * 60)) if pv_today_hist else 0
         # turn pv_today_hist into pv_power_hist by working out the increment for each minute, starting
@@ -669,10 +669,10 @@ class SolarAPI(ComponentBase):
 
         # Find the forecast history
         pv_forecast, pv_forecast_hist_days = history_attribute_to_minute_data(
-            self.now_utc_exact, prune_today(history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", days, required=False)), self.now_utc_exact, self.midnight_utc, prune=False, intermediate=True)
+            self.now_utc_exact, prune_today(history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", days + 1, required=False)), self.now_utc_exact, self.midnight_utc, prune=False, intermediate=True)
         )
 
-        hist_days = min(pv_today_hist_days, pv_forecast_hist_days)
+        hist_days = min(pv_today_hist_days, pv_forecast_hist_days, days)
         enabled_calibration = True
         if hist_days < 3:
             enabled_calibration = False
@@ -685,6 +685,8 @@ class SolarAPI(ComponentBase):
         past_day_forecast = {}
         past_day_actual = {}
         max_pv_power_hist = 0
+
+        # Work out the history for each slot in the day, and the history for each day, and the max power in the history for scaling purposes
         for minute in pv_power_hist:
             minute_absolute = self.minutes_now - minute
             if minute_absolute < 0:
@@ -695,10 +697,13 @@ class SolarAPI(ComponentBase):
                 pv_power_hist_by_slot_count[slot] = pv_power_hist_by_slot_count.get(slot, 0) + 1
                 past_day_actual[days_prev] = past_day_actual.get(days_prev, 0) + pv_power_hist[minute]
                 max_pv_power_hist = max(max_pv_power_hist, pv_power_hist[minute])
+
+        # Average the history for each slot in the day
         for slot in pv_power_hist_by_slot:
             if pv_power_hist_by_slot_count[slot] > 0:
                 pv_power_hist_by_slot[slot] = dp4(pv_power_hist_by_slot[slot] / pv_power_hist_by_slot_count[slot])
 
+        # Work out the forecast for each slot in the day, and the forecast for each day, and the max power in the forecast for scaling purposes
         max_pv_power_forecast = 0
         for minute in pv_forecast:
             minute_absolute = self.minutes_now - minute
@@ -709,17 +714,31 @@ class SolarAPI(ComponentBase):
                 pv_forecast_by_slot_count[slot] = pv_forecast_by_slot_count.get(slot, 0) + 1
                 max_pv_power_forecast = max(max_pv_power_forecast, pv_forecast[minute])
                 days_prev = int(abs(minute_absolute) / (24 * 60)) + 1
-                past_day_forecast[days_prev] = past_day_forecast.get(days_prev, 0) + pv_forecast[minute]
+                if days_prev <= hist_days:
+                    past_day_forecast[days_prev] = past_day_forecast.get(days_prev, 0) + pv_forecast[minute]
 
+        # Average the forecast for each slot in the day
+        for slot in pv_forecast_by_slot:
+            if pv_forecast_by_slot_count[slot] > 0:
+                pv_forecast_by_slot[slot] = dp4(pv_forecast_by_slot[slot] / pv_forecast_by_slot_count[slot])
+
+        # Work out the scaling factor for the forecast based on the history, looking at each day and each slot, and find the best and worst case day to use as a guide for scaling the forecast.
         worst_day_scaling = 1.0
         best_day_scaling = 1.0
+        average_day_scaling = 0
         for day in past_day_forecast:
             past_day_forecast[day] = dp4(past_day_forecast[day] / 60.0)  # Convert to kWh
             past_day_actual[day] = dp4(past_day_actual.get(day, 0) / 60.0)  # Convert to kWh
             scaling_factor = dp4(past_day_actual[day] / past_day_forecast[day] if past_day_forecast[day] > 0 else 1.0)
             worst_day_scaling = min(worst_day_scaling, scaling_factor)
             best_day_scaling = max(best_day_scaling, scaling_factor)
+            average_day_scaling += scaling_factor
             self.log("PV Calibration: Past day {} had {} kWh of forecast PV, and actual {} kWh PV generation".format(day, dp2(past_day_forecast[day]), dp2(past_day_actual[day])))
+        average_day_scaling = dp4(average_day_scaling / len(past_day_forecast)) if past_day_forecast else 1.0
+
+        # Now adjust worst and best day scaling through by average scaling so they are just a factor on the average day, and clamp to sensible values to prevent extreme outliers from causing crazy forecasts.
+        worst_day_scaling = dp4(worst_day_scaling / average_day_scaling)
+        best_day_scaling = dp4(best_day_scaling / average_day_scaling)
 
         # Clamp best and worst day scaling factors to sensible values
         worst_day_scaling = max(worst_day_scaling, 0.5)
@@ -727,29 +746,28 @@ class SolarAPI(ComponentBase):
         if not enabled_calibration:
             worst_day_scaling = 0.7
             best_day_scaling = 1.3
-        self.log("PV Calibration: Worst day scaling factor {}, best day scaling factor {} max historical power {} max future predicted power {}".format(dp2(worst_day_scaling), dp2(best_day_scaling), dp2(max_pv_power_hist), dp2(max_pv_power_forecast)))
+        self.log(
+            "PV Calibration: Worst day scaling factor {}, best day scaling factor {} average day scaling factor {} max historical power {} max future predicted power {}".format(
+                dp2(worst_day_scaling), dp2(best_day_scaling), dp2(average_day_scaling), dp2(max_pv_power_hist), dp2(max_pv_power_forecast)
+            )
+        )
         self.pv_calibration_worst_scaling = worst_day_scaling
         self.pv_calibration_best_scaling = best_day_scaling
+        self.pv_calibration_average_scaling = average_day_scaling
 
-        for slot in pv_forecast_by_slot:
-            if pv_forecast_by_slot_count[slot] > 0:
-                pv_forecast_by_slot[slot] = dp4(pv_forecast_by_slot[slot] / pv_forecast_by_slot_count[slot])
-
+        # Work out total production across the slot averages.
         total_production = 0
         for slot in range(0, 24 * 60, self.plan_interval_minutes):
             total_production += pv_power_hist_by_slot.get(slot, 0)
 
+        # Work out total forecast across the slot averages.
         total_forecast = 0
         for slot in range(0, 24 * 60, self.plan_interval_minutes):
             total_forecast += pv_forecast_by_slot.get(slot, 0)
 
-        pv_distribution = {}
-        forecast_distribution = {}
         slot_adjustment = {}
         for slot in range(0, 24 * 60, self.plan_interval_minutes):
-            pv_distribution[slot] = dp4((pv_power_hist_by_slot.get(slot, 0)) / total_production if total_production > 0 else 0)
-            forecast_distribution[slot] = dp4((pv_forecast_by_slot.get(slot, 0)) / total_forecast if total_forecast > 0 else 0)
-
+            # Work out the per-slot scale factor
             slot_adjustment[slot] = dp4(pv_power_hist_by_slot.get(slot, 0) / pv_forecast_by_slot.get(slot, 0) if pv_forecast_by_slot.get(slot, 0) > 0.01 else 1.0)
             slot_adjustment[slot] = max(min(slot_adjustment[slot], PV_CALIBRATION_HIGHEST), PV_CALIBRATION_LOWEST)  # Clamp adjustment factor to sensible values
 
@@ -773,11 +791,34 @@ class SolarAPI(ComponentBase):
             )
         )
 
+        # Work out the total forecast for each future day going forward.
+        days_forecast_total = {}
+        days_forecast_total_scaled_slot = {}
+        for minute in range(0, max(pv_forecast_minute.keys()) + 1):
+            day = int(minute / (24 * 60))
+            if day < forecast_days:
+                slot = (int(minute / self.plan_interval_minutes) * self.plan_interval_minutes) % (24 * 60)
+                pv_value = pv_forecast_minute.get(minute, 0)
+                days_forecast_total[day] = days_forecast_total.get(day, 0) + pv_value
+                days_forecast_total_scaled_slot[day] = days_forecast_total_scaled_slot.get(day, 0) + pv_value * slot_adjustment.get(slot, 1.0)
+
+        # Decide on the per day scaling factor
+        days_use_scaling = {}
+        for day in days_forecast_total:
+            total_day = days_forecast_total.get(day, 0)
+            total_day_scaled_slot = days_forecast_total_scaled_slot.get(day, 0)
+            scaling_applied = dp4(total_day_scaled_slot / total_day if total_day > 0.01 else 1.0)
+            days_use_scaling[day] = dp4(total_adjustment / scaling_applied if scaling_applied > 0.01 else 1.0)
+
+        self.log("PV Calibration: Days forecast total {}, days forecast total scaled by slot adjustments {}, days use scaling {}".format(days_forecast_total, days_forecast_total_scaled_slot, days_use_scaling))
+
         pv_forecast_minute_adjusted = {}
         for minute in range(0, max(pv_forecast_minute.keys()) + 1):
+            day = int(minute / (24 * 60))
+            use_scaling_day = days_use_scaling.get(day, 1.0)
             pv_value = pv_forecast_minute.get(minute, 0)
             slot = (int(minute / self.plan_interval_minutes) * self.plan_interval_minutes) % (24 * 60)
-            pv_forecast_minute_adjusted[minute] = pv_value * slot_adjustment.get(slot, 1.0)
+            pv_forecast_minute_adjusted[minute] = pv_value * slot_adjustment.get(slot, 1.0) * use_scaling_day
 
         pv_estimateCL = {}
         pv_estimate10 = {}
@@ -964,7 +1005,7 @@ class SolarAPI(ComponentBase):
             )
 
             # Run calibration on the data
-            pv_forecast_minute, pv_forecast_minute10, pv_forecast_data = self.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10, divide_by / period, max_kwh)
+            pv_forecast_minute, pv_forecast_minute10, pv_forecast_data = self.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10, divide_by / period, max_kwh, self.forecast_days)
             self.publish_pv_stats(pv_forecast_data, divide_by / period, period)
             self.pack_and_store_forecast(pv_forecast_minute, pv_forecast_minute10)
             self.update_success_timestamp()

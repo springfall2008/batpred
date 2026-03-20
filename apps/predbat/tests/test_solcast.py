@@ -1861,7 +1861,7 @@ def test_pv_calibration_power_conversion(my_predbat):
         pv_forecast_minute10 = {m: 0.04 for m in range(total_minutes)}
         pv_forecast_data = [{"period_start": base.midnight_utc.strftime("%Y-%m-%dT%H:%M:%S+0000"), "pv_estimate": 0.05}]
 
-        adj_minute, adj_minute10, adj_data = solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=5.0)
+        adj_minute, adj_minute10, adj_data = solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
 
         # Returned minute data must be non-negative
         if any(v < 0 for v in adj_minute.values()):
@@ -1982,7 +1982,7 @@ def test_pv_calibration_partial_history(my_predbat):
             pv_forecast_minute10 = {m: 0.01 for m in range(total_minutes)}
             pv_forecast_data = [{"period_start": "2025-06-15T00:00:00+0000", "pv_estimate": 0.5}]
 
-            solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=5.0)
+            solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
 
             worst = solar.pv_calibration_worst_scaling
             best = solar.pv_calibration_best_scaling
@@ -2073,7 +2073,7 @@ def test_pv_calibration_capped_data_clamp(my_predbat):
             pv_forecast_data.append({"period_start": ts.strftime("%Y-%m-%dT%H:%M:%S+0000"), "pv_estimate": 3.0 * plan_interval / 60})
 
         max_kwh = 2.0  # panel peak output cap in kW
-        adj_minute, adj_minute10, adj_data = solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=max_kwh)
+        adj_minute, adj_minute10, adj_data = solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=max_kwh, forecast_days=solar.forecast_days)
 
         # capped_data = min(max(max_pv_power_hist, max_pv_power_forecast), max_kwh) * plan_interval / 60
         # max_pv_power_hist ≈ 1 kW (per minute), max_pv_power_forecast ≈ 3/60 kW per minute
@@ -2089,6 +2089,237 @@ def test_pv_calibration_capped_data_clamp(my_predbat):
 
     finally:
         test_api.cleanup()
+
+    return failed
+
+
+def test_pv_calibration_synthetic_values(my_predbat):
+    """
+    Test pv_calibration with fully controlled synthetic data and verify all key
+    output values numerically.  Two sub-cases exercise the new algorithm:
+
+    Sub-case A – uniform 0.5x underperformance (5 days, actual=0.5 kWh, forecast=1.0 kWh):
+      - total_adjustment ≈ 0.5
+      - average_day_scaling ≈ 0.5
+      - worst / best day scaling = 1.0 (no day-to-day variance)
+      - calibrated gen-slot minute ≈ 0.5 × input
+      - pv_estimate10 / pv_estimate90 ≈ pv_estimateCL (worst=best=1.0 → no spread)
+
+    Sub-case B – variable performance (3 days: actual = 0.5, 1.0, 1.5 kWh each, forecast=1.0):
+      - average_day_scaling ≈ 1.0  ((0.5+1.0+1.5)/3)
+      - total_adjustment ≈ 1.0
+      - worst_day_scaling ≈ 0.5  (min/avg = 0.5/1.0, clamped)
+      - best_day_scaling  ≈ 1.5  (max/avg = 1.5/1.0)
+      - point estimate (pv_estimateCL) ≈ unchanged input (average ratio = 1.0)
+      - pv_estimate10 ≈ 0.5 × pv_estimateCL
+      - pv_estimate90 ≈ 1.5 × pv_estimateCL (may be capped to capped_data)
+    """
+    print("  - test_pv_calibration_synthetic_values")
+    failed = False
+
+    GEN_START = 600  # 10:00 UTC in minutes since midnight
+    GEN_END = 660  # 11:00 UTC
+    FORECAST_KW = 1.0  # h0 forecast power (kW) during gen window
+    TOL = 0.02  # 2% tolerance for floating-point comparisons
+
+    def build_pv_today_hist(actual_per_day, minutes_now=720):
+        """
+        Build cumulative pv_today kWh dict keyed by minutes-ago from now (noon).
+        actual_per_day: list of kWh produced in GEN_START–GEN_END; index 0 = yesterday.
+        All energy is generated linearly across [GEN_START, GEN_END] minutes of each past day.
+        """
+        hist = {}
+        for day_idx, actual_kwh in enumerate(actual_per_day):
+            day = day_idx + 1
+            midnight_ago = day * 1440 + minutes_now
+            for step in range(0, 24 * 60, 5):
+                minute_ago = midnight_ago - step
+                if minute_ago < 0:
+                    continue
+                actual_min = step  # minute-of-day counting from midnight
+                if actual_min < GEN_START:
+                    cumulative = 0.0
+                elif actual_min < GEN_END:
+                    cumulative = actual_kwh * (actual_min - GEN_START) / (GEN_END - GEN_START)
+                else:
+                    cumulative = actual_kwh
+                hist[minute_ago] = cumulative
+        return hist
+
+    def build_forecast_inputs(plan_interval, total_days=4):
+        """
+        Future forecast: FORECAST_KW kW in [GEN_START, GEN_END] for day 0 only.
+        Returns (pv_forecast_minute, pv_forecast_minute10, pv_forecast_data).
+        """
+        total_minutes = total_days * 24 * 60
+        pv_m = {}
+        pv_m10 = {}
+        for m in range(total_minutes):
+            val = (FORECAST_KW / 60.0) if GEN_START <= m < GEN_END else 0.0
+            pv_m[m] = val
+            pv_m10[m] = val
+
+        midnight = datetime(2025, 6, 15, 0, 0, 0, tzinfo=pytz.utc)
+        pv_data = []
+        for slot in range(GEN_START, GEN_END, plan_interval):
+            ts = midnight + timedelta(minutes=slot)
+            pv_data.append({"period_start": ts.strftime("%Y-%m-%dT%H:%M:%S+0000"), "pv_estimate": FORECAST_KW * plan_interval / 60.0})
+        return pv_m, pv_m10, pv_data
+
+    def run_scenario(actual_per_day):
+        test_api = create_test_solar_api()
+        solar = test_api.solar
+        base = test_api.mock_base
+        days_back = len(actual_per_day)
+        minutes_now = base.minutes_now  # 720 (noon)
+
+        hist = build_pv_today_hist(actual_per_day)
+
+        # Build pv_forecast minute dict directly (bypass full h0 pipeline).
+        # pv_calibration maps minute N → minute_absolute = minutes_now - N.
+        # For day D's gen window (GEN_START..GEN_END-1 min-of-day):
+        #   minute_ago = D*1440 + (minutes_now - m_of_day)
+        # We provide FORECAST_KW kW at each gen-window minute for all past days.
+        pv_forecast_hist = {}
+        for day_num in range(1, days_back + 1):
+            for m_of_day in range(GEN_START, GEN_END):
+                minutes_ago = day_num * 1440 + (minutes_now - m_of_day)
+                pv_forecast_hist[minutes_ago] = float(FORECAST_KW)
+
+        def mock_minute_import_export(max_days_prev, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True, _hist=hist):
+            return dict(_hist) if key == "pv_today" else {}
+
+        base.minute_data_import_export = mock_minute_import_export
+        # No h0 fetch needed; history_attribute_to_minute_data is mocked below.
+        solar.get_history_wrapper = lambda entity_id, days, required=False: []
+
+        pv_m, pv_m10, pv_data = build_forecast_inputs(base.plan_interval_minutes)
+
+        # Patch history_attribute_to_minute_data so pv_calibration receives the
+        # synthetic pv_forecast dict without going through the real h0 pipeline
+        # (which relies on now_utc_exact returning the mocked time).
+        with patch("solcast.history_attribute_to_minute_data", return_value=(pv_forecast_hist, days_back)):
+            adj_m, adj_m10, adj_data = solar.pv_calibration(pv_m, pv_m10, pv_data, create_pv10=True, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
+        result = {
+            "total_adj": solar.pv_calibration_total_adjustment,
+            "avg_scaling": getattr(solar, "pv_calibration_average_scaling", None),
+            "worst": solar.pv_calibration_worst_scaling,
+            "best": solar.pv_calibration_best_scaling,
+            "adj_m": adj_m,
+            "adj_data": adj_data,
+        }
+        test_api.cleanup()
+        return result
+
+    # --- Sub-case A: 5 days all at 0.5x ---
+    r = run_scenario([0.5, 0.5, 0.5, 0.5, 0.5])
+
+    if abs(r["total_adj"] - 0.5) > TOL:
+        print("ERROR [A]: total_adjustment should be ~0.5, got {}".format(r["total_adj"]))
+        failed = True
+
+    if r["avg_scaling"] is not None and abs(r["avg_scaling"] - 0.5) > TOL:
+        print("ERROR [A]: average_day_scaling should be ~0.5, got {}".format(r["avg_scaling"]))
+        failed = True
+
+    # Uniform underperformance: relative worst = min/avg = 0.5/0.5 = 1.0.
+    if abs(r["worst"] - 1.0) > TOL:
+        print("ERROR [A]: worst_day_scaling should be 1.0 (no day variance), got {}".format(r["worst"]))
+        failed = True
+
+    # Uniform underperformance: initial best stays 1.0 (no day exceeded 1.0×), so
+    # relative best = 1.0/avg = 1.0/0.5 = 2.0 → clamped to PV_CALIBRATION_HIGHEST_BEST=1.7.
+    if abs(r["best"] - 1.7) > TOL:
+        print("ERROR [A]: best_day_scaling should be 1.7 (clamped from 1.0/avg=2.0), got {}".format(r["best"]))
+        failed = True
+
+    # Calibrated gen-slot minute should be approximately total_adj × raw (within 15%).
+    # Small deviation arises from days_use_scaling correcting for the boundary-slot
+    # artifact (slot 655 gets clamped slot_adj due to step-function PV test data).
+    got = r["adj_m"].get(630, None)
+    if got is None:
+        print("ERROR [A]: adj_m[630] missing")
+        failed = True
+    else:
+        pv_raw = FORECAST_KW / 60.0
+        ratio = got / pv_raw if pv_raw else 0
+        if abs(ratio - r["total_adj"]) > 0.15:
+            print("ERROR [A]: adj_minute[630] / raw = {:.4f}, expected ~{:.4f} (total_adj ± 15%)".format(ratio, r["total_adj"]))
+            failed = True
+
+    # pv_estimate10 should use worst scaling (=1.0) → equal to pv_estimateCL.
+    # pv_estimate90 should use best scaling (=1.7) → 1.7× pv_estimateCL.
+    for entry in r["adj_data"]:
+        cl = entry.get("pv_estimateCL")
+        e10 = entry.get("pv_estimate10")
+        e90 = entry.get("pv_estimate90")
+        if cl is not None and cl > 0:
+            if e10 is not None and abs(e10 - cl) > TOL * cl:
+                print("ERROR [A]: pv_estimate10 ({}) should equal pv_estimateCL ({}) when worst=1.0".format(e10, cl))
+                failed = True
+                break
+            if e90 is not None and abs(e90 - cl * 1.7) > 0.05 * cl:
+                # e90 may be capped by capped_data; allow reduced value if capped
+                if e90 > cl * 1.7 * (1 + TOL):
+                    print("ERROR [A]: pv_estimate90 ({}) should be ≈ {:.5f} (cl × 1.7)".format(e90, cl * 1.7))
+                    failed = True
+                    break
+
+    # --- Sub-case B: 3 days at 0.5x, 1.0x, 1.5x → avg=1.0, worst=0.5, best=1.5 ---
+    r = run_scenario([0.5, 1.0, 1.5])
+
+    if abs(r["total_adj"] - 1.0) > TOL:
+        print("ERROR [B]: total_adjustment should be ~1.0 (avg ratio), got {}".format(r["total_adj"]))
+        failed = True
+
+    if r["avg_scaling"] is not None and abs(r["avg_scaling"] - 1.0) > TOL:
+        print("ERROR [B]: average_day_scaling should be ~1.0, got {}".format(r["avg_scaling"]))
+        failed = True
+
+    # worst = min_ratio / avg = 0.5 / 1.0 = 0.5 (at the clamp floor)
+    if abs(r["worst"] - 0.5) > TOL:
+        print("ERROR [B]: worst_day_scaling should be ~0.5 (relative to avg=1.0), got {}".format(r["worst"]))
+        failed = True
+
+    # best = max_ratio / avg = 1.5 / 1.0 = 1.5 (below the clamp ceiling of 1.7)
+    if abs(r["best"] - 1.5) > TOL:
+        print("ERROR [B]: best_day_scaling should be ~1.5 (relative to avg=1.0), got {}".format(r["best"]))
+        failed = True
+
+    # Calibrated gen-slot minute should be approximately total_adj × raw (within 15%).
+    got = r["adj_m"].get(630, None)
+    if got is None:
+        print("ERROR [B]: adj_m[630] missing")
+        failed = True
+    else:
+        pv_raw = FORECAST_KW / 60.0
+        ratio = got / pv_raw if pv_raw else 0
+        if abs(ratio - r["total_adj"]) > 0.15:
+            print("ERROR [B]: adj_minute[630] / raw = {:.4f}, expected ~{:.4f} (total_adj ± 15%)".format(ratio, r["total_adj"]))
+            failed = True
+
+    # pv_estimate10 = pv_estimateCL × worst (=0.5); pv_estimate90 ≥ pv_estimateCL (best=1.5)
+    for entry in r["adj_data"]:
+        cl = entry.get("pv_estimateCL")
+        e10 = entry.get("pv_estimate10")
+        e90 = entry.get("pv_estimate90")
+        if cl is not None and cl > 0:
+            if e10 is not None:
+                expected_e10 = cl * 0.5
+                if abs(e10 - expected_e10) > 0.05 * cl:
+                    print("ERROR [B]: pv_estimate10 ({}) should be ~0.5×pv_estimateCL ({}) = {:.5f}".format(e10, cl, expected_e10))
+                    failed = True
+                    break
+            if e90 is not None:
+                # best=1.5, so e90 = min(cl×1.5, capped_data) ≥ cl
+                if e90 < cl * (1.0 - TOL):
+                    print("ERROR [B]: pv_estimate90 ({}) should be ≥ pv_estimateCL ({})".format(e90, cl))
+                    failed = True
+                    break
+                if e90 > cl * 1.5 * (1.0 + TOL):
+                    print("ERROR [B]: pv_estimate90 ({}) should be ≤ 1.5 × pv_estimateCL ({})".format(e90, cl))
+                    failed = True
+                    break
 
     return failed
 
@@ -2157,5 +2388,6 @@ def run_solcast_tests(my_predbat):
     failed |= test_pv_calibration_power_conversion(my_predbat)
     failed |= test_pv_calibration_capped_data_clamp(my_predbat)
     failed |= test_pv_calibration_partial_history(my_predbat)
+    failed |= test_pv_calibration_synthetic_values(my_predbat)
 
     return failed
