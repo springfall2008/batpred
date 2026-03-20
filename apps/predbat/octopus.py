@@ -2570,7 +2570,7 @@ class MockBase:  # pragma: no cover
             print(f"  Attributes: {json.dumps(attributes, indent=2)}")
         self.set_state_wrapper(entity_id, state, attributes)
 
-    def get_arg(self, key, default=None):
+    def get_arg(self, key, default=None, indirect=True, attribute=None, combine=False, index=None, domain=None, can_override=False, required_unit=None):
         return default
 
     def set_arg(self, key, value):
