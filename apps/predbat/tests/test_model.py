@@ -1039,6 +1039,20 @@ def run_model_tests(my_predbat):
         discharge=0,
         battery_soc=50,
         export_limit=0.5,
+        battery_rate_max_charge_dc=10.0,
+    )
+    failed |= simple_scenario(
+        "battery_discharge_export_limit_ac_pv_b",
+        my_predbat,
+        1,
+        4,
+        assert_final_metric=-export_rate * 24 * 0.5,
+        assert_final_soc=50 + 24,
+        with_battery=True,
+        discharge=0,
+        battery_soc=50,
+        export_limit=0.5,
+        battery_rate_max_charge_dc=10.0,
     )
     failed |= simple_scenario(
         "battery_discharge_export_limit_ac_pv2",
