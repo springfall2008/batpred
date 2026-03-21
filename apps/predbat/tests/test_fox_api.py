@@ -5233,6 +5233,122 @@ def test_fox_rate_limiting_variable_pattern(my_predbat):
     return False
 
 
+def test_compute_schedule_charge_power_reads_slot_fdpwr(my_predbat):
+    """
+    Regression test for #3610: compute_schedule must read fdPwr from the active charge slot,
+    not always substitute fdPwr_max.  When inverter_limit_charge restricts charge power below
+    the hardware maximum, that lower value should appear in local_schedule["charge"]["power"].
+    """
+    print("  - test_compute_schedule_charge_power_reads_slot_fdpwr")
+
+    fox = MockFoxAPI()
+    deviceSN = "TEST123"
+
+    limited_power = 3000  # simulates inverter_limit_charge being set below fdPwr_max
+
+    fox.device_scheduler[deviceSN] = {
+        "enable": True,
+        "groups": [
+            {
+                "startHour": 1,
+                "startMinute": 0,
+                "endHour": 4,
+                "endMinute": 59,
+                "enable": 1,
+                "fdPwr": limited_power,  # slot has the limited power value
+                "workMode": "ForceCharge",
+                "fdSoc": 100,
+                "maxSoc": 80,
+                "minSocOnGrid": 10,
+            }
+        ],
+    }
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000  # hardware maximum is higher than the limit
+    fox.local_schedule[deviceSN] = {"reserve": 10}
+
+    asyncio.run(FoxAPI.compute_schedule(fox, deviceSN))
+
+    charge = fox.local_schedule[deviceSN]["charge"]
+    assert charge["power"] == limited_power, f"charge power should be {limited_power} (from slot fdPwr), got {charge['power']} — " "fdPwr_max must not overwrite the slot value (issue #3610)"
+
+    return False
+
+
+def test_compute_schedule_discharge_missing_fdpwr_defaults_to_max(my_predbat):
+    """
+    Regression test for #3610: when a ForceDischarge slot has no fdPwr key,
+    compute_schedule should default to fdPwr_max (not 0).
+    """
+    print("  - test_compute_schedule_discharge_missing_fdpwr_defaults_to_max")
+
+    fox = MockFoxAPI()
+    deviceSN = "TEST123"
+
+    fox.device_scheduler[deviceSN] = {
+        "enable": True,
+        "groups": [
+            {
+                "startHour": 16,
+                "startMinute": 0,
+                "endHour": 18,
+                "endMinute": 59,
+                "enable": 1,
+                # fdPwr intentionally omitted to test the default
+                "workMode": "ForceDischarge",
+                "fdSoc": 10,
+                "maxSoc": 90,
+                "minSocOnGrid": 10,
+            }
+        ],
+    }
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.local_schedule[deviceSN] = {"reserve": 10}
+
+    asyncio.run(FoxAPI.compute_schedule(fox, deviceSN))
+
+    discharge = fox.local_schedule[deviceSN]["discharge"]
+    assert discharge["power"] == 8000, f"discharge power should default to fdPwr_max (8000) when fdPwr is missing, got {discharge['power']}"
+
+    return False
+
+
+def test_apply_battery_schedule_limited_charge_power_sent_to_api(my_predbat):
+    """
+    Regression test for #3610: apply_battery_schedule must send the charge power stored in
+    local_schedule (which reflects inverter_limit_charge) as fdPwr in the ForceCharge slot —
+    not the hardware maximum fdPwr_max.
+    """
+    print("  - test_apply_battery_schedule_limited_charge_power_sent_to_api")
+
+    fox = MockFoxAPIWithSchedulerTracking()
+    deviceSN = "TEST123456"
+
+    limited_power = 3000  # simulates inverter_limit_charge
+
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.local_schedule[deviceSN] = {
+        "reserve": 10,
+        "charge": {"enable": 1, "start_time": "01:00:00", "end_time": "05:00:00", "soc": 100, "power": limited_power},
+        "discharge": {"enable": 0, "start_time": "00:00:00", "end_time": "00:00:00", "soc": 10, "power": 5000},
+    }
+
+    run_async(fox.apply_battery_schedule(deviceSN))
+
+    assert len(fox.set_scheduler_calls) == 1
+    groups = fox.set_scheduler_calls[0]["groups"]
+
+    charge_group = next((g for g in groups if g.get("workMode") == "ForceCharge"), None)
+    assert charge_group is not None, "ForceCharge group not found in schedule sent to API"
+    assert charge_group["fdPwr"] == limited_power, f"fdPwr sent to API should be {limited_power} (from local_schedule power), " f"got {charge_group['fdPwr']} — fdPwr_max must not override inverter_limit_charge (issue #3610)"
+
+    return False
+
+
 def run_fox_api_tests(my_predbat):
     """
     Run all Fox API tests
@@ -5403,6 +5519,11 @@ def run_fox_api_tests(my_predbat):
         failed |= test_apply_battery_schedule_discharge_only(my_predbat)
         failed |= test_apply_battery_schedule_both_enabled(my_predbat)
         failed |= test_apply_battery_schedule_neither_enabled(my_predbat)
+        failed |= test_apply_battery_schedule_limited_charge_power_sent_to_api(my_predbat)
+
+        # compute_schedule charge-rate power fix tests (issue #3610)
+        failed |= test_compute_schedule_charge_power_reads_slot_fdpwr(my_predbat)
+        failed |= test_compute_schedule_discharge_missing_fdpwr_defaults_to_max(my_predbat)
 
         # automatic_config tests
         failed |= test_automatic_config_single_battery(my_predbat)

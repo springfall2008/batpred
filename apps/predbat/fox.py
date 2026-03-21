@@ -663,6 +663,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
         battery_times = self.device_battery_charging_time.get(deviceSN, {})
         scheduler_times = self.device_scheduler.get(deviceSN, {}).get("groups", [])
         device_scheduler_enabled = self.device_scheduler.get(deviceSN, {}).get("enable", False)
+        fdPwr_max = self.fdpwr_max.get(deviceSN, 8000)
 
         # First convert battery times into the same format as scheduler times
         # Create an array of 0 - 2 slots containing the battery charge times
@@ -683,7 +684,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
                         "endHour": 0,
                         "endMinute": 0,
                         "enable": 0,
-                        "fdPwr": self.fdpwr_max.get(deviceSN, 8000),
+                        "fdPwr": fdPwr_max,
                         "workMode": "SelfUse",
                         "fdSoc": 100,
                         "minSocOnGrid": reserve,
@@ -703,7 +704,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
                         "endHour": end_time.get("hour", 0),
                         "endMinute": end_time.get("minute", 0),
                         "enable": 1,
-                        "fdPwr": 0,
+                        "fdPwr": fdPwr_max,
                         "workMode": "ForceCharge",
                         "fdSoc": 100,
                         "minSocOnGrid": reserve,
@@ -739,7 +740,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
             self.local_schedule[deviceSN]["charge"]["start_time"] = "{:02d}:{:02d}:00".format(charge_group.get("startHour", 0), charge_group.get("startMinute", 0))
             self.local_schedule[deviceSN]["charge"]["end_time"] = "{:02d}:{:02d}:00".format(end_hour, end_minute)
             self.local_schedule[deviceSN]["charge"]["soc"] = charge_group.get("maxSoc", 100)
-            self.local_schedule[deviceSN]["charge"]["power"] = self.fdpwr_max[deviceSN]
+            self.local_schedule[deviceSN]["charge"]["power"] = int(charge_group.get("fdPwr", fdPwr_max))
             self.local_schedule[deviceSN]["charge"]["enable"] = 1 if charge_group.get("enable", 0) else 0
         if discharge_group:
             end_hour = discharge_group.get("endHour", 0)
@@ -749,7 +750,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
             self.local_schedule[deviceSN]["discharge"]["start_time"] = "{:02d}:{:02d}:00".format(discharge_group.get("startHour", 0), discharge_group.get("startMinute", 0))
             self.local_schedule[deviceSN]["discharge"]["end_time"] = "{:02d}:{:02d}:00".format(end_hour, end_minute)
             self.local_schedule[deviceSN]["discharge"]["soc"] = discharge_group.get("fdSoc", 100)
-            self.local_schedule[deviceSN]["discharge"]["power"] = int(discharge_group.get("fdPwr", 0))
+            self.local_schedule[deviceSN]["discharge"]["power"] = int(discharge_group.get("fdPwr", fdPwr_max))
             self.local_schedule[deviceSN]["discharge"]["enable"] = 1 if discharge_group.get("enable", 0) else 0
         return self.local_schedule
 
@@ -1610,7 +1611,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
                             "workMode": "ForceCharge",
                             "fdSoc": 100,
                             "maxSoc": soc,
-                            "fdPwr": fdPwr_max,
+                            "fdPwr": power,
                             "minSocOnGrid": soc,
                         }
                     )
