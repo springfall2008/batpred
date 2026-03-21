@@ -954,9 +954,11 @@ An optional list of values with one entry per inverter. Only relevant for hybrid
 When set in Watts, overrides the maximum DC battery charge rate used in Predbat's prediction model during ECO mode when solar is available.
 This does not change how the inverter is controlled.
 
-On a hybrid inverter, solar panels connect directly to the DC bus. This means the battery can charge from solar at a rate higher than `inverter_limit` (the AC throughput ceiling) because the energy never passes through the AC conversion stage.
+On a hybrid inverter, solar panels connect directly to the DC bus. This means the battery can charge from solar at a rate higher than `inverter_limit` (the AC throughput ceiling)
+because the energy never passes through the AC conversion stage.
 
-By default Predbat uses `battery_rate_max` and to cap all ECO-mode battery charging, which can underestimate how fast the battery fills from solar.
+By default Predbat uses the derived `battery_rate_max_charge` value (calculated from `battery_rate_max` and `inverter_limit_charge`) to cap all ECO-mode battery charging,
+which can underestimate how fast the battery fills from solar if your battery can charge at a faster DC rate.
 
 When `inverter_limit_charge_dc` is set, Predbat uses it as the ceiling for DC solar charging in ECO mode instead of `battery_rate_max`.
 Set it to the maximum DC charge rate of your battery system in Watts if this rate is higher than the normal maximum AC charge rate.
