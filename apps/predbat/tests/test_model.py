@@ -630,6 +630,22 @@ def run_model_tests(my_predbat):
         hybrid=True,
     )
     failed |= simple_scenario(
+        "battery_charge_pv5_dc_b",
+        my_predbat,
+        0,
+        3,
+        assert_final_metric=-export_rate * 24 * 1,
+        assert_final_soc=24 * 2,
+        with_battery=True,
+        charge=100,
+        battery_size=100,
+        inverter_loss=1.0,
+        inverter_limit=1.0,
+        battery_rate_max_charge_dc=2.0,
+        hybrid=True,
+    )
+
+    failed |= simple_scenario(
         "battery_charge_pv6_ac",
         my_predbat,
         0,
@@ -947,6 +963,8 @@ def run_model_tests(my_predbat):
     )
     failed |= simple_scenario("battery_discharge_pv2_hybrid", my_predbat, 0, 1.5, assert_final_metric=-export_rate * 24, assert_final_soc=22, with_battery=True, discharge=0, battery_soc=10, hybrid=True)
     failed |= simple_scenario("battery_discharge_pv3_hybrid", my_predbat, 0, 2, assert_final_metric=-export_rate * 24, assert_final_soc=24, with_battery=True, discharge=0, battery_soc=0, hybrid=True)
+    failed |= simple_scenario("battery_discharge_pv3_hybrid2", my_predbat, 0, 3, assert_final_metric=-export_rate * 24, assert_final_soc=24, with_battery=True, discharge=0, battery_soc=0, hybrid=True)
+    failed |= simple_scenario("battery_discharge_pv3_hybrid3", my_predbat, 0, 3, assert_final_metric=-export_rate * 24, assert_final_soc=48, with_battery=True, discharge=0, battery_soc=0, hybrid=True, battery_rate_max_charge_dc=2.0)
     failed |= simple_scenario(
         "battery_discharge_pv4_hybrid",
         my_predbat,
@@ -1125,6 +1143,20 @@ def run_model_tests(my_predbat):
         battery_soc=50,
         export_limit=0.5,
         hybrid=True,
+    )
+    failed |= simple_scenario(
+        "battery_discharge_export_limit_hybrid_pv5",
+        my_predbat,
+        0,
+        3,
+        assert_final_metric=-export_rate * 24 * 0.5,
+        assert_final_soc=50 + 2 * 24,
+        with_battery=True,
+        discharge=0,
+        battery_soc=50,
+        export_limit=0.5,
+        hybrid=True,
+        battery_rate_max_charge_dc=2.0,
     )
     failed |= simple_scenario(
         "battery_charge_ac_loss",
