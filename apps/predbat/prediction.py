@@ -855,7 +855,8 @@ class Prediction:
                 # Only tune charge rate on final plan not every simulation
                 if inverter_hybrid and (battery_rate_max_charge_dc > battery_rate_max_charge):
                     # For a hybrid inverter if the DC rate is higher than the max charge rate then we can use some of the extra for PV charging.
-                    battery_rate_max_charge_combined = battery_rate_max_charge + min(battery_rate_max_charge_dc - battery_rate_max_charge, pv_now)
+                    pv_above = max((pv_now / step) - battery_rate_max_charge, 0)
+                    battery_rate_max_charge_combined = battery_rate_max_charge + min(battery_rate_max_charge_dc - battery_rate_max_charge, pv_above)
                 else:
                     battery_rate_max_charge_combined = battery_rate_max_charge
                 charge_rate_now, charge_rate_now_curve = find_charge_rate(

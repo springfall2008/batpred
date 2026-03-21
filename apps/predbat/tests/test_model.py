@@ -644,6 +644,38 @@ def run_model_tests(my_predbat):
         battery_rate_max_charge_dc=2.0,
         hybrid=True,
     )
+    failed |= simple_scenario(
+        "battery_charge_pv5_dc_c",
+        my_predbat,
+        0,
+        3,
+        assert_final_metric=0,
+        assert_final_soc=24 * 3,
+        with_battery=True,
+        charge=100,
+        battery_size=100,
+        inverter_loss=1.0,
+        inverter_limit=1.0,
+        battery_rate_max_charge_dc=10.0,
+        hybrid=True,
+        export_limit=10.0,
+    )
+    failed |= simple_scenario(
+        "battery_charge_pv5_dc_d",
+        my_predbat,
+        0,
+        4,
+        assert_final_metric=-export_rate * 24,
+        assert_final_soc=24 * 2,
+        with_battery=True,
+        charge=100,
+        battery_size=100,
+        inverter_loss=1.0,
+        inverter_limit=1.0,
+        battery_rate_max_charge_dc=2.0,
+        hybrid=True,
+        export_limit=10.0,
+    )
 
     failed |= simple_scenario(
         "battery_charge_pv6_ac",
