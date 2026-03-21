@@ -956,7 +956,7 @@ This does not change how the inverter is controlled.
 
 On a hybrid inverter, solar panels connect directly to the DC bus. This means the battery can charge from solar at a rate higher than `inverter_limit` (the AC throughput ceiling) because the energy never passes through the AC conversion stage.
 
-By default Predbat uses `battery_rate_max` and 'to cap all ECO-mode battery charging, which can underestimate how fast the battery fills from solar.
+By default Predbat uses `battery_rate_max` and to cap all ECO-mode battery charging, which can underestimate how fast the battery fills from solar.
 
 When `battery_rate_max_charge_dc` is set, Predbat uses it as the ceiling for DC solar charging in ECO mode instead of `battery_rate_max`.
 Set it to the maximum DC charge rate of your battery system in Watts if this rate is higher than the normal maximum AC charge rate.
