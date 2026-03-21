@@ -29,7 +29,7 @@ If applicable, add screenshots to help explain your problem. The most useful one
 **Log file**
 Can you capture a log file from the time of the issue, debug mode is not normally required.
 
-You can download the logfile from the WebUI on the Dash tab select **predbat_debug.log**
+You can download the logfile from the WebUI on the Dash tab select **predbat.log**
 
 **Predbat debug yaml file**
 This is important for any plan related issues.
