@@ -951,7 +951,7 @@ An optional list of values with one entry per inverter. Only relevant for hybrid
     - 9200
 ```
 
-When set in Watts, overrides the maximum DC battery charge rate used in Predbat's prediction model during ECO mode when solar is available.
+When set in Watts, overrides the maximum DC battery charge rate used in Predbat's prediction model when solar is available.
 This does not change how the inverter is controlled.
 
 On a hybrid inverter, solar panels connect directly to the DC bus. This means the battery can charge from solar at a rate higher than `inverter_limit` (the AC throughput ceiling)
