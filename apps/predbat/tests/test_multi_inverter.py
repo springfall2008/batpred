@@ -30,12 +30,14 @@ def run_inverter_multi_test(
     print("Run scenario {}".format(name))
     failed = False
     inverter.battery_rate_max_charge = battery_rate_max_charge
+    inverter.battery_rate_max_charge_dc = battery_rate_max_charge
     inverter.soc_max = soc_max
     inverter.soc_kw = soc_kw
     inverter.soc_percent = calc_percent_limit(soc_kw, soc_max)
     my_predbat.soc_max = soc_max_all
     my_predbat.soc_kw = soc_kw_all
     my_predbat.battery_rate_max_charge = battery_rate_max_charge_all
+    my_predbat.battery_rate_max_charge_dc = battery_rate_max_charge_all
 
     my_predbat.adjust_battery_target_multi(inverter, soc, isCharging, isExporting)
     if assert_soc != inverter.soc_target:

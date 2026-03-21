@@ -2238,7 +2238,7 @@ class Plan:
                     elif soc_min > limit_soc:
                         # Give it 10 minute margin
                         target_soc = max(limit_soc, soc_min)
-                        limit_soc = max(limit_soc, soc_min - 10 * self.battery_rate_max_discharge_scaled)
+                        limit_soc = max(limit_soc, soc_min - 10 * self.battery_rate_max_discharge * self.battery_rate_max_scaling_discharge)
                         window["target"] = calc_percent_limit(target_soc, self.soc_max)
                         export_limits_best[window_n] = calc_percent_limit(limit_soc, self.soc_max) + (limit - int(limit))
                         if limit != export_limits_best[window_n] and self.debug_enable:

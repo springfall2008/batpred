@@ -942,6 +942,27 @@ This can be used if you need Predbat to cap your inverter battery rate (e.g. due
 By default Predbat will normally configure all timed charges or discharges to be at the inverter's maximum rate and these options enable you to reduce that maximum rate.
 [Low rate charging](customisation.md#inverter-control-options) could also be used to slow down Predbat's charge rate whilst still meeting the battery plan.
 
+### **inverter_limit_charge_dc**
+
+An optional list of values with one entry per inverter. Only relevant for hybrid inverters (`inverter_hybrid: true`).
+
+```yaml
+  inverter_limit_charge_dc:
+    - 9200
+```
+
+When set in Watts, overrides the maximum DC battery charge rate used in Predbat's prediction model during ECO mode when solar is available.
+This does not change how the inverter is controlled.
+
+On a hybrid inverter, solar panels connect directly to the DC bus. This means the battery can charge from solar at a rate higher than `inverter_limit` (the AC throughput ceiling) because the energy never passes through the AC conversion stage.
+
+By default Predbat uses `battery_rate_max` and 'to cap all ECO-mode battery charging, which can underestimate how fast the battery fills from solar.
+
+When `inverter_limit_charge_dc` is set, Predbat uses it as the ceiling for DC solar charging in ECO mode instead of `battery_rate_max`.
+Set it to the maximum DC charge rate of your battery system in Watts if this rate is higher than the normal maximum AC charge rate.
+
+Note that for hybrid inverters the `inverter_limit` only applies to AC charging (grid) and not DC charge (from solar).
+
 ### **inverter_can_charge_during_export**
 
 Global setting, defaults to `true`.

@@ -157,9 +157,8 @@ class Inverter:
         self.reserve_max = 100
         self.battery_rate_max_raw = 2600.0
         self.battery_rate_max_charge = 2600.0 / MINUTE_WATT
+        self.battery_rate_max_charge_dc = 2600.0 / MINUTE_WATT
         self.battery_rate_max_discharge = 2600.0 / MINUTE_WATT
-        self.battery_rate_max_charge_scaled = 2600.0 / MINUTE_WATT
-        self.battery_rate_max_discharge_scaled = 2600.0 / MINUTE_WATT
         self.battery_temperature = 20
         self.battery_power = 0
         self.battery_voltage = 52.0
@@ -398,6 +397,7 @@ class Inverter:
 
         # Battery rate max charge, discharge (all converted to kW/min)
         inverter_limit_charge = self.base.get_arg("inverter_limit_charge", self.battery_rate_max_raw, index=self.id, required_unit="W")
+        inverter_limit_charge_dc = self.base.get_arg("inverter_limit_charge_dc", inverter_limit_charge, index=self.id, required_unit="W")
         inverter_limit_discharge = self.base.get_arg("inverter_limit_discharge", self.battery_rate_max_raw, index=self.id, required_unit="W")
         inverter_limit_override = self.base.get_arg("inverter_limit_override", 0, index=self.id, required_unit="W")
         if inverter_limit_override > 0:
@@ -405,9 +405,8 @@ class Inverter:
             inverter_limit_charge = min(inverter_limit_override, inverter_limit_charge)
             inverter_limit_discharge = min(inverter_limit_override, inverter_limit_discharge)
         self.battery_rate_max_charge = min(inverter_limit_charge, self.battery_rate_max_raw) / MINUTE_WATT
+        self.battery_rate_max_charge_dc = inverter_limit_charge_dc / MINUTE_WATT
         self.battery_rate_max_discharge = min(inverter_limit_discharge, self.battery_rate_max_raw) / MINUTE_WATT
-        self.battery_rate_max_charge_scaled = self.battery_rate_max_charge * self.base.battery_rate_max_scaling
-        self.battery_rate_max_discharge_scaled = self.battery_rate_max_discharge * self.base.battery_rate_max_scaling_discharge
         self.battery_rate_min = min(self.base.get_arg("inverter_battery_rate_min", 0, index=self.id, required_unit="W"), self.battery_rate_max_raw) / MINUTE_WATT
 
         # Convert inverter time into timestamp
@@ -488,12 +487,13 @@ class Inverter:
         # Log inverter details
         if not quiet:
             self.base.log(
-                "Inverter {} with soc_max {}kWh, nominal_capacity {}kWh, battery rate raw {}W, charge rate {}kW, discharge rate {}kW, battery_rate_min {}W, AC limit {}kW, export limit {}kW, reserve {}%, current_reserve {}%, temperature {}°C".format(
+                "Inverter {} with soc_max {}kWh, nominal_capacity {}kWh, battery rate raw {}W, charge rate {}kW, charge rate DC {}kW, discharge rate {}kW, battery_rate_min {}W, AC limit {}kW, export limit {}kW, reserve {}%, current_reserve {}%, temperature {}°C".format(
                     self.id,
                     dp2(self.soc_max),
                     dp2(self.nominal_capacity),
                     dp2(self.battery_rate_max_raw),
                     dp2(self.battery_rate_max_charge * 60.0),
+                    dp2(self.battery_rate_max_charge_dc * 60.0),
                     dp2(self.battery_rate_max_discharge * 60.0),
                     dp2(self.battery_rate_min * MINUTE_WATT),
                     dp2(self.inverter_limit * 60),

@@ -47,9 +47,8 @@ class ActiveTestInverter:
         self.soc_max = soc_max
         self.soc_percent = calc_percent_limit(soc_kw, soc_max)
         self.battery_rate_max_charge = 1 / 60.0
-        self.battery_rate_max_charge_scaled = 1 / 60.0
+        self.battery_rate_max_charge_dc = 1 / 60.0
         self.battery_rate_max_discharge = 1 / 60.0
-        self.battery_rate_max_discharge_scaled = 1 / 60.0
         self.reserve_max = 100.0
         self.now_utc = now_utc
         self.midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -235,6 +234,7 @@ def run_execute_test(
 
     total_inverters = len(my_predbat.inverters)
     my_predbat.battery_rate_max_charge = battery_max_rate / 1000.0 * total_inverters / 60.0
+    my_predbat.battery_rate_max_charge_dc = battery_max_rate / 1000.0 * total_inverters / 60.0
     my_predbat.battery_rate_max_discharge = battery_max_rate / 1000.0 * total_inverters / 60.0
     my_predbat.set_reserve_enable = set_reserve_enable
     for inverter in my_predbat.inverters:
@@ -248,6 +248,7 @@ def run_execute_test(
         inverter.soc_percent = calc_percent_limit(inverter.soc_kw, inverter.soc_max)
         inverter.in_calibration = in_calibration
         inverter.battery_rate_max_charge = my_predbat.battery_rate_max_charge / total_inverters
+        inverter.battery_rate_max_charge_dc = my_predbat.battery_rate_max_charge_dc / total_inverters
         inverter.battery_rate_max_discharge = my_predbat.battery_rate_max_discharge / total_inverters
         inverter.inv_has_timed_pause = has_timed_pause
         inverter.inv_has_target_soc = has_target_soc

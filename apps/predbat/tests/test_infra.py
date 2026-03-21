@@ -453,9 +453,8 @@ def reset_inverter(my_predbat):
     my_predbat.reserve_current = 0.0
     my_predbat.reserve_percent_current = 0.0
     my_predbat.battery_rate_max_charge = 1 / 60.0
+    my_predbat.battery_rate_max_charge_dc = 1 / 60.0
     my_predbat.battery_rate_max_discharge = 1 / 60.0
-    my_predbat.battery_rate_max_charge_scaled = 1 / 60.0
-    my_predbat.battery_rate_max_discharge_scaled = 1 / 60.0
     my_predbat.battery_rate_min = 0
     my_predbat.charge_rate_now = 1 / 60.0
     my_predbat.discharge_rate_now = 1 / 60.0
@@ -546,6 +545,7 @@ def simple_scenario(
     charge_limit_best=None,
     inverter_loss=1.0,
     battery_rate_max_charge=1.0,
+    battery_rate_max_charge_dc=None,
     charge_car=0,
     car_charging_from_battery=True,
     car_energy_reported_load=True,
@@ -597,6 +597,8 @@ def simple_scenario(
         print("Run scenario {}".format(name))
 
     battery_rate = 1.0 if with_battery else 0.0
+    if battery_rate_max_charge_dc is None:
+        battery_rate_max_charge_dc = battery_rate_max_charge
     my_predbat.battery_loss = battery_loss
     my_predbat.battery_loss_discharge = battery_loss
     my_predbat.battery_rate_max_scaling = battery_rate
@@ -648,9 +650,8 @@ def simple_scenario(
     my_predbat.reserve = reserve
     my_predbat.inverter_loss = inverter_loss
     my_predbat.battery_rate_max_charge = battery_rate_max_charge / 60.0
+    my_predbat.battery_rate_max_charge_dc = battery_rate_max_charge_dc / 60.0
     my_predbat.battery_rate_max_discharge = battery_rate_max_charge / 60.0
-    my_predbat.battery_rate_max_charge_scaled = battery_rate_max_charge / 60.0
-    my_predbat.battery_rate_max_discharge_scaled = battery_rate_max_charge / 60.0
     my_predbat.car_charging_from_battery = car_charging_from_battery
     my_predbat.car_energy_reported_load = car_energy_reported_load
     my_predbat.set_charge_low_power = set_charge_low_power

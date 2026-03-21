@@ -711,9 +711,8 @@ class Execute:
         self.reserve_current = 0.0
         self.reserve_current_percent = 0.0
         self.battery_rate_max_charge = 0.0
+        self.battery_rate_max_charge_dc = 0.0
         self.battery_rate_max_discharge = 0.0
-        self.battery_rate_max_charge_scaled = 0.0
-        self.battery_rate_max_discharge_scaled = 0.0
         self.battery_rate_min = 0
         self.charge_rate_now = 0.0
         self.discharge_rate_now = 0.0
@@ -789,9 +788,8 @@ class Execute:
             self.reserve += inverter.reserve
             self.reserve_current += inverter.reserve_current
             self.battery_rate_max_charge += inverter.battery_rate_max_charge
+            self.battery_rate_max_charge_dc += inverter.battery_rate_max_charge_dc
             self.battery_rate_max_discharge += inverter.battery_rate_max_discharge
-            self.battery_rate_max_charge_scaled += inverter.battery_rate_max_charge_scaled
-            self.battery_rate_max_discharge_scaled += inverter.battery_rate_max_discharge_scaled
             self.charge_rate_now += inverter.charge_rate_now
             self.discharge_rate_now += inverter.discharge_rate_now
             self.battery_rate_min += inverter.battery_rate_min

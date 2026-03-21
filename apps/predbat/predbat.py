@@ -559,9 +559,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.export_limits_best = []
         self.export_window_best = []
         self.battery_rate_max_charge = 0
+        self.battery_rate_max_charge_dc = 0
         self.battery_rate_max_discharge = 0
-        self.battery_rate_max_charge_scaled = 0
-        self.battery_rate_max_discharge_scaled = 0
         self.battery_rate_min = 0
         self.battery_rate_max_scaling = 1.0
         self.battery_rate_max_scaling_discharge = 1.0
