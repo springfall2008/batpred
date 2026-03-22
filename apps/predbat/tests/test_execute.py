@@ -366,6 +366,13 @@ def run_execute_test(
             print("ERROR: Inverter {} Immediate export SOC freeze should be True got {}".format(inverter.id, inverter.immediate_discharge_soc_freeze))
             failed = True
 
+    # Validate isCharging binary sensor state: must be True for any charging status (Freeze charging, Hold charging, Charging variants)
+    charging_statuses = ["Charging", "Freeze charging", "Hold charging"]
+    expected_is_charging = any(s in assert_status for s in charging_statuses)
+    if my_predbat.isCharging != expected_is_charging:
+        print("ERROR: isCharging should be {} for status '{}' got {}".format(expected_is_charging, assert_status, my_predbat.isCharging))
+        failed = True
+
     my_predbat.minutes_now = 12 * 60
     return failed
 

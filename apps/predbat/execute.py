@@ -609,7 +609,7 @@ class Execute:
             inverter.count_register_writes = 0
 
         # Set the charge/discharge status information
-        self.set_charge_export_status(isCharging and not disabled_charge_window, isExporting and not disabled_export, not (isCharging or isExporting))
+        self.set_charge_export_status(isCharging, isExporting and not disabled_export, not (isCharging or isExporting))
         self.isCharging = isCharging
         self.isExporting = isExporting
 
