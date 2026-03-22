@@ -49,14 +49,14 @@ Triggered when the user adds the integration via Settings → Integrations → A
 
 | Step | Content |
 |------|---------|
-| 1 — Inverter | Dropdown of 28 supported inverter brands/types. Selecting one copies the matching template as the base `apps.yaml`. |
+| 1 — Inverter | Dropdown of all supported inverter brands/types (populated from the `templates/` directory, excluding non-inverter files). Selecting one copies the matching template as the base `apps.yaml`. |
 | 2 — Battery | Capacity (kWh), max charge rate (kW), max discharge rate (kW), minimum SoC reserve (%). |
-| 3 — Energy Tariff | Tariff type selector. For Agile: auto-detect Octopus Energy HA integration or prompt for API key. For other types: configure import/export rate windows. |
+| 3 — Energy Tariff | Tariff type selector. For Agile: require the Octopus Energy HA integration to already be installed (the companion integration reads rates from its HA entities rather than duplicating API access). For other types: configure import/export rate windows. |
 | 4 — Solar Forecast | Optional. Auto-detect Solcast HA integration if present; otherwise prompt for API key or allow skip. |
 | 5 — Arbitrage | Optional. "Optimise for arbitrage profit?" If yes, set daily profit target (£/day). Can be skipped and configured later. |
-| 6 — Review & Save | Summary of all choices. On confirm: write completed `apps.yaml` to Predbat addon config directory and trigger reload. |
+| 6 — Review & Save | Summary of all choices. On confirm: write completed `apps.yaml` to Predbat addon config directory. Predbat (via AppDaemon) will restart to apply changes — the flow displays a "Predbat is restarting, this takes ~30 seconds" message and polls the `predbat_status` entity until Predbat is back online before declaring success. |
 
-On save failure (e.g. config directory not found), the flow surfaces a clear error message pointing the user to the Predbat addon config path. No partial writes occur.
+On save failure (e.g. config directory not found, or Predbat does not come back online within 60 seconds), the flow surfaces a clear error message. No partial writes occur.
 
 ### Options Flow (Ongoing Configuration)
 
@@ -91,7 +91,8 @@ Remaining `apps.yaml` items not covered above, organised by category. Hidden unl
 ### Implementation Notes
 
 - Uses `ruamel.yaml` (already a Predbat dependency) to make surgical edits to `apps.yaml`, preserving existing comments and structure.
-- All saves immediately rewrite affected keys in `apps.yaml`. Predbat detects the file change via its existing hot-reload mechanism — no restart required.
+- All saves rewrite affected keys in `apps.yaml`. AppDaemon detects the config change and restarts Predbat (~30 seconds). The UI displays a progress indicator and polls `predbat_status` until the restart completes.
+- The companion integration lives in its own GitHub repository and is distributed via HACS as a `custom_components` integration type (separate from the main Predbat addon repo, which distributes as an AppDaemon app type). The two are linked in documentation.
 - Tested with `pytest-homeassistant-custom-component`.
 
 ---
@@ -109,7 +110,7 @@ Enable deliberate grid import-for-export-profit scheduling on dynamic (Agile) ta
 | Agile import rates (30-min, 24–48hr horizon) | `fetch.py` → Octopus API |
 | Agile export rates (30-min, 24–48hr horizon) | `fetch.py` → Octopus API |
 | Solar forecast (30-min slots) | `solcast.py` |
-| Predicted load (30-min slots) | `load_predictor.py` |
+| Predicted load (30-min slots) | `prediction.py` (via `step_data_history` and load history arrays, same source used by `plan.py`) |
 | Current battery SoC and capacity | `inverter.py` |
 | Daily/weekly profit target (£) | `apps.yaml` / HA entity |
 
@@ -130,7 +131,7 @@ Slot pairs further in the forecast horizon are discounted by:
 - Agile rate uncertainty (rates beyond 23:00 are estimated, not confirmed)
 
 **4. Plan Integration**
-Outputs a set of charge/discharge slot overrides fed into the existing `plan.py` scheduling engine. Arbitrage decisions appear in the normal Predbat plan view alongside self-consumption decisions. The engine does not replace the optimiser — it provides constraints and hints to it.
+`arbitrage.py` produces a list of forced charge/discharge windows (start time, end time, direction, target SoC) which are injected into `plan.py` as pre-committed slot constraints — the same mechanism used by manual slot overrides in the web UI. The existing optimiser then plans around these fixed slots, so self-consumption and arbitrage share a coherent schedule. The arbitrage reserve % is enforced by capping the battery SoC available for self-consumption during the relevant windows, not by partitioning the battery hardware. Arbitrage decisions appear in the normal Predbat plan view alongside self-consumption decisions.
 
 ### New HA Entities
 
@@ -138,7 +139,7 @@ Outputs a set of charge/discharge slot overrides fed into the existing `plan.py`
 |--------|------|-------------|
 | `sensor.predbat_arbitrage_projected_gain` | Sensor (£) | Today's projected arbitrage profit |
 | `sensor.predbat_arbitrage_opportunity_score` | Sensor (0–100) | Quality of current arbitrage conditions |
-| `sensor.predbat_arbitrage_weekly_gain` | Sensor (£) | Rolling 7-day actual arbitrage gain |
+| `sensor.predbat_arbitrage_weekly_gain` | Sensor (£) | Rolling 7-day actual arbitrage gain (persisted via `db_manager.py`; stored as daily totals keyed by date) |
 | `binary_sensor.predbat_arbitrage_active` | Binary Sensor | True when executing an arbitrage charge or discharge |
 
 ### Error Handling
@@ -163,17 +164,17 @@ Outputs a set of charge/discharge slot overrides fed into the existing `plan.py`
 User (Options Flow UI)
     → custom_components/predbat_config
     → surgical edit of apps.yaml (ruamel.yaml, preserving comments)
-    → Predbat hot-reload detects file change
-    → Predbat reloads config, applies changes
+    → AppDaemon detects apps.yaml change → restarts Predbat (~30s)
+    → UI polls predbat_status entity until restart complete
 ```
 
 ### Arbitrage
 
 ```
-Octopus rate API  → fetch.py    ─┐
-Solcast API       → solcast.py  ─┤→ arbitrage.py → plan.py → execute.py → inverter
-load_predictor.py              ─┘         │
-                                          └→ output.py → new HA sensor entities
+Octopus rate API  → fetch.py      ─┐
+Solcast API       → solcast.py    ─┤→ arbitrage.py → plan.py → execute.py → inverter
+prediction.py (load history)      ─┘         │
+                                             └→ output.py → new HA sensor entities
 ```
 
 ---
@@ -199,4 +200,5 @@ load_predictor.py              ─┘         │
 
 ## Open Questions
 
-None — all design decisions resolved in brainstorming session.
+- **Octopus Energy integration requirement:** Config Flow Step 3 requires the Octopus Energy HA integration to be installed for Agile tariff support. This is a prerequisite, not something the companion integration handles itself. This dependency should be surfaced clearly in installation documentation and as a validation check in the Config Flow before reaching Step 3.
+- **AppDaemon restart timing:** The 30-second restart estimate should be validated against real-world addon restart timing before finalising the UI copy in Step 6.
