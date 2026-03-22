@@ -305,6 +305,49 @@ def test_fill_load_from_power_backwards_time():
     print("Test 6 PASSED")
 
 
+def test_fill_load_from_power_data_extends_beyond_load():
+    """
+    Regression test: power data extends further back in time than load data.
+
+    This simulates the real-world scenario where the load_power sensor has a longer
+    history than the load_energy_today sensor (e.g. load sensor installed 27 days ago,
+    power sensor installed 28+ days ago).  Previously, max_minute was computed as
+    max(load_minutes.keys(), load_power_data.keys()), so the extra 1440 minutes of
+    power-only data were iterated.  All those minutes defaulted to 0 in load_minutes
+    and triggered a spurious "zero load period" warning every single run.
+    """
+    print("\n=== Test 7: power data extends beyond load data range (regression) ===")
+
+    fetch = TestFetch()
+
+    # Load data goes back 60 minutes (2 x 30-min periods)
+    load_minutes = {}
+    for minute in range(0, 61):
+        load_minutes[minute] = 10.0 - (minute / 60.0) * 4.0  # 10.0 -> 6.0
+
+    # Power data goes back 1500 minutes (an extra 1440 minutes beyond the load data)
+    load_power_data = {}
+    for minute in range(0, 1500):
+        load_power_data[minute] = 2000.0  # 2 kW constant
+
+    result = fetch.fill_load_from_power(load_minutes, load_power_data)
+
+    # No spurious "zero load period" warning should be logged for the extended range
+    zero_period_msgs = [m for m in fetch.log_messages if "zero load" in m.lower() and "period" in m.lower()]
+    assert not zero_period_msgs, "Should NOT log zero-load-period warnings for power-data-only range, got: {}".format(zero_period_msgs)
+
+    # Processing should still work correctly within the load data range
+    assert result[0] >= result[30], "Load at minute 0 should be >= minute 30"
+    assert result[30] >= result[60], "Load at minute 30 should be >= minute 60"
+
+    # Verify that the extra minutes (beyond 60) are NOT inflated into the result
+    # They may not exist in the result dict at all, which is the correct behaviour.
+    assert 1440 not in result or result[1440] == 0, "Minute 1440 should not be populated from power-only range"
+
+    print("✓ No spurious zero-load warning when power data extends past load data range")
+    print("Test 7 PASSED")
+
+
 def run_all_tests(my_predbat=None):
     """Run all tests"""
     print("\n" + "=" * 60)
@@ -318,6 +361,7 @@ def run_all_tests(my_predbat=None):
         test_fill_load_from_power_single_minute_period()
         test_fill_load_from_power_zero_load()
         test_fill_load_from_power_backwards_time()
+        test_fill_load_from_power_data_extends_beyond_load()
 
         print("\n" + "=" * 60)
         print("✅ ALL TESTS PASSED")

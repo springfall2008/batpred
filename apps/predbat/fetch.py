@@ -237,8 +237,12 @@ class Fetch:
         # Create a copy to avoid modifying the original
         new_load_minutes = load_minutes.copy()
 
-        # Find all the minutes we have data for
-        max_minute = max(max(load_minutes.keys()) if load_minutes else 0, max(load_power_data.keys()) if load_power_data else 0)
+        # Find all the minutes we have load data for.
+        # Deliberately do NOT extend max_minute using load_power_data.keys() even if the power
+        # sensor has older history than the load sensor.  Any minutes beyond the load data range
+        # have no cumulative energy readings and would all default to 0, which the zero-period
+        # detection incorrectly treats as a full-day data gap every run.
+        max_minute = max(load_minutes.keys()) if load_minutes else 0
 
         # Determine gap size threshold for zero-load detection
         # This uses the same threshold as the gap filling logic
