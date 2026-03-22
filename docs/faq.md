@@ -205,8 +205,8 @@ or to encourage discharging just before import rates fall overnight.
 If you have a large **input_number.predbat_forecast_plan_hours** then you may see warning messages in the Home Assistant Core log about the size of a number of Predbat entities,
 the message will be "State attributes for predbat.*XXXX* exceed maximum size of 16384 bytes".
 
-This is just a warning, but note that Predbat entity attributes are stored in the database and can take up a significant amount of space.
-Attributes that exceed 16384 bytes are not stored in the database, but smaller attributes still will be.
+This is just a warning from the Home Assistant recorder, but note that Predbat entity attributes are stored in the recorder database and can take up a significant amount of space.
+When the serialized attributes payload for a Predbat entity state exceeds 16384 bytes, the recorder will not store any attributes for that state (only the state value itself is stored). States whose serialized attributes payload is below this limit are stored normally.
 You can suppress these warnings by adding the following to your `configuration.yaml` file:
 
 ```yaml
