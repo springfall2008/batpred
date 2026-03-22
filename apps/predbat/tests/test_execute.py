@@ -373,6 +373,13 @@ def run_execute_test(
         print("ERROR: isCharging should be {} for status '{}' got {}".format(expected_is_charging, assert_status, my_predbat.isCharging))
         failed = True
 
+    # Validate isExporting binary sensor state: must be True for any exporting status (Exporting, Freeze exporting variants)
+    exporting_statuses = ["Exporting", "Freeze exporting"]
+    expected_is_exporting = any(s in assert_status for s in exporting_statuses)
+    if my_predbat.isExporting != expected_is_exporting:
+        print("ERROR: isExporting should be {} for status '{}' got {}".format(expected_is_exporting, assert_status, my_predbat.isExporting))
+        failed = True
+
     my_predbat.minutes_now = 12 * 60
     return failed
 
