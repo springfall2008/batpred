@@ -6762,14 +6762,28 @@ def get_plan_renderer_js():
         return html;
     }
 
+    // Utility: Extract the timezone offset in minutes from an ISO timestamp string.
+    // Handles both +HHMM and +HH:MM formats produced by Python strftime and isoformat().
+    function getTimezoneOffsetMinutes(isoTimestamp) {
+        const match = isoTimestamp.match(/([+-])(\d{2}):?(\d{2})$/);
+        if (!match) return 0;
+        const sign = match[1] === '+' ? 1 : -1;
+        return sign * (parseInt(match[2]) * 60 + parseInt(match[3]));
+    }
+
     // Utility: Format ISO timestamp to short display format (e.g., "Fri 15:45")
+    // Uses the timezone offset embedded in the ISO string so the displayed time
+    // matches Predbat's configured timezone regardless of the browser's local timezone.
     function formatTimeDisplay(isoTimestamp) {
         try {
             const date = new Date(isoTimestamp);
+            const offsetMinutes = getTimezoneOffsetMinutes(isoTimestamp);
+            // Shift UTC time by the Predbat timezone offset, then read as UTC
+            const adjDate = new Date(date.getTime() + offsetMinutes * 60000);
             const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-            const dayName = days[date.getDay()];
-            const hours = date.getHours().toString().padStart(2, '0');
-            const minutes = date.getMinutes().toString().padStart(2, '0');
+            const dayName = days[adjDate.getUTCDay()];
+            const hours = adjDate.getUTCHours().toString().padStart(2, '0');
+            const minutes = adjDate.getUTCMinutes().toString().padStart(2, '0');
             return `${dayName} ${hours}:${minutes}`;
         } catch (e) {
             return isoTimestamp; // Fallback to original if parsing fails
@@ -6790,7 +6804,10 @@ def get_plan_renderer_js():
                     const midnight = new Date(window.planMidnightRef);
                     return Math.round((date - midnight) / 60000);
                 }
-                return date.getHours() * 60 + date.getMinutes();
+                // Fallback: use timezone offset from the ISO string itself
+                const offsetMinutes = getTimezoneOffsetMinutes(timeStr);
+                const adjDate = new Date(date.getTime() + offsetMinutes * 60000);
+                return adjDate.getUTCHours() * 60 + adjDate.getUTCMinutes();
             }
             // Fallback to "Day HH:MM" format parsing
             const parts = timeStr.split(' ');
@@ -6804,17 +6821,22 @@ def get_plan_renderer_js():
     }
 
     // Format timestamp to readable format
+    // Uses the timezone offset embedded in the ISO string so the displayed time
+    // matches Predbat's configured timezone regardless of the browser's local timezone.
     function formatTimestamp(isoTimestamp) {
         if (!isoTimestamp) return '';
         try {
             const date = new Date(isoTimestamp);
+            const offsetMinutes = getTimezoneOffsetMinutes(isoTimestamp);
+            // Shift UTC time by the Predbat timezone offset, then read as UTC
+            const adjDate = new Date(date.getTime() + offsetMinutes * 60000);
             const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-            const day = date.getDate();
-            const month = months[date.getMonth()];
-            const year = date.getFullYear();
-            const hours = String(date.getHours()).padStart(2, '0');
-            const minutes = String(date.getMinutes()).padStart(2, '0');
-            const seconds = String(date.getSeconds()).padStart(2, '0');
+            const day = adjDate.getUTCDate();
+            const month = months[adjDate.getUTCMonth()];
+            const year = adjDate.getUTCFullYear();
+            const hours = String(adjDate.getUTCHours()).padStart(2, '0');
+            const minutes = String(adjDate.getUTCMinutes()).padStart(2, '0');
+            const seconds = String(adjDate.getUTCSeconds()).padStart(2, '0');
             return `Updated: ${day} ${month} ${year} ${hours}:${minutes}:${seconds}`;
         } catch (e) {
             return '';
