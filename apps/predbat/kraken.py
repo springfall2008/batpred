@@ -206,3 +206,44 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
 
         self.log("Warn: Kraken: No active electricity agreement found")
         return None
+
+    def build_rates_url(self, product_code, tariff_code):
+        """Construct public REST rates URL from base URL + tariff info."""
+        return f"{self.base_url}/v1/products/{product_code}/electricity-tariffs/{tariff_code}/standard-unit-rates/"
+
+    def build_standing_charge_url(self, product_code, tariff_code):
+        """Construct public REST standing charge URL."""
+        return f"{self.base_url}/v1/products/{product_code}/electricity-tariffs/{tariff_code}/standing-charges/"
+
+    async def async_fetch_rates(self):
+        """Fetch rates from public REST endpoint. No auth needed. Returns list of rate objects or None."""
+        if not self.current_tariff:
+            return None
+
+        url = self.build_rates_url(
+            self.current_tariff["product_code"],
+            self.current_tariff["tariff_code"],
+        )
+
+        all_results = []
+        try:
+            timeout = aiohttp.ClientTimeout(total=30)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                while url:
+                    async with session.get(url) as response:
+                        if response.status != 200:
+                            self.log(f"Warn: Kraken: Rates HTTP {response.status} for {url}")
+                            self.failures_total += 1
+                            return None
+                        data = await response.json()
+
+                    all_results.extend(data.get("results", []))
+                    url = data.get("next")  # Pagination
+
+            self.log(f"Kraken: Fetched {len(all_results)} rate periods")
+            return all_results
+
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            self.log(f"Warn: Kraken: Network error fetching rates: {e}")
+            self.failures_total += 1
+            return None
