@@ -276,6 +276,28 @@ octoplus_saving_session_join_mutation = """mutation {{
 }}
 """
 
+flexibility_campaign_query = """query {{
+  customerFlexibilityCampaignEvents(
+    accountNumber: "{account_id}"
+    supplyPointIdentifier: "{mpan}"
+    campaignSlug: "{campaign_slug}"
+    first: 50
+  ) {{
+    edges {{
+      node {{
+        code
+        startAt
+        endAt
+      }}
+    }}
+    totalCount
+    pageInfo {{
+      hasNextPage
+      endCursor
+    }}
+  }}
+}}"""
+
 intelligent_settings_mutation = """mutation {{
   setDevicePreferences(input: {{
     deviceId: "{device_id}"

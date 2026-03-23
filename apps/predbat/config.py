@@ -2104,6 +2104,7 @@ APPS_SCHEMA = {
     "octopus_slot_low_rate": {"type": "boolean"},
     "octopus_slot_max": {"type": "integer"},
     "octopus_saving_session_octopoints_per_penny": {"type": "integer"},
+    "octopus_saving_session_rate": {"type": "float"},
     "octopus_free_url": {"type": "string", "empty": False},
     "metric_octopus_import": {"type": "sensor", "sensor_type": "float"},
     "metric_octopus_export": {"type": "sensor", "sensor_type": "float"},
