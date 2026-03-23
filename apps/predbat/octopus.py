@@ -1092,7 +1092,7 @@ class OctopusAPI(ComponentBase):
 
         # Query saving sessions
         saving_events = []
-        response_data = await self.async_graphql_query(flexibility_campaign_query.format(account_id=account_id, mpan=self.mpan, campaign_slug="saving_sessions"), "get-flexibility-saving-sessions", ignore_errors=True)
+        response_data = await self.async_graphql_query(flexibility_campaign_query.format(account_id=account_id, mpan=self.mpan, campaign_slug="octoplus-saving-sessions"), "get-flexibility-saving-sessions", ignore_errors=True)
         if response_data is not None:
             campaign_data = response_data.get("customerFlexibilityCampaignEvents", {})
             if campaign_data:
@@ -1157,6 +1157,13 @@ class OctopusAPI(ComponentBase):
 
         # Store free electricity events for use by fetch_octopus_sessions
         self.free_electricity_events = filtered_free
+
+        # If no saving session events from new API, fall back to legacy query
+        # The new flexibility API may not have events populated yet for all accounts
+        if not filtered_saving:
+            self.log("OctopusAPI: No saving session events from flexibility API, falling back to legacy query")
+            legacy_result = await self.async_get_saving_sessions(account_id)
+            return legacy_result
 
         # Map to existing internal format
         # New API doesn't distinguish available vs joined — treat all as joined
