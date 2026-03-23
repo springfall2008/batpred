@@ -10,6 +10,7 @@ KrakenAuthMixin (local API key / email+password → JWT).
 
 import aiohttp
 import asyncio
+from datetime import datetime
 
 from component_base import ComponentBase
 
@@ -43,6 +44,31 @@ except ImportError:
 
         _AUTH_BASE = _NoAuth
 
+
+# Validated EDF/E.ON Kraken query — uses electricitySupplyPoints (NOT Octopus's
+# electricityAgreements/meterPoint schema). Matches _shared/kraken-graphql.ts.
+# No accountNumber arg needed — JWT scopes to authenticated account.
+KRAKEN_ACCOUNT_QUERY = """{
+  account {
+    number
+    properties {
+      electricitySupplyPoints {
+        mpan
+        agreements {
+          validFrom
+          validTo
+          tariff {
+            ... on StandardTariff { tariffCode displayName productCode }
+            ... on DayNightTariff { tariffCode displayName productCode }
+            ... on ThreeRateTariff { tariffCode displayName productCode }
+            ... on HalfHourlyTariff { tariffCode displayName productCode }
+            ... on PrepayTariff { tariffCode displayName productCode }
+          }
+        }
+      }
+    }
+  }
+}"""
 
 KRAKEN_BASE_URLS = {
     "edf": "https://api.edfgb-kraken.energy",
@@ -133,3 +159,50 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             self.log(f"Warn: Kraken: Network error for {request_context}: {e}")
             self.failures_total += 1
             return None
+
+    async def async_find_tariffs(self):
+        """Query account to discover current tariff. Returns tariff info if changed, None if same."""
+        data = await self.async_graphql_query(KRAKEN_ACCOUNT_QUERY, "find-tariffs")
+        if not data:
+            return None
+
+        account = data.get("account", {})
+        properties = account.get("properties", [])
+
+        # Find first property with electricity supply points (same as kraken-graphql.ts)
+        for prop in properties:
+            supply_points = prop.get("electricitySupplyPoints", [])
+            for sp in supply_points:
+                agreements = sp.get("agreements", [])
+
+                # Find active agreement (validTo is None or in the future)
+                for agr in agreements:
+                    valid_to = agr.get("validTo")
+                    if valid_to is not None:
+                        try:
+                            vt = datetime.fromisoformat(valid_to.replace("Z", "+00:00"))
+                            if vt < datetime.now(vt.tzinfo):
+                                continue
+                        except (ValueError, AttributeError):
+                            continue
+
+                    tariff = agr.get("tariff", {})
+                    tariff_code = tariff.get("tariffCode")
+                    product_code = tariff.get("productCode")
+
+                    if not tariff_code or not product_code:
+                        continue
+
+                    new_tariff = {"tariff_code": tariff_code, "product_code": product_code}
+
+                    if self.current_tariff == new_tariff:
+                        self.log(f"Kraken: Tariff unchanged — {tariff_code}")
+                        return None
+
+                    old = self.current_tariff
+                    self.current_tariff = new_tariff
+                    self.log(f"Kraken: Tariff {'discovered' if old is None else 'changed'} — {tariff_code} (product {product_code})")
+                    return new_tariff
+
+        self.log("Warn: Kraken: No active electricity agreement found")
+        return None
