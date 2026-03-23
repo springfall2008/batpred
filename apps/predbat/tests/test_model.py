@@ -1015,7 +1015,7 @@ def run_model_tests(my_predbat):
     failed |= simple_scenario("battery_discharge_freeze2", my_predbat, 0, 0.5, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=10, with_battery=True, discharge=99, battery_soc=10, set_export_freeze_only=True)
     failed |= simple_scenario("battery_discharge_freeze_only", my_predbat, 0, 0.5, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=10, with_battery=True, discharge=0, battery_soc=10, set_export_freeze_only=True)
 
-    # Force discharge with PV: penalty = discharge_hours * pv_kw * export_rate = 10 * 0.5 * export_rate
+    # Force discharge with PV: penalty = discharge_hours * pv_kw * export_rate = 24 * 0.5 * export_rate (full 24h forecast window in these model tests)
     failed |= simple_scenario(
         "battery_discharge_pv_no_export_on_pv1",
         my_predbat,
