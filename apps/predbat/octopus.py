@@ -244,7 +244,7 @@ intelligent_settings_query = """query {{
 
 octoplus_saving_session_query = """query {{
 	savingSessions {{
-    events(getDevEvents: false) {{
+    events(includeDev: false) {{
 			id
       code
 			rewardPerKwhInOctoPoints
@@ -330,6 +330,7 @@ class OctopusEnergyApiClient:
         self.api_key = api_key
         self.log = log
         self.base_url = "https://api.octopus.energy"
+        self.backend_url = "https://api.backend.octopus.energy"
 
         self.default_headers = {"user-agent": f"{user_agent_value}/1.0"}
         self.timeout = aiohttp.ClientTimeout(total=None, sock_connect=timeout_in_seconds, sock_read=timeout_in_seconds)
@@ -829,7 +830,7 @@ class OctopusAPI(ComponentBase):
         if event_code:
             # Join the saving sessions
             self.log("OctopusAPI: Joining saving session event {}".format(event_code))
-            await self.async_graphql_query(octoplus_saving_session_join_mutation.format(account_id=account_id, event_code=event_code), "join-saving-session-event", returns_data=False)
+            await self.async_graphql_query(octoplus_saving_session_join_mutation.format(account_id=account_id, event_code=event_code), "join-saving-session-event", returns_data=False, use_backend=True)
             # Re-fetch the saving sessions if we have joined any
             self.saving_sessions = await self.async_get_saving_sessions(account_id)
 
@@ -1068,7 +1069,7 @@ class OctopusAPI(ComponentBase):
         """
         Get the saving sessions
         """
-        response_data = await self.async_graphql_query(octoplus_saving_session_query.format(account_id=self.account_id), "get-saving-sessions", ignore_errors=True)
+        response_data = await self.async_graphql_query(octoplus_saving_session_query.format(account_id=self.account_id), "get-saving-sessions", ignore_errors=True, use_backend=True)
         if response_data is None:
             return self.saving_sessions
         else:
@@ -1092,7 +1093,7 @@ class OctopusAPI(ComponentBase):
 
         # Query saving sessions
         saving_events = []
-        response_data = await self.async_graphql_query(flexibility_campaign_query.format(account_id=account_id, mpan=self.mpan, campaign_slug="octoplus-saving-sessions"), "get-flexibility-saving-sessions", ignore_errors=True)
+        response_data = await self.async_graphql_query(flexibility_campaign_query.format(account_id=account_id, mpan=self.mpan, campaign_slug="octoplus-saving-sessions"), "get-flexibility-saving-sessions", ignore_errors=True, use_backend=True)
         if response_data is not None:
             campaign_data = response_data.get("customerFlexibilityCampaignEvents", {})
             if campaign_data:
@@ -1114,7 +1115,7 @@ class OctopusAPI(ComponentBase):
 
         # Query free electricity sessions
         free_events = []
-        response_data = await self.async_graphql_query(flexibility_campaign_query.format(account_id=account_id, mpan=self.mpan, campaign_slug="free_electricity"), "get-flexibility-free-electricity", ignore_errors=True)
+        response_data = await self.async_graphql_query(flexibility_campaign_query.format(account_id=account_id, mpan=self.mpan, campaign_slug="free_electricity"), "get-flexibility-free-electricity", ignore_errors=True, use_backend=True)
         if response_data is not None:
             campaign_data = response_data.get("customerFlexibilityCampaignEvents", {})
             if campaign_data:
@@ -1542,9 +1543,11 @@ class OctopusAPI(ComponentBase):
             self.log(f"Warn: OctopusAPI: Failed to connect. Timeout of {self.api.timeout} exceeded.")
             return None
 
-    async def async_graphql_query(self, query, request_context, returns_data=True, ignore_errors=False, _retry_count=0):
+    async def async_graphql_query(self, query, request_context, returns_data=True, ignore_errors=False, _retry_count=0, use_backend=False):
         """
-        Execute a graphql query with automatic token refresh on auth errors
+        Execute a graphql query with automatic token refresh on auth errors.
+        If use_backend=True, uses api.backend.octopus.energy with no JWT prefix
+        (required for saving sessions since Feb 2026 API migration).
         """
         token = await self.async_refresh_token()
         if token is None:
@@ -1555,9 +1558,11 @@ class OctopusAPI(ComponentBase):
         try:
             self.requests_total += 1
             client = await self.api.async_create_client_session()
-            url = f"{self.api.base_url}/v1/graphql/"
+            base = self.api.backend_url if use_backend else self.api.base_url
+            url = f"{base}/v1/graphql/"
             payload = {"query": query}
-            headers = {"Authorization": f"JWT {self.graphql_token}", integration_context_header: request_context}
+            auth_prefix = "" if use_backend else "JWT "
+            headers = {"Authorization": f"{auth_prefix}{self.graphql_token}", integration_context_header: request_context}
             async with client.post(url, json=payload, headers=headers) as response:
                 # Process response (which reads the text)
                 response_body = await self.async_read_response_retry(response, url, ignore_errors=ignore_errors)
@@ -1577,7 +1582,7 @@ class OctopusAPI(ComponentBase):
                                 return None
                             # Token is now refreshed and cached in self.graphql_token
                             # Retry the query with new token (_retry_count=1 prevents infinite loop)
-                            return await self.async_graphql_query(query, request_context, returns_data=returns_data, ignore_errors=ignore_errors, _retry_count=1)
+                            return await self.async_graphql_query(query, request_context, returns_data=returns_data, ignore_errors=ignore_errors, _retry_count=1, use_backend=use_backend)
 
                 # Check for other errors (non-auth)
                 if response_body and "errors" in response_body and not ignore_errors:
