@@ -1020,6 +1020,18 @@ class OctopusAPI(ComponentBase):
                 possible_codes.append(code)
         self.dashboard_item(self.get_entity_name("select", "saving_session_join"), "", attributes={"options": possible_codes, "friendly_name": "Join Octopus Saving Session Event", "icon": "mdi:currency-usd"}, app="octopus")
 
+        # Publish free electricity events from flexibility API
+        free_electric_events = []
+        if hasattr(self, "free_electricity_events"):
+            for event in self.free_electricity_events:
+                start = event.get("startAt")
+                end = event.get("endAt")
+                code = event.get("code")
+                if start and end:
+                    free_electric_events.append({"start": start, "end": end, "code": code, "rate": 0})
+        free_attributes = {"friendly_name": "Octopus Free Electricity Sessions", "icon": "mdi:flash", "events": free_electric_events}
+        self.dashboard_item(self.get_entity_name("sensor", "free_electricity"), "on" if free_electric_events else "off", attributes=free_attributes, app="octopus")
+
         return return_available_events, return_joined_events
 
     def automatic_config(self, tariffs):
@@ -1029,6 +1041,7 @@ class OctopusAPI(ComponentBase):
         self.log("OctopusAPI: Automatic configuration of entities")
         self.set_arg("octopus_saving_session", self.get_entity_name("binary_sensor", "saving_session"))
         self.set_arg("octopus_saving_session_join", self.get_entity_name("select", "saving_session_join"))
+        self.set_arg("octopus_free_electricity", self.get_entity_name("sensor", "free_electricity"))
         for tariff in tariffs:
             self.set_arg("metric_octopus_{}".format(tariff), self.get_entity_name("sensor", tariff + "_rates"))
             if tariff == "import":
@@ -2590,6 +2603,22 @@ class Octopus:
         if "octopus_free_url" in self.args:
             free_online = self.download_octopus_free(self.get_arg("octopus_free_url", indirect=False))
             octopus_free_slots.extend(free_online)
+
+        # Load free electricity events from Octopus flexibility API
+        if "octopus_free_electricity" in self.args:
+            entity_id = self.get_arg("octopus_free_electricity", indirect=False)
+            if entity_id:
+                events = self.get_state_wrapper(entity_id=entity_id, attribute="events")
+                if events:
+                    for event in events:
+                        start = event.get("start", None)
+                        end = event.get("end", None)
+                        if start and end:
+                            octopus_free_slot = {}
+                            octopus_free_slot["start"] = start
+                            octopus_free_slot["end"] = end
+                            octopus_free_slot["rate"] = 0
+                            octopus_free_slots.append(octopus_free_slot)
 
         # Octopus saving session
         octopus_saving_slots = []
