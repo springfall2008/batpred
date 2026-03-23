@@ -392,7 +392,8 @@ icon: mdi:leaf
 friendly_name: Octoplus Saving Session (A-TEST1234)
 """
 
-    # Events with octopoints_per_kwh set to 800 — verifying rate calculation
+    # Events with null octopoints_per_kwh — simulating new flexibility API
+    # which does not return rewardPerKwhInOctoPoints
     session_sensor = f"""
 state: '2026-03-23T12:00:00+{tz_offset}:00'
 event_types: octopus_energy_all_octoplus_saving_sessions
@@ -405,7 +406,7 @@ joined_events:
       end: '{date_today}T18:00:00+{tz_offset}:00'
       duration_in_minutes: 60
       rewarded_octopoints: null
-      octopoints_per_kwh: 800
+      octopoints_per_kwh: null
       code: FLEX-2001
 friendly_name: Octoplus Saving Session Events
 """
@@ -418,23 +419,25 @@ friendly_name: Octoplus Saving Session Events
     if "octopus_free_url" in my_predbat.args:
         del my_predbat.args["octopus_free_url"]
     my_predbat.args["octopus_saving_session_octopoints_per_penny"] = 8
+    my_predbat.args["octopus_saving_session_rate"] = 100  # 100 p/kWh default
 
     ha.service_store_enable = True
     ha.service_store = []
     octopus_free_slots, octopus_saving_slots = my_predbat.fetch_octopus_sessions()
     ha.service_store_enable = False
 
-    # Should have saving slots with rate derived from octopoints (800/8 = 100p/kWh)
+    # Should have saving slots with default rate injected
+    # octopus_saving_session_rate=100 p/kWh used as fallback when octopoints_per_kwh is null
     if not octopus_saving_slots:
         print("ERROR: Expected saving slots with default rate, got none")
         failed = True
     else:
         slot = octopus_saving_slots[0]
-        expected_rate = 800 / 8  # 100 p/kWh
+        expected_rate = 100.0  # default_rate_pence (100) * octopoints_per_penny (8) / octopoints_per_penny (8) = 100 p/kWh
         if slot.get("rate") != expected_rate:
-            print(f"ERROR: Expected rate {expected_rate}, got {slot.get('rate')}")
+            print(f"ERROR: Expected default rate {expected_rate}, got {slot.get('rate')}")
             failed = True
         else:
-            print(f"PASS: Default rate correctly applied: {expected_rate} p/kWh")
+            print(f"PASS: Default rate correctly injected for null octopoints: {expected_rate} p/kWh")
 
     return failed

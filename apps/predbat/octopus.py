@@ -2667,6 +2667,10 @@ class Octopus:
                                 self.call_notify("Predbat: Joined Octopus saving event {}-{}, {} p/kWh".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
                             self.octopus_last_joined_try = self.now_utc
 
+            # Default saving session rate for when octopoints_per_kwh is not available
+            # (e.g. new flexibility API events that don't report reward rates)
+            default_rate_pence = self.get_arg("octopus_saving_session_rate", 0)
+
             if joined_events:
                 for event in joined_events:
                     start = event.get("start", None)
@@ -2674,8 +2678,10 @@ class Octopus:
                     octopoints_kwh = event.get("octopoints_per_kwh", None)
                     if octopoints_kwh is not None:
                         saving_rate = octopoints_kwh / octopoints_per_penny  # Octopoints per pence
-                    # If octopoints_per_kwh is None, skip this event as it's a past event only
-                    if start and end and octopoints_kwh is not None and saving_rate > 0:
+                    elif default_rate_pence > 0:
+                        saving_rate = default_rate_pence  # Use configured default rate
+                    # Skip events with no rate info unless default is configured
+                    if start and end and (octopoints_kwh is not None or default_rate_pence > 0) and saving_rate > 0:
                         # Save the saving slot?
                         try:
                             start_time = str2time(start)
