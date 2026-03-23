@@ -177,3 +177,29 @@ def test_oauth_failed_short_circuits():
     result = asyncio.run(mixin.check_and_refresh_oauth_token())
     assert result is False
     mixin._kraken_token_request.assert_not_called()
+
+
+def run_kraken_auth_mixin_tests(my_predbat=None):
+    """Run all KrakenAuthMixin tests. Returns True on failure, False on success."""
+    tests = [
+        test_init_api_key_mode,
+        test_init_email_mode,
+        test_obtain_token_api_key,
+        test_obtain_token_email,
+        test_refresh_uses_refresh_token,
+        test_valid_token_not_refreshed,
+        test_refresh_failure_retries_with_credentials,
+        test_total_auth_failure_sets_oauth_failed,
+        test_handle_oauth_401_clears_and_reobtains,
+        test_oauth_failed_short_circuits,
+    ]
+    for test_func in tests:
+        try:
+            test_func()
+        except Exception as e:
+            print(f"  FAIL: {test_func.__name__}: {e}")
+            import traceback
+            traceback.print_exc()
+            return True
+        print(f"  OK: {test_func.__name__}")
+    return False

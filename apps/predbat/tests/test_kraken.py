@@ -316,3 +316,36 @@ def test_run_fetches_rates_on_10min_cycle():
     assert result is True
     api.async_fetch_rates.assert_called_once()
     api.async_fetch_standing_charges.assert_called_once()
+
+
+def run_kraken_tests(my_predbat=None):
+    """Run all KrakenAPI tests. Returns True on failure, False on success."""
+    tests = [
+        test_initialize_sets_base_url_from_provider,
+        test_initialize_sets_current_tariff_none,
+        test_graphql_query_success,
+        test_graphql_query_auth_error_retries,
+        test_graphql_query_oauth_failed_returns_none,
+        test_find_tariffs_detects_change,
+        test_find_tariffs_no_change,
+        test_find_tariffs_graphql_failure,
+        test_build_rates_url,
+        test_build_rates_url_eon,
+        test_fetch_rates_single_page,
+        test_fetch_rates_no_tariff,
+        test_get_entity_name,
+        test_run_first_discovers_tariff_and_fetches_rates,
+        test_run_returns_false_on_auth_failure,
+        test_run_fetches_rates_on_10min_cycle,
+    ]
+    for test_func in tests:
+        try:
+            test_func()
+        except Exception as e:
+            print(f"  FAIL: {test_func.__name__}: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return True
+        print(f"  OK: {test_func.__name__}")
+    return False
