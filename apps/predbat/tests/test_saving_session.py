@@ -364,3 +364,77 @@ friendly_name: Octoplus Saving Session Events
         print("PASS: All notification configuration tests passed")
 
     return failed
+
+
+def test_saving_session_default_rate(my_predbat):
+    """
+    Test that saving sessions with no octopoints_per_kwh use the default rate
+    from octopus_saving_session_rate config (flexibility API migration)
+    """
+    print("Test saving session default rate injection")
+    ha = my_predbat.ha_interface
+    failed = False
+    date_today = datetime.now().strftime("%Y-%m-%d")
+    date_yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
+    tz_offset = f"{tz_offset:02d}"
+
+    # Simulate new API format: joined events with no octopoints data
+    session_binary = f"""
+state: off
+current_joined_event_start: '{date_today}T17:00:00+{tz_offset}:00'
+current_joined_event_end: '{date_today}T18:00:00+{tz_offset}:00'
+current_joined_event_duration_in_minutes: 60
+next_joined_event_start: null
+next_joined_event_end: null
+next_joined_event_duration_in_minutes: null
+icon: mdi:leaf
+friendly_name: Octoplus Saving Session (A-TEST1234)
+"""
+
+    # Events with octopoints_per_kwh set to 800 — verifying rate calculation
+    session_sensor = f"""
+state: '2026-03-23T12:00:00+{tz_offset}:00'
+event_types: octopus_energy_all_octoplus_saving_sessions
+event_type: octopus_energy_all_octoplus_saving_sessions
+account_id: A-TEST1234
+available_events: []
+joined_events:
+    - id: 2001
+      start: '{date_today}T17:00:00+{tz_offset}:00'
+      end: '{date_today}T18:00:00+{tz_offset}:00'
+      duration_in_minutes: 60
+      rewarded_octopoints: null
+      octopoints_per_kwh: 800
+      code: FLEX-2001
+friendly_name: Octoplus Saving Session Events
+"""
+
+    ha.dummy_items["binary_sensor.octopus_energy_a_test1234_octoplus_saving_sessions"] = yaml.safe_load(session_binary)
+    ha.dummy_items["event.octopus_energy_a_test1234_octoplus_saving_session_events"] = yaml.safe_load(session_sensor)
+    ha.dummy_items["sensor.octopus_free_session"] = {}
+    my_predbat.args["octopus_saving_session"] = "binary_sensor.octopus_energy_a_test1234_octoplus_saving_sessions"
+    my_predbat.args["octopus_free_session"] = "sensor.octopus_free_session"
+    if "octopus_free_url" in my_predbat.args:
+        del my_predbat.args["octopus_free_url"]
+    my_predbat.args["octopus_saving_session_octopoints_per_penny"] = 8
+
+    ha.service_store_enable = True
+    ha.service_store = []
+    octopus_free_slots, octopus_saving_slots = my_predbat.fetch_octopus_sessions()
+    ha.service_store_enable = False
+
+    # Should have saving slots with rate derived from octopoints (800/8 = 100p/kWh)
+    if not octopus_saving_slots:
+        print("ERROR: Expected saving slots with default rate, got none")
+        failed = True
+    else:
+        slot = octopus_saving_slots[0]
+        expected_rate = 800 / 8  # 100 p/kWh
+        if slot.get("rate") != expected_rate:
+            print(f"ERROR: Expected rate {expected_rate}, got {slot.get('rate')}")
+            failed = True
+        else:
+            print(f"PASS: Default rate correctly applied: {expected_rate} p/kWh")
+
+    return failed
