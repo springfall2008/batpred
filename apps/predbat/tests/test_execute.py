@@ -1815,6 +1815,8 @@ def run_execute_tests(my_predbat):
         has_ge_eco_toggle=True,
         assert_force_export=False,
         assert_status="Demand",
+        assert_discharge_start_time_minutes=my_predbat.minutes_now + 30,
+        assert_discharge_end_time_minutes=my_predbat.minutes_now + 90 + 1,
     )
     # Confirm the existing behaviour for standard inverters (inv_has_ge_eco_toggle=False) is unchanged:
     # force_export=True is still passed to pre-program the discharge window.
