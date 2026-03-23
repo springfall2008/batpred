@@ -187,3 +187,57 @@ def test_find_tariffs_graphql_failure():
     result = asyncio.run(api.async_find_tariffs())
     assert result is None
     assert api.current_tariff is None
+
+
+def test_build_rates_url():
+    api = make_kraken_api(provider="edf")
+    url = api.build_rates_url("VAR-22-11-01", "E-1R-VAR-22-11-01-J")
+    assert url == "https://api.edfgb-kraken.energy/v1/products/VAR-22-11-01/electricity-tariffs/E-1R-VAR-22-11-01-J/standard-unit-rates/"
+
+
+def test_build_rates_url_eon():
+    api = make_kraken_api(provider="eon")
+    url = api.build_rates_url("PROD-01", "E-1R-PROD-01-A")
+    assert url == "https://api.eonnext-kraken.energy/v1/products/PROD-01/electricity-tariffs/E-1R-PROD-01-A/standard-unit-rates/"
+
+
+def test_fetch_rates_single_page():
+    api = make_kraken_api()
+    api.current_tariff = {"tariff_code": "E-1R-VAR-22-11-01-J", "product_code": "VAR-22-11-01"}
+
+    rates_response = {
+        "count": 2,
+        "next": None,
+        "results": [
+            {"value_inc_vat": 24.5, "valid_from": "2026-03-23T00:00:00Z", "valid_to": "2026-03-24T00:00:00Z"},
+            {"value_inc_vat": 28.3, "valid_from": "2026-03-24T00:00:00Z", "valid_to": "2026-03-25T00:00:00Z"},
+        ],
+    }
+
+    mock_response = AsyncMock()
+    mock_response.status = 200
+    mock_response.json = AsyncMock(return_value=rates_response)
+
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_response),
+            __aexit__=AsyncMock(return_value=None),
+        )
+    )
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(api.async_fetch_rates())
+
+    assert result is not None
+    assert len(result) == 2
+    assert result[0]["value_inc_vat"] == 24.5
+
+
+def test_fetch_rates_no_tariff():
+    api = make_kraken_api()
+    assert api.current_tariff is None
+    result = asyncio.run(api.async_fetch_rates())
+    assert result is None
