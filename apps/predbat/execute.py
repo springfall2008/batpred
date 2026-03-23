@@ -400,7 +400,7 @@ class Execute:
                 else:
                     if (self.minutes_now < minutes_end) and ((minutes_start - self.minutes_now) <= self.set_window_minutes) and (self.export_limits_best[0] < 99.0):
                         # We can't schedule freeze export only full export
-                        # Don't turn off ECO mode for GE Inverterts except when we are within the export window as it will stop the battery being used
+                        # Don't turn off ECO mode for GE inverters except when we are within the export window as it will stop the battery being used
                         ge_inverters = inverter.inv_has_ge_eco_toggle or inverter.inv_has_ge_inverter_mode
                         inverter.adjust_force_export(inverter.inv_has_discharge_enable_time and not ge_inverters, discharge_start_time, discharge_end_time)
                     else:
