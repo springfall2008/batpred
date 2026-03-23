@@ -31,6 +31,7 @@ from web import WebInterface
 from ha import HAInterface, HAHistory
 from db_manager import DatabaseManager
 from fox import FoxAPI
+from kraken import KrakenAPI
 from web_mcp import PredbatMCPServer
 from load_ml_component import LoadMLComponent
 from datetime import datetime, timezone, timedelta
@@ -216,6 +217,47 @@ COMPONENT_LIST = {
             "token_hash": {
                 "required": False,
                 "config": "fox_token_hash",
+            },
+        },
+        "phase": 1,
+    },
+    "kraken": {
+        "class": KrakenAPI,
+        "name": "Kraken Energy (EDF/E.ON)",
+        "event_filter": "predbat_kraken_",
+        "args": {
+            "provider": {
+                "required": True,
+                "config": "kraken_provider",
+            },
+            "account_id": {
+                "required": True,
+                "config": "kraken_account_id",
+            },
+            "key": {
+                "required": False,
+                "config": "kraken_key",
+            },
+            "email": {
+                "required": False,
+                "config": "kraken_email",
+            },
+            "password": {
+                "required": False,
+                "config": "kraken_password",
+            },
+            "auth_method": {
+                "required": False,
+                "default": "oauth",
+                "config": "kraken_auth_method",
+            },
+            "token_expires_at": {
+                "required": False,
+                "config": "kraken_token_expires_at",
+            },
+            "token_hash": {
+                "required": False,
+                "config": "kraken_token_hash",
             },
         },
         "phase": 1,
