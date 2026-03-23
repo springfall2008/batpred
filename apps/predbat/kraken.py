@@ -81,7 +81,7 @@ KRAKEN_AUTH_ERROR_CODES = ("KT-CT-1139", "KT-CT-1111", "KT-CT-1143")
 class KrakenAPI(ComponentBase, _AUTH_BASE):
     """Kraken GraphQL component for EDF/E.ON tariff discovery and rate fetching."""
 
-    def initialize(self, provider, account_id, key=None, email=None, password=None, auth_method="oauth", token_expires_at=None):
+    def initialize(self, provider, account_id, key=None, email=None, password=None, auth_method="oauth", token_expires_at=None, token_hash=None):
         """Initialise the Kraken API component with provider, account, and auth config."""
         self.provider = provider
         self.base_url = KRAKEN_BASE_URLS.get(provider)
@@ -91,6 +91,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
 
         self.account_id = account_id
         self.current_tariff = None
+        self.wired = False
         self.requests_total = 0
         self.failures_total = 0
         self.oauth_failed = False
@@ -98,6 +99,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         # Init auth — OAuthMixin or KrakenAuthMixin depending on import
         if hasattr(self, "_init_oauth") and hasattr(_AUTH_BASE, "_init_oauth") and not hasattr(_AUTH_BASE, "_init_kraken_auth"):
             self._init_oauth(auth_method, key, token_expires_at, "kraken")
+            self.token_hash = token_hash or ""
         elif hasattr(self, "_init_kraken_auth"):
             self._init_kraken_auth(auth_method, key=key, email=email, password=password)
 
@@ -347,10 +349,11 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                     app="kraken",
                 )
 
-        # Wire into fetch.py on first successful run (same as OctopusAPI.automatic_config)
-        if first and self.current_tariff:
+        # Wire into fetch.py once tariff is discovered (retries until successful)
+        if not self.wired and self.current_tariff:
             self.set_arg("metric_octopus_import", self.get_entity_name("sensor", "import_rates"))
             self.set_arg("metric_standing_charge", self.get_entity_name("sensor", "import_standing"))
+            self.wired = True
 
         # Publish account status
         status = "error" if self.oauth_failed else ("connected" if self.current_tariff else "discovering")
