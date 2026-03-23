@@ -120,3 +120,70 @@ def test_graphql_query_oauth_failed_returns_none():
     api.check_and_refresh_oauth_token = AsyncMock(return_value=False)
     result = asyncio.run(api.async_graphql_query("query { test }", "test-context"))
     assert result is None
+
+
+def test_find_tariffs_detects_change():
+    api = make_kraken_api()
+    # Response shape matches validated EDF/E.ON Kraken schema (electricitySupplyPoints)
+    account_data = {
+        "account": {
+            "number": "A-TEST123",
+            "properties": [
+                {
+                    "electricitySupplyPoints": [
+                        {
+                            "mpan": "1234567890123",
+                            "agreements": [
+                                {
+                                    "validFrom": "2026-01-01T00:00:00+00:00",
+                                    "validTo": None,
+                                    "tariff": {
+                                        "productCode": "VAR-22-11-01",
+                                        "tariffCode": "E-1R-VAR-22-11-01-J",
+                                        "displayName": "EDF Variable",
+                                    },
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        },
+    }
+    api.async_graphql_query = AsyncMock(return_value=account_data)
+    result = asyncio.run(api.async_find_tariffs())
+    assert result is not None
+    assert result["tariff_code"] == "E-1R-VAR-22-11-01-J"
+    assert result["product_code"] == "VAR-22-11-01"
+    assert api.current_tariff == {"tariff_code": "E-1R-VAR-22-11-01-J", "product_code": "VAR-22-11-01"}
+
+
+def test_find_tariffs_no_change():
+    api = make_kraken_api()
+    api.current_tariff = {"tariff_code": "E-1R-VAR-22-11-01-J", "product_code": "VAR-22-11-01"}
+    account_data = {
+        "account": {
+            "number": "A-TEST123",
+            "properties": [
+                {
+                    "electricitySupplyPoints": [
+                        {
+                            "mpan": "1234567890123",
+                            "agreements": [{"validFrom": "2026-01-01T00:00:00+00:00", "validTo": None, "tariff": {"productCode": "VAR-22-11-01", "tariffCode": "E-1R-VAR-22-11-01-J", "displayName": "EDF Variable"}}],
+                        }
+                    ],
+                }
+            ],
+        },
+    }
+    api.async_graphql_query = AsyncMock(return_value=account_data)
+    result = asyncio.run(api.async_find_tariffs())
+    assert result is None
+
+
+def test_find_tariffs_graphql_failure():
+    api = make_kraken_api()
+    api.async_graphql_query = AsyncMock(return_value=None)
+    result = asyncio.run(api.async_find_tariffs())
+    assert result is None
+    assert api.current_tariff is None
