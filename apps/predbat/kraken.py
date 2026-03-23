@@ -305,6 +305,9 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
 
             if tariff_change:
                 had_success = True
+            elif self.current_tariff:
+                # Tariff unchanged — still counts as success for health check
+                had_success = True
                 self.dashboard_item(
                     self.get_entity_name("sensor", "tariff_code"),
                     tariff_change["tariff_code"],
@@ -372,7 +375,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         if had_success:
             self.update_success_timestamp()
 
-        if self.oauth_failed and first:
+        if first and (self.oauth_failed or not self.current_tariff):
             return False
 
         return True
