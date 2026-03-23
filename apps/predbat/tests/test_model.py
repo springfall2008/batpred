@@ -1026,7 +1026,7 @@ def run_model_tests(my_predbat):
         with_battery=True,
         discharge=0,
         battery_soc=100,
-        assert_keep=24 * 0.5 * export_rate,
+        assert_keep=24 * 0.5 * export_rate * 5,
         calculate_export_on_pv=False,
     )
     # No force discharge window: pv_ac is exported but battery_draw=0 so no penalty

@@ -851,7 +851,7 @@ class Prediction:
                 # If the configuration is to not calculate export on PV then score
                 # against this forced export to prevent it from appearing in the plan
                 if not calculate_export_on_pv and battery_draw > 0:
-                    metric_keep += pv_ac * export_rate
+                    metric_keep += pv_ac * export_rate * 5  # Give a strong incentive to use PV in this case
 
                 if battery_draw < 0:
                     battery_state = "f/"

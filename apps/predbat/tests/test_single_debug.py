@@ -84,6 +84,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.charge_limit_best[1] = 0
         # my_predbat.iboost_solar_excess = True
         # my_predbat.iboost_min_power = 500 / MINUTE_WATT
+        # my_predbat.calculate_export_on_pv = False
         pass
 
     print("Charge scaling 10 {} load scaling 10 {}".format(my_predbat.charge_scaling10, my_predbat.load_scaling10))
