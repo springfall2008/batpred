@@ -2,7 +2,6 @@
 
 Self-contained — discovers tariffs via Kraken GraphQL, constructs rate URLs
 from provider base URL + tariff code, fetches rates from public REST API.
-No stored URLs, no edge function callbacks.
 
 Auth strategy: SaaS uses OAuthMixin (edge function refresh), OSS uses
 KrakenAuthMixin (local API key / email+password → JWT).
@@ -94,9 +93,10 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         self.current_tariff = None
         self.requests_total = 0
         self.failures_total = 0
+        self.oauth_failed = False
 
         # Init auth — OAuthMixin or KrakenAuthMixin depending on import
-        if hasattr(self, "_init_oauth") and _AUTH_BASE.__name__ == "OAuthMixin":
+        if hasattr(self, "_init_oauth") and hasattr(_AUTH_BASE, "_init_oauth") and not hasattr(_AUTH_BASE, "_init_kraken_auth"):
             self._init_oauth(auth_method, key, token_expires_at, "kraken")
         elif hasattr(self, "_init_kraken_auth"):
             self._init_kraken_auth(auth_method, key=key, email=email, password=password)
@@ -226,10 +226,11 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         )
 
         all_results = []
+        pages = 0
         try:
             timeout = aiohttp.ClientTimeout(total=30)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                while url:
+                while url and pages < 3:
                     async with session.get(url) as response:
                         if response.status != 200:
                             self.log(f"Warn: Kraken: Rates HTTP {response.status} for {url}")
@@ -239,6 +240,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
 
                     all_results.extend(data.get("results", []))
                     url = data.get("next")  # Pagination
+                    pages += 1
 
             self.log(f"Kraken: Fetched {len(all_results)} rate periods")
             return all_results
@@ -253,26 +255,54 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         entity_name = root + ".predbat_kraken_" + self.account_id.replace("-", "_") + "_" + suffix
         return entity_name.lower()
 
-    def set_arg(self, key, value):
-        """Set a config arg on the base PredBat instance."""
-        self.base.args[key] = value
+    async def async_fetch_standing_charges(self):
+        """Fetch standing charges from public REST endpoint. No auth needed."""
+        if not self.current_tariff:
+            return None
+
+        url = self.build_standing_charge_url(
+            self.current_tariff["product_code"],
+            self.current_tariff["tariff_code"],
+        )
+
+        try:
+            timeout = aiohttp.ClientTimeout(total=30)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url) as response:
+                    if response.status != 200:
+                        self.log(f"Warn: Kraken: Standing charges HTTP {response.status}")
+                        self.failures_total += 1
+                        return None
+                    data = await response.json()
+
+            results = data.get("results", [])
+            if results:
+                return results[0].get("value_inc_vat")
+            return None
+
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            self.log(f"Warn: Kraken: Network error fetching standing charges: {e}")
+            self.failures_total += 1
+            return None
 
     async def run(self, seconds, first):
         """Component run method — called by ComponentBase.start() every 60s.
 
         Timing (mirrors OctopusAPI pattern):
         - First run + every 30 min: discover tariff via GraphQL
-        - Every cycle: fetch rates from REST + publish entities
+        - First run + every 10 min: fetch rates + standing charges from REST
         - First run: wire into fetch.py via set_arg
         """
         now = datetime.now()
         count_minutes = now.minute + now.hour * 60
+        had_success = False
 
         # Tariff discovery — first run + every 30 minutes
         if first or (count_minutes % 30) == 0:
             tariff_change = await self.async_find_tariffs()
 
             if tariff_change:
+                had_success = True
                 self.dashboard_item(
                     self.get_entity_name("sensor", "tariff_code"),
                     tariff_change["tariff_code"],
@@ -284,10 +314,11 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                     app="kraken",
                 )
 
-        # Fetch rates — every cycle (rates update throughout the day)
-        if self.current_tariff:
+        # Fetch rates + standing charges — first run + every 10 minutes
+        if self.current_tariff and (first or (count_minutes % 10) == 0):
             rates = await self.async_fetch_rates()
             if rates:
+                had_success = True
                 self.dashboard_item(
                     self.get_entity_name("sensor", "import_rates"),
                     state=len(rates),
@@ -296,6 +327,21 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                         "rates": rates,
                         "tariff_code": self.current_tariff["tariff_code"],
                         "product_code": self.current_tariff["product_code"],
+                        "icon": "mdi:currency-gbp",
+                    },
+                    app="kraken",
+                )
+
+            standing_charge = await self.async_fetch_standing_charges()
+            if standing_charge is not None:
+                had_success = True
+                self.dashboard_item(
+                    self.get_entity_name("sensor", "import_standing"),
+                    state=standing_charge,
+                    attributes={
+                        "friendly_name": "Kraken Standing Charge",
+                        "unit_of_measurement": "p/day",
+                        "tariff_code": self.current_tariff["tariff_code"],
                         "icon": "mdi:currency-gbp",
                     },
                     app="kraken",
@@ -319,5 +365,11 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             },
             app="kraken",
         )
+
+        if had_success:
+            self.update_success_timestamp()
+
+        if self.oauth_failed and first:
+            return False
 
         return True

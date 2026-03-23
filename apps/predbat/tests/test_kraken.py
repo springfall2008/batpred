@@ -263,27 +263,56 @@ def test_run_first_discovers_tariff_and_fetches_rates():
             {"value_inc_vat": 24.5, "valid_from": "2026-03-23T00:00:00Z", "valid_to": "2026-03-24T00:00:00Z"},
         ]
     )
+    api.async_fetch_standing_charges = AsyncMock(return_value=53.0)
     api.dashboard_item = MagicMock()
     api.set_arg = MagicMock()
+    api.update_success_timestamp = MagicMock()
 
     result = asyncio.run(api.run(0, True))
 
     assert result is True
     api.async_find_tariffs.assert_called_once()
     api.async_fetch_rates.assert_called_once()
+    api.async_fetch_standing_charges.assert_called_once()
     api.dashboard_item.assert_called()
+    api.update_success_timestamp.assert_called_once()
     # On first run, should wire into fetch.py
     api.set_arg.assert_any_call("metric_octopus_import", api.get_entity_name("sensor", "import_rates"))
+    api.set_arg.assert_any_call("metric_standing_charge", api.get_entity_name("sensor", "import_standing"))
 
 
-def test_run_fetches_rates_even_when_tariff_unchanged():
+def test_run_returns_false_on_auth_failure():
+    """run() returns False on first run when auth has failed."""
+    api = make_kraken_api()
+    api.oauth_failed = True
+    api.async_find_tariffs = AsyncMock(return_value=None)
+    api.dashboard_item = MagicMock()
+    api.update_success_timestamp = MagicMock()
+
+    result = asyncio.run(api.run(0, True))
+
+    assert result is False
+    api.update_success_timestamp.assert_not_called()
+
+
+def test_run_fetches_rates_on_10min_cycle():
+    """run() fetches rates on 10-minute boundaries, not every cycle."""
+    from datetime import datetime as dt
+
     api = make_kraken_api()
     api.current_tariff = {"tariff_code": "E-1R-VAR-01", "product_code": "VAR-01"}
     api.async_find_tariffs = AsyncMock(return_value=None)
     api.async_fetch_rates = AsyncMock(return_value=[{"value_inc_vat": 24.5}])
+    api.async_fetch_standing_charges = AsyncMock(return_value=53.0)
     api.dashboard_item = MagicMock()
+    api.update_success_timestamp = MagicMock()
 
-    result = asyncio.run(api.run(0, False))
+    # Mock time to 10:00 (count_minutes=600, 600%10==0, 600%30==0)
+    with patch("kraken.datetime") as mock_dt:
+        mock_dt.now.return_value = dt(2026, 3, 23, 10, 0, 0)
+        mock_dt.fromisoformat = dt.fromisoformat
+        result = asyncio.run(api.run(0, False))
 
     assert result is True
     api.async_fetch_rates.assert_called_once()
+    api.async_fetch_standing_charges.assert_called_once()
