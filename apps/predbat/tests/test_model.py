@@ -1015,6 +1015,36 @@ def run_model_tests(my_predbat):
     failed |= simple_scenario("battery_discharge_freeze2", my_predbat, 0, 0.5, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=10, with_battery=True, discharge=99, battery_soc=10, set_export_freeze_only=True)
     failed |= simple_scenario("battery_discharge_freeze_only", my_predbat, 0, 0.5, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=10, with_battery=True, discharge=0, battery_soc=10, set_export_freeze_only=True)
 
+    # Force discharge with PV: penalty = discharge_hours * pv_kw * export_rate = 10 * 0.5 * export_rate
+    failed |= simple_scenario(
+        "battery_discharge_pv_no_export_on_pv1",
+        my_predbat,
+        0,
+        0.5,
+        assert_final_metric=-export_rate * 24 * 1.5,
+        assert_final_soc=100 - 24,
+        with_battery=True,
+        discharge=0,
+        battery_soc=100,
+        assert_keep=24 * 0.5 * export_rate,
+        calculate_export_on_pv=False,
+    )
+    # No force discharge window: pv_ac is exported but battery_draw=0 so no penalty
+    failed |= simple_scenario(
+        "battery_discharge_pv_no_export_on_pv2",
+        my_predbat,
+        0,
+        0.5,
+        assert_final_metric=0,
+        assert_final_soc=10 + 0.5 * 24,
+        with_battery=True,
+        battery_soc=10,
+        assert_keep=0,
+        calculate_export_on_pv=False,
+    )
+    if failed:
+        return failed
+
     failed |= simple_scenario("battery_discharge_hold", my_predbat, 0, 0.5, assert_final_metric=-0, assert_final_soc=10 + 24 * 0.5, with_battery=True, discharge=98, battery_soc=10)
     failed |= simple_scenario(
         "battery_discharge_export_limit_ac",

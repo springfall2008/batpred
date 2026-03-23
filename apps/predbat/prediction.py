@@ -129,6 +129,7 @@ class Prediction:
             self.set_export_low_power = base.set_export_low_power
             self.set_charge_window = base.set_charge_window
             self.set_export_window = base.set_export_window
+            self.calculate_export_on_pv = base.calculate_export_on_pv
             self.charge_low_power_margin = base.charge_low_power_margin
             self.car_charging_slots = base.car_charging_slots
             self.car_charging_limit = base.car_charging_limit
@@ -537,6 +538,7 @@ class Prediction:
         battery_discharge_power_curve_tuple = charge_curve_to_tuple(self.battery_discharge_power_curve)
         battery_temperature_charge_curve_tuple = charge_curve_to_tuple(self.battery_temperature_charge_curve)
         battery_temperature_discharge_curve_tuple = charge_curve_to_tuple(self.battery_temperature_discharge_curve)
+        calculate_export_on_pv = self.calculate_export_on_pv
 
         # For the PV10 case we apply some de-rating to the battery charge rate to be more pessimistic
         if pv10:
@@ -845,6 +847,11 @@ class Prediction:
                     if total_inverted > inverter_limit:
                         over_limit = total_inverted - inverter_limit
                         battery_draw = max(battery_draw - over_limit * inverter_loss, 0)
+
+                # If the configuration is to not calculate export on PV then score
+                # against this forced export to prevent it from appearing in the plan
+                if not calculate_export_on_pv and battery_draw > 0:
+                    metric_keep += pv_ac * export_rate
 
                 if battery_draw < 0:
                     battery_state = "f/"

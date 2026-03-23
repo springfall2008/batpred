@@ -3203,6 +3203,7 @@ class Output:
         opts = ""
         opts += "mode({}), ".format(self.predbat_mode)
         opts += "calculate_export_oncharge({}), ".format(self.calculate_export_oncharge)
+        opts += "calculate_export_on_pv({}), ".format(self.calculate_export_on_pv)
         opts += "set_export_freeze_only({}), ".format(self.set_export_freeze_only)
         opts += "set_discharge_during_charge({}), ".format(self.set_discharge_during_charge)
         opts += "combine_charge_slots({}), ".format(self.combine_charge_slots)

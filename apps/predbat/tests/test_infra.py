@@ -328,6 +328,7 @@ class MockConfigProvider:
             "set_freeze_export_during_demand": False,
             "mode": "Control charge & discharge",
             "calculate_export_oncharge": True,
+            "calculate_export_on_pv": True,
             "calculate_second_pass": True,
             "calculate_inday_adjustment": True,
             "calculate_tweak_plan": True,
@@ -589,6 +590,7 @@ def simple_scenario(
     return_prediction_handle=False,
     ignore_failed=False,
     set_charge_freeze=True,
+    calculate_export_on_pv=True,
 ):
     """
     No PV, No Load
@@ -658,6 +660,7 @@ def simple_scenario(
     my_predbat.set_charge_window = set_charge_window
     my_predbat.set_charge_freeze = set_charge_freeze
     my_predbat.set_export_freeze_only = set_export_freeze_only
+    my_predbat.calculate_export_on_pv = calculate_export_on_pv
 
     my_predbat.iboost_enable = iboost_enable
     my_predbat.iboost_gas = iboost_gas

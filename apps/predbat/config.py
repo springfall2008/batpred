@@ -758,6 +758,13 @@ CONFIG_ITEMS = [
         "default": False,
     },
     {
+        "name": "calculate_export_on_pv",
+        "friendly_name": "Calculate export slots during solar production",
+        "type": "switch",
+        "enable": "expert_mode",
+        "default": True,
+    },
+    {
         "name": "calculate_second_pass",
         "friendly_name": "Calculate full second pass (slower)",
         "type": "switch",

@@ -240,6 +240,10 @@ The default of 24 hours is the recommended value (to match energy rate cycles). 
 
 **switch.predbat_calculate_export_oncharge** (_expert mode_) When turned On, calculated export slots will disable or move charge slots, allowing them to intermix in the plan. When Off (the default) export slots will never be placed into charge slots.
 
+**switch.predbat_calculate_export_on_pv** (_expert mode_) When turned On (the default), Predbat will consider forced battery export slots even during periods of predicted solar production.
+When turned Off, any forced export that occurs while solar power is being generated will be scored against `metric_keep` (as if that solar energy had to be re-imported), making those export slots far less attractive to the optimiser.
+This prevents Predbat from planning unnecessary forced exports during sunny periods, since the PV output would be exported anyway without requiring the battery to discharge.
+
 **switch.predbat_set_discharge_during_charge** - When turned On disables inverter discharge during charge slots, useful for multi-inverter setups to avoid cross-charging when batteries are out of balance. Default is On.
 
 **switch.predbat_inverter_set_charge_before** - (_expert_mode_) When turned On (the default), charge slots will be programmed before their start time, when Off they will only be configured when the charging time starts.

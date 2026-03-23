@@ -2259,6 +2259,7 @@ class Fetch:
         self.log("Predbat mode is set to {}".format(self.predbat_mode))
 
         self.calculate_export_oncharge = self.get_arg("calculate_export_oncharge")
+        self.calculate_export_on_pv = self.get_arg("calculate_export_on_pv")
         self.calculate_second_pass = self.get_arg("calculate_second_pass")
         self.calculate_inday_adjustment = self.get_arg("calculate_inday_adjustment")
         self.calculate_tweak_plan = self.get_arg("calculate_tweak_plan")
