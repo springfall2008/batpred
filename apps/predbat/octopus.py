@@ -952,6 +952,12 @@ class OctopusAPI(ComponentBase):
         event_reward = {}
         event_code = {}
 
+        # Default saving session rate in octopoints/kWh
+        # octopus_saving_session_rate is in p/kWh, convert to octopoints
+        octopoints_per_penny = self.get_arg("octopus_saving_session_octopoints_per_penny", 8)
+        default_rate_pence = self.get_arg("octopus_saving_session_rate", 100)  # 100p/kWh default
+        default_octopoints = default_rate_pence * octopoints_per_penny
+
         if not has_joined:
             self.log("OctopusAPI: User has not joined Octopus saving sessions campaign")
             available_events = []
@@ -966,29 +972,44 @@ class OctopusAPI(ComponentBase):
             end = event.get("endAt", None)
             event_id = event.get("id", None)
             code = event.get("code", None)
+            reward = event.get("rewardPerKwhInOctoPoints", None)
+            if reward is None:
+                reward = default_octopoints
             if event_id:
-                event_reward[event_id] = event.get("rewardPerKwhInOctoPoints", None)
+                event_reward[event_id] = reward
                 event_code[event_id] = code
             if start and end and event_id not in joined_ids:
                 endDataTime = parse_date_time(end)
                 if endDataTime > self.now_utc_exact:
-                    return_available_events.append({"start": start, "end": end, "octopoints_per_kwh": event.get("rewardPerKwhInOctoPoints", None), "code": code, "id": event_id})
+                    return_available_events.append({"start": start, "end": end, "octopoints_per_kwh": reward, "code": code, "id": event_id})
 
         for event in joined_events:
             start = event.get("startAt", None)
             end = event.get("endAt", None)
             event_id = event.get("eventId", None)
+            reward = event_reward.get(event_id, None)
+            if reward is None:
+                reward = default_octopoints  # Inject default when API doesn't provide reward
             if start and end:
-                return_joined_events.append({"start": start, "end": end, "octopoints_per_kwh": event_reward.get(event_id, None), "rewarded_octopoints": event.get("rewardGivenInOctoPoints", None), "id": event_id, "code": event_code.get(event_id, None)})
+                return_joined_events.append({"start": start, "end": end, "octopoints_per_kwh": reward, "rewarded_octopoints": event.get("rewardGivenInOctoPoints", None), "id": event_id, "code": event_code.get(event_id, None)})
+
         saving_attributes = {"friendly_name": "Octopus Intelligent Saving Sessions", "icon": "mdi:currency-usd", "joined_events": return_joined_events, "available_events": return_available_events}
+
+        # Check if currently in an active saving session
+        # Handle both old API keys (start/end) and new API keys (startAt/endAt)
         active_event = False
         for event in joined_events:
-            start = event.get("start", None)
-            end = event.get("end", None)
+            start = event.get("startAt", event.get("start", None))
+            end = event.get("endAt", event.get("end", None))
             if start and end:
-                if start <= self.now_utc_exact and end > self.now_utc_exact:
-                    active_event = True
-                    break
+                try:
+                    start_dt = parse_date_time(start)
+                    end_dt = parse_date_time(end)
+                    if start_dt <= self.now_utc_exact and end_dt > self.now_utc_exact:
+                        active_event = True
+                        break
+                except (ValueError, TypeError):
+                    pass
         self.dashboard_item(self.get_entity_name("binary_sensor", "saving_session"), "on" if active_event else "off", attributes=saving_attributes, app="octopus")
 
         # Create joiner dropdown for available events
