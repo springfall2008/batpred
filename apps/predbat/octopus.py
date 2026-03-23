@@ -372,6 +372,7 @@ class OctopusAPI(ComponentBase):
         self.intelligent_devices = {}
         self.automatic = automatic
         self.commands = []
+        self.mpan = None
 
         # API request metrics for monitoring
         self.requests_total = 0
@@ -659,6 +660,10 @@ class OctopusAPI(ComponentBase):
                         isImport = True
                         deviceID_import = meter.get("smartImportElectricityMeter", {}).get("deviceId", None)
                         self.log("OctopusAPI: Found active import meter with device ID {}".format(deviceID_import))
+                        if not self.mpan:
+                            self.mpan = meterpoint.get("mpan")
+                            if self.mpan:
+                                self.log("OctopusAPI: Found MPAN {}".format(self.mpan[:4] + "..." + self.mpan[-4:] if len(self.mpan) > 8 else self.mpan))
                     if meter.get("smartExportElectricityMeter", None):
                         isExport = True
                         deviceID_export = meter.get("smartExportElectricityMeter", {}).get("deviceId", None)
