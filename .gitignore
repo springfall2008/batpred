@@ -101,3 +101,4 @@ it
 
 # Runtime-generated manifest
 apps/predbat/manifest.yaml
+.worktrees/
