@@ -382,7 +382,9 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             app="kraken",
         )
 
-        if had_success:
+        # Update liveness timestamp if we got data OR tariff is known (prevents
+        # spurious liveness failures during transient rate-fetch outages)
+        if had_success or self.current_tariff:
             self.update_success_timestamp()
 
         if first and (self.oauth_failed or not self.current_tariff):

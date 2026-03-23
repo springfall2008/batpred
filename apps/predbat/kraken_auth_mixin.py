@@ -118,8 +118,14 @@ class KrakenAuthMixin:
         if not token_data or not token_data.get("token"):
             return None
 
+        refresh_token = token_data.get("refreshToken")
+        payload = token_data.get("payload") or {}
+        exp = payload.get("exp", 0)
+        if not refresh_token or not exp:
+            return None
+
         return {
             "token": token_data["token"],
-            "refreshToken": token_data["refreshToken"],
-            "exp": token_data["payload"]["exp"],
+            "refreshToken": refresh_token,
+            "exp": exp,
         }
