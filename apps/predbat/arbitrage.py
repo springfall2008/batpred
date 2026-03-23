@@ -60,7 +60,46 @@ class ArbitrageEngine:
         Confidence discount applied: slots further ahead score proportionally lower.
         Sorted descending by discounted net profit.
         """
-        raise NotImplementedError
+        scored = []
+        slot_hours = SLOT_MINUTES / 60.0
+        future_slots = [
+            m for m in range(self.minutes_now, 1440, SLOT_MINUTES)
+            if m in self.rate_import
+        ]
+
+        for charge_minute in future_slots:
+            charge_kwh = self.charge_rate_kw * slot_hours
+            import_cost_gbp = (self.rate_import[charge_minute] / 100.0) * charge_kwh
+
+            for export_minute in future_slots:
+                if export_minute <= charge_minute:
+                    continue
+                if export_minute not in self.rate_export:
+                    continue
+
+                discharge_kwh = charge_kwh * self.battery_efficiency
+                export_revenue_gbp = (self.rate_export[export_minute] / 100.0) * discharge_kwh
+                raw_profit_gbp = export_revenue_gbp - import_cost_gbp
+
+                # Only score profitable pairs; apply confidence discount after sign check
+                if raw_profit_gbp <= 0:
+                    continue
+
+                # Confidence discount: linear from 1.0 at 0h ahead to 0.5 at 48h
+                hours_ahead = (charge_minute - self.minutes_now) / 60.0
+                confidence = max(0.5, 1.0 - (hours_ahead / 96.0))
+                net_profit_gbp = raw_profit_gbp * confidence
+
+                scored.append({
+                    "charge_minute": charge_minute,
+                    "export_minute": export_minute,
+                    "net_profit_gbp": round(net_profit_gbp, 4),
+                    "charge_kwh": round(charge_kwh, 3),
+                    "discharge_kwh": round(discharge_kwh, 3),
+                })
+
+        scored.sort(key=lambda x: x["net_profit_gbp"], reverse=True)
+        return scored
 
     def schedule_to_target(self) -> list[dict]:
         """Select minimum non-overlapping slot pairs to hit profit_target_daily.
