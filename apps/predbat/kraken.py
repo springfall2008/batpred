@@ -303,17 +303,15 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         if first or (count_minutes % 30) == 0:
             tariff_change = await self.async_find_tariffs()
 
-            if tariff_change:
+            if tariff_change or self.current_tariff:
                 had_success = True
-            elif self.current_tariff:
-                # Tariff unchanged — still counts as success for health check
-                had_success = True
+                # Publish tariff sensor on discovery, change, and every 30-min cycle
                 self.dashboard_item(
                     self.get_entity_name("sensor", "tariff_code"),
-                    tariff_change["tariff_code"],
+                    self.current_tariff["tariff_code"],
                     attributes={
                         "friendly_name": "Kraken Tariff Code",
-                        "product_code": tariff_change["product_code"],
+                        "product_code": self.current_tariff["product_code"],
                         "icon": "mdi:lightning-bolt",
                     },
                     app="kraken",
