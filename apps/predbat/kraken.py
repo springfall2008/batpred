@@ -247,3 +247,77 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             self.log(f"Warn: Kraken: Network error fetching rates: {e}")
             self.failures_total += 1
             return None
+
+    def get_entity_name(self, root, suffix):
+        """Construct entity name. Same pattern as OctopusAPI.get_entity_name."""
+        entity_name = root + ".predbat_kraken_" + self.account_id.replace("-", "_") + "_" + suffix
+        return entity_name.lower()
+
+    def set_arg(self, key, value):
+        """Set a config arg on the base PredBat instance."""
+        self.base.args[key] = value
+
+    async def run(self, seconds, first):
+        """Component run method — called by ComponentBase.start() every 60s.
+
+        Timing (mirrors OctopusAPI pattern):
+        - First run + every 30 min: discover tariff via GraphQL
+        - Every cycle: fetch rates from REST + publish entities
+        - First run: wire into fetch.py via set_arg
+        """
+        now = datetime.now()
+        count_minutes = now.minute + now.hour * 60
+
+        # Tariff discovery — first run + every 30 minutes
+        if first or (count_minutes % 30) == 0:
+            tariff_change = await self.async_find_tariffs()
+
+            if tariff_change:
+                self.dashboard_item(
+                    self.get_entity_name("sensor", "tariff_code"),
+                    tariff_change["tariff_code"],
+                    attributes={
+                        "friendly_name": "Kraken Tariff Code",
+                        "product_code": tariff_change["product_code"],
+                        "icon": "mdi:lightning-bolt",
+                    },
+                    app="kraken",
+                )
+
+        # Fetch rates — every cycle (rates update throughout the day)
+        if self.current_tariff:
+            rates = await self.async_fetch_rates()
+            if rates:
+                self.dashboard_item(
+                    self.get_entity_name("sensor", "import_rates"),
+                    state=len(rates),
+                    attributes={
+                        "friendly_name": "Kraken Import Rates",
+                        "rates": rates,
+                        "tariff_code": self.current_tariff["tariff_code"],
+                        "product_code": self.current_tariff["product_code"],
+                        "icon": "mdi:currency-gbp",
+                    },
+                    app="kraken",
+                )
+
+        # Wire into fetch.py on first successful run (same as OctopusAPI.automatic_config)
+        if first and self.current_tariff:
+            self.set_arg("metric_octopus_import", self.get_entity_name("sensor", "import_rates"))
+            self.set_arg("metric_standing_charge", self.get_entity_name("sensor", "import_standing"))
+
+        # Publish account status
+        status = "error" if self.oauth_failed else ("connected" if self.current_tariff else "discovering")
+        self.dashboard_item(
+            self.get_entity_name("sensor", "account_status"),
+            state=status,
+            attributes={
+                "friendly_name": "Kraken Account Status",
+                "provider": self.provider,
+                "account_id": self.account_id,
+                "icon": "mdi:account-check" if status == "connected" else "mdi:account-alert",
+            },
+            app="kraken",
+        )
+
+        return True

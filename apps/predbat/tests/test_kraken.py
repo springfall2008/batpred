@@ -241,3 +241,49 @@ def test_fetch_rates_no_tariff():
     assert api.current_tariff is None
     result = asyncio.run(api.async_fetch_rates())
     assert result is None
+
+
+def test_get_entity_name():
+    api = make_kraken_api(account_id="A-1234ABCD")
+    name = api.get_entity_name("sensor", "import_rates")
+    assert name == "sensor.predbat_kraken_a_1234abcd_import_rates"
+
+
+def test_run_first_discovers_tariff_and_fetches_rates():
+    api = make_kraken_api()
+    discovered = {"tariff_code": "E-1R-NEW-01", "product_code": "NEW-01"}
+
+    async def find_tariffs_side_effect():
+        api.current_tariff = discovered
+        return discovered
+
+    api.async_find_tariffs = AsyncMock(side_effect=find_tariffs_side_effect)
+    api.async_fetch_rates = AsyncMock(
+        return_value=[
+            {"value_inc_vat": 24.5, "valid_from": "2026-03-23T00:00:00Z", "valid_to": "2026-03-24T00:00:00Z"},
+        ]
+    )
+    api.dashboard_item = MagicMock()
+    api.set_arg = MagicMock()
+
+    result = asyncio.run(api.run(0, True))
+
+    assert result is True
+    api.async_find_tariffs.assert_called_once()
+    api.async_fetch_rates.assert_called_once()
+    api.dashboard_item.assert_called()
+    # On first run, should wire into fetch.py
+    api.set_arg.assert_any_call("metric_octopus_import", api.get_entity_name("sensor", "import_rates"))
+
+
+def test_run_fetches_rates_even_when_tariff_unchanged():
+    api = make_kraken_api()
+    api.current_tariff = {"tariff_code": "E-1R-VAR-01", "product_code": "VAR-01"}
+    api.async_find_tariffs = AsyncMock(return_value=None)
+    api.async_fetch_rates = AsyncMock(return_value=[{"value_inc_vat": 24.5}])
+    api.dashboard_item = MagicMock()
+
+    result = asyncio.run(api.run(0, False))
+
+    assert result is True
+    api.async_fetch_rates.assert_called_once()
