@@ -108,7 +108,7 @@ class KrakenAuthMixin:
                     if response.status != 200:
                         return None
                     data = await response.json()
-        except (aiohttp.ClientError, asyncio.TimeoutError):
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
             return None
 
         if data.get("errors"):

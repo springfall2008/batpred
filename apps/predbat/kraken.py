@@ -9,7 +9,7 @@ KrakenAuthMixin (local API key / email+password → JWT).
 
 import aiohttp
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 
 from component_base import ComponentBase
 
@@ -157,7 +157,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
 
             return None
 
-        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as e:
             self.log(f"Warn: Kraken: Network error for {request_context}: {e}")
             self.failures_total += 1
             return None
@@ -177,16 +177,26 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             for sp in supply_points:
                 agreements = sp.get("agreements", [])
 
-                # Find active agreement (validTo is None or in the future)
+                # Find active agreement (validFrom <= now < validTo)
+                now = datetime.now(timezone.utc)
                 for agr in agreements:
+                    valid_from = agr.get("validFrom")
+                    if valid_from is not None:
+                        try:
+                            vf = datetime.fromisoformat(valid_from.replace("Z", "+00:00"))
+                            if now < vf:
+                                continue  # Future-dated agreement
+                        except (ValueError, AttributeError):
+                            pass  # Treat invalid validFrom as "started"
+
                     valid_to = agr.get("validTo")
                     if valid_to is not None:
                         try:
                             vt = datetime.fromisoformat(valid_to.replace("Z", "+00:00"))
-                            if vt < datetime.now(vt.tzinfo):
-                                continue
+                            if vt < now:
+                                continue  # Expired agreement
                         except (ValueError, AttributeError):
-                            continue
+                            pass  # Treat invalid validTo as "no expiry"
 
                     tariff = agr.get("tariff", {})
                     tariff_code = tariff.get("tariffCode")
@@ -244,6 +254,8 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                     url = data.get("next")  # Pagination
                     pages += 1
 
+            if url:
+                self.log(f"Warn: Kraken: Rate pagination capped at {pages} pages, more data available")
             self.log(f"Kraken: Fetched {len(all_results)} rate periods")
             return all_results
 
