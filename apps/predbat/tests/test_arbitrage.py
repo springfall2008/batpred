@@ -124,6 +124,106 @@ def _test_score_confidence_near_beats_far(my_predbat=None):
     return False
 
 
+# ---------------------------------------------------------------------------
+# schedule_to_target() tests
+# ---------------------------------------------------------------------------
+
+def _test_schedule_no_profitable_slots(my_predbat=None):
+    """When there are no profitable slots, return empty schedule."""
+    result = _make_engine().schedule_to_target()
+    if result != []:
+        print(f"ERROR: Expected [], got {result}")
+        return True
+    return False
+
+
+def _test_schedule_contains_charge_and_export(my_predbat=None):
+    """Each scheduled pair must produce one charge and one export slot."""
+    rate_import = {i: 15.0 for i in range(0, 1440)}
+    rate_export = {i: 5.0 for i in range(0, 1440)}
+    rate_import[0] = 3.0
+    rate_export[60] = 40.0
+    eng = _make_engine(rate_import=rate_import, rate_export=rate_export, profit_target_daily=0.01)
+    schedule = eng.schedule_to_target()
+    types = {s["type"] for s in schedule}
+    if "charge" not in types:
+        print("ERROR: Schedule missing 'charge' slot")
+        return True
+    if "export" not in types:
+        print("ERROR: Schedule missing 'export' slot")
+        return True
+    return False
+
+
+def _test_schedule_slot_structure(my_predbat=None):
+    """Each slot dict must have all required keys with correct types."""
+    rate_import = {i: 3.0 for i in range(0, 1440)}
+    rate_export = {i: 40.0 for i in range(0, 1440)}
+    eng = _make_engine(rate_import=rate_import, rate_export=rate_export, profit_target_daily=0.01)
+    failed = False
+    for slot in eng.schedule_to_target():
+        if not isinstance(slot.get("start"), int):
+            print(f"ERROR: start missing or wrong type in {slot}")
+            failed = True
+        if not isinstance(slot.get("end"), int):
+            print(f"ERROR: end missing or wrong type in {slot}")
+            failed = True
+        if slot.get("type") not in ("charge", "export"):
+            print(f"ERROR: type invalid in {slot}")
+            failed = True
+        if not isinstance(slot.get("target_soc"), float):
+            print(f"ERROR: target_soc missing or wrong type in {slot}")
+            failed = True
+        if slot.get("end", 0) <= slot.get("start", 0):
+            print(f"ERROR: end <= start in {slot}")
+            failed = True
+    return failed
+
+
+def _test_schedule_no_overlaps(my_predbat=None):
+    """Slots in the schedule must not overlap each other."""
+    rate_import = {i: 3.0 for i in range(0, 1440)}
+    rate_export = {i: 40.0 for i in range(0, 1440)}
+    eng = _make_engine(rate_import=rate_import, rate_export=rate_export, profit_target_daily=2.0)
+    schedule = eng.schedule_to_target()
+    for i, a in enumerate(schedule):
+        for j, b in enumerate(schedule):
+            if i >= j:
+                continue
+            overlap = a["start"] < b["end"] and b["start"] < a["end"]
+            if overlap:
+                print(f"ERROR: Slots overlap: {a} and {b}")
+                return True
+    return False
+
+
+def _test_schedule_sorted_chronologically(my_predbat=None):
+    """Schedule must be ordered by start time."""
+    rate_import = {i: 3.0 for i in range(0, 1440)}
+    rate_export = {i: 40.0 for i in range(0, 1440)}
+    eng = _make_engine(rate_import=rate_import, rate_export=rate_export, profit_target_daily=0.50)
+    schedule = eng.schedule_to_target()
+    starts = [s["start"] for s in schedule]
+    if starts != sorted(starts):
+        print(f"ERROR: Schedule not sorted: {starts}")
+        return True
+    return False
+
+
+def _test_schedule_meets_target(my_predbat=None):
+    """With very profitable rates, projected_gain should approximately meet the target."""
+    rate_import = {i: 1.0 for i in range(0, 1440)}
+    rate_export = {i: 50.0 for i in range(0, 1440)}
+    target = 0.50
+    eng = _make_engine(rate_import=rate_import, rate_export=rate_export, profit_target_daily=target)
+    # Use projected_gain() which uses raw (undiscounted) profit for monetary reporting
+    gain = eng.projected_gain()
+    if gain < target * 0.90:
+        print(f"ERROR: projected_gain {gain:.3f} < 90% of target {target}")
+        return True
+    return False
+
+
 def test_arbitrage(my_predbat=None):
     """Main arbitrage test runner. Returns True if any test failed."""
     sub_tests = [
@@ -133,6 +233,12 @@ def test_arbitrage(my_predbat=None):
         ("score_slots: export after charge only", _test_score_export_after_charge),
         ("score_slots: future slots only", _test_score_future_slots_only),
         ("score_slots: confidence discount near > far", _test_score_confidence_near_beats_far),
+        ("schedule_to_target: no profitable slots returns empty", _test_schedule_no_profitable_slots),
+        ("schedule_to_target: contains charge and export", _test_schedule_contains_charge_and_export),
+        ("schedule_to_target: slot structure correct", _test_schedule_slot_structure),
+        ("schedule_to_target: no overlaps", _test_schedule_no_overlaps),
+        ("schedule_to_target: sorted chronologically", _test_schedule_sorted_chronologically),
+        ("schedule_to_target: meets profit target", _test_schedule_meets_target),
     ]
     failed = 0
     for name, fn in sub_tests:

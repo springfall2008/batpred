@@ -108,7 +108,74 @@ class ArbitrageEngine:
         {"start": int, "end": int, "type": "charge"|"export", "target_soc": float}.
         If target is unachievable, returns the best possible schedule without error.
         """
-        raise NotImplementedError
+        scored = self.score_slots()
+        if not scored:
+            return []
+
+        slot_hours = SLOT_MINUTES / 60.0
+        arb_capacity_kwh = self.battery_capacity_kwh * (self.arbitrage_reserve_percent / 100.0)
+        soc_kwh = self.battery_capacity_kwh * (self.battery_soc_percent / 100.0)
+        # Headroom within the arbitrage-reserved portion of the battery.
+        # The arb portion is the top N% of capacity ring-fenced for grid arbitrage.
+        non_arb_kwh = self.battery_capacity_kwh - arb_capacity_kwh
+        soc_in_arb_portion = max(0.0, soc_kwh - non_arb_kwh)
+        available_charge_kwh = max(0.0, arb_capacity_kwh - soc_in_arb_portion)
+
+        committed_minutes: set = set()
+        schedule: list = []
+        accumulated_profit = 0.0
+
+        for pair in scored:
+            if accumulated_profit >= self.profit_target_daily:
+                break
+
+            charge_min = pair["charge_minute"]
+            export_min = pair["export_minute"]
+            charge_kwh = min(pair["charge_kwh"], available_charge_kwh)
+            if charge_kwh <= 0:
+                continue
+
+            charge_range = set(range(charge_min, charge_min + SLOT_MINUTES))
+            export_range = set(range(export_min, export_min + SLOT_MINUTES))
+            if charge_range & committed_minutes or export_range & committed_minutes:
+                continue
+
+            discharge_kwh = charge_kwh * self.battery_efficiency
+            import_cost = (self.rate_import[charge_min] / 100.0) * charge_kwh
+            export_revenue = (self.rate_export[export_min] / 100.0) * discharge_kwh
+            net_profit = export_revenue - import_cost
+
+            soc_after_charge = min(
+                100.0,
+                ((soc_kwh + charge_kwh) / self.battery_capacity_kwh) * 100.0,
+            )
+            soc_after_discharge = max(
+                0.0,
+                soc_after_charge - (discharge_kwh / self.battery_capacity_kwh) * 100.0,
+            )
+
+            schedule.append({
+                "start": charge_min,
+                "end": charge_min + SLOT_MINUTES,
+                "type": "charge",
+                "target_soc": round(soc_after_charge, 1),
+                "paired_export_minute": export_min,
+            })
+            schedule.append({
+                "start": export_min,
+                "end": export_min + SLOT_MINUTES,
+                "type": "export",
+                "target_soc": round(soc_after_discharge, 1),
+                "paired_charge_minute": charge_min,
+            })
+
+            committed_minutes |= charge_range
+            committed_minutes |= export_range
+            accumulated_profit += net_profit
+            available_charge_kwh -= charge_kwh
+
+        schedule.sort(key=lambda x: x["start"])
+        return schedule
 
     def plan_constraints(self) -> list[dict]:
         """Return slot constraints ready for injection into plan.py.
