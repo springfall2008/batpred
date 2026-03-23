@@ -373,6 +373,7 @@ class OctopusAPI(ComponentBase):
         self.automatic = automatic
         self.commands = []
         self.mpan = None
+        self.free_electricity_events = []
 
         # API request metrics for monitoring
         self.requests_total = 0
@@ -454,7 +455,7 @@ class OctopusAPI(ComponentBase):
             # 10-minute update for intelligent device
             await self.async_update_intelligent_devices(self.account_id)
             await self.fetch_tariffs(self.tariffs)
-            self.saving_sessions = await self.async_get_saving_sessions(self.account_id)
+            self.saving_sessions = await self.async_get_flexibility_events(self.account_id)
             self.get_saving_session_data()
 
         if first or refresh or (count_minutes % 2) == 0:
@@ -1044,6 +1045,99 @@ class OctopusAPI(ComponentBase):
                 if savingSessions["account"] is None:
                     savingSessions["account"] = {}
             return savingSessions
+
+    async def async_get_flexibility_events(self, account_id):
+        """
+        Get flexibility campaign events (saving sessions + free electricity)
+        using the new customerFlexibilityCampaignEvents API.
+        Falls back to legacy savingSessions query if MPAN is not available.
+        """
+        if not self.mpan:
+            self.log("OctopusAPI: No MPAN available, falling back to legacy saving sessions query")
+            return await self.async_get_saving_sessions(account_id)
+
+        # Query saving sessions
+        saving_events = []
+        response_data = await self.async_graphql_query(flexibility_campaign_query.format(account_id=account_id, mpan=self.mpan, campaign_slug="saving_sessions"), "get-flexibility-saving-sessions", ignore_errors=True)
+        if response_data is not None:
+            campaign_data = response_data.get("customerFlexibilityCampaignEvents", {})
+            if campaign_data:
+                total = campaign_data.get("totalCount", 0)
+                if total > 50:
+                    self.log("Warn: OctopusAPI: Saving sessions has {} events, only fetching first 50".format(total))
+                edges = campaign_data.get("edges", [])
+                for edge in edges:
+                    node = edge.get("node", {})
+                    if node:
+                        saving_events.append(
+                            {
+                                "code": node.get("code"),
+                                "startAt": node.get("startAt"),
+                                "endAt": node.get("endAt"),
+                            }
+                        )
+                self.log("OctopusAPI: Found {} saving session events via flexibility API".format(len(saving_events)))
+
+        # Query free electricity sessions
+        free_events = []
+        response_data = await self.async_graphql_query(flexibility_campaign_query.format(account_id=account_id, mpan=self.mpan, campaign_slug="free_electricity"), "get-flexibility-free-electricity", ignore_errors=True)
+        if response_data is not None:
+            campaign_data = response_data.get("customerFlexibilityCampaignEvents", {})
+            if campaign_data:
+                edges = campaign_data.get("edges", [])
+                for edge in edges:
+                    node = edge.get("node", {})
+                    if node:
+                        free_events.append(
+                            {
+                                "code": node.get("code"),
+                                "startAt": node.get("startAt"),
+                                "endAt": node.get("endAt"),
+                            }
+                        )
+                self.log("OctopusAPI: Found {} free electricity events via flexibility API".format(len(free_events)))
+
+        # Filter to events within 3 days of now
+        now = self.now_utc
+        filtered_saving = []
+        for event in saving_events:
+            start = event.get("startAt")
+            if start:
+                try:
+                    start_dt = parse_date_time(start)
+                    if abs((start_dt - now).days) <= 3:
+                        filtered_saving.append(event)
+                except (ValueError, TypeError):
+                    pass
+
+        filtered_free = []
+        for event in free_events:
+            start = event.get("startAt")
+            if start:
+                try:
+                    start_dt = parse_date_time(start)
+                    if abs((start_dt - now).days) <= 3:
+                        filtered_free.append(event)
+                except (ValueError, TypeError):
+                    pass
+
+        # Store free electricity events for use by fetch_octopus_sessions
+        self.free_electricity_events = filtered_free
+
+        # Map to existing internal format
+        # New API doesn't distinguish available vs joined — treat all as joined
+        result = {"events": [], "account": {"hasJoinedCampaign": len(filtered_saving) > 0, "joinedEvents": []}}  # No "available" events (no separate list in new API)
+        for event in filtered_saving:
+            result["account"]["joinedEvents"].append(
+                {
+                    "eventId": event.get("code"),
+                    "startAt": event.get("startAt"),
+                    "endAt": event.get("endAt"),
+                    "rewardGivenInOctoPoints": None,
+                }
+            )
+
+        return result
 
     async def async_get_day_night_rates(self, url):
         """
