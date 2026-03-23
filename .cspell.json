@@ -14,6 +14,8 @@
     "ignorePaths": [
         "**/*.json",
         "**/*.yaml",
+        "**/*_pb2.py",
+        "**/*.proto",
         ".gitignore",
       ],
     "import": [

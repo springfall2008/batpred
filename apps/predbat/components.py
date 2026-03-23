@@ -33,6 +33,14 @@ from db_manager import DatabaseManager
 from fox import FoxAPI
 from kraken import KrakenAPI
 from web_mcp import PredbatMCPServer
+
+try:
+    from gateway import GatewayMQTT
+
+    HAS_GATEWAY = True
+except (ImportError, Exception):
+    HAS_GATEWAY = False
+    GatewayMQTT = None
 from load_ml_component import LoadMLComponent
 from datetime import datetime, timezone, timedelta
 import asyncio
@@ -360,6 +368,21 @@ COMPONENT_LIST = {
         "can_restart": True,
     },
 }
+
+if HAS_GATEWAY:
+    COMPONENT_LIST["gateway"] = {
+        "class": GatewayMQTT,
+        "name": "PredBat Gateway",
+        "event_filter": "predbat_gateway_",
+        "args": {
+            "gateway_device_id": {"required": True, "config": "gateway_device_id"},
+            "mqtt_host": {"required": True, "config": "gateway_mqtt_host"},
+            "mqtt_port": {"required": False, "config": "gateway_mqtt_port", "default": 8883},
+            "mqtt_token": {"required": True, "config": "gateway_mqtt_token"},
+        },
+        "phase": 1,
+        "can_restart": True,
+    }
 
 
 class Components:

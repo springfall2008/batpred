@@ -6,6 +6,7 @@ afci
 AIO
 AIO's
 aiohttp
+aiomqtt
 Alertfeed
 allclose
 Anson
@@ -136,6 +137,7 @@ givtcp
 gridconsumption
 gridconsumptionpower
 growatt
+GWMQTT
 HACS
 hadashboard
 hahistory
@@ -171,6 +173,7 @@ ivtime
 jedlix
 jsyaml
 kaiming
+keepalive
 killall
 kopt
 Kostal
@@ -252,6 +255,7 @@ onmouseover
 openweathermap
 overfitting
 ownerapi
+pbgw
 pdata
 pdetails
 perc

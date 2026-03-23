@@ -1,0 +1,157 @@
+syntax = "proto3";
+package predbat;
+
+// Gateway Status Protocol Buffer Schema
+//
+// Schema version: 1
+// This is the canonical contract for ESP32 gateway → cloud MQTT status payloads.
+// Proto3 zero-value omission means unpopulated future fields cost nothing on the wire.
+
+// Mirrors InverterType enum in types.h (values must match 1:1 for safe casting)
+enum InverterType {
+  INVERTER_TYPE_UNKNOWN         = 0;
+  INVERTER_TYPE_SOLIS_HYBRID    = 1;
+  INVERTER_TYPE_SOLIS_AC        = 2;
+  INVERTER_TYPE_SOFAR_G3        = 3;
+  INVERTER_TYPE_GROWATT_SPH     = 4;
+  INVERTER_TYPE_DEYE_SUNSYNK    = 5;
+  INVERTER_TYPE_GIVENERGY       = 6;
+  INVERTER_TYPE_GIVENERGY_EMS   = 7;
+  INVERTER_TYPE_CUSTOM          = 8;
+}
+
+message BatteryStatus {
+  uint32 soc_percent     = 1;  // 0-100
+  float  voltage_v       = 2;
+  float  current_a       = 3;  // positive = charging
+  int32  power_w         = 4;  // positive = charging
+  float  temperature_c   = 5;
+  // Future: SunSpec 802-inspired fields (populated when available)
+  uint32 soh_percent     = 6;  // state of health, 0 = not available
+  uint32 cycle_count     = 7;
+  int32  capacity_wh     = 8;  // rated capacity
+  uint32 rate_max_w      = 9;  // max charge/discharge rate in W
+  uint32 depth_of_discharge_pct = 10;  // usable % 0-100 (e.g. 95 = 0.95); 0 = unknown (use 95)
+}
+
+message PvStatus {
+  int32 power_w = 1;
+}
+
+message GridStatus {
+  int32 power_w      = 1;  // positive = importing from grid
+  // Future: grid quality fields
+  float voltage_v    = 2;  // 0 = not available
+  float frequency_hz = 3;
+}
+
+message LoadStatus {
+  int32 power_w = 1;  // house consumption
+}
+
+message InverterData {
+  int32 active_power_w  = 1;
+  float temperature_c   = 2;
+}
+
+message ControlStatus {
+  uint32 mode               = 1;  // OperatingMode enum (0=auto,1=charge,2=discharge,3=idle)
+  bool   charge_enabled     = 2;
+  bool   discharge_enabled  = 3;
+  uint32 charge_rate_w      = 4;
+  uint32 discharge_rate_w   = 5;
+  uint32 reserve_soc        = 6;  // min SOC %
+  uint32 target_soc         = 7;  // charge target SOC %
+  uint32 force_power_w      = 8;
+  uint32 command_expires    = 9;  // unix timestamp
+}
+
+message ScheduleStatus {
+  uint32 charge_start     = 1;  // HHMM format
+  uint32 charge_end       = 2;
+  uint32 discharge_start  = 3;
+  uint32 discharge_end    = 4;
+}
+
+message EmsSubInverter {
+  uint32 soc       = 1;
+  int32  battery_w = 2;
+  int32  pv_w      = 3;
+  int32  grid_w    = 4;
+  float  temp_c    = 5;
+}
+
+message EmsStatus {
+  uint32 num_inverters      = 1;
+  uint32 total_soc          = 2;
+  int32  total_charge_w     = 3;
+  int32  total_discharge_w  = 4;
+  int32  total_grid_w       = 5;
+  int32  total_pv_w         = 6;
+  int32  total_load_w       = 7;
+  repeated EmsSubInverter sub_inverters = 8;
+}
+
+// Daily energy counters (Wh, reset at midnight, populated from extended poll tier)
+message EnergyCounters {
+  uint32 pv_today_wh              = 1;
+  uint32 grid_import_today_wh     = 2;
+  uint32 grid_export_today_wh     = 3;
+  uint32 battery_charge_today_wh  = 4;
+  uint32 battery_discharge_today_wh = 5;
+  uint32 consumption_today_wh     = 6;
+}
+
+message InverterEntry {
+  InverterType   type      = 1;
+  string         serial    = 2;
+  string         ip        = 3;
+  bool           connected = 4;
+  bool           active    = 5;
+  BatteryStatus  battery   = 6;
+  PvStatus       pv        = 7;
+  GridStatus     grid      = 8;
+  LoadStatus     load      = 9;
+  InverterData   inverter  = 10;
+  ControlStatus  control   = 11;
+  ScheduleStatus schedule  = 12;
+  EmsStatus      ems       = 13;
+  EnergyCounters energy    = 14;  // daily energy counters (populated from extended poll tier)
+  bool           managed   = 15;  // true = accepts commands, false = poll-only
+}
+
+message GatewayStatus {
+  string   device_id      = 1;
+  uint32   dongle_count   = 2;
+  string   firmware       = 3;
+  uint32   timestamp      = 4;  // unix timestamp
+  uint32   schema_version = 5;  // currently 1
+  repeated InverterEntry inverters = 6;
+  uint32   uptime_seconds   = 7;   // millis() / 1000
+  int32    wifi_rssi_dbm    = 8;   // WiFi.RSSI(), 0 if not connected
+  uint32   free_heap_bytes  = 9;   // ESP.getFreeHeap()
+  uint32   log_level        = 10;  // current setting: 0=NONE..4=DEBUG
+}
+
+// Execution plan sent from PredBat cloud to gateway
+// Published to predbat/devices/{id}/schedule as protobuf
+
+message PlanEntry {
+  bool   enabled       = 1;
+  uint32 start_hour    = 2;  // 0-23 (local time, per timezone field)
+  uint32 start_minute  = 3;  // 0-59
+  uint32 end_hour      = 4;  // 0-23
+  uint32 end_minute    = 5;  // 0-59
+  uint32 mode          = 6;  // OperatingMode: 0=auto, 1=charge, 2=discharge, 3=idle
+  uint32 power_w       = 7;  // target power
+  uint32 target_soc    = 8;  // target SOC for charge, min SOC for discharge
+  uint32 days_of_week  = 9;  // bitmask: bit 0 = Sunday, bit 6 = Saturday
+  bool   use_native    = 10; // true = write to inverter schedule registers
+}
+
+message ExecutionPlan {
+  uint32 timestamp        = 1;  // when plan was generated (unix epoch)
+  uint32 plan_version     = 2;  // monotonic, gateway skips stale plans
+  string timezone         = 3;  // IANA timezone (e.g. "Europe/London")
+  repeated PlanEntry entries = 4;
+}
