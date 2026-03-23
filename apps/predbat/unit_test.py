@@ -43,6 +43,7 @@ from tests.test_single_debug import run_single_debug
 from tests.test_saving_session import test_saving_session, test_saving_session_null_octopoints, test_saving_session_notify_config
 from tests.test_secrets import run_secrets_tests
 from tests.test_ge_cloud import test_ge_cloud
+from tests.test_gateway import run_gateway_tests
 from tests.test_axle import test_axle
 from tests.test_db_manager import test_db_manager
 from tests.test_hahistory import run_hahistory_tests
@@ -264,6 +265,7 @@ def main():
         ("oauth_mixin", run_oauth_mixin_tests, "OAuth mixin tests (token refresh, expiry, 401 handling, env var fallback)", False),
         ("fox_oauth", run_fox_oauth_tests, "Fox API OAuth tests (dual auth headers, 401 retry, initialize params)", False),
         ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", False),
+        ("gateway", run_gateway_tests, "GatewayMQTT component tests (protobuf, plan serialization, commands, telemetry)", False),
         ("optimise_windows", run_optimise_all_windows_tests, "Optimise all windows tests", True),
         ("debug_cases", run_debug_cases, "Debug case file tests", True),
     ]
