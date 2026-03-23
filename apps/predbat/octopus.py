@@ -830,7 +830,7 @@ class OctopusAPI(ComponentBase):
         if event_code:
             # Join the saving sessions
             self.log("OctopusAPI: Joining saving session event {}".format(event_code))
-            await self.async_graphql_query(octoplus_saving_session_join_mutation.format(account_id=account_id, event_code=event_code), "join-saving-session-event", returns_data=False, use_backend=True)
+            await self.async_graphql_query(octoplus_saving_session_join_mutation.format(account_id=account_id, event_code=event_code), "join-saving-session-event", returns_data=False)
             # Re-fetch the saving sessions if we have joined any
             self.saving_sessions = await self.async_get_saving_sessions(account_id)
 
@@ -1093,7 +1093,7 @@ class OctopusAPI(ComponentBase):
 
         # Query saving sessions
         saving_events = []
-        response_data = await self.async_graphql_query(flexibility_campaign_query.format(account_id=account_id, mpan=self.mpan, campaign_slug="octoplus-saving-sessions"), "get-flexibility-saving-sessions", ignore_errors=True, use_backend=True)
+        response_data = await self.async_graphql_query(flexibility_campaign_query.format(account_id=account_id, mpan=self.mpan, campaign_slug="octoplus-saving-sessions"), "get-flexibility-saving-sessions", ignore_errors=True)
         if response_data is not None:
             campaign_data = response_data.get("customerFlexibilityCampaignEvents", {})
             if campaign_data:
@@ -1115,7 +1115,7 @@ class OctopusAPI(ComponentBase):
 
         # Query free electricity sessions
         free_events = []
-        response_data = await self.async_graphql_query(flexibility_campaign_query.format(account_id=account_id, mpan=self.mpan, campaign_slug="free_electricity"), "get-flexibility-free-electricity", ignore_errors=True, use_backend=True)
+        response_data = await self.async_graphql_query(flexibility_campaign_query.format(account_id=account_id, mpan=self.mpan, campaign_slug="free_electricity"), "get-flexibility-free-electricity", ignore_errors=True)
         if response_data is not None:
             campaign_data = response_data.get("customerFlexibilityCampaignEvents", {})
             if campaign_data:
