@@ -255,6 +255,10 @@ COMPONENT_LIST = {
                 "required": False,
                 "config": "kraken_token_expires_at",
             },
+            "token_hash": {
+                "required": False,
+                "config": "kraken_token_hash",
+            },
         },
         "phase": 1,
     },
