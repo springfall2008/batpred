@@ -972,6 +972,85 @@ class Plan:
         # Creation prediction object
         self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10)
 
+        # Arbitrage: inject pre-committed charge/export constraints when enabled
+        if self.get_arg("arbitrage_enable", False):
+            from arbitrage import ArbitrageEngine
+
+            # charge_rate_now is in kWh/min — multiply by 60 to get kW
+            _soc_max = self.soc_max
+            _soc_kw = self.soc_kw
+            _soc_percent = (_soc_kw / _soc_max * 100.0) if _soc_max > 0 else 0.0
+
+            # Round-trip efficiency: charge loss × discharge loss × inverter loss
+            _round_trip_eff = (
+                (1.0 - self.battery_loss)
+                * (1.0 - self.battery_loss_discharge)
+                * (1.0 - getattr(self, "inverter_loss", 0.0))
+            )
+
+            _arb = ArbitrageEngine(
+                rate_import=self.rate_import,
+                rate_export=self.rate_export,
+                solar_forecast=getattr(self, "pv_forecast_minute_step", {}),
+                load_forecast=getattr(self, "load_minutes_step", {}),
+                battery_soc_percent=_soc_percent,
+                battery_capacity_kwh=_soc_max,
+                charge_rate_kw=self.charge_rate_now * 60,        # convert kWh/min → kW
+                discharge_rate_kw=self.discharge_rate_now * 60,  # convert kWh/min → kW
+                battery_efficiency=_round_trip_eff,
+                profit_target_daily=self.get_arg("arbitrage_profit_target_daily", 1.0),
+                arbitrage_reserve_percent=self.get_arg("arbitrage_reserve", 20.0),
+                minutes_now=self.minutes_now,
+            )
+            _arb_constraints = _arb.plan_constraints()
+
+            self.arbitrage_projected_gain = _arb.projected_gain()
+            self.arbitrage_opportunity_score = _arb.opportunity_score()
+            self.arbitrage_active = any(
+                c["constraint_type"] == "export"
+                and c["start"] <= self.minutes_now < c["end"]
+                for c in _arb_constraints
+            )
+
+            # Inject constraint window starts into manual_all_times so the optimiser
+            # treats these slots as fixed (not eligible for merging or removal)
+            for c in _arb_constraints:
+                self.manual_all_times.append(c["start"])
+
+            # Weekly gain persistence: retrieve last 7 days of projected gain from HA
+            # and sum to give a rolling weekly total
+            _weekly_gain = self.arbitrage_projected_gain
+            try:
+                _gain_history = self.get_history_wrapper(
+                    entity_id=self.prefix + ".arbitrage_projected_gain",
+                    days=7,
+                    required=False,
+                )
+                if _gain_history and isinstance(_gain_history, list) and len(_gain_history) > 0:
+                    _seen_dates = set()
+                    _weekly_gain = 0.0
+                    for record in _gain_history[0]:
+                        try:
+                            _ts = record.get("last_updated", "")
+                            _date = str(_ts)[:10]  # YYYY-MM-DD
+                            if _date not in _seen_dates:
+                                _seen_dates.add(_date)
+                                _val = float(record.get("state", 0.0))
+                                _weekly_gain += _val
+                        except (ValueError, TypeError, AttributeError):
+                            pass
+                    if not _seen_dates:
+                        _weekly_gain = self.arbitrage_projected_gain
+            except Exception:
+                _weekly_gain = self.arbitrage_projected_gain
+
+            self.arbitrage_weekly_gain = _weekly_gain
+        else:
+            self.arbitrage_projected_gain = 0.0
+            self.arbitrage_opportunity_score = 0
+            self.arbitrage_active = False
+            self.arbitrage_weekly_gain = 0.0
+
         # Check if LoadML is active and disable thread pools as it causes lockup due to race conditions with NumPy
         load_ml_comp = self.components.get_component("load_ml") if self.components else None
         load_ml_calculating = False
