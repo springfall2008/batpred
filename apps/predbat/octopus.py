@@ -281,7 +281,7 @@ flexibility_campaign_query = """query {{
     accountNumber: "{account_id}"
     supplyPointIdentifier: "{mpan}"
     campaignSlug: "{campaign_slug}"
-    first: 50
+    last: 50
   ) {{
     edges {{
       node {{
@@ -1023,15 +1023,27 @@ class OctopusAPI(ComponentBase):
 
         # Publish free electricity events from flexibility API
         free_electric_events = []
-        if hasattr(self, "free_electricity_events"):
-            for event in self.free_electricity_events:
-                start = event.get("startAt")
-                end = event.get("endAt")
-                code = event.get("code")
-                if start and end:
-                    free_electric_events.append({"start": start, "end": end, "code": code, "rate": 0})
+        for event in self.free_electricity_events:
+            start = event.get("startAt")
+            end = event.get("endAt")
+            code = event.get("code")
+            if start and end:
+                free_electric_events.append({"start": start, "end": end, "code": code, "rate": 0})
         free_attributes = {"friendly_name": "Octopus Free Electricity Sessions", "icon": "mdi:flash", "events": free_electric_events}
-        self.dashboard_item(self.get_entity_name("sensor", "free_electricity"), "on" if free_electric_events else "off", attributes=free_attributes, app="octopus")
+        active_free_event = False
+        for event in free_electric_events:
+            start = event.get("start")
+            end = event.get("end")
+            if start and end:
+                try:
+                    start_dt = parse_date_time(start)
+                    end_dt = parse_date_time(end)
+                    if start_dt <= self.now_utc_exact and end_dt > self.now_utc_exact:
+                        active_free_event = True
+                        break
+                except (ValueError, TypeError):
+                    pass
+        self.dashboard_item(self.get_entity_name("sensor", "free_electricity"), "on" if active_free_event else "off", attributes=free_attributes, app="octopus")
 
         return return_available_events, return_joined_events
 
@@ -1097,9 +1109,6 @@ class OctopusAPI(ComponentBase):
         if response_data is not None:
             campaign_data = response_data.get("customerFlexibilityCampaignEvents", {})
             if campaign_data:
-                total = campaign_data.get("totalCount", 0)
-                if total > 50:
-                    self.log("Warn: OctopusAPI: Saving sessions has {} events, only fetching first 50".format(total))
                 edges = campaign_data.get("edges", [])
                 for edge in edges:
                     node = edge.get("node", {})
@@ -1132,44 +1141,20 @@ class OctopusAPI(ComponentBase):
                         )
                 self.log("OctopusAPI: Found {} free electricity events via flexibility API".format(len(free_events)))
 
-        # Filter to events within 3 days of now
-        now = self.now_utc
-        filtered_saving = []
-        for event in saving_events:
-            start = event.get("startAt")
-            if start:
-                try:
-                    start_dt = parse_date_time(start)
-                    if abs((start_dt - now).days) <= 3:
-                        filtered_saving.append(event)
-                except (ValueError, TypeError):
-                    pass
-
-        filtered_free = []
-        for event in free_events:
-            start = event.get("startAt")
-            if start:
-                try:
-                    start_dt = parse_date_time(start)
-                    if abs((start_dt - now).days) <= 3:
-                        filtered_free.append(event)
-                except (ValueError, TypeError):
-                    pass
-
         # Store free electricity events for use by fetch_octopus_sessions
-        self.free_electricity_events = filtered_free
+        self.free_electricity_events = free_events
 
         # If no saving session events from new API, fall back to legacy query
         # The new flexibility API may not have events populated yet for all accounts
-        if not filtered_saving:
+        if not saving_events:
             self.log("OctopusAPI: No saving session events from flexibility API, falling back to legacy query")
             legacy_result = await self.async_get_saving_sessions(account_id)
             return legacy_result
 
         # Map to existing internal format
         # New API doesn't distinguish available vs joined — treat all as joined
-        result = {"events": [], "account": {"hasJoinedCampaign": len(filtered_saving) > 0, "joinedEvents": []}}  # No "available" events (no separate list in new API)
-        for event in filtered_saving:
+        result = {"events": [], "account": {"hasJoinedCampaign": len(saving_events) > 0, "joinedEvents": []}}  # No "available" events (no separate list in new API)
+        for event in saving_events:
             result["account"]["joinedEvents"].append(
                 {
                     "eventId": event.get("code"),
