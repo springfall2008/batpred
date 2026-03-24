@@ -1590,7 +1590,7 @@ class OctopusAPI(ComponentBase):
                     return None
         except TimeoutError:
             self.failures_total += 1
-            self.log(f"Warn: OctopusAPI: Failed to connect. Timeout of {self.timeout} exceeded.")
+            self.log(f"Warn: OctopusAPI: Failed to connect, timeout exceeded.")
             record_api_call("octopus", False, "connection_error")
 
         return None
