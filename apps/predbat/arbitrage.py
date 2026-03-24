@@ -177,19 +177,81 @@ class ArbitrageEngine:
         schedule.sort(key=lambda x: x["start"])
         return schedule
 
-    def plan_constraints(self) -> list[dict]:
+    def _slot_pairs_raw(self) -> list:
+        """Raw slot pairs with true monetary profit (no confidence discount).
+
+        Used for monetary reporting only — not for scheduling decisions.
+        """
+        pairs = []
+        slot_hours = SLOT_MINUTES / 60.0
+        future_slots = [
+            m for m in range(self.minutes_now, 1440, SLOT_MINUTES)
+            if m in self.rate_import
+        ]
+        for charge_minute in future_slots:
+            charge_kwh = self.charge_rate_kw * slot_hours
+            import_cost = (self.rate_import[charge_minute] / 100.0) * charge_kwh
+            for export_minute in future_slots:
+                if export_minute <= charge_minute:
+                    continue
+                if export_minute not in self.rate_export:
+                    continue
+                discharge_kwh = charge_kwh * self.battery_efficiency
+                export_revenue = (self.rate_export[export_minute] / 100.0) * discharge_kwh
+                raw_profit = export_revenue - import_cost
+                if raw_profit > 0:
+                    pairs.append({
+                        "charge_minute": charge_minute,
+                        "export_minute": export_minute,
+                        "raw_profit_gbp": round(raw_profit, 4),
+                    })
+        return pairs
+
+    def projected_gain(self) -> float:
+        """Return projected arbitrage profit for today in £ (true monetary value).
+
+        Uses the 'paired_export_minute' field written by schedule_to_target() to
+        correctly identify which export slot was paired with each charge slot.
+        """
+        schedule = self.schedule_to_target()
+        raw_pairs = self._slot_pairs_raw()
+        raw_lookup = {(p["charge_minute"], p["export_minute"]): p["raw_profit_gbp"] for p in raw_pairs}
+
+        total = 0.0
+        for slot in schedule:
+            if slot["type"] == "charge":
+                key = (slot["start"], slot["paired_export_minute"])
+                total += raw_lookup.get(key, 0.0)
+        return round(total, 2)
+
+    def opportunity_score(self) -> int:
+        """Return 0-100 score representing current arbitrage opportunity quality.
+
+        Returns 0 if profit_target_daily is 0 (avoid division by zero).
+        """
+        if self.profit_target_daily <= 0:
+            return 0
+        gain = self.projected_gain()
+        return min(100, int((gain / self.profit_target_daily) * 100))
+
+    def plan_constraints(self) -> list:
         """Return slot constraints ready for injection into plan.py.
 
         Format matches charge_window/export_window entries used by plan.py:
         {"start": minute, "end": minute, "average": rate_p_per_kwh,
          "min": 0, "max": target_soc, "constraint_type": "charge"|"export"}
         """
-        raise NotImplementedError
-
-    def projected_gain(self) -> float:
-        """Return projected arbitrage profit for today in £."""
-        raise NotImplementedError
-
-    def opportunity_score(self) -> int:
-        """Return 0-100 score representing current arbitrage opportunity quality."""
-        raise NotImplementedError
+        schedule = self.schedule_to_target()
+        constraints = []
+        for slot in schedule:
+            rate_dict = self.rate_import if slot["type"] == "charge" else self.rate_export
+            average_rate = float(rate_dict.get(slot["start"], 0.0))
+            constraints.append({
+                "start": slot["start"],
+                "end": slot["end"],
+                "average": average_rate,
+                "min": 0,
+                "max": slot["target_soc"],
+                "constraint_type": slot["type"],
+            })
+        return constraints

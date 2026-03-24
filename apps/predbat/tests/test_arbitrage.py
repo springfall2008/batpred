@@ -224,6 +224,166 @@ def _test_schedule_meets_target(my_predbat=None):
     return False
 
 
+# ---------------------------------------------------------------------------
+# Error handling tests
+# ---------------------------------------------------------------------------
+
+def _test_error_empty_rate_import(my_predbat=None):
+    result = _make_engine(rate_import={}).schedule_to_target()
+    if result != []:
+        print(f"ERROR: Expected [] with empty rate_import, got {result}")
+        return True
+    return False
+
+
+def _test_error_empty_rate_export(my_predbat=None):
+    result = _make_engine(rate_export={}).schedule_to_target()
+    if result != []:
+        print(f"ERROR: Expected [] with empty rate_export, got {result}")
+        return True
+    return False
+
+
+def _test_error_partial_rates_no_exception(my_predbat=None):
+    """Missing slots in rate dicts are skipped without error."""
+    try:
+        eng = _make_engine(rate_import={0: 3.0}, rate_export={60: 40.0}, profit_target_daily=0.01)
+        result = eng.schedule_to_target()
+        if not isinstance(result, list):
+            print("ERROR: Expected list result")
+            return True
+    except Exception as e:
+        print(f"ERROR: Unexpected exception with partial rates: {e}")
+        return True
+    return False
+
+
+def _test_error_unachievable_target_no_exception(my_predbat=None):
+    """Unachievable target returns best-effort schedule without raising."""
+    rate_import = {i: 14.9 for i in range(0, 1440)}
+    rate_export = {i: 15.1 for i in range(0, 1440)}
+    try:
+        result = _make_engine(rate_import=rate_import, rate_export=rate_export,
+                              profit_target_daily=1000.0).schedule_to_target()
+        if not isinstance(result, list):
+            print("ERROR: Expected list")
+            return True
+    except Exception as e:
+        print(f"ERROR: Unexpected exception: {e}")
+        return True
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Metrics tests
+# ---------------------------------------------------------------------------
+
+def _test_metrics_projected_gain_zero_no_spread(my_predbat=None):
+    gain = _make_engine().projected_gain()
+    if gain != 0.0:
+        print(f"ERROR: Expected 0.0, got {gain}")
+        return True
+    return False
+
+
+def _test_metrics_projected_gain_positive_with_spread(my_predbat=None):
+    rate_import = {i: 3.0 for i in range(0, 1440)}
+    rate_export = {i: 40.0 for i in range(0, 1440)}
+    gain = _make_engine(rate_import=rate_import, rate_export=rate_export).projected_gain()
+    if gain <= 0:
+        print(f"ERROR: Expected positive gain, got {gain}")
+        return True
+    return False
+
+
+def _test_metrics_opportunity_score_zero_no_spread(my_predbat=None):
+    score = _make_engine().opportunity_score()
+    if score != 0:
+        print(f"ERROR: Expected 0, got {score}")
+        return True
+    return False
+
+
+def _test_metrics_opportunity_score_bounded(my_predbat=None):
+    rate_import = {i: 0.1 for i in range(0, 1440)}
+    rate_export = {i: 100.0 for i in range(0, 1440)}
+    score = _make_engine(rate_import=rate_import, rate_export=rate_export).opportunity_score()
+    if not (0 <= score <= 100):
+        print(f"ERROR: Score {score} out of range 0-100")
+        return True
+    return False
+
+
+# ---------------------------------------------------------------------------
+# plan_constraints() tests
+# ---------------------------------------------------------------------------
+
+def _test_constraints_returns_list(my_predbat=None):
+    result = _make_engine().plan_constraints()
+    if not isinstance(result, list):
+        print(f"ERROR: Expected list, got {type(result)}")
+        return True
+    return False
+
+
+def _test_constraints_empty_no_spread(my_predbat=None):
+    if _make_engine().plan_constraints() != []:
+        print("ERROR: Expected [] with no spread")
+        return True
+    return False
+
+
+def _test_constraints_structure(my_predbat=None):
+    rate_import = {i: 3.0 for i in range(0, 1440)}
+    rate_export = {i: 40.0 for i in range(0, 1440)}
+    eng = _make_engine(rate_import=rate_import, rate_export=rate_export, profit_target_daily=0.01)
+    constraints = eng.plan_constraints()
+    if not constraints:
+        print("ERROR: Expected at least one constraint")
+        return True
+    failed = False
+    for c in constraints:
+        for key in ("start", "end", "average", "min", "max", "constraint_type"):
+            if key not in c:
+                print(f"ERROR: Missing key '{key}' in constraint {c}")
+                failed = True
+        if c.get("constraint_type") not in ("charge", "export"):
+            print(f"ERROR: Invalid constraint_type: {c.get('constraint_type')}")
+            failed = True
+        if c.get("end", 0) <= c.get("start", 0):
+            print(f"ERROR: end <= start in {c}")
+            failed = True
+    return failed
+
+
+def _test_constraints_charge_uses_import_rate(my_predbat=None):
+    rate_import = {i: 7.0 for i in range(0, 1440)}
+    rate_export = {i: 40.0 for i in range(0, 1440)}
+    eng = _make_engine(rate_import=rate_import, rate_export=rate_export, profit_target_daily=0.01)
+    charge_cs = [c for c in eng.plan_constraints() if c["constraint_type"] == "charge"]
+    if not charge_cs:
+        print("ERROR: No charge constraints found")
+        return True
+    if charge_cs[0]["average"] != 7.0:
+        print(f"ERROR: Charge constraint average should be 7.0, got {charge_cs[0]['average']}")
+        return True
+    return False
+
+
+def _test_constraints_export_uses_export_rate(my_predbat=None):
+    rate_import = {i: 3.0 for i in range(0, 1440)}
+    rate_export = {i: 40.0 for i in range(0, 1440)}
+    eng = _make_engine(rate_import=rate_import, rate_export=rate_export, profit_target_daily=0.01)
+    export_cs = [c for c in eng.plan_constraints() if c["constraint_type"] == "export"]
+    if not export_cs:
+        print("ERROR: No export constraints found")
+        return True
+    if export_cs[0]["average"] != 40.0:
+        print(f"ERROR: Export constraint average should be 40.0, got {export_cs[0]['average']}")
+        return True
+    return False
+
+
 def test_arbitrage(my_predbat=None):
     """Main arbitrage test runner. Returns True if any test failed."""
     sub_tests = [
@@ -239,6 +399,22 @@ def test_arbitrage(my_predbat=None):
         ("schedule_to_target: no overlaps", _test_schedule_no_overlaps),
         ("schedule_to_target: sorted chronologically", _test_schedule_sorted_chronologically),
         ("schedule_to_target: meets profit target", _test_schedule_meets_target),
+        # Error handling
+        ("error: empty rate_import returns empty", _test_error_empty_rate_import),
+        ("error: empty rate_export returns empty", _test_error_empty_rate_export),
+        ("error: partial rates no exception", _test_error_partial_rates_no_exception),
+        ("error: unachievable target no exception", _test_error_unachievable_target_no_exception),
+        # Metrics
+        ("metrics: projected_gain zero with no spread", _test_metrics_projected_gain_zero_no_spread),
+        ("metrics: projected_gain positive with spread", _test_metrics_projected_gain_positive_with_spread),
+        ("metrics: opportunity_score zero with no spread", _test_metrics_opportunity_score_zero_no_spread),
+        ("metrics: opportunity_score bounded 0-100", _test_metrics_opportunity_score_bounded),
+        # plan_constraints
+        ("plan_constraints: returns list", _test_constraints_returns_list),
+        ("plan_constraints: empty with no spread", _test_constraints_empty_no_spread),
+        ("plan_constraints: structure correct", _test_constraints_structure),
+        ("plan_constraints: charge uses import rate", _test_constraints_charge_uses_import_rate),
+        ("plan_constraints: export uses export rate", _test_constraints_export_uses_export_rate),
     ]
     failed = 0
     for name, fn in sub_tests:
