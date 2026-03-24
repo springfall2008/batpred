@@ -1018,6 +1018,20 @@ class Plan:
                 for c in _arb_constraints:
                     self.manual_all_times.append(c["start"])
 
+                # Create actual charge/export windows so the optimiser can schedule them
+                for c in _arb_constraints:
+                    window = {
+                        "start": c["start"],
+                        "end": c["end"],
+                        "average": c["average"],
+                    }
+                    if c["constraint_type"] == "charge":
+                        self.charge_window_best.append(window)
+                        self.charge_limit_best.append(c["max"])
+                    else:
+                        self.export_window_best.append(window)
+                        self.export_limits_best.append(c["max"])
+
                 self.log(
                     "Arbitrage: projected gain £{:.2f}, score {}, {} constraints injected".format(
                         self.arbitrage_projected_gain, self.arbitrage_opportunity_score, len(_arb_constraints)

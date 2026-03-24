@@ -63,7 +63,7 @@ class ArbitrageEngine:
         scored = []
         slot_hours = SLOT_MINUTES / 60.0
         future_slots = [
-            m for m in range(self.minutes_now, 1440, SLOT_MINUTES)
+            m for m in range(self.minutes_now, self.minutes_now + 1440, SLOT_MINUTES)
             if m in self.rate_import
         ]
 
@@ -185,7 +185,7 @@ class ArbitrageEngine:
         pairs = []
         slot_hours = SLOT_MINUTES / 60.0
         future_slots = [
-            m for m in range(self.minutes_now, 1440, SLOT_MINUTES)
+            m for m in range(self.minutes_now, self.minutes_now + 1440, SLOT_MINUTES)
             if m in self.rate_import
         ]
         for charge_minute in future_slots:
