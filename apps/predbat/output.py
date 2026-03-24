@@ -3194,6 +3194,29 @@ class Output:
         if self.rate_gas:
             self.publish_rates(self.rate_gas, False, gas=True)
 
+        # Arbitrage entities — only published when arbitrage is enabled
+        if self.get_arg("arbitrage_enable", False):
+            self.dashboard_item(
+                "sensor." + self.prefix + "_arbitrage_projected_gain",
+                state=str(round(getattr(self, "arbitrage_projected_gain", 0.0), 2)),
+                attributes={"friendly_name": "Predbat arbitrage projected gain", "unit_of_measurement": self.currency_symbols[1], "icon": "mdi:currency-usd", "state_class": "measurement"},
+            )
+            self.dashboard_item(
+                "sensor." + self.prefix + "_arbitrage_opportunity_score",
+                state=str(getattr(self, "arbitrage_opportunity_score", 0)),
+                attributes={"friendly_name": "Predbat arbitrage opportunity score", "icon": "mdi:chart-line", "state_class": "measurement"},
+            )
+            self.dashboard_item(
+                "sensor." + self.prefix + "_arbitrage_weekly_gain",
+                state=str(round(getattr(self, "arbitrage_weekly_gain", 0.0), 2)),
+                attributes={"friendly_name": "Predbat arbitrage weekly gain", "unit_of_measurement": self.currency_symbols[1], "icon": "mdi:currency-usd", "state_class": "total"},
+            )
+            self.dashboard_item(
+                "binary_sensor." + self.prefix + "_arbitrage_active",
+                state="on" if getattr(self, "arbitrage_active", False) else "off",
+                attributes={"friendly_name": "Predbat arbitrage active", "icon": "mdi:chart-line"},
+            )
+
     def log_option_best(self):
         """
         Log options
