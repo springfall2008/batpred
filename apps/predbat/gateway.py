@@ -527,14 +527,22 @@ class GatewayMQTT(ComponentBase):
             return
 
         status = self._last_status
-        inverters = status.inverters
+        all_inverters = status.inverters
 
-        if not inverters:
+        if not all_inverters:
             self.log("Error: GatewayMQTT: no inverters in gateway status")
             return
 
+        # Filter to primary inverters only — firmware marks which inverters PredBat
+        # should use to avoid double-counting redundant data paths.
+        any_primary = any(getattr(inv, "primary", False) for inv in all_inverters)
+        if any_primary:
+            inverters = [inv for inv in all_inverters if getattr(inv, "primary", False)]
+        else:
+            inverters = list(all_inverters)  # old firmware fallback
+
         num_inverters = len(inverters)
-        self.log(f"Info: GatewayMQTT: auto-config: {num_inverters} inverter(s)")
+        self.log(f"Info: GatewayMQTT: auto-config: {num_inverters} primary inverter(s) of {len(all_inverters)} total")
 
         # Set inverter type
         self.set_arg("inverter_type", ["GWMQTT"] * num_inverters)
