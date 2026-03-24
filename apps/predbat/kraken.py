@@ -266,7 +266,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
 
     def get_entity_name(self, root, suffix):
         """Construct entity name. Same pattern as OctopusAPI.get_entity_name."""
-        entity_name = root + ".predbat_kraken_" + self.account_id.replace("-", "_") + "_" + suffix
+        entity_name = root + "." + self.prefix + "_kraken_" + self.account_id.replace("-", "_") + "_" + suffix
         return entity_name.lower()
 
     async def async_fetch_standing_charges(self):
@@ -307,8 +307,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         - First run + every 10 min: fetch rates + standing charges from REST
         - First run: wire into fetch.py via set_arg
         """
-        now = datetime.now()
-        count_minutes = now.minute + now.hour * 60
+        count_minutes = seconds // 60
         had_success = False
 
         # Tariff discovery — first run + every 30 minutes

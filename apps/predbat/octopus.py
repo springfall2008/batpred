@@ -933,9 +933,9 @@ class OctopusAPI(ComponentBase):
         Get the entity name
         """
         if index:
-            entity_name = root + ".predbat_octopus_" + self.account_id.replace("-", "_") + "_" + suffix + "_" + index
+            entity_name = root + "." + self.prefix + "_octopus_" + self.account_id.replace("-", "_") + "_" + suffix + "_" + index
         else:
-            entity_name = root + ".predbat_octopus_" + self.account_id.replace("-", "_") + "_" + suffix
+            entity_name = root + "." + self.prefix + "_octopus_" + self.account_id.replace("-", "_") + "_" + suffix
         entity_name = entity_name.lower()
         return entity_name
 
