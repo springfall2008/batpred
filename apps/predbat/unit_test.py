@@ -103,6 +103,7 @@ from tests.test_temperature import test_temperature
 from tests.test_oauth_mixin import run_oauth_mixin_tests
 from tests.test_fox_oauth import run_fox_oauth_tests
 from tests.test_band_rate_text import test_band_rate_text
+from tests.test_rate_store import run_rate_store_tests
 
 
 # Mock the components and plugin system
@@ -267,6 +268,8 @@ def main():
         ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", False),
         ("optimise_windows", run_optimise_all_windows_tests, "Optimise all windows tests", True),
         ("debug_cases", run_debug_cases, "Debug case file tests", True),
+        # Rate Store unit tests
+        ("rate_store", run_rate_store_tests, "Rate Store persistence and finalization tests (write, rehydrate, finalize, priority, cleanup)", False),
     ]
 
     # Parse command line arguments

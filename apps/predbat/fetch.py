@@ -915,10 +915,30 @@ class Fetch:
         futurerate = FutureRate(self)
         self.future_energy_rates_import, self.future_energy_rates_export = futurerate.futurerate_analysis(self.rate_import, self.rate_export)
 
+        # Load stored rates for past minutes (frozen historical rates)
+        if self.rate_store:
+            today = datetime.now()
+            stored_import, stored_export = self.rate_store.load_rates(today)
+
+            if stored_import or stored_export:
+                # Merge frozen past rates into current rate tables
+                for minute in range(0, self.minutes_now):
+                    if stored_import and minute in stored_import:
+                        self.rate_import[minute] = stored_import[minute]
+                    if stored_export and minute in stored_export:
+                        self.rate_export[minute] = stored_export[minute]
+
+                self.log(
+                    "Loaded {} frozen import rates and {} frozen export rates from storage".format(
+                        len([m for m in stored_import.keys() if m < self.minutes_now]) if stored_import else 0, len([m for m in stored_export.keys() if m < self.minutes_now]) if stored_export else 0
+                    )
+                )
+
         # Replicate and scan import rates
         if self.rate_import:
             self.rate_scan(self.rate_import, print=False)
             self.rate_import, self.rate_import_replicated = self.rate_replicate(self.rate_import, self.io_adjusted, is_import=True)
+
             self.rate_import_no_io = self.rate_import.copy()
             for car_n in range(self.num_cars):
                 self.rate_import = self.rate_add_io_slots(car_n, self.rate_import, self.octopus_slots[car_n])
@@ -937,6 +957,7 @@ class Fetch:
         if self.rate_export:
             self.rate_scan_export(self.rate_export, print=False)
             self.rate_export, self.rate_export_replicated = self.rate_replicate(self.rate_export, is_import=False)
+
             # For export tariff only load the saving session if enabled
             if self.rate_export_max > 0:
                 self.load_saving_slot(self.octopus_saving_slots, export=True, rate_replicate=self.rate_export_replicated)
@@ -951,6 +972,11 @@ class Fetch:
         # Set rate thresholds
         if self.rate_import or self.rate_export:
             self.set_rate_thresholds()
+
+        # Save final computed rate tables to persistent storage (with frozen past slots)
+        if self.rate_store:
+            today = datetime.now()
+            self.rate_store.save_rates(today, self.rate_import, self.rate_export, self.minutes_now)
 
         # Find discharging windows
         if self.rate_export:
@@ -1516,6 +1542,14 @@ class Fetch:
                 continue
             rates[minute] = rate
             rate_replicate[minute] = "manual"
+
+            # Track manual override in rate store
+            if self.rate_store:
+                today = datetime.now()
+                if is_import:
+                    self.rate_store.update_manual_override(today, minute, rate, None)
+                else:
+                    self.rate_store.update_manual_override(today, minute, None, rate)
 
         return rates
 
