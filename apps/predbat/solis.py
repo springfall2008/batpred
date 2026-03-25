@@ -362,7 +362,14 @@ class SolisAPI(ComponentBase):
                 raise SolisAPIError(f"Read CID {cid} failed: missing 'data' field")
             if "msg" not in data:
                 raise SolisAPIError(f"Read CID {cid} failed: missing 'msg' field")
-            return data["msg"]
+
+            value = data["msg"]
+
+            if inverter_sn not in self.cached_values:
+                self.cached_values[inverter_sn] = {}
+            self.cached_values[inverter_sn][cid] = str(value)
+
+            return value
 
         return await self._with_retry(read_operation)
 
@@ -894,8 +901,7 @@ class SolisAPI(ComponentBase):
     async def read_and_write_cid(self, inverter_sn, cid, value, field_description=None):
         """Read CID value then write with verification (required by Solis API).
         Automatically reads current value, writes with old_value verification,
-        Retries if value doesn't update.
-        Updates cache on success, and logs appropriate messages.
+        Updates cache on success (via read_cid function), and logs appropriate messages.
 
         Args:
             inverter_sn: Inverter serial number
