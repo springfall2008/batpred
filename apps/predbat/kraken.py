@@ -262,6 +262,8 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         2. Check the import account's meter points for an export tariff
         3. Fall back to address-based matching across all accounts (viewer query)
         """
+        previous_export = self.export_tariff
+
         # Strategy 1: Configured export account (E.ON split accounts)
         if self.export_account_id and self.export_account_id != self.account_id:
             query = KRAKEN_ACCOUNT_QUERY.format(account_number=self.export_account_id)
@@ -279,8 +281,15 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                         self.export_mpan = export_result["mpan"]
                         self.log(f"Kraken: Export tariff {'discovered' if old is None else 'changed'} on account {self.export_account_id} — {export_result['tariff_code']}")
                     return
+                # Query succeeded but no active export tariff found — clear stale
+                if self.export_tariff:
+                    self.log(f"Warn: Kraken: Export tariff no longer active on account {self.export_account_id}")
+                    self.export_tariff = None
+            # Network failure on configured export account — don't fall through to Strategy 2
+            # (would incorrectly match an export on the import account)
+            return
 
-        # Strategy 2: Check import account's meter points
+        # Strategy 2: Check import account's meter points (only when no dedicated export account)
         export_result = self._find_active_tariff(import_meter_points, preferred_mpan=self.export_mpan, is_export=True)
         if export_result:
             new_export = {"tariff_code": export_result["tariff_code"], "product_code": export_result["product_code"]}
@@ -291,8 +300,8 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                 self.log(f"Kraken: Export tariff {'discovered' if old is None else 'changed'} on same account — {export_result['tariff_code']}")
             return
 
-        # Strategy 3: Address-based matching (only if no export found yet and no configured export account)
-        if not self.export_tariff and not self.export_account_id and import_address:
+        # Strategy 3: Address-based matching (only on first discovery — no existing export)
+        if not self.export_tariff and import_address:
             all_accounts = await self.async_discover_all_accounts()
             for acct in all_accounts:
                 if acct["account_number"] == self.account_id:
@@ -304,6 +313,11 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                     self.export_account_id = acct["account_number"]
                     self.log(f"Kraken: Export tariff discovered on account {acct['account_number']} (address match) — {et['tariff_code']}")
                     return
+
+        # No strategy found an export tariff — clear stale if previously set
+        if self.export_tariff:
+            self.log("Warn: Kraken: Export tariff no longer discoverable, clearing")
+            self.export_tariff = None
 
     async def async_discover_all_accounts(self):
         """Discover all account numbers via viewer query, then find import+export tariffs.
@@ -478,7 +492,9 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
 
             results = data.get("results", [])
             if results:
-                return results[0].get("value_inc_vat")
+                # API returns pence/day; fetch.py multiplies by 100 expecting pounds/day
+                value = results[0].get("value_inc_vat")
+                return value / 100.0 if value is not None else None
             return None
 
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
@@ -540,7 +556,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                     state=standing_charge,
                     attributes={
                         "friendly_name": "Kraken Standing Charge",
-                        "unit_of_measurement": "p/day",
+                        "unit_of_measurement": "£/day",
                         "tariff_code": self.current_tariff["tariff_code"],
                         "icon": "mdi:currency-gbp",
                     },

@@ -416,6 +416,72 @@ def test_find_active_tariff_prefers_configured_mpan():
     assert result["tariff_code"] == "E-1R-VAR-01-B"
 
 
+def test_standing_charge_converts_pence_to_pounds():
+    """async_fetch_standing_charges divides by 100 (API returns pence, fetch.py expects pounds)."""
+    api = make_kraken_api()
+    api.current_tariff = {"tariff_code": "E-1R-VAR-01", "product_code": "VAR-01"}
+
+    standing_response = {
+        "results": [{"value_inc_vat": 53.0, "valid_from": "2026-01-01T00:00:00Z"}],
+    }
+
+    mock_response = AsyncMock()
+    mock_response.status = 200
+    mock_response.json = AsyncMock(return_value=standing_response)
+
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_response),
+            __aexit__=AsyncMock(return_value=None),
+        )
+    )
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(api.async_fetch_standing_charges())
+
+    # 53.0 pence → 0.53 pounds
+    assert result == 0.53
+
+
+def test_export_discovery_clears_stale_when_not_found():
+    """Export tariff is cleared if all strategies fail (prevents stale rates)."""
+    api = make_kraken_api()
+    api.export_tariff = {"tariff_code": "E-1R-OLD-EXPORT", "product_code": "OLD-EXPORT"}
+
+    # No export meter points on import account, no configured export account
+    meter_points = [
+        {
+            "mpan": "1900000000456",
+            "agreements": [{"validFrom": "2026-01-01T00:00:00+00:00", "validTo": None, "tariff": {"productCode": "VAR-01", "tariffCode": "E-1R-VAR-01-J", "displayName": "Import Only"}}],
+        },
+    ]
+    asyncio.run(api._discover_export_tariff(meter_points, "1 test street"))
+    assert api.export_tariff is None
+
+
+def test_export_discovery_strategy1_no_fallthrough_on_network_failure():
+    """When export_account_id is configured, Strategy 1 network failure does NOT fall through to Strategy 2."""
+    api = make_kraken_api(export_account_id="A-EXPORT456")
+    api.export_tariff = {"tariff_code": "E-1R-OLD-EXPORT", "product_code": "OLD-EXPORT"}
+
+    # Strategy 1 will fail (graphql returns None)
+    api.async_graphql_query = AsyncMock(return_value=None)
+
+    # Import account has an export tariff — Strategy 2 SHOULD NOT pick it up
+    import_meter_points = [
+        {
+            "mpan": "2000000000789",
+            "agreements": [{"validFrom": "2026-01-01T00:00:00+00:00", "validTo": None, "tariff": {"productCode": "EXPORT-IMP", "tariffCode": "E-1R-EXPORT-IMP-01-J", "displayName": "Wrong Export"}}],
+        },
+    ]
+    asyncio.run(api._discover_export_tariff(import_meter_points, "1 test street"))
+    # Should NOT have picked up the import account's export tariff
+    assert api.export_tariff == {"tariff_code": "E-1R-OLD-EXPORT", "product_code": "OLD-EXPORT"}
+
+
 def run_kraken_tests(my_predbat=None):
     """Run all KrakenAPI tests. Returns True on failure, False on success."""
     tests = [
@@ -440,6 +506,9 @@ def run_kraken_tests(my_predbat=None):
         test_run_fetches_rates_on_10min_cycle,
         test_run_wires_export_when_discovered,
         test_find_active_tariff_prefers_configured_mpan,
+        test_standing_charge_converts_pence_to_pounds,
+        test_export_discovery_clears_stale_when_not_found,
+        test_export_discovery_strategy1_no_fallthrough_on_network_failure,
     ]
     for test_func in tests:
         try:
