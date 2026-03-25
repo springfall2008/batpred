@@ -923,7 +923,7 @@ class SolisAPI(ComponentBase):
                 self.log(f"Warn: Solis API: Failed to write CID {cid} {field_description} on {inverter_sn}")
                 return False
 
-            if old_value == value:
+            if str(old_value) == str(value):
                 self.log(f"Solis API: CID {cid} {field_description} on {inverter_sn} is set to {value}")
                 return True
             else:
