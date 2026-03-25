@@ -1086,8 +1086,9 @@ class SolisAPI(ComponentBase):
         #self.set_arg("soc_max", [f"sensor.{self.prefix}_solis_{device}_battery_capacity" for device in devices])
 
         # Reserve and limits
+        # Reserve isn't writable (so we don't use it for SolisCloud) instead we use it as the min SOC
         self.set_arg("reserve", [f"number.{self.prefix}_solis_{device}_reserve_soc" for device in devices])
-        self.set_arg("battery_min_soc", [f"number.{self.prefix}_solis_{device}_over_discharge_soc" for device in devices])
+        self.set_arg("battery_min_soc", [f"number.{self.prefix}_solis_{device}_reserve_soc" for device in devices])
 
         # Charge/discharge controls - using slot 1 for Predbat primary control
         self.set_arg("charge_start_time", [f"select.{self.prefix}_solis_{device}_charge_slot1_start_time" for device in devices])
@@ -1852,7 +1853,7 @@ class SolisAPI(ComponentBase):
             reserve_on = (storage_mode_int & (1 << SOLIS_BIT_BACKUP_MODE)) != 0 if storage_mode_int is not None else None
             self.dashboard_item(
                 entity_id,
-                state="1" if reserve_on else "0" if reserve_on is not None else None,
+                state="on" if reserve_on else "off" if reserve_on is not None else None,
                 attributes={
                     "friendly_name": f"Solis {inverter_name} Battery Reserve",
                     "icon": "mdi:battery-heart-outline",
@@ -1865,7 +1866,7 @@ class SolisAPI(ComponentBase):
             grid_charging_on = (storage_mode_int & (1 << SOLIS_BIT_GRID_CHARGING)) != 0 if storage_mode_int is not None else None
             self.dashboard_item(
                 entity_id,
-                state="1" if grid_charging_on else "0" if grid_charging_on is not None else None,
+                state="on" if grid_charging_on else "off" if grid_charging_on is not None else None,
                 attributes={
                     "friendly_name": f"Solis {inverter_name} Allow Grid Charging",
                     "icon": "mdi:battery-charging-outline",
@@ -1878,7 +1879,7 @@ class SolisAPI(ComponentBase):
             tou_on = (storage_mode_int & (1 << SOLIS_BIT_TOU_MODE)) != 0 if storage_mode_int is not None else None
             self.dashboard_item(
                 entity_id,
-                state="1" if tou_on else "0" if tou_on is not None else None,
+                state="on" if tou_on else "off" if tou_on is not None else None,
                 attributes={
                     "friendly_name": f"Solis {inverter_name} Time of Use Mode",
                     "icon": "mdi:clock-check-outline",
@@ -1892,7 +1893,7 @@ class SolisAPI(ComponentBase):
             allow_export_on = (allow_export_value == SOLIS_ALLOW_EXPORT_ON) if allow_export_value is not None else None
             self.dashboard_item(
                 entity_id,
-                state="1" if allow_export_on else "0" if allow_export_on is not None else None,
+                state="on" if allow_export_on else "off" if allow_export_on is not None else None,
                 attributes={
                     "friendly_name": f"Solis {inverter_name} Allow Export",
                     "icon": "mdi:transmission-tower-export",
@@ -2907,6 +2908,8 @@ async def test_solis_api(key_id, secret):  # pragma: no cover
     # Call run() once
     print("Calling run() once...")
     await solis_api.run(seconds=0, first=True)
+    #for device_sn, values in solis_api.cached_values.items():
+    #    await solis_api.read_and_write_cid(device_sn, SOLIS_CID_BATTERY_RESERVE_SOC, "12", field_description="Test write reserve SOC to 12%")
     print("Run completed successfully")
 
     await solis_api.final()
