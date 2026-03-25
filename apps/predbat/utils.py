@@ -769,6 +769,10 @@ def time_string_to_stamp(time_string):
     if isinstance(time_string, str) and len(time_string) == 5:
         time_string += ":00"
 
+    # Some inverters (e.g. GivEnergy) use "24:00:00" for midnight end-of-day
+    if isinstance(time_string, str) and time_string.startswith("24:"):
+        time_string = "00:" + time_string[3:]
+
     return datetime.strptime(time_string, "%H:%M:%S")
 
 
