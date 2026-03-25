@@ -2440,7 +2440,7 @@ async def test_number_event_max_power():
     assert len(api.read_and_write_cid_calls) == 1, "Should call read_and_write_cid once"
     call = api.read_and_write_cid_calls[0]
     assert call["cid"] == SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT, f"Expected CID {SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT}, got {call['cid']}"
-    expected_amps = str(round(float(4840) / 48.4, 1))  # = "100.0"
+    expected_amps = round(float(4840) / 48.4, 1)  # = "100.0"
     assert call["value"] == expected_amps, f"Expected '{expected_amps}', got {call['value']}"
 
     print("PASSED: Max power number event handled correctly")

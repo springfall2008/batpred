@@ -609,7 +609,7 @@ class SolisAPI(ComponentBase):
                         new_current = min(new_current, max_current)
                         cached_current = float(self.cached_values.get(inverter_sn, {}).get(current_cid, max_current))
                         if round(cached_current, 1) != round(new_current, 1):
-                            result = await self.read_and_write_cid(inverter_sn, current_cid, str(new_current), field_description=f"charge slot {slot} current")
+                            result = await self.read_and_write_cid(inverter_sn, current_cid, new_current, field_description=f"charge slot {slot} current")
                             success &= result
 
                     # Check and write discharge enable if changed
@@ -647,7 +647,7 @@ class SolisAPI(ComponentBase):
                         new_current = min(new_current, max_current)
                         cached_current = float(self.cached_values.get(inverter_sn, {}).get(current_cid, 0))
                         if round(cached_current, 1) != round(new_current, 1):
-                            result = await self.read_and_write_cid(inverter_sn, current_cid, str(new_current), field_description=f"discharge slot {slot} current")
+                            result = await self.read_and_write_cid(inverter_sn, current_cid, new_current, field_description=f"discharge slot {slot} current")
                             success &= result
 
                 # Decide if Solar charges the batter or exports
@@ -926,7 +926,7 @@ class SolisAPI(ComponentBase):
             # Read current value first (required by Solis API)
             # Write with old_value verification
             old_value, info = await self.read_cid(inverter_sn, cid)
-            result = await self.write_cid(inverter_sn, cid, value, old_value=old_value, field_description=field_description)
+            result = await self.write_cid(inverter_sn, cid, str(value), old_value=old_value, field_description=field_description)
 
             # Validate what we wrote so the cache is correct.
             old_value, info = await self.read_cid(inverter_sn, cid)
@@ -934,7 +934,7 @@ class SolisAPI(ComponentBase):
                 self.log(f"Warn: Solis API: Failed to write CID {cid} {field_description} on {inverter_sn}")
                 return False
 
-            if isinstance(old_value, (int, float)):
+            if isinstance(value, (int, float)):
                 try:
                     if float(old_value) == float(value):
                         self.log(f"Solis API: CID {cid} {field_description} on {inverter_sn} is set to {value}")
@@ -1003,6 +1003,7 @@ class SolisAPI(ComponentBase):
             # Update cache on success
             if inverter_sn not in self.cached_values:
                 self.cached_values[inverter_sn] = {}
+                self.cached_infos[inverter_sn] = {}
             self.cached_values[inverter_sn][cid] = str(value)
 
             # Log success
@@ -2420,10 +2421,9 @@ class SolisAPI(ComponentBase):
 
                 # Convert watts to amps for inverter
                 amps = round(float(value) / self.nominal_voltage, 1)
-                amps_str = str(amps)
 
                 # Write to inverter
-                await self.read_and_write_cid(inverter_sn, cid, amps_str, field_description=f"{field} to {value_str}W ({amps}A)")
+                await self.read_and_write_cid(inverter_sn, cid, amps, field_description=f"{field} to {value_str}W ({amps}A)")
 
                 # Re-calculate max currents after change
                 self._calculate_max_currents(inverter_sn)
