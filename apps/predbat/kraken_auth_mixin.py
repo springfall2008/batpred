@@ -8,11 +8,15 @@ GraphQL mutation: obtainKrakenToken(input: ObtainJSONWebTokenInput!)
   - API key mode: input = { APIKey: "..." }
   - Email mode:   input = { email: "...", password: "..." }
   - Refresh:      input = { refreshToken: "..." }
-All return: { token, refreshToken, payload { exp } }
+All return: { token, refreshToken, payload }
+
+Note: On EDF/E.ON, `payload` is a GenericScalar (JSON object, not a GraphQL
+type with subfields). Must be requested bare and parsed as JSON.
 """
 
 import aiohttp
 import asyncio
+import json
 from datetime import datetime, timezone, timedelta
 
 
@@ -89,11 +93,13 @@ class KrakenAuthMixin:
 
         Returns a dict with token, refreshToken, exp on success, or None on failure.
         """
+        # EDF/E.ON return `payload` as a GenericScalar — request it bare (no subfields).
+        # The scalar is a JSON object with { exp, origIat, sub, ... }.
         mutation = """mutation obtainKrakenToken($input: ObtainJSONWebTokenInput!) {
             obtainKrakenToken(input: $input) {
                 token
                 refreshToken
-                payload { exp }
+                payload
             }
         }"""
         url = f"{self.base_url}/v1/graphql/"
@@ -119,7 +125,14 @@ class KrakenAuthMixin:
             return None
 
         refresh_token = token_data.get("refreshToken")
+        # payload is a GenericScalar — may be a JSON string or already-parsed dict
         payload = token_data.get("payload") or {}
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except (json.JSONDecodeError, TypeError):
+                payload = {}
+
         exp = payload.get("exp", 0)
         if not refresh_token or not exp:
             return None

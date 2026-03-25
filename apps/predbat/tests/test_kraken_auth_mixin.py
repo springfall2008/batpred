@@ -10,7 +10,7 @@
 
 import asyncio
 import time
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime, timezone, timedelta
 
 import sys
@@ -18,15 +18,19 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 
-def make_token_response(token="jwt-token-123", refresh="refresh-token-456", exp_offset=3600):
+def make_token_response(token="jwt-token-123", refresh="refresh-token-456", exp_offset=3600, payload_as_string=False):
     """Build a mock obtainKrakenToken GraphQL response."""
     exp = int(time.time()) + exp_offset
+    payload = {"exp": exp}
+    if payload_as_string:
+        import json
+        payload = json.dumps(payload)
     return {
         "data": {
             "obtainKrakenToken": {
                 "token": token,
                 "refreshToken": refresh,
-                "payload": {"exp": exp},
+                "payload": payload,
             }
         }
     }
@@ -179,6 +183,94 @@ def test_oauth_failed_short_circuits():
     mixin._kraken_token_request.assert_not_called()
 
 
+def test_token_request_parses_scalar_payload_dict():
+    """_kraken_token_request handles payload as already-parsed dict (GenericScalar)."""
+    mixin = make_mixin(auth_method="api_key", key="test")
+    response_data = make_token_response(payload_as_string=False)
+
+    mock_resp = AsyncMock()
+    mock_resp.status = 200
+    mock_resp.json = AsyncMock(return_value=response_data)
+
+    mock_session = AsyncMock()
+    mock_session.post = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_resp),
+            __aexit__=AsyncMock(return_value=None),
+        )
+    )
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(mixin._kraken_token_request({"APIKey": "test"}))
+
+    assert result is not None
+    assert result["token"] == "jwt-token-123"
+    assert result["refreshToken"] == "refresh-token-456"
+    assert result["exp"] > 0
+
+
+def test_token_request_parses_scalar_payload_string():
+    """_kraken_token_request handles payload as JSON string (GenericScalar variant)."""
+    mixin = make_mixin(auth_method="api_key", key="test")
+    response_data = make_token_response(payload_as_string=True)
+
+    mock_resp = AsyncMock()
+    mock_resp.status = 200
+    mock_resp.json = AsyncMock(return_value=response_data)
+
+    mock_session = AsyncMock()
+    mock_session.post = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_resp),
+            __aexit__=AsyncMock(return_value=None),
+        )
+    )
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(mixin._kraken_token_request({"APIKey": "test"}))
+
+    assert result is not None
+    assert result["token"] == "jwt-token-123"
+    assert result["exp"] > 0
+
+
+def test_token_request_mutation_has_no_payload_subfields():
+    """Verify the GraphQL mutation requests 'payload' bare (no subfields like { exp })."""
+    mixin = make_mixin(auth_method="api_key", key="test")
+    response_data = make_token_response()
+
+    mock_resp = AsyncMock()
+    mock_resp.status = 200
+    mock_resp.json = AsyncMock(return_value=response_data)
+
+    captured_body = {}
+
+    def capture_post(*args, **kwargs):
+        captured_body.update(kwargs.get("json", {}))
+        ctx = AsyncMock()
+        ctx.__aenter__ = AsyncMock(return_value=mock_resp)
+        ctx.__aexit__ = AsyncMock(return_value=None)
+        return ctx
+
+    mock_session = AsyncMock()
+    mock_session.post = MagicMock(side_effect=capture_post)
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        asyncio.run(mixin._kraken_token_request({"APIKey": "test"}))
+
+    query = captured_body.get("query", "")
+    # "payload" must appear without subfields (not "payload { exp }" or "payload {")
+    assert "payload" in query
+    assert "payload {" not in query
+    assert "payload{" not in query
+
+
 def run_kraken_auth_mixin_tests(my_predbat=None):
     """Run all KrakenAuthMixin tests. Returns True on failure, False on success."""
     tests = [
@@ -192,6 +284,9 @@ def run_kraken_auth_mixin_tests(my_predbat=None):
         test_total_auth_failure_sets_oauth_failed,
         test_handle_oauth_401_clears_and_reobtains,
         test_oauth_failed_short_circuits,
+        test_token_request_parses_scalar_payload_dict,
+        test_token_request_parses_scalar_payload_string,
+        test_token_request_mutation_has_no_payload_subfields,
     ]
     for test_func in tests:
         try:

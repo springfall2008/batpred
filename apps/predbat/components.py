@@ -259,6 +259,18 @@ COMPONENT_LIST = {
                 "required": False,
                 "config": "kraken_token_hash",
             },
+            "mpan": {
+                "required": False,
+                "config": "kraken_mpan",
+            },
+            "export_account_id": {
+                "required": False,
+                "config": "kraken_export_account_id",
+            },
+            "export_mpan": {
+                "required": False,
+                "config": "kraken_export_mpan",
+            },
         },
         "phase": 1,
     },

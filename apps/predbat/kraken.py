@@ -5,6 +5,12 @@ from provider base URL + tariff code, fetches rates from public REST API.
 
 Auth strategy: SaaS uses OAuthMixin (edge function refresh), OSS uses
 KrakenAuthMixin (local API key / email+password → JWT).
+
+GraphQL schema notes (validated against live EDF/E.ON APIs):
+  - EDF/E.ON use `electricityMeterPoints` (NOT `electricitySupplyPoints`)
+  - `account(accountNumber: ...)` requires explicit account number
+  - `viewer { accounts { number } }` discovers all account numbers
+  - E.ON may split import/export into separate accounts matched by address
 """
 
 import aiohttp
@@ -44,30 +50,34 @@ except ImportError:
         _AUTH_BASE = _NoAuth
 
 
-# Validated EDF/E.ON Kraken query — uses electricitySupplyPoints (NOT Octopus's
-# electricityAgreements/meterPoint schema). Matches _shared/kraken-graphql.ts.
-# No accountNumber arg needed — JWT scopes to authenticated account.
-KRAKEN_ACCOUNT_QUERY = """{
-  account {
+# EDF/E.ON Kraken GraphQL query — uses electricityMeterPoints (NOT Octopus's
+# electricitySupplyPoints). Requires explicit accountNumber arg; the JWT does
+# NOT scope to a single account. Address is queried for export tariff matching.
+KRAKEN_ACCOUNT_QUERY = """{{
+  account(accountNumber: "{account_number}") {{
     number
-    properties {
-      electricitySupplyPoints {
+    properties {{
+      address
+      electricityMeterPoints {{
         mpan
-        agreements {
+        agreements {{
           validFrom
           validTo
-          tariff {
-            ... on StandardTariff { tariffCode displayName productCode }
-            ... on DayNightTariff { tariffCode displayName productCode }
-            ... on ThreeRateTariff { tariffCode displayName productCode }
-            ... on HalfHourlyTariff { tariffCode displayName productCode }
-            ... on PrepayTariff { tariffCode displayName productCode }
-          }
-        }
-      }
-    }
-  }
-}"""
+          tariff {{
+            ... on StandardTariff {{ tariffCode displayName productCode }}
+            ... on DayNightTariff {{ tariffCode displayName productCode }}
+            ... on ThreeRateTariff {{ tariffCode displayName productCode }}
+            ... on HalfHourlyTariff {{ tariffCode displayName productCode }}
+            ... on PrepayTariff {{ tariffCode displayName productCode }}
+          }}
+        }}
+      }}
+    }}
+  }}
+}}"""
+
+# Viewer query to discover all account numbers under the authenticated user
+KRAKEN_VIEWER_QUERY = """{ viewer { accounts { number } } }"""
 
 KRAKEN_BASE_URLS = {
     "edf": "https://api.edfgb-kraken.energy",
@@ -81,7 +91,20 @@ KRAKEN_AUTH_ERROR_CODES = ("KT-CT-1139", "KT-CT-1111", "KT-CT-1143")
 class KrakenAPI(ComponentBase, _AUTH_BASE):
     """Kraken GraphQL component for EDF/E.ON tariff discovery and rate fetching."""
 
-    def initialize(self, provider, account_id, key=None, email=None, password=None, auth_method="oauth", token_expires_at=None, token_hash=None):
+    def initialize(
+        self,
+        provider,
+        account_id,
+        key=None,
+        email=None,
+        password=None,
+        auth_method="oauth",
+        token_expires_at=None,
+        token_hash=None,
+        mpan=None,
+        export_account_id=None,
+        export_mpan=None,
+    ):
         """Initialise the Kraken API component with provider, account, and auth config."""
         self.provider = provider
         self.base_url = KRAKEN_BASE_URLS.get(provider)
@@ -90,11 +113,21 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             self.base_url = KRAKEN_BASE_URLS["edf"]
 
         self.account_id = account_id
+        self.configured_mpan = mpan  # From SaaS config — preferred MPAN to match
         self.current_tariff = None
+        self.export_tariff = None  # Export tariff (discovered dynamically)
         self.wired = False
+        self.export_wired = False
         self.requests_total = 0
         self.failures_total = 0
         self.oauth_failed = False
+
+        # Export account/MPAN from SaaS config (matched by address at onboarding time).
+        # Tariff is always discovered dynamically via GraphQL so changes are detected.
+        self.export_account_id = export_account_id
+        self.export_mpan = export_mpan
+        if export_account_id or export_mpan:
+            self.log(f"Kraken: Export account configured — {export_account_id or 'same account'} MPAN {export_mpan or 'auto'}")
 
         # Init auth — OAuthMixin or KrakenAuthMixin depending on import
         if hasattr(self, "_init_oauth") and hasattr(_AUTH_BASE, "_init_oauth") and not hasattr(_AUTH_BASE, "_init_kraken_auth"):
@@ -119,7 +152,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
 
         url = f"{self.base_url}/v1/graphql/"
         headers = {
-            "Authorization": f"JWT {token}",
+            "Authorization": token,
             "Content-Type": "application/json",
         }
 
@@ -162,62 +195,220 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             self.failures_total += 1
             return None
 
+    def _find_active_tariff(self, meter_points, preferred_mpan=None, is_export=False):
+        """Find the current active tariff from a list of meter points.
+
+        Args:
+            meter_points: List of electricityMeterPoints from GraphQL
+            preferred_mpan: If set, prefer this MPAN (from SaaS config)
+            is_export: If True, only match EXPORT tariff codes; if False, skip them
+
+        Returns:
+            dict with tariff_code, product_code, mpan or None
+        """
+        now = datetime.now(timezone.utc)
+
+        # Sort meter points to prefer configured MPAN
+        sorted_mps = sorted(meter_points, key=lambda mp: mp.get("mpan") != preferred_mpan)
+
+        for mp in sorted_mps:
+            mpan = mp.get("mpan", "")
+            agreements = mp.get("agreements", [])
+
+            for agr in agreements:
+                # Check validity window
+                valid_from = agr.get("validFrom")
+                if valid_from is not None:
+                    try:
+                        vf = datetime.fromisoformat(valid_from.replace("Z", "+00:00"))
+                        if now < vf:
+                            continue
+                    except (ValueError, AttributeError):
+                        pass
+
+                valid_to = agr.get("validTo")
+                if valid_to is not None:
+                    try:
+                        vt = datetime.fromisoformat(valid_to.replace("Z", "+00:00"))
+                        if vt < now:
+                            continue
+                    except (ValueError, AttributeError):
+                        pass
+
+                tariff = agr.get("tariff", {})
+                tariff_code = tariff.get("tariffCode")
+                product_code = tariff.get("productCode")
+
+                if not tariff_code or not product_code:
+                    continue
+
+                tariff_is_export = "EXPORT" in tariff_code.upper()
+                if is_export != tariff_is_export:
+                    continue
+
+                return {
+                    "tariff_code": tariff_code,
+                    "product_code": product_code,
+                    "mpan": mpan,
+                }
+
+        return None
+
+    async def _discover_export_tariff(self, import_meter_points, import_address):
+        """Discover or rediscover export tariff.
+
+        Three strategies, tried in order:
+        1. If export_account_id is configured and differs from import, query that account
+        2. Check the import account's meter points for an export tariff
+        3. Fall back to address-based matching across all accounts (viewer query)
+        """
+        # Strategy 1: Configured export account (E.ON split accounts)
+        if self.export_account_id and self.export_account_id != self.account_id:
+            query = KRAKEN_ACCOUNT_QUERY.format(account_number=self.export_account_id)
+            data = await self.async_graphql_query(query, f"export-tariff-{self.export_account_id}")
+            if data:
+                export_mps = []
+                for prop in data.get("account", {}).get("properties", []):
+                    export_mps.extend(prop.get("electricityMeterPoints", []))
+                export_result = self._find_active_tariff(export_mps, preferred_mpan=self.export_mpan, is_export=True)
+                if export_result:
+                    new_export = {"tariff_code": export_result["tariff_code"], "product_code": export_result["product_code"]}
+                    if self.export_tariff != new_export:
+                        old = self.export_tariff
+                        self.export_tariff = new_export
+                        self.export_mpan = export_result["mpan"]
+                        self.log(f"Kraken: Export tariff {'discovered' if old is None else 'changed'} on account {self.export_account_id} — {export_result['tariff_code']}")
+                    return
+
+        # Strategy 2: Check import account's meter points
+        export_result = self._find_active_tariff(import_meter_points, preferred_mpan=self.export_mpan, is_export=True)
+        if export_result:
+            new_export = {"tariff_code": export_result["tariff_code"], "product_code": export_result["product_code"]}
+            if self.export_tariff != new_export:
+                old = self.export_tariff
+                self.export_tariff = new_export
+                self.export_mpan = export_result["mpan"]
+                self.log(f"Kraken: Export tariff {'discovered' if old is None else 'changed'} on same account — {export_result['tariff_code']}")
+            return
+
+        # Strategy 3: Address-based matching (only if no export found yet and no configured export account)
+        if not self.export_tariff and not self.export_account_id and import_address:
+            all_accounts = await self.async_discover_all_accounts()
+            for acct in all_accounts:
+                if acct["account_number"] == self.account_id:
+                    continue
+                if acct["address"] == import_address and acct.get("export_tariff"):
+                    et = acct["export_tariff"]
+                    self.export_tariff = {"tariff_code": et["tariff_code"], "product_code": et["product_code"]}
+                    self.export_mpan = et["mpan"]
+                    self.export_account_id = acct["account_number"]
+                    self.log(f"Kraken: Export tariff discovered on account {acct['account_number']} (address match) — {et['tariff_code']}")
+                    return
+
+    async def async_discover_all_accounts(self):
+        """Discover all account numbers via viewer query, then find import+export tariffs.
+
+        Returns list of dicts with account_number, address, import_tariff, export_tariff.
+        """
+        data = await self.async_graphql_query(KRAKEN_VIEWER_QUERY, "discover-accounts")
+        if not data:
+            return []
+
+        account_numbers = data.get("viewer", {}).get("accounts", [])
+        if not account_numbers:
+            self.log("Warn: Kraken: No accounts found for this user")
+            return []
+
+        results = []
+        for acct in account_numbers:
+            acct_num = acct.get("number")
+            if not acct_num:
+                continue
+
+            query = KRAKEN_ACCOUNT_QUERY.format(account_number=acct_num)
+            acct_data = await self.async_graphql_query(query, f"account-{acct_num}")
+            if not acct_data:
+                continue
+
+            account = acct_data.get("account", {})
+            properties = account.get("properties", [])
+
+            for prop in properties:
+                meter_points = prop.get("electricityMeterPoints", [])
+                if not meter_points:
+                    continue
+
+                address_raw = prop.get("address", "")
+                if not isinstance(address_raw, str):
+                    address_raw = str(address_raw)
+
+                import_tariff = self._find_active_tariff(meter_points, is_export=False)
+                export_tariff = self._find_active_tariff(meter_points, is_export=True)
+
+                if import_tariff or export_tariff:
+                    results.append(
+                        {
+                            "account_number": account.get("number", acct_num),
+                            "address": address_raw.lower().strip(),
+                            "import_tariff": import_tariff,
+                            "export_tariff": export_tariff,
+                        }
+                    )
+
+        return results
+
     async def async_find_tariffs(self):
-        """Query account to discover current tariff. Returns tariff info if changed, None if same."""
-        data = await self.async_graphql_query(KRAKEN_ACCOUNT_QUERY, "find-tariffs")
+        """Query configured account to discover current import tariff.
+
+        Also discovers export tariff dynamically (E.ON splits import/export
+        into separate accounts — may need viewer query).
+
+        Returns import tariff info if changed, None if same.
+        """
+        # Query the configured account directly
+        query = KRAKEN_ACCOUNT_QUERY.format(account_number=self.account_id)
+        data = await self.async_graphql_query(query, "find-tariffs")
         if not data:
             return None
 
         account = data.get("account", {})
         properties = account.get("properties", [])
 
-        # Find first property with electricity supply points (same as kraken-graphql.ts)
+        # Collect all meter points across properties
+        all_meter_points = []
+        my_address = None
         for prop in properties:
-            supply_points = prop.get("electricitySupplyPoints", [])
-            for sp in supply_points:
-                agreements = sp.get("agreements", [])
+            mps = prop.get("electricityMeterPoints", [])
+            if mps:
+                all_meter_points.extend(mps)
+                if my_address is None:
+                    addr = prop.get("address", "")
+                    if isinstance(addr, str):
+                        my_address = addr.lower().strip()
 
-                # Find active agreement (validFrom <= now < validTo)
-                now = datetime.now(timezone.utc)
-                for agr in agreements:
-                    valid_from = agr.get("validFrom")
-                    if valid_from is not None:
-                        try:
-                            vf = datetime.fromisoformat(valid_from.replace("Z", "+00:00"))
-                            if now < vf:
-                                continue  # Future-dated agreement
-                        except (ValueError, AttributeError):
-                            pass  # Treat invalid validFrom as "started"
+        if not all_meter_points:
+            self.log("Warn: Kraken: No electricity meter points found")
+            return None
 
-                    valid_to = agr.get("validTo")
-                    if valid_to is not None:
-                        try:
-                            vt = datetime.fromisoformat(valid_to.replace("Z", "+00:00"))
-                            if vt < now:
-                                continue  # Expired agreement
-                        except (ValueError, AttributeError):
-                            pass  # Treat invalid validTo as "no expiry"
+        # Find import tariff (prefer configured MPAN)
+        import_result = self._find_active_tariff(all_meter_points, preferred_mpan=self.configured_mpan, is_export=False)
+        if not import_result:
+            self.log("Warn: Kraken: No active import tariff found")
+            return None
 
-                    tariff = agr.get("tariff", {})
-                    tariff_code = tariff.get("tariffCode")
-                    product_code = tariff.get("productCode")
+        new_tariff = {"tariff_code": import_result["tariff_code"], "product_code": import_result["product_code"]}
 
-                    if not tariff_code or not product_code:
-                        continue
+        # Discover export tariff — always re-discover to detect tariff changes
+        await self._discover_export_tariff(all_meter_points, my_address)
 
-                    new_tariff = {"tariff_code": tariff_code, "product_code": product_code}
+        if self.current_tariff == new_tariff:
+            self.log(f"Kraken: Tariff unchanged — {new_tariff['tariff_code']}")
+            return None
 
-                    if self.current_tariff == new_tariff:
-                        self.log(f"Kraken: Tariff unchanged — {tariff_code}")
-                        return None
-
-                    old = self.current_tariff
-                    self.current_tariff = new_tariff
-                    self.log(f"Kraken: Tariff {'discovered' if old is None else 'changed'} — {tariff_code} (product {product_code})")
-                    return new_tariff
-
-        self.log("Warn: Kraken: No active electricity agreement found")
-        return None
+        old = self.current_tariff
+        self.current_tariff = new_tariff
+        self.log(f"Kraken: Tariff {'discovered' if old is None else 'changed'} — {new_tariff['tariff_code']} (product {new_tariff['product_code']})")
+        return new_tariff
 
     def build_rates_url(self, product_code, tariff_code):
         """Construct public REST rates URL from base URL + tariff info."""
@@ -227,15 +418,13 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         """Construct public REST standing charge URL."""
         return f"{self.base_url}/v1/products/{product_code}/electricity-tariffs/{tariff_code}/standing-charges/"
 
-    async def async_fetch_rates(self):
+    async def async_fetch_rates(self, tariff=None):
         """Fetch rates from public REST endpoint. No auth needed. Returns list of rate objects or None."""
-        if not self.current_tariff:
+        tariff = tariff or self.current_tariff
+        if not tariff:
             return None
 
-        url = self.build_rates_url(
-            self.current_tariff["product_code"],
-            self.current_tariff["tariff_code"],
-        )
+        url = self.build_rates_url(tariff["product_code"], tariff["tariff_code"])
 
         all_results = []
         pages = 0
@@ -256,7 +445,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
 
             if url:
                 self.log(f"Warn: Kraken: Rate pagination capped at {pages} pages, more data available")
-            self.log(f"Kraken: Fetched {len(all_results)} rate periods")
+            self.log(f"Kraken: Fetched {len(all_results)} rate periods for {tariff['tariff_code']}")
             return all_results
 
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
@@ -269,15 +458,13 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         entity_name = root + "." + self.prefix + "_kraken_" + self.account_id.replace("-", "_") + "_" + suffix
         return entity_name.lower()
 
-    async def async_fetch_standing_charges(self):
+    async def async_fetch_standing_charges(self, tariff=None):
         """Fetch standing charges from public REST endpoint. No auth needed."""
-        if not self.current_tariff:
+        tariff = tariff or self.current_tariff
+        if not tariff:
             return None
 
-        url = self.build_standing_charge_url(
-            self.current_tariff["product_code"],
-            self.current_tariff["tariff_code"],
-        )
+        url = self.build_standing_charge_url(tariff["product_code"], tariff["tariff_code"])
 
         try:
             timeout = aiohttp.ClientTimeout(total=30)
@@ -316,7 +503,6 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
 
             if tariff_change or self.current_tariff:
                 had_success = True
-                # Publish tariff sensor on discovery, change, and every 30-min cycle
                 self.dashboard_item(
                     self.get_entity_name("sensor", "tariff_code"),
                     self.current_tariff["tariff_code"],
@@ -328,7 +514,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                     app="kraken",
                 )
 
-        # Fetch rates + standing charges — first run + every 10 minutes
+        # Fetch import rates + standing charges — first run + every 10 minutes
         if self.current_tariff and (first or (count_minutes % 10) == 0):
             rates = await self.async_fetch_rates()
             if rates:
@@ -361,11 +547,34 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                     app="kraken",
                 )
 
-        # Wire into fetch.py once tariff is discovered (retries until successful)
+            # Fetch export rates if export tariff is known
+            if self.export_tariff:
+                export_rates = await self.async_fetch_rates(tariff=self.export_tariff)
+                if export_rates:
+                    had_success = True
+                    self.dashboard_item(
+                        self.get_entity_name("sensor", "export_rates"),
+                        state=len(export_rates),
+                        attributes={
+                            "friendly_name": "Kraken Export Rates",
+                            "rates": export_rates,
+                            "tariff_code": self.export_tariff["tariff_code"],
+                            "product_code": self.export_tariff["product_code"],
+                            "icon": "mdi:currency-gbp",
+                        },
+                        app="kraken",
+                    )
+
+        # Wire import into fetch.py once tariff is discovered (retries until successful)
         if not self.wired and self.current_tariff:
             self.set_arg("metric_octopus_import", self.get_entity_name("sensor", "import_rates"))
             self.set_arg("metric_standing_charge", self.get_entity_name("sensor", "import_standing"))
             self.wired = True
+
+        # Wire export into fetch.py once export tariff is discovered
+        if not self.export_wired and self.export_tariff:
+            self.set_arg("metric_octopus_export", self.get_entity_name("sensor", "export_rates"))
+            self.export_wired = True
 
         # Publish account status
         status = "error" if self.oauth_failed else ("connected" if self.current_tariff else "discovering")
@@ -376,6 +585,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                 "friendly_name": "Kraken Account Status",
                 "provider": self.provider,
                 "account_id": self.account_id,
+                "has_export": self.export_tariff is not None,
                 "icon": "mdi:account-check" if status == "connected" else "mdi:account-alert",
             },
             app="kraken",
