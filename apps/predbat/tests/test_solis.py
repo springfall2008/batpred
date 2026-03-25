@@ -1088,38 +1088,54 @@ async def test_write_time_windows_v2_mode():
     # Verify results
     assert result == True, "write_time_windows_if_changed should return True"
 
-    # Check that read_and_write_cid was called for all V2 fields
+    # Check that read_and_write_cid was called for changed V2 fields
     calls = api.read_and_write_cid_calls
-    # Should write: charge_enable, charge_time, charge_soc, charge_current, discharge_enable, discharge_time, discharge_soc, discharge_current
-    # = 8 calls (not 10, since we only have discharge enable/time/soc/current, not a separate enable write)
-    assert len(calls) == 8, f"Expected 8 calls for V2 mode (4 charge + 4 discharge fields), got {len(calls)}"
+    # charge_enable=1: write enable, time, soc, current (4 calls)
+    # discharge_enable=0: write enable only, skip time/soc/current (1 call)
+    # = 5 calls total
+    assert len(calls) == 5, f"Expected 5 calls for V2 mode (4 charge + 1 discharge enable), got {len(calls)}"
 
     # Verify charge enable was written
     charge_enable_call = next((c for c in calls if c["cid"] == SOLIS_CID_CHARGE_ENABLE_BASE), None)
     assert charge_enable_call is not None, "Charge enable should be written"
     assert charge_enable_call["value"] == "1", "Charge enable should be 1"
 
-    # Verify charge time was written
+    # Verify charge time was written (charge is enabled)
     charge_time_call = next((c for c in calls if c["cid"] == SOLIS_CID_CHARGE_TIME[0]), None)
     assert charge_time_call is not None, "Charge time should be written"
     assert charge_time_call["value"] == "02:00-05:00", "Charge time should be 02:00-05:00"
 
-    # Verify charge SOC was written
+    # Verify charge SOC was written (charge is enabled)
     charge_soc_call = next((c for c in calls if c["cid"] == SOLIS_CID_CHARGE_SOC_BASE), None)
     assert charge_soc_call is not None, "Charge SOC should be written"
     assert charge_soc_call["value"] == "100", "Charge SOC should be 100"
 
-    # Verify charge current was written
+    # Verify charge current was written (charge is enabled)
     charge_current_call = next((c for c in calls if c["cid"] == SOLIS_CID_CHARGE_CURRENT[0]), None)
     assert charge_current_call is not None, "Charge current should be written"
     assert charge_current_call["value"] == "50", "Charge current should be 50"
+
+    # Verify discharge enable was written (always written regardless of enable state)
+    discharge_enable_call = next((c for c in calls if c["cid"] == SOLIS_CID_DISCHARGE_ENABLE_BASE), None)
+    assert discharge_enable_call is not None, "Discharge enable should be written"
+    assert discharge_enable_call["value"] == "0", "Discharge enable should be 0"
+
+    # Verify discharge time/SOC/current were NOT written (discharge is disabled)
+    from solis import SOLIS_CID_DISCHARGE_TIME, SOLIS_CID_DISCHARGE_SOC, SOLIS_CID_DISCHARGE_CURRENT
+
+    discharge_time_call = next((c for c in calls if c["cid"] == SOLIS_CID_DISCHARGE_TIME[0]), None)
+    assert discharge_time_call is None, "Discharge time should NOT be written when discharge is disabled"
+    discharge_soc_call = next((c for c in calls if c["cid"] == SOLIS_CID_DISCHARGE_SOC[0]), None)
+    assert discharge_soc_call is None, "Discharge SOC should NOT be written when discharge is disabled"
+    discharge_current_call = next((c for c in calls if c["cid"] == SOLIS_CID_DISCHARGE_CURRENT[0]), None)
+    assert discharge_current_call is None, "Discharge current should NOT be written when discharge is disabled"
 
     # Verify storage mode was set to Self-Use (non-zero charge current)
     storage_mode_calls = api.set_storage_mode_calls
     assert len(storage_mode_calls) == 1, f"Expected 1 storage mode call, got {len(storage_mode_calls)}"
     assert storage_mode_calls[0]["mode"] == "Self-Use", "Storage mode should be Self-Use for non-zero charge current"
 
-    print("PASSED: V2 mode writes all fields correctly and sets storage mode")
+    print("PASSED: V2 mode writes enabled fields only and sets storage mode")
     return False
 
 
