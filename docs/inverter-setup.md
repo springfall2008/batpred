@@ -301,33 +301,33 @@ shell_command:
   fronius_force_charge: >
     python3 /config/fronius_battery_control.py
     --host 192.168.1.100
-    --mode force_charge
-    --power {{ charge_power }}
-    --revert-time 900
+    --action force_charge
+    --rate {{ charge_power }}
+    --rvrt 900
 
   fronius_force_discharge: >
     python3 /config/fronius_battery_control.py
     --host 192.168.1.100
-    --mode force_discharge
-    --power {{ discharge_power }}
-    --revert-time 900
+    --action force_discharge
+    --rate {{ discharge_power }}
+    --rvrt 900
 
   fronius_charge_freeze: >
     python3 /config/fronius_battery_control.py
     --host 192.168.1.100
-    --mode charge_freeze
-    --revert-time 900
+    --action hold
+    --rvrt 900
 
   fronius_discharge_freeze: >
     python3 /config/fronius_battery_control.py
     --host 192.168.1.100
-    --mode discharge_freeze
-    --revert-time 900
+    --action hold
+    --rvrt 900
 
   fronius_reset: >
     python3 /config/fronius_battery_control.py
     --host 192.168.1.100
-    --mode reset
+    --action reset
 ```
 
 The `--revert-time 900` flag instructs the inverter to revert to automatic mode after 15 minutes if no further commands are received. Predbat re-issues commands every 5 minutes, so this acts as a safety fallback.
