@@ -284,11 +284,14 @@ class GatewayMQTT(ComponentBase):
                 tls_context = ssl.create_default_context()
 
                 client_id = f"predbat-{self.gateway_device_id}-{uuid.uuid4().hex[:8]}"
+                # Use instance UUID as MQTT username so the ACL authorizes
+                # subscribe access via device_site_access (not device self-access)
+                mqtt_username = self.args.get("user_id", self.gateway_device_id) if isinstance(self.args, dict) else self.gateway_device_id
 
                 async with aiomqtt.Client(
                     hostname=self.mqtt_host,
                     port=self.mqtt_port,
-                    username=self.gateway_device_id,
+                    username=mqtt_username,
                     password=self.mqtt_token,
                     tls_context=tls_context,
                     identifier=client_id,
