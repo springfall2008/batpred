@@ -58,6 +58,7 @@ class MockSolisAPI(SolisAPI):
         self.max_charge_current = {}
         self.max_discharge_current = {}
         self.charge_discharge_time_windows = {}
+        self.cached_infos = {}
         self.slots_reset = set()
 
         # Logging
@@ -398,12 +399,12 @@ async def test_read_cid():
     api._execute_request = mock_execute_request
 
     # Test reading battery SOC
-    result = await api.read_cid(inverter_sn, 103)
+    result, info = await api.read_cid(inverter_sn, 103)
     assert result == "50", f"Expected '50', got '{result}'"
     print("PASSED: read_cid returns correct value for battery SOC")
 
     # Test reading storage mode
-    result = await api.read_cid(inverter_sn, 633)
+    result, info = await api.read_cid(inverter_sn, 633)
     assert result == "33", f"Expected '33', got '{result}'"
     print("PASSED: read_cid returns correct value for storage mode")
 
@@ -482,7 +483,7 @@ async def test_read_cid():
 
     api._execute_request = mock_execute_request_with_retries
 
-    result = await api.read_cid(inverter_sn, 103)
+    result, info = await api.read_cid(inverter_sn, 103)
     assert result == "50", f"Expected '50' after retries, got '{result}'"
     assert call_count[0] == 3, f"Expected 3 API calls (2 failures + 1 success), got {call_count[0]}"
     print("PASSED: read_cid retries after API failures and eventually succeeds")
@@ -515,7 +516,7 @@ async def test_read_batch():
     api._execute_request = mock_execute_request
 
     # Test reading multiple CIDs
-    result = await api.read_batch(inverter_sn, [103, 633, 104])
+    result, result_info = await api.read_batch(inverter_sn, [103, 633, 104])
     assert isinstance(result, dict), f"Expected dict result, got {type(result)}"
     assert result[103] == "50", f"Expected '50' for CID 103, got '{result.get(103)}'"
     assert result[633] == "33", f"Expected '33' for CID 633, got '{result.get(633)}'"
@@ -562,7 +563,7 @@ async def test_read_batch():
 
     api._execute_request = mock_execute_request_empty
 
-    result = await api.read_batch(inverter_sn, [103, 633])
+    result, result_info = await api.read_batch(inverter_sn, [103, 633])
     assert result == {}, f"Expected empty dict for empty response, got {result}"
     print("PASSED: read_batch handles empty response correctly")
 
@@ -590,7 +591,7 @@ async def test_read_batch():
 
     api._execute_request = mock_execute_request_with_retries
 
-    result = await api.read_batch(inverter_sn, [103, 633])
+    result, result_info = await api.read_batch(inverter_sn, [103, 633])
     assert result[103] == "50", f"Expected '50' after retries, got '{result.get(103)}'"
     assert result[633] == "33", f"Expected '33' after retries, got '{result.get(633)}'"
     assert call_count[0] == 3, f"Expected 3 API calls (2 failures + 1 success), got {call_count[0]}"
@@ -617,7 +618,7 @@ async def test_read_and_write_cid():
 
     async def mock_read_cid(inv_sn, cid):
         read_calls.append({"inverter_sn": inv_sn, "cid": cid})
-        return cid_state.get(cid, "0")
+        return cid_state.get(cid, "0"), {"msg": cid_state.get(cid, "0")}
 
     async def mock_write_cid(inv_sn, cid, value, old_value=None, field_description=None):
         write_calls.append({"inverter_sn": inv_sn, "cid": cid, "value": value, "old_value": old_value, "field_description": field_description})
@@ -1088,54 +1089,58 @@ async def test_write_time_windows_v2_mode():
     # Verify results
     assert result == True, "write_time_windows_if_changed should return True"
 
-    # Check that read_and_write_cid was called for changed V2 fields
+    # Check that read_and_write_cid was called for all V2 fields (no enable gating)
     calls = api.read_and_write_cid_calls
-    # charge_enable=1: write enable, time, soc, current (4 calls)
-    # discharge_enable=0: write enable only, skip time/soc/current (1 call)
-    # = 5 calls total
-    assert len(calls) == 5, f"Expected 5 calls for V2 mode (4 charge + 1 discharge enable), got {len(calls)}"
+    # All fields written regardless of enable state:
+    # charge: enable, time, soc, current (4 calls)
+    # discharge: enable, time, soc, current (4 calls)
+    # = 8 calls total
+    assert len(calls) == 8, f"Expected 8 calls for V2 mode (4 charge + 4 discharge), got {len(calls)}"
 
     # Verify charge enable was written
     charge_enable_call = next((c for c in calls if c["cid"] == SOLIS_CID_CHARGE_ENABLE_BASE), None)
     assert charge_enable_call is not None, "Charge enable should be written"
     assert charge_enable_call["value"] == "1", "Charge enable should be 1"
 
-    # Verify charge time was written (charge is enabled)
+    # Verify charge time was written
     charge_time_call = next((c for c in calls if c["cid"] == SOLIS_CID_CHARGE_TIME[0]), None)
     assert charge_time_call is not None, "Charge time should be written"
     assert charge_time_call["value"] == "02:00-05:00", "Charge time should be 02:00-05:00"
 
-    # Verify charge SOC was written (charge is enabled)
+    # Verify charge SOC was written
     charge_soc_call = next((c for c in calls if c["cid"] == SOLIS_CID_CHARGE_SOC_BASE), None)
     assert charge_soc_call is not None, "Charge SOC should be written"
     assert charge_soc_call["value"] == "100", "Charge SOC should be 100"
 
-    # Verify charge current was written (charge is enabled)
+    # Verify charge current was written (as float string)
     charge_current_call = next((c for c in calls if c["cid"] == SOLIS_CID_CHARGE_CURRENT[0]), None)
     assert charge_current_call is not None, "Charge current should be written"
-    assert charge_current_call["value"] == "50", "Charge current should be 50"
+    assert charge_current_call["value"] == "50.0", "Charge current should be 50.0"
 
-    # Verify discharge enable was written (always written regardless of enable state)
+    # Verify discharge enable was written
     discharge_enable_call = next((c for c in calls if c["cid"] == SOLIS_CID_DISCHARGE_ENABLE_BASE), None)
     assert discharge_enable_call is not None, "Discharge enable should be written"
     assert discharge_enable_call["value"] == "0", "Discharge enable should be 0"
 
-    # Verify discharge time/SOC/current were NOT written (discharge is disabled)
+    # Verify discharge time/SOC/current were also written (no enable gating)
     from solis import SOLIS_CID_DISCHARGE_TIME, SOLIS_CID_DISCHARGE_SOC, SOLIS_CID_DISCHARGE_CURRENT
 
     discharge_time_call = next((c for c in calls if c["cid"] == SOLIS_CID_DISCHARGE_TIME[0]), None)
-    assert discharge_time_call is None, "Discharge time should NOT be written when discharge is disabled"
+    assert discharge_time_call is not None, "Discharge time should be written"
+    assert discharge_time_call["value"] == "16:00-19:00", "Discharge time should be 16:00-19:00"
     discharge_soc_call = next((c for c in calls if c["cid"] == SOLIS_CID_DISCHARGE_SOC[0]), None)
-    assert discharge_soc_call is None, "Discharge SOC should NOT be written when discharge is disabled"
+    assert discharge_soc_call is not None, "Discharge SOC should be written"
+    assert discharge_soc_call["value"] == "10", "Discharge SOC should be 10"
     discharge_current_call = next((c for c in calls if c["cid"] == SOLIS_CID_DISCHARGE_CURRENT[0]), None)
-    assert discharge_current_call is None, "Discharge current should NOT be written when discharge is disabled"
+    assert discharge_current_call is not None, "Discharge current should be written"
+    assert discharge_current_call["value"] == "30.0", "Discharge current should be 30.0"
 
     # Verify storage mode was set to Self-Use (non-zero charge current)
     storage_mode_calls = api.set_storage_mode_calls
     assert len(storage_mode_calls) == 1, f"Expected 1 storage mode call, got {len(storage_mode_calls)}"
     assert storage_mode_calls[0]["mode"] == "Self-Use", "Storage mode should be Self-Use for non-zero charge current"
 
-    print("PASSED: V2 mode writes enabled fields only and sets storage mode")
+    print("PASSED: V2 mode writes all fields and sets storage mode")
     return False
 
 
@@ -2435,7 +2440,7 @@ async def test_number_event_max_power():
     assert len(api.read_and_write_cid_calls) == 1, "Should call read_and_write_cid once"
     call = api.read_and_write_cid_calls[0]
     assert call["cid"] == SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT, f"Expected CID {SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT}, got {call['cid']}"
-    expected_amps = str(int(4840 / 48.4))  # = "100"
+    expected_amps = str(round(float(4840) / 48.4, 1))  # = "100.0"
     assert call["value"] == expected_amps, f"Expected '{expected_amps}', got {call['value']}"
 
     print("PASSED: Max power number event handled correctly")
