@@ -604,28 +604,24 @@ async def test_read_batch():
 
 
 async def test_read_and_write_cid():
-    """Test read_and_write_cid method reads, verifies, and writes CID values"""
+    """Test read_and_write_cid method reads, writes, and verifies CID values"""
     print("\n=== Test: read_and_write_cid ===")
 
     api = MockSolisAPI()
     inverter_sn = "TEST123456"
 
-    # Track calls to read_cid and write_cid
+    # Track calls to read_cid and write_cid with stateful storage
     read_calls = []
     write_calls = []
+    cid_state = {103: "50", 633: "33"}  # Simulated CID register values
 
     async def mock_read_cid(inv_sn, cid):
         read_calls.append({"inverter_sn": inv_sn, "cid": cid})
-        # Return current value
-        if cid == 103:
-            return "50"  # Current battery SOC
-        elif cid == 633:
-            return "33"  # Current storage mode
-        else:
-            return "0"
+        return cid_state.get(cid, "0")
 
     async def mock_write_cid(inv_sn, cid, value, old_value=None, field_description=None):
         write_calls.append({"inverter_sn": inv_sn, "cid": cid, "value": value, "old_value": old_value, "field_description": field_description})
+        cid_state[cid] = value  # Update state so verify read returns new value
         return True
 
     # Replace methods with mocks - need to use real read_and_write_cid from SolisAPI
@@ -639,33 +635,33 @@ async def test_read_and_write_cid():
 
     api.read_and_write_cid = SolisAPI.read_and_write_cid.__get__(api, MockSolisAPI)
 
-    # Test 1: Value changes - should read then write
+    # Test 1: Value changes - should read, write, then verify
     result = await api.read_and_write_cid(inverter_sn, 103, "80", field_description="battery SOC")
     assert result == True, "Expected True for successful write"
-    assert len(read_calls) == 1, f"Expected 1 read call, got {len(read_calls)}"
+    assert len(read_calls) == 2, f"Expected 2 read calls (initial + verify), got {len(read_calls)}"
     assert read_calls[0]["cid"] == 103, f"Expected read CID 103, got {read_calls[0]['cid']}"
     assert len(write_calls) == 1, f"Expected 1 write call, got {len(write_calls)}"
     assert write_calls[0]["cid"] == 103, f"Expected write CID 103, got {write_calls[0]['cid']}"
     assert write_calls[0]["value"] == "80", f"Expected write value '80', got '{write_calls[0]['value']}'"
     assert write_calls[0]["old_value"] == "50", f"Expected old_value '50', got '{write_calls[0]['old_value']}'"
     assert write_calls[0]["field_description"] == "battery SOC", "Expected field_description to be passed"
-    print("PASSED: read_and_write_cid reads current value then writes new value")
+    print("PASSED: read_and_write_cid reads current value, writes new value, and verifies")
 
-    # Test 2: Value unchanged - should read but not write
+    # Test 2: Value unchanged - should read, write, and verify (value already matches)
     read_calls.clear()
     write_calls.clear()
     result = await api.read_and_write_cid(inverter_sn, 633, "33", field_description="storage mode")
     assert result == True, "Expected True when value unchanged"
-    assert len(read_calls) == 1, f"Expected 1 read call, got {len(read_calls)}"
-    assert len(write_calls) == 0, f"Expected 0 write calls when value unchanged, got {len(write_calls)}"
-    print("PASSED: read_and_write_cid skips write when value already matches")
+    assert len(read_calls) == 2, f"Expected 2 read calls (initial + verify), got {len(read_calls)}"
+    assert len(write_calls) == 1, f"Expected 1 write call, got {len(write_calls)}"
+    print("PASSED: read_and_write_cid succeeds when value already matches")
 
     # Test 3: Write without field_description
     read_calls.clear()
     write_calls.clear()
     result = await api.read_and_write_cid(inverter_sn, 104, "100")
     assert result == True, "Expected True for successful write"
-    assert len(read_calls) == 1, f"Expected 1 read call, got {len(read_calls)}"
+    assert len(read_calls) == 2, f"Expected 2 read calls, got {len(read_calls)}"
     assert len(write_calls) == 1, f"Expected 1 write call, got {len(write_calls)}"
     assert write_calls[0]["field_description"] is None, "Expected no field_description when not provided"
     print("PASSED: read_and_write_cid works without field_description")
@@ -702,6 +698,26 @@ async def test_read_and_write_cid():
     result = await api.read_and_write_cid(inverter_sn, 106, "60")
     assert result == False, "Expected False when write fails"
     print("PASSED: read_and_write_cid returns False when write fails")
+
+    # Test 6: Verify fails (write succeeds but read-back doesn't match) - should return False
+    read_calls.clear()
+    write_calls.clear()
+    api.log_messages.clear()
+
+    async def mock_write_cid_no_update(inv_sn, cid, value, old_value=None, field_description=None):
+        write_calls.append({"inverter_sn": inv_sn, "cid": cid, "value": value, "old_value": old_value, "field_description": field_description})
+        # Write returns True but does NOT update cid_state, so verify read returns old value
+        return True
+
+    api.read_cid = mock_read_cid  # Restore stateful read
+    api.write_cid = mock_write_cid_no_update
+    cid_state[107] = "10"  # Set initial value
+
+    result = await api.read_and_write_cid(inverter_sn, 107, "99", field_description="verify test")
+    assert result == False, "Expected False when verify read doesn't match written value"
+    assert len(write_calls) == 1, f"Expected 1 write call, got {len(write_calls)}"
+    assert any("Failed to verify" in msg for msg in api.log_messages), "Expected verify failure log message"
+    print("PASSED: read_and_write_cid returns False when verify read doesn't match")
 
     # Restore original methods
     api.read_cid = original_read_cid

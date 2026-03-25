@@ -758,7 +758,7 @@ class SolisAPI(ComponentBase):
                 else:
                     self.log(f"Solis API: Time windows unchanged for {inverter_sn}, skipping SOLIS_CID_CHARGE_DISCHARGE_SETTINGS write")
 
-                # Decide if Solar charges the batter or exports
+                # Decide if Solar charges the battery or exports
                 if charge_current == 0:
                     if in_charge_slot or in_discharge_slot:
                         self.log(f"Solis API: Charge current is 0A for {inverter_sn}, setting storage mode to 'Feed-in priority'")
@@ -894,7 +894,8 @@ class SolisAPI(ComponentBase):
     async def read_and_write_cid(self, inverter_sn, cid, value, field_description=None):
         """Read CID value then write with verification (required by Solis API).
         Automatically reads current value, writes with old_value verification,
-        updates cache on success, and logs appropriate messages.
+        Retries if value doesn't update.
+        Updates cache on success, and logs appropriate messages.
 
         Args:
             inverter_sn: Inverter serial number
@@ -906,13 +907,23 @@ class SolisAPI(ComponentBase):
         """
         try:
             # Read current value first (required by Solis API)
-            old_value = await self.read_cid(inverter_sn, cid)
             # Write with old_value verification
+            old_value = await self.read_cid(inverter_sn, cid)
+            result = await self.write_cid(inverter_sn, cid, value, old_value=old_value, field_description=field_description)
+
+            # Validate what we wrote so the cache is correct.
+            old_value = await self.read_cid(inverter_sn, cid)
+            if not result:
+                self.log(f"Warn: Solis API: Failed to write CID {cid} {field_description} on {inverter_sn}")
+                return False
+
             if old_value == value:
-                # No change needed
-                self.log(f"Solis API: CID {cid} {field_description} on {inverter_sn} already set to {value}")
+                self.log(f"Solis API: CID {cid} {field_description} on {inverter_sn} is set to {value}")
                 return True
-            return await self.write_cid(inverter_sn, cid, value, old_value=old_value, field_description=field_description)
+            else:
+                self.log(f"Warn: Solis API: Failed to verify CID {cid} {field_description} on {inverter_sn}, wrote {value} but read back {old_value}")
+                return False
+
         except Exception as e:
             # Log failure
             if field_description:
@@ -2746,8 +2757,12 @@ class SolisAPI(ComponentBase):
                     success = await self.poll_inverter_data(sn, SOLIS_CID_LIST_TOU_V2)
                     if not success:
                         poll_success = False
-                    # For V2 all the data is in the windows, so we can decode them directly each time
-                    await self.decode_time_windows_v2(sn)
+                    # Only decode on first run to establish initial state.
+                    # Subsequent polls update cached_values (for change detection in write_time_windows_if_changed)
+                    # but we retain the local charge_discharge_time_windows to stop Predbat fighting with the inverter
+                    # which may internally adjust CID values (e.g. actual charge current vs configured max).
+                    if first:
+                        await self.decode_time_windows_v2(sn)
                 else:
                     self.log("Solis API: Inverter is in standard Time of Use mode, polling standard TOU data")
                     success =  await self.poll_inverter_data(sn, SOLIS_CID_SINGLE, batch=False)
