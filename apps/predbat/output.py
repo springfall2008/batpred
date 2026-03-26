@@ -1497,8 +1497,12 @@ class Output:
             json_row["slot_minute"] = minute  # aligned slot minute used by the override system
             json_row["import_rate"] = rate_value_import
             json_row["export_rate"] = rate_value_export
-            json_row["import_rate_adjust"] = self.rate_import_replicated.get(minute, None)
-            json_row["export_rate_adjust"] = self.rate_export_replicated.get(minute, None)
+            import_rate_adjust_type = self.rate_import_replicated.get(minute)
+            if import_rate_adjust_type is not None:
+                json_row["import_rate_adjust_type"] = import_rate_adjust_type
+            export_rate_adjust_type = self.rate_export_replicated.get(minute)
+            if export_rate_adjust_type is not None:
+                json_row["export_rate_adjust_type"] = export_rate_adjust_type
             # Add adjusted rates (always included for client-side debug toggle)
             json_row["import_rate_adjusted"] = dp2(rate_value_import / self.battery_loss / self.inverter_loss + self.metric_battery_cycle)
             json_row["export_rate_adjusted"] = dp2(rate_value_export * self.battery_loss_discharge * self.inverter_loss - self.metric_battery_cycle)

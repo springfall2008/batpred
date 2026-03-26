@@ -6412,8 +6412,8 @@ def get_plan_renderer_js():
                 if (showDebug && row.import_rate_adjusted !== undefined) {
                     importText += ` (${row.import_rate_adjusted.toFixed(2)})`;
                 }
-                const importAdjust = row.import_rate_adjust ? ` ${getAdjustSymbol(row.import_rate_adjust)}` : '';
-                if (row.import_rate_adjust) {
+                const importAdjust = row.import_rate_adjust_type ? ` ${getAdjustSymbol(row.import_rate_adjust_type)}` : '';
+                if (row.import_rate_adjust_type) {
                     importText = `<i>${importText}${importAdjust}</i>`;
                 }
                 if (importBold) {
@@ -6430,8 +6430,8 @@ def get_plan_renderer_js():
                 if (showDebug && row.export_rate_adjusted !== undefined) {
                     exportText += ` (${row.export_rate_adjusted.toFixed(2)})`;
                 }
-                const exportAdjust = row.export_rate_adjust ? ` ${getAdjustSymbol(row.export_rate_adjust)}` : '';
-                if (row.export_rate_adjust) {
+                const exportAdjust = row.export_rate_adjust_type ? ` ${getAdjustSymbol(row.export_rate_adjust_type)}` : '';
+                if (row.export_rate_adjust_type) {
                     exportText = `<i>${exportText}${exportAdjust}</i>`;
                 }
                 if (editable) {
