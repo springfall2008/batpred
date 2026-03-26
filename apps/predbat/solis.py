@@ -626,8 +626,6 @@ class SolisAPI(ComponentBase):
                     current_cid = SOLIS_CID_DISCHARGE_CURRENT[slot - 1]
                     max_discharge_current_amps = min(self.cached_infos.get(inverter_sn, {}).get(current_cid, {}).get('sysCommand', {}).get('max', max_discharge_current_amps), max_discharge_current_amps)
 
-                self.log("Solis API: Max charge current amps determined to be {} and max discharge current amps determined to be {} for {}".format(max_charge_current_amps, max_discharge_current_amps, inverter_sn))
-
                 for slot in slots_to_check:
                     slot_data = time_windows.get(slot)
                     if not slot_data:
