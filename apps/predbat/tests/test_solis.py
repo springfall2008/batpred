@@ -2647,7 +2647,7 @@ async def test_set_storage_mode_if_needed_all_modes():
     test_modes = [
         ("Self-Use", "33"),                                           # bits 0,5 = 1+32 = 33
         ("Feed-in priority", "96"),                                   # bits 5,6 = 32+64 = 96
-        ("Self-Use - No Grid Charging", "1"),                         # bit 0 = 1
+        ("Self-Use - No Timed Charge/Discharge", "1"),                         # bit 0 = 1
         ("Feed-in priority - No Timed Charge/Discharge", "64"),       # bit 6 = 64
     ]
 
@@ -2809,8 +2809,8 @@ async def test_get_solis_mode_enum():
     # Self-Use without grid charging: bit 0 = 1
     mode, mode_str = get_solis_mode_enum(1)
     assert mode == ENUM_SELF_USE_NO_GRID_CHARGING, f"Expected ENUM_SELF_USE_NO_GRID_CHARGING, got {mode}"
-    assert mode_str == "Self-Use - No Grid Charging", f"Expected 'Self-Use - No Grid Charging', got '{mode_str}'"
-    print("PASSED: Self-Use - No Grid Charging (1) decoded correctly")
+    assert mode_str == "Self-Use - No Timed Charge/Discharge", f"Expected 'Self-Use - No Timed Charge/Discharge', got '{mode_str}'"
+    print("PASSED: Self-Use - No Timed Charge/Discharge (1) decoded correctly")
 
     # Feed-in priority with grid charging: bits 5,6 = 32 + 64 = 96
     mode, mode_str = get_solis_mode_enum(96)
@@ -2907,7 +2907,7 @@ async def test_get_solis_mode_enum_compute_roundtrip():
     # For each mode, compute the register value then decode it back
     test_cases = [
         (ENUM_SELF_USE, "Self-Use"),
-        (ENUM_SELF_USE_NO_GRID_CHARGING, "Self-Use - No Grid Charging"),
+        (ENUM_SELF_USE_NO_GRID_CHARGING, "Self-Use - No Timed Charge/Discharge"),
         (ENUM_FEED_IN_PRIORITY, "Feed-in priority"),
         (ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING, "Feed-in priority - No Timed Charge/Discharge"),
     ]

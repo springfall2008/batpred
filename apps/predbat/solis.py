@@ -133,7 +133,7 @@ ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING = 4
 SOLIS_STORAGE_MODES = {
     "Other": ENUM_OTHER,
     "Self-Use": ENUM_SELF_USE,
-    "Self-Use - No Grid Charging": ENUM_SELF_USE_NO_GRID_CHARGING,
+    "Self-Use - No Timed Charge/Discharge": ENUM_SELF_USE_NO_GRID_CHARGING,
     "Feed-in priority": ENUM_FEED_IN_PRIORITY,
     "Feed-in priority - No Timed Charge/Discharge": ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING
 }
