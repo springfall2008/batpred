@@ -262,8 +262,6 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         2. Check the import account's meter points for an export tariff
         3. Fall back to address-based matching across all accounts (viewer query)
         """
-        previous_export = self.export_tariff
-
         # Strategy 1: Configured export account (E.ON split accounts)
         if self.export_account_id and self.export_account_id != self.account_id:
             query = KRAKEN_ACCOUNT_QUERY.format(account_number=self.export_account_id)
