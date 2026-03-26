@@ -2376,7 +2376,10 @@ def _test_async_automatic_config(my_predbat):
         assert ge.config_args.get("discharge_end_time") == ["select.predbat_gecloud_EMS001_export_end_time_slot_1"]
 
         # EMS-specific sensors
-        assert ge.config_args.get("load_today") == ["sensor.predbat_gecloud_EMS001_consumption_today"]
+        assert ge.config_args.get("load_today") == ["sensor.predbat_gecloud_EMS001_consumption_total"]
+        assert ge.config_args.get("pv_today") == ["sensor.predbat_gecloud_EMS001_solar_total"]
+        assert ge.config_args.get("import_today") == ["sensor.predbat_gecloud_EMS001_grid_import_total"]
+        assert ge.config_args.get("export_today") == ["sensor.predbat_gecloud_EMS001_grid_export_total"]
         assert ge.config_args.get("battery_power") == ["sensor.predbat_gecloud_EMS001_battery_power"]
         assert ge.config_args.get("pv_power") == ["sensor.predbat_gecloud_EMS001_solar_power"]
         assert ge.config_args.get("load_power") == ["sensor.predbat_gecloud_EMS001_consumption_power"]

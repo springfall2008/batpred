@@ -17,6 +17,9 @@ from solis import SOLIS_CID_STORAGE_MODE, SOLIS_BIT_GRID_CHARGING, SOLIS_BIT_TOU
 from solis import SOLIS_CID_ALLOW_EXPORT, SOLIS_ALLOW_EXPORT_ON, SOLIS_ALLOW_EXPORT_OFF, SOLIS_CID_BATTERY_RESERVE_SOC
 from solis import SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT
 from solis import SOLIS_CID_POWER_LIMIT, SOLIS_STORAGE_MODES, SOLIS_BIT_BACKUP_MODE
+from solis import get_solis_mode_enum, compute_solis_mode_value
+from solis import ENUM_OTHER, ENUM_SELF_USE, ENUM_SELF_USE_NO_GRID_CHARGING, ENUM_FEED_IN_PRIORITY, ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING
+from solis import SOLIS_BIT_SELF_USE, SOLIS_BIT_FEED_IN_PRIORITY, SOLIS_BIT_GRID_CHARGING, SOLIS_BIT_OFF_GRID
 
 
 class MockBase:
@@ -352,6 +355,9 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_set_storage_mode_if_needed_changes())
         failed |= asyncio.run(test_set_storage_mode_if_needed_no_changes())
         failed |= asyncio.run(test_set_storage_mode_if_needed_all_modes())
+        failed |= asyncio.run(test_get_solis_mode_enum())
+        failed |= asyncio.run(test_compute_solis_mode_value())
+        failed |= asyncio.run(test_get_solis_mode_enum_compute_roundtrip())
         failed |= asyncio.run(test_fetch_entity_data())
         failed |= asyncio.run(test_fetch_entity_data_power_clamping())
         failed |= asyncio.run(test_fetch_entity_data_invalid_values())
@@ -1886,14 +1892,9 @@ async def test_select_event_storage_mode():
     api.max_charge_current[inverter_sn] = 50
     api.max_discharge_current[inverter_sn] = 50
 
-    # Mock set_storage_mode
+    # Use mock mode for set_storage_mode_if_needed tracking
+    api._mock_storage_mode = True
     api.set_storage_mode_calls = []
-
-    async def mock_set_storage_mode(sn, value):
-        api.set_storage_mode_calls.append({"sn": sn, "value": value})
-        return True
-
-    api.set_storage_mode = mock_set_storage_mode
 
     # Call select_event with storage mode change
     entity_id = f"select.predbat_solis_{inverter_sn}_storage_mode"
@@ -1901,14 +1902,13 @@ async def test_select_event_storage_mode():
 
     await api.select_event(entity_id, value)
 
-    # Verify set_storage_mode was called
-    assert len(api.set_storage_mode_calls) == 1, "set_storage_mode should be called once"
+    # Verify set_storage_mode_if_needed was called
+    assert len(api.set_storage_mode_calls) == 1, "set_storage_mode_if_needed should be called once"
     call = api.set_storage_mode_calls[0]
-    assert call["sn"] == inverter_sn, f"Expected inverter_sn {inverter_sn}, got {call['sn']}"
+    assert call["inverter_sn"] == inverter_sn, f"Expected inverter_sn {inverter_sn}, got {call['inverter_sn']}"
 
-    # The value should be converted from "Self-Use" to "35"
-    expected_value = "35"  # SOLIS_STORAGE_MODES["Self-Use"] = 35
-    assert call["value"] == expected_value, f"Expected value {expected_value}, got {call['value']}"
+    # The mode text should be passed through
+    assert call["mode"] == "Self-Use", f"Expected mode 'Self-Use', got {call['mode']}"
 
     print("PASSED: Storage mode select event handled correctly")
     return False
@@ -2089,8 +2089,8 @@ async def test_switch_event_battery_reserve():
     inverter_sn = "345678"
     api.inverter_sn = [inverter_sn]
 
-    # Setup initial storage mode (bit 2 = 0, backup off)
-    api.cached_values[inverter_sn] = {SOLIS_CID_STORAGE_MODE: "33"}  # Binary: 100001, bit 2 is 0
+    # Setup initial storage mode (bit 4 = 0, backup off)
+    api.cached_values[inverter_sn] = {SOLIS_CID_STORAGE_MODE: "33"}  # Binary: 100001, bit 4 is 0
 
     # Mock read_and_write_cid to capture calls
     api.read_and_write_cid_calls = []
@@ -2103,31 +2103,31 @@ async def test_switch_event_battery_reserve():
 
     api.read_and_write_cid = mock_read_and_write_cid
 
-    # Test turn_on service (set bit 2)
+    # Test turn_on service (set bit 4)
     entity_id = f"switch.predbat_solis_{inverter_sn}_battery_reserve"
     await api.switch_event(entity_id, "turn_on")
 
     # Verify read_and_write_cid was called with correct value
     assert len(api.read_and_write_cid_calls) == 1, "read_and_write_cid should be called once"
     call = api.read_and_write_cid_calls[0]
-    expected_value = 33 | (1 << SOLIS_BIT_BACKUP_MODE)  # Set bit 2: 33 | 4 = 37
+    expected_value = 33 | (1 << SOLIS_BIT_BACKUP_MODE)  # Set bit 4: 33 | 16 = 49
     assert call["value"] == str(expected_value), f"Expected value {expected_value}, got {call['value']}"
     assert call["cid"] == SOLIS_CID_STORAGE_MODE, f"Expected CID {SOLIS_CID_STORAGE_MODE}, got {call['cid']}"
 
-    # Test turn_off service (clear bit 2)
+    # Test turn_off service (clear bit 4) - after turn_on, cached value is 49
     api.read_and_write_cid_calls = []
     await api.switch_event(entity_id, "turn_off")
 
     call = api.read_and_write_cid_calls[0]
-    expected_value = 37 & ~(1 << SOLIS_BIT_BACKUP_MODE)  # Clear bit 2: 37 & ~4 = 33
+    expected_value = 49 & ~(1 << SOLIS_BIT_BACKUP_MODE)  # Clear bit 4: 49 & ~16 = 33
     assert call["value"] == str(expected_value), f"Expected value {expected_value}, got {call['value']}"
 
-    # Test toggle service
+    # Test toggle service - after turn_off, cached value is 33
     api.read_and_write_cid_calls = []
     await api.switch_event(entity_id, "toggle")
 
     call = api.read_and_write_cid_calls[0]
-    expected_value = 33 ^ (1 << SOLIS_BIT_BACKUP_MODE)  # Toggle bit 2: 33 ^ 4 = 37
+    expected_value = 33 ^ (1 << SOLIS_BIT_BACKUP_MODE)  # Toggle bit 4: 33 ^ 16 = 49
     assert call["value"] == str(expected_value), f"Expected value {expected_value}, got {call['value']}"
 
     print("PASSED: Battery reserve switch handled correctly")
@@ -2135,15 +2135,15 @@ async def test_switch_event_battery_reserve():
 
 
 async def test_switch_event_allow_grid_charging():
-    """Test switch_event for allow grid charging (bit 4 manipulation)"""
+    """Test switch_event for allow grid charging (bit 5 manipulation)"""
     print("\n=== Test: switch_event allow grid charging ===")
 
     api = MockSolisAPI()
     inverter_sn = "456789"
     api.inverter_sn = [inverter_sn]
 
-    # Setup initial storage mode (bit 4 = 0, grid charging off)
-    api.cached_values[inverter_sn] = {SOLIS_CID_STORAGE_MODE: "35"}  # Binary: 100011, bit 4 is 0
+    # Setup initial storage mode (bit 5 = 0, grid charging off)
+    api.cached_values[inverter_sn] = {SOLIS_CID_STORAGE_MODE: "3"}  # Binary: 11, bit 5 is 0
 
     # Mock read_and_write_cid
     api.read_and_write_cid_calls = []
@@ -2155,12 +2155,12 @@ async def test_switch_event_allow_grid_charging():
 
     api.read_and_write_cid = mock_read_and_write_cid
 
-    # Test turn_on service (set bit 4)
+    # Test turn_on service (set bit 5)
     entity_id = f"switch.predbat_solis_{inverter_sn}_allow_grid_charging"
     await api.switch_event(entity_id, "turn_on")
 
     call = api.read_and_write_cid_calls[0]
-    expected_value = 35 | (1 << SOLIS_BIT_GRID_CHARGING)  # Set bit 4: 35 | 16 = 51
+    expected_value = 3 | (1 << SOLIS_BIT_GRID_CHARGING)  # Set bit 5: 3 | 32 = 35
     assert call["value"] == str(expected_value), f"Expected value {expected_value}, got {call['value']}"
 
     print("PASSED: Allow grid charging switch handled correctly")
@@ -2168,15 +2168,15 @@ async def test_switch_event_allow_grid_charging():
 
 
 async def test_switch_event_time_of_use():
-    """Test switch_event for time of use mode (bit 6 manipulation)"""
+    """Test switch_event for time of use mode (bit 1 manipulation)"""
     print("\n=== Test: switch_event time of use ===")
 
     api = MockSolisAPI()
     inverter_sn = "567890"
     api.inverter_sn = [inverter_sn]
 
-    # Setup initial storage mode (bit 6 = 0, TOU off)
-    api.cached_values[inverter_sn] = {SOLIS_CID_STORAGE_MODE: "35"}
+    # Setup initial storage mode (bit 1 = 0, TOU off)
+    api.cached_values[inverter_sn] = {SOLIS_CID_STORAGE_MODE: "33"}  # Binary: 100001, bit 1 is 0
 
     # Mock read_and_write_cid
     api.read_and_write_cid_calls = []
@@ -2188,12 +2188,12 @@ async def test_switch_event_time_of_use():
 
     api.read_and_write_cid = mock_read_and_write_cid
 
-    # Test turn_on service (set bit 6)
+    # Test turn_on service (set bit 1)
     entity_id = f"switch.predbat_solis_{inverter_sn}_time_of_use"
     await api.switch_event(entity_id, "turn_on")
 
     call = api.read_and_write_cid_calls[0]
-    expected_value = 35 | (1 << SOLIS_BIT_TOU_MODE)  # Set bit 6: 35 | 64 = 99
+    expected_value = 33 | (1 << SOLIS_BIT_TOU_MODE)  # Set bit 1: 33 | 2 = 35
     assert call["value"] == str(expected_value), f"Expected value {expected_value}, got {call['value']}"
 
     print("PASSED: Time of use switch handled correctly")
@@ -2501,74 +2501,74 @@ async def test_number_event_unknown_inverter():
 
 
 async def test_set_storage_mode_self_use():
-    """Test set_storage_mode writes correct CID value for Self-Use mode"""
+    """Test set_storage_mode_if_needed writes correct CID value for Self-Use mode"""
     print("\n=== Test: set_storage_mode Self-Use ===")
 
     api = MockSolisAPI()
     inverter_sn = "345678"
     api.inverter_sn = [inverter_sn]
 
-    # Setup storage modes
-    api.storage_modes[inverter_sn] = SOLIS_STORAGE_MODES
+    # Setup initial cached value (different from target so a write occurs)
+    api.cached_values[inverter_sn] = {SOLIS_CID_STORAGE_MODE: "1"}
 
-    # Call set_storage_mode with mode name
-    await api.set_storage_mode(inverter_sn, "Self-Use")
+    # Call set_storage_mode_if_needed with mode name
+    await api.set_storage_mode_if_needed(inverter_sn, "Self-Use")
 
     # Verify read_and_write_cid was called
     calls = api.read_and_write_cid_calls
     assert len(calls) == 1, f"Expected 1 call, got {len(calls)}"
 
-    # Verify correct CID and value
+    # Verify correct CID and value (Self-Use = bits 0,5 set = 33)
     call = calls[0]
     assert call["cid"] == SOLIS_CID_STORAGE_MODE, f"Expected CID {SOLIS_CID_STORAGE_MODE}, got {call['cid']}"
-    assert call["value"] == "35", f"Expected value '35' (Self-Use), got {call['value']}"
-    assert "storage mode to Self-Use" in call["field_description"], "Field description should mention Self-Use"
+    assert call["value"] == "33", f"Expected value '33' (Self-Use), got {call['value']}"
+    assert "storage mode to 33" in call["field_description"], "Field description should mention value 33"
 
-    print("PASSED: set_storage_mode writes Self-Use correctly")
+    print("PASSED: set_storage_mode_if_needed writes Self-Use correctly")
     return False
 
 
 async def test_set_storage_mode_feed_in_priority():
-    """Test set_storage_mode writes correct CID value for Feed-in priority mode"""
+    """Test set_storage_mode_if_needed writes correct CID value for Feed-in priority mode"""
     print("\n=== Test: set_storage_mode Feed-in priority ===")
 
     api = MockSolisAPI()
     inverter_sn = "456789"
     api.inverter_sn = [inverter_sn]
 
-    # Setup storage modes
-    api.storage_modes[inverter_sn] = SOLIS_STORAGE_MODES
+    # Setup initial cached value (different from target so a write occurs)
+    api.cached_values[inverter_sn] = {SOLIS_CID_STORAGE_MODE: "1"}
 
-    # Call set_storage_mode with mode name
-    await api.set_storage_mode(inverter_sn, "Feed-in priority")
+    # Call set_storage_mode_if_needed with mode name
+    await api.set_storage_mode_if_needed(inverter_sn, "Feed-in priority")
 
     # Verify read_and_write_cid was called
     calls = api.read_and_write_cid_calls
     assert len(calls) == 1, f"Expected 1 call, got {len(calls)}"
 
-    # Verify correct CID and value
+    # Verify correct CID and value (Feed-in priority = bits 5,6 set = 96)
     call = calls[0]
     assert call["cid"] == SOLIS_CID_STORAGE_MODE, f"Expected CID {SOLIS_CID_STORAGE_MODE}, got {call['cid']}"
-    assert call["value"] == "98", f"Expected value '98' (Feed-in priority), got {call['value']}"
-    assert "storage mode to Feed-in priority" in call["field_description"], "Field description should mention Feed-in priority"
+    assert call["value"] == "96", f"Expected value '96' (Feed-in priority), got {call['value']}"
+    assert "storage mode to 96" in call["field_description"], "Field description should mention value 96"
 
-    print("PASSED: set_storage_mode writes Feed-in priority correctly")
+    print("PASSED: set_storage_mode_if_needed writes Feed-in priority correctly")
     return False
 
 
 async def test_set_storage_mode_unknown_mode():
-    """Test set_storage_mode with unknown mode (should log error and not write)"""
+    """Test set_storage_mode_if_needed with unknown mode (should log error and not write)"""
     print("\n=== Test: set_storage_mode unknown mode ===")
 
     api = MockSolisAPI()
     inverter_sn = "567890"
     api.inverter_sn = [inverter_sn]
 
-    # Setup storage modes
-    api.storage_modes[inverter_sn] = SOLIS_STORAGE_MODES
+    # Setup initial cached value
+    api.cached_values[inverter_sn] = {SOLIS_CID_STORAGE_MODE: "1"}
 
-    # Call set_storage_mode with unknown mode
-    await api.set_storage_mode(inverter_sn, "Invalid Mode")
+    # Call set_storage_mode_if_needed with unknown mode
+    await api.set_storage_mode_if_needed(inverter_sn, "Invalid Mode")
 
     # Verify no write was attempted
     calls = api.read_and_write_cid_calls
@@ -2590,13 +2590,10 @@ async def test_set_storage_mode_if_needed_changes():
     inverter_sn = "678901"
     api.inverter_sn = [inverter_sn]
 
-    # Setup storage modes
-    api.storage_modes[inverter_sn] = SOLIS_STORAGE_MODES
-
     # Setup cached value (currently Self-Use - No Grid Charging = 1)
     api.cached_values[inverter_sn] = {SOLIS_CID_STORAGE_MODE: "1"}
 
-    # Call set_storage_mode_if_needed to change to Self-Use (35)
+    # Call set_storage_mode_if_needed to change to Self-Use (bits 0,5 = 33)
     await api.set_storage_mode_if_needed(inverter_sn, "Self-Use")
 
     # Verify read_and_write_cid was called
@@ -2606,7 +2603,7 @@ async def test_set_storage_mode_if_needed_changes():
     # Verify correct CID and value
     call = calls[0]
     assert call["cid"] == SOLIS_CID_STORAGE_MODE, f"Expected CID {SOLIS_CID_STORAGE_MODE}, got {call['cid']}"
-    assert call["value"] == "35", f"Expected value '35' (Self-Use), got {call['value']}"
+    assert call["value"] == "33", f"Expected value '33' (Self-Use), got {call['value']}"
 
     print("PASSED: set_storage_mode_if_needed writes when mode changes")
     return False
@@ -2620,11 +2617,8 @@ async def test_set_storage_mode_if_needed_no_changes():
     inverter_sn = "789012"
     api.inverter_sn = [inverter_sn]
 
-    # Setup storage modes
-    api.storage_modes[inverter_sn] = SOLIS_STORAGE_MODES
-
-    # Setup cached value (currently Self-Use = 35)
-    api.cached_values[inverter_sn] = {SOLIS_CID_STORAGE_MODE: "35"}
+    # Setup cached value (currently Self-Use = bits 0,5 = 33)
+    api.cached_values[inverter_sn] = {SOLIS_CID_STORAGE_MODE: "33"}
 
     # Call set_storage_mode_if_needed with same mode
     await api.set_storage_mode_if_needed(inverter_sn, "Self-Use")
@@ -2645,18 +2639,16 @@ async def test_set_storage_mode_if_needed_all_modes():
     inverter_sn = "890123"
     api.inverter_sn = [inverter_sn]
 
-    # Setup storage modes
-    api.storage_modes[inverter_sn] = SOLIS_STORAGE_MODES
-
     # Initialize cache
     api.cached_values[inverter_sn] = {}
 
-    # Test mode transitions
+    # Test mode transitions (sequential, each uses previous cached value)
+    # Default cache = 1 (1<<SOLIS_BIT_SELF_USE)
     test_modes = [
-        ("Self-Use", "35"),
-        ("Feed-in priority", "98"),
-        ("Backup/Reserve", "51"),
-        ("Self-Use - No Grid Charging", "1"),
+        ("Self-Use", "33"),                                           # bits 0,5 = 1+32 = 33
+        ("Feed-in priority", "96"),                                   # bits 5,6 = 32+64 = 96
+        ("Self-Use - No Grid Charging", "1"),                         # bit 0 = 1
+        ("Feed-in priority - No Timed Charge/Discharge", "64"),       # bit 6 = 64
     ]
 
     for mode_name, expected_value in test_modes:
@@ -2800,5 +2792,141 @@ async def test_automatic_config():
     assert any("No inverters to configure" in msg for msg in api3.log_messages), "Should log warning about no inverters"
 
     print("PASSED: automatic_config handles empty inverter list")
+
+    return False
+
+
+async def test_get_solis_mode_enum():
+    """Test get_solis_mode_enum decodes register values to correct enums"""
+    print("\n=== Test: get_solis_mode_enum ===")
+
+    # Self-Use with grid charging: bits 0,5 = 1 + 32 = 33
+    mode, mode_str = get_solis_mode_enum(33)
+    assert mode == ENUM_SELF_USE, f"Expected ENUM_SELF_USE, got {mode}"
+    assert mode_str == "Self-Use", f"Expected 'Self-Use', got '{mode_str}'"
+    print("PASSED: Self-Use (33) decoded correctly")
+
+    # Self-Use without grid charging: bit 0 = 1
+    mode, mode_str = get_solis_mode_enum(1)
+    assert mode == ENUM_SELF_USE_NO_GRID_CHARGING, f"Expected ENUM_SELF_USE_NO_GRID_CHARGING, got {mode}"
+    assert mode_str == "Self-Use - No Grid Charging", f"Expected 'Self-Use - No Grid Charging', got '{mode_str}'"
+    print("PASSED: Self-Use - No Grid Charging (1) decoded correctly")
+
+    # Feed-in priority with grid charging: bits 5,6 = 32 + 64 = 96
+    mode, mode_str = get_solis_mode_enum(96)
+    assert mode == ENUM_FEED_IN_PRIORITY, f"Expected ENUM_FEED_IN_PRIORITY, got {mode}"
+    assert mode_str == "Feed-in priority", f"Expected 'Feed-in priority', got '{mode_str}'"
+    print("PASSED: Feed-in priority (96) decoded correctly")
+
+    # Feed-in priority without grid charging: bit 6 = 64
+    mode, mode_str = get_solis_mode_enum(64)
+    assert mode == ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING, f"Expected ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING, got {mode}"
+    print("PASSED: Feed-in priority - No Grid Charging (64) decoded correctly")
+
+    # Other: no relevant bits set (e.g. 0)
+    mode, mode_str = get_solis_mode_enum(0)
+    assert mode == ENUM_OTHER, f"Expected ENUM_OTHER, got {mode}"
+    assert mode_str == "Other", f"Expected 'Other', got '{mode_str}'"
+    print("PASSED: Other (0) decoded correctly")
+
+    # Extra bits preserved: Self-Use with backup (bits 0,4,5 = 1+16+32 = 49)
+    mode, mode_str = get_solis_mode_enum(49)
+    assert mode == ENUM_SELF_USE, f"Expected ENUM_SELF_USE for 49, got {mode}"
+    print("PASSED: Self-Use with extra backup bit (49) decoded correctly")
+
+    # Feed-in priority wins over self-use when both set (bits 0,5,6 = 1+32+64 = 97)
+    mode, mode_str = get_solis_mode_enum(97)
+    assert mode == ENUM_FEED_IN_PRIORITY, f"Expected ENUM_FEED_IN_PRIORITY for 97, got {mode}"
+    print("PASSED: Feed-in priority takes precedence when both bits set (97)")
+
+    return False
+
+
+async def test_compute_solis_mode_value():
+    """Test compute_solis_mode_value encodes enums to correct register values"""
+    print("\n=== Test: compute_solis_mode_value ===")
+
+    # Self-Use from clean slate
+    value = compute_solis_mode_value(ENUM_SELF_USE, 0)
+    assert value == (1 << SOLIS_BIT_SELF_USE) | (1 << SOLIS_BIT_GRID_CHARGING), f"Expected 33, got {value}"
+    assert value == 33
+    print("PASSED: ENUM_SELF_USE from 0 -> 33")
+
+    # Self-Use - No Grid Charging from clean slate
+    value = compute_solis_mode_value(ENUM_SELF_USE_NO_GRID_CHARGING, 0)
+    assert value == (1 << SOLIS_BIT_SELF_USE), f"Expected 1, got {value}"
+    assert value == 1
+    print("PASSED: ENUM_SELF_USE_NO_GRID_CHARGING from 0 -> 1")
+
+    # Feed-in priority from clean slate
+    value = compute_solis_mode_value(ENUM_FEED_IN_PRIORITY, 0)
+    assert value == (1 << SOLIS_BIT_GRID_CHARGING) | (1 << SOLIS_BIT_FEED_IN_PRIORITY), f"Expected 96, got {value}"
+    assert value == 96
+    print("PASSED: ENUM_FEED_IN_PRIORITY from 0 -> 96")
+
+    # Feed-in priority - No Grid Charging from clean slate
+    value = compute_solis_mode_value(ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING, 0)
+    assert value == (1 << SOLIS_BIT_FEED_IN_PRIORITY), f"Expected 64, got {value}"
+    assert value == 64
+    print("PASSED: ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING from 0 -> 64")
+
+    # Preserves unrelated bits (backup bit 4 = 16)
+    value = compute_solis_mode_value(ENUM_SELF_USE, 16)  # old_value has backup set
+    assert value & (1 << SOLIS_BIT_BACKUP_MODE), "Backup bit should be preserved"
+    assert value == 49, f"Expected 49 (33+16), got {value}"
+    print("PASSED: Preserves backup bit when switching to Self-Use")
+
+    # Clears conflicting bits when changing modes
+    value = compute_solis_mode_value(ENUM_FEED_IN_PRIORITY, 33)  # old_value is Self-Use
+    assert not (value & (1 << SOLIS_BIT_SELF_USE)), "Self-use bit should be cleared"
+    assert value & (1 << SOLIS_BIT_FEED_IN_PRIORITY), "Feed-in priority bit should be set"
+    assert value & (1 << SOLIS_BIT_GRID_CHARGING), "Grid charging bit should be set"
+    assert value == 96, f"Expected 96, got {value}"
+    print("PASSED: Clears self-use when switching to Feed-in priority")
+
+    # ENUM_OTHER doesn't change anything
+    value = compute_solis_mode_value(ENUM_OTHER, 33)
+    assert value == 33, f"Expected 33 (unchanged), got {value}"
+    print("PASSED: ENUM_OTHER leaves value unchanged")
+
+    # Clears TOU and off-grid bits
+    old_with_tou = (1 << SOLIS_BIT_SELF_USE) | (1 << SOLIS_BIT_TOU_MODE) | (1 << SOLIS_BIT_OFF_GRID)  # bits 0,1,2 = 7
+    value = compute_solis_mode_value(ENUM_SELF_USE, old_with_tou)
+    assert not (value & (1 << SOLIS_BIT_TOU_MODE)), "TOU bit should be cleared"
+    assert not (value & (1 << SOLIS_BIT_OFF_GRID)), "Off-grid bit should be cleared"
+    assert value == 33, f"Expected 33, got {value}"
+    print("PASSED: Clears TOU and off-grid bits on mode change")
+
+    return False
+
+
+async def test_get_solis_mode_enum_compute_roundtrip():
+    """Test that get_solis_mode_enum and compute_solis_mode_value roundtrip correctly"""
+    print("\n=== Test: get_solis_mode_enum / compute_solis_mode_value roundtrip ===")
+
+    # For each mode, compute the register value then decode it back
+    test_cases = [
+        (ENUM_SELF_USE, "Self-Use"),
+        (ENUM_SELF_USE_NO_GRID_CHARGING, "Self-Use - No Grid Charging"),
+        (ENUM_FEED_IN_PRIORITY, "Feed-in priority"),
+        (ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING, "Feed-in priority - No Timed Charge/Discharge"),
+    ]
+
+    for mode_enum, expected_str in test_cases:
+        # Encode
+        reg_value = compute_solis_mode_value(mode_enum, 0)
+        # Decode
+        decoded_enum, decoded_str = get_solis_mode_enum(reg_value)
+        assert decoded_enum == mode_enum, f"Roundtrip failed for {expected_str}: encoded {reg_value}, decoded enum {decoded_enum} != {mode_enum}"
+        assert decoded_str == expected_str, f"Roundtrip failed: decoded str '{decoded_str}' != '{expected_str}'"
+        print(f"PASSED: Roundtrip {expected_str} -> {reg_value} -> {decoded_str}")
+
+    # Roundtrip with preserved bits (backup=16)
+    for mode_enum, expected_str in test_cases:
+        reg_value = compute_solis_mode_value(mode_enum, 16)  # Start with backup bit
+        decoded_enum, decoded_str = get_solis_mode_enum(reg_value)
+        assert decoded_enum == mode_enum, f"Roundtrip with backup failed for {expected_str}: decoded {decoded_enum} != {mode_enum}"
+        assert reg_value & (1 << SOLIS_BIT_BACKUP_MODE), f"Backup bit lost for {expected_str}"
+        print(f"PASSED: Roundtrip with backup {expected_str} -> {reg_value} -> {decoded_str}")
 
     return False

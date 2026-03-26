@@ -53,11 +53,6 @@ SOLIS_CID_ALLOW_EXPORT = 6962
 SOLIS_ALLOW_EXPORT_ON = "0"  # Allow export
 SOLIS_ALLOW_EXPORT_OFF = "1"  # Block export
 
-# Storage mode bit positions for bitwise operations
-SOLIS_BIT_BACKUP_MODE = 2  # Battery reserve/backup mode
-SOLIS_BIT_GRID_CHARGING = 4  # Allow grid charging
-SOLIS_BIT_TOU_MODE = 6  # Time of use mode
-
 # Battery max current CIDs
 SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT = 7224
 SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT = 7226
@@ -129,22 +124,21 @@ SOLIS_CID_LIST_TOU_V2 = [
     # Discharge slot 1-6 currents (non-sequential!)
     *SOLIS_CID_DISCHARGE_CURRENT,
 ]
-# Storage mode mappings
+# Storage mode enum, these are just labels for the bitwise combinations of the bits defined below, used for easier handling in code and UI
+ENUM_OTHER = 0
+ENUM_SELF_USE_NO_GRID_CHARGING = 1
+ENUM_SELF_USE = 2
+ENUM_FEED_IN_PRIORITY = 3
+ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING = 4
 SOLIS_STORAGE_MODES = {
-    "Self-Use - No Grid Charging": 1,
-    "Timed Charge/Discharge - No Grid Charging": 3,
-    "Backup/Reserve - No Grid Charging": 17,
-    "Self-Use - No Timed Charge/Discharge": 33,
-    "Self-Use": 35,
-    "Off-Grid Mode": 37,
-    "Battery Awaken": 41,
-    "Battery Awaken + Timed Charge/Discharge": 43,
-    "Backup/Reserve - No Timed Charge/Discharge": 49,
-    "Backup/Reserve": 51,
-    "Feed-in priority - No Grid Charging": 64,
-    "Feed-in priority - No Timed Charge/Discharge": 96,
-    "Feed-in priority": 98,
+    "Other": ENUM_OTHER,
+    "Self-Use": ENUM_SELF_USE,
+    "Self-Use - No Grid Charging": ENUM_SELF_USE_NO_GRID_CHARGING,
+    "Feed-in priority": ENUM_FEED_IN_PRIORITY,
+    "Feed-in priority - No Timed Charge/Discharge": ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING
 }
+
+# Real solis mode bits
 """
 BIT Tag Number | Fault Status | Status Code
 BIT00 | Self-Consumption Mode Switch | 0—Off | 1—On
@@ -160,6 +154,67 @@ BIT09 | Battery Current Correction Enable Switch | 0—Off | 1—On
 BIT10 | Battery Treatment Mode | 0—Off 1—On
 BIT11 | Peak-shaving mode switch 0—Off 1—On
 """
+
+# Storage mode bit positions for bitwise operations
+SOLIS_BIT_SELF_USE = 0  # Self-use mode
+SOLIS_BIT_TOU_MODE = 1  # Time of use mode
+SOLIS_BIT_OFF_GRID = 2  # Off-grid mode
+SOLIS_BIT_BACKUP_MODE = 4  # Battery reserve/backup mode
+SOLIS_BIT_GRID_CHARGING = 5  # Allow grid charging
+SOLIS_BIT_FEED_IN_PRIORITY = 6  # Feed-in priority mode
+SOLIS_BIT_PEAK_SHAVING = 11  # Peak-shaving mode
+
+def get_solis_mode_enum(value):
+    """
+    Determine storage mode enum based on bit flags in the value.
+    """
+    mode = ENUM_OTHER
+    if value & (1 << SOLIS_BIT_FEED_IN_PRIORITY) and (value & (1 << SOLIS_BIT_GRID_CHARGING)):
+        mode = ENUM_FEED_IN_PRIORITY
+    elif value & (1 << SOLIS_BIT_SELF_USE) and (value & (1 << SOLIS_BIT_GRID_CHARGING)):
+        mode = ENUM_SELF_USE
+    elif value & (1 << SOLIS_BIT_FEED_IN_PRIORITY):
+        mode = ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING
+    elif value & (1 << SOLIS_BIT_SELF_USE):
+        mode = ENUM_SELF_USE_NO_GRID_CHARGING
+    mode_str = "Other"
+    for mode_name, mode_value in SOLIS_STORAGE_MODES.items():
+        if mode_value == mode:
+            mode_str = mode_name
+            break
+    return mode, mode_str
+
+def compute_solis_mode_value(mode_enum, old_value):
+    """
+    Convert storage mode enum to bit flag value for CID 636
+    """
+    value = old_value  # Start with current value to preserve unrelated bits
+    if mode_enum == ENUM_SELF_USE_NO_GRID_CHARGING:
+        value |= (1 << SOLIS_BIT_SELF_USE)  # Set self-use bit
+        value &= ~(1 << SOLIS_BIT_GRID_CHARGING)  # Clear grid charging bit
+        value &= ~(1 << SOLIS_BIT_FEED_IN_PRIORITY)  # Clear feed-in priority bit
+        value &= ~(1 << SOLIS_BIT_OFF_GRID)  # Clear off-grid bit
+        value &= ~(1 << SOLIS_BIT_TOU_MODE)  # Clear TOU mode bit
+    elif mode_enum == ENUM_SELF_USE:
+        value |= (1 << SOLIS_BIT_SELF_USE)  # Set self-use bit
+        value |= (1 << SOLIS_BIT_GRID_CHARGING)  # Set grid charging bit
+        value &= ~(1 << SOLIS_BIT_FEED_IN_PRIORITY)  # Clear feed-in priority bit
+        value &= ~(1 << SOLIS_BIT_OFF_GRID)  # Clear off-grid bit
+        value &= ~(1 << SOLIS_BIT_TOU_MODE)  # Clear TOU mode bit
+    elif mode_enum == ENUM_FEED_IN_PRIORITY:
+        value &= ~(1 << SOLIS_BIT_SELF_USE)  # Clear self-use bit
+        value |= (1 << SOLIS_BIT_GRID_CHARGING)  # Set grid charging bit
+        value |= (1 << SOLIS_BIT_FEED_IN_PRIORITY)  # Set feed-in priority bit
+        value &= ~(1 << SOLIS_BIT_OFF_GRID)  # Clear off-grid bit
+        value &= ~(1 << SOLIS_BIT_TOU_MODE)  # Clear TOU mode bit
+    elif mode_enum == ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING:
+        value &= ~(1 << SOLIS_BIT_SELF_USE)  # Clear self-use bit
+        value &= ~(1 << SOLIS_BIT_GRID_CHARGING)  # Clear grid charging bit
+        value |= (1 << SOLIS_BIT_FEED_IN_PRIORITY)  # Set feed-in priority bit
+        value &= ~(1 << SOLIS_BIT_OFF_GRID)  # Clear off-grid bit
+        value &= ~(1 << SOLIS_BIT_TOU_MODE)  # Clear TOU mode bit
+    return value
+
 
 # Inverter status codes
 SOLIS_INVERTER_STATUS = {
@@ -225,7 +280,6 @@ class SolisAPI(ComponentBase):
         self.cached_values = {}  # {inverter_sn: {cid: str_value}}
         self.cached_infos = {}  # {inverter_sn: {cid: info_dict}}
         self.inverter_details = {}  # {inverter_sn: detail_dict}
-        self.storage_modes = {}  # {inverter_sn: {name: value}}
         self.parallel_battery_count = {}  # {inverter_sn: int}
         self.max_charge_current = {}  # {inverter_sn: int}
         self.max_discharge_current = {}  # {inverter_sn: int}
@@ -564,6 +618,16 @@ class SolisAPI(ComponentBase):
                 charge_current = max_charge_current_amps
                 discharge_current = max_discharge_current_amps
 
+                # There appears to be charge current limit on the slots which confused as slot 1 has a higher limit than the others,
+                # but the value isn't accepted, find the lowest slot limit
+                for slot in slots_to_check:
+                    current_cid = SOLIS_CID_CHARGE_CURRENT[slot - 1]
+                    max_charge_current_amps = min(self.cached_infos.get(inverter_sn, {}).get(current_cid, {}).get('sysCommand', {}).get('max', max_charge_current_amps), max_charge_current_amps)
+                    current_cid = SOLIS_CID_DISCHARGE_CURRENT[slot - 1]
+                    max_discharge_current_amps = min(self.cached_infos.get(inverter_sn, {}).get(current_cid, {}).get('sysCommand', {}).get('max', max_discharge_current_amps), max_discharge_current_amps)
+
+                self.log("Solis API: Max charge current amps determined to be {} and max discharge current amps determined to be {} for {}".format(max_charge_current_amps, max_discharge_current_amps, inverter_sn))
+
                 for slot in slots_to_check:
                     slot_data = time_windows.get(slot)
                     if not slot_data:
@@ -605,9 +669,8 @@ class SolisAPI(ComponentBase):
                     if "charge_current" in slot_data:
                         current_cid = SOLIS_CID_CHARGE_CURRENT[slot - 1]
                         new_current = float(slot_data['charge_current'])
-                        max_current = self.cached_infos.get(inverter_sn, {}).get(current_cid, {}).get('sysCommand', {}).get('max', max_charge_current_amps)
-                        new_current = min(new_current, max_current)
-                        cached_current = float(self.cached_values.get(inverter_sn, {}).get(current_cid, max_current))
+                        new_current = min(new_current, max_charge_current_amps)
+                        cached_current = float(self.cached_values.get(inverter_sn, {}).get(current_cid, max_charge_current_amps))
                         if round(cached_current, 1) != round(new_current, 1):
                             result = await self.read_and_write_cid(inverter_sn, current_cid, new_current, field_description=f"charge slot {slot} current")
                             success &= result
@@ -643,9 +706,8 @@ class SolisAPI(ComponentBase):
                     if "discharge_current" in slot_data:
                         current_cid = SOLIS_CID_DISCHARGE_CURRENT[slot - 1]
                         new_current = float(slot_data['discharge_current'])
-                        max_current = self.cached_infos.get(inverter_sn, {}).get(current_cid, {}).get('sysCommand', {}).get('max', max_discharge_current_amps)
-                        new_current = min(new_current, max_current)
-                        cached_current = float(self.cached_values.get(inverter_sn, {}).get(current_cid, 0))
+                        new_current = min(new_current, max_discharge_current_amps)
+                        cached_current = float(self.cached_values.get(inverter_sn, {}).get(current_cid, max_discharge_current_amps))
                         if round(cached_current, 1) != round(new_current, 1):
                             result = await self.read_and_write_cid(inverter_sn, current_cid, new_current, field_description=f"discharge slot {slot} current")
                             success &= result
@@ -1168,6 +1230,7 @@ class SolisAPI(ComponentBase):
         self.max_discharge_current[inverter_sn] = max_discharge
 
         self.log(f"Solis API: Calculated max currents for {inverter_sn}: charge={max_charge}A, discharge={max_discharge}A")
+
 
     async def fetch_entity_data(self, sn):
         """
@@ -1825,20 +1888,14 @@ class SolisAPI(ComponentBase):
 
             # Storage mode selector
             entity_id = f"select.{prefix}_solis_{inverter_sn_lower}_storage_mode"
-            mode_value = values.get(SOLIS_CID_STORAGE_MODE, None)
-            # Storage mode bit switches
-            storage_mode_int = None
-            if mode_value is not None:
-                try:
-                    storage_mode_int = int(mode_value)
-                except (ValueError, TypeError):
-                    self.log("Warn: Failed to convert storage mode to int for {}: {}".format(inverter_sn, mode_value))  # Debug log
+            storage_mode_value = self.get_current_solis_mode_value(inverter_sn)
+            mode_enum, mode_str = get_solis_mode_enum(storage_mode_value)
 
             # Use dynamic storage modes if available, otherwise static
-            mode_options = list(self.storage_modes.get(inverter_sn, SOLIS_STORAGE_MODES).keys())
+            mode_options = list(SOLIS_STORAGE_MODES.keys())
             self.dashboard_item(
                 entity_id,
-                state=SOLIS_STORAGE_MODES.get(mode_value, mode_value) if mode_value is not None else None,
+                state=mode_str,
                 attributes={
                     "friendly_name": f"Solis {inverter_name} Storage Mode",
                     "options": mode_options,
@@ -1850,10 +1907,11 @@ class SolisAPI(ComponentBase):
 
             # Battery reserve switch
             entity_id = f"switch.{prefix}_solis_{inverter_sn_lower}_battery_reserve"
-            reserve_on = (storage_mode_int & (1 << SOLIS_BIT_BACKUP_MODE)) != 0 if storage_mode_int is not None else None
+            storage_mode_int = self.get_current_solis_mode_value(inverter_sn)
+            reserve_on = (storage_mode_int & (1 << SOLIS_BIT_BACKUP_MODE)) != 0
             self.dashboard_item(
                 entity_id,
-                state="on" if reserve_on else "off" if reserve_on is not None else None,
+                state="on" if reserve_on else "off",
                 attributes={
                     "friendly_name": f"Solis {inverter_name} Battery Reserve",
                     "icon": "mdi:battery-heart-outline",
@@ -1863,10 +1921,11 @@ class SolisAPI(ComponentBase):
 
             # Allow grid charging switch
             entity_id = f"switch.{prefix}_solis_{inverter_sn_lower}_allow_grid_charging"
-            grid_charging_on = (storage_mode_int & (1 << SOLIS_BIT_GRID_CHARGING)) != 0 if storage_mode_int is not None else None
+            storage_mode_int = self.get_current_solis_mode_value(inverter_sn)
+            grid_charging_on = (storage_mode_int & (1 << SOLIS_BIT_GRID_CHARGING)) != 0
             self.dashboard_item(
                 entity_id,
-                state="on" if grid_charging_on else "off" if grid_charging_on is not None else None,
+                state="on" if grid_charging_on else "off",
                 attributes={
                     "friendly_name": f"Solis {inverter_name} Allow Grid Charging",
                     "icon": "mdi:battery-charging-outline",
@@ -1876,10 +1935,11 @@ class SolisAPI(ComponentBase):
 
             # Time of use switch
             entity_id = f"switch.{prefix}_solis_{inverter_sn_lower}_time_of_use"
-            tou_on = (storage_mode_int & (1 << SOLIS_BIT_TOU_MODE)) != 0 if storage_mode_int is not None else None
+            storage_mode_int = self.get_current_solis_mode_value(inverter_sn)
+            tou_on = (storage_mode_int & (1 << SOLIS_BIT_TOU_MODE)) != 0
             self.dashboard_item(
                 entity_id,
-                state="on" if tou_on else "off" if tou_on is not None else None,
+                state="on" if tou_on else "off",
                 attributes={
                     "friendly_name": f"Solis {inverter_name} Time of Use Mode",
                     "icon": "mdi:clock-check-outline",
@@ -2075,41 +2135,39 @@ class SolisAPI(ComponentBase):
                 except (ValueError, TypeError, OSError):
                     self.log(f"Warn: Failed to parse dataTimestamp for {inverter_sn}: {data_timestamp_ms}")
 
+    def get_current_solis_mode_value(self, inverter_sn):
+        """Get the current solis mode value"""
+        value = self.cached_values.get(inverter_sn, {}).get(SOLIS_CID_STORAGE_MODE, 1<<SOLIS_BIT_SELF_USE)
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            self.log(f"Warn: Failed to parse storage mode value for {inverter_sn}: {value}")
+            return 1<<SOLIS_BIT_SELF_USE
+
     # ==================== Control Methods ====================
 
     async def set_storage_mode_if_needed(self, inverter_sn, mode):
-        """Set storage mode if it differs from cached value"""
+        """Set storage mode (as text) if it differs from cached value"""
         try:
             # Convert mode name to value
-            modes = self.storage_modes.get(inverter_sn, SOLIS_STORAGE_MODES)
-            mode_value = modes.get(mode)
-            if mode_value is None:
+            mode_enum = SOLIS_STORAGE_MODES.get(mode)
+            if mode_enum is None:
                 self.log(f"Error: Unknown storage mode '{mode}' for {inverter_sn}")
                 return
+            cached_mode = self.get_current_solis_mode_value(inverter_sn)
+            mode_value = compute_solis_mode_value(mode_enum, cached_mode)            
 
-            # Check cached value
-            cached_mode = None
-            if inverter_sn in self.cached_values:
-                cached_mode = self.cached_values[inverter_sn].get(SOLIS_CID_STORAGE_MODE)
-
-            if cached_mode != str(mode_value):
-                await self.set_storage_mode(inverter_sn, mode)
+            if cached_mode != mode_value:
+                await self.set_storage_mode_value(inverter_sn, mode_value)
 
         except Exception as e:
             self.log(f"Warn: Solis API set storage mode if needed failed for {inverter_sn}: {e}")
 
-    async def set_storage_mode(self, inverter_sn, mode):
-        """Set storage mode"""
+    async def set_storage_mode_value(self, inverter_sn, mode_value):
+        """Set storage mode numerical value directly"""
         try:
-            # Convert mode name to value
-            modes = self.storage_modes.get(inverter_sn, SOLIS_STORAGE_MODES)
-            mode_value = modes.get(mode)
-            if mode_value is None:
-                self.log(f"Error: Unknown storage mode '{mode}' for {inverter_sn}")
-                return
-
             # Write storage mode CID
-            success = await self.read_and_write_cid(inverter_sn, SOLIS_CID_STORAGE_MODE, mode_value, field_description=f"storage mode to {mode}")
+            success = await self.read_and_write_cid(inverter_sn, SOLIS_CID_STORAGE_MODE, mode_value, field_description=f"storage mode to {mode_value}")
             if not success:
                 self.log(f"Warn: Solis API set storage mode encountered errors for {inverter_sn}")
 
@@ -2158,25 +2216,8 @@ class SolisAPI(ComponentBase):
 
             # Handle storage mode
             if field == "storage_mode":
-                # If value is in the lookup table convert it from Text to number
-                value = SOLIS_STORAGE_MODES.get(value, value)
-                try:
-                    value = str(int(value))
-                except (ValueError, TypeError):
-                    self.log(f"Error: Solis API: Invalid storage mode value '{value}' for {inverter_sn}")
-                    return
-
-                await self.set_storage_mode(inverter_sn, value)
-                # Update cache if write succeeded
-                try:
-                    read_value, info = await self.read_cid(inverter_sn, SOLIS_CID_STORAGE_MODE)
-                    if inverter_sn not in self.cached_values:
-                        self.cached_values[inverter_sn] = {}
-                    self.cached_values[inverter_sn][SOLIS_CID_STORAGE_MODE] = read_value
-                    self.log(f"Solis API: Updated cache for storage mode on {inverter_sn}")
-                except Exception as e:
-                    self.log(f"Warn: Solis API: Failed to update cache for storage mode: {e}")
-
+                # Change mode, does a write and updates cache
+                await self.set_storage_mode_if_needed(inverter_sn, value)
                 # Re-publish entities
                 await self.publish_entities()
                 return
@@ -2561,12 +2602,7 @@ class SolisAPI(ComponentBase):
                 if inverter_sn not in self.cached_values:
                     self.cached_values[inverter_sn] = {}
 
-                current_mode_str = self.cached_values[inverter_sn].get(SOLIS_CID_STORAGE_MODE, "0")
-                try:
-                    current_mode = int(current_mode_str)
-                except (ValueError, TypeError):
-                    self.log(f"Warn: Solis API: Invalid storage mode value: {current_mode_str}")
-                    return
+                current_mode = self.get_current_solis_mode_value(inverter_sn)
 
                 # Calculate new value
                 if service == "turn_on":
@@ -2592,12 +2628,7 @@ class SolisAPI(ComponentBase):
                 if inverter_sn not in self.cached_values:
                     self.cached_values[inverter_sn] = {}
 
-                current_mode_str = self.cached_values[inverter_sn].get(SOLIS_CID_STORAGE_MODE, "0")
-                try:
-                    current_mode = int(current_mode_str)
-                except (ValueError, TypeError):
-                    self.log(f"Warn: Solis API: Invalid storage mode value: {current_mode_str}")
-                    return
+                current_mode = self.get_current_solis_mode_value(inverter_sn)
 
                 # Calculate new value
                 if service == "turn_on":
@@ -2623,12 +2654,7 @@ class SolisAPI(ComponentBase):
                 if inverter_sn not in self.cached_values:
                     self.cached_values[inverter_sn] = {}
 
-                current_mode_str = self.cached_values[inverter_sn].get(SOLIS_CID_STORAGE_MODE, "0")
-                try:
-                    current_mode = int(current_mode_str)
-                except (ValueError, TypeError):
-                    self.log(f"Warn: Solis API: Invalid storage mode value: {current_mode_str}")
-                    return
+                current_mode = self.get_current_solis_mode_value(inverter_sn)
 
                 # Calculate new value
                 if service == "turn_on":
@@ -2689,10 +2715,6 @@ class SolisAPI(ComponentBase):
                 self.parallel_battery_count[sn] = int(float(parallel_battery)) + 1
             except (ValueError, TypeError):
                 self.parallel_battery_count[sn] = 1
-
-            # Extract storage modes if available in detail response
-            # TODO: Check if API provides storage mode options in detail
-            self.storage_modes[sn] = SOLIS_STORAGE_MODES
             return True
 
         except Exception as e:
