@@ -104,10 +104,11 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         mpan=None,
         export_account_id=None,
         export_mpan=None,
+        base_url=None,
     ):
         """Initialise the Kraken API component with provider, account, and auth config."""
         self.provider = provider
-        self.base_url = KRAKEN_BASE_URLS.get(provider)
+        self.base_url = base_url or KRAKEN_BASE_URLS.get(provider)
         if not self.base_url:
             self.log(f"Warn: Kraken: Unknown provider '{provider}', expected 'edf' or 'eon'")
             self.base_url = KRAKEN_BASE_URLS["edf"]

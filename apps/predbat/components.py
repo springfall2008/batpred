@@ -271,6 +271,10 @@ COMPONENT_LIST = {
                 "required": False,
                 "config": "kraken_export_mpan",
             },
+            "base_url": {
+                "required": False,
+                "config": "kraken_base_url",
+            },
         },
         "phase": 1,
     },
