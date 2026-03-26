@@ -6334,6 +6334,20 @@ def get_plan_renderer_js():
         }
     }
 
+    // Map rate adjust type to HTML symbol (matches output.py adjust_symbol)
+    function getAdjustSymbol(adjustType) {
+        if (!adjustType) return '';
+        switch (adjustType) {
+            case 'offset': return '? &#8518;';
+            case 'future': return '? &#x2696;';
+            case 'user': return '&#61;';
+            case 'manual': return '&#8526;';
+            case 'increment': return '&#177;';
+            case 'saving': return '&dollar;';
+            default: return '?';
+        }
+    }
+
     // Render plan table from JSON data
     function renderPlanTable(jsonData, overrides, showDebug, editable) {
         try {
@@ -6392,11 +6406,15 @@ def get_plan_renderer_js():
                     html += `<td id=time bgcolor=#FFFFFF>${timeDisplay}</td>`;
                 }
 
-                // Import rate - formatted bold if in charge window, with adjusted rate in parentheses if debug mode
+                // Import rate - formatted bold if in charge window, italic with symbol if estimated
                 const importBold = row.state && (row.state === 'Chrg' || row.state === 'HoldChrg' || row.state === 'FrzChrg');
                 let importText = row.import_rate.toFixed(2);
                 if (showDebug && row.import_rate_adjusted !== undefined) {
                     importText += ` (${row.import_rate_adjusted.toFixed(2)})`;
+                }
+                const importAdjust = row.import_rate_adjust ? ` ${getAdjustSymbol(row.import_rate_adjust)}` : '';
+                if (row.import_rate_adjust) {
+                    importText = `<i>${importText}${importAdjust}</i>`;
                 }
                 if (importBold) {
                     importText = `<b>${importText}</b>`;
@@ -6407,10 +6425,14 @@ def get_plan_renderer_js():
                     html += `<td id=import ${cellStyle} bgcolor=${row.rate_color_import || '#FFFFFF'}>${importText}</td>`;
                 }
 
-                // Export rate - with adjusted rate in parentheses if debug mode
+                // Export rate - italic with symbol if estimated
                 let exportText = row.export_rate.toFixed(2);
                 if (showDebug && row.export_rate_adjusted !== undefined) {
                     exportText += ` (${row.export_rate_adjusted.toFixed(2)})`;
+                }
+                const exportAdjust = row.export_rate_adjust ? ` ${getAdjustSymbol(row.export_rate_adjust)}` : '';
+                if (row.export_rate_adjust) {
+                    exportText = `<i>${exportText}${exportAdjust}</i>`;
                 }
                 if (editable) {
                     html += renderRateCell(row.export_rate, row.rate_color_export, 'export', row.time, timeDisplay, overrides, exportText, row.slot_minute);
