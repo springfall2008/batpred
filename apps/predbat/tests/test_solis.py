@@ -2645,10 +2645,10 @@ async def test_set_storage_mode_if_needed_all_modes():
     # Test mode transitions (sequential, each uses previous cached value)
     # Default cache = 1 (1<<SOLIS_BIT_SELF_USE)
     test_modes = [
-        ("Self-Use", "33"),                                           # bits 0,5 = 1+32 = 33
-        ("Feed-in priority", "96"),                                   # bits 5,6 = 32+64 = 96
-        ("Self-Use - No Timed Charge/Discharge", "1"),                         # bit 0 = 1
-        ("Feed-in priority - No Timed Charge/Discharge", "64"),       # bit 6 = 64
+        ("Self-Use", "33"),  # bits 0,5 = 1+32 = 33
+        ("Feed-in priority", "96"),  # bits 5,6 = 32+64 = 96
+        ("Self-Use - No Timed Charge/Discharge", "1"),  # bit 0 = 1
+        ("Feed-in priority - No Timed Charge/Discharge", "64"),  # bit 6 = 64
     ]
 
     for mode_name, expected_value in test_modes:
