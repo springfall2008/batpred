@@ -16,7 +16,7 @@ from solis import SOLIS_CID_BATTERY_FORCE_CHARGE_SOC, SOLIS_CID_BATTERY_OVER_DIS
 from solis import SOLIS_CID_STORAGE_MODE, SOLIS_BIT_GRID_CHARGING, SOLIS_BIT_TOU_MODE
 from solis import SOLIS_CID_ALLOW_EXPORT, SOLIS_ALLOW_EXPORT_ON, SOLIS_ALLOW_EXPORT_OFF, SOLIS_CID_BATTERY_RESERVE_SOC
 from solis import SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT
-from solis import SOLIS_CID_POWER_LIMIT, SOLIS_STORAGE_MODES, SOLIS_BIT_BACKUP_MODE
+from solis import SOLIS_CID_POWER_LIMIT, SOLIS_BIT_BACKUP_MODE
 from solis import get_solis_mode_enum, compute_solis_mode_value
 from solis import ENUM_OTHER, ENUM_SELF_USE, ENUM_SELF_USE_NO_GRID_CHARGING, ENUM_FEED_IN_PRIORITY, ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING
 from solis import SOLIS_BIT_SELF_USE, SOLIS_BIT_FEED_IN_PRIORITY, SOLIS_BIT_GRID_CHARGING, SOLIS_BIT_OFF_GRID
@@ -2645,10 +2645,10 @@ async def test_set_storage_mode_if_needed_all_modes():
     # Test mode transitions (sequential, each uses previous cached value)
     # Default cache = 1 (1<<SOLIS_BIT_SELF_USE)
     test_modes = [
-        ("Self-Use", "33"),                                           # bits 0,5 = 1+32 = 33
-        ("Feed-in priority", "96"),                                   # bits 5,6 = 32+64 = 96
-        ("Self-Use - No Grid Charging", "1"),                         # bit 0 = 1
-        ("Feed-in priority - No Timed Charge/Discharge", "64"),       # bit 6 = 64
+        ("Self-Use", "33"),  # bits 0,5 = 1+32 = 33
+        ("Feed-in priority", "96"),  # bits 5,6 = 32+64 = 96
+        ("Self-Use - No Grid Charging", "1"),  # bit 0 = 1
+        ("Feed-in priority - No Timed Charge/Discharge", "64"),  # bit 6 = 64
     ]
 
     for mode_name, expected_value in test_modes:

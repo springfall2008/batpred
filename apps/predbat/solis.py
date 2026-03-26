@@ -2155,7 +2155,7 @@ class SolisAPI(ComponentBase):
                 self.log(f"Error: Unknown storage mode '{mode}' for {inverter_sn}")
                 return
             cached_mode = self.get_current_solis_mode_value(inverter_sn)
-            mode_value = compute_solis_mode_value(mode_enum, cached_mode)            
+            mode_value = compute_solis_mode_value(mode_enum, cached_mode)
 
             if cached_mode != mode_value:
                 await self.set_storage_mode_value(inverter_sn, mode_value)
