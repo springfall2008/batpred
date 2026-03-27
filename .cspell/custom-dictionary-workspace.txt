@@ -84,6 +84,7 @@ dimport
 dischargeenergytotal
 dischargefreeze
 diverter
+docstrings
 dlimit
 dnoregion
 dstamp
