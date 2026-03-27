@@ -200,10 +200,10 @@ def test_mixed_slots(my_predbat):
 
     windows = [
         make_window(720, 750, target=100.0),  # disabled
-        make_window(750, 780, target=50.0),   # keep
-        make_window(780, 810, target=50.0),   # combine with previous
+        make_window(750, 780, target=50.0),  # keep
+        make_window(780, 810, target=50.0),  # combine with previous
         make_window(810, 840, target=100.0),  # disabled
-        make_window(840, 870, target=30.0),   # keep
+        make_window(840, 870, target=30.0),  # keep
     ]
     limits = [100.0, 50.0, 50.0, 100.0, 30.0]
 
