@@ -63,6 +63,7 @@ black .
 ```
 
 Key constraints:
+
 - **Line length**: 256 chars (Black), 250 chars (Flake8)
 - **Docstrings**: 100% coverage required (`interrogate`) for all functions and classes
 - **Spell checking**: British English (`en-gb`) via CSpell; add valid unknown words to `.cspell/custom-dictionary-workspace.txt` (file is auto-sorted alphabetically on commit, so re-stage after running pre-commit)
@@ -100,6 +101,7 @@ The main loop (`update_pred()`) runs every 5 minutes: fetch data → run optimiz
 ### Component/Plugin System
 
 `components.py` defines a registry of 18 pluggable components (DB, HA, Web, MCP, GECloud, Octopus, Fox, Solax, Solis, Axle, Ohme, Kraken, etc.). Each component:
+
 - Inherits from `ComponentBase`
 - Has `api_start()` / `api_stop()` lifecycle methods
 - Can be independently enabled/disabled
@@ -125,4 +127,4 @@ Documentation source lives in `docs/` and is built with MkDocs:
 mkdocs serve   # Live preview at http://localhost:8000
 ```
 
-When adding a new doc page, add it to `mkdocs.yml`. The published site at https://springfall2008.github.io/batpred/ is built automatically from `main` via GitHub Actions.
+When adding a new doc page, add it to `mkdocs.yml`. The published site at <https://springfall2008.github.io/batpred/> is built automatically from `main` via GitHub Actions.

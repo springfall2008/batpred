@@ -2229,7 +2229,7 @@ class Plan:
 
                     # Export level adjustments for safety
                     if limit == 99.0:
-                        if dp1(soc_min) == dp1(self.soc_max) and dp1(soc_max) == dp1(self.soc_max) and window_start not in self.manual_freeze_export_times:
+                        if dp1(soc_min) == dp1(self.soc_max) and dp1(soc_max) == dp1(self.soc_max) and window["start"] not in self.manual_freeze_export_times:
                             # Reserve slot, so set to 100% if we are already at 100% (but not for manual overrides)
                             window["target"] = 100
                             export_limits_best[window_n] = 100.0
