@@ -7,7 +7,6 @@
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
-import copy
 from tests.test_infra import reset_inverter
 
 
@@ -230,9 +229,9 @@ def test_multiple_windows_mixed(my_predbat):
 
     minutes_now = 720
     windows = [
-        make_window(720, 750),   # Window 0: freeze export at 100% SoC (should be clipped)
-        make_window(750, 780),   # Window 1: manual freeze export at 100% SoC (should be preserved)
-        make_window(780, 810),   # Window 2: normal export (should remain)
+        make_window(720, 750),  # Window 0: freeze export at 100% SoC (should be clipped)
+        make_window(750, 780),  # Window 1: manual freeze export at 100% SoC (should be preserved)
+        make_window(780, 810),  # Window 2: normal export (should remain)
     ]
     limits = [99.0, 99.0, 50.0]
 

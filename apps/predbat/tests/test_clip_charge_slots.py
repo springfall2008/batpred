@@ -300,9 +300,9 @@ def test_multiple_windows_mixed(my_predbat):
 
     minutes_now = 720
     windows = [
-        make_window(720, 750),   # Window 0: SoC well above limit -> clip off
-        make_window(780, 810),   # Window 1: freeze charge at 100% SoC -> convert to full charge
-        make_window(840, 870),   # Window 2: SoC below limit -> clip up
+        make_window(720, 750),  # Window 0: SoC well above limit -> clip off
+        make_window(780, 810),  # Window 1: freeze charge at 100% SoC -> convert to full charge
+        make_window(840, 870),  # Window 2: SoC below limit -> clip up
     ]
     limits = [3.0, my_predbat.reserve, 8.0]
 
