@@ -2521,8 +2521,8 @@ async def test_set_storage_mode_self_use():
     # Verify correct CID and value (Self-Use = bits 0,5 set = 33)
     call = calls[0]
     assert call["cid"] == SOLIS_CID_STORAGE_MODE, f"Expected CID {SOLIS_CID_STORAGE_MODE}, got {call['cid']}"
-    assert call["value"] == "33", f"Expected value '33' (Self-Use), got {call['value']}"
-    assert "storage mode to 33" in call["field_description"], "Field description should mention value 33"
+    assert call["value"] == "35", f"Expected value '35' (Self-Use), got {call['value']}"
+    assert "storage mode to 35" in call["field_description"], "Field description should mention value 35"
 
     print("PASSED: set_storage_mode_if_needed writes Self-Use correctly")
     return False
@@ -2549,8 +2549,8 @@ async def test_set_storage_mode_feed_in_priority():
     # Verify correct CID and value (Feed-in priority = bits 5,6 set = 96)
     call = calls[0]
     assert call["cid"] == SOLIS_CID_STORAGE_MODE, f"Expected CID {SOLIS_CID_STORAGE_MODE}, got {call['cid']}"
-    assert call["value"] == "96", f"Expected value '96' (Feed-in priority), got {call['value']}"
-    assert "storage mode to 96" in call["field_description"], "Field description should mention value 96"
+    assert call["value"] == "98", f"Expected value '98' (Feed-in priority), got {call['value']}"
+    assert "storage mode to 98" in call["field_description"], "Field description should mention value 98"
 
     print("PASSED: set_storage_mode_if_needed writes Feed-in priority correctly")
     return False
@@ -2603,7 +2603,7 @@ async def test_set_storage_mode_if_needed_changes():
     # Verify correct CID and value
     call = calls[0]
     assert call["cid"] == SOLIS_CID_STORAGE_MODE, f"Expected CID {SOLIS_CID_STORAGE_MODE}, got {call['cid']}"
-    assert call["value"] == "33", f"Expected value '33' (Self-Use), got {call['value']}"
+    assert call["value"] == "35", f"Expected value '35' (Self-Use), got {call['value']}"
 
     print("PASSED: set_storage_mode_if_needed writes when mode changes")
     return False
@@ -2617,8 +2617,8 @@ async def test_set_storage_mode_if_needed_no_changes():
     inverter_sn = "789012"
     api.inverter_sn = [inverter_sn]
 
-    # Setup cached value (currently Self-Use = bits 0,5 = 33)
-    api.cached_values[inverter_sn] = {SOLIS_CID_STORAGE_MODE: "33"}
+    # Setup cached value (currently Self-Use = bits 0,5 = 35)
+    api.cached_values[inverter_sn] = {SOLIS_CID_STORAGE_MODE: "35"}
 
     # Call set_storage_mode_if_needed with same mode
     await api.set_storage_mode_if_needed(inverter_sn, "Self-Use")
@@ -2645,8 +2645,8 @@ async def test_set_storage_mode_if_needed_all_modes():
     # Test mode transitions (sequential, each uses previous cached value)
     # Default cache = 1 (1<<SOLIS_BIT_SELF_USE)
     test_modes = [
-        ("Self-Use", "33"),  # bits 0,5 = 1+32 = 33
-        ("Feed-in priority", "96"),  # bits 5,6 = 32+64 = 96
+        ("Self-Use", "35"),  # bits 0,1, 5 = 1+2+32 = 35
+        ("Feed-in priority", "98"),  # bits 5,6 = 32+64 = 98
         ("Self-Use - No Timed Charge/Discharge", "1"),  # bit 0 = 1
         ("Feed-in priority - No Timed Charge/Discharge", "64"),  # bit 6 = 64
     ]
@@ -2848,9 +2848,9 @@ async def test_compute_solis_mode_value():
 
     # Self-Use from clean slate
     value = compute_solis_mode_value(ENUM_SELF_USE, 0)
-    assert value == (1 << SOLIS_BIT_SELF_USE) | (1 << SOLIS_BIT_GRID_CHARGING), f"Expected 33, got {value}"
-    assert value == 33
-    print("PASSED: ENUM_SELF_USE from 0 -> 33")
+    assert value == (1 << SOLIS_BIT_SELF_USE) | (1 << SOLIS_BIT_TOU_MODE) | (1 << SOLIS_BIT_GRID_CHARGING), f"Expected 35, got {value}"
+    assert value == 35
+    print("PASSED: ENUM_SELF_USE from 0 -> 35")
 
     # Self-Use - No Grid Charging from clean slate
     value = compute_solis_mode_value(ENUM_SELF_USE_NO_GRID_CHARGING, 0)
@@ -2860,9 +2860,9 @@ async def test_compute_solis_mode_value():
 
     # Feed-in priority from clean slate
     value = compute_solis_mode_value(ENUM_FEED_IN_PRIORITY, 0)
-    assert value == (1 << SOLIS_BIT_GRID_CHARGING) | (1 << SOLIS_BIT_FEED_IN_PRIORITY), f"Expected 96, got {value}"
-    assert value == 96
-    print("PASSED: ENUM_FEED_IN_PRIORITY from 0 -> 96")
+    assert value == (1 << SOLIS_BIT_GRID_CHARGING) | (1 << SOLIS_BIT_TOU_MODE) | (1 << SOLIS_BIT_FEED_IN_PRIORITY), f"Expected 98, got {value}"
+    assert value == 98
+    print("PASSED: ENUM_FEED_IN_PRIORITY from 0 -> 98")
 
     # Feed-in priority - No Grid Charging from clean slate
     value = compute_solis_mode_value(ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING, 0)
@@ -2873,7 +2873,7 @@ async def test_compute_solis_mode_value():
     # Preserves unrelated bits (backup bit 4 = 16)
     value = compute_solis_mode_value(ENUM_SELF_USE, 16)  # old_value has backup set
     assert value & (1 << SOLIS_BIT_BACKUP_MODE), "Backup bit should be preserved"
-    assert value == 49, f"Expected 49 (33+16), got {value}"
+    assert value == 51, f"Expected 51 (32 +2 +16), got {value}"
     print("PASSED: Preserves backup bit when switching to Self-Use")
 
     # Clears conflicting bits when changing modes
@@ -2881,7 +2881,8 @@ async def test_compute_solis_mode_value():
     assert not (value & (1 << SOLIS_BIT_SELF_USE)), "Self-use bit should be cleared"
     assert value & (1 << SOLIS_BIT_FEED_IN_PRIORITY), "Feed-in priority bit should be set"
     assert value & (1 << SOLIS_BIT_GRID_CHARGING), "Grid charging bit should be set"
-    assert value == 96, f"Expected 96, got {value}"
+    assert value & (1 << SOLIS_BIT_TOU_MODE), "TOU mode bit should be set"
+    assert value == 98, f"Expected 98, got {value}"
     print("PASSED: Clears self-use when switching to Feed-in priority")
 
     # ENUM_OTHER doesn't change anything
@@ -2892,9 +2893,9 @@ async def test_compute_solis_mode_value():
     # Clears TOU and off-grid bits
     old_with_tou = (1 << SOLIS_BIT_SELF_USE) | (1 << SOLIS_BIT_TOU_MODE) | (1 << SOLIS_BIT_OFF_GRID)  # bits 0,1,2 = 7
     value = compute_solis_mode_value(ENUM_SELF_USE, old_with_tou)
-    assert not (value & (1 << SOLIS_BIT_TOU_MODE)), "TOU bit should be cleared"
+    assert (value & (1 << SOLIS_BIT_TOU_MODE)), "TOU bit should be set"
     assert not (value & (1 << SOLIS_BIT_OFF_GRID)), "Off-grid bit should be cleared"
-    assert value == 33, f"Expected 33, got {value}"
+    assert value == 35, f"Expected 35, got {value}"
     print("PASSED: Clears TOU and off-grid bits on mode change")
 
     return False

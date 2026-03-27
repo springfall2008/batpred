@@ -200,17 +200,17 @@ def compute_solis_mode_value(mode_enum, old_value):
         value |= (1 << SOLIS_BIT_GRID_CHARGING)  # Set grid charging bit
         value &= ~(1 << SOLIS_BIT_FEED_IN_PRIORITY)  # Clear feed-in priority bit
         value &= ~(1 << SOLIS_BIT_OFF_GRID)  # Clear off-grid bit
-        value &= ~(1 << SOLIS_BIT_TOU_MODE)  # Clear TOU mode bit
+        value |=  (1 << SOLIS_BIT_TOU_MODE)  # Set TOU mode bit
     elif mode_enum == ENUM_FEED_IN_PRIORITY:
         value &= ~(1 << SOLIS_BIT_SELF_USE)  # Clear self-use bit
         value |= (1 << SOLIS_BIT_GRID_CHARGING)  # Set grid charging bit
         value |= (1 << SOLIS_BIT_FEED_IN_PRIORITY)  # Set feed-in priority bit
         value &= ~(1 << SOLIS_BIT_OFF_GRID)  # Clear off-grid bit
-        value &= ~(1 << SOLIS_BIT_TOU_MODE)  # Clear TOU mode bit
+        value |= (1 << SOLIS_BIT_TOU_MODE)  # Set TOU mode bit
     elif mode_enum == ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING:
         value &= ~(1 << SOLIS_BIT_SELF_USE)  # Clear self-use bit
         value &= ~(1 << SOLIS_BIT_GRID_CHARGING)  # Clear grid charging bit
-        value |= (1 << SOLIS_BIT_FEED_IN_PRIORITY)  # Set feed-in priority bit
+        value |=  (1 << SOLIS_BIT_FEED_IN_PRIORITY)  # Set feed-in priority bit
         value &= ~(1 << SOLIS_BIT_OFF_GRID)  # Clear off-grid bit
         value &= ~(1 << SOLIS_BIT_TOU_MODE)  # Clear TOU mode bit
     return value
@@ -2928,7 +2928,9 @@ async def test_solis_api(key_id, secret):  # pragma: no cover
     # Call run() once
     print("Calling run() once...")
     await solis_api.run(seconds=0, first=True)
-    #for device_sn, values in solis_api.cached_values.items():
+    for device_sn, values in solis_api.cached_values.items():
+         await solis_api.set_storage_mode_if_needed(device_sn, "Feed-in priority")
+         await solis_api.set_storage_mode_if_needed(device_sn, "Self-Use")
     #    await solis_api.read_and_write_cid(device_sn, SOLIS_CID_BATTERY_RESERVE_SOC, "12", field_description="Test write reserve SOC to 12%")
     print("Run completed successfully")
 
