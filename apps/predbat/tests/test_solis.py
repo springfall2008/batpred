@@ -2893,7 +2893,7 @@ async def test_compute_solis_mode_value():
     # Clears TOU and off-grid bits
     old_with_tou = (1 << SOLIS_BIT_SELF_USE) | (1 << SOLIS_BIT_TOU_MODE) | (1 << SOLIS_BIT_OFF_GRID)  # bits 0,1,2 = 7
     value = compute_solis_mode_value(ENUM_SELF_USE, old_with_tou)
-    assert (value & (1 << SOLIS_BIT_TOU_MODE)), "TOU bit should be set"
+    assert value & (1 << SOLIS_BIT_TOU_MODE), "TOU bit should be set"
     assert not (value & (1 << SOLIS_BIT_OFF_GRID)), "Off-grid bit should be cleared"
     assert value == 35, f"Expected 35, got {value}"
     print("PASSED: Clears TOU and off-grid bits on mode change")
