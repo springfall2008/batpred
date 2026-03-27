@@ -49,17 +49,7 @@ The `run_all` script is a thin wrapper; you can run `unit_test.py` directly from
 All checks are enforced via pre-commit and must pass before merging:
 
 ```bash
-# Install hook (run once):
-pre-commit install
-
-# Run all checks on staged files:
-pre-commit
-
-# Run all checks on all files:
-pre-commit run --all-files
-
-# Format code with Black:
-black .
+./run_pre_commit
 ```
 
 Key constraints:
