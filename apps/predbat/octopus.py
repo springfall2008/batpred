@@ -2375,7 +2375,7 @@ class Octopus:
                     new_slot["end"] = end_minutes
                     new_slot["kwh"] = kwh
                     new_slot["average"] = self.rate_import.get(start_minutes, self.rate_min)
-                    if octopus_slot_low_rate and source != "bump-charge":
+                    if octopus_slot_low_rate and source != "bump-charge" and source != "BOOST":
                         new_slot["average"] = self.rate_min  # Assume price in min
                     new_slot["cost"] = dp2(new_slot["average"] * kwh)
                     new_slot["soc"] = dp2(car_soc)
@@ -2387,7 +2387,7 @@ class Octopus:
                         new_slot["end"] = end_minutes_original
                         new_slot["kwh"] = 0.0
                         new_slot["average"] = self.rate_import.get(start_minutes, self.rate_min)
-                        if octopus_slot_low_rate and source != "bump-charge":
+                        if octopus_slot_low_rate and source != "bump-charge" and source != "BOOST":
                             new_slot["average"] = self.rate_min  # Assume price in min
                         new_slot["cost"] = 0.0
                         new_slot["soc"] = dp2(car_soc)
@@ -2400,7 +2400,7 @@ class Octopus:
                     new_slot["end"] = end_minutes
                     new_slot["kwh"] = kwh
                     new_slot["average"] = self.rate_import.get(start_minutes, self.rate_min)
-                    if octopus_slot_low_rate and source != "bump-charge":
+                    if octopus_slot_low_rate and source != "bump-charge" and source != "BOOST":
                         new_slot["average"] = self.rate_min  # Assume price in min
                     new_slot["cost"] = dp2(new_slot["average"] * kwh)
                     new_slot["soc"] = dp2(car_soc)
@@ -2429,7 +2429,7 @@ class Octopus:
                 start_minutes, end_minutes, kwh, source, location = self.decode_octopus_slot(car_n, slot, raw=True)
 
                 # Ignore bump-charge slots as their cost won't change
-                if source != "bump-charge" and (not location or location == "AT_HOME"):
+                if source != "bump-charge" and source != "BOOST" and (not location or location == "AT_HOME"):
                     # Round slots to 30 minute boundary
                     # Floor the start (round down) and ceiling the end (round up)
                     # This ensures any partial overlap with a 30-min slot marks the entire slot as off-peak
