@@ -36,7 +36,7 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.35.1"
+THIS_VERSION = "v8.35.2"
 
 from download import predbat_update_move, predbat_update_download, check_install
 from const import MINUTE_WATT

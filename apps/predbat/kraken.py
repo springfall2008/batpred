@@ -15,7 +15,7 @@ GraphQL schema notes (validated against live EDF/E.ON APIs):
 
 import aiohttp
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from component_base import ComponentBase
 
@@ -431,6 +431,49 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         """Construct public REST standing charge URL."""
         return f"{self.base_url}/v1/products/{product_code}/electricity-tariffs/{tariff_code}/standing-charges/"
 
+    @staticmethod
+    def _normalize_rate_timestamps(results):
+        """Normalize Kraken rate results so downstream minute_data() can parse them.
+
+        Kraken's REST API returns null valid_from/valid_to for flat-rate tariffs
+        (e.g. fixed export rates). The Octopus API always provides real timestamps,
+        so minute_data() expects valid_from to be a parsable ISO timestamp.
+
+        Normalization rules:
+        - valid_from=null: set to the earliest valid_to across all results, or
+          48h in the past if no valid_to exists (covers the full forecast window).
+        - valid_to=null: already handled by minute_data() (extends to end of forecast).
+
+        Note: We have only observed the single-entry flat-rate case from Kraken
+        (1 result, both timestamps null). If Kraken later returns multiple entries
+        where some have null valid_from (e.g. an open-ended latest rate alongside
+        historical rates with real timestamps), this logic should still work -
+        but the actual API response shape for that scenario is unverified.
+        """
+        if not results:
+            return results
+
+        has_null_from = any(r.get("valid_from") is None for r in results)
+        if not has_null_from:
+            return results
+
+        # Find the earliest valid_to to use as a reference point for null valid_from
+        earliest_to = None
+        for r in results:
+            vt = r.get("valid_to")
+            if vt:
+                if earliest_to is None or vt < earliest_to:
+                    earliest_to = vt
+
+        # Default: 48h in the past covers history + forecast window
+        fallback_from = (datetime.now(timezone.utc) - timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        for r in results:
+            if r.get("valid_from") is None:
+                r["valid_from"] = earliest_to or fallback_from
+
+        return results
+
     async def async_fetch_rates(self, tariff=None):
         """Fetch rates from public REST endpoint. No auth needed. Returns list of rate objects or None."""
         tariff = tariff or self.current_tariff
@@ -458,6 +501,8 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
 
             if url:
                 self.log(f"Warn: Kraken: Rate pagination capped at {pages} pages, more data available")
+
+            all_results = self._normalize_rate_timestamps(all_results)
             self.log(f"Kraken: Fetched {len(all_results)} rate periods for {tariff['tariff_code']}")
             return all_results
 

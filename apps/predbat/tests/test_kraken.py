@@ -482,6 +482,70 @@ def test_export_discovery_strategy1_no_fallthrough_on_network_failure():
     assert api.export_tariff == {"tariff_code": "E-1R-OLD-EXPORT", "product_code": "OLD-EXPORT"}
 
 
+def test_normalize_rate_timestamps_flat_rate_both_null():
+    """Flat-rate tariff with valid_from=null and valid_to=null (observed from Kraken export API).
+
+    Without normalization, minute_data() skips these entries because it can't
+    parse null as a timestamp, resulting in 'metric_octopus_export not set correctly'.
+    """
+    from kraken import KrakenAPI
+
+    results = [{"value_inc_vat": 16.5, "valid_from": None, "valid_to": None, "payment_method": None}]
+    normalized = KrakenAPI._normalize_rate_timestamps(results)
+
+    assert len(normalized) == 1
+    assert normalized[0]["value_inc_vat"] == 16.5
+    assert normalized[0]["valid_from"] is not None  # Must be a real timestamp
+    assert normalized[0]["valid_to"] is None  # Left as-is (minute_data handles this)
+    # Should be parsable as ISO datetime
+    from datetime import datetime
+
+    datetime.fromisoformat(normalized[0]["valid_from"].replace("Z", "+00:00"))
+
+
+def test_normalize_rate_timestamps_normal_rates_unchanged():
+    """Rates with real timestamps should pass through unmodified."""
+    from kraken import KrakenAPI
+
+    results = [
+        {"value_inc_vat": 24.5, "valid_from": "2026-03-23T00:00:00Z", "valid_to": "2026-03-24T00:00:00Z"},
+        {"value_inc_vat": 28.3, "valid_from": "2026-03-24T00:00:00Z", "valid_to": None},
+    ]
+    normalized = KrakenAPI._normalize_rate_timestamps(results)
+
+    assert normalized[0]["valid_from"] == "2026-03-23T00:00:00Z"
+    assert normalized[1]["valid_from"] == "2026-03-24T00:00:00Z"
+
+
+def test_normalize_rate_timestamps_empty_list():
+    """Empty results should return empty."""
+    from kraken import KrakenAPI
+
+    assert KrakenAPI._normalize_rate_timestamps([]) == []
+    assert KrakenAPI._normalize_rate_timestamps(None) is None
+
+
+def test_normalize_rate_timestamps_mixed_null_and_real():
+    """Mixed results where some have null valid_from (hypothetical future Kraken response).
+
+    We have NOT observed this from Kraken's API - only the single-entry flat-rate case
+    has been seen. This test documents expected behaviour if Kraken later returns
+    multiple rate entries where the latest has valid_from=null (open-ended) alongside
+    historical entries with real timestamps, similar to Octopus's pattern.
+    """
+    from kraken import KrakenAPI
+
+    results = [
+        {"value_inc_vat": 15.0, "valid_from": "2026-01-01T00:00:00Z", "valid_to": "2026-04-01T00:00:00Z"},
+        {"value_inc_vat": 16.5, "valid_from": None, "valid_to": None},
+    ]
+    normalized = KrakenAPI._normalize_rate_timestamps(results)
+
+    # The null valid_from should get the earliest valid_to as its start
+    assert normalized[0]["valid_from"] == "2026-01-01T00:00:00Z"  # Unchanged
+    assert normalized[1]["valid_from"] == "2026-04-01T00:00:00Z"  # Set from earliest valid_to
+
+
 def run_kraken_tests(my_predbat=None):
     """Run all KrakenAPI tests. Returns True on failure, False on success."""
     tests = [
@@ -509,6 +573,10 @@ def run_kraken_tests(my_predbat=None):
         test_standing_charge_converts_pence_to_pounds,
         test_export_discovery_clears_stale_when_not_found,
         test_export_discovery_strategy1_no_fallthrough_on_network_failure,
+        test_normalize_rate_timestamps_flat_rate_both_null,
+        test_normalize_rate_timestamps_normal_rates_unchanged,
+        test_normalize_rate_timestamps_empty_list,
+        test_normalize_rate_timestamps_mixed_null_and_real,
     ]
     for test_func in tests:
         try:
