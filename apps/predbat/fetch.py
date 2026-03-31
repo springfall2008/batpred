@@ -1489,7 +1489,7 @@ class Fetch:
             else:
                 if rate_low_start >= 0 and rate_low_end >= minute:
                     rate_low_end = minute
-                break
+                    break
             minute += 5
             alt_rate_last = alt_rate
 
