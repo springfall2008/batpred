@@ -279,7 +279,7 @@ The following configuration items in `apps.yaml` are used to configure Predbat t
 ## Strømligning Integration
 
 Strømligning is a Danish electricity price comparison service that provides detailed 15-minute interval pricing data.
-Unlike Energi Data Service which uses 2 sensors (one for today/tomorrow combined), Strømligning requires 4 separate sensors:
+Unlike Energi Data Service, where Predbat reads both today's and tomorrow's prices from a single sensor entity per rate type using the `raw_today` and `raw_tomorrow` attributes, Strømligning requires 4 separate sensors:
 two for import prices (today and tomorrow) and optionally two for export prices (today and tomorrow).
 
 Each Strømligning sensor should provide attributes with the following format:
