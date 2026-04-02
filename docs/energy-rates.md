@@ -285,19 +285,21 @@ two for import prices (today and tomorrow) and optionally two for export prices 
 Each Strømligning sensor should provide attributes with the following format:
 
 - **prices_today** or **prices_tomorrow** - List of price intervals with:
-  - `price` - Price value
-  - `start` - Start time in ISO format (e.g., '2025-11-08T00:00:00+01:00')
-  - `end` - End time in ISO format (e.g., '2025-11-08T00:15:00+01:00')
+    - `price` - Price value
+    - `start` - Start time in ISO format (e.g., '2025-11-08T00:00:00+01:00')
+    - `end` - End time in ISO format (e.g., '2025-11-08T00:15:00+01:00')
 
 ### Configuring Predbat to Use the Strømligning Integration
 
 The following configuration items in `apps.yaml` are used to configure Predbat to use Strømligning sensors:
 
 **Import Rates (Required):**
+
 - **metric_stromligning_import_today** - Sensor for today's import prices (must have `prices_today` attribute)
 - **metric_stromligning_import_tomorrow** - Sensor for tomorrow's import prices (must have `prices_tomorrow` attribute)
 
 **Export Rates (Optional):**
+
 - **metric_stromligning_export_today** - Sensor for today's export prices (must have `prices_today` attribute)
 - **metric_stromligning_export_tomorrow** - Sensor for tomorrow's export prices (must have `prices_tomorrow` attribute)
 

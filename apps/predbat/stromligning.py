@@ -7,14 +7,14 @@ class Stromligning:
         """
         Read Strømligning attributes from 4 sensors (today/tomorrow for import/export).
         Strømligning provides 15-minute intervals with price, start, and end times.
-        
+
         Args:
             entity_id_today: Sensor for today's import prices
             entity_id_tomorrow: Sensor for tomorrow's import prices
             entity_id_today_export: Sensor for today's export prices (optional)
             entity_id_tomorrow_export: Sensor for tomorrow's export prices (optional)
             adjust_key: Optional key for adjustments
-        
+
         Returns:
             dict: Per-minute rate data keyed by minute offset from midnight_utc
         """
@@ -73,7 +73,7 @@ class Stromligning:
     def _minute_data_stromligning_rates(self, data, forecast_days, midnight_utc, scale=1.0, adjust_key=None):
         """
         Convert 15-minute Strømligning rate data into a per-minute dict keyed by minute offset from midnight_utc.
-        
+
         Strømligning data format:
         - price: Price value (already in correct unit)
         - start: ISO timestamp for interval start
@@ -91,7 +91,7 @@ class Stromligning:
             # Parse times robustly
             start_time = self._parse_iso(start_time_str)
             end_time = self._parse_iso(end_time_str)
-            
+
             if start_time is None or end_time is None:
                 self.log(f"Warn: Invalid time format in Strømligning data: start='{start_time_str}', end='{end_time_str}'")
                 continue
