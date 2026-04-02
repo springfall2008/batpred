@@ -20,6 +20,7 @@ class Stromligning:
         """
         data_all = []
         rate_data = {}
+        scale = 1.0
 
         if entity_id_today or entity_id_tomorrow:
             if self.debug_enable:
@@ -27,19 +28,32 @@ class Stromligning:
 
             # Fetch today's data
             if entity_id_today:
+                unit_today = self.get_state_wrapper(entity_id=entity_id_today, attribute="unit_of_measurement")
                 data_import_today = self.get_state_wrapper(entity_id=entity_id_today, attribute="prices_today")
+                if not data_import_today:
+                    # Some integrations expose a single `prices` list for current day.
+                    data_import_today = self.get_state_wrapper(entity_id=entity_id_today, attribute="prices")
                 if data_import_today:
                     data_all += data_import_today
                 else:
-                    self.log(f"Warn: No Strømligning data in sensor {entity_id_today} attribute 'prices_today'")
+                    self.log(f"Warn: No Strømligning data in sensor {entity_id_today} attributes 'prices_today' or 'prices'")
 
             # Fetch tomorrow's data
             if entity_id_tomorrow:
+                unit_tomorrow = self.get_state_wrapper(entity_id=entity_id_tomorrow, attribute="unit_of_measurement")
                 data_import_tomorrow = self.get_state_wrapper(entity_id=entity_id_tomorrow, attribute="prices_tomorrow")
+                if not data_import_tomorrow:
+                    # Compatibility fallback if only a generic list exists.
+                    data_import_tomorrow = self.get_state_wrapper(entity_id=entity_id_tomorrow, attribute="prices")
                 if data_import_tomorrow:
                     data_all += data_import_tomorrow
                 else:
-                    self.log(f"Warn: No Strømligning data in sensor {entity_id_tomorrow} attribute 'prices_tomorrow'")
+                    self.log(f"Warn: No Strømligning data in sensor {entity_id_tomorrow} attributes 'prices_tomorrow' or 'prices'")
+
+            unit = (unit_today if entity_id_today else None) or (unit_tomorrow if entity_id_tomorrow else None) or ""
+            if isinstance(unit, str) and "kr/" in unit.lower():
+                # PredBat internal rate units are ore/cents for compatibility with other providers.
+                scale = 100.0
 
         if data_all:
             # Sort to be safe
@@ -50,12 +64,13 @@ class Stromligning:
                 data_all,
                 self.forecast_days + 1,
                 self.midnight_utc,
+                scale=scale,
                 adjust_key=adjust_key,
             )
 
         return rate_data
 
-    def _minute_data_stromligning_rates(self, data, forecast_days, midnight_utc, adjust_key=None):
+    def _minute_data_stromligning_rates(self, data, forecast_days, midnight_utc, scale=1.0, adjust_key=None):
         """
         Convert 15-minute Strømligning rate data into a per-minute dict keyed by minute offset from midnight_utc.
         
@@ -71,7 +86,7 @@ class Stromligning:
         for entry in data:
             start_time_str = entry.get("start")
             end_time_str = entry.get("end")
-            rate = entry.get("price", 0)
+            rate = entry.get("price", 0) * scale
 
             # Parse times robustly
             start_time = self._parse_iso(start_time_str)
@@ -89,6 +104,10 @@ class Stromligning:
                 # If midnight_utc is naive, drop tzinfo from start_time for subtraction
                 start_minute = int((start_time.replace(tzinfo=None) - midnight_utc).total_seconds() / 60)
                 end_minute = int((end_time.replace(tzinfo=None) - midnight_utc).total_seconds() / 60)
+
+            # Some feeds express 23:00-00:00 with end on the same date; treat as next day.
+            if end_minute <= start_minute:
+                end_minute += 24 * 60
 
             # Fill each minute in the interval
             for minute in range(start_minute, end_minute):
