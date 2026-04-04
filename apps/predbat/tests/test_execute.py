@@ -9,11 +9,14 @@
 # pylint: disable=attribute-defined-outside-init
 
 from tests.test_infra import reset_inverter
-from utils import calc_percent_limit
+from utils import calc_percent_limit, local_midnight
 
 
 class ActiveTestInverter:
+    """Mock inverter for execute tests."""
+
     def __init__(self, id, soc_kw, soc_max, now_utc):
+        """Initialise mock inverter."""
         self.soc_target = -1
         self.id = id
         self.isCharging = False
@@ -53,7 +56,7 @@ class ActiveTestInverter:
         self.battery_rate_max_discharge = 1 / 60.0
         self.reserve_max = 100.0
         self.now_utc = now_utc
-        self.midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        self.midnight_utc = local_midnight(now_utc)
         self.count_register_writes = 0
         self.charge_window = []
         self.charge_limits = []

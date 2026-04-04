@@ -70,7 +70,7 @@ from const import (
 )
 from config import APPS_SCHEMA, CONFIG_ITEMS
 from prediction import reset_prediction_globals
-from utils import minutes_since_yesterday, dp1, dp2, dp3
+from utils import minutes_since_yesterday, dp1, dp2, dp3, local_midnight
 from predheat import PredHeat
 from octopus import Octopus
 from energydataservice import Energidataservice
@@ -739,7 +739,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.now_utc = now_utc
         self.now = now
         self.midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        self.midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        self.midnight_utc = local_midnight(now_utc)
 
         self.difference_minutes = minutes_since_yesterday(now)
         self.minutes_now = int((now - self.midnight).seconds / 60 / PREDICT_STEP) * PREDICT_STEP

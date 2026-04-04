@@ -19,7 +19,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from predbat_metrics import record_api_call
 from const import TIME_FORMAT, TIME_FORMAT_OCTOPUS
-from utils import str2time, minutes_to_time, dp1, dp2, dp4, minute_data
+from utils import str2time, minutes_to_time, dp1, dp2, dp4, minute_data, local_midnight
 from component_base import ComponentBase
 import aiohttp
 import json
@@ -2718,7 +2718,7 @@ class MockBase:  # pragma: no cover
         self.now_utc = datetime.now(self.local_tz)
         self.prefix = "predbat"
         self.args = {}
-        self.midnight_utc = datetime.now(self.local_tz).replace(hour=0, minute=0, second=0, microsecond=0)
+        self.midnight_utc = local_midnight(datetime.now(self.local_tz))
         self.minutes_now = self.now_utc.hour * 60 + self.now_utc.minute
         self.entities = {}
         self.config_root = "./temp_octopus"

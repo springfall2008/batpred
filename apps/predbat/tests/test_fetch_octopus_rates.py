@@ -10,6 +10,10 @@
 
 from datetime import datetime
 
+import pytz
+
+from utils import local_midnight
+
 
 def test_fetch_octopus_rates(my_predbat):
     """
@@ -243,6 +247,149 @@ def test_fetch_octopus_rates(my_predbat):
         failed = True
     else:
         print("Test 8 passed - sensor with no attributes returns empty dict")
+
+    # Test 9: DST transition day - mixed timezone offsets in rate data
+    print("*** Test 9: DST spring-forward day with mixed +00:00 / +01:00 offsets")
+
+    # On UK spring-forward day (last Sunday in March), clocks go from GMT (+00:00)
+    # to BST (+01:00) at 01:00 GMT.  The Octopus integration delivers rates before
+    # the transition with +00:00 and rates after with +01:00.
+    # midnight_utc must carry the correct offset (+00:00) so that minute indices
+    # are computed correctly for both sets of rates.
+    #
+    # We simulate "now" at 14:00 BST and derive midnight_utc via
+    # local_midnight() to exercise the actual DST-offset fix (midnight was
+    # still in GMT +00:00 even though 14:00 is in BST +01:00).
+
+    london_tz = pytz.timezone("Europe/London")
+    # Simulate "now" at 14:00 BST on spring-forward day (13:00 UTC)
+    now_bst = london_tz.localize(datetime(2026, 3, 29, 14, 0, 0))
+    my_predbat.local_tz = london_tz
+    my_predbat.midnight_utc = local_midnight(now_bst)
+
+    # Verify local_midnight() picked the correct GMT offset for midnight
+    assert my_predbat.midnight_utc.utcoffset().total_seconds() == 0, "midnight_utc should have +00:00 offset on spring-forward day, got {}".format(my_predbat.midnight_utc.utcoffset())
+    assert my_predbat.midnight_utc.hour == 0 and my_predbat.midnight_utc.minute == 0, "midnight_utc should be 00:00, got {}".format(my_predbat.midnight_utc)
+
+    my_predbat.forecast_days = 2
+
+    entity_id_dst = "sensor.metric_octopus_import_dst"
+    dst_rates = [
+        # Pre-DST rates (GMT, +00:00)
+        {"start": "2026-03-29T00:00:00+00:00", "end": "2026-03-29T00:30:00+00:00", "value": 0.04138},
+        {"start": "2026-03-29T00:30:00+00:00", "end": "2026-03-29T01:00:00+00:00", "value": 0.04135},
+        # Post-DST rates (BST, +01:00) — 02:00 BST = 01:00 UTC
+        {"start": "2026-03-29T02:00:00+01:00", "end": "2026-03-29T02:30:00+01:00", "value": 0.04000},
+        {"start": "2026-03-29T02:30:00+01:00", "end": "2026-03-29T03:00:00+01:00", "value": 0.03991},
+    ]
+
+    my_predbat.ha_interface.dummy_items[entity_id_dst] = {
+        "state": "0.04",
+        "raw_today": dst_rates,
+    }
+
+    rate_data = my_predbat.fetch_octopus_rates(entity_id_dst)
+
+    if not rate_data:
+        print("ERROR: No rate data returned for DST test")
+        failed = True
+    else:
+        # 00:00+00:00 is minute 0 from midnight
+        expected_min0 = 0.04138 * 100  # scale=100 for start/end format
+        if 0 not in rate_data:
+            print("ERROR: DST test - missing rate at minute 0")
+            failed = True
+        elif abs(rate_data[0] - expected_min0) > 0.01:
+            print("ERROR: DST test - minute 0 expected {}, got {}".format(expected_min0, rate_data[0]))
+            failed = True
+
+        # 02:00+01:00 = 01:00 UTC = minute 60 from midnight (+00:00)
+        expected_min60 = 0.04000 * 100
+        if 60 not in rate_data:
+            print("ERROR: DST test - missing rate at minute 60 (02:00 BST = 01:00 UTC)")
+            failed = True
+        elif abs(rate_data[60] - expected_min60) > 0.01:
+            print("ERROR: DST test - minute 60 expected {}, got {}".format(expected_min60, rate_data[60]))
+            failed = True
+
+        # 02:30+01:00 = 01:30 UTC = minute 90 from midnight (+00:00)
+        expected_min90 = 0.03991 * 100
+        if 90 not in rate_data:
+            print("ERROR: DST test - missing rate at minute 90 (02:30 BST = 01:30 UTC)")
+            failed = True
+        elif abs(rate_data[90] - expected_min90) > 0.01:
+            print("ERROR: DST test - minute 90 expected {}, got {}".format(expected_min90, rate_data[90]))
+            failed = True
+
+        if 0 in rate_data and 60 in rate_data and 90 in rate_data:
+            print("Test 9 passed - DST mixed-offset rates placed at correct minutes")
+
+    # Test 10: DST autumn fallback day - mixed timezone offsets in rate data
+    print("*** Test 10: DST fall-back day with mixed +01:00 / +00:00 offsets")
+
+    # On UK fall-back day (last Sunday in October), clocks go from BST (+01:00)
+    # to GMT (+00:00).  Midnight is still in BST (+01:00), but later daytime is
+    # in GMT (+00:00).
+    #
+    # We simulate "now" at 14:00 GMT and derive midnight_utc via
+    # local_midnight() to verify it picks +01:00 for local midnight.
+    now_gmt = london_tz.localize(datetime(2026, 10, 25, 14, 0, 0))
+    my_predbat.midnight_utc = local_midnight(now_gmt)
+
+    # Verify local_midnight() picked the correct BST offset for midnight
+    assert my_predbat.midnight_utc.utcoffset().total_seconds() == 3600, "midnight_utc should have +01:00 offset on fall-back day, got {}".format(my_predbat.midnight_utc.utcoffset())
+    assert my_predbat.midnight_utc.hour == 0 and my_predbat.midnight_utc.minute == 0, "midnight_utc should be 00:00, got {}".format(my_predbat.midnight_utc)
+
+    entity_id_dst_fall = "sensor.metric_octopus_import_dst_fall"
+    dst_fall_rates = [
+        # Pre-fallback rates (BST, +01:00)
+        {"start": "2026-10-25T00:00:00+01:00", "end": "2026-10-25T00:30:00+01:00", "value": 0.05000},
+        {"start": "2026-10-25T00:30:00+01:00", "end": "2026-10-25T01:00:00+01:00", "value": 0.04900},
+        # Post-fallback rates (GMT, +00:00) — 01:00 GMT = minute 120 from midnight (+01:00)
+        {"start": "2026-10-25T01:00:00+00:00", "end": "2026-10-25T01:30:00+00:00", "value": 0.04800},
+        {"start": "2026-10-25T01:30:00+00:00", "end": "2026-10-25T02:00:00+00:00", "value": 0.04700},
+    ]
+
+    my_predbat.ha_interface.dummy_items[entity_id_dst_fall] = {
+        "state": "0.05",
+        "raw_today": dst_fall_rates,
+    }
+
+    rate_data = my_predbat.fetch_octopus_rates(entity_id_dst_fall)
+
+    if not rate_data:
+        print("ERROR: No rate data returned for DST fall-back test")
+        failed = True
+    else:
+        # 00:00+01:00 is minute 0 from midnight
+        expected_min0 = 0.05000 * 100
+        if 0 not in rate_data:
+            print("ERROR: DST fall-back test - missing rate at minute 0")
+            failed = True
+        elif abs(rate_data[0] - expected_min0) > 0.01:
+            print("ERROR: DST fall-back test - minute 0 expected {}, got {}".format(expected_min0, rate_data[0]))
+            failed = True
+
+        # 01:00+00:00 = 01:00 UTC = minute 120 from midnight (+01:00)
+        expected_min120 = 0.04800 * 100
+        if 120 not in rate_data:
+            print("ERROR: DST fall-back test - missing rate at minute 120 (01:00 GMT = 120 mins from 00:00 BST)")
+            failed = True
+        elif abs(rate_data[120] - expected_min120) > 0.01:
+            print("ERROR: DST fall-back test - minute 120 expected {}, got {}".format(expected_min120, rate_data[120]))
+            failed = True
+
+        # 01:30+00:00 = 01:30 UTC = minute 150 from midnight (+01:00)
+        expected_min150 = 0.04700 * 100
+        if 150 not in rate_data:
+            print("ERROR: DST fall-back test - missing rate at minute 150 (01:30 GMT = 150 mins from 00:00 BST)")
+            failed = True
+        elif abs(rate_data[150] - expected_min150) > 0.01:
+            print("ERROR: DST fall-back test - minute 150 expected {}, got {}".format(expected_min150, rate_data[150]))
+            failed = True
+
+        if 0 in rate_data and 120 in rate_data and 150 in rate_data:
+            print("Test 10 passed - DST fall-back mixed-offset rates placed at correct minutes")
 
     # Restore original values
     my_predbat.forecast_days = old_forecast_days

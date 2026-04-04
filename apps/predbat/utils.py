@@ -876,6 +876,38 @@ def minutes_to_time(updated, now):
     return minutes
 
 
+def local_midnight(dt_aware):
+    """Return midnight on the same local date as *dt_aware*, correctly localised.
+
+    ``datetime.replace(hour=0)`` preserves the original UTC offset, which is
+    wrong on DST-transition days (e.g. spring-forward: the current offset is
+    +01:00 but midnight was still +00:00).  Stripping the tzinfo and
+    re-localising lets pytz pick the offset that was actually in effect at
+    midnight.
+
+    The timezone is extracted from *dt_aware* itself, so the datetime must
+    already be timezone-aware.
+
+    For non-pytz tzinfo (e.g. ``zoneinfo`` or fixed-offset tzinfo), the
+    simple ``replace()`` path is used.  This is safe because those tzinfo
+    implementations compute the UTC offset from the resulting wall time,
+    unlike pytz's offset-bound ``DstTzInfo`` instances.
+    """
+    effective_tz = getattr(dt_aware, "tzinfo", None)
+    if effective_tz is not None and hasattr(effective_tz, "localize"):
+        # effective_tz might be a pytz _UTCclass / StaticTzInfo / DstTzInfo.
+        # For DstTzInfo we need the *zone* (canonical) timezone, not the
+        # offset-bound instance that .tzinfo returns.
+        zone = getattr(effective_tz, "zone", None)
+        if zone is not None:
+            import pytz
+
+            effective_tz = pytz.timezone(zone)
+        naive_midnight = dt_aware.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+        return effective_tz.localize(naive_midnight)
+    return dt_aware.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
 def str2time(str):
     if "." in str:
         tdata = datetime.strptime(str, TIME_FORMAT_SECONDS)

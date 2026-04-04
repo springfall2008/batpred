@@ -14,7 +14,7 @@ management via the GivEnergy Cloud REST API.
 
 import aiohttp
 from datetime import timedelta, datetime
-from utils import str2time, dp1, dp2
+from utils import str2time, dp1, dp2, local_midnight
 from predbat_metrics import record_api_call
 import asyncio
 import json
@@ -1711,7 +1711,7 @@ class MockBase:  # pragma: no cover
         self.now_utc = datetime.now(self.local_tz)
         self.prefix = "predbat"
         self.args = {}
-        self.midnight_utc = datetime.now(self.local_tz).replace(hour=0, minute=0, second=0, microsecond=0)
+        self.midnight_utc = local_midnight(datetime.now(self.local_tz))
         self.minutes_now = self.now_utc.hour * 60 + self.now_utc.minute
         self.entities = {}
         self.config_root = "./temp_gecloud"

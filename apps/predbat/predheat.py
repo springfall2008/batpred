@@ -21,7 +21,7 @@ requirements and costs for heat pump systems.
 
 from datetime import datetime, timedelta
 import pytz
-from utils import str2time, dp2, dp3, minute_data
+from utils import str2time, dp2, dp3, minute_data, local_midnight
 
 from const import TIME_FORMAT
 
@@ -533,7 +533,7 @@ class PredHeat:
         self.forecast_days = self.get_arg("forecast_days", 2, domain="predheat")
         self.forecast_minutes = self.forecast_days * 60 * 24
         self.midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        self.midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        self.midnight_utc = local_midnight(now_utc)
         self.minutes_now = int((now - self.midnight).seconds / 60 / PREDICT_STEP) * PREDICT_STEP
         self.metric_future_rate_offset_import = 0
 

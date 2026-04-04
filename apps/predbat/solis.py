@@ -17,6 +17,7 @@ import copy
 from datetime import datetime, timedelta, UTC
 from predbat_metrics import record_api_call
 from component_base import ComponentBase
+from utils import local_midnight
 
 
 # API Endpoints
@@ -2894,7 +2895,7 @@ class MockBase:  # pragma: no cover
         self.now_utc = datetime.now(self.local_tz)
         self.prefix = "predbat"
         self.args = {}
-        self.midnight_utc = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        self.midnight_utc = local_midnight(datetime.now(self.local_tz))
         self.minutes_now = self.now_utc.hour * 60 + self.now_utc.minute
         self.entities = {}
 

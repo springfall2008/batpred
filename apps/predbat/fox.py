@@ -25,6 +25,7 @@ import argparse
 import random
 from component_base import ComponentBase
 from oauth_mixin import OAuthMixin
+from utils import local_midnight
 
 # Define TIME_FORMAT_HA locally to avoid dependency issues
 TIME_FORMAT_HA = "%Y-%m-%dT%H:%M:%S%z"
@@ -1712,7 +1713,7 @@ class MockBase:  # pragma: no cover
         self.now_utc = datetime.now(self.local_tz)
         self.prefix = "predbat"
         self.args = {}
-        self.midnight_utc = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        self.midnight_utc = local_midnight(datetime.now(self.local_tz))
         self.minutes_now = self.now_utc.hour * 60 + self.now_utc.minute
         self.entities = {}
 
