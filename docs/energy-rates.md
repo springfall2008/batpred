@@ -312,8 +312,6 @@ Example configuration in `apps.yaml`:
   metric_stromligning_export_tomorrow: 'sensor.stromligning_export_tomorrow'
 ```
 
-See the `templates/stromligning.yaml` template file for a complete example configuration.
-
 ## Other Energy Spot Rate sensor integrations
 
 Different spot rate integrations that include forecast prices may be used.
