@@ -346,8 +346,8 @@ startt
 stdlib
 stepline
 Stromligning
-Strømligning
 strptime
+Strømligning
 substep
 sunspec
 sunsynk
