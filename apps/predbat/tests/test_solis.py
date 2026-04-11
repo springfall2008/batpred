@@ -2689,6 +2689,10 @@ async def test_automatic_config():
     # Create API with multiple inverters
     api = MockSolisAPI(prefix="predbat")
     api.inverter_sn = ["ABC123", "DEF456"]
+    api.inverter_details = {
+        "ABC123": {"batteryHealthSoh": 95},
+        "DEF456": {"batteryHealthSoh": 88},
+    }
 
     # Track set_arg calls
     set_arg_calls = {}
@@ -2748,9 +2752,12 @@ async def test_automatic_config():
     assert "export_today" in set_arg_calls, "export_today not configured"
     assert "pv_today" in set_arg_calls, "pv_today not configured"
 
-    # Verify reserve and limits configured
+    # Verify reserve and limits use over_discharge_soc (not reserve_soc)
     assert "reserve" in set_arg_calls, "reserve not configured"
+    expected_reserve = ["number.predbat_solis_abc123_over_discharge_soc", "number.predbat_solis_def456_over_discharge_soc"]
+    assert set_arg_calls["reserve"] == expected_reserve, f"Expected {expected_reserve}, got {set_arg_calls['reserve']}"
     assert "battery_min_soc" in set_arg_calls, "battery_min_soc not configured"
+    assert set_arg_calls["battery_min_soc"] == expected_reserve, f"Expected {expected_reserve}, got {set_arg_calls['battery_min_soc']}"
 
     # Verify rate controls configured
     assert "battery_rate_max" in set_arg_calls, "battery_rate_max not configured"
@@ -2762,6 +2769,7 @@ async def test_automatic_config():
     # Test with single inverter
     api2 = MockSolisAPI(prefix="test_prefix")
     api2.inverter_sn = ["SINGLE123"]
+    api2.inverter_details = {"SINGLE123": {"batteryHealthSoh": 90}}
 
     set_arg_calls2 = {}
 
@@ -2796,6 +2804,27 @@ async def test_automatic_config():
     assert any("No inverters to configure" in msg for msg in api3.log_messages), "Should log warning about no inverters"
 
     print("PASSED: automatic_config handles empty inverter list")
+
+    # Test with inverters that have no batteries (batteryHealthSoh absent)
+    api4 = MockSolisAPI()
+    api4.inverter_sn = ["GOOD123"]
+    # inverter_details exists but has no batteryHealthSoh entry
+    api4.inverter_details = {"GOOD123": {"someOtherField": "value"}}
+
+    set_arg_calls4 = {}
+
+    def mock_set_arg4(key, value):
+        set_arg_calls4[key] = value
+
+    api4.set_arg = mock_set_arg4
+
+    await api4.automatic_config()
+
+    # Should log warning and not configure anything
+    assert len(set_arg_calls4) == 0, "Should not configure entities when no inverters have batteries"
+    assert any("No inverters with batteries found" in msg for msg in api4.log_messages), "Should log warning about no inverters with batteries"
+
+    print("PASSED: automatic_config skips inverters without batteries")
 
     return False
 

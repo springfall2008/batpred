@@ -368,6 +368,8 @@ class SolisAPI(ComponentBase):
                     # Parse JSON response
                     response_json = await response.json()
 
+                    #self.log("Request to Solis API endpoint {} with payload {} returned response: {}".format(endpoint, payload, response_json))
+
                     # Check API response code
                     code = response_json.get("code", "Unknown")
                     if str(code) != "0":
@@ -412,7 +414,6 @@ class SolisAPI(ComponentBase):
         async def read_operation():
             payload = {"inverterSn": inverter_sn, "cid": cid}
             data = await self._execute_request(SOLIS_READ_ENDPOINT, payload)
-            self.log("Read Payload: {} - result {}".format(payload, data))  # Debug log for payload and result
             if data is None:
                 raise SolisAPIError(f"Read CID {cid} failed: missing 'data' field")
             if "msg" not in data:
@@ -437,9 +438,7 @@ class SolisAPI(ComponentBase):
             # Convert CID list to comma-separated string
             cids_str = ",".join(str(cid) for cid in cids)
             payload = {"inverterSn": inverter_sn, "cids": cids_str}
-            self.log("Batch Read Payload: " + str(payload))  # Debug log for payload
             data = await self._execute_request(SOLIS_READ_BATCH_ENDPOINT, payload)
-            self.log("Batch Read Payload: {} - result {}".format(payload, data))  # Debug log for payload and result
 
             if data is None:
                 raise SolisAPIError("Batch read failed: missing 'data' field")
@@ -1040,8 +1039,6 @@ class SolisAPI(ComponentBase):
             if old_value is not None:
                 payload["yuanzhi"] = str(old_value)
 
-            self.log("Write Payload: " + str(payload))  # Debug log for payload
-
             data = await self._execute_request(SOLIS_CONTROL_ENDPOINT, payload)
 
             if data is None:
@@ -1115,11 +1112,26 @@ class SolisAPI(ComponentBase):
             self.log("Warn: Solis API automatic_config: No inverters to configure")
             return
 
-        num_inverters = len(self.inverter_sn)
-        self.log(f"Solis API: Configuring Predbat for {num_inverters} inverter(s)")
+        # Count inverters with batteries
+        batteries = []
+        for inverter_sn in self.inverter_sn:
+            detail = self.inverter_details.get(inverter_sn, {})
+            battery_soh = detail.get("batteryHealthSoh")
+            try:
+                battery_soh = float(battery_soh) / 100.0
+            except (ValueError, TypeError):
+                battery_soh = None
+            if battery_soh:
+                batteries.append(inverter_sn)
+
+        num_inverters = len(batteries)
+        self.log(f"Solis API: Configuring Predbat for {num_inverters} inverter(s) with batteries")
+        if num_inverters == 0:
+            self.log("Warn: Solis API automatic_config: No inverters with batteries found, skipping configuration")
+            return
 
         # Convert SNs to lowercase for entity naming
-        devices = [sn.lower() for sn in self.inverter_sn]
+        devices = [sn.lower() for sn in batteries]
 
         # Configure base Predbat settings
         self.set_arg("inverter_type", ["SolisCloud" for _ in range(num_inverters)])
@@ -1148,9 +1160,8 @@ class SolisAPI(ComponentBase):
         # self.set_arg("soc_max", [f"sensor.{self.prefix}_solis_{device}_battery_capacity" for device in devices])
 
         # Reserve and limits
-        # Reserve isn't writable (so we don't use it for SolisCloud) instead we use it as the min SOC
-        self.set_arg("reserve", [f"number.{self.prefix}_solis_{device}_reserve_soc" for device in devices])
-        self.set_arg("battery_min_soc", [f"number.{self.prefix}_solis_{device}_reserve_soc" for device in devices])
+        self.set_arg("reserve", [f"number.{self.prefix}_solis_{device}_over_discharge_soc" for device in devices])
+        self.set_arg("battery_min_soc", [f"number.{self.prefix}_solis_{device}_over_discharge_soc" for device in devices])
 
         # Charge/discharge controls - using slot 1 for Predbat primary control
         self.set_arg("charge_start_time", [f"select.{self.prefix}_solis_{device}_charge_slot1_start_time" for device in devices])
@@ -2736,6 +2747,19 @@ class SolisAPI(ComponentBase):
 
     # ==================== Component Lifecycle ====================
 
+    async def startup_reset_registers(self, device_sn):
+        """
+        Reset the startup registers for the given device serial number.
+        """
+        value = await self.read_cid(device_sn, SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC)
+        try:
+            value = float(value)
+        except (ValueError, TypeError):
+            value = 0
+        # If the value is above 20, reset it to 20 default
+        if value > 20:
+            await self.read_and_write_cid(device_sn, SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC, "20", field_description="Set over discharge soc to 20 default")
+
     async def run(self, seconds, first):
         """Main run cycle called every 5 seconds"""
         poll_success = True
@@ -2780,6 +2804,8 @@ class SolisAPI(ComponentBase):
                     self.log(f"Solis API: Inverter {sn} is in Time of Use V2 mode")
                 else:
                     self.log(f"Solis API: Inverter {sn} is in standard Time of Use mode")
+                if self.control_enable:
+                    await self.startup_reset_registers(sn)  # Reset registers on startup to ensure we have write access and correct initial state
 
             if not self.inverter_sn:
                 self.log("Error: Solis API: No inverters to manage after discovery")
@@ -2892,8 +2918,8 @@ class MockBase:  # pragma: no cover
             print(f"  Attributes: {json.dumps(attributes, indent=2)}")
         self.set_state_wrapper(entity_id, state, attributes)
 
-    def get_arg(self, key, default=None):
-        return self.args.get(key, default)
+    def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
+        return self.args.get(arg, default)
 
     def set_arg(self, key, value):
         self.args[key] = value
@@ -2928,9 +2954,19 @@ async def test_solis_api(key_id, secret):  # pragma: no cover
     print("Calling run() once...")
     await solis_api.run(seconds=0, first=True)
     for device_sn, values in solis_api.cached_values.items():
-         await solis_api.set_storage_mode_if_needed(device_sn, "Feed-in priority")
-         await solis_api.set_storage_mode_if_needed(device_sn, "Self-Use")
-    #    await solis_api.read_and_write_cid(device_sn, SOLIS_CID_BATTERY_RESERVE_SOC, "12", field_description="Test write reserve SOC to 12%")
+        #await solis_api.read_cid(device_sn, SOLIS_CID_STORAGE_MODE)  # Ensure we have the latest value for storage mode
+        #await solis_api.read_cid(device_sn, SOLIS_CID_BATTERY_RESERVE_SOC)  # Ensure we have the latest value for battery reserve SOC
+        #await solis_api.read_and_write_cid(device_sn, SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC, "5", field_description="Test write discharge soc to 5")  # Test writing a value
+        #await solis_api.read_cid(device_sn, SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC)  # Ensure we have the latest value for TOU V2 mode
+        #await solis_api.set_storage_mode_if_needed(device_sn, "Feed-in priority")
+        #await solis_api.set_storage_mode_if_needed(device_sn, "Self-Use")
+        #current_mode = solis_api.get_current_solis_mode_value(device_sn)
+        #new_mode = current_mode | (1 << SOLIS_BIT_BACKUP_MODE)
+        #await solis_api.read_and_write_cid(device_sn, SOLIS_CID_STORAGE_MODE, str(new_mode), field_description=f"battery reserve to (mode: {current_mode} -> {new_mode})")
+        #await solis_api.read_and_write_cid(device_sn, SOLIS_CID_BATTERY_RESERVE_SOC, "5", field_description="Test write reserve SOC to 5%")
+        #new_mode = current_mode & ~(1 << SOLIS_BIT_BACKUP_MODE)
+        #await solis_api.read_and_write_cid(device_sn, SOLIS_CID_STORAGE_MODE, str(new_mode), field_description=f"battery reserve to (mode: {current_mode} -> {new_mode})")
+        pass
     print("Run completed successfully")
 
     await solis_api.final()

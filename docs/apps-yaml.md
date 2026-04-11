@@ -1432,6 +1432,7 @@ These are described in detail in [Energy Rates](energy-rates.md) and are listed 
 - **rates_export_override** - Over-ride export rate for specific date and time range
 - **futurerate_url** - URL of future energy market prices for Agile users
 - **futurerate_adjust_import** and **futurerate_adjust_export** - Whether tomorrow's predicted import or export prices should be adjusted based on market prices or not
+- **futurerate_adjust_auto** - Auto-detect which of import/export are Agile and calibrate only those rates; overrides `futurerate_adjust_import` / `futurerate_adjust_export`; requires the Octopus Energy integration or Predbat's Octopus Component
 - **futurerate_peak_start** and **futurerate_peak_end** - start/end times for peak-rate adjustment
 - **carbon_postcode** - Postcode to retrieve Carbon intensity grid information for
 - **carbon_automatic** - Retrieve Carbon intensity information automatically based upon postcode

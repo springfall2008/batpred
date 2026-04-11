@@ -1355,7 +1355,7 @@ class OctopusAPI(ComponentBase):
         """
         await self.clean_url_cache()
 
-        for tariff in tariffs:
+        for tariff in sorted(tariffs, key=lambda t: 0 if t == "import" else 1):
             product_code = tariffs[tariff]["productCode"]
             tariff_code = tariffs[tariff]["tariffCode"]
 
@@ -1365,6 +1365,15 @@ class OctopusAPI(ComponentBase):
             else:
                 tariff_type = "electricity"
             tariffs[tariff]["data"] = await self.fetch_url_cached(f"https://api.octopus.energy/v1/products/{product_code}/{tariff_type}-tariffs/{tariff_code}/standard-unit-rates/")
+            if not tariffs[tariff]["data"] and tariff == "export" and "INTELLI-FLUX" in product_code:
+                # INTELLI-FLUX-EXPORT rates are the same as import rates but the product is not on the public REST API
+                # Use the import tariff rates as a fallback
+                import_data = tariffs.get("import", {}).get("data", None)
+                if import_data:
+                    tariffs[tariff]["data"] = import_data
+                    self.log("OctopusAPI: Using import rates as fallback for {} export tariff (INTELLI-FLUX-EXPORT not on REST API)".format(product_code))
+                else:
+                    self.log("Warn: OctopusAPI: No import data available yet for INTELLI-FLUX-EXPORT fallback, export rates will be zero")
             tariffs[tariff]["standing"] = await self.fetch_url_cached(f"https://api.octopus.energy/v1/products/{product_code}/{tariff_type}-tariffs/{tariff_code}/standing-charges/")
 
             rates = self.get_octopus_rates_direct(tariff)
@@ -2375,7 +2384,7 @@ class Octopus:
                     new_slot["end"] = end_minutes
                     new_slot["kwh"] = kwh
                     new_slot["average"] = self.rate_import.get(start_minutes, self.rate_min)
-                    if octopus_slot_low_rate and source != "bump-charge":
+                    if octopus_slot_low_rate and source != "bump-charge" and source != "BOOST":
                         new_slot["average"] = self.rate_min  # Assume price in min
                     new_slot["cost"] = dp2(new_slot["average"] * kwh)
                     new_slot["soc"] = dp2(car_soc)
@@ -2387,7 +2396,7 @@ class Octopus:
                         new_slot["end"] = end_minutes_original
                         new_slot["kwh"] = 0.0
                         new_slot["average"] = self.rate_import.get(start_minutes, self.rate_min)
-                        if octopus_slot_low_rate and source != "bump-charge":
+                        if octopus_slot_low_rate and source != "bump-charge" and source != "BOOST":
                             new_slot["average"] = self.rate_min  # Assume price in min
                         new_slot["cost"] = 0.0
                         new_slot["soc"] = dp2(car_soc)
@@ -2400,7 +2409,7 @@ class Octopus:
                     new_slot["end"] = end_minutes
                     new_slot["kwh"] = kwh
                     new_slot["average"] = self.rate_import.get(start_minutes, self.rate_min)
-                    if octopus_slot_low_rate and source != "bump-charge":
+                    if octopus_slot_low_rate and source != "bump-charge" and source != "BOOST":
                         new_slot["average"] = self.rate_min  # Assume price in min
                     new_slot["cost"] = dp2(new_slot["average"] * kwh)
                     new_slot["soc"] = dp2(car_soc)
@@ -2429,7 +2438,7 @@ class Octopus:
                 start_minutes, end_minutes, kwh, source, location = self.decode_octopus_slot(car_n, slot, raw=True)
 
                 # Ignore bump-charge slots as their cost won't change
-                if source != "bump-charge" and (not location or location == "AT_HOME"):
+                if source != "bump-charge" and source != "BOOST" and (not location or location == "AT_HOME"):
                     # Round slots to 30 minute boundary
                     # Floor the start (round down) and ceiling the end (round up)
                     # This ensures any partial overlap with a 30-min slot marks the entire slot as off-peak

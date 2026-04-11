@@ -2329,6 +2329,15 @@ def _test_component_fetch_load_data():
         mock_base_step_size.minute_data_load = MagicMock(return_value=(load_data, 1.0))
         mock_base_step_size.minute_data_import_export = MagicMock(return_value={})
         mock_base_step_size.fill_load_from_power = MagicMock(side_effect=lambda x, y: x)
+        # Override get_arg to disable car_charging_hold (test the non-car-charging branch)
+        original_get_arg = mock_base_step_size.get_arg
+
+        def mock_get_arg_no_car_hold(key, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
+            if key == "car_charging_hold":
+                return False
+            return original_get_arg(key, default=default, indirect=indirect, combine=combine, attribute=attribute, index=index, domain=domain, can_override=can_override, required_unit=required_unit)
+
+        mock_base_step_size.get_arg = mock_get_arg_no_car_hold
 
         component = LoadMLComponent(mock_base_step_size, load_ml_enable=True)
         # Override default values for testing
@@ -2340,8 +2349,6 @@ def _test_component_fetch_load_data():
         component.ml_time_decay_days = 7
         component.ml_max_load_kw = 23.0
         component.ml_max_model_age_hours = 48
-        # IMPORTANT: Disable car charging hold to test the non-car-charging branch (the bug scenario)
-        component.car_charging_hold = False
 
         result_data, result_age, result_now, result_pv, result_temp, result_import_rates, result_export_rates = await component._fetch_load_data()
 

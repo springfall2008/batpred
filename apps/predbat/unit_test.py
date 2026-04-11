@@ -32,6 +32,7 @@ from tests.test_find_charge_curve import run_find_charge_curve_tests
 from tests.test_find_battery_size import run_find_battery_size_tests
 from tests.test_optimise_all_windows import run_optimise_all_windows_tests
 from tests.test_nordpool import run_nordpool_test
+from tests.test_futurerate_auto import test_futurerate_auto
 from tests.test_car_charging_smart import run_car_charging_smart_tests
 from tests.test_plugin_startup import test_plugin_startup_order
 from tests.test_optimise_levels import run_optimise_levels_tests
@@ -95,6 +96,7 @@ from tests.test_octopus_download_rates import test_octopus_download_rates_wrappe
 from tests.test_integer_config import test_integer_config_entities, test_expose_config_preserves_integer
 from tests.test_plan_json_rate_adjust import run_test_plan_json_rate_adjust
 from tests.test_rate_replicate_missing_slots import test_rate_replicate
+from tests.test_find_charge_window import test_find_charge_window
 from tests.test_carbon import test_carbon
 from tests.test_download import test_download
 from tests.test_ohme import test_ohme
@@ -111,6 +113,7 @@ from tests.test_clip_export_slots import run_clip_export_slots_tests
 from tests.test_clip_charge_slots import run_clip_charge_slots_tests
 from tests.test_discard_unused_charge_slots import run_discard_unused_charge_slots_tests
 from tests.test_discard_unused_export_slots import run_discard_unused_export_slots_tests
+from tests.test_marginal_costs import test_marginal_costs
 
 
 # Mock the components and plugin system
@@ -209,10 +212,12 @@ def main():
         ("manual_select", run_test_manual_select, "Manual select tests", False),
         ("web_if", run_test_web_if, "Web interface tests", False),
         ("nordpool", run_nordpool_test, "Nordpool tests", False),
+        ("futurerate_auto", test_futurerate_auto, "FutureRate auto Agile detection tests", False),
         ("octopus_slots", run_load_octopus_slots_tests, "Load Octopus slots tests", False),
         ("multi_car_iog", run_multi_car_iog_tests, "Multi-car IOG tests", False),
         ("rate_add_io_slots", run_rate_add_io_slots_tests, "Rate add IO slots tests", False),
         ("rate_replicate", test_rate_replicate, "Rate replicate comprehensive tests (missing slots, IO, offsets, gas)", False),
+        ("find_charge_window", test_find_charge_window, "Find charge window gap handling tests", False),
         ("find_charge_rate", test_find_charge_rate, "Find charge rate tests", False),
         ("find_charge_rate_string_temp", test_find_charge_rate_string_temperature, "Find charge rate string temperature", False),
         ("find_charge_rate_string_curve", test_find_charge_rate_string_charge_curve, "Find charge rate string charge curve", False),
@@ -281,6 +286,7 @@ def main():
         ("discard_unused_charge_slots", run_discard_unused_charge_slots_tests, "Discard unused charge slots tests", False),
         ("discard_unused_export_slots", run_discard_unused_export_slots_tests, "Discard unused export slots tests", False),
         ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", False),
+        ("marginal_costs", test_marginal_costs, "Marginal energy cost matrix tests", False),
         ("gateway", run_gateway_tests, "GatewayMQTT component tests (protobuf, plan serialization, commands, telemetry)", False),
         ("optimise_windows", run_optimise_all_windows_tests, "Optimise all windows tests", True),
         ("debug_cases", run_debug_cases, "Debug case file tests", True),

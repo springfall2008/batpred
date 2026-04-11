@@ -3383,6 +3383,68 @@ async def test_query_device_realtime_data_main():
     else:
         print(f"✓ Overwrite existing device data test passed")
 
+    # Test 8: real_sn != sn (shared Device ID / fake battery suffix)
+    # When real_sn differs from sn, snList must use real_sn and requestSnType must be set.
+    print("Test 8: real_sn != sn - snList uses real_sn and requestSnType is set")
+    api8 = MockSolaxAPI()
+    api8.initialize(client_id="test", client_secret="test", region="eu")
+
+    captured_params = []
+
+    async def mock_fetch_capture_params(path, params=None, post=False, json_data=None):
+        captured_params.append(dict(params) if params else {})
+        return [{"deviceSn": "INV001_battery", "batterySOC": 80}], "req_1"
+
+    api8.fetch_single_result = mock_fetch_capture_params
+
+    await api8.query_device_realtime_data("INV001_battery", device_type=2, real_sn="INV001")
+
+    if len(captured_params) != 1:
+        print(f"**** ERROR: Expected 1 fetch call, got {len(captured_params)} ****")
+        failed = True
+    else:
+        p = captured_params[0]
+        if p.get("snList") != ["INV001"]:
+            print(f"**** ERROR: snList should be ['INV001'] (real_sn), got {p.get('snList')} ****")
+            failed = True
+        elif p.get("requestSnType") != 1:
+            print(f"**** ERROR: requestSnType should be 1 when real_sn != sn, got {p.get('requestSnType')} ****")
+            failed = True
+        elif api8.realtime_device_data.get("INV001_battery", {}).get("batterySOC") != 80:
+            print(f"**** ERROR: Result stored under wrong key or data incorrect ****")
+            failed = True
+        else:
+            print(f"✓ real_sn != sn request params test passed")
+
+    # Also verify that when real_sn == sn, requestSnType is NOT added to params
+    print("Test 8b: real_sn == sn - requestSnType is absent")
+    api8b = MockSolaxAPI()
+    api8b.initialize(client_id="test", client_secret="test", region="eu")
+
+    captured_params_b = []
+
+    async def mock_fetch_no_override(path, params=None, post=False, json_data=None):
+        captured_params_b.append(dict(params) if params else {})
+        return [{"deviceSn": "INV001", "gridPower": -1000}], "req_2"
+
+    api8b.fetch_single_result = mock_fetch_no_override
+
+    await api8b.query_device_realtime_data("INV001", device_type=1)
+
+    if len(captured_params_b) != 1:
+        print(f"**** ERROR: Expected 1 fetch call, got {len(captured_params_b)} ****")
+        failed = True
+    else:
+        p = captured_params_b[0]
+        if p.get("snList") != ["INV001"]:
+            print(f"**** ERROR: snList should be ['INV001'], got {p.get('snList')} ****")
+            failed = True
+        elif "requestSnType" in p:
+            print(f"**** ERROR: requestSnType should not be present when real_sn == sn, got {p.get('requestSnType')} ****")
+            failed = True
+        else:
+            print(f"✓ real_sn == sn no requestSnType test passed")
+
     if not failed:
         print("✓ query_device_realtime_data tests passed")
 
@@ -3410,7 +3472,7 @@ async def test_query_device_realtime_data_all_main():
 
     call_log = []
 
-    async def mock_query_device(sn, device_type, business_type=None):
+    async def mock_query_device(sn, device_type, business_type=None, real_sn=None):
         call_log.append({"sn": sn, "device_type": device_type})
         return [{"deviceSn": sn, "deviceType": device_type, "value": len(call_log)}]
 
@@ -3442,7 +3504,7 @@ async def test_query_device_realtime_data_all_main():
 
     call_count = [0]
 
-    async def mock_query_never_called(sn, device_type, business_type=None):
+    async def mock_query_never_called(sn, device_type, business_type=None, real_sn=None):
         call_count[0] += 1
         return [{"deviceSn": sn}]
 
@@ -3470,7 +3532,7 @@ async def test_query_device_realtime_data_all_main():
         "GOOD002": {"deviceSn": "GOOD002", "deviceType": 2},
     }
 
-    async def mock_query_with_error(sn, device_type, business_type=None):
+    async def mock_query_with_error(sn, device_type, business_type=None, real_sn=None):
         if sn == "ERROR001":
             return None  # Simulate API error
         return [{"deviceSn": sn, "status": "ok"}]
@@ -3499,7 +3561,7 @@ async def test_query_device_realtime_data_all_main():
 
     captured_business_type = []
 
-    async def mock_query_capture_business_type(sn, device_type, business_type=None):
+    async def mock_query_capture_business_type(sn, device_type, business_type=None, real_sn=None):
         captured_business_type.append(business_type)
         return [{"deviceSn": sn}]
 
@@ -3540,7 +3602,7 @@ async def test_query_device_realtime_data_all_main():
 
     device_type_log = []
 
-    async def mock_query_log_types(sn, device_type, business_type=None):
+    async def mock_query_log_types(sn, device_type, business_type=None, real_sn=None):
         device_type_log.append({"sn": sn, "device_type": device_type})
         return [{"deviceSn": sn, "deviceType": device_type}]
 
@@ -3579,7 +3641,7 @@ async def test_query_device_realtime_data_all_main():
         "DEV2": {"deviceSn": "DEV2", "deviceType": 1},
     }
 
-    async def mock_query_multi_records(sn, device_type, business_type=None):
+    async def mock_query_multi_records(sn, device_type, business_type=None, real_sn=None):
         # Each device returns 2 records (simulating multiple data points)
         return [{"deviceSn": sn, "record": 1}, {"deviceSn": sn, "record": 2}]
 
@@ -3592,6 +3654,50 @@ async def test_query_device_realtime_data_all_main():
         failed = True
     else:
         print(f"✓ Results aggregation test passed")
+
+    # Test 7: Shared Device ID (battery SN has _battery suffix, real_sn strips it)
+    print("Test 7: Shared Device ID - battery uses inverter SN with _battery suffix")
+    api7 = MockSolaxAPI()
+    api7.initialize(client_id="test", client_secret="test", region="eu")
+
+    # Simulate the case where battery and inverter share the same hardware SN.
+    # The inverter is stored under "INV001" and the fake battery entry is "INV001_battery".
+    api7.device_info = {
+        "INV001": {"deviceSn": "INV001", "deviceType": 1, "plantId": "plant7"},
+        "INV001_battery": {"deviceSn": "INV001_battery", "deviceType": 2, "plantId": "plant7"},
+    }
+
+    real_sn_calls = []
+
+    async def mock_query_capture_real_sn(sn, device_type, business_type=None, real_sn=None):
+        real_sn_calls.append({"sn": sn, "real_sn": real_sn, "device_type": device_type})
+        return [{"deviceSn": sn, "deviceType": device_type}]
+
+    api7.query_device_realtime_data = mock_query_capture_real_sn
+
+    result7 = await api7.query_device_realtime_data_all("plant7")
+
+    if len(result7) != 2:
+        print(f"**** ERROR: Expected 2 results, got {len(result7)} ****")
+        failed = True
+    else:
+        inv_call = next((c for c in real_sn_calls if c["sn"] == "INV001"), None)
+        bat_call = next((c for c in real_sn_calls if c["sn"] == "INV001_battery"), None)
+
+        if inv_call is None:
+            print(f"**** ERROR: No call made for INV001 ****")
+            failed = True
+        elif inv_call["real_sn"] != "INV001":
+            print(f"**** ERROR: Inverter real_sn should be 'INV001', got '{inv_call['real_sn']}' ****")
+            failed = True
+        elif bat_call is None:
+            print(f"**** ERROR: No call made for INV001_battery ****")
+            failed = True
+        elif bat_call["real_sn"] != "INV001":
+            print(f"**** ERROR: Battery real_sn should be 'INV001' (suffix stripped), got '{bat_call['real_sn']}' ****")
+            failed = True
+        else:
+            print(f"✓ Shared Device ID real_sn test passed")
 
     if not failed:
         print("✓ query_device_realtime_data_all tests passed")

@@ -1077,8 +1077,9 @@ class SolaxAPI(ComponentBase):
         Returns:
             Parsed JSON response or None
         """
-        self.log("Solax: Request get path {} params {}".format(path, params))
-        return await self.request_wrapper(lambda: self._request_get_impl(path, params, post, json_data))
+        self.log("Solax: Request get path {} params {} json {}".format(path, params, json_data))
+        result = await self.request_wrapper(lambda: self._request_get_impl(path, params, post, json_data))
+        return result
 
     async def fetch_paginated_data(self, path, base_params, page_size=100):
         """
@@ -1271,6 +1272,38 @@ class SolaxAPI(ComponentBase):
                     elif device_type == 2 and deviceSn not in self.plant_batteries[plant_id]:
                         self.plant_batteries[plant_id].append(deviceSn)
                     self.log(f"Solax: Stored device info for SN: {deviceSn} info {device}")
+
+        # Workaround, if for some reason there is no device info for the battery, but there is a battery capacity then add
+        # a battery device with the plant ID and a fake SN so that the battery sensors can still be created and show the battery SOC and other info.
+        # This is because some SolaX users have reported that their battery device info is not showing up in the API, but they can see the battery capacity in the plant info.
+        if device_type == 2 and not self.plant_batteries.get(plant_id) and self.plant_info:
+            for plant in self.plant_info:
+                if plant.get("plantId") == plant_id and plant.get("batteryCapacity", 0) > 0:
+                    # Find the deviceSN of the inverter instead
+                    realSN = None
+                    for device in self.device_info.values():
+                        if device.get("plantId") == plant_id and device.get("deviceType") == 1:
+                            realSN = device.get("deviceSn")
+                            break
+                    if realSN:
+                        self.log("Info: SolaX API: No battery device info found for plant {}, but battery capacity is {} kWh in plant info. Adding fake battery device.".format(plant_id, plant.get("batteryCapacity", 0)))
+                        fake_sn = f"{realSN}_battery"
+                        self.device_info[fake_sn] = {
+                            "deviceModel": 2,
+                            "hardwareVersion": None,
+                            "registerNo": None,
+                            "deviceSn": fake_sn,
+                            "plantId": plant_id,
+                            "softwareVersion": None,
+                            "ratedCapacity": plant.get("batteryCapacity", 0),
+                            "onlineStatus": 1,
+                            "deviceType": 2,
+                        }
+                        if plant_id not in self.plant_batteries:
+                            self.plant_batteries[plant_id] = []
+                        self.plant_batteries[plant_id].append(fake_sn)
+                        self.log(f"Solax: Added fake battery device for plant {plant_id} with SN {fake_sn} based on battery capacity in plant info")
+
         return result
 
     async def query_plant_realtime_data(self, plant_id, business_type=None):
@@ -1319,7 +1352,10 @@ class SolaxAPI(ComponentBase):
         results = []
         for device_sn in self.device_info:
             device_type = self.device_info[device_sn].get("deviceType")
-            result = await self.query_device_realtime_data(device_sn, device_type, business_type)
+            real_sn = device_sn
+            if device_sn.endswith("_battery"):
+                real_sn = device_sn.replace("_battery", "")
+            result = await self.query_device_realtime_data(device_sn, device_type, business_type, real_sn=real_sn)
             if result is not None:
                 results.extend(result)
         return results
@@ -1414,7 +1450,7 @@ class SolaxAPI(ComponentBase):
 
         return result
 
-    async def query_device_realtime_data(self, sn, device_type, business_type=None):
+    async def query_device_realtime_data(self, sn, device_type, business_type=None, real_sn=None):
         # cSpell:disable
         """
         Query real-time data for specific devices
@@ -1423,6 +1459,7 @@ class SolaxAPI(ComponentBase):
             sn: Device serial number
             device_type: Device type (1=Inverter, 2=Battery, 3=Meter, 4=EV Charger)
             business_type: Business type (1=Residential, 4=Commercial), defaults to residential
+            real_sn: Optional real device SN to use for battery queries when device info is missing (workaround for some SolaX users with missing battery device info)
 
         Returns:
             List of device realtime data dictionaries or None on failure
@@ -1513,13 +1550,19 @@ class SolaxAPI(ComponentBase):
             }
         ]
         """
+        if not real_sn:
+            real_sn = sn
         # cSpell:enable
         # Build POST body
         params = {
-            "snList": [sn],
+            "snList": [real_sn],
             "deviceType": device_type,
             "businessType": business_type if business_type is not None else BUSINESS_TYPE_RESIDENTIAL,
         }
+
+        # Force fetch of all batteries under device
+        if real_sn != sn:
+            params["requestSnType"] = 1  # 1=Device SN, 2=Register No
 
         # Fetch single result (returns array in this case)
         result, requestId = await self.fetch_single_result("/openapi/v2/device/realtime_data", params=params)
@@ -2402,6 +2445,7 @@ class SolaxAPI(ComponentBase):
                 self.log(f"SolaX API: Fetching device information for plant ID {plantID}...")
                 await self.query_device_info(plantID, device_type=SOLAX_DEVICE_TYPE_INVERTER)  # Inverter
                 await self.query_device_info(plantID, device_type=SOLAX_DEVICE_TYPE_BATTERY)  # Battery
+
                 # await self.query_device_info(plantID, device_type=SOLAX_DEVICE_TYPE_METER)  # Meter
                 # await self.query_plant_statistics_daily(plantID)
 

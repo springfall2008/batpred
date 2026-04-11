@@ -384,10 +384,10 @@ class Inverter:
 
         # Battery cannot be zero size
         if not self.soc_max or self.soc_max <= 0:
-            self.log("Note: Battery size was not set, attempting to find it..")
+            self.log("Note: Battery size was not set for inverter {}, attempting to find it..".format(self.id))
             found_size = self.find_battery_size()
             if not found_size or found_size <= 0:
-                self.log("Warn: Unable to determine battery size, setting to 8 kWh default, you must set soc_max in apps.yaml or wait until enough data is collected to estimate battery size")
+                self.log("Warn: Unable to determine battery size for inverter {}, setting to 8 kWh default, you must set soc_max in apps.yaml or wait until enough data is collected to estimate battery size".format(self.id))
                 self.soc_max = 8.0
             else:
                 # Store found battery size so we don't keep having to fetch it
@@ -442,7 +442,7 @@ class Inverter:
                     )
                 )
                 self.base.record_status(
-                    "Inverter time is {}, Predbat computer time {}, this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter time, checking HA is synchronising with your inverter, or fixing Predbat computer time zone".format(
+                    "Warn: Inverter time is {}, Predbat computer time {}, this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter time, checking HA is synchronising with your inverter, or fixing Predbat computer time zone".format(
                         self.inverter_time, now_utc, tdiff
                     ),
                     had_errors=True,
@@ -472,7 +472,7 @@ class Inverter:
             self.reserve_min = battery_min_soc
 
         self.base.log("Reserve min: {}%, battery_min: {}%".format(self.reserve_min, dp0(battery_min_soc)))
-        if self.base.set_reserve_enable and self.inv_has_reserve_soc:
+        if (self.base.set_reserve_enable and self.inv_has_reserve_soc) or not self.inv_has_reserve_soc:
             self.reserve_percent = self.reserve_min
         else:
             self.reserve_percent = self.reserve_percent_current
@@ -2746,7 +2746,7 @@ class Inverter:
 
         # Exhausted retry attempts, fail REST GET and fallback to using HA entities (if they have been configured in apps.yaml)
         self.base.log("Warn: Inverter {} unable to read REST data from {} - REST will be skipped for this run".format(self.id, url))
-        self.base.record_status("Inverter {} unable to read REST data from {} - REST will be skipped".format(self.id, url), had_errors=True)
+        self.base.record_status("Warn: Inverter {} unable to read REST data from {} - REST will be skipped".format(self.id, url), had_errors=True)
         return None
 
     def rest_runAll(self, old_data=None):

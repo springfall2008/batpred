@@ -318,15 +318,26 @@ class LoadMLComponent(ComponentBase):
                 load_power_data, load_minutes_age = self.base.minute_data_load(self.now_utc, "load_power", days_to_fetch, required_unit="W", load_scaling=1.0, interpolate=True, pad=False)
                 load_minutes = self.base.fill_load_from_power(load_minutes, load_power_data)
 
+            # Re-read car charging settings dynamically so switch changes are picked up without a restart.
+            # Note: car_charging_from_battery does not affect EV subtraction from load history; it only controls
+            # whether the battery is allowed to discharge for car charging in the prediction model.
+            car_charging_hold = self.get_arg("car_charging_hold", True)
+            car_energy_reported_load = self.get_arg("car_energy_reported_load", True)
+            if not car_energy_reported_load:
+                # Car energy is not part of the house load (outside CT clamp), so don't subtract it
+                car_charging_hold = False
+            car_charging_energy_scale = self.get_arg("car_charging_energy_scale", 1.0)
+            self.log("ML Component: Car charging hold {}, car energy reported load {}".format(car_charging_hold, car_energy_reported_load))
+
             car_charging_energy = {}
             if self.get_arg("car_charging_energy", default=None, indirect=False):
-                car_charging_energy = self.base.minute_data_import_export(days_to_fetch, self.now_utc, "car_charging_energy", scale=self.car_charging_energy_scale, required_unit="kWh", pad=False)
+                car_charging_energy = self.base.minute_data_import_export(days_to_fetch, self.now_utc, "car_charging_energy", scale=car_charging_energy_scale, required_unit="kWh", pad=False)
 
             max_minute = max(load_minutes.keys()) if load_minutes else 0
             max_minute = (max_minute // 5) * 5  # Align to 5-minute intervals
             load_minutes_new = {}
 
-            if self.car_charging_hold and car_charging_energy:
+            if car_charging_hold and car_charging_energy:
                 # Use improved car subtraction method that handles timing misalignment and gaps
                 self.log("ML Component: Applying improved car charging subtraction with hold and interpolation")
                 load_minutes_new = self.car_subtraction(load_minutes, car_charging_energy, step=PREDICT_STEP, interpolate_gaps=True, max_gap_minutes=60, smoothing_window=3)
@@ -336,7 +347,7 @@ class LoadMLComponent(ComponentBase):
                 total_load_energy = 0
                 for minute in range(max_minute, -PREDICT_STEP, -PREDICT_STEP):
                     car_delta = 0.0
-                    if self.car_charging_hold:
+                    if car_charging_hold:
                         load_now = self.get_from_incrementing(load_minutes, minute, PREDICT_STEP, backwards=True)
                         if load_now >= self.car_charging_threshold * PREDICT_STEP:
                             car_delta = self.car_charging_rate * PREDICT_STEP

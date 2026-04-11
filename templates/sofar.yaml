@@ -228,7 +228,7 @@ pred_bat:
 
   # Octopus saving session points to the saving session Sensor in the Octopus plugin, when enabled saving sessions will be at the assumed
   # rate configured with input_number.predbat_metric_octopus_saving_rate in-side HA
-  octopus_saving_session: 're:(event.octopus_energy([0-9a-z_]+|)_saving_session_event(s|)'
+  octopus_saving_session: 're:(event.octopus_energy([0-9a-z_]+|)_saving_session_event(s|))'
   octopus_saving_session_octopoints_per_penny: 8
 
   # Octopus free session points to the free session Sensor in the Octopus plugin

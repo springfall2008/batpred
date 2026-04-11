@@ -1220,6 +1220,9 @@ class Plan:
                 self.publish_charge_limit(self.charge_limit_best, self.charge_window_best, best=True, soc=self.predict_soc_best)
                 self.publish_export_limit(self.export_window_best, self.export_limits_best, best=True)
 
+                # Compute marginal energy cost matrix (what-if extra load scenarios)
+                self.calculate_marginal_costs()
+
                 # HTML data
                 text = self.short_textual_plan(soc_min, soc_min_minute, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, self.end_record)
                 text_lines = text.split("\n")

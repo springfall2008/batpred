@@ -1,5 +1,6 @@
 # src/batpred/apps/predbat/tests/test_kraken.py
 import asyncio
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import sys
@@ -482,6 +483,454 @@ def test_export_discovery_strategy1_no_fallthrough_on_network_failure():
     assert api.export_tariff == {"tariff_code": "E-1R-OLD-EXPORT", "product_code": "OLD-EXPORT"}
 
 
+def test_normalize_rate_timestamps_flat_rate_both_null():
+    """Flat-rate tariff with valid_from=null and valid_to=null (observed from Kraken export API).
+
+    Without normalization, minute_data() skips these entries because it can't
+    parse null as a timestamp, resulting in 'metric_octopus_export not set correctly'.
+    """
+    from kraken import KrakenAPI
+
+    results = [{"value_inc_vat": 16.5, "valid_from": None, "valid_to": None, "payment_method": None}]
+    normalized = KrakenAPI._normalize_rate_timestamps(results)
+
+    assert len(normalized) == 1
+    assert normalized[0]["value_inc_vat"] == 16.5
+    assert normalized[0]["valid_from"] is not None  # Must be a real timestamp
+    assert normalized[0]["valid_to"] is None  # Left as-is (minute_data handles this)
+    # Should be parsable as ISO datetime
+    from datetime import datetime
+
+    datetime.fromisoformat(normalized[0]["valid_from"].replace("Z", "+00:00"))
+
+
+def test_normalize_rate_timestamps_normal_rates_unchanged():
+    """Rates with real timestamps should pass through unmodified."""
+    from kraken import KrakenAPI
+
+    results = [
+        {"value_inc_vat": 24.5, "valid_from": "2026-03-23T00:00:00Z", "valid_to": "2026-03-24T00:00:00Z"},
+        {"value_inc_vat": 28.3, "valid_from": "2026-03-24T00:00:00Z", "valid_to": None},
+    ]
+    normalized = KrakenAPI._normalize_rate_timestamps(results)
+
+    assert normalized[0]["valid_from"] == "2026-03-23T00:00:00Z"
+    assert normalized[1]["valid_from"] == "2026-03-24T00:00:00Z"
+
+
+def test_normalize_rate_timestamps_empty_list():
+    """Empty results should return empty."""
+    from kraken import KrakenAPI
+
+    assert KrakenAPI._normalize_rate_timestamps([]) == []
+    assert KrakenAPI._normalize_rate_timestamps(None) is None
+
+
+def test_normalize_rate_timestamps_mixed_null_and_real():
+    """Mixed results where some have null valid_from (hypothetical future Kraken response).
+
+    We have NOT observed this from Kraken's API - only the single-entry flat-rate case
+    has been seen. This test documents expected behaviour if Kraken later returns
+    multiple rate entries where the latest has valid_from=null (open-ended) alongside
+    historical entries with real timestamps, similar to Octopus's pattern.
+    """
+    from kraken import KrakenAPI
+
+    results = [
+        {"value_inc_vat": 15.0, "valid_from": "2026-01-01T00:00:00Z", "valid_to": "2026-04-01T00:00:00Z"},
+        {"value_inc_vat": 16.5, "valid_from": None, "valid_to": None},
+    ]
+    normalized = KrakenAPI._normalize_rate_timestamps(results)
+
+    # The null valid_from should get the earliest valid_to as its start
+    assert normalized[0]["valid_from"] == "2026-01-01T00:00:00Z"  # Unchanged
+    assert normalized[1]["valid_from"] == "2026-04-01T00:00:00Z"  # Set from earliest valid_to
+
+
+def test_email_auth_obtains_token_when_oauth_mixin_is_base():
+    """Regression: email auth must obtain a token even when OAuthMixin is _AUTH_BASE.
+
+    Bug: when both oauth_mixin and kraken_auth_mixin are present, OAuthMixin becomes
+    _AUTH_BASE.  The old hasattr(self, '_init_kraken_auth') check returned False because
+    KrakenAPI only inherited OAuthMixin.  OAuthMixin._init_oauth() sets access_token=None
+    and check_and_refresh_oauth_token() returns True without obtaining a token, causing
+    "Warn: Kraken: No access token for find-tariffs".
+
+    Fix: use module-level _KrakenAuthMixin reference and bind its methods to the instance.
+    """
+    import kraken as kraken_module
+
+    assert kraken_module._KrakenAuthMixin is not None, "KrakenAuthMixin must be importable for this test"
+
+    api = make_kraken_api(auth_method="email", email="user@eon.com", password="secret123", key=None)
+
+    # access_token must be None before first auth — KrakenAuthMixin lazy-obtains on first call
+    assert api.access_token is None, "access_token should be None before first auth"
+
+    # Mock _kraken_token_request so no real HTTP call is made
+    api._kraken_token_request = AsyncMock(
+        return_value={
+            "token": "email-jwt-token",
+            "refreshToken": "email-refresh-token",
+            "exp": int(time.time()) + 3600,
+        }
+    )
+
+    result = asyncio.run(api.check_and_refresh_oauth_token())
+    assert result is True, "check_and_refresh_oauth_token must return True on success"
+    assert api.access_token == "email-jwt-token", "access_token must be set after email auth (was None — OAuthMixin bug)"
+
+
+def test_api_key_auth_obtains_token_when_oauth_mixin_is_base():
+    """Regression: api_key auth must obtain a token even when OAuthMixin is _AUTH_BASE."""
+    import kraken as kraken_module
+
+    assert kraken_module._KrakenAuthMixin is not None, "KrakenAuthMixin must be importable for this test"
+
+    api = make_kraken_api(auth_method="api_key", key="sk_live_test123")
+    assert api.access_token is None
+
+    api._kraken_token_request = AsyncMock(
+        return_value={
+            "token": "api-key-jwt-token",
+            "refreshToken": "api-key-refresh-token",
+            "exp": int(time.time()) + 3600,
+        }
+    )
+
+    result = asyncio.run(api.check_and_refresh_oauth_token())
+    assert result is True
+    assert api.access_token == "api-key-jwt-token", "access_token must be set after api_key auth"
+
+
+def test_oauth_mode_unaffected_by_kraken_auth_mixin():
+    """Regression: OAuthMixin OAuth mode must still work (SaaS scenario).
+
+    Ensure the fix for email/api_key auth does not break SaaS users who use
+    auth_method='oauth' with a pre-issued access_token.
+    """
+    api = make_kraken_api(auth_method="oauth", key="saas-access-token", token_expires_at="2099-01-01T00:00:00Z")
+    # For OAuth mode, OAuthMixin._init_oauth() is called and access_token = key
+    assert api.access_token == "saas-access-token", "OAuth mode must preserve the pre-issued access_token"
+    # Token is valid (far future expiry) — must return True without refresh
+    result = asyncio.run(api.check_and_refresh_oauth_token())
+    assert result is True
+
+
+def test_find_tariffs_stores_import_mpan():
+    """async_find_tariffs() must set self.import_mpan from the discovered import meter point."""
+    api = make_kraken_api()
+    account_data = {
+        "account": {
+            "number": "A-TEST123",
+            "properties": [
+                {
+                    "address": "1 Test Street",
+                    "electricityMeterPoints": [
+                        {
+                            "mpan": "1900000000456",
+                            "agreements": [{"validFrom": "2026-01-01T00:00:00+00:00", "validTo": None, "tariff": {"productCode": "SMART-V16", "tariffCode": "E-1R-SMART-V16-J", "displayName": "Smart Saver"}}],
+                        }
+                    ],
+                }
+            ],
+        },
+    }
+    api.async_graphql_query = AsyncMock(return_value=account_data)
+    api._discover_export_tariff = AsyncMock()
+    asyncio.run(api.async_find_tariffs())
+    assert api.import_mpan == "1900000000456"
+
+
+def test_fetch_rates_graphql_parses_applicable_rates():
+    """async_fetch_rates_graphql() converts GraphQL value/validFrom/validTo to REST-compatible shape."""
+    api = make_kraken_api()
+    api.account_id = "A-AA8A473C"
+    api.async_graphql_query = AsyncMock(
+        return_value={
+            "applicableRates": [
+                {"value": 24.57, "validFrom": "2026-04-10T00:00:00Z", "validTo": "2026-04-11T00:00:00Z"},
+                {"value": 24.57, "validFrom": "2026-04-11T00:00:00Z", "validTo": "2026-04-12T00:00:00Z"},
+            ]
+        }
+    )
+
+    result = asyncio.run(api.async_fetch_rates_graphql("1900000000456"))
+
+    assert result is not None
+    assert len(result) == 2
+    # value_inc_vat must be the raw value from the API (pence/kWh inc VAT)
+    assert result[0]["value_inc_vat"] == 24.57
+    # value_exc_vat must be value / 1.05, rounded to 4dp
+    assert result[0]["value_exc_vat"] == round(24.57 / 1.05, 4)
+    # Timestamps must be passed through unchanged
+    assert result[0]["valid_from"] == "2026-04-10T00:00:00Z"
+    assert result[0]["valid_to"] == "2026-04-11T00:00:00Z"
+
+
+def test_fetch_rates_graphql_normalizes_null_timestamps():
+    """async_fetch_rates_graphql() applies _normalize_rate_timestamps to handle null valid_from."""
+    api = make_kraken_api()
+    api.account_id = "A-AA8A473C"
+    api.async_graphql_query = AsyncMock(
+        return_value={
+            "applicableRates": [
+                {"value": 28.0, "validFrom": None, "validTo": "2026-04-12T00:00:00Z"},
+            ]
+        }
+    )
+
+    result = asyncio.run(api.async_fetch_rates_graphql("1900000000456"))
+
+    assert result is not None
+    assert len(result) == 1
+    # Normalization must replace null valid_from with a real timestamp
+    assert result[0]["valid_from"] is not None
+    from datetime import datetime
+
+    datetime.fromisoformat(result[0]["valid_from"].replace("Z", "+00:00"))
+
+
+def test_fetch_rates_graphql_returns_none_on_empty_response():
+    """async_fetch_rates_graphql() returns None when applicableRates is empty."""
+    api = make_kraken_api()
+    api.account_id = "A-AA8A473C"
+    api.async_graphql_query = AsyncMock(return_value={"applicableRates": []})
+
+    result = asyncio.run(api.async_fetch_rates_graphql("1900000000456"))
+    assert result is None
+
+
+def test_fetch_rates_graphql_returns_none_on_graphql_failure():
+    """async_fetch_rates_graphql() returns None when GraphQL query fails."""
+    api = make_kraken_api()
+    api.account_id = "A-AA8A473C"
+    api.async_graphql_query = AsyncMock(return_value=None)
+
+    result = asyncio.run(api.async_fetch_rates_graphql("1900000000456"))
+    assert result is None
+
+
+def test_fetch_rates_graphql_window_derived_from_forecast_hours():
+    """async_fetch_rates_graphql() derives start/end from forecast_hours, not a hard-coded 2-day window.
+
+    With forecast_hours=72 (3 days), forecast_days=3 and end_at should be midnight + 4 days.
+    start_at should be midnight - 1 day (to capture rate periods that started earlier today).
+    """
+    from datetime import datetime, timedelta, timezone
+    import re
+
+    api = make_kraken_api()
+    api.account_id = "A-AA8A473C"
+    api.get_arg = MagicMock(side_effect=lambda arg, default=None, **kwargs: 72 if arg == "forecast_hours" else default)
+
+    captured_query = {}
+
+    async def capture_query(query, context):
+        captured_query["query"] = query
+        return {"applicableRates": [{"value": 24.0, "validFrom": "2026-04-10T00:00:00Z", "validTo": "2026-04-14T00:00:00Z"}]}
+
+    api.async_graphql_query = capture_query
+
+    asyncio.run(api.async_fetch_rates_graphql("1900000000456"))
+
+    query = captured_query.get("query", "")
+    # Extract startAt and endAt from the query string
+    start_match = re.search(r'startAt:\s*"([^"]+)"', query)
+    end_match = re.search(r'endAt:\s*"([^"]+)"', query)
+    assert start_match and end_match, f"Could not find startAt/endAt in query: {query}"
+
+    start_dt = datetime.fromisoformat(start_match.group(1).replace("Z", "+00:00"))
+    end_dt = datetime.fromisoformat(end_match.group(1).replace("Z", "+00:00"))
+
+    now = datetime.now(timezone.utc)
+    midnight_utc = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # start_at must be midnight - 1 day (within a small tolerance for test timing)
+    expected_start = midnight_utc - timedelta(days=1)
+    assert abs((start_dt - expected_start).total_seconds()) < 60, f"start_at {start_dt} not close to expected {expected_start}"
+
+    # forecast_hours=72 → forecast_days=3 → end_at must be midnight + 4 days
+    expected_end = midnight_utc + timedelta(days=4)
+    assert abs((end_dt - expected_end).total_seconds()) < 60, f"end_at {end_dt} not close to expected {expected_end}"
+
+
+def test_fetch_rates_graphql_window_default_forecast_hours():
+    """async_fetch_rates_graphql() uses forecast_hours default of 48 when not configured.
+
+    forecast_hours=48 → forecast_days=2 → end_at = midnight + 3 days.
+    """
+    from datetime import datetime, timedelta, timezone
+    import re
+
+    api = make_kraken_api()
+    api.account_id = "A-AA8A473C"
+    # No forecast_hours in args — should default to 48
+    api.get_arg = MagicMock(side_effect=lambda arg, default=None, **kwargs: default)
+
+    captured_query = {}
+
+    async def capture_query(query, context):
+        captured_query["query"] = query
+        return {"applicableRates": [{"value": 24.0, "validFrom": "2026-04-10T00:00:00Z", "validTo": "2026-04-13T00:00:00Z"}]}
+
+    api.async_graphql_query = capture_query
+
+    asyncio.run(api.async_fetch_rates_graphql("1900000000456"))
+
+    query = captured_query.get("query", "")
+    end_match = re.search(r'endAt:\s*"([^"]+)"', query)
+    assert end_match, f"Could not find endAt in query: {query}"
+
+    end_dt = datetime.fromisoformat(end_match.group(1).replace("Z", "+00:00"))
+    now = datetime.now(timezone.utc)
+    midnight_utc = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # default forecast_hours=48 → forecast_days=2 → end_at must be midnight + 3 days
+    expected_end = midnight_utc + timedelta(days=3)
+    assert abs((end_dt - expected_end).total_seconds()) < 60, f"end_at {end_dt} not close to expected {expected_end}"
+
+
+def test_fetch_rates_rest_404_falls_back_to_graphql_for_import():
+    """async_fetch_rates() falls back to GraphQL applicableRates when REST returns 404 on import tariff.
+
+    Reproduces the Derek scenario: NEXT_SMART_SAVER_FIXED_12M_V6 removed from the E.ON API
+    but the customer is still on that tariff — REST 404, GraphQL fallback should succeed.
+    """
+    api = make_kraken_api(provider="eon", account_id="A-AA8A473C")
+    api.current_tariff = {"tariff_code": "E-1R-NEXT_SMART_SAVER_FIXED_12M_V6-J", "product_code": "NEXT_SMART_SAVER_FIXED_12M_V6"}
+    api.import_mpan = "1900000000456"
+
+    graphql_rates = [
+        {"value_inc_vat": 24.57, "value_exc_vat": round(24.57 / 1.05, 4), "valid_from": "2026-04-10T00:00:00Z", "valid_to": "2026-04-12T00:00:00Z"},
+    ]
+    api.async_fetch_rates_graphql = AsyncMock(return_value=graphql_rates)
+
+    mock_response = AsyncMock()
+    mock_response.status = 404
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_response),
+            __aexit__=AsyncMock(return_value=None),
+        )
+    )
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(api.async_fetch_rates())
+
+    assert result is graphql_rates
+    api.async_fetch_rates_graphql.assert_called_once_with("1900000000456")
+
+
+def test_fetch_rates_rest_404_no_fallback_without_import_mpan():
+    """async_fetch_rates() returns None (no fallback) when REST 404 and import_mpan is not set."""
+    api = make_kraken_api()
+    api.current_tariff = {"tariff_code": "E-1R-OLD-J", "product_code": "OLD"}
+    api.import_mpan = None  # Not yet discovered
+
+    mock_response = AsyncMock()
+    mock_response.status = 404
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_response),
+            __aexit__=AsyncMock(return_value=None),
+        )
+    )
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(api.async_fetch_rates())
+
+    assert result is None
+
+
+def test_fetch_rates_rest_404_no_fallback_for_export_tariff():
+    """async_fetch_rates() does NOT fall back to GraphQL when REST 404 on export tariff."""
+    api = make_kraken_api()
+    api.current_tariff = {"tariff_code": "E-1R-IMP-01-J", "product_code": "IMP-01"}
+    api.import_mpan = "1900000000456"
+    export_tariff = {"tariff_code": "E-1R-EXPORT-01-J", "product_code": "EXPORT-01"}
+    api.async_fetch_rates_graphql = AsyncMock()
+
+    mock_response = AsyncMock()
+    mock_response.status = 404
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_response),
+            __aexit__=AsyncMock(return_value=None),
+        )
+    )
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(api.async_fetch_rates(tariff=export_tariff))
+
+    assert result is None
+    api.async_fetch_rates_graphql.assert_not_called()
+
+
+def test_fetch_rates_rest_410_falls_back_to_graphql_for_import():
+    """async_fetch_rates() also falls back on HTTP 410 Gone (product permanently removed)."""
+    api = make_kraken_api(provider="eon", account_id="A-AA8A473C")
+    api.current_tariff = {"tariff_code": "E-1R-GONE-V1-J", "product_code": "GONE-V1"}
+    api.import_mpan = "1900000000456"
+
+    graphql_rates = [{"value_inc_vat": 24.57, "value_exc_vat": round(24.57 / 1.05, 4), "valid_from": "2026-04-10T00:00:00Z", "valid_to": "2026-04-12T00:00:00Z"}]
+    api.async_fetch_rates_graphql = AsyncMock(return_value=graphql_rates)
+
+    mock_response = AsyncMock()
+    mock_response.status = 410
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_response),
+            __aexit__=AsyncMock(return_value=None),
+        )
+    )
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(api.async_fetch_rates())
+
+    assert result is graphql_rates
+    api.async_fetch_rates_graphql.assert_called_once_with("1900000000456")
+
+
+def test_fetch_rates_transient_error_does_not_fall_back_to_graphql():
+    """async_fetch_rates() returns None (no GraphQL fallback) for transient errors like 500/429."""
+    for status_code in (429, 500, 503):
+        api = make_kraken_api()
+        api.current_tariff = {"tariff_code": "E-1R-VAR-01-J", "product_code": "VAR-01"}
+        api.import_mpan = "1900000000456"
+        api.async_fetch_rates_graphql = AsyncMock()
+
+        mock_response = AsyncMock()
+        mock_response.status = status_code
+        mock_session = AsyncMock()
+        mock_session.get = MagicMock(
+            return_value=AsyncMock(
+                __aenter__=AsyncMock(return_value=mock_response),
+                __aexit__=AsyncMock(return_value=None),
+            )
+        )
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            result = asyncio.run(api.async_fetch_rates())
+
+        assert result is None, f"Expected None for HTTP {status_code}, got {result}"
+        api.async_fetch_rates_graphql.assert_not_called()
+
+
 def run_kraken_tests(my_predbat=None):
     """Run all KrakenAPI tests. Returns True on failure, False on success."""
     tests = [
@@ -509,6 +958,25 @@ def run_kraken_tests(my_predbat=None):
         test_standing_charge_converts_pence_to_pounds,
         test_export_discovery_clears_stale_when_not_found,
         test_export_discovery_strategy1_no_fallthrough_on_network_failure,
+        test_normalize_rate_timestamps_flat_rate_both_null,
+        test_normalize_rate_timestamps_normal_rates_unchanged,
+        test_normalize_rate_timestamps_empty_list,
+        test_normalize_rate_timestamps_mixed_null_and_real,
+        test_email_auth_obtains_token_when_oauth_mixin_is_base,
+        test_api_key_auth_obtains_token_when_oauth_mixin_is_base,
+        test_oauth_mode_unaffected_by_kraken_auth_mixin,
+        test_find_tariffs_stores_import_mpan,
+        test_fetch_rates_graphql_parses_applicable_rates,
+        test_fetch_rates_graphql_normalizes_null_timestamps,
+        test_fetch_rates_graphql_returns_none_on_empty_response,
+        test_fetch_rates_graphql_returns_none_on_graphql_failure,
+        test_fetch_rates_graphql_window_derived_from_forecast_hours,
+        test_fetch_rates_graphql_window_default_forecast_hours,
+        test_fetch_rates_rest_404_falls_back_to_graphql_for_import,
+        test_fetch_rates_rest_404_no_fallback_without_import_mpan,
+        test_fetch_rates_rest_404_no_fallback_for_export_tariff,
+        test_fetch_rates_rest_410_falls_back_to_graphql_for_import,
+        test_fetch_rates_transient_error_does_not_fall_back_to_graphql,
     ]
     for test_func in tests:
         try:

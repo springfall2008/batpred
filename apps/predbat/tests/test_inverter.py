@@ -220,7 +220,7 @@ def test_adjust_charge_window(
     return failed
 
 
-def test_adjust_reserve(test_name, ha, inv, dummy_rest, prev_reserve, reserve, expect_reserve=None, reserve_min=4, reserve_max=100):
+def test_adjust_reserve(test_name, ha, inv, dummy_rest, prev_reserve, reserve, expect_reserve=None, reserve_min=4, reserve_max=100, reserve_percent=None):
     """
     Test
        inv.adjust_reserve(self, reserve):
@@ -229,7 +229,12 @@ def test_adjust_reserve(test_name, ha, inv, dummy_rest, prev_reserve, reserve, e
     if expect_reserve is None:
         expect_reserve = reserve
 
-    inv.reserve_percent = reserve_min
+    # reserve_percent simulates the current planning floor (may differ from reserve_min for
+    # inverters where inv_has_reserve_soc is False, e.g. SolisCloud where the sensor can be "stuck" high)
+    if reserve_percent is None:
+        reserve_percent = reserve_min
+    inv.reserve_percent = reserve_percent
+    inv.reserve_min = reserve_min
     inv.reserve_max = reserve_max
 
     print("Test: {}".format(test_name))

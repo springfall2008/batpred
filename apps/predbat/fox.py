@@ -1276,7 +1276,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
                         soc = float(soc)
                     except ValueError:
                         soc = None
-                    if soc is not None:
+                    if soc is not None and soc > 0:
                         soc_total += soc
                         soc_total_count += 1
             if soc_total_count > 0:
@@ -1754,7 +1754,7 @@ class MockBase:  # pragma: no cover
         print(f"Set arg {key} = {value} (state={state})")
 
 
-async def test_fox_api(sn, api_key):  # pragma: no cover
+async def test_fox_api(sn, api_key, token_hash):  # pragma: no cover
     """
     Run a test
     """
@@ -1765,7 +1765,9 @@ async def test_fox_api(sn, api_key):  # pragma: no cover
 
     # Create FoxAPI instance with a lambda that returns the API key
     arg_dict = {}
-    arg_dict = {"key": api_key, "automatic": True}
+    arg_dict = {"key": api_key, "automatic": True, "token_hash": token_hash}
+    if token_hash:
+        arg_dict["auth_method"] = "oauth"
     fox_api = FoxAPI(mock_base, **arg_dict)
 
     # Call run() once
@@ -1779,15 +1781,17 @@ def main():  # pragma: no cover
     Main function for command line execution
     """
     parser = argparse.ArgumentParser(description="Test Fox API")
-    parser.add_argument("--serial", action="store_true", default=None, help="Fox API serial number")
+    parser.add_argument("--serial", action="store", default=None, help="Fox API serial number")
     parser.add_argument("--api-key", required=True, help="Fox API key")
+    parser.add_argument("--token-hash", action="store", help="Fox API token hash")
 
     args = parser.parse_args()
     key = args.api_key
     serial = args.serial
+    token_hash = args.token_hash
 
     # Run the test
-    asyncio.run(test_fox_api(serial, key))
+    asyncio.run(test_fox_api(serial, key, token_hash))
 
 
 if __name__ == "__main__":

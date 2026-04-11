@@ -604,6 +604,47 @@ This means the SoC shown in the 'Yesterday without Predbat' plan view can differ
 On tariffs such as Intelligent Octopus Go where Predbat charges to a lower target than 100%, the 'without Predbat' simulation may show a higher starting SoC than reality,
 because without Predbat the baseline assumes charging to 100% in the cheapest window each night.
 
+## Marginal energy cost data
+
+After each plan calculation Predbat runs a set of what-if simulations to determine the marginal cost (in pence per kWh) of consuming extra electricity at different
+levels and at different times in the upcoming forecast window. The results are published as a matrix sensor and a set of binary sensors.
+
+### Main matrix sensor
+
+- **sensor.predbat_marginal_energy_costs** - The primary marginal cost sensor. State is the 1 kWh marginal cost for the current time window.
+  Attributes include:
+    - `matrix` - Nested dict `{kWh_level: {HH:MM: cost_p_per_kWh}}` for all simulated load levels and time windows
+    - `grid_import` - Dict of actual grid import rate (p/kWh) at each time window label
+    - `grid_export` - Dict of actual grid export rate (p/kWh) at each time window label
+    - `grid_import_now` - Current grid import rate (p/kWh)
+    - `grid_export_now` - Current grid export rate (p/kWh)
+    - `baseline_metric` - Internal baseline cost used to compute deltas (standing charge excluded)
+    - `rate_now_low_consumption` - Marginal cost now for the 'low' (1 kWh) load level
+    - `rate_now_med_consumption` - Marginal cost now for the 'med' (2 kWh) load level
+    - `rate_now_high_consumption` - Marginal cost now for the 'high' (4 kWh) load level
+    - `rate_now_ev_consumption` - Marginal cost now for the 'ev' (8 kWh) load level
+
+### Cheap/moderate binary sensors
+
+For each load level name (`low`, `med`, `high`, `ev`) Predbat publishes two binary sensors based on whether the current marginal cost is cheap or moderate
+relative to the day's import rate range:
+
+- **binary_sensor.predbat_marginal_rate_now_low_is_cheap** - `on` when the marginal cost for a low (1 kWh) extra load right now is at or below the cheap threshold
+- **binary_sensor.predbat_marginal_rate_now_low_is_moderate** - `on` when the marginal cost is above cheap but within the moderate threshold
+- **binary_sensor.predbat_marginal_rate_now_med_is_cheap** - `on` when the marginal cost for a medium (2 kWh) extra load right now is cheap
+- **binary_sensor.predbat_marginal_rate_now_med_is_moderate** - `on` when it is moderate
+- **binary_sensor.predbat_marginal_rate_now_high_is_cheap** - `on` when the marginal cost for a high (4 kWh) extra load right now is cheap
+- **binary_sensor.predbat_marginal_rate_now_high_is_moderate** - `on` when it is moderate
+- **binary_sensor.predbat_marginal_rate_now_ev_is_cheap** - `on` when the marginal cost for an EV-scale (8 kWh) extra load right now is cheap
+- **binary_sensor.predbat_marginal_rate_now_ev_is_moderate** - `on` when it is moderate
+
+The cheap/moderate thresholds are computed relative to the current day's import rate range:
+
+- **Cheap threshold** = `rate_min × 1.2`
+- **Moderate threshold** = `max(rate_max × 0.5, rate_min × 1.5)`
+
+These binary sensors are useful in Home Assistant automations, e.g. to start an EV charge or run a dishwasher only when energy is cheap.
+
 ## Solar forecast data
 
 The following sensors give the forecast Solar data from Solcast.
