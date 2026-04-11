@@ -366,9 +366,8 @@ class AxleAPI(ComponentBase):
                 # send alert if this is a new Axle event
                 if (start_time.strftime(TIME_FORMAT) != current_start_time) or (end_time.strftime(TIME_FORMAT) != current_end_time):
                     if self.get_arg("set_event_notify"):
-                        local_tz = getattr(self, "local_tz", None)
-                        local_start = (start_time.astimezone(local_tz) if local_tz else start_time.astimezone()).strftime("%a %d/%m %H:%M")
-                        local_end = (end_time.astimezone(local_tz) if local_tz else end_time.astimezone()).strftime("%H:%M")
+                        local_start = start_time.astimezone(self.local_tz)
+                        local_end = end_time.astimezone(self.local_tz)
                         self.call_notify("Predbat: Scheduled Axle VPP event {}-{}, {} p/kWh".format(local_start, local_end, self.pence_per_kwh))
 
             self.cleanup_event_history()
