@@ -865,27 +865,35 @@ class GatewayMQTT(ComponentBase):
             marginal_costs = []
             marginal_time_labels = []
             try:
-                marg_attrs = self.get_state_wrapper(self.prefix + ".marginal_energy_costs", attribute="all") or {}
-                # HA attribute payload shape varies — look for the "matrix" attribute.
-                matrix = None
-                if isinstance(marg_attrs, dict):
-                    attrs = marg_attrs.get("attributes", marg_attrs)
-                    matrix = attrs.get("matrix") if isinstance(attrs, dict) else None
+                matrix = self.get_state_wrapper(self.prefix + ".marginal_energy_costs", attribute="matrix")
                 if isinstance(matrix, dict) and matrix:
-                    # JSON-round-tripped keys may be strings ("1") or ints (1) — normalise.
-                    def _row(kwh_key):
-                        row = matrix.get(kwh_key) or matrix.get(str(kwh_key)) or {}
-                        return row if isinstance(row, dict) else {}
-
                     # Canonical level order matches MARGINAL_EXTRA_KWH_LEVELS in marginal.py.
+                    # Keys are integers when the HA state cache holds the dict directly;
+                    # defensive fallback to the string form covers any JSON-round-tripped path.
                     levels = [1, 2, 4, 8]
-                    first_row = _row(levels[0])
-                    marginal_time_labels = list(first_row.keys())
+                    # Build time labels from the first row that actually has data, not
+                    # unconditionally from levels[0] — that way a single missing level
+                    # doesn't collapse the whole matrix to empty.
+                    tmp_costs = []
+                    time_labels = []
                     for lvl in levels:
-                        row = _row(lvl)
-                        marginal_costs.append([round(float(row.get(tl, 0) or 0), 2) for tl in marginal_time_labels])
-            except Exception as exc:  # pylint: disable=broad-except
-                self.log(f"Warning: GatewayMQTT failed to read marginal costs: {exc}")
+                        row = matrix.get(lvl) or matrix.get(str(lvl)) or {}
+                        if not isinstance(row, dict):
+                            row = {}
+                        if not time_labels and row:
+                            time_labels = list(row.keys())
+                        # Skip rows that don't match the established column shape.
+                        if time_labels and any(tl not in row for tl in time_labels):
+                            # Missing columns — pad with 0 rather than dropping the row.
+                            tmp_costs.append([round(float(row.get(tl, 0) or 0), 2) for tl in time_labels])
+                        else:
+                            tmp_costs.append([round(float(row.get(tl, 0) or 0), 2) for tl in time_labels])
+                    # Only publish once we have something meaningful.
+                    if time_labels:
+                        marginal_time_labels = time_labels
+                        marginal_costs = tmp_costs
+            except (TypeError, ValueError, AttributeError, KeyError) as exc:
+                self.log(f"Warn: GatewayMQTT: failed to read marginal costs: {exc}")
                 marginal_costs = []
                 marginal_time_labels = []
 
