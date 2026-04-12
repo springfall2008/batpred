@@ -605,7 +605,7 @@ class Fetch:
 
         return import_today
 
-    def minute_data_load(self, now_utc, entity_name, max_days_previous, load_scaling=1.0, required_unit=None, interpolate=False, pad=True):
+    def minute_data_load(self, now_utc, entity_name, max_days_previous, load_scaling=1.0, required_unit=None, interpolate=False, pad=True, clean_increment=True):
         """
         Download one or more entities for load data
         """
@@ -652,7 +652,7 @@ class Fetch:
                     backwards=True,
                     smoothing=True,
                     scale=load_scaling,
-                    clean_increment=True,
+                    clean_increment=clean_increment,
                     accumulate=load_minutes,
                     required_unit=required_unit,
                     interpolate=interpolate,
@@ -744,9 +744,8 @@ class Fetch:
             self.download_ge_data(self.now_utc)
 
             if ("load_power" in self.args) and self.get_arg("load_power_fill_enable", True):
-                # Use power data to make load data more accurate
                 self.log("Using load_power data to fill gaps in load_today data")
-                load_power_data, _ = self.minute_data_load(self.now_utc, "load_power", self.max_days_previous, required_unit="W", load_scaling=1.0, interpolate=True)
+                load_power_data, _ = self.minute_data_load(self.now_utc, "load_power", self.max_days_previous, required_unit="W", load_scaling=1.0, interpolate=True, clean_increment=False)
                 self.load_minutes = self.fill_load_from_power(self.load_minutes, load_power_data)
         else:
             # Load data
@@ -757,9 +756,12 @@ class Fetch:
                 self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
 
                 if ("load_power" in self.args) and self.get_arg("load_power_fill_enable", True):
-                    # Use power data to make load data more accurate
+                    # Use power data to make load data more accurate.
+                    # clean_increment=False: power sensors report instantaneous W, not cumulative kWh.
+                    # clean_incrementing_reverse would distort fluctuating power readings into an
+                    # ever-growing cumulative series, inflating fill_load_from_power gap-fills.
                     self.log("Using load_power data to fill gaps in load_today data")
-                    load_power_data, _ = self.minute_data_load(self.now_utc, "load_power", self.max_days_previous, required_unit="W", load_scaling=1.0, interpolate=True)
+                    load_power_data, _ = self.minute_data_load(self.now_utc, "load_power", self.max_days_previous, required_unit="W", load_scaling=1.0, interpolate=True, clean_increment=False)
                     self.load_minutes = self.fill_load_from_power(self.load_minutes, load_power_data)
             else:
                 if self.load_forecast:
