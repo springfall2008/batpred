@@ -856,6 +856,39 @@ class GatewayMQTT(ComponentBase):
                     pass
             saving_month_average = round(float(saving_total) * 365 / 12 / total_days_of_savings, 2)
 
+            # Marginal cost matrix — "what does an extra 1/2/4/8 kWh of load cost
+            # me right now and in each of the next 6 two-hour windows?". Computed
+            # by the Marginal mixin via what-if prediction runs. Used by the
+            # gateway's appliance RAG to pick a colour that actually reflects the
+            # cost of running the dryer/EV/etc, rather than inferring from slot
+            # categories alone.
+            marginal_costs = []
+            marginal_time_labels = []
+            try:
+                marg_attrs = self.get_state_wrapper(self.prefix + ".marginal_energy_costs", attribute="all") or {}
+                # HA attribute payload shape varies — look for the "matrix" attribute.
+                matrix = None
+                if isinstance(marg_attrs, dict):
+                    attrs = marg_attrs.get("attributes", marg_attrs)
+                    matrix = attrs.get("matrix") if isinstance(attrs, dict) else None
+                if isinstance(matrix, dict) and matrix:
+                    # JSON-round-tripped keys may be strings ("1") or ints (1) — normalise.
+                    def _row(kwh_key):
+                        row = matrix.get(kwh_key) or matrix.get(str(kwh_key)) or {}
+                        return row if isinstance(row, dict) else {}
+
+                    # Canonical level order matches MARGINAL_EXTRA_KWH_LEVELS in marginal.py.
+                    levels = [1, 2, 4, 8]
+                    first_row = _row(levels[0])
+                    marginal_time_labels = list(first_row.keys())
+                    for lvl in levels:
+                        row = _row(lvl)
+                        marginal_costs.append([round(float(row.get(tl, 0) or 0), 2) for tl in marginal_time_labels])
+            except Exception as exc:  # pylint: disable=broad-except
+                self.log(f"Warning: GatewayMQTT failed to read marginal costs: {exc}")
+                marginal_costs = []
+                marginal_time_labels = []
+
             payload = {
                 "current_price": round(float(current_price), 1),
                 "avg_price": round(float(avg_price or 0), 1),
@@ -869,6 +902,8 @@ class GatewayMQTT(ComponentBase):
                 "savings_month_average": saving_month_average,
                 "predbat_status": predbat_status,
                 "predbat_status_detail": predbat_status_detail,
+                "marginal_costs": marginal_costs,
+                "marginal_time_labels": marginal_time_labels,
             }
 
             # Only publish if data changed
