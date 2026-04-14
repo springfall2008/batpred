@@ -865,7 +865,7 @@ class GatewayMQTT(ComponentBase):
             marginal_costs = []
             marginal_time_labels = []
             try:
-                matrix = self.get_state_wrapper(self.prefix + ".marginal_energy_costs", attribute="matrix")
+                matrix = self.get_state_wrapper("sensor." + self.prefix + "_marginal_energy_costs", attribute="matrix")
                 if isinstance(matrix, dict) and matrix:
                     # Canonical level order matches MARGINAL_EXTRA_KWH_LEVELS in marginal.py.
                     # Keys are integers when the HA state cache holds the dict directly;
