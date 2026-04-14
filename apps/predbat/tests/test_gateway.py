@@ -1796,6 +1796,30 @@ class TestPublishPredbatData:
         assert payload["marginal_costs"][1] == [0, 0]  # padded
         assert payload["marginal_costs"][2] == [7.0, 6.0]
 
+    def test_marginal_costs_leading_missing_rows_padded_with_zeros(self):
+        """Leading missing rows are zero-padded once later levels define the matrix width."""
+        matrix = {
+            # 1 and 2 intentionally missing
+            4: {"14:00": 7.0, "16:00": 6.0},
+            8: {"14:00": 9.0, "16:00": 8.0},
+        }
+        gw = self._make_gateway(
+            {
+                "predbat.rates": "10.0",
+                "predbat.cost_today": "0",
+                "predbat.ppkwh_today": "10.0",
+                "predbat.marginal_energy_costs#matrix": matrix,
+            }
+        )
+        self._run(gw._publish_predbat_data())
+        payload = self._get_published_payload(gw)
+        assert len(payload["marginal_costs"]) == 4
+        assert payload["marginal_costs"][0] == [0, 0]
+        assert payload["marginal_costs"][1] == [0, 0]
+        assert payload["marginal_costs"][2] == [7.0, 6.0]
+        assert payload["marginal_costs"][3] == [9.0, 8.0]
+        assert payload["marginal_time_labels"] == ["14:00", "16:00"]
+
     def test_marginal_costs_non_numeric_value_caught(self):
         """Non-numeric cells (e.g. 'N/A') don't blow up the publish — graceful empty fallback."""
         matrix = {1: {"14:00": "N/A"}, 2: {"14:00": 0}, 4: {"14:00": 0}, 8: {"14:00": 0}}
