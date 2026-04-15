@@ -160,6 +160,7 @@ hypervolt
 iboost
 idag
 idetails
+idxs
 iflux
 inday
 INTELLI

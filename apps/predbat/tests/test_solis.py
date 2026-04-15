@@ -325,6 +325,7 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_write_time_windows_v2_mode())
         failed |= asyncio.run(test_write_time_windows_v1_mode())
         failed |= asyncio.run(test_write_time_windows_v2_no_changes())
+        failed |= asyncio.run(test_write_time_windows_v2_stale_slot_clearing())
         failed |= asyncio.run(test_write_time_windows_zero_charge_current())
         failed |= asyncio.run(test_write_time_windows_v1_slot_detection())
         failed |= asyncio.run(test_encode_time_windows_variant1())
@@ -1099,13 +1100,14 @@ async def test_write_time_windows_v2_mode():
     # Verify results
     assert result == True, "write_time_windows_if_changed should return True"
 
-    # Check that read_and_write_cid was called for all V2 fields (no enable gating)
+    # Check that read_and_write_cid was called with two-pass ordering:
+    # Pass 1 (clear disabled slots):
+    #   discharge: enable=0, time=00:00-00:00 (2 calls)
+    # Pass 2 (write active slots):
+    #   charge: enable=1, time, soc, current (4 calls)
+    # = 6 calls total (disabled slots do NOT get SOC/current written)
     calls = api.read_and_write_cid_calls
-    # All fields written regardless of enable state:
-    # charge: enable, time, soc, current (4 calls)
-    # discharge: enable, time, soc, current (4 calls)
-    # = 8 calls total
-    assert len(calls) == 8, f"Expected 8 calls for V2 mode (4 charge + 4 discharge), got {len(calls)}"
+    assert len(calls) == 6, f"Expected 6 calls for V2 mode (2 discharge clear + 4 charge active), got {len(calls)}"
 
     # Verify charge enable was written
     charge_enable_call = next((c for c in calls if c["cid"] == SOLIS_CID_CHARGE_ENABLE_BASE), None)
@@ -1132,18 +1134,16 @@ async def test_write_time_windows_v2_mode():
     assert discharge_enable_call is not None, "Discharge enable should be written"
     assert discharge_enable_call["value"] == "0", "Discharge enable should be 0"
 
-    # Verify discharge time/SOC/current were also written (no enable gating)
+    # For disabled discharge: only enable and time are cleared (SOC/current not written)
     from solis import SOLIS_CID_DISCHARGE_TIME, SOLIS_CID_DISCHARGE_SOC, SOLIS_CID_DISCHARGE_CURRENT
 
     discharge_time_call = next((c for c in calls if c["cid"] == SOLIS_CID_DISCHARGE_TIME[0]), None)
-    assert discharge_time_call is not None, "Discharge time should be written"
-    assert discharge_time_call["value"] == "16:00-19:00", "Discharge time should be 16:00-19:00"
+    assert discharge_time_call is not None, "Discharge time should be written (cleared) for disabled slot"
+    assert discharge_time_call["value"] == "00:00-00:00", "Disabled discharge time should be cleared to 00:00-00:00"
     discharge_soc_call = next((c for c in calls if c["cid"] == SOLIS_CID_DISCHARGE_SOC[0]), None)
-    assert discharge_soc_call is not None, "Discharge SOC should be written"
-    assert discharge_soc_call["value"] == "10", "Discharge SOC should be 10"
+    assert discharge_soc_call is None, "Discharge SOC should NOT be written for a disabled slot"
     discharge_current_call = next((c for c in calls if c["cid"] == SOLIS_CID_DISCHARGE_CURRENT[0]), None)
-    assert discharge_current_call is not None, "Discharge current should be written"
-    assert discharge_current_call["value"] == "30.0", "Discharge current should be 30.0"
+    assert discharge_current_call is None, "Discharge current should NOT be written for a disabled slot"
 
     # Verify storage mode was set to Self-Use (non-zero charge current)
     storage_mode_calls = api.set_storage_mode_calls
@@ -1151,6 +1151,103 @@ async def test_write_time_windows_v2_mode():
     assert storage_mode_calls[0]["mode"] == "Self-Use", "Storage mode should be Self-Use for non-zero charge current"
 
     print("PASSED: V2 mode writes all fields and sets storage mode")
+    return False
+
+
+async def test_write_time_windows_v2_stale_slot_clearing():
+    """Test that stale times on disabled slots are cleared (Pass 1) before the active slot is written (Pass 2).
+
+    Scenario: slot 2 was previously active and has stale 02:00-05:30 times on the inverter
+    (reflected in cache).  Slot 1 is the new active window.  The two-pass approach must send
+    the slot-2 clear writes *before* the slot-1 active writes so the API never sees an
+    overlap conflict.
+    """
+    print("\n=== Test: write_time_windows_if_changed V2 mode stale slot clearing ===")
+
+    api = MockSolisAPI()
+    api._test_v2_mode = True
+    api._mock_storage_mode = True
+    inverter_sn = "TEST_STALE"
+    api.inverter_sn = [inverter_sn]
+
+    from solis import SOLIS_CID_DISCHARGE_TIME
+
+    # Desired state: slot 1 charge-active, everything else disabled/cleared
+    api.charge_discharge_time_windows[inverter_sn] = {
+        1: {
+            "charge_enable": 1,
+            "charge_start_time": "02:00",
+            "charge_end_time": "05:00",
+            "charge_soc": 100,
+            "charge_current": 50,
+            "discharge_enable": 0,
+            "discharge_start_time": "00:00",
+            "discharge_end_time": "00:00",
+            "discharge_soc": 10,
+            "discharge_current": 0,
+        },
+        2: {
+            "charge_enable": 0,
+            "charge_start_time": "00:00",
+            "charge_end_time": "00:00",
+            "charge_soc": 0,
+            "charge_current": 0,
+            "discharge_enable": 0,
+            "discharge_start_time": "00:00",
+            "discharge_end_time": "00:00",
+            "discharge_soc": 0,
+            "discharge_current": 0,
+        },
+    }
+
+    # Cache reflects stale inverter state: slot 2 still has old active times.
+    # Slot 1 charge time is STALE (03:00-06:00 != 02:00-05:00 desired) so Pass 2 must write it,
+    # giving us a concrete slot-1 active write to assert ordering against.
+    api.cached_values[inverter_sn] = {
+        # Slot 1 charge - enable/SOC/current already match, but time is STALE so Pass 2 must write it
+        SOLIS_CID_CHARGE_ENABLE_BASE: "1",
+        SOLIS_CID_CHARGE_TIME[0]: "03:00-06:00",
+        SOLIS_CID_CHARGE_SOC_BASE: "100",
+        SOLIS_CID_CHARGE_CURRENT[0]: "50.0",
+        # Slot 1 discharge - already cleared in cache
+        SOLIS_CID_DISCHARGE_ENABLE_BASE: "0",
+        SOLIS_CID_DISCHARGE_TIME[0]: "00:00-00:00",
+        # Slot 2 charge - STALE: was previously enabled with old times
+        SOLIS_CID_CHARGE_ENABLE_BASE + 1: "1",
+        SOLIS_CID_CHARGE_TIME[1]: "02:00-05:30",
+        # Slot 2 discharge - already cleared
+        SOLIS_CID_DISCHARGE_ENABLE_BASE + 1: "0",
+        SOLIS_CID_DISCHARGE_TIME[1]: "00:00-00:00",
+    }
+
+    result = await api.write_time_windows_if_changed(inverter_sn)
+    assert result == True, "write_time_windows_if_changed should return True"
+
+    calls = api.read_and_write_cid_calls
+
+    # Pass 1 should clear slot 2 charge (enable + time) even though slot 1 is also processed.
+    # Slot 1 charge is active so Pass 1 skips it; slot 1 discharge is already clear.
+    # Slot 2 charge is disabled AND stale → 2 clear writes expected.
+    slot2_enable_clear = next((c for c in calls if c["cid"] == SOLIS_CID_CHARGE_ENABLE_BASE + 1 and c["value"] == "0"), None)
+    assert slot2_enable_clear is not None, "Pass 1 must clear stale slot 2 charge enable"
+
+    slot2_time_clear = next((c for c in calls if c["cid"] == SOLIS_CID_CHARGE_TIME[1] and c["value"] == "00:00-00:00"), None)
+    assert slot2_time_clear is not None, "Pass 1 must clear stale slot 2 charge time"
+
+    # Verify ordering: both slot-2 clears must appear before the slot-1 time write from Pass 2.
+    # Narrowing to SOLIS_CID_CHARGE_TIME[0] only ensures we only match the stale time update,
+    # not an enable write that might have come from Pass 1 (which doesn't write active slots).
+    call_cids = [c["cid"] for c in calls]
+    slot2_enable_idx = call_cids.index(SOLIS_CID_CHARGE_ENABLE_BASE + 1)
+    slot2_time_idx = call_cids.index(SOLIS_CID_CHARGE_TIME[1])
+    # Slot 1 time write must exist (cache was stale) and must come after both Pass-1 clears
+    slot1_active_idxs = [i for i, c in enumerate(calls) if c["cid"] == SOLIS_CID_CHARGE_TIME[0]]
+    assert len(slot1_active_idxs) > 0, "Pass 2 must write slot 1 charge time (stale in cache)"
+    first_slot1_active = min(slot1_active_idxs)
+    assert slot2_enable_idx < first_slot1_active, "Slot 2 enable clear must precede slot 1 active write"
+    assert slot2_time_idx < first_slot1_active, "Slot 2 time clear must precede slot 1 active write"
+
+    print("PASSED: V2 mode two-pass clears stale disabled slots before writing active slot")
     return False
 
 
@@ -1254,12 +1351,17 @@ async def test_write_time_windows_v2_no_changes():
         }
     }
 
-    # Initialize cache with same values (no changes)
+    # Initialize cache with same values (no changes) - including discharge cleared state
+    # so Pass 1 finds no diff and generates zero calls for discharge too
+    from solis import SOLIS_CID_DISCHARGE_TIME
+
     api.cached_values[inverter_sn] = {
         SOLIS_CID_CHARGE_ENABLE_BASE: "1",
         SOLIS_CID_CHARGE_TIME[0]: "02:00-05:00",
         SOLIS_CID_CHARGE_SOC_BASE: "100",
         SOLIS_CID_CHARGE_CURRENT[0]: "50",
+        SOLIS_CID_DISCHARGE_ENABLE_BASE: "0",
+        SOLIS_CID_DISCHARGE_TIME[0]: "00:00-00:00",
     }
 
     # Call the function
