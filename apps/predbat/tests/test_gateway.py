@@ -1732,7 +1732,7 @@ class TestPublishPredbatData:
                 "predbat.rates": "10.0",
                 "predbat.cost_today": "0",
                 "predbat.ppkwh_today": "10.0",
-                "predbat.marginal_energy_costs#matrix": matrix,
+                "sensor.predbat_marginal_energy_costs#matrix": matrix,
             }
         )
         self._run(gw._publish_predbat_data())
