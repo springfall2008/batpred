@@ -314,8 +314,8 @@ def test_fetch_config_options(my_predbat):
 
     print("✓ Forecast calculations test passed")
 
-    # Test 12: LoadML source auto-disables in-day adjustment
-    print("\n*** Test 12: LoadML source auto-disables in-day adjustment ***")
+    # Test 12: LoadML should not modify the in-day adjustment config setting
+    print("\n*** Test 12: LoadML does not change in-day adjustment config setting ***")
 
     mock_config.config["load_ml_enable"] = True
     mock_config.config["load_ml_source"] = True
@@ -324,10 +324,10 @@ def test_fetch_config_options(my_predbat):
 
     my_predbat.fetch_config_options()
 
-    assert my_predbat.calculate_inday_adjustment is False, "calculate_inday_adjustment should be False when load_ml_source is enabled"
-    assert ("calculate_inday_adjustment", False) in exposed_config_calls, "calculate_inday_adjustment should be exposed as False when load_ml_source is enabled"
+    assert my_predbat.calculate_inday_adjustment is True, "calculate_inday_adjustment config should remain unchanged"
+    assert ("calculate_inday_adjustment", False) not in exposed_config_calls, "calculate_inday_adjustment should not be force-updated in config"
 
-    print("✓ LoadML source auto-disable test passed")
+    print("✓ LoadML config-preservation test passed")
 
     # Restore original methods
     my_predbat.get_arg = original_get_arg

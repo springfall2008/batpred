@@ -2433,27 +2433,6 @@ class Output:
         """
         Compare predicted vs actual load
         """
-        if self.get_arg("load_ml_enable", False) and self.get_arg("load_ml_source", False):
-            if save:
-                for entity_name, friendly_name, units in [
-                    ("load_inday_adjustment", "Load in-day adjustment factor", "%"),
-                    ("load_energy_actual", "Load energy actual (filtered)", "kWh"),
-                    ("load_energy_predicted", "Load energy predicted (filtered)", "kWh"),
-                    ("load_energy_adjusted", "Load energy predicted adjusted", "kWh"),
-                ]:
-                    self.dashboard_item(
-                        self.prefix + "." + entity_name,
-                        state="unavailable",
-                        attributes={
-                            "results": {},
-                            "friendly_name": friendly_name,
-                            "state_class": "measurement",
-                            "unit_of_measurement": units,
-                            "icon": "mdi:percent",
-                        },
-                    )
-            return 1.0
-
         load_total_pred = 0
         load_total_pred_now = 0
         car_total_pred = 0
@@ -2565,8 +2544,9 @@ class Output:
             yesterday_weight = (24 * 60 - minutes_now) / (24 * 60)
 
         # Work out divergence
+        apply_inday_adjustment = self.calculate_inday_adjustment and (not self.get_arg("load_ml_enable", False))
         today_damped_factor = 1.0
-        if not self.calculate_inday_adjustment:
+        if not apply_inday_adjustment:
             difference_cap = 1.0
         else:
             # Apply damping factor to today's adjustment
@@ -2582,7 +2562,7 @@ class Output:
         if save:
             self.log(
                 "Today's load divergence {}%, in-day adjustment {}%, damping {}x, yesterday {}% today {}% blend {}%".format(
-                    dp2(difference * 100.0), dp2(difference_cap * 100.0), self.metric_inday_adjust_damping, dp2(yesterday_adjustment * 100.0), dp2(today_damped_factor * 100.0) if self.calculate_inday_adjustment else 100.0, dp2(yesterday_weight * 100.0)
+                    dp2(difference * 100.0), dp2(difference_cap * 100.0), self.metric_inday_adjust_damping, dp2(yesterday_adjustment * 100.0), dp2(today_damped_factor * 100.0) if apply_inday_adjustment else 100.0, dp2(yesterday_weight * 100.0)
                 )
             )
             self.log("Today's predicted so far {}kWh with {}kWh car/iBoost excluded, {}kWh import ignored, and {}kWh forecast extra.".format(dp2(load_total_pred_now), dp2(car_total_pred), dp2(import_ignored_load_pred), dp2(total_forecast_value_pred_now)))

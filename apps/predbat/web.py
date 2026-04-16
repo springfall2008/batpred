@@ -1259,12 +1259,6 @@ class WebInterface(ComponentBase):
         results = self.base.dashboard_values.get(entity, {}).get("attributes", {}).get("results", {})
         return results
 
-    def is_load_ml_source_mode(self):
-        """
-        Return True when LoadML is enabled and configured as the load source.
-        """
-        return self.base.get_arg("load_ml_enable", False) and self.base.get_arg("load_ml_source", False)
-
     def get_header(self, title, refresh=0, codemirror=False):
         calculating = self.get_arg("active", False)
         if self.base.update_pending:
@@ -2585,8 +2579,6 @@ chart.render();
             ]
             text += self.render_chart(series_data, self.currency_symbols[1], "Energy Rates", now_str)
         elif chart == "InDay":
-            if self.is_load_ml_source_mode():
-                return "<br><h2>In Day Adjustment chart is disabled when LoadML source mode is enabled</h2>"
             load_energy_actual = self.get_entity_results(self.prefix + ".load_energy_actual")
             load_energy_predicted = self.get_entity_results(self.prefix + ".load_energy_predicted")
             load_energy_adjusted = self.get_entity_results(self.prefix + ".load_energy_adjusted")
@@ -2859,7 +2851,6 @@ chart.render();
         """
         args = request.query
         chart = args.get("chart", "Battery")
-        load_ml_source_mode = self.is_load_ml_source_mode()
         self.default_page = "./charts?chart={}".format(chart)
         text = self.get_header("Predbat Charts", refresh=60 * 5)
         text += "<body>\n"
@@ -2871,8 +2862,7 @@ chart.render();
         text += f'<a href="./charts?chart=Power" class="{"active" if chart == "Power" else ""}">Power</a>'
         text += f'<a href="./charts?chart=Cost" class="{"active" if chart == "Cost" else ""}">Cost</a>'
         text += f'<a href="./charts?chart=Rates" class="{"active" if chart == "Rates" else ""}">Rates</a>'
-        if not load_ml_source_mode:
-            text += f'<a href="./charts?chart=InDay" class="{"active" if chart == "InDay" else ""}">InDay</a>'
+        text += f'<a href="./charts?chart=InDay" class="{"active" if chart == "InDay" else ""}">InDay</a>'
         text += f'<a href="./charts?chart=PV" class="{"active" if chart == "PV" else ""}">PV</a>'
         text += f'<a href="./charts?chart=PV7" class="{"active" if chart == "PV7" else ""}">PV7</a>'
         text += f'<a href="./charts?chart=Savings" class="{"active" if chart == "Savings" else ""}">Savings</a>'
