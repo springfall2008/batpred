@@ -304,6 +304,9 @@ def run_execute_test(
     my_predbat.car_charging_solar_surplus = car_charging_solar_surplus
     my_predbat.car_charging_solar_surplus_threshold = car_charging_solar_surplus_threshold
     my_predbat.car_charging_solar_surplus_ignore_limit = car_charging_solar_surplus_ignore_limit
+    my_predbat.car_charging_solar_surplus_active = [False] * max(my_predbat.num_cars, 1)
+    my_predbat._car_surplus_prev = [False] * max(my_predbat.num_cars, 1)
+    my_predbat.car_charging_rate = [7.4] * max(my_predbat.num_cars, 1)
     if car_charging_planned is not None:
         my_predbat.car_charging_planned = car_charging_planned
     else:
@@ -367,7 +370,8 @@ def run_execute_test(
 
         assert_soc_target_force = (
             assert_immediate_soc_target
-            if assert_status in ["Charging", "Charging, Hold for car", "Hold charging", "Freeze charging", "Hold charging, Hold for iBoost", "Hold charging, Hold for car", "Freeze charging, Hold for iBoost", "Hold for car", "Hold for iBoost", "Hold for car (solar)"]
+            if assert_status
+            in ["Charging", "Charging, Hold for car", "Hold charging", "Freeze charging", "Hold charging, Hold for iBoost", "Hold charging, Hold for car", "Freeze charging, Hold for iBoost", "Hold for car", "Hold for iBoost", "Hold for car (solar)"]
             else 0
         )
         if not set_charge_window:
@@ -2425,6 +2429,7 @@ def run_execute_tests(my_predbat):
         car_charging_from_battery=False,
         assert_status="Hold for car (solar)",
         assert_pause_discharge=True,
+        assert_immediate_soc_target=0,
         assert_solar_surplus_active=[True],
     )
     if failed:
@@ -2438,16 +2443,17 @@ def run_execute_tests(my_predbat):
         set_export_window=True,
         export_window_best=export_window_best,
         export_limits_best=export_limits_best,
-        soc_kw=10,
+        soc_kw=100,
         car_charging_solar_surplus=True,
         car_charging_planned=[True],
+        car_charging_from_battery=True,
+        car_slot=charge_window_best_slot,
         grid_power=7500,
         battery_power=0,
         assert_status="Exporting",
         assert_force_export=True,
         assert_discharge_start_time_minutes=my_predbat.minutes_now,
         assert_discharge_end_time_minutes=my_predbat.minutes_now + 61,
-        assert_soc_target=0,
         assert_immediate_soc_target=0,
         assert_solar_surplus_active=[False],
     )
@@ -2535,6 +2541,7 @@ def run_execute_tests(my_predbat):
         car_charging_from_battery=False,
         assert_status="Hold for car (solar)",
         assert_pause_discharge=True,
+        assert_immediate_soc_target=0,
         assert_solar_surplus_active=[True],
     )
     if failed:
