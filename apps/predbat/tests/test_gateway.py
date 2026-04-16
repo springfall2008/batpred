@@ -1715,6 +1715,142 @@ class TestPublishPredbatData:
         assert topic == "predbat/devices/pbgw_test/predbat_data"
         assert retain is True
 
+    # ------------------------------------------------------------------
+    # Marginal cost matrix
+    # ------------------------------------------------------------------
+
+    def test_marginal_costs_nominal_matrix(self):
+        """Marginal matrix with int keys is flattened in canonical 1/2/4/8 level order."""
+        matrix = {
+            1: {"14:00": 5.2, "16:00": 4.1, "18:00": 3.8},
+            2: {"14:00": 5.8, "16:00": 4.3, "18:00": 3.9},
+            4: {"14:00": 8.1, "16:00": 7.5, "18:00": 6.8},
+            8: {"14:00": 12.3, "16:00": 11.5, "18:00": 10.8},
+        }
+        gw = self._make_gateway(
+            {
+                "predbat.rates": "10.0",
+                "predbat.cost_today": "0",
+                "predbat.ppkwh_today": "10.0",
+                "sensor.predbat_marginal_energy_costs#matrix": matrix,
+            }
+        )
+        self._run(gw._publish_predbat_data())
+        payload = self._get_published_payload(gw)
+        assert payload["marginal_time_labels"] == ["14:00", "16:00", "18:00"]
+        assert len(payload["marginal_costs"]) == 4
+        assert payload["marginal_costs"][0] == [5.2, 4.1, 3.8]
+        assert payload["marginal_costs"][3] == [12.3, 11.5, 10.8]
+
+    def test_marginal_costs_string_keys_work(self):
+        """A JSON-round-tripped matrix with string keys is handled identically."""
+        matrix = {
+            "1": {"14:00": 5.0},
+            "2": {"14:00": 6.0},
+            "4": {"14:00": 7.0},
+            "8": {"14:00": 8.0},
+        }
+        gw = self._make_gateway(
+            {
+                "predbat.rates": "10.0",
+                "predbat.cost_today": "0",
+                "predbat.ppkwh_today": "10.0",
+                "sensor.predbat_marginal_energy_costs#matrix": matrix,
+            }
+        )
+        self._run(gw._publish_predbat_data())
+        payload = self._get_published_payload(gw)
+        assert payload["marginal_costs"] == [[5.0], [6.0], [7.0], [8.0]]
+
+    def test_marginal_costs_missing_sensor_empty_lists(self):
+        """When the marginal sensor isn't populated the payload still publishes empty lists."""
+        gw = self._make_gateway({"predbat.rates": "10.0", "predbat.cost_today": "0", "predbat.ppkwh_today": "10.0"})
+        self._run(gw._publish_predbat_data())
+        payload = self._get_published_payload(gw)
+        assert payload["marginal_costs"] == []
+        assert payload["marginal_time_labels"] == []
+
+    def test_marginal_costs_missing_row_padded_with_zeros(self):
+        """A row missing from the matrix is padded with 0 rather than dropping the whole structure.
+
+        Prevents one absent level collapsing the gateway's view of the matrix.
+        """
+        matrix = {
+            1: {"14:00": 5.0, "16:00": 4.0},
+            # 2 intentionally missing
+            4: {"14:00": 7.0, "16:00": 6.0},
+            8: {"14:00": 9.0, "16:00": 8.0},
+        }
+        gw = self._make_gateway(
+            {
+                "predbat.rates": "10.0",
+                "predbat.cost_today": "0",
+                "predbat.ppkwh_today": "10.0",
+                "sensor.predbat_marginal_energy_costs#matrix": matrix,
+            }
+        )
+        self._run(gw._publish_predbat_data())
+        payload = self._get_published_payload(gw)
+        assert len(payload["marginal_costs"]) == 4
+        assert payload["marginal_costs"][0] == [5.0, 4.0]
+        assert payload["marginal_costs"][1] == [0, 0]  # padded
+        assert payload["marginal_costs"][2] == [7.0, 6.0]
+
+    def test_marginal_costs_leading_missing_rows_padded_with_zeros(self):
+        """Leading missing rows are zero-padded once later levels define the matrix width."""
+        matrix = {
+            # 1 and 2 intentionally missing
+            4: {"14:00": 7.0, "16:00": 6.0},
+            8: {"14:00": 9.0, "16:00": 8.0},
+        }
+        gw = self._make_gateway(
+            {
+                "predbat.rates": "10.0",
+                "predbat.cost_today": "0",
+                "predbat.ppkwh_today": "10.0",
+                "sensor.predbat_marginal_energy_costs#matrix": matrix,
+            }
+        )
+        self._run(gw._publish_predbat_data())
+        payload = self._get_published_payload(gw)
+        assert len(payload["marginal_costs"]) == 4
+        assert payload["marginal_costs"][0] == [0, 0]
+        assert payload["marginal_costs"][1] == [0, 0]
+        assert payload["marginal_costs"][2] == [7.0, 6.0]
+        assert payload["marginal_costs"][3] == [9.0, 8.0]
+        assert payload["marginal_time_labels"] == ["14:00", "16:00"]
+
+    def test_marginal_costs_non_numeric_value_caught(self):
+        """Non-numeric cells (e.g. 'N/A') don't blow up the publish — graceful empty fallback."""
+        matrix = {1: {"14:00": "N/A"}, 2: {"14:00": 0}, 4: {"14:00": 0}, 8: {"14:00": 0}}
+        gw = self._make_gateway(
+            {
+                "predbat.rates": "10.0",
+                "predbat.cost_today": "0",
+                "predbat.ppkwh_today": "10.0",
+                "sensor.predbat_marginal_energy_costs#matrix": matrix,
+            }
+        )
+        self._run(gw._publish_predbat_data())
+        payload = self._get_published_payload(gw)
+        assert payload["marginal_costs"] == []
+        assert payload["marginal_time_labels"] == []
+
+    def test_marginal_costs_non_dict_matrix_ignored(self):
+        """Matrix that isn't a dict (e.g. published as a list by mistake) falls back to empty."""
+        gw = self._make_gateway(
+            {
+                "predbat.rates": "10.0",
+                "predbat.cost_today": "0",
+                "predbat.ppkwh_today": "10.0",
+                "sensor.predbat_marginal_energy_costs#matrix": [1, 2, 3],
+            }
+        )
+        self._run(gw._publish_predbat_data())
+        payload = self._get_published_payload(gw)
+        assert payload["marginal_costs"] == []
+        assert payload["marginal_time_labels"] == []
+
 
 class TestIanaToPosixTz:
     """Tests for GatewayMQTT.iana_to_posix_tz() — IANA to POSIX TZ string conversion."""

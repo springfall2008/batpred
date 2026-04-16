@@ -856,6 +856,48 @@ class GatewayMQTT(ComponentBase):
                     pass
             saving_month_average = round(float(saving_total) * 365 / 12 / total_days_of_savings, 2)
 
+            # Marginal cost matrix — "what does an extra 1/2/4/8 kWh of load cost
+            # me right now and in each of the next 6 two-hour windows?". Computed
+            # by the Marginal mixin via what-if prediction runs. Used by the
+            # gateway's appliance RAG to pick a colour that actually reflects the
+            # cost of running the dryer/EV/etc, rather than inferring from slot
+            # categories alone.
+            marginal_costs = []
+            marginal_time_labels = []
+            try:
+                matrix = self.get_state_wrapper("sensor." + self.prefix + "_marginal_energy_costs", attribute="matrix")
+                if isinstance(matrix, dict) and matrix:
+                    # Canonical level order matches MARGINAL_EXTRA_KWH_LEVELS in marginal.py.
+                    # Keys are integers when the HA state cache holds the dict directly;
+                    # defensive fallback to the string form covers any JSON-round-tripped path.
+                    levels = [1, 2, 4, 8]
+                    # Determine the column shape first from the first non-empty row, then
+                    # build all rows against that fixed set of labels so the matrix stays
+                    # rectangular even when lower levels are missing.
+                    time_labels = []
+                    for lvl in levels:
+                        row = matrix.get(lvl) or matrix.get(str(lvl)) or {}
+                        if isinstance(row, dict) and row:
+                            time_labels = list(row.keys())
+                            break
+
+                    # Only publish once we have something meaningful.
+                    if time_labels:
+                        tmp_costs = []
+                        for lvl in levels:
+                            row = matrix.get(lvl) or matrix.get(str(lvl)) or {}
+                            if not isinstance(row, dict):
+                                row = {}
+                            # Missing rows or columns are padded with 0 rather than dropped.
+                            tmp_costs.append([round(float(row.get(tl, 0) or 0), 2) for tl in time_labels])
+
+                        marginal_time_labels = time_labels
+                        marginal_costs = tmp_costs
+            except (TypeError, ValueError, AttributeError, KeyError) as exc:
+                self.log(f"Warn: GatewayMQTT: failed to read marginal costs: {exc}")
+                marginal_costs = []
+                marginal_time_labels = []
+
             payload = {
                 "current_price": round(float(current_price), 1),
                 "avg_price": round(float(avg_price or 0), 1),
@@ -869,6 +911,8 @@ class GatewayMQTT(ComponentBase):
                 "savings_month_average": saving_month_average,
                 "predbat_status": predbat_status,
                 "predbat_status_detail": predbat_status_detail,
+                "marginal_costs": marginal_costs,
+                "marginal_time_labels": marginal_time_labels,
             }
 
             # Only publish if data changed
