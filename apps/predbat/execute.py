@@ -457,11 +457,7 @@ class Execute:
                             self.car_charging_solar_surplus_active[car_n] = True
 
                     if self.car_charging_solar_surplus_active[car_n]:
-                        self.log(
-                            "Solar surplus car charging active for car {}: export {}W (effective {}W), rate {}W, threshold {}W".format(
-                                car_n, int(self.grid_power), int(effective_export), int(car_rate_w), int(threshold)
-                            )
-                        )
+                        self.log("Solar surplus car charging active for car {}: export {}W (effective {}W), rate {}W, threshold {}W".format(car_n, int(self.grid_power), int(effective_export), int(car_rate_w), int(threshold)))
                         break  # One car at a time from surplus
                 self._car_surplus_prev = list(self.car_charging_solar_surplus_active)
 
