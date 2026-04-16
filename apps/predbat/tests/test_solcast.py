@@ -809,6 +809,49 @@ def test_download_forecast_solar_data_with_postcode(my_predbat):
     return failed
 
 
+def test_download_forecast_solar_data_with_postcode_lookup_failure(my_predbat):
+    """
+    Test download_forecast_solar_data handles postcode lookup returning no data.
+    """
+    print("  - test_download_forecast_solar_data_with_postcode_lookup_failure")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.forecast_solar = [
+            {
+                "postcode": "SW1A 1AA",
+                "declination": 30,
+                "azimuth": 0,
+                "kwp": 3.0,
+                "efficiency": 1.0,
+            }
+        ]
+
+        # postcode API returns error (cache_get_url returns None)
+        test_api.set_mock_response("postcodes.io", {"error": "rate limit"}, 429)
+        forecast_response = {"result": {"watts": {"2025-06-15T12:00:00+0000": 500}}, "message": {"info": {"time": "2025-06-15T11:30:00+0000"}}}
+        test_api.set_mock_response("forecast.solar", forecast_response, 200)
+
+        def create_mock_session(*args, **kwargs):
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            result, max_kwh = run_async(test_api.solar.download_forecast_solar_data())
+
+        if result is None or len(result) == 0:
+            print("ERROR: Expected forecast data even when postcode lookup fails")
+            failed = True
+        if max_kwh <= 0:
+            print("ERROR: Expected positive max_kwh when postcode lookup fails")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
 def test_download_forecast_solar_data_personal_api(my_predbat):
     """
     Test download_forecast_solar_data uses personal API URL when api_key provided.
@@ -849,6 +892,49 @@ def test_download_forecast_solar_data_personal_api(my_predbat):
             if "personal_key_123" not in url:
                 print(f"ERROR: Expected personal API URL with api_key, got {url}")
                 failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_download_forecast_solar_data_rate_limited_no_cache(my_predbat):
+    """
+    Test download_forecast_solar_data handles forecast.solar 429 with no cache.
+    """
+    print("  - test_download_forecast_solar_data_rate_limited_no_cache")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.forecast_solar = [
+            {
+                "latitude": 51.5,
+                "longitude": -0.1,
+                "declination": 30,
+                "azimuth": 0,
+                "kwp": 3.0,
+                "efficiency": 1.0,
+            }
+        ]
+        test_api.set_mock_response("forecast.solar", {"error": "rate limit"}, 429)
+
+        def create_mock_session(*args, **kwargs):
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            result, max_kwh = run_async(test_api.solar.download_forecast_solar_data())
+
+        if result is None:
+            print("ERROR: Expected empty dict result, got None")
+            failed = True
+        elif len(result) != 0:
+            print(f"ERROR: Expected empty result for 429/no-cache, got {result}")
+            failed = True
+        if max_kwh <= 0:
+            print("ERROR: Expected positive max_kwh even when forecast.solar is rate limited")
+            failed = True
 
     finally:
         test_api.cleanup()
@@ -2353,7 +2439,9 @@ def run_solcast_tests(my_predbat):
     # Forecast.Solar download tests
     failed |= test_download_forecast_solar_data(my_predbat)
     failed |= test_download_forecast_solar_data_with_postcode(my_predbat)
+    failed |= test_download_forecast_solar_data_with_postcode_lookup_failure(my_predbat)
     failed |= test_download_forecast_solar_data_personal_api(my_predbat)
+    failed |= test_download_forecast_solar_data_rate_limited_no_cache(my_predbat)
 
     # HA sensor tests
     failed |= test_fetch_pv_datapoints_detailed_forecast(my_predbat)
