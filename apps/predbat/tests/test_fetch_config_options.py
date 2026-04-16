@@ -324,7 +324,7 @@ def test_fetch_config_options(my_predbat):
 
     my_predbat.fetch_config_options()
 
-    assert my_predbat.calculate_inday_adjustment == False, "calculate_inday_adjustment should be False when load_ml_source is enabled"
+    assert my_predbat.calculate_inday_adjustment is False, "calculate_inday_adjustment should be False when load_ml_source is enabled"
     assert ("calculate_inday_adjustment", False) in exposed_config_calls, "calculate_inday_adjustment should be exposed as False when load_ml_source is enabled"
 
     print("✓ LoadML source auto-disable test passed")
