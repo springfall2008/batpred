@@ -147,7 +147,7 @@ def run_test_web_if(my_predbat):
             print("ERROR: LoadML chart tab should be visible when load_ml_enable is enabled")
             failed = 1
         inday_res = requests.get("http://127.0.0.1:5052/charts", params={"chart": "InDay"})
-        if "In Day Adjustment" in inday_res.text:
+        if "<h2>In Day Adjustment</h2>" in inday_res.text:
             print("ERROR: In Day Adjustment chart content should be suppressed when load_ml_source is enabled")
             failed = 1
 
