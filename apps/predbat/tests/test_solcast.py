@@ -839,11 +839,15 @@ def test_download_forecast_solar_data_with_postcode_lookup_failure(my_predbat):
         with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
             result, max_kwh = run_async(test_api.solar.download_forecast_solar_data())
 
-        if result is None or len(result) == 0:
-            print("ERROR: Expected forecast data even when postcode lookup fails")
+        if result is None:
+            print("ERROR: Expected forecast data dict when postcode lookup fails, got None")
             failed = True
-        if max_kwh <= 0:
-            print("ERROR: Expected positive max_kwh when postcode lookup fails")
+        elif len(result) == 0:
+            print("ERROR: Expected non-empty forecast data when postcode lookup fails")
+            failed = True
+        expected_max_kwh = 3.0 * 1.0
+        if abs(max_kwh - expected_max_kwh) > 0.01:
+            print(f"ERROR: Expected max_kwh {expected_max_kwh} when postcode lookup fails, got {max_kwh}")
             failed = True
 
     finally:
@@ -926,14 +930,12 @@ def test_download_forecast_solar_data_rate_limited_no_cache(my_predbat):
         with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
             result, max_kwh = run_async(test_api.solar.download_forecast_solar_data())
 
-        if result is None:
-            print("ERROR: Expected empty dict result, got None")
+        if result != []:
+            print(f"ERROR: Expected empty list result for 429/no-cache, got {result}")
             failed = True
-        elif len(result) != 0:
-            print(f"ERROR: Expected empty result for 429/no-cache, got {result}")
-            failed = True
-        if max_kwh <= 0:
-            print("ERROR: Expected positive max_kwh even when forecast.solar is rate limited")
+        expected_max_kwh = 3.0 * 1.0
+        if abs(max_kwh - expected_max_kwh) > 0.01:
+            print(f"ERROR: Expected max_kwh {expected_max_kwh} even when forecast.solar is rate limited, got {max_kwh}")
             failed = True
 
     finally:
