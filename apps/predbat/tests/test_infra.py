@@ -368,6 +368,9 @@ class MockConfigProvider:
             "car_charging_manual_soc": False,
             "car_charging_threshold": 60.0,
             "car_charging_energy_scale": 1.0,
+            "car_charging_solar_surplus": False,
+            "car_charging_solar_surplus_threshold": 500,
+            "car_charging_solar_surplus_ignore_limit": True,
             "forecast_plan_hours": 8,
             "inverter_clock_skew_start": 0,
             "inverter_clock_skew_end": 0,
@@ -475,6 +478,11 @@ def reset_inverter(my_predbat):
     my_predbat.car_charging_from_battery = True
     my_predbat.car_charging_limit = [100.0, 100.0, 100.0, 100.0]
     my_predbat.car_charging_soc = [0, 0, 0, 0]
+    my_predbat.car_charging_solar_surplus = False
+    my_predbat.car_charging_solar_surplus_threshold = 500
+    my_predbat.car_charging_solar_surplus_ignore_limit = True
+    my_predbat.car_charging_solar_surplus_active = []
+    my_predbat._car_surplus_prev = []
     my_predbat.iboost_enable = False
     my_predbat.iboost_solar = False
     my_predbat.iboost_gas = False
