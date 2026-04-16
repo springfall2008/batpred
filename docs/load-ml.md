@@ -343,7 +343,7 @@ Once you are happy with the predictions Load ML is producing you can set Predbat
 Before enabling load_ml_source:
 
 - Make sure you do not have [PredAI](https://github.com/springfall2008/predai) enabled at the same time
-- Disable in day adjustment (**switch.predbat_calculate_inday_adjustment**) as the Load ML model will do that for you and otherwise Predbat will double-count in-day load
+- In-day adjustment (**switch.predbat_calculate_inday_adjustment**) is automatically disabled while `load_ml_source: true` is active to avoid double-counting in-day load
 
 Then set load_ml_source to true in `apps.yaml` so that the Load ML forecast is used in Predbat's planning:
 
@@ -483,7 +483,7 @@ Large shifts in `mean` or `std` for a group (e.g. `import_rate` after a tariff c
 
 - **Cause**: In-day adjustment has been left turned on and both Load ML and inday adjustment are increasing the load in line with daily household use
 - **Solution**:
-    - Ensure that **switch.predbat_calculate_inday_adjustment** is turned off
+    - Ensure `load_ml_source: true` is enabled so Predbat auto-disables in-day adjustment
 
 ### Viewing Predictions
 

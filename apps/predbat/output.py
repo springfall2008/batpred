@@ -2433,6 +2433,27 @@ class Output:
         """
         Compare predicted vs actual load
         """
+        if self.get_arg("load_ml_enable", False) and self.get_arg("load_ml_source", False):
+            if save:
+                for entity_name, friendly_name, units in [
+                    ("load_inday_adjustment", "Load in-day adjustment factor", "%"),
+                    ("load_energy_actual", "Load energy actual (filtered)", "kWh"),
+                    ("load_energy_predicted", "Load energy predicted (filtered)", "kWh"),
+                    ("load_energy_adjusted", "Load energy predicted adjusted", "kWh"),
+                ]:
+                    self.dashboard_item(
+                        self.prefix + "." + entity_name,
+                        state="unavailable",
+                        attributes={
+                            "results": {},
+                            "friendly_name": friendly_name,
+                            "state_class": "measurement",
+                            "unit_of_measurement": units,
+                            "icon": "mdi:percent",
+                        },
+                    )
+            return 1.0
+
         load_total_pred = 0
         load_total_pred_now = 0
         car_total_pred = 0

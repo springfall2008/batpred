@@ -39,6 +39,10 @@ def run_test_web_if(my_predbat):
         # Change to temp directory
         os.chdir(temp_dir)
 
+        # Enable LoadML source mode so InDay chart is suppressed
+        my_predbat.args["load_ml_enable"] = True
+        my_predbat.args["load_ml_source"] = True
+
         orig_ha_if = my_predbat.ha_interface
         my_predbat.components = Components(my_predbat)
         my_predbat.components.initialize()
@@ -133,6 +137,19 @@ def run_test_web_if(my_predbat):
             else:
                 print("ERROR: Unexpected status from {} got {} value {}".format(address, res.status_code, res.text))
                 failed = 1
+
+        # Verify InDay chart tab is hidden when LoadML source mode is enabled
+        charts_res = requests.get("http://127.0.0.1:5052/charts")
+        if "chart=InDay" in charts_res.text:
+            print("ERROR: InDay chart tab should be hidden when load_ml_source is enabled")
+            failed = 1
+        if "chart=LoadML" not in charts_res.text:
+            print("ERROR: LoadML chart tab should be visible when load_ml_enable is enabled")
+            failed = 1
+        inday_res = requests.get("http://127.0.0.1:5052/charts", params={"chart": "InDay"})
+        if "In Day Adjustment" in inday_res.text:
+            print("ERROR: In Day Adjustment chart content should be suppressed when load_ml_source is enabled")
+            failed = 1
 
         # Test POST endpoints
         print("\n**** Testing POST endpoints ****")

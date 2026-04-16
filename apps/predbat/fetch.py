@@ -2264,6 +2264,11 @@ class Fetch:
         self.calculate_export_on_pv = self.get_arg("calculate_export_on_pv")
         self.calculate_second_pass = self.get_arg("calculate_second_pass")
         self.calculate_inday_adjustment = self.get_arg("calculate_inday_adjustment")
+        if self.get_arg("load_ml_enable", False) and self.get_arg("load_ml_source", False):
+            if self.calculate_inday_adjustment:
+                self.log("Info: Disabling in-day adjustment because load_ml_source is enabled")
+                self.expose_config("calculate_inday_adjustment", False)
+            self.calculate_inday_adjustment = False
         self.calculate_tweak_plan = self.get_arg("calculate_tweak_plan")
         self.calculate_regions = True
         self.calculate_import_low_export = self.get_arg("calculate_import_low_export")
