@@ -236,6 +236,9 @@ class SolarAPI(ComponentBase):
 
             if postcode:
                 result = await self.cache_get_url("https://api.postcodes.io/postcodes/{}".format(postcode), params={}, max_age=24 * 60 * 30)  # Cache postcode data for 30 days
+                if not result:
+                    self.log("Warn: Postcode {} could not be resolved, no postcode lookup data available".format(postcode))
+                    result = {}
                 result = result.get("result", {})
                 if "longitude" not in result or "latitude" not in result:
                     self.log("Warn: Postcode {} could not be resolved to latitude and longitude, using default".format(postcode))
@@ -254,6 +257,9 @@ class SolarAPI(ComponentBase):
                 days_data = config.get("days", 2)
 
             data = await self.cache_get_url(url, params={}, max_age=self.forecast_solar_max_age * 60)
+            if not data:
+                self.log("Warn: Forecast Solar data could not be downloaded and no cache available for lat {} lon {}".format(lat, lon))
+                continue
             watts = data.get("result", {}).get("watts", {})
             info = data.get("message", {}).get("info", {})
             if not watts or not info:
