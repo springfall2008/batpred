@@ -6,6 +6,7 @@ numpy==2.3.5
 pre-commit
 prometheus-client
 protobuf
+pvlib
 pyjwt
 pytz
 requests

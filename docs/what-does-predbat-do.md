@@ -12,7 +12,7 @@ It uses the solar production forecast from Solcast combined with your historical
 - Costs are based on energy pricing data, either manually configured (e.g. 7p from 11pm-4pm and 35p otherwise) or by using the Octopus Energy integration
     - Both import and export rates are supported.
     - Intelligent Octopus is also supported and takes into account allocated charging slots.  
-- The solar forecast used is the central scenario from Solcast/Forecast.solar (50%) with a configurable weighting towards the more pessimistic (10%) scenario.
+- The solar forecast used is the central scenario from Solcast/Open-Meteo/Forecast.solar (50%) with a configurable weighting towards the more pessimistic (10%) scenario.
 - Predbat automatically programs your inverter with the appropriate charging and discharging controls. Both Hybrid inverters and AC-coupled inverters are supported by Predbat.
 - Automatic planning of export slots is also supported, when enabled Predbat can start a forced discharge of the battery if the export rates are high and you have spare capacity.
 - Historical load data is used to predict your consumption, optionally car charging load can be filtered out of this data.

@@ -89,6 +89,7 @@ from tests.test_add_now_to_octopus_slot import test_add_now_to_octopus_slot
 from tests.test_dynamic_load import test_dynamic_load_car_slot_cancellation
 from tests.test_fox_api import run_fox_api_tests
 from tests.test_solcast import run_solcast_tests
+from tests.test_open_meteo import run_open_meteo_tests
 from tests.test_rate_add_io_slots import run_rate_add_io_slots_tests
 from tests.test_battery_curve_keys import run_battery_curve_keys_tests
 from tests.test_balance_inverters import run_balance_inverters_tests
@@ -231,6 +232,7 @@ def main():
         ("alert_feed", test_alert_feed, "Alert feed tests", False),
         ("fox_api", run_fox_api_tests, "Fox API tests", False),
         ("solcast", run_solcast_tests, "Solcast API tests", False),
+        ("open_meteo", run_open_meteo_tests, "Open-Meteo solar forecast provider tests", False),
         ("solax", run_solax_tests, "SolaX API tests", False),
         ("iboost_smart", run_iboost_smart_tests, "iBoost smart tests", False),
         ("car_charging_smart", run_car_charging_smart_tests, "Car charging smart tests", False),

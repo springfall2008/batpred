@@ -18,11 +18,41 @@ personal API tiers.
 
 import hashlib
 import json
+import math
 import os
 import aiohttp
 import traceback
 import pytz
 from datetime import datetime, timedelta, timezone
+
+try:
+    from pvlib.temperature import sapm_cell as _pvlib_sapm_cell
+    from pvlib.temperature import TEMPERATURE_MODEL_PARAMETERS as _PVLIB_TEMP_PARAMS
+
+    _PVLIB_SAPM_PARAMS = _PVLIB_TEMP_PARAMS["sapm"]["open_rack_glass_glass"]
+    _HAS_PVLIB = True
+except ImportError:
+    _HAS_PVLIB = False
+
+# PVWatts / SAPM cell temperature model constants (glass/glass, open rack)
+_SAPM_A = -3.47
+_SAPM_B = -0.0594
+_SAPM_DELTA_T = 3.0
+
+
+def pvwatts_cell_temperature(poa_global, temp_air, wind_speed):
+    """Compute PV cell temperature using the SAPM (PVWatts) model.
+
+    Uses pvlib.temperature.sapm_cell when available; falls back to the
+    equivalent inline formula otherwise.  Parameters correspond to a
+    glass/glass module on an open rack (the most common residential case).
+    """
+    if _HAS_PVLIB:
+        return float(_pvlib_sapm_cell(poa_global, temp_air, wind_speed, _PVLIB_SAPM_PARAMS["a"], _PVLIB_SAPM_PARAMS["b"], _PVLIB_SAPM_PARAMS["deltaT"]))
+    # Inline SAPM formula: T_cell = T_air + GTI * exp(a + b*wind) + (GTI/1000) * deltaT
+    return temp_air + poa_global * math.exp(_SAPM_A + _SAPM_B * wind_speed) + (poa_global / 1000.0) * _SAPM_DELTA_T
+
+
 from const import TIME_FORMAT, TIME_FORMAT_SOLCAST
 from utils import dp1, dp2, dp4, history_attribute_to_minute_data, minute_data, history_attribute, prune_today
 from predbat_metrics import record_api_call, metrics
@@ -45,7 +75,22 @@ class SolarAPI(ComponentBase):
     for system optimisation and decision-making.
     """
 
-    def initialize(self, solcast_host, solcast_api_key, solcast_sites, solcast_poll_hours, forecast_solar, forecast_solar_max_age, pv_forecast_today, pv_forecast_tomorrow, pv_forecast_d3, pv_forecast_d4, pv_scaling):
+    def initialize(
+        self,
+        solcast_host,
+        solcast_api_key,
+        solcast_sites,
+        solcast_poll_hours,
+        forecast_solar,
+        forecast_solar_max_age,
+        pv_forecast_today,
+        pv_forecast_tomorrow,
+        pv_forecast_d3,
+        pv_forecast_d4,
+        pv_scaling,
+        open_meteo_forecast,
+        open_meteo_forecast_max_age,
+    ):
         """Initialise the Solar API component"""
         self.solcast_host = solcast_host
         self.solcast_api_key = solcast_api_key
@@ -58,6 +103,8 @@ class SolarAPI(ComponentBase):
         self.pv_forecast_d3 = pv_forecast_d3
         self.pv_forecast_d4 = pv_forecast_d4
         self.pv_scaling = pv_scaling
+        self.open_meteo_forecast = open_meteo_forecast
+        self.open_meteo_forecast_max_age = open_meteo_forecast_max_age
         self.solcast_requests_total = 0
         self.solcast_failures_total = 0
         self.forecast_solar_requests_total = 0
@@ -193,6 +240,136 @@ class SolarAPI(ComponentBase):
             az = -180 - az
 
         return az
+
+    async def download_open_meteo_ensemble_data(self, lat, lon, tilt, az, kwp, system_loss):
+        """
+        Download Open-Meteo ensemble data for P10 solar estimate.
+        Returns a dict mapping ISO timestamp strings to P10 kW values.
+        """
+        url = "https://ensemble-api.open-meteo.com/v1/ensemble?models=icon_seamless&latitude={lat}&longitude={lon}&hourly=global_tilted_irradiance&tilt={tilt}&azimuth={az}&forecast_days=4&timezone=UTC".format(lat=lat, lon=lon, tilt=tilt, az=az)
+        data = await self.cache_get_url(url, params={}, max_age=self.open_meteo_forecast_max_age * 60)
+        if not data:
+            return {}
+
+        hourly = data.get("hourly", {})
+        times = hourly.get("time", [])
+        member_keys = [k for k in hourly if k.startswith("global_tilted_irradiance_member")]
+        if not member_keys or not times:
+            return {}
+
+        result = {}
+        for idx, ts in enumerate(times):
+            values = []
+            for k in member_keys:
+                val = hourly[k][idx] if idx < len(hourly[k]) else None
+                if val is not None:
+                    values.append(val)
+            if not values:
+                result[ts] = 0.0
+                continue
+            values.sort()
+            p10_idx = max(0, int(len(values) * 0.10) - 1)
+            gti_p10 = values[p10_idx]
+            result[ts] = dp4((gti_p10 / 1000.0) * kwp * (1.0 - system_loss))
+        return result
+
+    async def download_open_meteo_data(self):
+        """
+        Download Open-Meteo forecast data and convert to PV power estimates.
+        Uses GTI (global tilted irradiance) with simple temperature derating for P50,
+        and ensemble members for P10. Returns (sorted_data, max_kwh).
+        """
+        period_data = {}
+        max_kwh = 0
+
+        configs = self.open_meteo_forecast
+        if configs is None:
+            raise ValueError("SolarAPI: No Open-Meteo forecast configurations found")
+        if not isinstance(configs, list):
+            configs = [configs]
+
+        for config in configs:
+            lat = config.get("latitude", 51.5072)
+            lon = config.get("longitude", -0.1276)
+            postcode = config.get("postcode", None)
+            tilt = config.get("tilt", 35.0)
+            az = config.get("azimuth", 180.0)
+            az = self.convert_azimuth(az)
+            kwp = config.get("kwp", 3.0)
+            system_loss = config.get("system_loss", 0)
+
+            max_kwh += kwp * (1.0 - system_loss)
+
+            if postcode:
+                postcode_data = await self.cache_get_url("https://api.postcodes.io/postcodes/{}".format(postcode), params={}, max_age=24 * 60 * 30)
+                if postcode_data:
+                    postcode_result = postcode_data.get("result", {})
+                    if "longitude" in postcode_result and "latitude" in postcode_result:
+                        lon = postcode_result.get("longitude", lon)
+                        lat = postcode_result.get("latitude", lat)
+                        self.log("Postcode {} resolved to latitude {} longitude {}".format(postcode, lat, lon))
+                    else:
+                        self.log("Warn: Postcode {} could not be resolved to latitude and longitude, using default".format(postcode))
+
+            url = "https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=global_tilted_irradiance,temperature_2m,wind_speed_10m&wind_speed_unit=ms&tilt={tilt}&azimuth={az}&forecast_days=4&timezone=UTC".format(
+                lat=lat, lon=lon, tilt=tilt, az=az
+            )
+            data = await self.cache_get_url(url, params={}, max_age=self.open_meteo_forecast_max_age * 60)
+            if not data:
+                self.log("Warn: Open-Meteo data for lat {} lon {} could not be downloaded".format(lat, lon))
+                continue
+
+            hourly = data.get("hourly", {})
+            times = hourly.get("time", [])
+            gti_values = hourly.get("global_tilted_irradiance", [])
+            temp_values = hourly.get("temperature_2m", [])
+            wind_values = hourly.get("wind_speed_10m", [])
+
+            if not times or not gti_values:
+                self.log("Warn: Open-Meteo data for lat {} lon {} has no hourly data".format(lat, lon))
+                continue
+
+            ensemble_p10 = await self.download_open_meteo_ensemble_data(lat, lon, tilt, az, kwp, system_loss)
+
+            for idx, ts in enumerate(times):
+                if idx >= len(gti_values):
+                    break
+                gti = gti_values[idx]
+                if gti is None:
+                    gti = 0.0
+                temp = temp_values[idx] if idx < len(temp_values) and temp_values[idx] is not None else 25.0
+                wind = wind_values[idx] if idx < len(wind_values) and wind_values[idx] is not None else 1.0
+                # Cell temperature via SAPM/PVWatts model: irradiance heats the cell above ambient
+                t_cell = pvwatts_cell_temperature(gti, temp, wind)
+                # c-Si temperature coefficient: -0.4%/°C relative to STC (25°C)
+                # No lower clamp on (t_cell - 25): cool cells genuinely produce more power.
+                # Cap at 1.1 (10% above STC) to prevent unrealistic gains at very cold temperatures.
+                eta_temp = max(0.5, min(1.1, 1.0 - 0.004 * (t_cell - 25.0)))
+                pv50 = dp4((gti / 1000.0) * kwp * eta_temp * (1.0 - system_loss))
+                raw_p10 = ensemble_p10.get(ts)
+                # ensemble_p10 was computed without temperature derating; apply eta_temp now
+                pv10 = dp4(min(raw_p10 * eta_temp, pv50) if raw_p10 is not None else pv50 * 0.7)
+
+                try:
+                    period_start_stamp = datetime.strptime(ts, "%Y-%m-%dT%H:%M")
+                    period_start_stamp = period_start_stamp.replace(tzinfo=pytz.utc)
+                except (ValueError, TypeError):
+                    continue
+
+                data_item = {"period_start": period_start_stamp.strftime(TIME_FORMAT), "pv_estimate": pv50, "pv_estimate10": pv10}
+                if period_start_stamp in period_data:
+                    period_data[period_start_stamp]["pv_estimate"] = dp4(period_data[period_start_stamp]["pv_estimate"] + pv50)
+                    period_data[period_start_stamp]["pv_estimate10"] = dp4(period_data[period_start_stamp]["pv_estimate10"] + pv10)
+                else:
+                    period_data[period_start_stamp] = data_item
+
+        sorted_data = []
+        if period_data:
+            for key in sorted(period_data.keys()):
+                sorted_data.append(period_data[key])
+
+        self.log("Open-Meteo returned {} data points".format(len(sorted_data)))
+        return sorted_data, max_kwh
 
     async def download_forecast_solar_data(self):
         """
@@ -918,6 +1095,11 @@ class SolarAPI(ComponentBase):
         if self.forecast_solar:
             self.log("Obtaining solar forecast from Forecast Solar API")
             pv_forecast_data, max_kwh = await self.download_forecast_solar_data()
+            divide_by = 30.0
+            create_pv10 = True
+        elif self.open_meteo_forecast:
+            self.log("Obtaining solar forecast from Open-Meteo API")
+            pv_forecast_data, max_kwh = await self.download_open_meteo_data()
             divide_by = 30.0
             create_pv10 = True
         elif self.solcast_host and self.solcast_api_key:

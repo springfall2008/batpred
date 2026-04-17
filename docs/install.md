@@ -181,6 +181,53 @@ Optionally you can set an api_key for personal or professional accounts and you 
 
 Note you can omit any of these settings for a default value. They do not have to be exact if you use Predbat auto calibration for PV to improve the data quality.
 
+### Predbat direct to Open-Meteo
+
+[Open-Meteo](https://open-meteo.com/) is a free, open-source weather API that provides solar irradiance forecasts. It requires no API key and is a good no-cost alternative to Solcast or Forecast.solar.
+Predbat fetches the Global Tilted Irradiance (GTI) for each array from Open-Meteo and converts it to a power estimate using a PVWatts cell-temperature model, so the forecast automatically accounts for hot days reducing panel efficiency and cool days slightly improving it.
+Ensemble members are used to derive a P10 pessimistic estimate alongside the central P50, just like Solcast.
+
+You can define one or more arrays (roof aspects). For the UK, use a postcode instead of latitude/longitude.
+
+The azimuth convention is the same as Forecast.solar: 0=North, -90=East, 90=West, -180/180=South.
+The tilt is the angle of the panels from horizontal, e.g. 35 for a typical pitched roof.
+The `system_loss` (optional, default 0) is a fractional derating for wiring losses, soiling, etc., e.g. 0.05 for 5% losses.
+
+```yaml
+  open_meteo_forecast:
+    - postcode: SW1A 2AB
+      kwp: 3.5
+      tilt: 35
+      azimuth: 180
+      system_loss: 0.05
+  open_meteo_forecast_max_age: 4.0
+```
+
+or with latitude/longitude if you are not in the UK:
+
+```yaml
+  open_meteo_forecast:
+    - latitude: 51.5072
+      longitude: -0.1276
+      kwp: 3.5
+      tilt: 35
+      azimuth: 180
+```
+
+For a house with two differently oriented roof aspects, add a second entry to the list:
+
+```yaml
+  open_meteo_forecast:
+    - postcode: BS1 4DJ
+      kwp: 1.56
+      tilt: 23
+      azimuth: -133
+    - postcode: BS1 4DJ
+      kwp: 2.73
+      tilt: 45
+      azimuth: 45
+```
+
 ### Solcast Home Assistant integration method
 
 Install the Solcast integration (<https://github.com/BJReplay/ha-solcast-solar>), create a free [Solcast account](https://solcast.com/),

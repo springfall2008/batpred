@@ -1409,6 +1409,57 @@ Optionally you can set an api_key for personal or professional accounts and you 
 
 Note you can omit any of these settings for a default value. They do not have to be exact if you use Predbat auto calibration for PV to improve the data quality.
 
+## Open-Meteo Solar Forecast
+
+[Open-Meteo](https://open-meteo.com/) is a free, open-source weather API that provides solar irradiance forecasts with no API key required.
+Predbat fetches the Global Tilted Irradiance (GTI) for each array and converts it to a power estimate using a PVWatts cell-temperature model.
+Ensemble members are used to derive a P10 pessimistic estimate alongside the central P50.
+
+You can define one or more rooftop arrays by providing a list; they will be summed automatically.
+
+The azimuth convention is the same as Forecast.solar: 0=North, -90=East, 90=West, -180/180=South.
+The tilt is the angle of the panels from horizontal (e.g. 35 for a typical pitched UK roof).
+For the UK you can use a postcode instead of latitude/longitude.
+The optional `system_loss` (default 0) is a fractional derating for wiring losses and soiling, e.g. 0.05 for 5%.
+The optional `open_meteo_forecast_max_age` sets the number of hours between refreshing the cached API data (default 4.0 hours).
+
+```yaml
+  open_meteo_forecast:
+    - postcode: SW1A 2AB
+      kwp: 3.5
+      tilt: 35
+      azimuth: 180
+      system_loss: 0.05
+  open_meteo_forecast_max_age: 4.0
+```
+
+or with latitude/longitude if you are outside the UK:
+
+```yaml
+  open_meteo_forecast:
+    - latitude: 51.5072
+      longitude: -0.1276
+      kwp: 3.5
+      tilt: 35
+      azimuth: 180
+```
+
+For a house with two differently oriented roof aspects, add a second entry to the list:
+
+```yaml
+  open_meteo_forecast:
+    - postcode: BS1 4DJ
+      kwp: 1.56
+      tilt: 23
+      azimuth: -133
+    - postcode: BS1 4DJ
+      kwp: 2.73
+      tilt: 45
+      azimuth: 45
+```
+
+Note you can omit any of these settings for a default value. They do not have to be exact if you use Predbat auto calibration for PV to improve the data quality.
+
 ## Energy Rates
 
 There are a number of configuration items in `apps.yaml` for telling Predbat what your import and export rates are.

@@ -151,6 +151,8 @@ class TestSolarAPI:
             pv_forecast_d3=None,
             pv_forecast_d4=None,
             pv_scaling=1.0,
+            open_meteo_forecast=None,
+            open_meteo_forecast_max_age=1.0,
         )
 
         # Mock HTTP responses storage
