@@ -474,9 +474,6 @@ def test_download_open_meteo_data_two_aspect_configs(my_predbat):
 
         # Patch mock_aiohttp_session so each array's ensemble call returns consistent data.
         # We override ensemble response per azimuth too.
-        original_set = test_api.set_mock_response
-        test_api.mock_responses["ensemble_wsw"] = ensemble_wsw
-        test_api.mock_responses["ensemble_nw"] = ensemble_nw
 
         # Replace the generic ensemble mock with per-azimuth keys
         del test_api.mock_responses["ensemble-api.open-meteo.com"]
