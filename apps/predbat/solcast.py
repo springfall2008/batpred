@@ -47,7 +47,7 @@ class SolarAPI(ComponentBase):
     for system optimisation and decision-making.
     """
 
-    def initialize(self, solcast_host, solcast_api_key, solcast_sites, solcast_poll_hours, forecast_solar, forecast_solar_max_age, pv_forecast_today, pv_forecast_tomorrow, pv_forecast_d3, pv_forecast_d4, pv_scaling):
+    def initialize(self, solcast_host, solcast_api_key, solcast_sites, solcast_poll_hours, forecast_solar, forecast_solar_max_age, open_meteo, open_meteo_max_age, pv_forecast_today, pv_forecast_tomorrow, pv_forecast_d3, pv_forecast_d4, pv_scaling):
         """Initialise the Solar API component"""
         self.solcast_host = solcast_host
         self.solcast_api_key = solcast_api_key
@@ -55,6 +55,8 @@ class SolarAPI(ComponentBase):
         self.solcast_poll_hours = solcast_poll_hours
         self.forecast_solar = forecast_solar
         self.forecast_solar_max_age = forecast_solar_max_age
+        self.open_meteo = open_meteo
+        self.open_meteo_max_age = open_meteo_max_age
         self.pv_forecast_today = pv_forecast_today
         self.pv_forecast_tomorrow = pv_forecast_tomorrow
         self.pv_forecast_d3 = pv_forecast_d3
@@ -64,8 +66,11 @@ class SolarAPI(ComponentBase):
         self.solcast_failures_total = 0
         self.forecast_solar_requests_total = 0
         self.forecast_solar_failures_total = 0
+        self.open_meteo_requests_total = 0
+        self.open_meteo_failures_total = 0
         self.solcast_last_success_timestamp = None
         self.forecast_solar_last_success_timestamp = None
+        self.open_meteo_last_success_timestamp = None
         self.last_fetched_timestamp = None
         self.forecast_days = 4
 
@@ -1056,7 +1061,12 @@ class SolarAPI(ComponentBase):
         create_pv10 = False
         max_kwh = 9999
 
-        if self.forecast_solar:
+        if self.open_meteo:
+            self.log("Obtaining solar forecast from Open-Meteo API")
+            pv_forecast_data, max_kwh = await self.download_open_meteo_data()
+            divide_by = 30.0
+            create_pv10 = True
+        elif self.forecast_solar:
             self.log("Obtaining solar forecast from Forecast Solar API")
             pv_forecast_data, max_kwh = await self.download_forecast_solar_data()
             divide_by = 30.0
@@ -1116,7 +1126,7 @@ class SolarAPI(ComponentBase):
             # For the HA sensor path the divide_by was computed assuming 30-minute periods;
             # recalculate it using the actual detected period so that the per-minute kWh
             # values are correctly scaled regardless of the forecast resolution.
-            if not self.forecast_solar and not (self.solcast_host and self.solcast_api_key):
+            if not self.open_meteo and not self.forecast_solar and not (self.solcast_host and self.solcast_api_key):
                 factor = divide_by / 30.0
                 divide_by = dp2(period * factor)
 

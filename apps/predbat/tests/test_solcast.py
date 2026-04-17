@@ -146,6 +146,8 @@ class TestSolarAPI:
             solcast_poll_hours=4,
             forecast_solar=None,
             forecast_solar_max_age=4,
+            open_meteo=None,
+            open_meteo_max_age=1,
             pv_forecast_today=None,
             pv_forecast_tomorrow=None,
             pv_forecast_d3=None,
@@ -2647,6 +2649,48 @@ def test_open_meteo_multi_array(my_predbat):
     return failed
 
 
+def test_fetch_pv_forecast_open_meteo(my_predbat):
+    """
+    Integration test: fetch_pv_forecast routes to Open-Meteo when open_meteo is configured.
+    Verifies that the full pipeline runs and dashboard items are published.
+    """
+    print("  - test_fetch_pv_forecast_open_meteo")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        # Configure for Open-Meteo: disable all other providers
+        test_api.solar.solcast_host = None
+        test_api.solar.solcast_api_key = None
+        test_api.solar.forecast_solar = None
+        _setup_open_meteo_solar_api(test_api)
+
+        mock_response = _build_open_meteo_response()
+        test_api.set_mock_response("open-meteo.com", mock_response, 200)
+
+        def create_mock_session(*args, **kwargs):
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
+
+        # Verify Open-Meteo API was called
+        open_meteo_calls = [r for r in test_api.request_log if "open-meteo.com" in r["url"]]
+        if len(open_meteo_calls) == 0:
+            print("ERROR: Expected Open-Meteo API call, got none")
+            failed = True
+
+        # Verify dashboard items were published (proves the full pipeline ran)
+        if "sensor.{}_pv_today".format(test_api.mock_base.prefix) not in test_api.dashboard_items:
+            print("ERROR: Expected pv_today entity to be published, got {}".format(list(test_api.dashboard_items.keys())))
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
 # ============================================================================
 # Main Test Runner
 # ============================================================================
@@ -2706,6 +2750,7 @@ def run_solcast_tests(my_predbat):
     # Integration tests (one per mode)
     failed |= test_fetch_pv_forecast_solcast_direct(my_predbat)
     failed |= test_fetch_pv_forecast_forecast_solar(my_predbat)
+    failed |= test_fetch_pv_forecast_open_meteo(my_predbat)
     failed |= test_fetch_pv_forecast_ha_sensors(my_predbat)
 
     # 15-minute resolution tests

@@ -100,13 +100,15 @@ COMPONENT_LIST = {
             "solcast_poll_hours": {"required": False, "config": "solcast_poll_hours", "default": 8},
             "forecast_solar": {"required": False, "config": "forecast_solar", "default": False},
             "forecast_solar_max_age": {"required": False, "config": "forecast_solar_max_age", "default": 8},
+            "open_meteo": {"required": False, "config": "open_meteo", "default": False},
+            "open_meteo_max_age": {"required": False, "config": "open_meteo_max_age", "default": 1},
             "pv_forecast_today": {"required": False, "config": "pv_forecast_today"},
             "pv_forecast_tomorrow": {"required": False, "config": "pv_forecast_tomorrow"},
             "pv_forecast_d3": {"required": False, "config": "pv_forecast_d3"},
             "pv_forecast_d4": {"required": False, "config": "pv_forecast_d4"},
             "pv_scaling": {"required": False, "config": "pv_scaling", "default": 1.0},
         },
-        "required_or": ["solcast_api_key", "forecast_solar", "pv_forecast_today"],
+        "required_or": ["solcast_api_key", "forecast_solar", "open_meteo", "pv_forecast_today"],
         "phase": 2,  # Solar component moved to phase 2 so that any Predbat cloud components (such as GEcloud) have been started and initialised pv_today, etc
     },
     "gecloud": {
