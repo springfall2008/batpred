@@ -825,12 +825,13 @@ class HAInterface(ComponentBase):
                 service_data["service_data"] = {"entity_id": entity_id, "time": value_str}
             elif has_date is True and has_time is True:
                 service_data["service_data"] = {"entity_id": entity_id, "datetime": value_str}
-            elif ("T" in value_str) or (" " in value_str and ":" in value_str):
-                service_data["service_data"] = {"entity_id": entity_id, "datetime": value_str}
-            elif ":" in value_str:
-                service_data["service_data"] = {"entity_id": entity_id, "time": value_str}
             else:
-                service_data["service_data"] = {"entity_id": entity_id, "date": value_str}
+                if ("T" in value_str) or (" " in value_str and ":" in value_str):
+                    service_data["service_data"] = {"entity_id": entity_id, "datetime": value_str}
+                elif ":" in value_str:
+                    service_data["service_data"] = {"entity_id": entity_id, "time": value_str}
+                else:
+                    service_data["service_data"] = {"entity_id": entity_id, "date": value_str}
         elif domain == "input_text":
             service_data["service"] = "set_value"
             service_data["service_data"] = {"entity_id": entity_id, "value": new_value}
