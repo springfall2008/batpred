@@ -427,9 +427,10 @@ class Execute:
 
                 status_freeze_export = " [Freeze exporting]"
 
-            # Solar surplus car charging - detect excess solar export and activate car charging
-            self.car_charging_solar_surplus_active = [False] * self.num_cars
-            if self.car_charging_solar_surplus and self.num_cars > 0 and not isExporting:
+            # Solar surplus car charging - detect excess solar export and activate car charging (once, not per-inverter)
+            if inverter.id == 0:
+                self.car_charging_solar_surplus_active = [False] * self.num_cars
+            if inverter.id == 0 and self.car_charging_solar_surplus and self.num_cars > 0 and not isExporting:
                 surplus_hysteresis = 200  # W deadband to prevent flapping
                 was_active = getattr(self, "_car_surplus_prev", [False] * self.num_cars)
                 for car_n in range(self.num_cars):
@@ -461,7 +462,7 @@ class Execute:
                         break  # One car at a time from surplus
                 self._car_surplus_prev = list(self.car_charging_solar_surplus_active)
 
-            # Car charging from battery disable?
+            # Car charging from battery disable? (runs per-inverter for discharge hold)
             carHolding = False
             if self.set_charge_window and not self.car_charging_from_battery and self.car_energy_reported_load:
                 for car_n in range(self.num_cars):
@@ -666,9 +667,9 @@ class Execute:
                     "binary_sensor." + self.prefix + "_car_charging_slot" + postfix,
                     state="on",
                     attributes={
-                        "planned": "solar_surplus",
+                        "planned": [],
                         "cost": 0,
-                        "kWh": 0,
+                        "kwh": 0,
                         "friendly_name": "Predbat car charging slot" + postfix,
                         "icon": "mdi:home-lightning-bolt-outline",
                         "solar_surplus": True,
