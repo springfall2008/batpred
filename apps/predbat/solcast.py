@@ -21,6 +21,8 @@ import json
 import os
 import aiohttp
 import traceback
+import pandas as pd
+import pvlib
 import pytz
 from datetime import datetime, timedelta, timezone
 from const import TIME_FORMAT, TIME_FORMAT_SOLCAST
@@ -446,6 +448,142 @@ class SolarAPI(ComponentBase):
 
         self.log("Solcast returned {} data points".format(len(sorted_data)))
         return sorted_data
+
+    OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
+
+    async def download_open_meteo_data(self):
+        """Download solar irradiance from Open-Meteo and convert to PV output using pvlib."""
+        cache_path = self.config_root + "/cache"
+
+        self.open_meteo_data = {}
+        cache_file = cache_path + "/open_meteo.json"
+
+        if os.path.exists(cache_file):
+            try:
+                with open(cache_file) as f:
+                    self.open_meteo_data = json.load(f)
+            except Exception as e:
+                self.log("Warn: Error loading Open-Meteo cache file {}, error {}".format(cache_file, e))
+                self.log("Warn: " + traceback.format_exc())
+                os.remove(cache_file)
+
+        configs = self.open_meteo
+        if configs is None:
+            raise ValueError("SolarAPI: No Open-Meteo configurations found")
+
+        if not isinstance(configs, list):
+            configs = [configs]
+
+        period_data = {}
+        max_kwh = 0
+        for config in configs:
+            lat = config.get("latitude", 51.5072)
+            lon = config.get("longitude", -0.1276)
+            tilt = config.get("tilt", 35.0)
+            azimuth = config.get("azimuth", 180.0)
+            kwp = config.get("kwp", 3.0)
+            efficiency = config.get("efficiency", 0.95)
+            days_data = config.get("days", 2)
+
+            max_kwh += kwp * efficiency
+
+            params = {
+                "latitude": lat,
+                "longitude": lon,
+                "hourly": "shortwave_radiation,direct_radiation,diffuse_radiation,direct_normal_irradiance",
+                "forecast_days": days_data,
+                "timezone": "UTC",
+            }
+            url = self.OPEN_METEO_URL
+            param_str = "&".join("{}={}".format(k, v) for k, v in sorted(params.items()))
+            full_url = "{}?{}".format(url, param_str)
+
+            data = await self.cache_get_url(full_url, params={}, max_age=self.open_meteo_max_age * 60)
+            if not data:
+                self.log("Warn: Open-Meteo API returned no data for lat {} lon {}".format(lat, lon))
+                continue
+
+            hourly = data.get("hourly", {})
+            times = hourly.get("time", [])
+            ghi_values = hourly.get("shortwave_radiation", [])
+            dni_values = hourly.get("direct_normal_irradiance", [])
+            dhi_values = hourly.get("diffuse_radiation", [])
+
+            if not times or not ghi_values:
+                self.log("Warn: Open-Meteo returned empty data for lat {} lon {}".format(lat, lon))
+                continue
+
+            # Convert times to pandas DatetimeIndex for pvlib
+            time_index = pd.DatetimeIndex(pd.to_datetime(times, utc=True))
+
+            # Calculate solar position
+            solar_position = pvlib.solarposition.get_solarposition(time_index, lat, lon)
+            solar_zenith = solar_position["apparent_zenith"]
+            solar_azimuth = solar_position["azimuth"]
+
+            # Transpose irradiance to plane-of-array
+            poa = pvlib.irradiance.get_total_irradiance(
+                surface_tilt=tilt,
+                surface_azimuth=azimuth,
+                solar_zenith=solar_zenith,
+                solar_azimuth=solar_azimuth,
+                dni=pd.Series(dni_values, index=time_index).fillna(0),
+                ghi=pd.Series(ghi_values, index=time_index).fillna(0),
+                dhi=pd.Series(dhi_values, index=time_index).fillna(0),
+                model="isotropic",
+            )
+
+            poa_global = poa["poa_global"].fillna(0).clip(lower=0)
+
+            # Convert POA irradiance (W/m²) to PV output (kW)
+            # Standard test conditions: 1000 W/m² = kwp output
+            pv_watts = poa_global * (kwp / 1000.0) * efficiency
+
+            # Build forecast data in predbat standard format
+            for i, time_val in enumerate(time_index):
+                pv_kw = float(pv_watts.iloc[i])
+                # Convert kW to kWh per interval (matching predbat's expected divide_by=30 format)
+                pv_estimate = dp4(pv_kw / 60.0 * self.plan_interval_minutes)
+
+                if time_val in period_data:
+                    period_data[time_val]["pv_estimate"] += pv_estimate
+                else:
+                    period_data[time_val] = {
+                        "period_start": time_val.strftime(TIME_FORMAT),
+                        "pv_estimate": pv_estimate,
+                    }
+
+        # Merge new data into cached data
+        for key in period_data:
+            self.open_meteo_data[key.strftime(TIME_FORMAT)] = period_data[key]
+
+        # Prune old data
+        new_data = {}
+        for key_txt in self.open_meteo_data:
+            key = datetime.strptime(key_txt, TIME_FORMAT)
+            if key >= self.midnight_utc:
+                new_data[key_txt] = self.open_meteo_data[key_txt]
+        self.open_meteo_data = new_data
+
+        # Save to cache file
+        with open(cache_file, "w") as f:
+            json.dump(self.open_meteo_data, f)
+
+        # Fetch the final cached data as timestamps
+        period_data = {}
+        for key_txt in self.open_meteo_data:
+            key = datetime.strptime(key_txt, TIME_FORMAT)
+            period_data[key] = self.open_meteo_data[key_txt]
+
+        # Sort data and return
+        sorted_data = []
+        if period_data:
+            period_keys = sorted(period_data.keys())
+            for key in period_keys:
+                sorted_data.append(period_data[key])
+
+        self.log("Open-Meteo returned {} data points".format(len(sorted_data)))
+        return sorted_data, max_kwh
 
     def fetch_pv_datapoints(self, argname, entity_id):
         """

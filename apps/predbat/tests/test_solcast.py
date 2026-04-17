@@ -2380,6 +2380,274 @@ def test_forecast_solar_null_response(my_predbat):
 
 
 # ============================================================================
+# Open-Meteo Data Download Tests
+# ============================================================================
+
+
+def _build_open_meteo_response(lat=51.5, lon=-0.1, hours=24):
+    """Build a mock Open-Meteo API response with synthetic irradiance data."""
+    from datetime import timezone as tz
+
+    base_time = datetime(2025, 6, 15, 0, 0, 0, tzinfo=tz.utc)
+    times = [(base_time + timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M") for h in range(hours)]
+
+    # Simulate a simple irradiance curve - peak at midday (hour 12)
+    ghi = []
+    dni = []
+    dhi = []
+    shortwave = []
+    for h in range(hours):
+        if 6 <= h <= 18:
+            factor = 1.0 - abs(h - 12) / 6.0
+            ghi.append(round(800 * factor, 1))
+            dni.append(round(700 * factor, 1))
+            dhi.append(round(100 * factor, 1))
+            shortwave.append(round(800 * factor, 1))
+        else:
+            ghi.append(0.0)
+            dni.append(0.0)
+            dhi.append(0.0)
+            shortwave.append(0.0)
+
+    return {
+        "latitude": lat,
+        "longitude": lon,
+        "hourly": {
+            "time": times,
+            "shortwave_radiation": shortwave,
+            "direct_radiation": ghi,
+            "diffuse_radiation": dhi,
+            "direct_normal_irradiance": dni,
+        },
+    }
+
+
+def _setup_open_meteo_solar_api(test_api, configs=None):
+    """Set up SolarAPI instance with open_meteo attributes for testing."""
+    if configs is None:
+        configs = [
+            {
+                "latitude": 51.5,
+                "longitude": -0.1,
+                "tilt": 35.0,
+                "azimuth": 180.0,
+                "kwp": 3.0,
+                "efficiency": 0.95,
+                "days": 2,
+            }
+        ]
+    test_api.solar.open_meteo = configs
+    test_api.solar.open_meteo_max_age = 4
+    # midnight_utc is a property on ComponentBase that reads from self.base — already set in MockBase
+
+
+def test_open_meteo_basic(my_predbat):
+    """
+    Test download_open_meteo_data with a mock Open-Meteo response.
+    Verifies that PV output is calculated from irradiance and that the
+    data structure is correct.
+    """
+    print("  - test_open_meteo_basic")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        _setup_open_meteo_solar_api(test_api)
+
+        mock_response = _build_open_meteo_response()
+        test_api.set_mock_response("open-meteo.com", mock_response, 200)
+
+        def create_mock_session(*args, **kwargs):
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            result, max_kwh = run_async(test_api.solar.download_open_meteo_data())
+
+        # Verify we got data back
+        if result is None or len(result) == 0:
+            print("ERROR: Expected forecast data, got {}".format(result))
+            failed = True
+
+        if result:
+            # Each entry must have period_start and pv_estimate
+            first = result[0]
+            if "period_start" not in first:
+                print("ERROR: Expected 'period_start' in result, got {}".format(list(first.keys())))
+                failed = True
+            if "pv_estimate" not in first:
+                print("ERROR: Expected 'pv_estimate' in result")
+                failed = True
+
+            # Daytime entries should have positive pv_estimate
+            positive_entries = [e for e in result if e.get("pv_estimate", 0) > 0]
+            if len(positive_entries) == 0:
+                print("ERROR: Expected some positive pv_estimate values (daytime irradiance present)")
+                failed = True
+
+            # All pv_estimate values must be non-negative
+            negative_entries = [e for e in result if e.get("pv_estimate", 0) < 0]
+            if len(negative_entries) > 0:
+                print("ERROR: Found {} entries with negative pv_estimate".format(len(negative_entries)))
+                failed = True
+
+        # max_kwh = kwp * efficiency = 3.0 * 0.95 = 2.85
+        expected_max_kwh = 3.0 * 0.95
+        if abs(max_kwh - expected_max_kwh) > 0.01:
+            print("ERROR: Expected max_kwh {}, got {}".format(expected_max_kwh, max_kwh))
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_open_meteo_null_response(my_predbat):
+    """
+    Test download_open_meteo_data handles None from cache_get_url gracefully.
+    Should return empty data without crashing.
+    """
+    print("  - test_open_meteo_null_response")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        _setup_open_meteo_solar_api(test_api)
+
+        # Ensure cache directory exists (normally created by cache_get_url, but we're mocking it)
+        cache_path = test_api.mock_base.config_root + "/cache"
+        os.makedirs(cache_path, exist_ok=True)
+
+        # Mock cache_get_url to return None
+        async def mock_cache_get_url_none(url, params, max_age=None):
+            """Simulate API returning no data."""
+            return None
+
+        test_api.solar.cache_get_url = mock_cache_get_url_none
+
+        result, max_kwh = run_async(test_api.solar.download_open_meteo_data())
+
+        # Should return empty list, not crash
+        if result is None:
+            print("ERROR: Expected empty list, got None")
+            failed = True
+        elif len(result) != 0:
+            print("ERROR: Expected empty list when API returns None, got {} items".format(len(result)))
+            failed = True
+
+        # max_kwh should still be computed from config (kwp * efficiency)
+        expected_max_kwh = 3.0 * 0.95
+        if abs(max_kwh - expected_max_kwh) > 0.01:
+            print("ERROR: Expected max_kwh {} even with null response, got {}".format(expected_max_kwh, max_kwh))
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_open_meteo_multi_array(my_predbat):
+    """
+    Test that download_open_meteo_data aggregates PV output across multiple panel arrays.
+    With two identical arrays, the combined output should be double a single array.
+    """
+    print("  - test_open_meteo_multi_array")
+    failed = False
+
+    # --- single-array run ---
+    test_single = create_test_solar_api()
+    try:
+        single_config = [
+            {
+                "latitude": 51.5,
+                "longitude": -0.1,
+                "tilt": 35.0,
+                "azimuth": 180.0,
+                "kwp": 3.0,
+                "efficiency": 0.95,
+                "days": 2,
+            }
+        ]
+        _setup_open_meteo_solar_api(test_single, configs=single_config)
+
+        mock_response = _build_open_meteo_response()
+        test_single.set_mock_response("open-meteo.com", mock_response, 200)
+
+        def create_mock_session_single(*args, **kwargs):
+            return test_single.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session_single):
+            single_result, single_max_kwh = run_async(test_single.solar.download_open_meteo_data())
+    finally:
+        test_single.cleanup()
+
+    # --- dual-array run (same config × 2) ---
+    test_dual = create_test_solar_api()
+    try:
+        dual_config = [
+            {
+                "latitude": 51.5,
+                "longitude": -0.1,
+                "tilt": 35.0,
+                "azimuth": 180.0,
+                "kwp": 3.0,
+                "efficiency": 0.95,
+                "days": 2,
+            },
+            {
+                "latitude": 51.5,
+                "longitude": -0.1,
+                "tilt": 35.0,
+                "azimuth": 180.0,
+                "kwp": 3.0,
+                "efficiency": 0.95,
+                "days": 2,
+            },
+        ]
+        _setup_open_meteo_solar_api(test_dual, configs=dual_config)
+
+        mock_response = _build_open_meteo_response()
+        test_dual.set_mock_response("open-meteo.com", mock_response, 200)
+
+        def create_mock_session_dual(*args, **kwargs):
+            return test_dual.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session_dual):
+            dual_result, dual_max_kwh = run_async(test_dual.solar.download_open_meteo_data())
+    finally:
+        test_dual.cleanup()
+
+    # max_kwh should be doubled
+    expected_dual_max_kwh = single_max_kwh * 2
+    if abs(dual_max_kwh - expected_dual_max_kwh) > 0.01:
+        print("ERROR: Expected dual max_kwh {}, got {}".format(expected_dual_max_kwh, dual_max_kwh))
+        failed = True
+
+    # Both runs should return the same number of time slots
+    if single_result and dual_result:
+        if len(single_result) != len(dual_result):
+            print("ERROR: Single ({}) and dual ({}) should have same number of time slots".format(len(single_result), len(dual_result)))
+            failed = True
+
+        # Dual pv_estimate should be approximately double single for each slot
+        for i, (s, d) in enumerate(zip(single_result, dual_result)):
+            sv = s.get("pv_estimate", 0)
+            dv = d.get("pv_estimate", 0)
+            if sv == 0 and dv == 0:
+                continue
+            if abs(dv - 2 * sv) > 0.001:
+                print("ERROR: slot {}: dual ({}) should be ~2x single ({})".format(i, dv, sv))
+                failed = True
+                break  # Only report first failure
+    else:
+        print("ERROR: single_result={}, dual_result={}".format(single_result, dual_result))
+        failed = True
+
+    return failed
+
+
+# ============================================================================
 # Main Test Runner
 # ============================================================================
 
@@ -2410,6 +2678,11 @@ def run_solcast_tests(my_predbat):
     failed |= test_download_forecast_solar_data_with_postcode(my_predbat)
     failed |= test_download_forecast_solar_data_personal_api(my_predbat)
     failed |= test_forecast_solar_null_response(my_predbat)
+
+    # Open-Meteo download tests
+    failed |= test_open_meteo_basic(my_predbat)
+    failed |= test_open_meteo_null_response(my_predbat)
+    failed |= test_open_meteo_multi_array(my_predbat)
 
     # HA sensor tests
     failed |= test_fetch_pv_datapoints_detailed_forecast(my_predbat)

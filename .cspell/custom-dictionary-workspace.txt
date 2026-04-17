@@ -332,6 +332,7 @@ sofar
 SolarEdge
 solarman
 solarnet
+solarposition
 Solax
 solaxcloud
 solaxmodbus
