@@ -109,8 +109,11 @@ class SolarAPI(ComponentBase):
         self.solcast_failures_total = 0
         self.forecast_solar_requests_total = 0
         self.forecast_solar_failures_total = 0
+        self.open_meteo_requests_total = 0
+        self.open_meteo_failures_total = 0
         self.solcast_last_success_timestamp = None
         self.forecast_solar_last_success_timestamp = None
+        self.open_meteo_last_success_timestamp = None
         self.last_fetched_timestamp = None
         self.forecast_days = 4
 
@@ -134,6 +137,7 @@ class SolarAPI(ComponentBase):
         # Check if this is a Solcast API call for metrics tracking
         is_solcast_api = "solcast.com" in url.lower() or "api.solcast" in url.lower()
         is_forecast_solar_api = "forecast.solar" in url.lower()
+        is_open_meteo_api = "open-meteo.com" in url.lower()
 
         # Increment request counter for Solcast API calls
         if is_solcast_api:
@@ -142,6 +146,10 @@ class SolarAPI(ComponentBase):
         # Increment request counter for forecast.solar API calls
         if is_forecast_solar_api:
             self.forecast_solar_requests_total += 1
+
+        # Increment request counter for Open-Meteo API calls
+        if is_open_meteo_api:
+            self.open_meteo_requests_total += 1
 
         # Get data from cache
         age_minutes = 0
@@ -186,6 +194,9 @@ class SolarAPI(ComponentBase):
                         if is_forecast_solar_api:
                             self.forecast_solar_failures_total += 1
                             record_api_call("forecast_solar", False, "server_error")
+                        if is_open_meteo_api:
+                            self.open_meteo_failures_total += 1
+                            record_api_call("open_meteo", False, "server_error")
                         return data
 
                     try:
@@ -196,6 +207,9 @@ class SolarAPI(ComponentBase):
                         if is_forecast_solar_api:
                             self.forecast_solar_last_success_timestamp = datetime.now(timezone.utc)
                             record_api_call("forecast_solar")
+                        if is_open_meteo_api:
+                            self.open_meteo_last_success_timestamp = datetime.now(timezone.utc)
+                            record_api_call("open_meteo")
                     except (aiohttp.ContentTypeError, Exception) as e:
                         self.log("Warn: Error downloading data from URL {}, error {} code {}".format(url, e, status_code))
                         if is_solcast_api:
@@ -204,6 +218,9 @@ class SolarAPI(ComponentBase):
                         if is_forecast_solar_api:
                             self.forecast_solar_failures_total += 1
                             record_api_call("forecast_solar", False, "decode_error")
+                        if is_open_meteo_api:
+                            self.open_meteo_failures_total += 1
+                            record_api_call("open_meteo", False, "decode_error")
                         if data:
                             self.log("Warn: Error downloading data from URL {}, using cached data age {} minutes".format(url, dp1(age_minutes)))
                         else:
@@ -216,6 +233,9 @@ class SolarAPI(ComponentBase):
             if is_forecast_solar_api:
                 self.forecast_solar_failures_total += 1
                 record_api_call("forecast_solar", False, "connection_error")
+            if is_open_meteo_api:
+                self.open_meteo_failures_total += 1
+                record_api_call("open_meteo", False, "connection_error")
             return data
 
         # Store data in cache
@@ -230,9 +250,9 @@ class SolarAPI(ComponentBase):
 
     def convert_azimuth(self, az):
         """
-        Convert azimuth from solcast format to forecast solar format
-        solcast format is        0 = North, -90 = East, 90 = West, 180 = South
-        forecast solar format is 0 = South, -90 = East, 90 = West, 180 = North
+        Convert azimuth from Predbat/Solcast convention to Forecast.solar/Open-Meteo convention.
+        Predbat/Solcast convention:         0 = North, -90 = East, 90 = West, 180 = South
+        Forecast.solar/Open-Meteo convention: 0 = South, -90 = East, 90 = West, ±180 = North
         """
         if az >= 0:
             az = 180 - az
@@ -268,7 +288,7 @@ class SolarAPI(ComponentBase):
                 result[ts] = 0.0
                 continue
             values.sort()
-            p10_idx = max(0, int(len(values) * 0.10) - 1)
+            p10_idx = max(0, math.ceil(len(values) * 0.10) - 1)
             gti_p10 = values[p10_idx]
             result[ts] = dp4((gti_p10 / 1000.0) * kwp * (1.0 - system_loss))
         return result

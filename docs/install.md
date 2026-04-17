@@ -189,7 +189,7 @@ Ensemble members are used to derive a P10 pessimistic estimate alongside the cen
 
 You can define one or more arrays (roof aspects). For the UK, use a postcode instead of latitude/longitude.
 
-The azimuth convention is the same as Forecast.solar: 0=North, -90=East, 90=West, -180/180=South.
+The azimuth uses the same convention as all other Predbat solar configs (Solcast/Forecast.solar): 0=North, -90=East, 90=West, -180/180=South. Predbat converts this to the Open-Meteo convention (0=South) internally.
 The tilt is the angle of the panels from horizontal, e.g. 35 for a typical pitched roof.
 The `system_loss` (optional, default 0) is a fractional derating for wiring losses, soiling, etc., e.g. 0.05 for 5% losses.
 

@@ -6,7 +6,7 @@ It runs every 5 minutes and, by default, forecasts 48 hours ahead (configurable 
 with the plan typically covering at least 24 hours after the first charge slot (forecast_plan_hours).
 
 Predbat will automatically decide when to charge and discharge your battery to achieve the best (lowest) cost spend within the parameters you have set.
-It uses the solar production forecast from Solcast combined with your historical energy usage to make this prediction.
+It uses the solar production forecast from Solcast, Open-Meteo, or Forecast.solar combined with your historical energy usage to make this prediction.
 
 - The output is a prediction of the battery levels, solar generation, house load, charging activity, discharging activity, costs and import and export amounts based on (by default) 30-minute slots.
 - Costs are based on energy pricing data, either manually configured (e.g. 7p from 11pm-4pm and 35p otherwise) or by using the Octopus Energy integration
