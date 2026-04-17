@@ -254,6 +254,9 @@ class SolarAPI(ComponentBase):
                 days_data = config.get("days", 2)
 
             data = await self.cache_get_url(url, params={}, max_age=self.forecast_solar_max_age * 60)
+            if not data:
+                self.log("Warn: Forecast Solar API returned no data for lat {} lon {}, location may not be covered by PVGIS database".format(lat, lon))
+                continue
             watts = data.get("result", {}).get("watts", {})
             info = data.get("message", {}).get("info", {})
             if not watts or not info:

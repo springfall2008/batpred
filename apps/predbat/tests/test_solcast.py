@@ -2325,6 +2325,61 @@ def test_pv_calibration_synthetic_values(my_predbat):
 
 
 # ============================================================================
+# Forecast.Solar null response tests
+# ============================================================================
+
+
+def test_forecast_solar_null_response(my_predbat):
+    """
+    Test that download_forecast_solar_data handles None from cache_get_url without crashing.
+    Regression test for AttributeError: 'NoneType' object has no attribute 'get' when
+    Forecast.Solar returns HTTP 422 for unsupported locations.
+    """
+    print("  - test_forecast_solar_null_response")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.forecast_solar = [
+            {
+                "latitude": 89.9,  # Near North Pole - not covered by PVGIS
+                "longitude": 0.0,
+                "declination": 30,
+                "azimuth": 0,
+                "kwp": 3.0,
+                "efficiency": 0.9,
+            }
+        ]
+
+        # Ensure cache directory exists (normally created by cache_get_url, but we're mocking it)
+        cache_path = test_api.mock_base.config_root + "/cache"
+        os.makedirs(cache_path, exist_ok=True)
+
+        # Mock cache_get_url to return None (simulating HTTP 422 or connection failure)
+        async def mock_cache_get_url_none(url, params, max_age=None):
+            """Return None to simulate an unsupported location response."""
+            return None
+
+        test_api.solar.cache_get_url = mock_cache_get_url_none
+
+        # This should NOT raise AttributeError - the null guard must handle it gracefully
+        result, max_kwh = run_async(test_api.solar.download_forecast_solar_data())
+
+        # Result should be empty (no data), not a crash
+        if result is None:
+            print("ERROR: Expected empty list, got None")
+            failed = True
+        elif len(result) != 0:
+            print("ERROR: Expected empty list when API returns None, got {} items".format(len(result)))
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+# ============================================================================
 # Main Test Runner
 # ============================================================================
 
@@ -2354,6 +2409,7 @@ def run_solcast_tests(my_predbat):
     failed |= test_download_forecast_solar_data(my_predbat)
     failed |= test_download_forecast_solar_data_with_postcode(my_predbat)
     failed |= test_download_forecast_solar_data_personal_api(my_predbat)
+    failed |= test_forecast_solar_null_response(my_predbat)
 
     # HA sensor tests
     failed |= test_fetch_pv_datapoints_detailed_forecast(my_predbat)
