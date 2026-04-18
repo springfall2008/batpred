@@ -9,18 +9,17 @@
 # pylint: disable=line-too-long
 
 """
-Standalone live comparison of Open-Meteo vs Forecast.Solar solar forecasts.
+Standalone live comparison of PV forecast sources using the real Predbat pipeline.
 
-Uses the real SolarAPI.download_open_meteo_data() and
-SolarAPI.download_forecast_solar_data() from solcast.py — no duplication of
-model logic or API call code.
+Calls fetch_pv_forecast() for each configured source (Open-Meteo, Forecast.Solar,
+Solcast) and reads back the detailedForecast from sensor.predbat_pv_today — exactly
+what Predbat would see after running its full fetch + calibration pipeline.
 
-Both sources use the same ARRAYS configuration so the results are directly
-comparable. Hours are shown in local time (e.g. BST in summer).
+Hours are shown in local time (e.g. BST in summer). Energy totals are in kWh/hour.
 
 Run from the repository root or coverage/ directory:
     source coverage/venv/bin/activate
-    python3 apps/predbat/tests/open_meteo_live.py
+    python3 apps/predbat/tests/open_meteo_live.py [--fs-api-key KEY] [--solcast-api-key KEY]
 
 This file is intentionally NOT registered in TEST_REGISTRY and is not
 executed by run_all / run_cov.
@@ -40,6 +39,7 @@ _PREDBAT_DIR = os.path.dirname(_TESTS_DIR)  # apps/predbat
 if _PREDBAT_DIR not in sys.path:
     sys.path.insert(0, _PREDBAT_DIR)
 
+from const import TIME_FORMAT  # noqa: E402
 from solcast import SolarAPI  # noqa: E402
 from tests.test_solcast import MockBase  # noqa: E402
 
@@ -54,16 +54,18 @@ ARRAYS = [
 LOCAL_TZ = pytz.timezone("Europe/London")
 MAX_AGE_HOURS = 1.0  # re-fetch if cached data is older than this
 
-
-# Stable cache directory alongside this script so data persists between runs
+# Stable cache directory alongside this script so API responses persist between runs
 _CACHE_ROOT = os.path.join(_TESTS_DIR, ".om_live_cache")
 
 
-def _make_solar_api(fs_api_key: str = None) -> tuple:
-    """Create a real SolarAPI wired to a minimal mock base.  Returns (solar, base)."""
-    # Use UTC midnight so FS and OM period_start timestamps share the same anchor.
-    # FS uses (period_stamp - midnight_utc) to compute minute offsets; with UTC midnight
-    # those offsets match the UTC timestamps that OM also produces, giving aligned output.
+async def _fetch_via_pipeline(source_name: str, forecast_solar, open_meteo_forecast, solcast_api_key: str, solcast_host: str, plan_interval_minutes: int) -> tuple:
+    """Run fetch_pv_forecast() for one source and return what Predbat would store.
+
+    Creates a minimal MockBase + SolarAPI, calls fetch_pv_forecast(), then reads
+    back the detailedForecast from sensor.predbat_pv_today and _pv_tomorrow.
+
+    Returns (today_total_kwh, today_detail, tomorrow_total_kwh, tomorrow_detail).
+    """
     now_utc = datetime.now(tz=pytz.utc)
     base = MockBase()
     base.config_root = _CACHE_ROOT  # stable dir so API responses are cached across runs
@@ -71,10 +73,8 @@ def _make_solar_api(fs_api_key: str = None) -> tuple:
     base.now_utc_exact = now_utc
     base.midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
     base.minutes_now = now_utc.hour * 60 + now_utc.minute
-    # Use 60-minute plan intervals so forecast.solar per-slot kWh == kWh/hour
-    base.plan_interval_minutes = 60
-    # Print all log messages so errors from cache_get_url are visible
-    base.log = lambda msg: print(f"  [log] {msg}")
+    base.plan_interval_minutes = plan_interval_minutes
+    base.log = lambda msg: print(f"  [{source_name}] {msg}")
 
     solar = SolarAPI.__new__(SolarAPI)
     solar.base = base
@@ -87,81 +87,134 @@ def _make_solar_api(fs_api_key: str = None) -> tuple:
     solar.last_success_timestamp = None
     solar.count_errors = 0
 
-    fs_arrays = [{**a, "api_key": fs_api_key} if fs_api_key else a for a in ARRAYS]
     solar.initialize(
-        solcast_host=None,
-        solcast_api_key=None,
+        solcast_host=solcast_host or "https://api.solcast.com.au",
+        solcast_api_key=solcast_api_key,
         solcast_sites=None,
         solcast_poll_hours=4,
-        forecast_solar=fs_arrays,
+        forecast_solar=forecast_solar,
         forecast_solar_max_age=MAX_AGE_HOURS,
         pv_forecast_today=None,
         pv_forecast_tomorrow=None,
         pv_forecast_d3=None,
         pv_forecast_d4=None,
         pv_scaling=1.0,
-        open_meteo_forecast=ARRAYS,
+        open_meteo_forecast=open_meteo_forecast,
         open_meteo_forecast_max_age=MAX_AGE_HOURS,
     )
-    return solar, base
+
+    await solar.fetch_pv_forecast()
+
+    today_item = base.dashboard_items.get(f"sensor.{base.prefix}_pv_today", {})
+    tomorrow_item = base.dashboard_items.get(f"sensor.{base.prefix}_pv_tomorrow", {})
+
+    today_total = today_item.get("state", 0.0) or 0.0
+    today_detail = today_item.get("attributes", {}).get("detailedForecast", [])
+    tomorrow_total = tomorrow_item.get("state", 0.0) or 0.0
+    tomorrow_detail = tomorrow_item.get("attributes", {}).get("detailedForecast", [])
+
+    return today_total, today_detail, tomorrow_total, tomorrow_detail
 
 
-def _index_by_hour(sorted_data: list) -> dict:
-    """Return dict mapping 'YYYY-MM-DDTHH' → (p50, p10) keyed by the first 13 chars of period_start."""
-    result = {}
-    for item in sorted_data:
-        ts = item["period_start"]
+def _aggregate_to_hourly(detail_forecast: list) -> dict:
+    """Aggregate detailedForecast entries (kW average per period) into hourly kWh.
+
+    The detailedForecast from publish_pv_stats contains pv_estimate in kW (average
+    power for the slot). To get kWh for the slot: kW * period_hours. Slots are then
+    summed per UTC hour to give a comparable kWh/hour value across all sources.
+
+    Returns {hour_key: (kwh_p50, kwh_p10)} where hour_key is 'YYYY-MM-DDTHH'.
+    """
+    if not detail_forecast:
+        return {}
+
+    # Detect the actual period from consecutive entries
+    period = 60  # default
+    if len(detail_forecast) >= 2:
         try:
-            key = ts[:13]
+            t0 = datetime.strptime(detail_forecast[0]["period_start"], TIME_FORMAT)
+            t1 = datetime.strptime(detail_forecast[1]["period_start"], TIME_FORMAT)
+            detected = int(abs((t1 - t0).total_seconds() / 60))
+            if 5 <= detected <= 60:
+                period = detected
+        except (ValueError, TypeError, KeyError):
+            pass
+
+    period_hours = period / 60.0
+    hourly: dict = {}
+    for entry in detail_forecast:
+        try:
+            dt = datetime.strptime(entry["period_start"], TIME_FORMAT)
         except (ValueError, TypeError):
             continue
-        result[key] = (item.get("pv_estimate", 0.0), item.get("pv_estimate10", None))
-    return result
+        hour_key = dt.strftime("%Y-%m-%dT%H")
+        kw = entry.get("pv_estimate", 0.0) or 0.0
+        kw10 = entry.get("pv_estimate10", kw) or kw
+        existing = hourly.get(hour_key, (0.0, 0.0))
+        hourly[hour_key] = (existing[0] + kw * period_hours, existing[1] + kw10 * period_hours)
+    return hourly
 
 
-def print_comparison_table(label: str, om_by_hour: dict, fs_by_hour: dict, day_str: str, tz_name: str) -> None:
-    """Print a side-by-side comparison table for one day."""
-    w = 70
+def print_comparison_table(label: str, sources: dict, day_str: str, tz_name: str) -> None:
+    """Print a side-by-side comparison table for one day.
+
+    sources is an ordered dict of {source_name: hourly_dict} where each hourly_dict
+    maps 'YYYY-MM-DDTHH' → (kwh_p50, kwh_p10) as returned by _aggregate_to_hourly().
+    Hours are shown in local time (tz_name).
+    """
+    source_names = list(sources.keys())
+    col_w = 12
+    n_cols = len(source_names)
+    w = 10 + n_cols * (col_w + 3)
     print()
     print("=" * w)
-    print(f"  {label}  (hours in {tz_name})")
+    print(f"  {label}  (hours in {tz_name})  [kWh/hour]")
     print("=" * w)
-    print(f"  {'Hour':>5}   {'OM P50 kW':>10}   {'OM P10 kW':>10}   {'FS P50 kW':>10}")
-    print(f"  {'-'*5}   {'-'*10}   {'-'*10}   {'-'*10}")
+    header = f"  {'Hour':>5}  "
+    divider = f"  {'-'*5}  "
+    for name in source_names:
+        header += f"  {(name + ' kWh/h'):>{col_w}}"
+        divider += f"  {'-'*col_w}"
+    print(header)
+    print(divider)
 
-    all_keys = sorted(set(list(om_by_hour.keys()) + list(fs_by_hour.keys())))
+    all_keys = sorted(set(k for hrs in sources.values() for k in hrs.keys()))
     day_keys = [k for k in all_keys if k[:10] == day_str]
 
-    om_total = 0.0
-    om10_total = 0.0
-    fs_total = 0.0
+    totals = {name: 0.0 for name in source_names}
     any_data = False
 
     for hour_key in day_keys:
         utc_dt = datetime.strptime(hour_key, "%Y-%m-%dT%H").replace(tzinfo=pytz.utc)
         hour_str = utc_dt.astimezone(LOCAL_TZ).strftime("%H:%M")
-        om_p50, om_p10 = om_by_hour.get(hour_key, (0.0, None))
-        fs_p50, _ = fs_by_hour.get(hour_key, (0.0, None))
-
-        if om_p50 > 0.0 or fs_p50 > 0.0:
+        row_vals = {name: sources[name].get(hour_key, (0.0, 0.0))[0] for name in source_names}
+        if any(v > 0.0 for v in row_vals.values()):
             any_data = True
-            om10_str = f"{om_p10:10.3f}" if om_p10 is not None else "         -"
-            print(f"  {hour_str:>5}   {om_p50:10.3f}   {om10_str}   {fs_p50:10.3f}")
-
-        om_total += om_p50
-        om10_total += (om_p10 if om_p10 is not None else 0.0)
-        fs_total += fs_p50
+            row = f"  {hour_str:>5}  "
+            for name in source_names:
+                row += f"  {row_vals[name]:>{col_w}.3f}"
+            print(row)
+        for name in source_names:
+            totals[name] += row_vals.get(name, 0.0)
 
     if not any_data:
         print("  (no data)")
 
-    print(f"  {'-'*5}   {'-'*10}   {'-'*10}   {'-'*10}")
-    print(f"  {'Total':>5}   {om_total:9.3f}kWh  {om10_total:9.3f}kWh  {fs_total:9.3f}kWh")
+    print(divider)
+    total_row = f"  {'Total':>5}  "
+    for name in source_names:
+        total_row += f"  {totals[name]:>{col_w}.3f}"
+    print(total_row + "  kWh")
     print()
 
 
-async def run(fs_api_key: str = None) -> None:
-    """Fetch live data from both sources and print a side-by-side comparison."""
+async def run(fs_api_key: str = None, solcast_api_key: str = None, solcast_host: str = None) -> None:
+    """Fetch live data via fetch_pv_forecast() for each source and print comparison.
+
+    Runs the full Predbat PV fetch pipeline (download → minute_data → pv_calibration
+    → publish_pv_stats) for each enabled source, then reads the detailedForecast that
+    Predbat would store in sensor.predbat_pv_today.
+    """
     now_local = datetime.now(tz=LOCAL_TZ)
     now_utc = datetime.now(tz=pytz.utc)
     today_str = now_utc.strftime("%Y-%m-%d")
@@ -169,45 +222,88 @@ async def run(fs_api_key: str = None) -> None:
     tz_name = now_local.strftime("%Z")  # e.g. "BST" or "GMT" — for display only
 
     print()
-    print(f"Solar forecast comparison  —  run date: {today_str} UTC  ({tz_name})")
+    print(f"Predbat PV forecast pipeline comparison  —  {today_str} UTC  ({tz_name})")
     print()
     print(f"Arrays ({len(ARRAYS)} configured):")
     _tmp = SolarAPI.__new__(SolarAPI)
     for i, a in enumerate(ARRAYS, 1):
         az_api = SolarAPI.convert_azimuth(_tmp, a["azimuth"])
         print(f"  [{i}] postcode={a['postcode']}  kwp={a['kwp']}  declination={a['declination']}°  azimuth={a['azimuth']}° (→API: {az_api:.0f}°)  efficiency={a.get('efficiency', 1.0):.0%}")
+    print(f"  cache: {_CACHE_ROOT}/cache/")
 
-    solar, base = _make_solar_api(fs_api_key=fs_api_key)
-    print(f"  (cache: {_CACHE_ROOT}/cache/)")
-    print("\nFetching Open-Meteo data (GTI forecast + ensemble P10)...")
+    # results maps source_name → {"today": hourly_dict, "tomorrow": hourly_dict}
+    results: dict = {}
+
+    # ── Open-Meteo ────────────────────────────────────────────────────────────
+    # Uses plan_interval_minutes=60 so OM hourly data maps 1:1 to 60-min slots.
+    print("\nFetching via fetch_pv_forecast() [Open-Meteo] ...")
     try:
-        om_data, om_max_kwh = await solar.download_open_meteo_data()
-        print(f"  {len(om_data)} data points  (combined max_kwh={om_max_kwh:.2f})")
-
-        print("Fetching Forecast.Solar data (free tier, 2 days)...")
-        fs_data, fs_max_kwh = await solar.download_forecast_solar_data()
-        print(f"  {len(fs_data)} data points  (combined max_kwh={fs_max_kwh:.2f})")
+        om_today_total, om_today_detail, om_tmrw_total, om_tmrw_detail = await _fetch_via_pipeline(
+            "OM",
+            forecast_solar=None,
+            open_meteo_forecast=ARRAYS,
+            solcast_api_key=None,
+            solcast_host=None,
+            plan_interval_minutes=60,
+        )
+        print(f"  Today: {om_today_total:.2f} kWh   Tomorrow: {om_tmrw_total:.2f} kWh")
+        results["OM"] = {"today": _aggregate_to_hourly(om_today_detail), "tomorrow": _aggregate_to_hourly(om_tmrw_detail)}
     except Exception as e:
         print(f"  Error: {e}")
-        raise
+        results["OM"] = {"today": {}, "tomorrow": {}}
 
-    # Both OM and FS now produce period_start in UTC (midnight_utc is UTC midnight).
-    # Hours shown are UTC; with trapz integration OM "05:00 UTC" = energy during 05:00-06:00 UTC,
-    # which aligns with FS "05:00 UTC" = energy accumulated for the hour ending at 06:00 UTC.
-    # Sunrise ~05:10 UTC (06:10 BST) means the 05:00 UTC slot shows the first partial hour of sun.
-    om_by_hour = _index_by_hour(om_data)
-    fs_by_hour = _index_by_hour(fs_data)
+    # ── Forecast.Solar ────────────────────────────────────────────────────────
+    # Uses plan_interval_minutes=30 to match FS native 30-min resolution.
+    # Slots are aggregated to hourly kWh by _aggregate_to_hourly().
+    fs_arrays = [{**a, "api_key": fs_api_key} if fs_api_key else a for a in ARRAYS]
+    print(f"\nFetching via fetch_pv_forecast() [Forecast.Solar — {'personal' if fs_api_key else 'free tier'}] ...")
+    try:
+        fs_today_total, fs_today_detail, fs_tmrw_total, fs_tmrw_detail = await _fetch_via_pipeline(
+            "FS",
+            forecast_solar=fs_arrays,
+            open_meteo_forecast=None,
+            solcast_api_key=None,
+            solcast_host=None,
+            plan_interval_minutes=30,
+        )
+        print(f"  Today: {fs_today_total:.2f} kWh   Tomorrow: {fs_tmrw_total:.2f} kWh")
+        results["FS"] = {"today": _aggregate_to_hourly(fs_today_detail), "tomorrow": _aggregate_to_hourly(fs_tmrw_detail)}
+    except Exception as e:
+        print(f"  Error: {e}")
+        results["FS"] = {"today": {}, "tomorrow": {}}
 
-    print_comparison_table(f"TODAY  ({today_str})", om_by_hour, fs_by_hour, today_str, tz_name)
-    print_comparison_table(f"TOMORROW  ({tomorrow_str})", om_by_hour, fs_by_hour, tomorrow_str, tz_name)
+    # ── Solcast ───────────────────────────────────────────────────────────────
+    if solcast_api_key:
+        print("\nFetching via fetch_pv_forecast() [Solcast] ...")
+        try:
+            sc_today_total, sc_today_detail, sc_tmrw_total, sc_tmrw_detail = await _fetch_via_pipeline(
+                "SC",
+                forecast_solar=None,
+                open_meteo_forecast=None,
+                solcast_api_key=solcast_api_key,
+                solcast_host=solcast_host,
+                plan_interval_minutes=30,
+            )
+            print(f"  Today: {sc_today_total:.2f} kWh   Tomorrow: {sc_tmrw_total:.2f} kWh")
+            results["SC"] = {"today": _aggregate_to_hourly(sc_today_detail), "tomorrow": _aggregate_to_hourly(sc_tmrw_detail)}
+        except Exception as e:
+            print(f"  Error: {e}")
+            results["SC"] = {"today": {}, "tomorrow": {}}
+
+    source_today = {name: results[name]["today"] for name in results}
+    source_tomorrow = {name: results[name]["tomorrow"] for name in results}
+    print_comparison_table(f"TODAY  ({today_str})", source_today, today_str, tz_name)
+    print_comparison_table(f"TOMORROW  ({tomorrow_str})", source_tomorrow, tomorrow_str, tz_name)
 
 
 def main() -> None:
-    """Entry point."""
-    parser = argparse.ArgumentParser(description="Live comparison of Open-Meteo vs Forecast.Solar")
+    """Entry point — parse CLI arguments and invoke run()."""
+    parser = argparse.ArgumentParser(description="Predbat PV forecast pipeline comparison (OM vs FS vs Solcast)")
     parser.add_argument("--fs-api-key", metavar="KEY", default=None, help="Forecast.Solar personal API key (enables professional account with more forecast days)")
+    parser.add_argument("--solcast-api-key", metavar="KEY", default=None, help="Solcast API key to also fetch and display Solcast forecasts")
+    parser.add_argument("--solcast-host", metavar="URL", default="https://api.solcast.com.au", help="Solcast API host (default: https://api.solcast.com.au)")
     args = parser.parse_args()
-    asyncio.run(run(fs_api_key=args.fs_api_key))
+    asyncio.run(run(fs_api_key=args.fs_api_key, solcast_api_key=args.solcast_api_key, solcast_host=args.solcast_host))
 
 
 if __name__ == "__main__":
