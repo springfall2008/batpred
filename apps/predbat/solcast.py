@@ -317,6 +317,10 @@ class SolarAPI(ComponentBase):
             az = self.convert_azimuth(az)
             kwp = config.get("kwp", 3.0)
             system_loss = config.get("system_loss", 0)
+            shading_factors = config.get("shading_factors", None)
+
+            if shading_factors and len(shading_factors) == 12:
+                self.log("Open-Meteo: Using per-month shading factors for lat {} lon {}".format(lat, lon))
 
             max_kwh += kwp * (1.0 - system_loss)
 
@@ -375,6 +379,12 @@ class SolarAPI(ComponentBase):
                     period_start_stamp = period_start_stamp.replace(tzinfo=pytz.utc)
                 except (ValueError, TypeError):
                     continue
+
+                # Apply per-month site shading correction from Google Solar API if available
+                if shading_factors and len(shading_factors) == 12:
+                    shading_month = shading_factors[period_start_stamp.month - 1]
+                    pv50 = dp4(pv50 * shading_month)
+                    pv10 = dp4(pv10 * shading_month)
 
                 data_item = {"period_start": period_start_stamp.strftime(TIME_FORMAT), "pv_estimate": pv50, "pv_estimate10": pv10}
                 if period_start_stamp in period_data:
