@@ -147,7 +147,7 @@ You can create charts from these sensors to show how the different tariffs compa
 ## Overriding Predbat configuration per tariff
 
 You can override any standard Predbat configuration setting for a specific tariff comparison using the `config:` block.
-This is applied before the scenario is run and does not affect the rest of Predbat.
+This is applied before the scenario is run and is used to model that comparison scenario.
 
 For example, to model a tariff combined with a higher minimum SoC target:
 
