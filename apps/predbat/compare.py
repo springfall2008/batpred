@@ -15,6 +15,7 @@ per-tariff plan visualisations.
 
 import os
 from datetime import datetime
+from const import MINUTE_WATT
 from utils import dp0, dp2
 import yaml
 import copy
@@ -158,6 +159,35 @@ class Compare:
                 return False
         return True
 
+    def apply_hardware_overrides(self, tariff, my_predbat):
+        """
+        Apply optional hardware overrides from a tariff definition to model
+        a different battery size, charge rate, or inverter limit.
+
+        Supported tariff keys (all optional):
+          override_soc_max_kwh                  - battery usable capacity in kWh
+          override_battery_rate_max_charge_kw   - max charge rate in kW
+          override_battery_rate_max_discharge_kw - max discharge rate in kW
+          override_inverter_limit_kw            - AC inverter output limit in kW
+        """
+        if "override_soc_max_kwh" in tariff:
+            my_predbat.soc_max = float(tariff["override_soc_max_kwh"])
+            # Clamp starting SoC to new capacity
+            my_predbat.soc_kw = min(my_predbat.soc_kw, my_predbat.soc_max)
+            self.log("Compare, override soc_max to {:.2f} kWh (soc_kw clamped to {:.2f} kWh)".format(my_predbat.soc_max, my_predbat.soc_kw))
+
+        if "override_battery_rate_max_charge_kw" in tariff:
+            my_predbat.battery_rate_max_charge = float(tariff["override_battery_rate_max_charge_kw"]) * 1000 / MINUTE_WATT
+            self.log("Compare, override battery_rate_max_charge to {:.2f} kW".format(tariff["override_battery_rate_max_charge_kw"]))
+
+        if "override_battery_rate_max_discharge_kw" in tariff:
+            my_predbat.battery_rate_max_discharge = float(tariff["override_battery_rate_max_discharge_kw"]) * 1000 / MINUTE_WATT
+            self.log("Compare, override battery_rate_max_discharge to {:.2f} kW".format(tariff["override_battery_rate_max_discharge_kw"]))
+
+        if "override_inverter_limit_kw" in tariff:
+            my_predbat.inverter_limit = float(tariff["override_inverter_limit_kw"]) * 1000 / MINUTE_WATT
+            self.log("Compare, override inverter_limit to {:.2f} kW".format(tariff["override_inverter_limit_kw"]))
+
     def run_scenario(self, end_record):
         my_predbat = self.pb
 
@@ -194,6 +224,7 @@ class Compare:
             "import_kwh10": dp2(import_kwh_battery10 + import_kwh_house10),
             "export_kwh": dp2(export_kwh),
             "export_kwh10": dp2(export_kwh10),
+            "soc_start": dp2(my_predbat.soc_kw),
             "soc": dp2(soc),
             "soc10": dp2(soc10),
             "soc_min": dp2(soc_min),
@@ -221,7 +252,7 @@ class Compare:
 
         return result_data
 
-    def run_single(self, tariff, rate_import_base, rate_export_base, end_record, debug=False, fetch_sensor=True, car_charging_slots=[]):
+    def run_single(self, tariff, rate_import_base, rate_export_base, end_record, debug=False, fetch_sensor=True, car_charging_slots=[], start_soc=None):
         """
         Compare a single energy tariff with the current settings and report results
         """
@@ -236,6 +267,14 @@ class Compare:
 
         if fetch_sensor:
             self.pb.fetch_sensor_data(save=False)
+
+        # Override starting SoC so each tariff comparison begins from a fair baseline
+        # rather than the live (mid-run) inverter SoC
+        if start_soc is not None:
+            my_predbat.soc_kw = start_soc
+
+        # Apply optional hardware overrides (battery size, charge rate, inverter limit)
+        self.apply_hardware_overrides(tariff, my_predbat)
 
         # Fetch rates
         try:
@@ -443,6 +482,11 @@ class Compare:
         save_car_charging_soc = copy.deepcopy(my_predbat.car_charging_soc)
         save_car_charging_battery_size = copy.deepcopy(my_predbat.car_charging_battery_size)
         save_car_charging_slots = copy.deepcopy(my_predbat.car_charging_slots)
+        save_soc_kw = my_predbat.soc_kw
+        save_soc_max = my_predbat.soc_max
+        save_battery_rate_max_charge = my_predbat.battery_rate_max_charge
+        save_battery_rate_max_discharge = my_predbat.battery_rate_max_discharge
+        save_inverter_limit = my_predbat.inverter_limit
 
         # Final reports, cut end_record back to 24 hours to ignore the dump at end of day
         end_record = int((my_predbat.minutes_now + 24 * 60 + 29) / 30) * 30 - my_predbat.minutes_now
@@ -451,10 +495,27 @@ class Compare:
         rate_import_base = copy.deepcopy(self.pb.rate_import)
         rate_export_base = copy.deepcopy(self.pb.rate_export)
 
+        # Midnight SOC fallback for tariffs with no prior result
+        soc_midnight_fallback = my_predbat.soc_kwh_history.get(my_predbat.minutes_now, my_predbat.soc_kw)
+        today_date = datetime.now().strftime("%Y-%m-%d")
+
         self.log("Starting comparison of tariffs")
 
         for tariff in compare_list:
-            result_data = self.run_single(tariff, rate_import_base, rate_export_base, end_record, debug=debug, fetch_sensor=fetch_sensor, car_charging_slots=save_car_charging_slots)
+            prior = results.get(tariff["id"], {})
+            if prior:
+                prior_date = prior.get("date", "")[:10]
+                if prior_date == today_date:
+                    # Same day: reuse the same starting SoC so repeated runs stay consistent
+                    start_soc = prior.get("soc_start", soc_midnight_fallback)
+                else:
+                    # New day: carry forward yesterday's predicted ending SoC as today's start
+                    start_soc = prior.get("soc", soc_midnight_fallback)
+            else:
+                # First ever run for this tariff: start from actual midnight SoC
+                start_soc = soc_midnight_fallback
+            self.log("Compare tariff {} starting SoC: {:.2f} kWh".format(tariff.get("id", ""), start_soc))
+            result_data = self.run_single(tariff, rate_import_base, rate_export_base, end_record, debug=debug, fetch_sensor=fetch_sensor, car_charging_slots=save_car_charging_slots, start_soc=start_soc)
             if result_data is not None:
                 results[tariff["id"]] = result_data
             # Save and update comparisons as we go so it is updated in HA
@@ -488,3 +549,8 @@ class Compare:
         my_predbat.car_charging_battery_size = save_car_charging_battery_size
         my_predbat.car_charging_slots = save_car_charging_slots
         my_predbat.car_charging_plan_smart = save_car_charging_plan_smart
+        my_predbat.soc_kw = save_soc_kw
+        my_predbat.soc_max = save_soc_max
+        my_predbat.battery_rate_max_charge = save_battery_rate_max_charge
+        my_predbat.battery_rate_max_discharge = save_battery_rate_max_discharge
+        my_predbat.inverter_limit = save_inverter_limit
