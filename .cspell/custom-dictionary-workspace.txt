@@ -378,7 +378,9 @@ timeobj
 timestep
 timestr
 timezone
+tmrw
 tojson
+trapz
 Trefor
 treforsiphone
 twinx
