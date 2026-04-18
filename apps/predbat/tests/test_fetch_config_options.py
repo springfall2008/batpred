@@ -70,8 +70,10 @@ def test_fetch_config_options(my_predbat):
         pass
 
     # Mock expose_config
+    exposed_config_calls = []
+
     def mock_expose_config(key, value):
-        pass
+        exposed_config_calls.append((key, value))
 
     # Apply mocks
     my_predbat.manual_times = mock_manual_times
@@ -311,6 +313,21 @@ def test_fetch_config_options(my_predbat):
     assert my_predbat.forecast_minutes == 25 * 60, "forecast_minutes should be 1500"
 
     print("✓ Forecast calculations test passed")
+
+    # Test 12: LoadML should not modify the in-day adjustment config setting
+    print("\n*** Test 12: LoadML does not change in-day adjustment config setting ***")
+
+    mock_config.config["load_ml_enable"] = True
+    mock_config.config["load_ml_source"] = True
+    mock_config.config["calculate_inday_adjustment"] = True
+    exposed_config_calls.clear()
+
+    my_predbat.fetch_config_options()
+
+    assert my_predbat.calculate_inday_adjustment is True, "calculate_inday_adjustment config should remain unchanged"
+    assert ("calculate_inday_adjustment", False) not in exposed_config_calls, "calculate_inday_adjustment should not be force-updated in config"
+
+    print("✓ LoadML config-preservation test passed")
 
     # Restore original methods
     my_predbat.get_arg = original_get_arg
