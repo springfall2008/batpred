@@ -516,6 +516,11 @@ class Compare:
                 start_soc = soc_midnight_fallback
             self.log("Compare tariff {} starting SoC: {:.2f} kWh".format(tariff.get("id", ""), start_soc))
             result_data = self.run_single(tariff, rate_import_base, rate_export_base, end_record, debug=debug, fetch_sensor=fetch_sensor, car_charging_slots=save_car_charging_slots, start_soc=start_soc)
+            # Restore hardware settings after each tariff so overrides don't bleed into the next tariff
+            my_predbat.soc_max = save_soc_max
+            my_predbat.battery_rate_max_charge = save_battery_rate_max_charge
+            my_predbat.battery_rate_max_discharge = save_battery_rate_max_discharge
+            my_predbat.inverter_limit = save_inverter_limit
             if result_data is not None:
                 results[tariff["id"]] = result_data
             # Save and update comparisons as we go so it is updated in HA
