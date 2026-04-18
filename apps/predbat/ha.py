@@ -833,8 +833,9 @@ class HAInterface(ComponentBase):
                 else:
                     service_data["service_data"] = {"entity_id": entity_id, "date": value_str}
         elif domain == "input_text":
+            value_str = str(new_value)
             service_data["service"] = "set_value"
-            service_data["service_data"] = {"entity_id": entity_id, "value": new_value}
+            service_data["service_data"] = {"entity_id": entity_id, "value": value_str}
         else:
             service_data = None
         if service_data:
