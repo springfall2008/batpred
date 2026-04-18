@@ -121,6 +121,84 @@ class WebInterface(ComponentBase):
                 results[key] = hist1[key]
         return results
 
+    def history_daily_at_hour(self, history_raw, hour_limit=3):
+        """
+        For each calendar day (local time), return the last recorded entity state
+        whose local hour falls in [0, hour_limit).  This captures the result of
+        the overnight compare run (which completes around 1am) without being
+        influenced by any later manual re-runs during the day.
+        Returns {YYYY-MM-DD: float} with values in the raw unit of the entity state.
+        """
+        results = {}
+        if not isinstance(history_raw, list) or not history_raw:
+            return results
+        history = history_raw[0] if isinstance(history_raw[0], list) else history_raw
+        for item in history:
+            last_updated = item.get("last_updated")
+            state = item.get("state")
+            if not last_updated or state in (None, "unavailable", "unknown"):
+                continue
+            try:
+                state = float(state)
+            except (ValueError, TypeError):
+                continue
+            try:
+                ts = str2time(last_updated).astimezone()
+            except (ValueError, TypeError):
+                continue
+            if ts.hour >= hour_limit:
+                continue
+            day_str = ts.strftime(TIME_FORMAT_DAILY)
+            # Keep the latest record within the overnight window for this day
+            results[day_str] = state
+        return results
+
+    def average_cost_window(self, daily_pence, days):
+        """
+        Return the mean daily cost (in pence) and the number of days with data
+        over the last `days` calendar days, excluding today.
+        Returns (None, 0) when there are no data points in the window.
+        """
+        today = self.now_utc.astimezone().date()
+        total = 0.0
+        count = 0
+        for d in range(1, days + 1):
+            day_str = (today - timedelta(days=d)).strftime(TIME_FORMAT_DAILY)
+            if day_str in daily_pence:
+                total += daily_pence[day_str]
+                count += 1
+        return ((total / count), count) if count else (None, 0)
+
+    def rolling_7d_average(self, daily_pence):
+        """
+        For every date that has a data point, compute the 7-day trailing average
+        (the mean of that day and up to 6 preceding days that have data).
+        Returns {YYYY-MM-DD: float} in the same unit as daily_pence (pence),
+        only for days where at least one data point exists in the window.
+        """
+        if not daily_pence:
+            return {}
+        from datetime import date as date_cls
+
+        # Sort dates so we can iterate chronologically
+        sorted_days = sorted(daily_pence.keys())
+        results = {}
+        for day_str in sorted_days:
+            try:
+                anchor = date_cls.fromisoformat(day_str)
+            except (ValueError, TypeError):
+                continue
+            total = 0.0
+            count = 0
+            for d in range(7):
+                candidate = (anchor - timedelta(days=d)).strftime(TIME_FORMAT_DAILY)
+                if candidate in daily_pence:
+                    total += daily_pence[candidate]
+                    count += 1
+            if count:
+                results[day_str] = dp2(total / count)
+        return results
+
     async def start(self):
         # Start the web server
         app = web.Application()
@@ -3319,7 +3397,7 @@ chart.render();
         text += "</form>"
 
         text += "<table class='comparison-table'>\n"
-        text += "<tr><th>ID</th><th>Name</th><th>Date</th><th>True cost</th><th>Cost</th><th>Cost 10%</th><th>Export</th><th>Import</th><th>Final SoC</th>"
+        text += "<tr><th>ID</th><th>Name</th><th>Date</th><th>True cost</th><th>Cost</th><th>Cost 10%</th><th>7d avg</th><th>Export</th><th>Import</th><th>Final SoC</th>"
         if self.base.iboost_enable:
             text += "<th>Iboost</th>"
         if self.base.carbon_enable:
@@ -3344,8 +3422,10 @@ chart.render();
                 compare_hist[id] = {}
                 result = self.base.comparison.get_comparison(id)
                 if result:
-                    compare_hist[id]["cost"] = history_attribute(self.get_history_wrapper(result["entity_id"], 28, required=False), daily=True, pounds=True)
-                    compare_hist[id]["metric"] = history_attribute(self.get_history_wrapper(result["entity_id"], 28, required=False), state_key="metric", attributes=True, daily=True, pounds=True)
+                    entity_hist = self.get_history_wrapper(result["entity_id"], 28, required=False)
+                    compare_hist[id]["cost"] = history_attribute(entity_hist, daily=True, pounds=True)
+                    compare_hist[id]["metric"] = history_attribute(entity_hist, state_key="metric", attributes=True, daily=True, pounds=True)
+                    compare_hist[id]["cost_1am"] = self.history_daily_at_hour(entity_hist)
 
         compare_list = self.get_arg("compare_list", [])
 
@@ -3391,8 +3471,15 @@ chart.render();
             metric_str = self.to_pounds(metric)
             cost_str = self.to_pounds(cost)
             cost10_str = self.to_pounds(cost10)
+            cost_1am = compare_hist.get(id, {}).get("cost_1am", {})
+            avg7, avg7_count = self.average_cost_window(cost_1am, 7)
+            if avg7 is not None:
+                avg7_pounds = self.currency_symbols[0] + "{:.2f}".format(avg7 / 100.0)
+                avg7_str = "{}&nbsp;({}d)".format(avg7_pounds, avg7_count)
+            else:
+                avg7_str = ""
 
-            text += "<tr><td><a href='#heading-{}'>{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td>".format(id, id, name, date, metric_str, cost_str, cost10_str, export, imported, soc)
+            text += "<tr><td><a href='#heading-{}'>{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td>".format(id, id, name, date, metric_str, cost_str, cost10_str, avg7_str, export, imported, soc)
             if self.base.iboost_enable:
                 text += "<td>{}</td>".format(final_iboost)
             if self.base.carbon_enable:
@@ -3418,6 +3505,22 @@ chart.render();
             text += self.render_chart(series_data, self.currency_symbols[0], "Tariff Comparison - True cost", now_str, daily_chart=False)
         else:
             text += "<br><h2>Loading chart (please wait)...</h2><br>"
+
+        # 7-day rolling average chart
+        text += '<div id="chart7d"></div>'
+        series_7d = []
+        for compare in compare_list:
+            name = compare.get("name", "")
+            id = compare.get("id", "")
+            rolling_pence = self.rolling_7d_average(compare_hist.get(id, {}).get("cost_1am", {}))
+            # cost_1am is stored in pence; convert to pounds to match the chart axis
+            rolling = {k: dp2(v / 100) for k, v in rolling_pence.items()}
+            if rolling:
+                series_7d.append({"name": name, "data": rolling, "chart_type": "line", "stroke_width": "2"})
+        if series_7d:
+            text += self.render_chart(series_7d, self.currency_symbols[0], "Tariff Comparison - 7 day rolling average", now_str, tagname="chart7d", daily_chart=False)
+        else:
+            text += "<br><h2>7 day rolling average chart loading (please wait)...</h2><br>"
 
         # HTML Plans
         for compare in compare_list:
