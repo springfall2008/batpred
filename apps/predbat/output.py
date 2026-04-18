@@ -2544,7 +2544,8 @@ class Output:
             yesterday_weight = (24 * 60 - minutes_now) / (24 * 60)
 
         # Work out divergence
-        apply_inday_adjustment = self.calculate_inday_adjustment and (not self.get_arg("load_ml_enable", False))
+        using_load_ml_forecast = self.get_arg("load_ml_enable", False) and self.get_arg("load_ml_source", False)
+        apply_inday_adjustment = self.calculate_inday_adjustment and (not using_load_ml_forecast)
         today_damped_factor = 1.0
         if not apply_inday_adjustment:
             difference_cap = 1.0
