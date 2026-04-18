@@ -712,7 +712,13 @@ def test_hainterface_set_state_external_domain_input_datetime_datetime(my_predba
         failed += 1
     else:
         data = mock_base.trigger_callback_calls[0]
-        if data.get("service_data", {}).get("datetime") != "2026-04-18 13:45:00":
+        if data.get("domain") != "input_datetime":
+            print(f"ERROR: Expected domain 'input_datetime', got '{data.get('domain')}'")
+            failed += 1
+        elif data.get("service") != "set_datetime":
+            print(f"ERROR: Expected service 'set_datetime', got '{data.get('service')}'")
+            failed += 1
+        elif data.get("service_data", {}).get("datetime") != "2026-04-18 13:45:00":
             print("ERROR: Expected datetime payload")
             failed += 1
         else:
@@ -744,7 +750,13 @@ def test_hainterface_set_state_external_domain_input_datetime_date(my_predbat=No
         failed += 1
     else:
         data = mock_base.trigger_callback_calls[0]
-        if data.get("service_data", {}).get("date") != "2026-04-18":
+        if data.get("domain") != "input_datetime":
+            print(f"ERROR: Expected domain 'input_datetime', got '{data.get('domain')}'")
+            failed += 1
+        elif data.get("service") != "set_datetime":
+            print(f"ERROR: Expected service 'set_datetime', got '{data.get('service')}'")
+            failed += 1
+        elif data.get("service_data", {}).get("date") != "2026-04-18":
             print("ERROR: Expected date payload")
             failed += 1
         else:
