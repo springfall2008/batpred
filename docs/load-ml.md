@@ -479,11 +479,15 @@ Large shifts in `mean` or `std` for a group (e.g. `import_rate` after a tariff c
     - If you have an EV, check that **switch.predbat_car_charging_hold** is On, **car_charging_energy** is set correctly in `apps.yaml` and that the sensor it is configured to looks correct
     - Consider adding PV data if you have solar panels
 
-**Issue**: Load ML predicts much greater load than expected**
+**Issue**: Load ML predicts much greater load than expected
 
-- **Cause**: Load ML is not enabled, so classic in-day adjustment is still applied based on the switch setting
+- **Cause**: This usually comes down to which load source Predbat is using for planning:
+    - If `load_ml_enable: true` is set, Load ML can train and publish forecasts, but those forecasts are **not** used for planning unless `load_ml_source` is also configured to use them.
+    - If Load ML is enabled but `load_ml_source` is still using the classic load source, Predbat will continue to apply the classic in-day adjustment based on the switch setting. In that case, you may see an ML forecast entity, but it is not the forecast driving the plan.
+    - If `load_ml_source` is set to use the ML forecast, Predbat uses the ML forecast directly as the planning load source and the classic in-day adjustment is ignored, because that adjustment only applies to the classic load forecast path.
 - **Solution**:
-    - Ensure `load_ml_enable: true` is enabled; in-day adjustment is ignored while Load ML is enabled
+    - If you want to use Load ML for planning, ensure both `load_ml_enable: true` is set and `load_ml_source` is configured to use the ML forecast.
+    - If you want to keep using the classic load source, review the in-day adjustment setting instead; changes there can affect the planned load even when ML forecasts are visible for monitoring.
 
 ### Viewing Predictions
 
