@@ -1418,18 +1418,18 @@ Ensemble members are used to derive a P10 pessimistic estimate alongside the cen
 You can define one or more rooftop arrays by providing a list; they will be summed automatically.
 
 The azimuth uses the same convention as all other Predbat solar configs (Solcast/Forecast.solar): 0=North, -90=East, 90=West, -180/180=South. Predbat converts this to the Open-Meteo convention (0=South) internally.
-The tilt is the angle of the panels from horizontal (e.g. 35 for a typical pitched UK roof).
+The declination is the angle of the panels from horizontal (e.g. 35 for a typical pitched UK roof).
 For the UK you can use a postcode instead of latitude/longitude.
-The optional `system_loss` (default 0) is a fractional derating for wiring losses and soiling, e.g. 0.05 for 5%.
+The optional `efficiency` (default 1.0) is the panel efficiency as a fraction where 1.0 = 100% (no losses), e.g. 0.95 for 5% losses from wiring and soiling. This uses the same convention as Forecast.solar.
 The optional `open_meteo_forecast_max_age` sets the number of hours between refreshing the cached API data (default 4.0 hours).
 
 ```yaml
   open_meteo_forecast:
     - postcode: SW1A 2AB
       kwp: 3.5
-      tilt: 35
+      declination: 35
       azimuth: 180
-      system_loss: 0.05
+      efficiency: 0.95
   open_meteo_forecast_max_age: 4.0
 ```
 
@@ -1440,7 +1440,7 @@ or with latitude/longitude if you are outside the UK:
     - latitude: 51.5072
       longitude: -0.1276
       kwp: 3.5
-      tilt: 35
+      declination: 35
       azimuth: 180
 ```
 
@@ -1450,11 +1450,11 @@ For a house with two differently oriented roof aspects, add a second entry to th
   open_meteo_forecast:
     - postcode: BS1 4DJ
       kwp: 1.56
-      tilt: 23
+      declination: 23
       azimuth: -133
     - postcode: BS1 4DJ
       kwp: 2.73
-      tilt: 45
+      declination: 45
       azimuth: 45
 ```
 

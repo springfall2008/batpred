@@ -312,11 +312,11 @@ class SolarAPI(ComponentBase):
             lat = config.get("latitude", 51.5072)
             lon = config.get("longitude", -0.1276)
             postcode = config.get("postcode", None)
-            tilt = config.get("tilt", 35.0)
+            tilt = config.get("declination", 35.0)
             az = config.get("azimuth", 180.0)
             az = self.convert_azimuth(az)
             kwp = config.get("kwp", 3.0)
-            system_loss = config.get("system_loss", 0)
+            system_loss = 1.0 - config.get("efficiency", 0.95)
             shading_factors = config.get("shading_factors", None)
 
             if shading_factors and len(shading_factors) == 12:

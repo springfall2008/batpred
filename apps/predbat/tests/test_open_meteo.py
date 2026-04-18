@@ -164,7 +164,7 @@ def test_download_open_meteo_data_basic(my_predbat):
 
     test_api = create_test_solar_api()
     try:
-        test_api.solar.open_meteo_forecast = [{"latitude": 51.5, "longitude": -0.1, "tilt": 35, "azimuth": 180, "kwp": 3.0, "system_loss": 0.0}]
+        test_api.solar.open_meteo_forecast = [{"latitude": 51.5, "longitude": -0.1, "declination": 35, "azimuth": 180, "kwp": 3.0, "efficiency": 1.0}]
         test_api.solar.open_meteo_forecast_max_age = 1.0
 
         forecast_response = _make_forecast_response(
@@ -229,7 +229,7 @@ def test_download_open_meteo_data_temperature_derating(my_predbat):
 
     test_api = create_test_solar_api()
     try:
-        test_api.solar.open_meteo_forecast = [{"latitude": 51.5, "longitude": -0.1, "tilt": 35, "azimuth": 180, "kwp": 4.0, "system_loss": 0.0}]
+        test_api.solar.open_meteo_forecast = [{"latitude": 51.5, "longitude": -0.1, "declination": 35, "azimuth": 180, "kwp": 4.0, "efficiency": 1.0}]
         test_api.solar.open_meteo_forecast_max_age = 1.0
 
         # GTI=1000, T=45°C, wind=1.0 m/s: T_cell via SAPM model, eta = 1 - 0.004*(T_cell-25)
@@ -273,8 +273,8 @@ def test_download_open_meteo_data_multi_config(my_predbat):
     try:
         # Two identical 2 kWp arrays → combined should be 4 kWp
         test_api.solar.open_meteo_forecast = [
-            {"latitude": 51.5, "longitude": -0.1, "tilt": 35, "azimuth": 180, "kwp": 2.0, "system_loss": 0.0},
-            {"latitude": 51.5, "longitude": -0.1, "tilt": 35, "azimuth": 180, "kwp": 2.0, "system_loss": 0.0},
+            {"latitude": 51.5, "longitude": -0.1, "declination": 35, "azimuth": 180, "kwp": 2.0, "efficiency": 1.0},
+            {"latitude": 51.5, "longitude": -0.1, "declination": 35, "azimuth": 180, "kwp": 2.0, "efficiency": 1.0},
         ]
         test_api.solar.open_meteo_forecast_max_age = 1.0
 
@@ -317,7 +317,7 @@ def test_download_open_meteo_data_postcode_lookup(my_predbat):
 
     test_api = create_test_solar_api()
     try:
-        test_api.solar.open_meteo_forecast = [{"postcode": "SW1A1AA", "tilt": 35, "azimuth": 180, "kwp": 3.0, "system_loss": 0.0}]
+        test_api.solar.open_meteo_forecast = [{"postcode": "SW1A1AA", "declination": 35, "azimuth": 180, "kwp": 3.0, "efficiency": 1.0}]
         test_api.solar.open_meteo_forecast_max_age = 1.0
 
         postcode_response = {"result": {"latitude": 51.5014, "longitude": -0.1419}}
@@ -362,7 +362,7 @@ def test_download_open_meteo_data_cool_temp_efficiency(my_predbat):
 
     test_api = create_test_solar_api()
     try:
-        test_api.solar.open_meteo_forecast = [{"latitude": 51.5, "longitude": -0.1, "tilt": 35, "azimuth": 180, "kwp": 3.0, "system_loss": 0.0}]
+        test_api.solar.open_meteo_forecast = [{"latitude": 51.5, "longitude": -0.1, "declination": 35, "azimuth": 180, "kwp": 3.0, "efficiency": 1.0}]
         test_api.solar.open_meteo_forecast_max_age = 1.0
 
         # 10 degC ambient, 200 W/m2, 1 m/s wind: SAPM T_cell < 25 degC -> eta > 1.0
@@ -412,7 +412,7 @@ def test_download_open_meteo_data_no_gti_returns_zero(my_predbat):
 
     test_api = create_test_solar_api()
     try:
-        test_api.solar.open_meteo_forecast = [{"latitude": 51.5, "longitude": -0.1, "tilt": 35, "azimuth": 180, "kwp": 3.0, "system_loss": 0.0}]
+        test_api.solar.open_meteo_forecast = [{"latitude": 51.5, "longitude": -0.1, "declination": 35, "azimuth": 180, "kwp": 3.0, "efficiency": 1.0}]
         test_api.solar.open_meteo_forecast_max_age = 1.0
 
         # GTI=None at night
@@ -455,8 +455,8 @@ def test_download_open_meteo_data_two_aspect_configs(my_predbat):
         # Array 1: WSW-facing, shallow tilt  (az -133 Solcast → convert_azimuth → -47 OM)
         # Array 2: NW-facing, steep tilt     (az +45 Solcast  → convert_azimuth → 135 OM)
         test_api.solar.open_meteo_forecast = [
-            {"latitude": 51.49, "longitude": -2.49, "tilt": 23.0, "azimuth": -133.0, "kwp": 1.56, "system_loss": 0.0},
-            {"latitude": 51.49, "longitude": -2.49, "tilt": 45.0, "azimuth": 45.0, "kwp": 2.73, "system_loss": 0.0},
+            {"latitude": 51.49, "longitude": -2.49, "declination": 23.0, "azimuth": -133.0, "kwp": 1.56, "efficiency": 1.0},
+            {"latitude": 51.49, "longitude": -2.49, "declination": 45.0, "azimuth": 45.0, "kwp": 2.73, "efficiency": 1.0},
         ]
         test_api.solar.open_meteo_forecast_max_age = 1.0
 
@@ -537,7 +537,7 @@ def test_download_open_meteo_data_http_failure(my_predbat):
 
     test_api = create_test_solar_api()
     try:
-        test_api.solar.open_meteo_forecast = [{"latitude": 51.5, "longitude": -0.1, "tilt": 35, "azimuth": 180, "kwp": 3.0, "system_loss": 0.14}]
+        test_api.solar.open_meteo_forecast = [{"latitude": 51.5, "longitude": -0.1, "declination": 35, "azimuth": 180, "kwp": 3.0, "efficiency": 0.86}]
         test_api.solar.open_meteo_forecast_max_age = 1.0
         # No mocks set → cache_get_url returns None
 
@@ -573,7 +573,7 @@ def test_fetch_pv_forecast_open_meteo(my_predbat):
         test_api.solar.solcast_host = None
         test_api.solar.solcast_api_key = None
         test_api.solar.forecast_solar = None
-        test_api.solar.open_meteo_forecast = [{"latitude": 51.5, "longitude": -0.1, "tilt": 35, "azimuth": 180, "kwp": 3.0, "system_loss": 0.0}]
+        test_api.solar.open_meteo_forecast = [{"latitude": 51.5, "longitude": -0.1, "declination": 35, "azimuth": 180, "kwp": 3.0, "efficiency": 1.0}]
         test_api.solar.open_meteo_forecast_max_age = 1.0
 
         # Produce 96 hourly slots (4 days) so the forecast covers the full horizon
@@ -635,7 +635,7 @@ def test_fetch_pv_forecast_open_meteo_not_selected_when_forecast_solar_configure
         test_api.solar.solcast_host = None
         test_api.solar.solcast_api_key = None
         test_api.solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "declination": 30, "azimuth": 0, "kwp": 3.0}]
-        test_api.solar.open_meteo_forecast = [{"latitude": 51.5, "longitude": -0.1, "tilt": 35, "azimuth": 180, "kwp": 3.0, "system_loss": 0.0}]
+        test_api.solar.open_meteo_forecast = [{"latitude": 51.5, "longitude": -0.1, "declination": 35, "azimuth": 180, "kwp": 3.0, "efficiency": 1.0}]
 
         forecast_solar_response = {
             "result": {"watts": {"2025-06-15T12:00:00+0000": 500}},
