@@ -3473,7 +3473,11 @@ chart.render();
             cost10_str = self.to_pounds(cost10)
             cost_1am = compare_hist.get(id, {}).get("cost_1am", {})
             avg7, avg7_count = self.average_cost_window(cost_1am, 7)
-            avg7_str = "{}&nbsp;({}d)".format(self.to_pounds(avg7), avg7_count) if avg7 is not None else ""
+            if avg7 is not None:
+                avg7_pounds = self.currency_symbols[0] + "{:.2f}".format(avg7 / 100.0)
+                avg7_str = "{}&nbsp;({}d)".format(avg7_pounds, avg7_count)
+            else:
+                avg7_str = ""
 
             text += "<tr><td><a href='#heading-{}'>{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td>".format(id, id, name, date, metric_str, cost_str, cost10_str, avg7_str, export, imported, soc)
             if self.base.iboost_enable:

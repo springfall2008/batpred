@@ -271,8 +271,6 @@ def main():
         ("component_base", test_component_base_all, "ComponentBase tests (all)", False),
         # Solis Cloud API unit tests
         ("solis", run_solis_tests, "Solis Cloud API tests (V1/V2 time window writes, change detection)", False),
-        # ML Load Forecaster tests
-        ("load_ml", test_load_ml, "ML Load Forecaster tests (MLP, training, persistence, validation)", False),
         # External Temperature API tests
         ("temperature", test_temperature, "External Temperature API tests (initialization, zone.home fallback, timezone conversion, caching)", False),
         ("band_rate_text", test_band_rate_text, "Band rate text tests (flat rate, Cosy, Flux import/export)", False),
@@ -286,10 +284,11 @@ def main():
         ("clip_charge_slots", run_clip_charge_slots_tests, "Clip charge slots tests", False),
         ("discard_unused_charge_slots", run_discard_unused_charge_slots_tests, "Discard unused charge slots tests", False),
         ("discard_unused_export_slots", run_discard_unused_export_slots_tests, "Discard unused export slots tests", False),
-        ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", False),
         ("marginal_costs", test_marginal_costs, "Marginal energy cost matrix tests", False),
         ("compare", test_compare, "Compare tariff engine tests (hardware overrides, bleed isolation)", False),
         ("gateway", run_gateway_tests, "GatewayMQTT component tests (protobuf, plan serialization, commands, telemetry)", False),
+        ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", False),
+        ("load_ml", test_load_ml, "ML Load Forecaster tests (MLP, training, persistence, validation)", True),
         ("optimise_windows", run_optimise_all_windows_tests, "Optimise all windows tests", True),
         ("debug_cases", run_debug_cases, "Debug case file tests", True),
     ]
