@@ -20,6 +20,7 @@ from solis import SOLIS_CID_POWER_LIMIT, SOLIS_BIT_BACKUP_MODE
 from solis import get_solis_mode_enum, compute_solis_mode_value
 from solis import ENUM_OTHER, ENUM_SELF_USE, ENUM_SELF_USE_NO_GRID_CHARGING, ENUM_FEED_IN_PRIORITY, ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING
 from solis import SOLIS_BIT_SELF_USE, SOLIS_BIT_FEED_IN_PRIORITY, SOLIS_BIT_GRID_CHARGING, SOLIS_BIT_OFF_GRID
+from solis import SOLIS_CB_FAILURE_THRESHOLD, SOLIS_CB_INITIAL_RECOVERY_TIME, SOLIS_CB_MAX_RECOVERY_TIME, SOLIS_CB_BACKOFF_MULTIPLIER, SOLIS_CB_THROTTLE_CODES, SolisAPIError
 
 
 class MockBase:
@@ -63,6 +64,13 @@ class MockSolisAPI(SolisAPI):
         self.charge_discharge_time_windows = {}
         self.cached_infos = {}
         self.slots_reset = set()
+
+        # Circuit breaker state (mirrors initialize() in SolisAPI)
+        self._cb_state = "CLOSED"
+        self._cb_failure_count = 0
+        self._cb_trip_count = 0
+        self._cb_open_at = None
+        self._cb_recovery_time = SOLIS_CB_INITIAL_RECOVERY_TIME
 
         # Logging
         self.log_messages = []
@@ -308,6 +316,257 @@ async def test_fetch_entity_data_invalid_values():
     return False
 
 
+# ==================== Circuit Breaker Tests ====================
+
+
+async def test_cb_closed_to_open_on_threshold():
+    """CLOSED → OPEN after SOLIS_CB_FAILURE_THRESHOLD consecutive non-throttle failures"""
+    print("\n=== Test: circuit breaker CLOSED → OPEN on threshold ===")
+
+    api = MockSolisAPI()
+    assert api._cb_state == "CLOSED"
+
+    # Fire (threshold - 1) failures — breaker should still be CLOSED
+    for i in range(SOLIS_CB_FAILURE_THRESHOLD - 1):
+        api._cb_record_failure()
+        assert api._cb_state == "CLOSED", f"Expected CLOSED after {i + 1} failure(s), got {api._cb_state}"
+
+    # One more — should trip now
+    api._cb_record_failure()
+    assert api._cb_state == "OPEN", f"Expected OPEN after {SOLIS_CB_FAILURE_THRESHOLD} failures, got {api._cb_state}"
+    assert api._cb_trip_count == 1
+    assert api._cb_recovery_time == SOLIS_CB_INITIAL_RECOVERY_TIME
+    assert api._cb_open_at is not None
+
+    print("PASSED: circuit breaker CLOSED → OPEN on threshold")
+    return False
+
+
+async def test_cb_immediate_trip_on_throttle_code():
+    """CLOSED → OPEN immediately on a known throttle code (e.g. B0600)"""
+    print("\n=== Test: circuit breaker immediate trip on throttle code ===")
+
+    for code in SOLIS_CB_THROTTLE_CODES:
+        api = MockSolisAPI()
+        assert api._cb_state == "CLOSED"
+        api._cb_record_failure(response_code=code)
+        assert api._cb_state == "OPEN", f"Expected OPEN for code {code}, got {api._cb_state}"
+        assert api._cb_trip_count == 1
+        assert api._cb_failure_count == 0  # reset on trip
+
+    print("PASSED: circuit breaker immediate trip on throttle code")
+    return False
+
+
+async def test_cb_open_blocks_calls():
+    """OPEN circuit breaker raises SolisAPIError without making HTTP requests"""
+    print("\n=== Test: OPEN circuit breaker blocks calls ===")
+
+    api = MockSolisAPI()
+    # Trip the breaker
+    api._cb_record_failure(response_code="B0600")
+    assert api._cb_state == "OPEN"
+
+    # _cb_is_open should return True (recovery time has NOT elapsed)
+    assert api._cb_is_open is True
+
+    # Confirm it raises immediately when _execute_request is called
+    http_called = []
+
+    async def mock_post(*args, **kwargs):
+        http_called.append(True)
+        raise AssertionError("HTTP request should not have been made")
+
+    # Patch session to detect if a real HTTP call is attempted
+    api.session = MagicMock()
+    api.session.post = mock_post
+
+    try:
+        await api._execute_request("/v2/api/atRead", {"inverterSn": "TEST", "cid": 636})
+        assert False, "Expected SolisAPIError to be raised"
+    except SolisAPIError as e:
+        assert "Circuit breaker OPEN" in str(e), f"Unexpected error message: {e}"
+
+    assert not http_called, "HTTP call was made despite circuit being OPEN"
+
+    print("PASSED: OPEN circuit breaker blocks calls")
+    return False
+
+
+async def test_cb_open_to_half_open_after_recovery():
+    """OPEN → HALF_OPEN after recovery time elapses"""
+    print("\n=== Test: OPEN → HALF_OPEN after recovery time ===")
+
+    api = MockSolisAPI()
+    api._cb_record_failure(response_code="B0600")
+    assert api._cb_state == "OPEN"
+
+    # Simulate recovery time having passed by backdating _cb_open_at
+    api._cb_open_at = api._cb_open_at - api._cb_recovery_time - 1
+
+    assert api._cb_is_open is False
+    assert api._cb_state == "HALF_OPEN"
+
+    # _cb_is_open should now return False (probe allowed through)
+    assert api._cb_is_open is False
+
+    print("PASSED: OPEN → HALF_OPEN after recovery time")
+    return False
+
+
+async def test_cb_half_open_to_closed_on_success():
+    """HALF_OPEN → CLOSED when the probe request succeeds"""
+    print("\n=== Test: HALF_OPEN → CLOSED on success ===")
+
+    api = MockSolisAPI()
+    api._cb_record_failure(response_code="B0600")
+    api._cb_open_at = api._cb_open_at - api._cb_recovery_time - 1
+    api._cb_is_open  # trigger transition to HALF_OPEN
+    assert api._cb_state == "HALF_OPEN"
+
+    api._cb_record_success()
+    assert api._cb_state == "CLOSED"
+    assert api._cb_failure_count == 0
+    assert api._cb_trip_count == 0
+    assert api._cb_recovery_time == SOLIS_CB_INITIAL_RECOVERY_TIME
+
+    print("PASSED: HALF_OPEN → CLOSED on success")
+    return False
+
+
+async def test_cb_half_open_retrips_on_failure():
+    """HALF_OPEN → OPEN (re-trip) with doubled recovery time when probe request fails"""
+    print("\n=== Test: HALF_OPEN re-trips on failure with doubled recovery time ===")
+
+    api = MockSolisAPI()
+    # First trip
+    api._cb_record_failure(response_code="B0600")
+    assert api._cb_trip_count == 1
+    first_recovery = api._cb_recovery_time
+
+    # Transition to HALF_OPEN
+    api._cb_open_at = api._cb_open_at - api._cb_recovery_time - 1
+    api._cb_is_open  # trigger transition
+    assert api._cb_state == "HALF_OPEN"
+
+    # Probe fails — should re-trip
+    api._cb_record_failure(response_code="B0600")
+    assert api._cb_state == "OPEN"
+    assert api._cb_trip_count == 2
+    expected_recovery = min(first_recovery * SOLIS_CB_BACKOFF_MULTIPLIER, SOLIS_CB_MAX_RECOVERY_TIME)
+    assert api._cb_recovery_time == expected_recovery, f"Expected {expected_recovery}s recovery, got {api._cb_recovery_time}s"
+
+    print("PASSED: HALF_OPEN re-trips on failure with doubled recovery time")
+    return False
+
+
+async def test_cb_backoff_sequence_and_cap():
+    """Recovery time doubles on each trip and caps at SOLIS_CB_MAX_RECOVERY_TIME"""
+    print("\n=== Test: circuit breaker backoff sequence and cap ===")
+
+    api = MockSolisAPI()
+    expected = SOLIS_CB_INITIAL_RECOVERY_TIME
+
+    trip = 0
+    while expected < SOLIS_CB_MAX_RECOVERY_TIME:
+        api._cb_record_failure(response_code="B0600")
+        trip += 1
+        assert api._cb_trip_count == trip
+        assert api._cb_recovery_time == expected, f"Trip {trip}: expected {expected}s, got {api._cb_recovery_time}s"
+
+        # Transition to HALF_OPEN, then re-trip
+        api._cb_open_at = api._cb_open_at - api._cb_recovery_time - 1
+        api._cb_is_open  # OPEN → HALF_OPEN
+
+        expected = min(expected * SOLIS_CB_BACKOFF_MULTIPLIER, SOLIS_CB_MAX_RECOVERY_TIME)
+
+    # One more trip — should be capped
+    api._cb_record_failure(response_code="B0600")
+    assert api._cb_recovery_time == SOLIS_CB_MAX_RECOVERY_TIME, f"Expected cap at {SOLIS_CB_MAX_RECOVERY_TIME}s, got {api._cb_recovery_time}s"
+
+    print("PASSED: circuit breaker backoff sequence and cap")
+    return False
+
+
+async def test_cb_full_recovery_resets_trip_count():
+    """Full recovery (_cb_record_success from HALF_OPEN) resets trip count and recovery time"""
+    print("\n=== Test: full recovery resets trip count ===")
+
+    api = MockSolisAPI()
+    # Trip multiple times
+    for _ in range(3):
+        api._cb_record_failure(response_code="B0600")
+        api._cb_open_at = api._cb_open_at - api._cb_recovery_time - 1
+        api._cb_is_open  # OPEN → HALF_OPEN
+
+    assert api._cb_trip_count == 3
+    assert api._cb_state == "HALF_OPEN"
+
+    # Successful probe
+    api._cb_record_success()
+    assert api._cb_state == "CLOSED"
+    assert api._cb_trip_count == 0
+    assert api._cb_recovery_time == SOLIS_CB_INITIAL_RECOVERY_TIME
+
+    print("PASSED: full recovery resets trip count")
+    return False
+
+
+async def test_cb_with_retry_bails_on_open():
+    """_with_retry bails immediately when circuit is OPEN (does not sleep and retry)"""
+    print("\n=== Test: _with_retry bails immediately when circuit is OPEN ===")
+
+    api = MockSolisAPI()
+    api._cb_record_failure(response_code="B0600")
+    assert api._cb_state == "OPEN"
+
+    call_count = [0]
+
+    async def failing_operation():
+        call_count[0] += 1
+        raise SolisAPIError("simulated API error")
+
+    try:
+        await api._with_retry(failing_operation, max_retry_time=30)
+        assert False, "Expected SolisAPIError to be raised"
+    except SolisAPIError:
+        pass
+
+    assert call_count[0] == 1, f"Expected exactly 1 call (no retries), got {call_count[0]}"
+
+    print("PASSED: _with_retry bails immediately when circuit is OPEN")
+    return False
+
+
+async def test_cb_run_skips_when_open():
+    """run() short-circuits and calls publish_entities() when circuit is OPEN"""
+    print("\n=== Test: run() skips API calls when circuit is OPEN ===")
+
+    api = MockSolisAPI()
+
+    # Pre-populate so publish_entities() doesn't crash
+    api.inverter_sn = []
+    api._cb_record_failure(response_code="B0600")
+    assert api._cb_state == "OPEN"
+
+    publish_called = []
+    original_publish = api.publish_entities
+
+    async def mock_publish():
+        publish_called.append(True)
+
+    api.publish_entities = mock_publish
+
+    result = await api.run(seconds=60, first=False)
+
+    assert result is False, f"Expected run() to return False when circuit is OPEN, got {result}"
+    assert publish_called, "Expected publish_entities() to be called when circuit is OPEN"
+    assert any("Circuit breaker OPEN" in m for m in api.log_messages), "Expected circuit breaker log message"
+
+    print("PASSED: run() skips API calls when circuit is OPEN")
+    return False
+
+
 def run_solis_tests(my_predbat):
     """
     Run all Solis API tests
@@ -367,6 +626,17 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_fetch_entity_data_power_clamping())
         failed |= asyncio.run(test_fetch_entity_data_invalid_values())
         failed |= asyncio.run(test_automatic_config())
+        # Circuit breaker tests
+        failed |= asyncio.run(test_cb_closed_to_open_on_threshold())
+        failed |= asyncio.run(test_cb_immediate_trip_on_throttle_code())
+        failed |= asyncio.run(test_cb_open_blocks_calls())
+        failed |= asyncio.run(test_cb_open_to_half_open_after_recovery())
+        failed |= asyncio.run(test_cb_half_open_to_closed_on_success())
+        failed |= asyncio.run(test_cb_half_open_retrips_on_failure())
+        failed |= asyncio.run(test_cb_backoff_sequence_and_cap())
+        failed |= asyncio.run(test_cb_full_recovery_resets_trip_count())
+        failed |= asyncio.run(test_cb_with_retry_bails_on_open())
+        failed |= asyncio.run(test_cb_run_skips_when_open())
 
     except Exception as e:
         print(f"Error running Solis tests: {e}")

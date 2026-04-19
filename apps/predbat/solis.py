@@ -32,6 +32,13 @@ SOLIS_MAX_RETRY_TIME = 30  # seconds
 SOLIS_INITIAL_RETRY_DELAY = 1  # seconds
 SOLIS_REQUEST_TIMEOUT = 30  # seconds
 
+# Circuit breaker configuration
+SOLIS_CB_FAILURE_THRESHOLD = 3          # consecutive non-throttle failures before tripping
+SOLIS_CB_INITIAL_RECOVERY_TIME = 60     # seconds before first retry after trip
+SOLIS_CB_MAX_RECOVERY_TIME = 900        # 15-minute cap on recovery wait
+SOLIS_CB_BACKOFF_MULTIPLIER = 2         # double recovery time on each successive trip
+SOLIS_CB_THROTTLE_CODES = {"B0600", "B0173", "B0115"}  # API response codes that trip the breaker immediately
+
 # CID Constants (Control IDs for inverter registers)
 SOLIS_CID_STORAGE_MODE = 636
 SOLIS_CID_BATTERY_RESERVE_SOC = 157
@@ -288,6 +295,13 @@ class SolisAPI(ComponentBase):
         # Tracking
         self.slots_reset = set()  # Track which inverters had slots reset
 
+        # Circuit breaker state
+        self._cb_state = "CLOSED"              # "CLOSED" | "OPEN" | "HALF_OPEN"
+        self._cb_failure_count = 0             # consecutive non-throttle failures
+        self._cb_trip_count = 0                # how many times the breaker has tripped (drives backoff)
+        self._cb_open_at = None                # time.monotonic() when circuit last opened
+        self._cb_recovery_time = SOLIS_CB_INITIAL_RECOVERY_TIME  # current wait duration before retry
+
         self.log(f"Solis API: Initialised with inverter_sn={self.inverter_sn}, automatic={automatic}")
 
     # ==================== Helper Methods ====================
@@ -350,8 +364,56 @@ class SolisAPI(ComponentBase):
 
     # ==================== Core API Methods ====================
 
+    def _cb_record_success(self):
+        """Record a successful API call and close the circuit breaker if it was recovering."""
+        if self._cb_state == "HALF_OPEN":
+            self.log("Solis API: Circuit breaker closed (recovered)")
+        self._cb_state = "CLOSED"
+        self._cb_failure_count = 0
+        self._cb_trip_count = 0
+        self._cb_recovery_time = SOLIS_CB_INITIAL_RECOVERY_TIME
+
+    def _cb_record_failure(self, response_code=None):
+        """Record a failed API call and trip the circuit breaker when appropriate."""
+        if response_code is not None and response_code in SOLIS_CB_THROTTLE_CODES:
+            # Throttle code — trip immediately regardless of failure count
+            self._cb_trip_count += 1
+            self._cb_recovery_time = min(SOLIS_CB_INITIAL_RECOVERY_TIME * (SOLIS_CB_BACKOFF_MULTIPLIER ** (self._cb_trip_count - 1)), SOLIS_CB_MAX_RECOVERY_TIME)
+            self._cb_state = "OPEN"
+            self._cb_open_at = time.monotonic()
+            self._cb_failure_count = 0
+            self.log(f"Warn: Solis API: Circuit breaker OPEN for {self._cb_recovery_time:.0f}s (trip {self._cb_trip_count}) — throttle code {response_code}")
+        else:
+            self._cb_failure_count += 1
+            if self._cb_failure_count >= SOLIS_CB_FAILURE_THRESHOLD:
+                self._cb_trip_count += 1
+                self._cb_recovery_time = min(SOLIS_CB_INITIAL_RECOVERY_TIME * (SOLIS_CB_BACKOFF_MULTIPLIER ** (self._cb_trip_count - 1)), SOLIS_CB_MAX_RECOVERY_TIME)
+                self._cb_state = "OPEN"
+                self._cb_open_at = time.monotonic()
+                self._cb_failure_count = 0
+                self.log(f"Warn: Solis API: Circuit breaker OPEN for {self._cb_recovery_time:.0f}s (trip {self._cb_trip_count}) — {self._cb_trip_count * SOLIS_CB_FAILURE_THRESHOLD} consecutive failures")
+
+    @property
+    def _cb_is_open(self):
+        """Return True if the circuit breaker is blocking outgoing calls."""
+        if self._cb_state == "CLOSED":
+            return False
+        if self._cb_state == "OPEN":
+            elapsed = time.monotonic() - self._cb_open_at
+            if elapsed >= self._cb_recovery_time:
+                self._cb_state = "HALF_OPEN"
+                self.log(f"Solis API: Circuit breaker transitioning to HALF_OPEN after {elapsed:.0f}s — allowing probe request")
+                return False
+            return True
+        # HALF_OPEN — let the next probe request through
+        return False
+
     async def _execute_request(self, endpoint, payload):
         """Execute HTTP POST request to Solis API"""
+        # Circuit breaker check — bail immediately if the breaker is OPEN
+        if self._cb_is_open:
+            raise SolisAPIError("Circuit breaker OPEN, skipping API call")
+
         url = f"{self.base_url}{endpoint}"
         headers = self._build_headers(endpoint, payload)
 
@@ -363,6 +425,7 @@ class SolisAPI(ComponentBase):
                         error_text = await response.text()
                         reason = "auth_error" if response.status in (401, 403) else "server_error"
                         record_api_call("solis", False, reason)
+                        self._cb_record_failure()
                         raise SolisAPIError(f"HTTP error: {error_text}", status_code=response.status)
 
                     # Parse JSON response
@@ -375,18 +438,23 @@ class SolisAPI(ComponentBase):
                     if str(code) != "0":
                         error_msg = response_json.get("msg", "Unknown error")
                         error_detail = SOLIS_API_CODES.get(str(code), f"Unknown code: {code}")
-                        record_api_call("solis", False, "server_error")
+                        is_throttle = str(code) in SOLIS_CB_THROTTLE_CODES
+                        record_api_call("solis", False, "rate_limit" if is_throttle else "server_error")
+                        self._cb_record_failure(str(code))
                         raise SolisAPIError(f"API error: {error_msg} ({error_detail} - {response_json})", response_code=str(code))
 
                     # Return data field
                     record_api_call("solis")
+                    self._cb_record_success()
                     return response_json.get("data")
 
         except asyncio.TimeoutError as err:
             record_api_call("solis", False, "connection_error")
+            self._cb_record_failure()
             raise SolisAPIError(f"Timeout accessing {url}") from err
         except aiohttp.ClientError as err:
             record_api_call("solis", False, "connection_error")
+            self._cb_record_failure()
             raise SolisAPIError(f"Network error accessing {url}: {str(err)}") from err
 
     async def _with_retry(self, operation, max_retry_time=SOLIS_MAX_RETRY_TIME):
@@ -401,6 +469,10 @@ class SolisAPI(ComponentBase):
             except SolisAPIError as err:
                 elapsed_time = time.monotonic() - start_time
                 if elapsed_time >= max_retry_time:
+                    raise err
+
+                # Bail immediately if the circuit just tripped — no point burning the retry window
+                if self._cb_state != "CLOSED":
                     raise err
 
                 attempt += 1
@@ -2808,6 +2880,13 @@ class SolisAPI(ComponentBase):
     async def run(self, seconds, first):
         """Main run cycle called every 5 seconds"""
         poll_success = True
+
+        # Circuit breaker — skip all API calls this cycle if the breaker is OPEN
+        if self._cb_is_open:
+            remaining = self._cb_recovery_time - (time.monotonic() - self._cb_open_at)
+            self.log(f"Solis API: Circuit breaker OPEN, skipping API calls this cycle ({remaining:.0f}s remaining)")
+            await self.publish_entities()  # stale cache is fine; keeps HA entities alive
+            return False
 
         # One-time startup configuration
         if first:
