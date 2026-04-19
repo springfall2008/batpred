@@ -2176,6 +2176,8 @@ APPS_SCHEMA = {
     "predheat": {"type": "dict"},
     "forecast_solar": {"type": "dict_list"},
     "forecast_solar_max_age": {"type": "float"},
+    "open_meteo_forecast": {"type": "dict_list"},
+    "open_meteo_forecast_max_age": {"type": "float"},
     "enable_coarse_fine_levels": {"type": "boolean"},
     "load_power_fill_enable": {"type": "boolean"},
     "load_ml_enable": {"type": "boolean"},
