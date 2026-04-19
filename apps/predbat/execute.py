@@ -432,7 +432,8 @@ class Execute:
                 self.car_charging_solar_surplus_active = [False] * self.num_cars
             if inverter.id == 0 and self.car_charging_solar_surplus and self.num_cars > 0 and not isExporting:
                 surplus_hysteresis = 200  # W deadband to prevent flapping
-                was_active = getattr(self, "_car_surplus_prev", [False] * self.num_cars)
+                if len(self._car_surplus_prev) != self.num_cars:
+                    self._car_surplus_prev = [False] * self.num_cars
                 for car_n in range(self.num_cars):
                     if not self.car_charging_planned[car_n]:
                         continue
@@ -444,7 +445,7 @@ class Execute:
 
                     # When car was surplus-charging last cycle, add back its load to get true available export
                     effective_export = self.grid_power
-                    previously_active = car_n < len(was_active) and was_active[car_n]
+                    previously_active = self._car_surplus_prev[car_n]
                     if previously_active:
                         effective_export += car_rate_w
 
