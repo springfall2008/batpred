@@ -1556,7 +1556,7 @@ class OctopusAPI(ComponentBase):
             payload = {"query": query}
             auth_prefix = "" if use_backend else "JWT "
             headers = {"Authorization": f"{auth_prefix}{self.graphql_token}", integration_context_header: request_context}
-            self.log("OctopusAPI: Making GraphQL request to {} payload {} headers {}".format(url, payload, headers))
+            #self.log("OctopusAPI: Making GraphQL request to {} payload {} headers {}".format(url, payload, headers))
             async with client.post(url, json=payload, headers=headers) as response:
                 # Process response (which reads the text)
                 response_body = await self.async_read_response_retry(response, url, ignore_errors=ignore_errors)
