@@ -713,7 +713,7 @@ class GECloudDirect(ComponentBase):
                     if "%" in reg_name:
                         attributes["device_class"] = "battery"
                         attributes["unit_of_measurement"] = "%"
-                    elif "_power_percent" in ha_name:
+                    elif "_power_percent" in ha_name or "_power_rate" in ha_name:
                         attributes["device_class"] = "power_factor"
                         attributes["unit_of_measurement"] = "%"
                     elif "_power" in ha_name:

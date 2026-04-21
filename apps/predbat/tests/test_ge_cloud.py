@@ -2215,11 +2215,12 @@ def _test_publish_registers(my_predbat):
         56: {"name": "Enable AC Charge", "validation_rules": ["boolean"], "validation": "", "value": "1"},
         66: {"name": "Battery Reserve Percent Limit", "validation_rules": ["between:0,100"], "validation": "", "value": "20"},
         77: {"name": "AC Charge 1 Start Time", "validation_rules": ["date_format:H:i"], "validation": "", "value": "23:30:00"},
+        88: {"name": "Charge Power Rate", "validation_rules": ["between:0,100"], "validation": "", "value": "50"},
     }
 
     ge_cloud.register_list["test123"] = registers
 
-    ge_cloud.settings["test123"] = {56: "1", 66: "20", 77: "23:30:00"}
+    ge_cloud.settings["test123"] = {56: "1", 66: "20", 77: "23:30:00", 88: "50"}
 
     run_async(ge_cloud.publish_registers("test123", registers))
 
@@ -2236,6 +2237,19 @@ def _test_publish_registers(my_predbat):
     # Check select entity
     if "select.predbat_gecloud_test123_ac_charge_1_start_time" not in ge_cloud.dashboard_items:
         print("ERROR: Expected select entity to be published")
+        return 1
+
+    # Check power rate number entity has percent attributes
+    entity_id = "number.predbat_gecloud_test123_charge_power_rate"
+    if entity_id not in ge_cloud.dashboard_items:
+        print("ERROR: Expected charge power rate number entity to be published")
+        return 1
+    attrs = ge_cloud.dashboard_items[entity_id]["attributes"]
+    if attrs.get("unit_of_measurement") != "%":
+        print("ERROR: Expected charge power rate unit '%', got '{}'".format(attrs.get("unit_of_measurement")))
+        return 1
+    if attrs.get("device_class") != "power_factor":
+        print("ERROR: Expected charge power rate device_class 'power_factor', got '{}'".format(attrs.get("device_class")))
         return 1
 
     return 0
