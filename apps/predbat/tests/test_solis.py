@@ -9,8 +9,8 @@
 # pylint: disable=attribute-defined-outside-init
 
 import asyncio
-from datetime import timezone
-from unittest.mock import patch, MagicMock
+from datetime import datetime
+from unittest.mock import MagicMock
 from solis import SolisAPI, SOLIS_CID_CHARGE_ENABLE_BASE, SOLIS_CID_CHARGE_TIME, SOLIS_CID_CHARGE_SOC_BASE, SOLIS_CID_CHARGE_CURRENT, SOLIS_CID_DISCHARGE_ENABLE_BASE
 from solis import SOLIS_CID_BATTERY_FORCE_CHARGE_SOC, SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC, SOLIS_CID_CHARGE_DISCHARGE_SETTINGS
 from solis import SOLIS_CID_STORAGE_MODE, SOLIS_BIT_GRID_CHARGING, SOLIS_BIT_TOU_MODE
@@ -64,6 +64,10 @@ class MockSolisAPI(SolisAPI):
         self.cached_infos = {}
         self.slots_reset = set()
 
+        # Timezone for now_utc_exact property (from ComponentBase)
+        self.local_tz = datetime.now().astimezone().tzinfo
+        self._test_now_utc_exact = None  # Set to a datetime to override now_utc_exact in tests
+
         # Logging
         self.log_messages = []
         self.dashboard_items = {}
@@ -98,6 +102,13 @@ class MockSolisAPI(SolisAPI):
     def get_arg(self, name, default=None):
         """Mock get_arg"""
         return default
+
+    @property
+    def now_utc_exact(self):
+        """Allow tests to override the current time via _test_now_utc_exact"""
+        if self._test_now_utc_exact is not None:
+            return self._test_now_utc_exact
+        return datetime.now(self.local_tz)
 
     def is_tou_v2_mode(self, sn):
         """Mock is_tou_v2_mode - can be overridden in tests"""
@@ -328,6 +339,8 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_write_time_windows_v2_stale_slot_clearing())
         failed |= asyncio.run(test_write_time_windows_zero_charge_current())
         failed |= asyncio.run(test_write_time_windows_v1_slot_detection())
+        failed |= asyncio.run(test_write_time_windows_v1_discharge_slot_detection())
+        failed |= asyncio.run(test_write_time_windows_v1_local_time_not_utc())
         failed |= asyncio.run(test_encode_time_windows_variant1())
         failed |= asyncio.run(test_encode_time_windows_variant2())
         failed |= asyncio.run(test_encode_time_windows_empty())
@@ -1470,14 +1483,13 @@ async def test_write_time_windows_v1_slot_detection():
     api.cached_values[inverter_sn] = {}
 
     # Mock current time to be during charge slot (03:00)
-    with patch("solis.datetime") as mock_datetime:
-        mock_now = MagicMock()
-        mock_now.strftime.return_value = "03:00"
-        mock_datetime.now.return_value = mock_now
-        mock_datetime.UTC = timezone.utc
+    mock_now = MagicMock()
+    mock_now.strftime.return_value = "03:00"
+    api._test_now_utc_exact = mock_now
 
-        # Call the function
-        result = await api.write_time_windows_if_changed(inverter_sn)
+    # Call the function
+    result = await api.write_time_windows_if_changed(inverter_sn)
+    api._test_now_utc_exact = None
 
     # Verify results
     assert result == True, "write_time_windows_if_changed should return True"
@@ -1487,6 +1499,123 @@ async def test_write_time_windows_v1_slot_detection():
     assert charge_log, "Should log that we're in charge slot with target SOC"
 
     print("PASSED: V1 mode detects active time slots correctly")
+    return False
+
+
+async def test_write_time_windows_v1_discharge_slot_detection():
+    """Test V1 mode discharge slot detection — reproduces the bug where a discharge window
+    was set up but Predbat set storage mode to 'Self-Use - No Timed Charge/Discharge', blocking
+    the discharge.  The root cause was using UTC time instead of local time for slot comparison."""
+    print("\n=== Test: write_time_windows_if_changed V1 mode discharge slot detection ===")
+
+    api = MockSolisAPI()
+    api._test_v2_mode = False  # V1 mode
+    api._mock_storage_mode = True  # Track storage mode calls
+    inverter_sn = "TEST123"
+    api.inverter_sn = [inverter_sn]
+
+    # Discharge window 21:30-23:59 (like the reporter's slot)
+    api.charge_discharge_time_windows[inverter_sn] = {
+        1: {
+            "charge_start_time": "00:00",
+            "charge_end_time": "00:00",
+            "charge_soc": 100,
+            "charge_current": 50,
+            "charge_enable": 0,
+            "discharge_start_time": "21:30",
+            "discharge_end_time": "23:59",
+            "discharge_soc": 15,
+            "discharge_current": 30,
+            "discharge_enable": 1,
+            "field_length": 18,
+        },
+    }
+    api.cached_values[inverter_sn] = {}
+    api.inverter_details[inverter_sn] = {"batteryCapacitySoc": 50}
+
+    # Mock local time to 21:43 — inside the discharge window
+    mock_now = MagicMock()
+    mock_now.strftime.return_value = "21:43"
+    api._test_now_utc_exact = mock_now
+
+    result = await api.write_time_windows_if_changed(inverter_sn)
+    api._test_now_utc_exact = None
+
+    assert result == True, "write_time_windows_if_changed should return True"
+
+    # Must detect we are inside the discharge slot and use 'Self-Use', NOT 'Self-Use - No Timed Charge/Discharge'
+    discharge_log = any("In discharge slot" in msg for msg in api.log_messages)
+    assert discharge_log, "Should log that we're in discharge slot"
+
+    storage_calls = api.set_storage_mode_calls
+    assert len(storage_calls) == 1, f"Expected 1 storage mode call, got {len(storage_calls)}"
+    assert storage_calls[0]["mode"] == "Self-Use", f"Storage mode should be 'Self-Use' when inside discharge window, got '{storage_calls[0]['mode']}'"
+
+    print("PASSED: V1 mode correctly detects active discharge slot and sets Self-Use storage mode")
+    return False
+
+
+async def test_write_time_windows_v1_local_time_not_utc():
+    """Regression test: V1 slot detection must use local time, not UTC.
+    A BST user (UTC+1) with a discharge window at 21:30-23:59 local time would see
+    UTC time as 20:30-22:59.  At local 21:43 (UTC 20:43) the window is active in local
+    time but would appear inactive if UTC were used, causing TOU to be disabled."""
+    print("\n=== Test: write_time_windows_if_changed V1 mode uses local time not UTC ===")
+
+    api = MockSolisAPI()
+    api._test_v2_mode = False
+    api._mock_storage_mode = True
+    inverter_sn = "TEST123"
+    api.inverter_sn = [inverter_sn]
+
+    # Discharge window 21:30-23:59 local time
+    api.charge_discharge_time_windows[inverter_sn] = {
+        1: {
+            "charge_start_time": "00:00",
+            "charge_end_time": "00:00",
+            "charge_soc": 100,
+            "charge_current": 50,
+            "charge_enable": 0,
+            "discharge_start_time": "21:30",
+            "discharge_end_time": "23:59",
+            "discharge_soc": 15,
+            "discharge_current": 30,
+            "discharge_enable": 1,
+            "field_length": 18,
+        },
+    }
+    api.cached_values[inverter_sn] = {}
+    api.inverter_details[inverter_sn] = {"batteryCapacitySoc": 50}
+
+    # Simulate local time 21:43 (inside window) — this is what now_utc_exact returns
+    mock_local = MagicMock()
+    mock_local.strftime.return_value = "21:43"
+    api._test_now_utc_exact = mock_local
+    result_inside = await api.write_time_windows_if_changed(inverter_sn)
+    api._test_now_utc_exact = None
+
+    assert result_inside == True
+    assert any("In discharge slot" in m for m in api.log_messages), "Should detect discharge slot at local 21:43"
+    inside_mode = api.set_storage_mode_calls[-1]["mode"]
+    assert inside_mode == "Self-Use", f"Expected 'Self-Use' at local 21:43, got '{inside_mode}'"
+
+    # Now simulate UTC time 20:43 (1 hour behind, outside window) — the old buggy behaviour
+    api.log_messages.clear()
+    api.set_storage_mode_calls.clear()
+
+    mock_utc = MagicMock()
+    mock_utc.strftime.return_value = "20:43"
+    api._test_now_utc_exact = mock_utc
+    result_outside = await api.write_time_windows_if_changed(inverter_sn)
+    api._test_now_utc_exact = None
+
+    assert result_outside == True
+    outside_mode = api.set_storage_mode_calls[-1]["mode"]
+    assert outside_mode == "Self-Use - No Timed Charge/Discharge", f"With UTC time 20:43 (outside window) expected 'Self-Use - No Timed Charge/Discharge', got '{outside_mode}'"
+
+    # The fix ensures now_utc_exact (local time) is used, so 21:43 local → Self-Use (in slot)
+    # If UTC were used (20:43), result would be Self-Use - No Timed Charge/Discharge (outside slot)
+    print("PASSED: V1 mode uses local time for slot detection (regression: UTC offset no longer causes missed discharge windows)")
     return False
 
 
