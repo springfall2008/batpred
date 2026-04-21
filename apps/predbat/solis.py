@@ -235,6 +235,7 @@ SOLIS_API_CODES = {
     "10403": "Forbidden",
     "10404": "Not found",
     "10500": "Internal server error",
+    "B0115": "Failure to send",
 }
 
 # Time options for selectors (HH:MM:SS format)
@@ -376,6 +377,10 @@ class SolisAPI(ComponentBase):
                         error_msg = response_json.get("msg", "Unknown error")
                         error_detail = SOLIS_API_CODES.get(str(code), f"Unknown code: {code}")
                         record_api_call("solis", False, "server_error")
+                        if str(code) == "B0115":
+                            # Perform a wait as it maybe rate limiting
+                            self.log("Solis API: Received B0115 error, likely rate limiting. Waiting for 10 seconds before retrying.")
+                            await asyncio.sleep(10)
                         raise SolisAPIError(f"API error: {error_msg} ({error_detail} - {response_json})", response_code=str(code))
 
                     # Return data field
