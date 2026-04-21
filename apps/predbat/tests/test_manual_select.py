@@ -43,7 +43,7 @@ def run_test_manual_select(my_predbat):
         return 1
 
     # Use HH:MM input format to avoid weekday/timezone parsing edge cases
-    future_time = future_time_label[-5:]
+    future_time = future_time_label.split()[-1]
     print(f"Using test time: {future_time_label}")
 
     # Test 1: Select a time for force charge
