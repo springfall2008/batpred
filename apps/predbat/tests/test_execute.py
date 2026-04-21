@@ -213,6 +213,7 @@ def run_execute_test(
     car_charging_solar_surplus_limit=100,
     car_charging_planned=None,
     car_battery_size=100.0,
+    car_surplus_prev=None,
     grid_power=0,
     battery_power=0,
     assert_solar_surplus_active=None,
@@ -306,7 +307,7 @@ def run_execute_test(
     my_predbat.car_charging_solar_surplus_threshold = car_charging_solar_surplus_threshold
     my_predbat.car_charging_solar_surplus_limit = car_charging_solar_surplus_limit
     my_predbat.car_charging_solar_surplus_active = [False] * max(my_predbat.num_cars, 1)
-    my_predbat._car_surplus_prev = [False] * max(my_predbat.num_cars, 1)
+    my_predbat._car_surplus_prev = list(car_surplus_prev) if car_surplus_prev is not None else [False] * max(my_predbat.num_cars, 1)
     my_predbat.car_charging_rate = [7.4] * max(my_predbat.num_cars, 1)
     my_predbat.car_charging_battery_size = [car_battery_size] * max(my_predbat.num_cars, 1)
     if car_charging_planned is not None:
@@ -2571,6 +2572,47 @@ def run_execute_tests(my_predbat):
         assert_pause_discharge=True,
         assert_immediate_soc_target=0,
         assert_solar_surplus_active=[True],
+    )
+    if failed:
+        return failed
+
+    # Hysteresis: when car was already surplus-charging, it stays on even though grid_power alone
+    # is below the turn-on threshold (car load is masking the real available export).
+    # car_rate=7400W, threshold=500W, hysteresis=200W → stay-on threshold on effective export is 6700W.
+    # grid_power=0 + car_rate 7400 = 7400 effective → >= 6700, stays on.
+    failed |= run_execute_test(
+        my_predbat,
+        "solar_surplus_hysteresis_stays_on",
+        set_charge_window=True,
+        set_export_window=True,
+        car_charging_solar_surplus=True,
+        car_charging_planned=[True],
+        car_surplus_prev=[True],
+        grid_power=0,
+        battery_power=500,  # battery discharging — intentionally ignored in the stay-on branch
+        car_charging_from_battery=False,
+        assert_status="Hold for car (solar)",
+        assert_pause_discharge=True,
+        assert_immediate_soc_target=0,
+        assert_solar_surplus_active=[True],
+    )
+    if failed:
+        return failed
+
+    # Hysteresis: when real surplus is gone (we're importing from grid even accounting for car load),
+    # surplus charging deactivates. grid_power=-1000 + car_rate 7400 = 6400 effective → < 6700, drops off.
+    failed |= run_execute_test(
+        my_predbat,
+        "solar_surplus_hysteresis_drops_off",
+        set_charge_window=True,
+        set_export_window=True,
+        car_charging_solar_surplus=True,
+        car_charging_planned=[True],
+        car_surplus_prev=[True],
+        grid_power=-1000,
+        battery_power=0,
+        assert_status="Demand",
+        assert_solar_surplus_active=[False],
     )
     if failed:
         return failed
