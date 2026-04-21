@@ -631,7 +631,7 @@ class GECloudDirect(ComponentBase):
                         self.log("GECloud: Warn: Failed to set {} for {}".format(ha_name, device))
                         return False
             # Reset AC charge start and end times to 00:00 to disable
-            for charge_id in range(1, 11):
+            for charge_id in range(2, 11):
                 if (
                     ("ac_charge_{}_start_time".format(charge_id) in ha_name)
                     or ("ac_charge_{}_end_time".format(charge_id) in ha_name)

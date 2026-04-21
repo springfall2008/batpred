@@ -2817,20 +2817,17 @@ def _test_enable_default_options(my_predbat):
             print("ERROR: Should not write when time is None, got {} calls".format(len(write_calls)))
             return 1
 
-        # Test 17: AC charge slot 1 should be reset
+        # Test 17: AC charge slot 1 should NOT be reset (slots 2-10 only)
         write_calls = []
         registers = {210: {"name": "AC_Charge_1_Start_Time", "value": "05:30", "validation_rules": []}}
 
         result = await ge_cloud.enable_default_options("test123", registers)
 
-        if not result:
-            print("ERROR: enable_default_options should return True for AC charge 1 reset")
+        if result:
+            print("ERROR: enable_default_options should return False for AC charge 1 (not in range 2-10)")
             return 1
-        if len(write_calls) != 1:
-            print("ERROR: Should write to AC charge 1 slot, got {} calls".format(len(write_calls)))
-            return 1
-        if write_calls[0]["value"] != "00:00":
-            print("ERROR: Expected value='00:00' for AC charge 1 start time, got {}".format(write_calls[0]["value"]))
+        if len(write_calls) != 0:
+            print("ERROR: Should not write to AC charge 1 slot, got {} calls".format(len(write_calls)))
             return 1
 
         # Test 18: Lower SOC percent limit needs fixing
