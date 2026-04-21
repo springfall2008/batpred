@@ -772,7 +772,7 @@ class SolisAPI(ComponentBase):
 
                 in_charge_slot = None
                 in_discharge_slot = None
-                current_time = datetime.now(UTC).strftime("%H:%M")
+                current_time = self.now_utc_exact.strftime("%H:%M")  # Use local time to match time windows set by Predbat in local timezone
                 max_charge_current_amps = self.cached_values.get(inverter_sn, {}).get(SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT, None)
                 charge_current = max_charge_current_amps
                 discharge_current = max_charge_current_amps
