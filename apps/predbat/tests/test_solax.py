@@ -5270,7 +5270,7 @@ async def test_publish_controls_main():
     elif charge_enable not in api.dashboard_items:
         print(f"**** ERROR: Charge enable entity not created ****")
         failed = True
-    elif api.dashboard_items[charge_enable]["state"] != True:
+    elif api.dashboard_items[charge_enable]["state"] != "on":
         print(f"**** ERROR: Charge enable incorrect: {api.dashboard_items[charge_enable]['state']} ****")
         failed = True
     elif reserve not in api.dashboard_items:
@@ -5290,7 +5290,7 @@ async def test_publish_controls_main():
     if export_enable not in api.dashboard_items:
         print(f"**** ERROR: Export enable entity not created ****")
         failed = True
-    elif api.dashboard_items[export_enable]["state"] != False:
+    elif api.dashboard_items[export_enable]["state"] != "off":
         print(f"**** ERROR: Export enable should be False ****")
         failed = True
     elif export_rate not in api.dashboard_items:
