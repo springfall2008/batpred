@@ -377,7 +377,7 @@ class SolisAPI(ComponentBase):
                         error_msg = response_json.get("msg", "Unknown error")
                         error_detail = SOLIS_API_CODES.get(str(code), f"Unknown code: {code}")
                         record_api_call("solis", False, "server_error")
-                        if error_msg == "B0115":
+                        if str(code) == "B0115":
                             # Perform a wait as it maybe rate limiting
                             self.log("Solis API: Received B0115 error, likely rate limiting. Waiting for 10 seconds before retrying.")
                             await asyncio.sleep(10)
