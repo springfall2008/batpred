@@ -554,21 +554,15 @@ Predbat will plan and charge the car with the kW that are needed to reach the ta
 
 ## Solar Surplus Car Charging
 
-When your house battery is full (or solar generation exceeds what the battery can absorb), excess solar power is exported to the grid at
-typically low export rates. Solar surplus car charging automatically diverts this excess into your EV instead, making better use of your
-solar generation.
+When your house battery is full (or solar generation exceeds what the battery can absorb), excess solar power is exported to the grid at typically low export rates. Solar surplus car charging automatically diverts this excess into your EV instead, making better use of your solar generation.
 
 ### How it works
 
-Every 5 minutes Predbat checks whether you are exporting power to the grid. If the export exceeds your car's charge rate
-(minus a configurable shortfall allowance), it turns on `binary_sensor.predbat_car_charging_slot` — the same sensor your
-existing car charging automation already watches.
+Every 5 minutes Predbat checks whether you are exporting power to the grid. If the export exceeds your car's charge rate (minus a configurable shortfall allowance), it turns on `binary_sensor.predbat_car_charging_slot` — the same sensor your existing car charging automation already watches.
 
-Surplus car charging will **not** activate during force export windows (when Predbat is deliberately exporting battery to the grid
-for profit). It only captures genuinely excess solar that would otherwise be exported at low rates.
+Surplus car charging will **not** activate during force export windows (when Predbat is deliberately exporting battery to the grid for profit). It only captures genuinely excess solar that would otherwise be exported at low rates.
 
-Built-in hysteresis (200W deadband) prevents the charger from flapping on and off due to passing clouds. When the car is already
-surplus-charging, Predbat accounts for the car's consumption when evaluating whether surplus is still available.
+Built-in hysteresis (200W) prevents the charger from flapping on and off due to passing clouds. When the car is already surplus-charging, Predbat accounts for the car's consumption (`input_number.predbat_car_charging_rate`) when evaluating whether surplus is still available.
 
 ### Configuration
 
@@ -580,29 +574,24 @@ Enable the feature with these Predbat entities:
   For example, if your car charges at 7.4kW and the threshold is 500W, charging activates when export reaches 6.9kW.
 - **input_number.predbat_car_charging_solar_surplus_limit** — Upper SoC cap for surplus charging, as a percentage (default: 100%).
   Predbat manages scheduled charging up to `car_charging_limit` as normal; any excess solar can top the car up to this cap.
-  For example, with `car_charging_limit` of 80% and `car_charging_solar_surplus_limit` of 90%, Predbat will plan charging to
-  reach 80% and allow surplus to push the car up to 90%. Leave at 100% (default) to always use available surplus.
+  For example, with `car_charging_limit` of 80% and `car_charging_solar_surplus_limit` of 90%, Predbat will plan charging to reach 80% and allow surplus to push the car up to 90%. Leave at 100% (default) to always use available surplus.
 
 ### Sensors
 
-- **binary_sensor.predbat_car_charging_slot** gains a `solar_surplus: true` attribute when activated by surplus (rather than
-  a planned charging window).
+- **binary_sensor.predbat_car_charging_slot** gains a `solar_surplus: true` attribute when activated by surplus (rather than a planned charging window).
 - **binary_sensor.predbat_car_charging_solar_surplus** — Dedicated sensor showing whether surplus charging is currently active.
 
 ### Interaction with other settings
 
-- **switch.predbat_car_charging_from_battery** — When Off, Predbat prevents the house battery from discharging into the car
-  during surplus charging, just as it does for planned charging slots.
+- **switch.predbat_car_charging_from_battery** — When Off, Predbat prevents the house battery from discharging into the car during surplus charging, just as it does for planned charging slots.
 - The car must be plugged in (`car_charging_planned` sensor reporting true) for surplus charging to activate.
 - Only one car will surplus-charge at a time (the first eligible car in order).
 - If a planned charging slot is already active, surplus detection still runs but does not override the planned slot.
 
 ### Tips
 
-- Your Home Assistant automation that watches `binary_sensor.predbat_car_charging_slot` should use a `for:` debounce
-  (e.g. `for: "00:00:15"`) to avoid reacting to brief state transitions during Predbat's update cycle.
-- The status sensor (`predbat.status`) will show "Hold for car (solar)" when battery discharge is being prevented
-  during surplus car charging.
+- Your Home Assistant automation that watches `binary_sensor.predbat_car_charging_slot` should use a `for:` debounce (e.g. `for: "00:00:15"`) to avoid reacting to brief state transitions during Predbat's update cycle.
+- The status sensor (`predbat.status`) will show "Hold for car (solar)" when battery discharge is being prevented during surplus car charging.
 
 ## Example: Separating car charging costs for multiple cars
 
