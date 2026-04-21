@@ -6626,6 +6626,60 @@ async def test_fetch_controls_value_conversion_main():
     else:
         print(f"✓ Mixed numeric and text values handled correctly")
 
+    # Test 6: Switch entities return "on"/"off" strings from HA — must be normalised to bool
+    print("Test 6: Switch 'on'/'off' strings normalised to bool")
+    api6 = MockSolaxAPI()
+    api6.initialize(client_id="test", client_secret="test", region="eu")
+
+    def mock_get_state_switch_strings(entity_id, default=None):
+        if "charge_enable" in entity_id:
+            return "on"
+        elif "export_enable" in entity_id:
+            return "off"
+        return default
+
+    api6.get_state_wrapper = mock_get_state_switch_strings
+    api6.plant_inverters = {plant_id: ["H1231231932123"]}
+    api6.device_info = {"H1231231932123": {"ratedPower": 10.0}}
+
+    await api6.fetch_controls(plant_id)
+
+    if api6.controls[plant_id]["charge"]["enable"] is not True:
+        print(f"**** ERROR: Expected charge enable True from 'on' string, got {api6.controls[plant_id]['charge']['enable']!r} ****")
+        failed = True
+    elif api6.controls[plant_id]["export"]["enable"] is not False:
+        print(f"**** ERROR: Expected export enable False from 'off' string, got {api6.controls[plant_id]['export']['enable']!r} ****")
+        failed = True
+    else:
+        print("✓ Switch 'on'/'off' strings normalised to bool correctly")
+
+    # Test 7: Switch entities return uppercase "ON"/"OFF" — case-insensitive normalisation
+    print("Test 7: Switch uppercase 'ON'/'OFF' strings normalised to bool")
+    api7 = MockSolaxAPI()
+    api7.initialize(client_id="test", client_secret="test", region="eu")
+
+    def mock_get_state_switch_upper(entity_id, default=None):
+        if "charge_enable" in entity_id:
+            return "ON"
+        elif "export_enable" in entity_id:
+            return "OFF"
+        return default
+
+    api7.get_state_wrapper = mock_get_state_switch_upper
+    api7.plant_inverters = {plant_id: ["H1231231932123"]}
+    api7.device_info = {"H1231231932123": {"ratedPower": 10.0}}
+
+    await api7.fetch_controls(plant_id)
+
+    if api7.controls[plant_id]["charge"]["enable"] is not True:
+        print(f"**** ERROR: Expected charge enable True from 'ON' string, got {api7.controls[plant_id]['charge']['enable']!r} ****")
+        failed = True
+    elif api7.controls[plant_id]["export"]["enable"] is not False:
+        print(f"**** ERROR: Expected export enable False from 'OFF' string, got {api7.controls[plant_id]['export']['enable']!r} ****")
+        failed = True
+    else:
+        print("✓ Uppercase switch strings normalised correctly")
+
     if not failed:
         print("✓ fetch_controls value conversion tests passed")
 
