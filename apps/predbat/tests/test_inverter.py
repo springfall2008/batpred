@@ -559,6 +559,9 @@ def test_adjust_ge_eco_toggle_missing_entity(test_name, inv, force_export):
     inv.rest_data = None
     inv.rest_api = None
     inv.base.args.pop("inverter_mode", None)
+    log_messages = []
+    orig_log = inv.base.log
+    inv.base.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
 
     try:
         inv.adjust_inverter_mode(force_export, False)
@@ -568,10 +571,14 @@ def test_adjust_ge_eco_toggle_missing_entity(test_name, inv, force_export):
 
     inv.inv_has_ge_eco_toggle = orig_has_ge_eco_toggle
     inv.inv_has_ge_inverter_mode = orig_has_ge_inverter_mode
+    inv.base.log = orig_log
     if orig_has_inverter_mode_arg:
         inv.base.args["inverter_mode"] = orig_inverter_mode_arg
     else:
         inv.base.args.pop("inverter_mode", None)
+    if any("No entity_id for ECO Toggle" in msg for msg in log_messages):
+        print("ERROR: Missing inverter_mode should not log ECO toggle warning")
+        failed = True
 
     return failed
 
