@@ -214,6 +214,7 @@ def run_execute_test(
     car_charging_solar_surplus_threshold=500,
     car_charging_solar_surplus_limit=100,
     car_charging_planned=None,
+    car_battery_size=100.0,
     grid_power=0,
     battery_power=0,
     assert_solar_surplus_active=None,
@@ -313,6 +314,7 @@ def run_execute_test(
     my_predbat.car_charging_solar_surplus_active = [False] * max(my_predbat.num_cars, 1)
     my_predbat._car_surplus_prev = [False] * max(my_predbat.num_cars, 1)
     my_predbat.car_charging_rate = [7.4] * max(my_predbat.num_cars, 1)
+    my_predbat.car_charging_battery_size = [car_battery_size] * max(my_predbat.num_cars, 1)
     if car_charging_planned is not None:
         my_predbat.car_charging_planned = car_charging_planned
     else:
@@ -2614,6 +2616,7 @@ def run_execute_tests(my_predbat):
         return failed
 
     # Surplus activates when car SoC is below the surplus limit (allowing over Predbat's target)
+    # 75 kWh battery, 60 kWh == 80% SoC, cap at 90% == 67.5 kWh — under the cap, should activate
     failed |= run_execute_test(
         my_predbat,
         "solar_surplus_limit_allows_over_target",
@@ -2622,7 +2625,8 @@ def run_execute_tests(my_predbat):
         car_charging_solar_surplus=True,
         car_charging_solar_surplus_limit=90,
         car_charging_planned=[True],
-        car_soc=80,
+        car_battery_size=75.0,
+        car_soc=60.0,
         grid_power=7500,
         battery_power=0,
         car_charging_from_battery=False,
@@ -2635,6 +2639,7 @@ def run_execute_tests(my_predbat):
         return failed
 
     # Surplus stops when car SoC reaches the surplus limit
+    # 75 kWh battery, 67.5 kWh == 90% SoC, cap at 90% — at the cap, should not activate
     failed |= run_execute_test(
         my_predbat,
         "solar_surplus_stops_at_surplus_limit",
@@ -2643,7 +2648,8 @@ def run_execute_tests(my_predbat):
         car_charging_solar_surplus=True,
         car_charging_solar_surplus_limit=90,
         car_charging_planned=[True],
-        car_soc=90,
+        car_battery_size=75.0,
+        car_soc=67.5,
         grid_power=7500,
         battery_power=0,
         assert_status="Demand",
@@ -2653,6 +2659,7 @@ def run_execute_tests(my_predbat):
         return failed
 
     # Default surplus limit of 100 allows charging up to full
+    # 75 kWh battery, 74.25 kWh == 99% SoC, cap at 100% (default) — under the cap, should activate
     failed |= run_execute_test(
         my_predbat,
         "solar_surplus_limit_default_100",
@@ -2660,7 +2667,8 @@ def run_execute_tests(my_predbat):
         set_export_window=True,
         car_charging_solar_surplus=True,
         car_charging_planned=[True],
-        car_soc=99,
+        car_battery_size=75.0,
+        car_soc=74.25,
         grid_power=7500,
         battery_power=0,
         car_charging_from_battery=False,

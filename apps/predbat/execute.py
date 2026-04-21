@@ -694,7 +694,9 @@ class Execute:
         for car_n in range(self.num_cars):
             if not self.car_charging_planned[car_n]:
                 continue
-            if self.car_charging_soc[car_n] >= self.car_charging_solar_surplus_limit:
+            # car_charging_soc is kWh; surplus_limit is a % — convert to kWh using the car's battery size
+            battery_size_kwh = self.car_charging_battery_size[car_n] if car_n < len(self.car_charging_battery_size) else 0
+            if battery_size_kwh > 0 and self.car_charging_soc[car_n] >= battery_size_kwh * self.car_charging_solar_surplus_limit / 100.0:
                 continue
 
             car_rate_w = self.car_charging_rate[car_n] * 1000
