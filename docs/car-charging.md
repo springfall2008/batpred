@@ -578,9 +578,10 @@ Enable the feature with these Predbat entities:
 - **input_number.predbat_car_charging_solar_surplus_threshold** — Shortfall allowance in Watts (default: 500W).
   This is how many Watts short of the car charge rate the solar export can be and still trigger charging.
   For example, if your car charges at 7.4kW and the threshold is 500W, charging activates when export reaches 6.9kW.
-- **switch.predbat_car_charging_solar_surplus_ignore_limit** — When On (default), surplus charging will charge the car
-  past the configured charge limit. This is useful because the energy would otherwise be wasted — even if your car is at 80%
-  target, surplus solar can top it up further.
+- **input_number.predbat_car_charging_solar_surplus_limit** — Upper SoC cap for surplus charging, as a percentage (default: 100%).
+  Predbat manages scheduled charging up to `car_charging_limit` as normal; any excess solar can top the car up to this cap.
+  For example, with `car_charging_limit` of 80% and `car_charging_solar_surplus_limit` of 90%, Predbat will plan charging to
+  reach 80% and allow surplus to push the car up to 90%. Leave at 100% (default) to always use available surplus.
 
 ### Sensors
 

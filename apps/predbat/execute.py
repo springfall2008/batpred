@@ -437,7 +437,7 @@ class Execute:
                 for car_n in range(self.num_cars):
                     if not self.car_charging_planned[car_n]:
                         continue
-                    if not self.car_charging_solar_surplus_ignore_limit and self.car_charging_soc[car_n] >= self.car_charging_limit[car_n]:
+                    if self.car_charging_soc[car_n] >= self.car_charging_solar_surplus_limit:
                         continue
 
                     car_rate_w = self.car_charging_rate[car_n] * 1000

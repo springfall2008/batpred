@@ -2348,7 +2348,7 @@ class Fetch:
         self.car_charging_energy_scale = self.get_arg("car_charging_energy_scale")
         self.car_charging_solar_surplus = self.get_arg("car_charging_solar_surplus")
         self.car_charging_solar_surplus_threshold = float(self.get_arg("car_charging_solar_surplus_threshold"))
-        self.car_charging_solar_surplus_ignore_limit = self.get_arg("car_charging_solar_surplus_ignore_limit")
+        self.car_charging_solar_surplus_limit = float(self.get_arg("car_charging_solar_surplus_limit"))
 
         # Update list of slot times
         self.manual_charge_times = self.manual_times("manual_charge")

@@ -212,7 +212,7 @@ def run_execute_test(
     assert_button_push=False,
     car_charging_solar_surplus=False,
     car_charging_solar_surplus_threshold=500,
-    car_charging_solar_surplus_ignore_limit=True,
+    car_charging_solar_surplus_limit=100,
     car_charging_planned=None,
     grid_power=0,
     battery_power=0,
@@ -309,7 +309,7 @@ def run_execute_test(
     # Solar surplus car charging setup
     my_predbat.car_charging_solar_surplus = car_charging_solar_surplus
     my_predbat.car_charging_solar_surplus_threshold = car_charging_solar_surplus_threshold
-    my_predbat.car_charging_solar_surplus_ignore_limit = car_charging_solar_surplus_ignore_limit
+    my_predbat.car_charging_solar_surplus_limit = car_charging_solar_surplus_limit
     my_predbat.car_charging_solar_surplus_active = [False] * max(my_predbat.num_cars, 1)
     my_predbat._car_surplus_prev = [False] * max(my_predbat.num_cars, 1)
     my_predbat.car_charging_rate = [7.4] * max(my_predbat.num_cars, 1)
@@ -2613,16 +2613,37 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
-    # Surplus respects ignore_limit=False when car is at limit
+    # Surplus activates when car SoC is below the surplus limit (allowing over Predbat's target)
     failed |= run_execute_test(
         my_predbat,
-        "solar_surplus_at_limit_no_ignore",
+        "solar_surplus_limit_allows_over_target",
         set_charge_window=True,
         set_export_window=True,
         car_charging_solar_surplus=True,
-        car_charging_solar_surplus_ignore_limit=False,
+        car_charging_solar_surplus_limit=90,
         car_charging_planned=[True],
-        car_soc=100,  # Car fully charged
+        car_soc=80,
+        grid_power=7500,
+        battery_power=0,
+        car_charging_from_battery=False,
+        assert_status="Hold for car (solar)",
+        assert_pause_discharge=True,
+        assert_immediate_soc_target=0,
+        assert_solar_surplus_active=[True],
+    )
+    if failed:
+        return failed
+
+    # Surplus stops when car SoC reaches the surplus limit
+    failed |= run_execute_test(
+        my_predbat,
+        "solar_surplus_stops_at_surplus_limit",
+        set_charge_window=True,
+        set_export_window=True,
+        car_charging_solar_surplus=True,
+        car_charging_solar_surplus_limit=90,
+        car_charging_planned=[True],
+        car_soc=90,
         grid_power=7500,
         battery_power=0,
         assert_status="Demand",
@@ -2631,16 +2652,15 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
-    # Surplus ignores limit when ignore_limit=True (default) and car is at limit
+    # Default surplus limit of 100 allows charging up to full
     failed |= run_execute_test(
         my_predbat,
-        "solar_surplus_at_limit_with_ignore",
+        "solar_surplus_limit_default_100",
         set_charge_window=True,
         set_export_window=True,
         car_charging_solar_surplus=True,
-        car_charging_solar_surplus_ignore_limit=True,
         car_charging_planned=[True],
-        car_soc=100,
+        car_soc=99,
         grid_power=7500,
         battery_power=0,
         car_charging_from_battery=False,
