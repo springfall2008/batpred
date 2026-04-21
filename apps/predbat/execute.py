@@ -632,14 +632,32 @@ class Execute:
                 if self.minutes_now >= window["start"] and self.minutes_now < window["end"] and window.get("kwh", 0) > 0:
                     in_planned_slot = True
             if not in_planned_slot:
+                # Preserve the planned slot list and totals that publish_car_plan published, just flip state on
+                plan = []
+                total_cost = 0.0
+                total_kwh = 0.0
+                for window in self.car_charging_slots[car_n]:
+                    kwh = dp2(window["kwh"])
+                    cost = dp2(window["cost"])
+                    plan.append(
+                        {
+                            "start": self.time_abs_str(window["start"]),
+                            "end": self.time_abs_str(window["end"]),
+                            "kwh": kwh,
+                            "average": dp2(window["average"]),
+                            "cost": cost,
+                        }
+                    )
+                    total_kwh += kwh
+                    total_cost += cost
                 postfix = "" if car_n == 0 else "_" + str(car_n)
                 self.dashboard_item(
                     "binary_sensor." + self.prefix + "_car_charging_slot" + postfix,
                     state="on",
                     attributes={
-                        "planned": [],
-                        "cost": 0,
-                        "kwh": 0,
+                        "planned": plan,
+                        "cost": dp2(total_cost) if plan else None,
+                        "kwh": dp2(total_kwh) if plan else None,
                         "friendly_name": "Predbat car charging slot" + postfix,
                         "icon": "mdi:home-lightning-bolt-outline",
                         "solar_surplus": True,
