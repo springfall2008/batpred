@@ -2435,8 +2435,10 @@ def _test_async_automatic_config(my_predbat):
         devices = {"ems": None, "gateway": None, "battery": ["battery003"]}
         await ge.async_automatic_config(devices)
 
-        assert ge.config_args.get("charge_rate") == ["number.predbat_gecloud_battery003_charge_power_rate"]
-        assert ge.config_args.get("discharge_rate") == ["number.predbat_gecloud_battery003_discharge_power_rate"]
+        assert ge.config_args.get("charge_rate") is None
+        assert ge.config_args.get("discharge_rate") is None
+        assert ge.config_args.get("charge_rate_percent") == ["number.predbat_gecloud_battery003_charge_power_rate"]
+        assert ge.config_args.get("discharge_rate_percent") == ["number.predbat_gecloud_battery003_discharge_power_rate"]
         assert ge.config_args.get("reserve") == ["number.predbat_gecloud_battery003_battery_reserve_percent"]
         assert ge.config_args.get("charge_limit") == ["number.predbat_gecloud_battery003_ac_charge_1_upper_soc_percent_limit"]
         assert ge.config_args.get("scheduled_charge_enable") == ["switch.predbat_gecloud_battery003_enable_ac_charge"]

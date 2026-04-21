@@ -773,8 +773,9 @@ class GECloudDirect(ComponentBase):
             num_inverters = 1
             batteries = [devices["gateway"]]
 
-        # Do we have a charge power percentage setting?
+        # Do we have a charge/discharge power percentage setting?
         has_charge_power_percent = False
+        has_discharge_power_percent = False
         has_pause_start_time = False
         has_discharge_target_soc = False
         has_pause_battery = False
@@ -783,8 +784,10 @@ class GECloudDirect(ComponentBase):
             for key in registers:
                 reg_name = registers[key].get("name", "")
                 ha_name = regname_to_ha(reg_name)
-                if "inverter_charge_power_percentage" in ha_name:
+                if "inverter_charge_power_percentage" in ha_name or "charge_power_rate" in ha_name:
                     has_charge_power_percent = True
+                if "inverter_discharge_power_percentage" in ha_name or "discharge_power_rate" in ha_name:
+                    has_discharge_power_percent = True
                 if "pause_battery_start_time" in ha_name:
                     has_pause_start_time = True
                 if "dc_discharge_1_lower_soc_percent_limit" in ha_name:
@@ -828,9 +831,9 @@ class GECloudDirect(ComponentBase):
         self.set_arg("import_today", [f"sensor.{self.prefix}_gecloud_{device}_grid_import_total" for device in batteries])
         self.set_arg("export_today", [f"sensor.{self.prefix}_gecloud_{device}_grid_export_total" for device in batteries])
         self.set_arg("pv_today", [f"sensor.{self.prefix}_gecloud_{device}_solar_total" for device in batteries])
-        self.set_arg("charge_rate", build_entities("number", ["battery_charge_power", "charge_power_rate"]))
+        self.set_arg("charge_rate", build_entities("number", ["battery_charge_power"]))
         self.set_arg("battery_rate_max", [f"sensor.{self.prefix}_gecloud_{device}_max_charge_rate" for device in batteries])
-        self.set_arg("discharge_rate", build_entities("number", ["battery_discharge_power", "discharge_power_rate"]))
+        self.set_arg("discharge_rate", build_entities("number", ["battery_discharge_power"]))
         self.set_arg("battery_power", [f"sensor.{self.prefix}_gecloud_{device}_battery_power" for device in batteries])
         self.set_arg("pv_power", [f"sensor.{self.prefix}_gecloud_{device}_solar_power" for device in batteries])
         self.set_arg("load_power", [f"sensor.{self.prefix}_gecloud_{device}_consumption_power" for device in batteries])
@@ -868,9 +871,15 @@ class GECloudDirect(ComponentBase):
         else:
             self.set_arg("discharge_target_soc", None)
 
-        if has_charge_power_percent:
-            self.set_arg("charge_rate_percent", [f"number.{self.prefix}_gecloud_{device}_inverter_charge_power_percentage" for device in batteries])
-            self.set_arg("discharge_rate_percent", [f"number.{self.prefix}_gecloud_{device}_inverter_discharge_power_percentage" for device in batteries])
+        if has_charge_power_percent or has_discharge_power_percent:
+            charge_rate_percent = build_entities("number", ["inverter_charge_power_percentage", "charge_power_rate"])
+            discharge_rate_percent = build_entities("number", ["inverter_discharge_power_percentage", "discharge_power_rate"])
+            if charge_rate_percent is None:
+                charge_rate_percent = [f"number.{self.prefix}_gecloud_{device}_inverter_charge_power_percentage" for device in batteries]
+            if discharge_rate_percent is None:
+                discharge_rate_percent = [f"number.{self.prefix}_gecloud_{device}_inverter_discharge_power_percentage" for device in batteries]
+            self.set_arg("charge_rate_percent", charge_rate_percent)
+            self.set_arg("discharge_rate_percent", discharge_rate_percent)
         else:
             self.set_arg("charge_rate_percent", None)
             self.set_arg("discharge_rate_percent", None)
