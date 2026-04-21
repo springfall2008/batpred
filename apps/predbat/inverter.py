@@ -1905,9 +1905,11 @@ class Inverter:
             inverter_mode                      string
 
         """
+        inverter_mode_configured = False
         if self.rest_data:
             old_inverter_mode = self.rest_data["Control"]["Mode"]
         else:
+            inverter_mode_configured = "inverter_mode" in self.base.args
             # Inverter mode
             if changed_start_end and not self.rest_data:
                 # XXX: Workaround for GivTCP window state update time to take effort
@@ -1947,7 +1949,9 @@ class Inverter:
                     if entity_id:
                         self.write_and_poll_switch("inverter_mode", entity_id, new_inverter_mode == "on")
                     else:
-                        self.log("Warn: Inverter {} adjust_inverter_mode: No entity_id for ECO Toggle, inverter_mode should be set to xxx_enable_eco_mode".format(self.id))
+                        if not inverter_mode_configured:
+                            self.log("Warn: Inverter {} adjust_inverter_mode: No entity_id for ECO Toggle, inverter_mode should be set to xxx_enable_eco_mode".format(self.id))
+                        return
                 else:
                     self.write_and_poll_option("inverter_mode", entity_id, new_inverter_mode)
 

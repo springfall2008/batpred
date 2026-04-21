@@ -542,6 +542,58 @@ def test_adjust_ge_eco_toggle(test_name, ha, inv, prev_eco_state, force_export, 
     return failed
 
 
+def test_adjust_ge_eco_toggle_missing_entity(test_name, inv, force_export, inverter_mode_arg, expect_warning):
+    """
+    Test GE eco-toggle adjust_inverter_mode when inverter_mode entity is missing.
+
+    inverter_mode_arg:
+      - "unset": remove inverter_mode from args (expect warning)
+      - None: explicitly set inverter_mode to None (expect no warning)
+    """
+    failed = False
+    print("Test: {} force_export={}".format(test_name, force_export))
+
+    orig_has_ge_eco_toggle = inv.inv_has_ge_eco_toggle
+    orig_has_ge_inverter_mode = inv.inv_has_ge_inverter_mode
+    orig_has_inverter_mode_arg = "inverter_mode" in inv.base.args
+    orig_inverter_mode_arg = inv.base.args.get("inverter_mode")
+
+    inv.inv_has_ge_eco_toggle = True
+    inv.inv_has_ge_inverter_mode = False
+    inv.rest_data = None
+    inv.rest_api = None
+    if inverter_mode_arg == "unset":
+        inv.base.args.pop("inverter_mode", None)
+    else:
+        inv.base.args["inverter_mode"] = inverter_mode_arg
+    log_messages = []
+    orig_log = inv.base.log
+    orig_inv_log = inv.log
+    inv.base.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
+    inv.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
+
+    try:
+        inv.adjust_inverter_mode(force_export, False)
+    except Exception as exc:
+        print("ERROR: adjust_inverter_mode should not raise when inverter_mode entity is missing, got {}".format(exc))
+        failed = True
+
+    inv.inv_has_ge_eco_toggle = orig_has_ge_eco_toggle
+    inv.inv_has_ge_inverter_mode = orig_has_ge_inverter_mode
+    inv.base.log = orig_log
+    inv.log = orig_inv_log
+    if orig_has_inverter_mode_arg:
+        inv.base.args["inverter_mode"] = orig_inverter_mode_arg
+    else:
+        inv.base.args.pop("inverter_mode", None)
+    warning_found = any("No entity_id for ECO Toggle" in msg for msg in log_messages)
+    if warning_found != expect_warning:
+        print("ERROR: expected warning {} got {}".format(expect_warning, warning_found))
+        failed = True
+
+    return failed
+
+
 def test_adjust_battery_target(test_name, ha, inv, dummy_rest, prev_soc, soc, isCharging, isExporting, expect_soc=None, has_inv_time_button_press=False, expect_button_press=False):
     """
     Test the adjust_battery_target function
@@ -1632,6 +1684,10 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_adjust_ge_eco_toggle("eco_toggle_force_export", ha, inv, "on", True, "off")
     failed |= test_adjust_ge_eco_toggle("eco_toggle_no_change_eco", ha, inv, "on", False, "on")
     failed |= test_adjust_ge_eco_toggle("eco_toggle_no_change_export", ha, inv, "off", True, "off")
+    failed |= test_adjust_ge_eco_toggle_missing_entity("eco_toggle_missing_entity_unset_enable", inv, False, "unset", True)
+    failed |= test_adjust_ge_eco_toggle_missing_entity("eco_toggle_missing_entity_unset_export", inv, True, "unset", True)
+    failed |= test_adjust_ge_eco_toggle_missing_entity("eco_toggle_missing_entity_none_enable", inv, False, None, False)
+    failed |= test_adjust_ge_eco_toggle_missing_entity("eco_toggle_missing_entity_none_export", inv, True, None, False)
     if failed:
         return failed
 
