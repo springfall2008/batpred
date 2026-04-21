@@ -9,8 +9,8 @@
 # pylint: disable=attribute-defined-outside-init
 
 import asyncio
-from datetime import datetime, timezone
-from unittest.mock import patch, MagicMock
+from datetime import datetime
+from unittest.mock import MagicMock
 from solis import SolisAPI, SOLIS_CID_CHARGE_ENABLE_BASE, SOLIS_CID_CHARGE_TIME, SOLIS_CID_CHARGE_SOC_BASE, SOLIS_CID_CHARGE_CURRENT, SOLIS_CID_DISCHARGE_ENABLE_BASE
 from solis import SOLIS_CID_BATTERY_FORCE_CHARGE_SOC, SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC, SOLIS_CID_CHARGE_DISCHARGE_SETTINGS
 from solis import SOLIS_CID_STORAGE_MODE, SOLIS_BIT_GRID_CHARGING, SOLIS_BIT_TOU_MODE
@@ -1549,9 +1549,7 @@ async def test_write_time_windows_v1_discharge_slot_detection():
 
     storage_calls = api.set_storage_mode_calls
     assert len(storage_calls) == 1, f"Expected 1 storage mode call, got {len(storage_calls)}"
-    assert storage_calls[0]["mode"] == "Self-Use", (
-        f"Storage mode should be 'Self-Use' when inside discharge window, got '{storage_calls[0]['mode']}'"
-    )
+    assert storage_calls[0]["mode"] == "Self-Use", f"Storage mode should be 'Self-Use' when inside discharge window, got '{storage_calls[0]['mode']}'"
 
     print("PASSED: V1 mode correctly detects active discharge slot and sets Self-Use storage mode")
     return False
@@ -1613,9 +1611,7 @@ async def test_write_time_windows_v1_local_time_not_utc():
 
     assert result_outside == True
     outside_mode = api.set_storage_mode_calls[-1]["mode"]
-    assert outside_mode == "Self-Use - No Timed Charge/Discharge", (
-        f"With UTC time 20:43 (outside window) expected 'Self-Use - No Timed Charge/Discharge', got '{outside_mode}'"
-    )
+    assert outside_mode == "Self-Use - No Timed Charge/Discharge", f"With UTC time 20:43 (outside window) expected 'Self-Use - No Timed Charge/Discharge', got '{outside_mode}'"
 
     # The fix ensures now_utc_exact (local time) is used, so 21:43 local → Self-Use (in slot)
     # If UTC were used (20:43), result would be Self-Use - No Timed Charge/Discharge (outside slot)
