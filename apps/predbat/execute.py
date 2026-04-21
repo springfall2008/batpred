@@ -53,6 +53,11 @@ class Execute:
 
         isCharging = False
         isExporting = False
+
+        # Solar surplus car charging runs once up-front since it only reads global state
+        in_force_export_window = bool(self.set_export_window and self.export_window_best and self.minutes_now >= self.export_window_best[0]["start"] and self.minutes_now < self.export_window_best[0]["end"] and self.export_limits_best[0] < 100.0)
+        self.detect_car_solar_surplus(in_force_export_window)
+
         for inverter in self.inverters:
             if inverter.id not in self.count_inverter_writes:
                 self.count_inverter_writes[inverter.id] = 0
@@ -427,42 +432,6 @@ class Execute:
 
                 status_freeze_export = " [Freeze exporting]"
 
-            # Solar surplus car charging - detect excess solar export and activate car charging (once, not per-inverter)
-            if inverter.id == 0:
-                self.car_charging_solar_surplus_active = [False] * self.num_cars
-            if inverter.id == 0 and self.car_charging_solar_surplus and self.num_cars > 0 and not isExporting:
-                surplus_hysteresis = 200  # W deadband to prevent flapping
-                if len(self._car_surplus_prev) != self.num_cars:
-                    self._car_surplus_prev = [False] * self.num_cars
-                for car_n in range(self.num_cars):
-                    if not self.car_charging_planned[car_n]:
-                        continue
-                    if self.car_charging_soc[car_n] >= self.car_charging_solar_surplus_limit:
-                        continue
-
-                    car_rate_w = self.car_charging_rate[car_n] * 1000
-                    threshold = self.car_charging_solar_surplus_threshold
-
-                    # When car was surplus-charging last cycle, add back its load to get true available export
-                    effective_export = self.grid_power
-                    previously_active = self._car_surplus_prev[car_n]
-                    if previously_active:
-                        effective_export += car_rate_w
-
-                    if previously_active:
-                        # Currently on: lower bar to stay on, no battery check needed
-                        if effective_export >= car_rate_w - threshold - surplus_hysteresis:
-                            self.car_charging_solar_surplus_active[car_n] = True
-                    else:
-                        # Currently off: higher bar to turn on, require battery not discharging
-                        if effective_export >= car_rate_w - threshold + surplus_hysteresis and self.battery_power <= surplus_hysteresis:
-                            self.car_charging_solar_surplus_active[car_n] = True
-
-                    if self.car_charging_solar_surplus_active[car_n]:
-                        self.log("Solar surplus car charging active for car {}: export {}W (effective {}W), rate {}W, threshold {}W".format(car_n, int(self.grid_power), int(effective_export), int(car_rate_w), int(threshold)))
-                        break  # One car at a time from surplus
-                self._car_surplus_prev = list(self.car_charging_solar_surplus_active)
-
             # Car charging from battery disable? (runs per-inverter for discharge hold)
             carHolding = False
             if self.set_charge_window and not self.car_charging_from_battery and self.car_energy_reported_load:
@@ -703,6 +672,54 @@ class Execute:
             status += " [Manual SoC]"
 
         return status, status_extra
+
+    def detect_car_solar_surplus(self, in_force_export_window):
+        """
+        Detect excess solar export and mark cars as eligible to charge from surplus.
+
+        Populates ``self.car_charging_solar_surplus_active`` (per car) and updates
+        ``self._car_surplus_prev`` for the next cycle's hysteresis check. Uses only
+        global state (grid/battery power, car config), so runs once per execute_plan
+        rather than per inverter.
+        """
+        self.car_charging_solar_surplus_active = [False] * self.num_cars
+        if not self.car_charging_solar_surplus or self.num_cars <= 0 or in_force_export_window:
+            self._car_surplus_prev = list(self.car_charging_solar_surplus_active)
+            return
+
+        surplus_hysteresis = 200  # W deadband to prevent flapping
+        if len(self._car_surplus_prev) != self.num_cars:
+            self._car_surplus_prev = [False] * self.num_cars
+
+        for car_n in range(self.num_cars):
+            if not self.car_charging_planned[car_n]:
+                continue
+            if self.car_charging_soc[car_n] >= self.car_charging_solar_surplus_limit:
+                continue
+
+            car_rate_w = self.car_charging_rate[car_n] * 1000
+            threshold = self.car_charging_solar_surplus_threshold
+
+            # When car was surplus-charging last cycle, add back its load to get true available export
+            effective_export = self.grid_power
+            previously_active = self._car_surplus_prev[car_n]
+            if previously_active:
+                effective_export += car_rate_w
+
+            if previously_active:
+                # Currently on: lower bar to stay on, no battery check needed
+                if effective_export >= car_rate_w - threshold - surplus_hysteresis:
+                    self.car_charging_solar_surplus_active[car_n] = True
+            else:
+                # Currently off: higher bar to turn on, require battery not discharging
+                if effective_export >= car_rate_w - threshold + surplus_hysteresis and self.battery_power <= surplus_hysteresis:
+                    self.car_charging_solar_surplus_active[car_n] = True
+
+            if self.car_charging_solar_surplus_active[car_n]:
+                self.log("Solar surplus car charging active for car {}: export {}W (effective {}W), rate {}W, threshold {}W".format(car_n, int(self.grid_power), int(effective_export), int(car_rate_w), int(threshold)))
+                break  # One car at a time from surplus
+
+        self._car_surplus_prev = list(self.car_charging_solar_surplus_active)
 
     def adjust_battery_target_multi(self, inverter, soc, is_charging, is_exporting, isFreezeCharge=False, check=False):
         """
