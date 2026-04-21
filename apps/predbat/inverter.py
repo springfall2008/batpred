@@ -1948,6 +1948,7 @@ class Inverter:
                         self.write_and_poll_switch("inverter_mode", entity_id, new_inverter_mode == "on")
                     else:
                         self.log("Warn: Inverter {} adjust_inverter_mode: No entity_id for ECO Toggle, inverter_mode should be set to xxx_enable_eco_mode".format(self.id))
+                        return
                 else:
                     self.write_and_poll_option("inverter_mode", entity_id, new_inverter_mode)
 
