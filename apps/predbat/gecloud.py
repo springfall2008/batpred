@@ -874,10 +874,6 @@ class GECloudDirect(ComponentBase):
         if has_charge_power_percent or has_discharge_power_percent:
             charge_rate_percent = build_entities("number", ["inverter_charge_power_percentage", "charge_power_rate"])
             discharge_rate_percent = build_entities("number", ["inverter_discharge_power_percentage", "discharge_power_rate"])
-            if charge_rate_percent is None:
-                charge_rate_percent = [f"number.{self.prefix}_gecloud_{device}_inverter_charge_power_percentage" for device in batteries]
-            if discharge_rate_percent is None:
-                discharge_rate_percent = [f"number.{self.prefix}_gecloud_{device}_inverter_discharge_power_percentage" for device in batteries]
             self.set_arg("charge_rate_percent", charge_rate_percent)
             self.set_arg("discharge_rate_percent", discharge_rate_percent)
         else:
