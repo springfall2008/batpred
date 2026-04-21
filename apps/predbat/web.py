@@ -3042,7 +3042,7 @@ chart.render();
         for arg in args:
             value = args[arg]
             raw_value = self.resolve_value_raw(arg, value)
-            if ("_key" in arg) or ("_password" in arg):
+            if ("_key" in arg) or ("_password" in arg) or ("_secret" in arg):
                 value = '<span title = "{}"> (hidden)</span>'.format(value)
             arg_errors = self.base.arg_errors.get(arg, "")
 

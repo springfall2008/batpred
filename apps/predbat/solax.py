@@ -833,6 +833,10 @@ class SolaxAPI(ComponentBase):
                 if field_type == 'number':
                     state = as_int(state, default=default)
                     state = max(min_value, min(max_value, state))
+                elif field_type == 'switch':
+                    # Normalise to bool: HA entities return "on"/"off" strings
+                    if isinstance(state, str):
+                        state = state.lower() == "on"
                 self.controls[plant_id][direction][field] = state
         for field in ["reserve"]:
             item_name, ha_name, friendly_name, field_type, field_units, default, min_value, max_value = self.control_info(plant_id, None, field)
@@ -869,6 +873,10 @@ class SolaxAPI(ComponentBase):
                         attributes["step"] = 1
                     if '_time' in field:
                         attributes["options"] = OPTIONS_TIME_FULL
+                    # Switch entities must publish "on"/"off" strings so that inverter.py
+                    # normalization (which checks for the string "off") works correctly
+                    if field_type == 'switch':
+                        value = "on" if value else "off"
                     self.dashboard_item(
                         ha_name,
                         state=value,
