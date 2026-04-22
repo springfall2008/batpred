@@ -2429,6 +2429,71 @@ class Output:
         if had_errors:
             self.had_errors = True
 
+    def record_alert(self, category, severity, title, message, dedup_key=None, metadata=None, expires_at=None, action_url=None):
+        """
+        Record a user-facing alert. Published as a list of dicts on the
+        `sensor.<prefix>_system_alerts` entity (attribute `alerts`).
+
+        Producers re-call each cycle while the condition holds and must pass
+        an `expires_at` slightly longer than their re-check cadence (usually
+        2× the plan interval). Alerts with a past `expires_at` are auto-pruned
+        on the next publish. To fast-resolve an alert early, re-record it with
+        `expires_at` set to now.
+
+        Args:
+            category: Short string grouping (e.g. "weather", "system",
+                "api_keys"). Consumers may filter or route by this.
+            severity: One of "critical", "warning", "info".
+            title: Short user-facing title.
+            message: Longer description.
+            dedup_key: Optional — if provided, an existing alert with the same
+                key is replaced (so repeated calls don't accumulate). Defaults
+                to a composite of category + title.
+            metadata: Optional dict carried through to consumers for routing
+                hints (e.g. `{"action": "keep_reserve", "percent": 50}`).
+            expires_at: ISO-8601 timestamp. Strongly recommended — without
+                one, an alert persists until the process restarts.
+            action_url: Optional deep link for consumers that can render it.
+        """
+        key = dedup_key or "{}::{}".format(category, title)
+        self._active_alerts[key] = {
+            "category": category,
+            "severity": severity,
+            "title": title,
+            "message": message,
+            "dedup_key": key,
+            "metadata": metadata or {},
+            "expires_at": expires_at,
+            "action_url": action_url,
+            "recorded_at": self.now_utc_exact.isoformat() if hasattr(self, "now_utc_exact") and self.now_utc_exact else None,
+        }
+        self._publish_system_alerts()
+
+    def _publish_system_alerts(self):
+        """Prune expired entries and publish the current active list."""
+        now_iso = self.now_utc_exact.isoformat() if hasattr(self, "now_utc_exact") and self.now_utc_exact else None
+
+        # Prune expired
+        if now_iso:
+            expired_keys = [k for k, a in self._active_alerts.items() if a.get("expires_at") and a["expires_at"] < now_iso]
+            for k in expired_keys:
+                del self._active_alerts[k]
+
+        active = sorted(
+            self._active_alerts.values(),
+            key=lambda a: ({"critical": 0, "warning": 1, "info": 2}.get(a.get("severity", "info"), 2), a.get("recorded_at") or ""),
+        )
+        self.dashboard_item(
+            self.prefix + ".system_alerts",
+            state="on" if active else "off",
+            attributes={
+                "friendly_name": "PredBat system alerts",
+                "icon": "mdi:alert-circle-outline",
+                "alerts": active,
+                "count": len(active),
+            },
+        )
+
     def load_today_comparison(self, load_minutes, load_forecast, car_minutes, import_minutes, minutes_now, step=5, save=True):
         """
         Compare predicted vs actual load

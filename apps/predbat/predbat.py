@@ -473,6 +473,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Marginal, Exec
         self.current_status = None
         self.previous_status = None
         self.had_errors = False
+        # Active user-facing alerts keyed by (category, dedup_key). See
+        # record_alert()/clear_alert() in output.py.
+        self._active_alerts = {}
         self.plan_valid = False
         self.plan_last_updated = None
         self.plan_last_updated_minutes = 0
