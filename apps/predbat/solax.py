@@ -669,12 +669,14 @@ class SolaxAPI(ComponentBase):
             charge_end = now.replace(hour=int(charge_end_str.split(":")[0]), minute=int(charge_end_str.split(":")[1]), second=0, microsecond=0)
             charge_end_minutes = charge_end.hour * 60 + charge_end.minute
             if charge_end <= charge_start:
-                # Window spans midnight - adjust both ends so the comparison works
-                # regardless of whether we're before or after midnight
-                charge_end += timedelta(days=1)
-                if now < charge_start:
-                    # We're past midnight but before charge_start in clock terms; slide start back
+                # Window spans midnight: slide the appropriate end so comparisons work.
+                # If now is before the end time (we're in the after-midnight portion), pull start
+                # back to yesterday so start < now < end.  Otherwise push end to tomorrow so the
+                # window is treated as fully in the future (or already passed today).
+                if now < charge_end:
                     charge_start -= timedelta(days=1)
+                else:
+                    charge_end += timedelta(days=1)
             if charge_start <= now <= charge_end:
                 charge_window = True
         if export_enable:
@@ -682,12 +684,11 @@ class SolaxAPI(ComponentBase):
             export_end = now.replace(hour=int(export_end_str.split(":")[0]), minute=int(export_end_str.split(":")[1]), second=0, microsecond=0)
             export_end_minutes = export_end.hour * 60 + export_end.minute
             if export_end <= export_start:
-                # Window spans midnight - adjust both ends so the comparison works
-                # regardless of whether we're before or after midnight
-                export_end += timedelta(days=1)
-                if now < export_start:
-                    # We're past midnight but before export_start in clock terms; slide start back
+                # Window spans midnight: same logic as charge window above.
+                if now < export_end:
                     export_start -= timedelta(days=1)
+                else:
+                    export_end += timedelta(days=1)
             if export_start <= now <= export_end:
                 export_window = True
 

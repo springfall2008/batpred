@@ -560,6 +560,35 @@ async def test_apply_controls(solax_api, test_plant_id):
             else:
                 print(f"✓ Midnight-spanning charge window correctly detected at 23:45")
 
+    # Test 11: After window end (06:00) should be eco mode, not charge mode
+    print("\n--- Test 11: After midnight-spanning window end at 06:00 (window 23:30-05:30) ---")
+    test_time = datetime.now(solax_api.local_tz).replace(hour=6, minute=0, second=0, microsecond=0)
+
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
+        mock_datetime.now.return_value = test_time
+        mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = True
+        solax_api.current_mode_hash = None  # Reset hash
+
+        result = await solax_api.apply_controls(test_plant_id)
+
+        if not result:
+            print("**** ERROR: apply_controls returned False at 06:00 ****")
+            failed = True
+        elif mock_send.call_count == 0:
+            print("**** ERROR: No API calls made at 06:00 ****")
+            failed = True
+        else:
+            calls_str = " ".join(str(c) for c in mock_send.call_args_list)
+            if "soc_target_control_mode" in calls_str:
+                print(f"**** ERROR: Expected eco mode at 06:00 (after window end), got charge mode: {calls_str} ****")
+                failed = True
+            elif "charge_or_discharge_mode" not in calls_str:
+                print(f"**** ERROR: Expected eco mode (charge_or_discharge_mode) at 06:00, got: {calls_str} ****")
+                failed = True
+            else:
+                print(f"✓ After midnight-spanning window end (06:00) correctly uses eco mode")
+
     return failed
 
 
