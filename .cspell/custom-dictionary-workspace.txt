@@ -238,10 +238,11 @@ nattribute
 ncalls
 nearr
 njpwerner
+nobat
 nocharge
 nodischarge
 nord
-Nordpool
+nordpool
 nosc
 nrgheat
 numpy

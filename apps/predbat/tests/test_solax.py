@@ -500,6 +500,66 @@ async def test_apply_controls(solax_api, test_plant_id):
             else:
                 print(f"✓ Freeze export mode applied correctly at 18:00 (target_soc >= current_soc)")
 
+    # Test 9: Midnight-spanning charge window - currently after midnight (00:30) inside 23:30-05:30 window
+    # This was the bug: charge_start (23:30 today) > now (00:30 today) so the window was missed
+    print("\n--- Test 9: Midnight-spanning charge window at 00:30 (window 23:30-05:30) ---")
+    test_time = datetime.now(solax_api.local_tz).replace(hour=0, minute=30, second=0, microsecond=0)
+
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
+        mock_datetime.now.return_value = test_time
+        mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = True
+        solax_api.current_mode_hash = None  # Reset hash
+
+        solax_api.controls[test_plant_id]["charge"]["start_time"] = "23:30:00"
+        solax_api.controls[test_plant_id]["charge"]["end_time"] = "05:30:00"
+        solax_api.controls[test_plant_id]["charge"]["enable"] = True
+        solax_api.controls[test_plant_id]["charge"]["target_soc"] = 90
+        solax_api.controls[test_plant_id]["export"]["enable"] = False
+
+        result = await solax_api.apply_controls(test_plant_id)
+
+        if not result:
+            print("**** ERROR: apply_controls returned False for midnight-spanning charge window ****")
+            failed = True
+        elif mock_send.call_count == 0:
+            print("**** ERROR: No API calls made - charge window not detected after midnight ****")
+            failed = True
+        else:
+            # Charge mode sends soc_target_control_mode; eco mode sends self_consume/charge_or_discharge_mode
+            calls_str = " ".join(str(c) for c in mock_send.call_args_list)
+            if "soc_target_control_mode" not in calls_str:
+                print(f"**** ERROR: Expected soc_target_control_mode (charge mode) after midnight, got: {calls_str} ****")
+                failed = True
+            else:
+                print(f"✓ Midnight-spanning charge window correctly detected at 00:30")
+
+    # Test 10: Midnight-spanning charge window - currently before midnight (23:45) inside 23:30-05:30 window
+    print("\n--- Test 10: Midnight-spanning charge window at 23:45 (window 23:30-05:30) ---")
+    test_time = datetime.now(solax_api.local_tz).replace(hour=23, minute=45, second=0, microsecond=0)
+
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
+        mock_datetime.now.return_value = test_time
+        mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = True
+        solax_api.current_mode_hash = None  # Reset hash
+
+        result = await solax_api.apply_controls(test_plant_id)
+
+        if not result:
+            print("**** ERROR: apply_controls returned False for midnight-spanning charge window before midnight ****")
+            failed = True
+        elif mock_send.call_count == 0:
+            print("**** ERROR: No API calls made - charge window not detected before midnight ****")
+            failed = True
+        else:
+            calls_str = " ".join(str(c) for c in mock_send.call_args_list)
+            if "soc_target_control_mode" not in calls_str:
+                print(f"**** ERROR: Expected soc_target_control_mode (charge mode) before midnight, got: {calls_str} ****")
+                failed = True
+            else:
+                print(f"✓ Midnight-spanning charge window correctly detected at 23:45")
+
     return failed
 
 
