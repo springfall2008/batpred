@@ -4846,6 +4846,98 @@ async def test_publish_device_realtime_data_main():
     else:
         print(f"✓ Multiple devices test passed")
 
+    # Test 8: load_power is calculated correctly from inverter + battery data
+    # load_power = pv - battery_charge_discharge - grid
+    # PV=2000, grid=-500 (importing), battery=1000 (charging) => load = 2000 - 1000 - (-500) = 1500W
+    print("Test 8: load_power sensor calculated correctly")
+    api8 = MockSolaxAPI()
+    api8.initialize(client_id="test", client_secret="test", region="eu")
+
+    api8.device_info["INV_LOAD"] = {"deviceSn": "INV_LOAD", "deviceType": 1, "deviceModel": 3, "plantId": "load_plant"}
+    api8.device_info["BAT_LOAD"] = {"deviceSn": "BAT_LOAD", "deviceType": 2, "deviceModel": 0, "plantId": "load_plant"}
+
+    api8.realtime_device_data["INV_LOAD"] = {
+        "deviceSn": "INV_LOAD",
+        "acPower1": 500,
+        "acPower2": 0,
+        "acPower3": 0,
+        "gridPower": -500,  # Importing 500W
+        "pvMap": {"pv1Power": 2000},
+        "totalActivePower": 500,
+        "totalReactivePower": 0,
+        "totalYield": 1000.0,
+        "deviceStatus": 102,
+    }
+    api8.realtime_device_data["BAT_LOAD"] = {
+        "deviceSn": "BAT_LOAD",
+        "batterySOC": 60,
+        "batteryVoltage": 400.0,
+        "chargeDischargePower": 1000,  # Charging at 1000W
+        "batteryCurrent": 2.5,
+        "batteryTemperature": 21.0,
+        "deviceStatus": 1,
+    }
+
+    await api8.publish_device_realtime_data()
+
+    load_sensor = "sensor.predbat_solax_load_plant_INV_LOAD_load_power"
+    expected_load = 1500  # 2000 pv - 1000 battery - (-500 grid) = 1500
+    if load_sensor not in api8.dashboard_items:
+        print(f"**** ERROR: load_power sensor not found (expected {load_sensor}) ****")
+        failed = True
+    elif api8.dashboard_items[load_sensor]["state"] != expected_load:
+        print(f"**** ERROR: Expected load_power {expected_load}W, got {api8.dashboard_items[load_sensor]['state']} ****")
+        failed = True
+    elif api8.dashboard_items[load_sensor]["attributes"]["unit_of_measurement"] != "W":
+        print(f"**** ERROR: Wrong load_power unit_of_measurement ****")
+        failed = True
+    else:
+        print(f"✓ load_power sensor calculated correctly ({expected_load}W)")
+
+    # Test 9: load_power with None battery power (API returns None for chargeDischargePower)
+    # load_power should treat None as 0: load = pv - 0 - grid
+    print("Test 9: load_power with None chargeDischargePower defaults to 0")
+    api9 = MockSolaxAPI()
+    api9.initialize(client_id="test", client_secret="test", region="eu")
+
+    api9.device_info["INV_NOBAT"] = {"deviceSn": "INV_NOBAT", "deviceType": 1, "deviceModel": 3, "plantId": "nobat_plant"}
+    api9.device_info["BAT_NOBAT"] = {"deviceSn": "BAT_NOBAT", "deviceType": 2, "deviceModel": 0, "plantId": "nobat_plant"}
+
+    api9.realtime_device_data["INV_NOBAT"] = {
+        "deviceSn": "INV_NOBAT",
+        "acPower1": 800,
+        "acPower2": 0,
+        "acPower3": 0,
+        "gridPower": 300,  # Exporting 300W
+        "pvMap": {"pv1Power": 1100},
+        "totalActivePower": 800,
+        "totalReactivePower": 0,
+        "totalYield": 500.0,
+        "deviceStatus": 102,
+    }
+    api9.realtime_device_data["BAT_NOBAT"] = {
+        "deviceSn": "BAT_NOBAT",
+        "batterySOC": 100,
+        "batteryVoltage": 400.0,
+        "chargeDischargePower": None,  # API returned None
+        "batteryCurrent": 0,
+        "batteryTemperature": 20.0,
+        "deviceStatus": 1,
+    }
+
+    await api9.publish_device_realtime_data()
+
+    load_sensor9 = "sensor.predbat_solax_nobat_plant_INV_NOBAT_load_power"
+    expected_load9 = 800  # 1100 pv - 0 (None->0) - 300 grid = 800
+    if load_sensor9 not in api9.dashboard_items:
+        print(f"**** ERROR: load_power sensor not found (expected {load_sensor9}) ****")
+        failed = True
+    elif api9.dashboard_items[load_sensor9]["state"] != expected_load9:
+        print(f"**** ERROR: Expected load_power {expected_load9}W with None battery, got {api9.dashboard_items[load_sensor9]['state']} ****")
+        failed = True
+    else:
+        print(f"✓ load_power with None chargeDischargePower treated as 0 ({expected_load9}W)")
+
     if not failed:
         print("✓ publish_device_realtime_data tests passed")
 
