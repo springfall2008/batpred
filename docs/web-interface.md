@@ -104,6 +104,11 @@ The chart also shows where charging is planned under the Base and Best scenarios
 - **PV7** - Similar to the PV chart, but shows actual solar generation and forecast for the last 7 days including today
 - **Load ML** - Shows the correlation between your actual house load and the [Load ML predictions](load-ml.md), charting current prediction, the 1 hour in the future prediction, and the 8 hours future prediction
 - **LoadMLPower** - Similar to the Load ML chart, but also plots actual PV production, predicted PV production and temperature predictions.
+- **MarginalCosts** - Shows the marginal cost of consuming extra electricity at different load levels (1, 2, 4, 8 kWh) across upcoming time windows.
+  The page contains three sections:
+    - A status table showing whether the current marginal rate for each load level is **cheap** or **moderate** based on today's import rate range
+    - A compact **Grid Rates** heatmap showing the actual import and export rate at each time window
+    - A full **Marginal Energy Cost** heatmap matrix coloured green (cheap) to red (expensive) on a shared scale
 
 Example PV chart:
 

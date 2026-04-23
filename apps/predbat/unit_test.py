@@ -32,6 +32,7 @@ from tests.test_find_charge_curve import run_find_charge_curve_tests
 from tests.test_find_battery_size import run_find_battery_size_tests
 from tests.test_optimise_all_windows import run_optimise_all_windows_tests
 from tests.test_nordpool import run_nordpool_test
+from tests.test_futurerate_auto import test_futurerate_auto
 from tests.test_car_charging_smart import run_car_charging_smart_tests
 from tests.test_plugin_startup import test_plugin_startup_order
 from tests.test_optimise_levels import run_optimise_levels_tests
@@ -43,6 +44,7 @@ from tests.test_single_debug import run_single_debug
 from tests.test_saving_session import test_saving_session, test_saving_session_null_octopoints, test_saving_session_notify_config, test_saving_session_default_rate
 from tests.test_secrets import run_secrets_tests
 from tests.test_ge_cloud import test_ge_cloud
+from tests.test_compare import test_compare
 from tests.test_gateway import run_gateway_tests
 from tests.test_axle import test_axle
 from tests.test_db_manager import test_db_manager
@@ -88,6 +90,7 @@ from tests.test_add_now_to_octopus_slot import test_add_now_to_octopus_slot
 from tests.test_dynamic_load import test_dynamic_load_car_slot_cancellation
 from tests.test_fox_api import run_fox_api_tests
 from tests.test_solcast import run_solcast_tests
+from tests.test_open_meteo import run_open_meteo_tests
 from tests.test_rate_add_io_slots import run_rate_add_io_slots_tests
 from tests.test_battery_curve_keys import run_battery_curve_keys_tests
 from tests.test_balance_inverters import run_balance_inverters_tests
@@ -112,6 +115,7 @@ from tests.test_clip_export_slots import run_clip_export_slots_tests
 from tests.test_clip_charge_slots import run_clip_charge_slots_tests
 from tests.test_discard_unused_charge_slots import run_discard_unused_charge_slots_tests
 from tests.test_discard_unused_export_slots import run_discard_unused_export_slots_tests
+from tests.test_marginal_costs import test_marginal_costs
 
 
 # Mock the components and plugin system
@@ -210,6 +214,7 @@ def main():
         ("manual_select", run_test_manual_select, "Manual select tests", False),
         ("web_if", run_test_web_if, "Web interface tests", False),
         ("nordpool", run_nordpool_test, "Nordpool tests", False),
+        ("futurerate_auto", test_futurerate_auto, "FutureRate auto Agile detection tests", False),
         ("octopus_slots", run_load_octopus_slots_tests, "Load Octopus slots tests", False),
         ("multi_car_iog", run_multi_car_iog_tests, "Multi-car IOG tests", False),
         ("rate_add_io_slots", run_rate_add_io_slots_tests, "Rate add IO slots tests", False),
@@ -228,6 +233,7 @@ def main():
         ("alert_feed", test_alert_feed, "Alert feed tests", False),
         ("fox_api", run_fox_api_tests, "Fox API tests", False),
         ("solcast", run_solcast_tests, "Solcast API tests", False),
+        ("open_meteo", run_open_meteo_tests, "Open-Meteo solar forecast provider tests", False),
         ("solax", run_solax_tests, "SolaX API tests", False),
         ("iboost_smart", run_iboost_smart_tests, "iBoost smart tests", False),
         ("car_charging_smart", run_car_charging_smart_tests, "Car charging smart tests", False),
@@ -267,8 +273,6 @@ def main():
         ("component_base", test_component_base_all, "ComponentBase tests (all)", False),
         # Solis Cloud API unit tests
         ("solis", run_solis_tests, "Solis Cloud API tests (V1/V2 time window writes, change detection)", False),
-        # ML Load Forecaster tests
-        ("load_ml", test_load_ml, "ML Load Forecaster tests (MLP, training, persistence, validation)", False),
         # External Temperature API tests
         ("temperature", test_temperature, "External Temperature API tests (initialization, zone.home fallback, timezone conversion, caching)", False),
         ("band_rate_text", test_band_rate_text, "Band rate text tests (flat rate, Cosy, Flux import/export)", False),
@@ -282,8 +286,11 @@ def main():
         ("clip_charge_slots", run_clip_charge_slots_tests, "Clip charge slots tests", False),
         ("discard_unused_charge_slots", run_discard_unused_charge_slots_tests, "Discard unused charge slots tests", False),
         ("discard_unused_export_slots", run_discard_unused_export_slots_tests, "Discard unused export slots tests", False),
-        ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", False),
+        ("marginal_costs", test_marginal_costs, "Marginal energy cost matrix tests", False),
+        ("compare", test_compare, "Compare tariff engine tests (hardware overrides, bleed isolation)", False),
         ("gateway", run_gateway_tests, "GatewayMQTT component tests (protobuf, plan serialization, commands, telemetry)", False),
+        ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", False),
+        ("load_ml", test_load_ml, "ML Load Forecaster tests (MLP, training, persistence, validation)", True),
         ("optimise_windows", run_optimise_all_windows_tests, "Optimise all windows tests", True),
         ("debug_cases", run_debug_cases, "Debug case file tests", True),
     ]

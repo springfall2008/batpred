@@ -17,6 +17,7 @@ def run_battery_curve_keys_tests(my_predbat):
         test_get_curve_value_with_string_keys(my_predbat)
         test_get_curve_value_with_mixed_keys(my_predbat)
         test_get_curve_value_custom_default(my_predbat)
+        test_validate_config_auto_curve(my_predbat)
         print("**** Battery curve keys tests: All tests passed ****")
     except AssertionError as e:
         print(f"**** Battery curve keys tests FAILED: {e} ****")
@@ -74,6 +75,25 @@ def test_get_curve_value_custom_default(my_predbat):
     assert get_curve_value(curve, 99, default=0.5) == 0.5
     assert get_curve_value(curve, 98, default=0.0) == 0.0
     print("✓ Custom default test passed")
+
+
+def test_validate_config_auto_curve(my_predbat):
+    """Test that battery_charge_power_curve and battery_discharge_power_curve set to 'auto' passes validation"""
+    original_args = my_predbat.args.copy()
+    try:
+        # Get baseline error count without the curve settings
+        my_predbat.args.pop("battery_charge_power_curve", None)
+        my_predbat.args.pop("battery_discharge_power_curve", None)
+        baseline_errors = my_predbat.validate_config()
+
+        # Now set both curves to "auto" and verify no additional errors are introduced
+        my_predbat.args["battery_charge_power_curve"] = "auto"
+        my_predbat.args["battery_discharge_power_curve"] = "auto"
+        errors_with_auto = my_predbat.validate_config()
+        assert errors_with_auto == baseline_errors, f"Setting curves to 'auto' introduced extra validation errors: baseline={baseline_errors}, with_auto={errors_with_auto}"
+        print("✓ Auto curve validation test passed")
+    finally:
+        my_predbat.args = original_args
 
 
 if __name__ == "__main__":

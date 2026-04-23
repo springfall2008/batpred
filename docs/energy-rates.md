@@ -477,7 +477,12 @@ The approximation is only used until the real Octopus Agile rates are released a
 
 - **futurerate_url** - URL of future energy market prices; this should not normally need to be changed
 - **futurerate_adjust_import** and **futurerate_adjust_export** - Whether tomorrow's predicted import or export prices should be adjusted based on energy market prices or not.
-Set these depending on whether you have an agile tariff for import, export or both
+  Set these depending on whether you have an Agile tariff for import, export or both.
+- **futurerate_adjust_auto** - When set to `true`, Predbat will automatically detect whether you are on an Agile tariff using the sensor attributes from
+  the [Octopus Energy integration](https://github.com/BottlecapDave/HomeAssistant-OctopusEnergy) or Predbat's built-in Octopus Component
+  (configured via `metric_octopus_import` / `metric_octopus_export`). If neither import nor export is detected as Agile, future rate fetching is skipped entirely.
+  If at least one is Agile, Predbat fetches future rates and automatically calibrates only the Agile rates, overriding the manual `futurerate_adjust_import` and
+  `futurerate_adjust_export` settings.
 - **futurerate_peak_start** and **futurerate_peak_end** - during the peak period Octopus applies an additional peak-rate price adjustment.
 These configuration items enable the peak-rate hours to be adjusted
 
@@ -485,6 +490,15 @@ CAUTION: You may violate the terms and conditions of the Nordpool site if you us
 Predbat accepts no responsibility for any violations:
 
 <https://www.nordpoolgroup.com/en/About-us/terms-and-conditions-for-useofwebsite/>
+
+```yaml
+  futurerate_url: 'https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices?date=DATE&market=N2EX_DayAhead&deliveryArea=UK&currency=GBP'
+  futurerate_adjust_auto: true
+  futurerate_peak_start: "16:00:00"
+  futurerate_peak_end: "19:00:00"
+```
+
+Or, if you prefer to set import/export calibration manually rather than auto-detecting:
 
 ```yaml
   futurerate_url: 'https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices?date=DATE&market=N2EX_DayAhead&deliveryArea=UK&currency=GBP'

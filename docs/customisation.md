@@ -750,3 +750,5 @@ These are described in detail in [Updating Predbat](install.md#predbat-built-in-
 
 - **select.predbat_update** - List of Predbat software versions you can select to update Predbat to
 - **switch.predbat_auto_update** - When On, Predbat will automatically update itself as new releases are published on GitHub.
+
+Advanced: set `predbat_repository` in `apps.yaml` (format `owner/repo`) to source **main** updates from a fork instead of the default upstream repository. Versioned release options still use the official upstream repository.

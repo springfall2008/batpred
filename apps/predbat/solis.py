@@ -235,6 +235,7 @@ SOLIS_API_CODES = {
     "10403": "Forbidden",
     "10404": "Not found",
     "10500": "Internal server error",
+    "B0115": "Failure to send",
 }
 
 # Time options for selectors (HH:MM:SS format)
@@ -368,12 +369,18 @@ class SolisAPI(ComponentBase):
                     # Parse JSON response
                     response_json = await response.json()
 
+                    #self.log("Request to Solis API endpoint {} with payload {} returned response: {}".format(endpoint, payload, response_json))
+
                     # Check API response code
                     code = response_json.get("code", "Unknown")
                     if str(code) != "0":
                         error_msg = response_json.get("msg", "Unknown error")
                         error_detail = SOLIS_API_CODES.get(str(code), f"Unknown code: {code}")
                         record_api_call("solis", False, "server_error")
+                        if str(code) == "B0115":
+                            # Perform a wait as it maybe rate limiting
+                            self.log("Solis API: Received B0115 error, likely rate limiting. Waiting for 10 seconds before retrying.")
+                            await asyncio.sleep(10)
                         raise SolisAPIError(f"API error: {error_msg} ({error_detail} - {response_json})", response_code=str(code))
 
                     # Return data field
@@ -412,7 +419,6 @@ class SolisAPI(ComponentBase):
         async def read_operation():
             payload = {"inverterSn": inverter_sn, "cid": cid}
             data = await self._execute_request(SOLIS_READ_ENDPOINT, payload)
-            self.log("Read Payload: {} - result {}".format(payload, data))  # Debug log for payload and result
             if data is None:
                 raise SolisAPIError(f"Read CID {cid} failed: missing 'data' field")
             if "msg" not in data:
@@ -437,9 +443,7 @@ class SolisAPI(ComponentBase):
             # Convert CID list to comma-separated string
             cids_str = ",".join(str(cid) for cid in cids)
             payload = {"inverterSn": inverter_sn, "cids": cids_str}
-            self.log("Batch Read Payload: " + str(payload))  # Debug log for payload
             data = await self._execute_request(SOLIS_READ_BATCH_ENDPOINT, payload)
-            self.log("Batch Read Payload: {} - result {}".format(payload, data))  # Debug log for payload and result
 
             if data is None:
                 raise SolisAPIError("Batch read failed: missing 'data' field")
@@ -625,6 +629,8 @@ class SolisAPI(ComponentBase):
                     current_cid = SOLIS_CID_DISCHARGE_CURRENT[slot - 1]
                     max_discharge_current_amps = min(self.cached_infos.get(inverter_sn, {}).get(current_cid, {}).get('sysCommand', {}).get('max', max_discharge_current_amps), max_discharge_current_amps)
 
+                # Prep: extract active currents from slot 1 and zero out times for disabled slots
+                # so that the two-pass write below has clean data to compare against.
                 for slot in slots_to_check:
                     slot_data = time_windows.get(slot)
                     if not slot_data:
@@ -635,79 +641,122 @@ class SolisAPI(ComponentBase):
                         charge_current = slot_data.get("charge_current", charge_current)
                         discharge_current = slot_data.get("discharge_current", discharge_current)
 
-                    # Check and write charge enable if changed
-                    if "charge_enable" in slot_data:
+                    # When a slot is disabled, zero out its times so the inverter shows a clean 00:00-00:00
+                    if not slot_data.get("charge_enable", 0):
+                        slot_data["charge_start_time"] = "00:00"
+                        slot_data["charge_end_time"] = "00:00"
+                    if not slot_data.get("discharge_enable", 0):
+                        slot_data["discharge_start_time"] = "00:00"
+                        slot_data["discharge_end_time"] = "00:00"
+
+                # Pass 1: Clear all disabled slots first.
+                # This prevents stale times on the inverter from blocking active-slot writes due to overlap conflicts.
+                for slot in slots_to_check:
+                    slot_data = time_windows.get(slot)
+                    if not slot_data:
+                        continue
+
+                    if not slot_data.get("charge_enable", 0):
                         enable_cid = SOLIS_CID_CHARGE_ENABLE_BASE + (slot - 1)
-                        new_enable_str = str(int(slot_data['charge_enable']))
                         cached_enable = self.cached_values.get(inverter_sn, {}).get(enable_cid)
-                        if cached_enable != new_enable_str:
-                            result = await self.read_and_write_cid(inverter_sn, enable_cid, new_enable_str, field_description=f"charge slot {slot} enable")
+                        if cached_enable != "0":
+                            result = await self.read_and_write_cid(inverter_sn, enable_cid, "0", field_description=f"charge slot {slot} enable")
                             success &= result
-
-                    # Check and write charge time if changed
-                    if "charge_start_time" in slot_data and "charge_end_time" in slot_data:
                         time_cid = SOLIS_CID_CHARGE_TIME[slot - 1]
-                        new_time_str = f"{slot_data['charge_start_time']}-{slot_data['charge_end_time']}"
                         cached_time = self.cached_values.get(inverter_sn, {}).get(time_cid)
-                        if cached_time != new_time_str:
-                            result = await self.read_and_write_cid(inverter_sn, time_cid, new_time_str, field_description=f"charge slot {slot} time")
+                        if cached_time != "00:00-00:00":
+                            result = await self.read_and_write_cid(inverter_sn, time_cid, "00:00-00:00", field_description=f"charge slot {slot} time")
                             success &= result
 
-                    # Check and write charge SOC if changed
-                    if "charge_soc" in slot_data:
-                        soc_cid = SOLIS_CID_CHARGE_SOC_BASE + (slot - 1)
-                        new_soc_str = str(int(slot_data['charge_soc']))
-                        cached_soc = self.cached_values.get(inverter_sn, {}).get(soc_cid)
-                        if cached_soc != new_soc_str:
-                            result = await self.read_and_write_cid(inverter_sn, soc_cid, new_soc_str, field_description=f"charge slot {slot} SOC")
-                            success &= result
-
-                    # Check and write charge current if changed
-                    if "charge_current" in slot_data:
-                        current_cid = SOLIS_CID_CHARGE_CURRENT[slot - 1]
-                        new_current = float(slot_data['charge_current'])
-                        new_current = min(new_current, max_charge_current_amps)
-                        cached_current = float(self.cached_values.get(inverter_sn, {}).get(current_cid, max_charge_current_amps))
-                        if round(cached_current, 1) != round(new_current, 1):
-                            result = await self.read_and_write_cid(inverter_sn, current_cid, new_current, field_description=f"charge slot {slot} current")
-                            success &= result
-
-                    # Check and write discharge enable if changed
-                    if "discharge_enable" in slot_data:
+                    if not slot_data.get("discharge_enable", 0):
                         enable_cid = SOLIS_CID_DISCHARGE_ENABLE_BASE + (slot - 1)
-                        new_enable_str = str(int(slot_data['discharge_enable']))
                         cached_enable = self.cached_values.get(inverter_sn, {}).get(enable_cid)
-                        if cached_enable != new_enable_str:
-                            result = await self.read_and_write_cid(inverter_sn, enable_cid, new_enable_str, field_description=f"discharge slot {slot} enable")
+                        if cached_enable != "0":
+                            result = await self.read_and_write_cid(inverter_sn, enable_cid, "0", field_description=f"discharge slot {slot} enable")
                             success &= result
-
-                    # Check and write discharge time if changed
-                    if "discharge_start_time" in slot_data and "discharge_end_time" in slot_data:
                         time_cid = SOLIS_CID_DISCHARGE_TIME[slot - 1]
-                        new_time_str = f"{slot_data['discharge_start_time']}-{slot_data['discharge_end_time']}"
                         cached_time = self.cached_values.get(inverter_sn, {}).get(time_cid)
-                        if cached_time != new_time_str:
-                            result = await self.read_and_write_cid(inverter_sn, time_cid, new_time_str, field_description=f"discharge slot {slot} time")
+                        if cached_time != "00:00-00:00":
+                            result = await self.read_and_write_cid(inverter_sn, time_cid, "00:00-00:00", field_description=f"discharge slot {slot} time")
                             success &= result
 
-                    # Check and write discharge SOC if changed
-                    if "discharge_soc" in slot_data:
-                        soc_cid = SOLIS_CID_DISCHARGE_SOC[slot - 1]
-                        new_soc_str = str(int(slot_data['discharge_soc']))
-                        cached_soc = self.cached_values.get(inverter_sn, {}).get(soc_cid)
-                        if cached_soc != new_soc_str:
-                            result = await self.read_and_write_cid(inverter_sn, soc_cid, new_soc_str, field_description=f"discharge slot {slot} SOC")
+                # Pass 2: Write active slot settings (enable, time, SOC, current).
+                # By this point all disabled slots should have been cleared on the inverter,
+                # so there is no risk of a time-overlap rejection from the API.
+                for slot in slots_to_check:
+                    slot_data = time_windows.get(slot)
+                    if not slot_data:
+                        continue
+
+                    if slot_data.get("charge_enable", 0):
+                        # Check and write charge enable if changed
+                        enable_cid = SOLIS_CID_CHARGE_ENABLE_BASE + (slot - 1)
+                        cached_enable = self.cached_values.get(inverter_sn, {}).get(enable_cid)
+                        if cached_enable != "1":
+                            result = await self.read_and_write_cid(inverter_sn, enable_cid, "1", field_description=f"charge slot {slot} enable")
                             success &= result
 
-                    # Check and write discharge current if changed
-                    if "discharge_current" in slot_data:
-                        current_cid = SOLIS_CID_DISCHARGE_CURRENT[slot - 1]
-                        new_current = float(slot_data['discharge_current'])
-                        new_current = min(new_current, max_discharge_current_amps)
-                        cached_current = float(self.cached_values.get(inverter_sn, {}).get(current_cid, max_discharge_current_amps))
-                        if round(cached_current, 1) != round(new_current, 1):
-                            result = await self.read_and_write_cid(inverter_sn, current_cid, new_current, field_description=f"discharge slot {slot} current")
+                        # Check and write charge time if changed
+                        if "charge_start_time" in slot_data and "charge_end_time" in slot_data:
+                            time_cid = SOLIS_CID_CHARGE_TIME[slot - 1]
+                            new_time_str = f"{slot_data['charge_start_time']}-{slot_data['charge_end_time']}"
+                            cached_time = self.cached_values.get(inverter_sn, {}).get(time_cid)
+                            if cached_time != new_time_str:
+                                result = await self.read_and_write_cid(inverter_sn, time_cid, new_time_str, field_description=f"charge slot {slot} time")
+                                success &= result
+
+                        # Check and write charge SOC if changed
+                        if "charge_soc" in slot_data:
+                            soc_cid = SOLIS_CID_CHARGE_SOC_BASE + (slot - 1)
+                            new_soc_str = str(int(slot_data['charge_soc']))
+                            cached_soc = self.cached_values.get(inverter_sn, {}).get(soc_cid)
+                            if cached_soc != new_soc_str:
+                                result = await self.read_and_write_cid(inverter_sn, soc_cid, new_soc_str, field_description=f"charge slot {slot} SOC")
+                                success &= result
+
+                        # Check and write charge current if changed
+                        if "charge_current" in slot_data:
+                            current_cid = SOLIS_CID_CHARGE_CURRENT[slot - 1]
+                            new_current = min(float(slot_data['charge_current']), max_charge_current_amps)
+                            cached_current = float(self.cached_values.get(inverter_sn, {}).get(current_cid, max_charge_current_amps))
+                            if round(cached_current, 1) != round(new_current, 1):
+                                result = await self.read_and_write_cid(inverter_sn, current_cid, new_current, field_description=f"charge slot {slot} current")
+                                success &= result
+
+                    if slot_data.get("discharge_enable", 0):
+                        # Check and write discharge enable if changed
+                        enable_cid = SOLIS_CID_DISCHARGE_ENABLE_BASE + (slot - 1)
+                        cached_enable = self.cached_values.get(inverter_sn, {}).get(enable_cid)
+                        if cached_enable != "1":
+                            result = await self.read_and_write_cid(inverter_sn, enable_cid, "1", field_description=f"discharge slot {slot} enable")
                             success &= result
+
+                        # Check and write discharge time if changed
+                        if "discharge_start_time" in slot_data and "discharge_end_time" in slot_data:
+                            time_cid = SOLIS_CID_DISCHARGE_TIME[slot - 1]
+                            new_time_str = f"{slot_data['discharge_start_time']}-{slot_data['discharge_end_time']}"
+                            cached_time = self.cached_values.get(inverter_sn, {}).get(time_cid)
+                            if cached_time != new_time_str:
+                                result = await self.read_and_write_cid(inverter_sn, time_cid, new_time_str, field_description=f"discharge slot {slot} time")
+                                success &= result
+
+                        # Check and write discharge SOC if changed
+                        if "discharge_soc" in slot_data:
+                            soc_cid = SOLIS_CID_DISCHARGE_SOC[slot - 1]
+                            new_soc_str = str(int(slot_data['discharge_soc']))
+                            cached_soc = self.cached_values.get(inverter_sn, {}).get(soc_cid)
+                            if cached_soc != new_soc_str:
+                                result = await self.read_and_write_cid(inverter_sn, soc_cid, new_soc_str, field_description=f"discharge slot {slot} SOC")
+                                success &= result
+
+                        # Check and write discharge current if changed
+                        if "discharge_current" in slot_data:
+                            current_cid = SOLIS_CID_DISCHARGE_CURRENT[slot - 1]
+                            new_current = min(float(slot_data['discharge_current']), max_discharge_current_amps)
+                            cached_current = float(self.cached_values.get(inverter_sn, {}).get(current_cid, max_discharge_current_amps))
+                            if round(cached_current, 1) != round(new_current, 1):
+                                result = await self.read_and_write_cid(inverter_sn, current_cid, new_current, field_description=f"discharge slot {slot} current")
+                                success &= result
 
                 # Decide if Solar charges the batter or exports
                 if charge_current == 0:
@@ -728,7 +777,7 @@ class SolisAPI(ComponentBase):
 
                 in_charge_slot = None
                 in_discharge_slot = None
-                current_time = datetime.now(UTC).strftime("%H:%M")
+                current_time = self.now_utc_exact.strftime("%H:%M")  # Use local time to match time windows set by Predbat in local timezone
                 max_charge_current_amps = self.cached_values.get(inverter_sn, {}).get(SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT, None)
                 charge_current = max_charge_current_amps
                 discharge_current = max_charge_current_amps
@@ -1040,8 +1089,6 @@ class SolisAPI(ComponentBase):
             if old_value is not None:
                 payload["yuanzhi"] = str(old_value)
 
-            self.log("Write Payload: " + str(payload))  # Debug log for payload
-
             data = await self._execute_request(SOLIS_CONTROL_ENDPOINT, payload)
 
             if data is None:
@@ -1115,11 +1162,26 @@ class SolisAPI(ComponentBase):
             self.log("Warn: Solis API automatic_config: No inverters to configure")
             return
 
-        num_inverters = len(self.inverter_sn)
-        self.log(f"Solis API: Configuring Predbat for {num_inverters} inverter(s)")
+        # Count inverters with batteries
+        batteries = []
+        for inverter_sn in self.inverter_sn:
+            detail = self.inverter_details.get(inverter_sn, {})
+            battery_soh = detail.get("batteryHealthSoh")
+            try:
+                battery_soh = float(battery_soh) / 100.0
+            except (ValueError, TypeError):
+                battery_soh = None
+            if battery_soh:
+                batteries.append(inverter_sn)
+
+        num_inverters = len(batteries)
+        self.log(f"Solis API: Configuring Predbat for {num_inverters} inverter(s) with batteries")
+        if num_inverters == 0:
+            self.log("Warn: Solis API automatic_config: No inverters with batteries found, skipping configuration")
+            return
 
         # Convert SNs to lowercase for entity naming
-        devices = [sn.lower() for sn in self.inverter_sn]
+        devices = [sn.lower() for sn in batteries]
 
         # Configure base Predbat settings
         self.set_arg("inverter_type", ["SolisCloud" for _ in range(num_inverters)])
@@ -1148,9 +1210,8 @@ class SolisAPI(ComponentBase):
         # self.set_arg("soc_max", [f"sensor.{self.prefix}_solis_{device}_battery_capacity" for device in devices])
 
         # Reserve and limits
-        # Reserve isn't writable (so we don't use it for SolisCloud) instead we use it as the min SOC
-        self.set_arg("reserve", [f"number.{self.prefix}_solis_{device}_reserve_soc" for device in devices])
-        self.set_arg("battery_min_soc", [f"number.{self.prefix}_solis_{device}_reserve_soc" for device in devices])
+        self.set_arg("reserve", [f"number.{self.prefix}_solis_{device}_over_discharge_soc" for device in devices])
+        self.set_arg("battery_min_soc", [f"number.{self.prefix}_solis_{device}_over_discharge_soc" for device in devices])
 
         # Charge/discharge controls - using slot 1 for Predbat primary control
         self.set_arg("charge_start_time", [f"select.{self.prefix}_solis_{device}_charge_slot1_start_time" for device in devices])
@@ -2736,6 +2797,19 @@ class SolisAPI(ComponentBase):
 
     # ==================== Component Lifecycle ====================
 
+    async def startup_reset_registers(self, device_sn):
+        """
+        Reset the startup registers for the given device serial number.
+        """
+        value = await self.read_cid(device_sn, SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC)
+        try:
+            value = float(value)
+        except (ValueError, TypeError):
+            value = 0
+        # If the value is above 20, reset it to 20 default
+        if value > 20:
+            await self.read_and_write_cid(device_sn, SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC, "20", field_description="Set over discharge soc to 20 default")
+
     async def run(self, seconds, first):
         """Main run cycle called every 5 seconds"""
         poll_success = True
@@ -2780,6 +2854,8 @@ class SolisAPI(ComponentBase):
                     self.log(f"Solis API: Inverter {sn} is in Time of Use V2 mode")
                 else:
                     self.log(f"Solis API: Inverter {sn} is in standard Time of Use mode")
+                if self.control_enable:
+                    await self.startup_reset_registers(sn)  # Reset registers on startup to ensure we have write access and correct initial state
 
             if not self.inverter_sn:
                 self.log("Error: Solis API: No inverters to manage after discovery")
@@ -2892,8 +2968,8 @@ class MockBase:  # pragma: no cover
             print(f"  Attributes: {json.dumps(attributes, indent=2)}")
         self.set_state_wrapper(entity_id, state, attributes)
 
-    def get_arg(self, key, default=None):
-        return self.args.get(key, default)
+    def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
+        return self.args.get(arg, default)
 
     def set_arg(self, key, value):
         self.args[key] = value
@@ -2928,9 +3004,19 @@ async def test_solis_api(key_id, secret):  # pragma: no cover
     print("Calling run() once...")
     await solis_api.run(seconds=0, first=True)
     for device_sn, values in solis_api.cached_values.items():
-         await solis_api.set_storage_mode_if_needed(device_sn, "Feed-in priority")
-         await solis_api.set_storage_mode_if_needed(device_sn, "Self-Use")
-    #    await solis_api.read_and_write_cid(device_sn, SOLIS_CID_BATTERY_RESERVE_SOC, "12", field_description="Test write reserve SOC to 12%")
+        #await solis_api.read_cid(device_sn, SOLIS_CID_STORAGE_MODE)  # Ensure we have the latest value for storage mode
+        #await solis_api.read_cid(device_sn, SOLIS_CID_BATTERY_RESERVE_SOC)  # Ensure we have the latest value for battery reserve SOC
+        #await solis_api.read_and_write_cid(device_sn, SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC, "5", field_description="Test write discharge soc to 5")  # Test writing a value
+        #await solis_api.read_cid(device_sn, SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC)  # Ensure we have the latest value for TOU V2 mode
+        #await solis_api.set_storage_mode_if_needed(device_sn, "Feed-in priority")
+        #await solis_api.set_storage_mode_if_needed(device_sn, "Self-Use")
+        #current_mode = solis_api.get_current_solis_mode_value(device_sn)
+        #new_mode = current_mode | (1 << SOLIS_BIT_BACKUP_MODE)
+        #await solis_api.read_and_write_cid(device_sn, SOLIS_CID_STORAGE_MODE, str(new_mode), field_description=f"battery reserve to (mode: {current_mode} -> {new_mode})")
+        #await solis_api.read_and_write_cid(device_sn, SOLIS_CID_BATTERY_RESERVE_SOC, "5", field_description="Test write reserve SOC to 5%")
+        #new_mode = current_mode & ~(1 << SOLIS_BIT_BACKUP_MODE)
+        #await solis_api.read_and_write_cid(device_sn, SOLIS_CID_STORAGE_MODE, str(new_mode), field_description=f"battery reserve to (mode: {current_mode} -> {new_mode})")
+        pass
     print("Run completed successfully")
 
     await solis_api.final()

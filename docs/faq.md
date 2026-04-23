@@ -202,10 +202,57 @@ or to encourage discharging just before import rates fall overnight.
 
 ## Predbat is causing 'exceed maximum size' warning messages in the Home Assistant Core log
 
-If you have a large **input_number.predbat_forecast_plan_hours** then you may see warning messages in the Home Assistant Core log about the size of a number of Predbat entities,
-the message will be "State attributes for predbat.*XXXX* exceed maximum size of 16384 bytes".
+You may see warning messages in the Home Assistant Core log about the size of a number of Predbat entities, the message will be "State attributes for predbat.*XXXX* exceed maximum size of 16384 bytes".
 
 This is just a warning from the Home Assistant recorder, but note that Predbat entity attributes are stored in the recorder database and can take up a significant amount of space.
+The history of most of Predbat's entities isn't needed so to limit the size of the recorder database the following filters can be added to `configuration.yaml`,
+but pay attention to the [order in which inclusion and exclusion rules are applied](https://www.home-assistant.io/integrations/recorder/#configure-filter) if you have existing filters:
+
+```yaml
+recorder:
+  exclude:
+    domains:
+      - predbat
+      - predheat
+    entities:
+      - sensor.predbat_load_ml_forecast
+      - sensor.predbat_pv_today
+      - sensor.predbat_pv_tomorrow
+      - sensor.predbat_pv_forecast_raw
+      - sensor.predbat_pv_d2
+      - sensor.predbat_pv_d3
+      - sensor.predbat_temperature
+      - sensor.predbat_pv_forecast_h0
+  include:
+    entities: #The history of these entities is used by Predbat
+      - predbat.cost_today
+      - predbat.cost_today_car
+      - predbat.cost_yesterday
+      - predbat.cost_yesterday_car
+      - predbat.load_ml_stats
+      - predbat.load_power
+      - predbat.load_energy_actual
+      - predbat.load_energy_predicted
+      - predbat.load_energy_adjusted
+      - predbat.load_inday_adjustment
+      - predbat.ppkwh_today
+      - predbat.ppkwh_hour
+      - predbat.pv_power
+      - predbat.rates
+      - predbat.rates_export
+      - predbat.soc_kw_h0
+      - predbat.savings_yesterday_predbat
+      - predbat.savings_yesterday_pvbat
+      - predbat.status
+      - predbat.savings_total_predbat
+      - predbat.savings_total_pvbat
+      - predheat.external_temperature
+      - predheat.heating_energy
+      - predheat.internal_temperature
+      - predheat.target_temperature
+
+```
+
 When the serialized attributes payload for a Predbat entity state exceeds 16384 bytes, the recorder will not store any attributes for that state (only the state value itself is stored). States whose serialized attributes payload is below this limit are stored normally.
 You can suppress these warnings by adding the following to your `configuration.yaml` file:
 
@@ -215,47 +262,8 @@ logger:
   default: warning
   filters:
     homeassistant.components.recorder.db_schema:
-      - "State attributes for predbat.base10_export_energy exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.base10_import_energy exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.base10_metric exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.base10_pv_energy exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.battery_cycle exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.battery_cycle_best exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.battery_power exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.battery_power_best exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.best_charge_limit exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.best_export_energy exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.best_import_energy exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.best_load_energy exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.best_metric exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.best_pv_energy exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.best10_export_energy exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.best10_import_energy exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.best10_metric exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.best10_pv_energy exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.cost_today_export exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.cost_today_import exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
       - "State attributes for predbat.cost_yesterday exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.export_energy exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.grid_power exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.grid_power_best exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.import_energy exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.load_energy exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.load_energy_actual exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.load_energy_adjusted exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.load_energy_predicted exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.load_power exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.load_power_best exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.metric exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.plan_html exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.pv_energy exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.pv_power exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.pv_power_best exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.rates exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.soc_kw exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.soc_kw_base10 exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.soc_kw_best exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
-      - "State attributes for predbat.soc_kw_best10 exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
+      - "State attributes for predbat.savings_yesterday_predbat exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
 ```
 
 ## Error - metric_octopus_import not set correctly in apps.yaml, or no energy rates can be read

@@ -12,8 +12,9 @@ status monitoring, meter data collection, and inverter control settings
 management via the GivEnergy Cloud REST API.
 """
 
+import re
 import aiohttp
-from datetime import timedelta, datetime
+from datetime import timedelta, datetime, timezone
 from utils import str2time, dp1, dp2
 from predbat_metrics import record_api_call
 import asyncio
@@ -198,6 +199,7 @@ attribute_table = {
     "grid_import_total": {"friendly_name": "Grid Import Total", "icon": "mdi:transmission-tower", "unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total"},
     "grid_export_total": {"friendly_name": "Grid Export Total", "icon": "mdi:transmission-tower", "unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total"},
     "max_charge_rate": {"friendly_name": "Max Charge Rate", "icon": "mdi:battery", "unit_of_measurement": "W", "device_class": "power"},
+    "max_inverter_rate": {"friendly_name": "Max Inverter Rate", "icon": "mdi:flash", "unit_of_measurement": "W", "device_class": "power"},
     "battery_size": {"friendly_name": "Battery Size", "icon": "mdi:battery", "unit_of_measurement": "kWh", "device_class": "energy"},
     "battery_dod": {"friendly_name": "Battery Depth of Discharge", "icon": "mdi:battery", "unit_of_measurement": "*", "device_class": "battery"},
     "model": {"friendly_name": "Model", "icon": "mdi:information", "unit_of_measurement": None},
@@ -360,6 +362,31 @@ class GECloudDirect(ComponentBase):
                     else:
                         self.log("GECloud: Warn: Failed to write setting {} {} to {}".format(device, key, new_value))
 
+    def get_max_inverter_rate_from_model(self, model, max_charge_rate=None):
+        """
+        GivEnergy models (descriptive names):
+        - All-In-One  - 6kW inverter with integrated battery, should use the max_charge_rate value as the inverter rating
+        - Gateway     - Not an inverter, should use the individual inverter values
+        - GIV-AC3.0.  - 3kW inverter
+        - GIV-AIO-AC-13.5-12.0  - 12kW inverter (last decimal number is the inverter power)
+        - GIV-HY-10.0-G3-HV - 10kW inverter (decimal number is mid-string)
+        - GIV-HY3.6         - 3.6kW inverter
+        - GIV-HY5.0         - 5.0kW inverter
+        - GIV-HY-8.0-G3-HV. - 8kW inverter
+        - Plant EMS   - Not an inverter, should use the individual inverter values
+        """
+
+        # Find all decimal numbers anywhere in the model string (e.g. 3.6, 10.0, 12.0)
+        # Use the last match so that e.g. GIV-AIO-AC-13.5-12.0 resolves to 12kW not 13.5kW
+        matches = re.findall(r"\d+\.\d+", model)
+        if matches:
+            try:
+                max_inverter_rate = int(float(matches[-1]) * 1000)
+                return max_inverter_rate
+            except ValueError:
+                pass
+        return max_charge_rate
+
     async def publish_info(self, device, device_info):
         """
         Publish the device info
@@ -387,7 +414,8 @@ class GECloudDirect(ComponentBase):
                 volt = info.get("battery", {}).get("nominal_voltage", None)
                 dod = info.get("battery", {}).get("depth_of_discharge", None)
                 model = info.get("model", "Unknown")
-                max_charge_rate = info.get("max_charge_rate", 0)
+                max_charge_rate = info.get("max_charge_rate", 3600)
+                max_inverter_rate = self.get_max_inverter_rate_from_model(model, max_charge_rate)
 
                 capacity = None
                 if cap and volt:
@@ -396,7 +424,7 @@ class GECloudDirect(ComponentBase):
                     except (ValueError, TypeError):
                         pass
 
-                self.log("GECloud: Updated data for device {}: battery capacity {}kWh, max charge rate {}kW".format(device, capacity, max_charge_rate))
+                self.log("GECloud: Updated data for device {}: battery capacity {}kWh, max charge rate {}W, max inverter rate {}W".format(device, capacity, max_charge_rate, max_inverter_rate))
 
                 self.dashboard_item(entity_name + "_battery_size", capacity, attributes=attribute_table.get("battery_size", {}), app="gecloud")
                 self.dashboard_item(entity_name + "_max_charge_rate", max_charge_rate, attributes=attribute_table.get("max_charge_rate", {}), app="gecloud")
@@ -404,6 +432,7 @@ class GECloudDirect(ComponentBase):
                 model_attr = attribute_table.get("model", {}).copy()
                 model_attr["details"] = device_info
                 self.dashboard_item(entity_name + "_model", model, attributes=model_attr, app="gecloud")
+                self.dashboard_item(entity_name + "_max_inverter_rate", max_inverter_rate, attributes=attribute_table.get("max_inverter_rate", {}), app="gecloud")
                 self.dashboard_item(entity_name + "_last_updated", last_updated, attributes=attribute_table.get("time", {}), app="gecloud")
 
     async def publish_evc_data(self, serial, evc_data):
@@ -579,6 +608,28 @@ class GECloudDirect(ComponentBase):
                     else:
                         self.log("GECloud: Warn: Failed to set {} for {}".format(ha_name, device))
                         return False
+            if "charge_up_to_percent" in ha_name:
+                if not value or value < 100:
+                    self.log("GECloud: Setting {} to 100% for {}, previous value was {}".format(ha_name, device, value))
+                    result = await self.async_write_inverter_setting(device, key, 100)
+                    if result and ("value" in result):
+                        registers[key]["value"] = result["value"]
+                        await self.publish_registers(device, self.settings[device], select_key=key)
+                        return True
+                    else:
+                        self.log("GECloud: Warn: Failed to set {} for {}".format(ha_name, device))
+                        return False
+            if "discharge_down_to_percent" in ha_name:
+                if not value or value > 4:
+                    self.log("GECloud: Setting {} to 4% for {}, previous value was {}".format(ha_name, device, value))
+                    result = await self.async_write_inverter_setting(device, key, 4)
+                    if result and ("value" in result):
+                        registers[key]["value"] = result["value"]
+                        await self.publish_registers(device, self.settings[device], select_key=key)
+                        return True
+                    else:
+                        self.log("GECloud: Warn: Failed to set {} for {}".format(ha_name, device))
+                        return False
             # Reset AC charge start and end times to 00:00 to disable
             for charge_id in range(2, 11):
                 if (
@@ -741,37 +792,63 @@ class GECloudDirect(ComponentBase):
                 if "pause_battery" in ha_name:
                     has_pause_battery = True
 
+        def register_names(device):
+            """Return HA-format register names for a specific device."""
+            names = set()
+            for key in self.settings.get(device, {}):
+                reg_name = self.settings[device][key].get("name", "")
+                names.add(regname_to_ha(reg_name))
+            return names
+
+        register_names_by_device = {device: register_names(device) for device in batteries}
+
+        def first_existing_entity(domain, device, candidates):
+            """Return the first entity ID whose suffix exists in this device registers."""
+            register_names = register_names_by_device.get(device, set())
+            for candidate in candidates:
+                if candidate in register_names:
+                    return f"{domain}.{self.prefix}_gecloud_{device}_{candidate}"
+            return None
+
+        def build_entities(domain, candidates):
+            """Build per-device entity IDs from candidate suffixes, or None if none exist."""
+            entities = [first_existing_entity(domain, device, candidates) for device in batteries]
+            if all(entity is None for entity in entities):
+                return None
+            return entities
+
         self.log("GECloud: Auto-configuring Predbat and not using apps.yaml entries for control")
         self.log("GECloud: detected features - charge power percent: {}, pause battery: {}, pause start time: {}, discharge target soc: {}".format(has_charge_power_percent, has_pause_battery, has_pause_start_time, has_discharge_target_soc))
 
         self.set_arg("inverter_type", ["GEC" for _ in range(num_inverters)])
         self.set_arg("num_inverters", num_inverters)
-        self.set_arg("inverter_mode", [f"switch.{self.prefix}_gecloud_{device}_enable_eco_mode" for device in batteries])
+        self.set_arg("inverter_mode", build_entities("switch", ["enable_eco_mode"]))
         if not self.get_arg("ge_cloud_load_today_ignore", default=False):
             self.set_arg("load_today", [f"sensor.{self.prefix}_gecloud_{device}_consumption_total" for device in batteries])
         self.set_arg("import_today", [f"sensor.{self.prefix}_gecloud_{device}_grid_import_total" for device in batteries])
         self.set_arg("export_today", [f"sensor.{self.prefix}_gecloud_{device}_grid_export_total" for device in batteries])
         self.set_arg("pv_today", [f"sensor.{self.prefix}_gecloud_{device}_solar_total" for device in batteries])
-        self.set_arg("charge_rate", [f"number.{self.prefix}_gecloud_{device}_battery_charge_power" for device in batteries])
+        self.set_arg("charge_rate", build_entities("number", ["battery_charge_power", "charge_power_rate"]))
         self.set_arg("battery_rate_max", [f"sensor.{self.prefix}_gecloud_{device}_max_charge_rate" for device in batteries])
-        self.set_arg("discharge_rate", [f"number.{self.prefix}_gecloud_{device}_battery_discharge_power" for device in batteries])
+        self.set_arg("discharge_rate", build_entities("number", ["battery_discharge_power", "discharge_power_rate"]))
         self.set_arg("battery_power", [f"sensor.{self.prefix}_gecloud_{device}_battery_power" for device in batteries])
         self.set_arg("pv_power", [f"sensor.{self.prefix}_gecloud_{device}_solar_power" for device in batteries])
         self.set_arg("load_power", [f"sensor.{self.prefix}_gecloud_{device}_consumption_power" for device in batteries])
         self.set_arg("grid_power", [f"sensor.{self.prefix}_gecloud_{device}_grid_power" for device in batteries])
         self.set_arg("soc_percent", [f"sensor.{self.prefix}_gecloud_{device}_battery_percent" for device in batteries])
         self.set_arg("soc_max", [f"sensor.{self.prefix}_gecloud_{device}_battery_size" for device in batteries])
-        self.set_arg("reserve", [f"number.{self.prefix}_gecloud_{device}_battery_reserve_percent_limit" for device in batteries])
+        self.set_arg("reserve", build_entities("number", ["battery_reserve_percent_limit", "battery_reserve_percent"]))
         self.set_arg("inverter_time", [f"sensor.{self.prefix}_gecloud_{device}_time" for device in batteries])
         self.set_arg("charge_start_time", [f"select.{self.prefix}_gecloud_{device}_ac_charge_1_start_time" for device in batteries])
         self.set_arg("charge_end_time", [f"select.{self.prefix}_gecloud_{device}_ac_charge_1_end_time" for device in batteries])
-        self.set_arg("charge_limit", [f"number.{self.prefix}_gecloud_{device}_ac_charge_upper_percent_limit" for device in batteries])
+        self.set_arg("charge_limit", build_entities("number", ["ac_charge_upper_percent_limit", "ac_charge_1_upper_soc_percent_limit"]))
         self.set_arg("discharge_start_time", [f"select.{self.prefix}_gecloud_{device}_dc_discharge_1_start_time" for device in batteries])
         self.set_arg("discharge_end_time", [f"select.{self.prefix}_gecloud_{device}_dc_discharge_1_end_time" for device in batteries])
-        self.set_arg("scheduled_charge_enable", [f"switch.{self.prefix}_gecloud_{device}_ac_charge_enable" for device in batteries])
-        self.set_arg("scheduled_discharge_enable", [f"switch.{self.prefix}_gecloud_{device}_enable_dc_discharge" for device in batteries])
+        self.set_arg("scheduled_charge_enable", build_entities("switch", ["ac_charge_enable", "enable_ac_charge"]))
+        self.set_arg("scheduled_discharge_enable", build_entities("switch", ["enable_dc_discharge", "enable_force_discharge"]))
         self.set_arg("battery_temperature", [f"sensor.{self.prefix}_gecloud_{device}_battery_temperature" for device in batteries])
         self.set_arg("battery_scaling", [f"sensor.{self.prefix}_gecloud_{device}_battery_dod" for device in batteries])
+        self.set_arg("inverter_limit", [f"sensor.{self.prefix}_gecloud_{device}_max_inverter_rate" for device in batteries])
 
         if len(batteries):
             self.set_arg("battery_temperature_history", f"sensor.{self.prefix}_gecloud_{batteries[0]}_battery_temperature")
@@ -839,7 +916,7 @@ class GECloudDirect(ComponentBase):
             model = info.get("model", "").lower()
             if model:
                 model_name = info["model"]
-                if ("ac" in model) or ("aio" in model):
+                if ("ac" in model) or ("aio" in model) or ("all-in-one" in model):
                     ac_coupled = True
                     break
         entity_id = "switch.{}_inverter_hybrid".format(self.prefix)
@@ -1106,7 +1183,7 @@ class GECloudDirect(ComponentBase):
         """
         Get list of EVC sessions
         """
-        now = self.now_utc_exact
+        now = self.now_utc_exact.astimezone(timezone.utc)
         start = now - timedelta(hours=24)
         start_time = start.strftime("%Y-%m-%dT%H:%M:%SZ")
         end_time = now.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1120,7 +1197,7 @@ class GECloudDirect(ComponentBase):
         """
         Get smart device data points
         """
-        now = self.now_utc_exact
+        now = self.now_utc_exact.astimezone(timezone.utc)
         start = now - timedelta(minutes=10)
         start_time = start.strftime("%Y-%m-%dT%H:%M:%SZ")
         end_time = now.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1703,6 +1780,16 @@ class GECloudData(ComponentBase):
         return self.mdata, self.oldest_data_time
 
 
+class MockHAInterface:  # pragma: no cover
+    """Mock HA interface for testing"""
+
+    def __init__(self):
+        pass
+
+    async def set_state_external(self, entity_id, state):
+        print(f"Set state external {entity_id} = {state}")
+
+
 class MockBase:  # pragma: no cover
     """Mock base class for testing"""
 
@@ -1716,6 +1803,7 @@ class MockBase:  # pragma: no cover
         self.entities = {}
         self.config_root = "./temp_gecloud"
         self.plan_interval_minutes = 30
+        self.ha_interface = MockHAInterface()
 
     def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=None):
         if raw:
@@ -1737,7 +1825,7 @@ class MockBase:  # pragma: no cover
             print(f"  Attributes: {json.dumps(attributes, indent=2)}")
         self.set_state_wrapper(entity_id, state, attributes)
 
-    def get_arg(self, key, default=None):
+    def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
         return default
 
     def set_arg(self, key, value):

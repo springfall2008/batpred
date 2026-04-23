@@ -20,17 +20,46 @@ import requests
 import yaml
 import hashlib
 
+DEFAULT_PREDBAT_REPOSITORY = "springfall2008/batpred"
 
-def get_github_directory_listing(tag):
+
+def resolve_predbat_repository(repository=None):
+    """Resolve the GitHub repository used for Predbat self-update operations.
+
+    Resolution order:
+    1) Explicit *repository* parameter
+    2) PREDBAT_REPOSITORY environment variable
+    3) Default upstream repository
     """
-    Get the list of files in the apps/predbat directory from GitHub
+    if repository is not None:
+        repository = repository.strip()
+        if repository:
+            return repository
+
+    env_repository = os.environ.get("PREDBAT_REPOSITORY")
+    if env_repository is not None:
+        env_repository = env_repository.strip()
+        if env_repository:
+            return env_repository
+
+    return DEFAULT_PREDBAT_REPOSITORY
+
+
+def get_github_directory_listing(tag, repository=None):
+    """
+    Get the list of files in the apps/predbat directory from GitHub.
 
     Args:
-        tag (str): The tag to query (e.g. v1.0.0)
+        tag (str): The tag to query (e.g. v1.0.0).
+        repository (str, optional): GitHub repository override in "owner/repo"
+            format (e.g. "springfall2008/batpred"). If not provided, the
+            value is resolved via ``resolve_predbat_repository()``.
+
     Returns:
-        list: List of file metadata dicts from GitHub API, or None on failure
+        list: List of file metadata dicts from GitHub API, or None on failure.
     """
-    url = "https://api.github.com/repos/springfall2008/batpred/contents/apps/predbat?ref={}".format(tag)
+    repository = resolve_predbat_repository(repository)
+    url = "https://api.github.com/repos/{}/contents/apps/predbat?ref={}".format(repository, tag)
     print("Fetching directory listing from {}".format(url))
     try:
         r = requests.get(url, headers={})
@@ -75,18 +104,23 @@ def compute_file_sha1(filepath):
         return None
 
 
-def download_predbat_file_from_github(tag, filename, new_filename):
+def download_predbat_file_from_github(tag, filename, new_filename, repository=None):
     """
-    Downloads a Predbat source file from GitHub and returns the contents
+    Download a Predbat source file from GitHub and return the contents.
 
     Args:
-        tag (str): The tag to download from (e.g. v1.0.0)
-        filename (str): The filename to download (e.g. predbat.py)
-        new_filename (str): The new filename to save the file as
+        tag (str): The tag to download from (e.g. v1.0.0).
+        filename (str): The filename to download (e.g. predbat.py).
+        new_filename (str): The local path to save the downloaded file.
+        repository (str, optional): GitHub repository override in "owner/repo"
+            format (e.g. "springfall2008/batpred"). If not provided, the
+            value is resolved via ``resolve_predbat_repository()``.
+
     Returns:
-        str: The contents of the file
+        str: The contents of the file.
     """
-    url = "https://raw.githubusercontent.com/springfall2008/batpred/" + tag + "/apps/predbat/{}".format(filename)
+    repository = resolve_predbat_repository(repository)
+    url = "https://raw.githubusercontent.com/{}/".format(repository) + tag + "/apps/predbat/{}".format(filename)
     print("Downloading {}".format(url))
     r = requests.get(url, headers={})
     if r.ok:
@@ -120,12 +154,16 @@ def predbat_update_move(version, files):
     return False
 
 
-def check_install(version):
+def check_install(version, repository=None):
     """
-    Check if Predbat is installed correctly
+    Check if Predbat is installed correctly.
 
     Args:
-        version (str): The version string (e.g. v8.30.8)
+        version (str): The version string (e.g. v8.30.8).
+        repository (str, optional): GitHub repository override in "owner/repo"
+            format (e.g. "springfall2008/batpred"). Used when downloading a
+            missing manifest. If not provided, the value is resolved via
+            ``resolve_predbat_repository()``.
     """
     this_path = os.path.dirname(__file__)
     manifest_file = os.path.join(this_path, "manifest.yaml")
@@ -137,7 +175,7 @@ def check_install(version):
         tag_split = version.split(" ")
         if tag_split:
             tag = tag_split[0]
-            file_list = get_github_directory_listing(tag)
+            file_list = get_github_directory_listing(tag, repository=repository)
             if file_list:
                 # Sort files alphabetically
                 file_list_sorted = sorted(file_list, key=lambda x: x["name"])
@@ -204,9 +242,15 @@ def check_install(version):
         return False
 
 
-def predbat_update_download(version):
+def predbat_update_download(version, repository=None):
     """
-    Download the defined version of Predbat from GitHub
+    Download the defined version of Predbat from GitHub.
+
+    Args:
+        version (str): The version string (e.g. v8.30.8).
+        repository (str, optional): GitHub repository override in "owner/repo"
+            format (e.g. "springfall2008/batpred"). If not provided, the
+            value is resolved via ``resolve_predbat_repository()``.
     """
     this_path = os.path.dirname(__file__)
     tag_split = version.split(" ")
@@ -214,7 +258,7 @@ def predbat_update_download(version):
         tag = tag_split[0]
 
         # Get the list of files from GitHub API
-        file_list = get_github_directory_listing(tag)
+        file_list = get_github_directory_listing(tag, repository=repository)
         if not file_list:
             print("Error: Failed to get file list from GitHub")
             return None
@@ -246,7 +290,7 @@ def predbat_update_download(version):
                         skip_download = False
 
             if not skip_download:
-                if not download_predbat_file_from_github(tag, filename, download_filepath):
+                if not download_predbat_file_from_github(tag, filename, download_filepath, repository=repository):
                     print("Error: Failed to download {}".format(filename))
                     return None
 

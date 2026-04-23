@@ -29,6 +29,7 @@ class FutureRate:
         self.plan_interval_minutes = base.plan_interval_minutes
         self.log = base.log
         self.get_arg = base.get_arg
+        self.set_arg = base.set_arg
         self.midnight = base.midnight
         self.midnight_utc = base.midnight_utc
         self.forecast_days = base.forecast_days
@@ -36,6 +37,14 @@ class FutureRate:
         self.forecast_plan_hours = base.forecast_plan_hours
         self.time_abs_str = base.time_abs_str
         self.futurerate_url_cache = base.futurerate_url_cache
+        self.get_state_wrapper = base.get_state_wrapper
+
+        futurerate_adjust_auto = self.get_arg("futurerate_adjust_auto", False)
+        if futurerate_adjust_auto:
+            import_agile, export_agile = self.import_export_is_agile()
+            # Change settings based on auto
+            self.set_arg("futurerate_adjust_import", import_agile)
+            self.set_arg("futurerate_adjust_export", export_agile)
 
     def futurerate_calibrate(self, real_mdata, mdata, is_import, peak_start_minutes, peak_end_minutes):
         """
@@ -153,6 +162,30 @@ class FutureRate:
 
         return calibrated_data
 
+    def import_export_is_agile(self):
+        # Figure out if we have Agile on import or export before deciding which to adjust
+        import_tariff = None
+        import_agile = False
+        import_entity = self.get_arg("metric_octopus_import", default=None, indirect=False)
+        if import_entity:
+            import_tariff = self.get_state_wrapper(import_entity, attribute="tariff")
+            if not import_tariff:
+                import_tariff = self.get_state_wrapper(import_entity, attribute="tariff_code")
+        if import_tariff and "agile" in import_tariff.lower():
+            import_agile = True
+
+        export_tariff = None
+        export_agile = False
+        export_entity = self.get_arg("metric_octopus_export", default=None, indirect=False)
+        if export_entity:
+            export_tariff = self.get_state_wrapper(export_entity, attribute="tariff")
+            if not export_tariff:
+                export_tariff = self.get_state_wrapper(export_entity, attribute="tariff_code")
+        if export_tariff and "agile" in export_tariff.lower():
+            export_agile = True
+        self.log("FutureRate: Detected import tariff {} agile {} export tariff {} agile {}".format(import_tariff, import_agile, export_tariff, export_agile))
+        return import_agile, export_agile
+
     def futurerate_analysis_new(self, url_template, rate_import_real, rate_export_real):
         """
         Convert new Futurerate data to minute data
@@ -266,7 +299,6 @@ class FutureRate:
 
         adjust_import = self.get_arg("futurerate_adjust_import", False)
         adjust_export = self.get_arg("futurerate_adjust_export", False)
-
         mdata_import = self.futurerate_calibrate(rate_import_real if adjust_import else {}, mdata_import, is_import=True, peak_start_minutes=peak_start_minutes, peak_end_minutes=peak_end_minutes)
         mdata_export = self.futurerate_calibrate(rate_export_real if adjust_export else {}, mdata_export, is_import=False, peak_start_minutes=peak_start_minutes, peak_end_minutes=peak_end_minutes)
 
@@ -290,9 +322,13 @@ class FutureRate:
         if not url:
             return {}, {}
 
-        self.log("Fetching futurerate data from {}".format(url))
-
         if "DATE" in url:
+            import_agile = self.get_arg("futurerate_adjust_import", False)
+            export_agile = self.get_arg("futurerate_adjust_export", False)
+            if not import_agile and not export_agile:
+                self.log("FutureRate: No futurerate adjustment enabled, skipping futurerate analysis")
+                return {}, {}
+            self.log("Fetching futurerate data from {}".format(url))
             return self.futurerate_analysis_new(url, rate_import_real, rate_export_real)
         else:
             print("Warning: Old futurerate URL, you must update this in apps.yaml")

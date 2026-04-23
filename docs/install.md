@@ -181,6 +181,53 @@ Optionally you can set an api_key for personal or professional accounts and you 
 
 Note you can omit any of these settings for a default value. They do not have to be exact if you use Predbat auto calibration for PV to improve the data quality.
 
+### Predbat direct to Open-Meteo
+
+[Open-Meteo](https://open-meteo.com/) is a free, open-source weather API that provides solar irradiance forecasts. It requires no API key and is a good no-cost alternative to Solcast or Forecast.solar.
+Predbat fetches the Global Tilted Irradiance (GTI) for each array from Open-Meteo and converts it to a power estimate using a PVWatts cell-temperature model, so the forecast automatically accounts for hot days reducing panel efficiency and cool days slightly improving it.
+Ensemble members are used to derive a P10 pessimistic estimate alongside the central P50, just like Solcast.
+
+You can define one or more arrays (roof aspects). For the UK, use a postcode instead of latitude/longitude.
+
+The azimuth uses the same convention as all other Predbat solar configs (Solcast/Forecast.solar): 0=North, -90=East, 90=West, -180/180=South. Predbat converts this to the Open-Meteo convention (0=South) internally.
+The declination is the angle of the panels from horizontal, e.g. 35 for a typical pitched roof.
+The `efficiency` (optional, default 1.0) is the panel efficiency as a fraction where 1.0 = 100% (no losses), e.g. 0.95 for 5% losses. This uses the same convention as Forecast.solar.
+
+```yaml
+  open_meteo_forecast:
+    - postcode: SW1A 2AB
+      kwp: 3.5
+      declination: 35
+      azimuth: 180
+      efficiency: 0.95
+  open_meteo_forecast_max_age: 4.0
+```
+
+or with latitude/longitude if you are not in the UK:
+
+```yaml
+  open_meteo_forecast:
+    - latitude: 51.5072
+      longitude: -0.1276
+      kwp: 3.5
+      declination: 35
+      azimuth: 180
+```
+
+For a house with two differently oriented roof aspects, add a second entry to the list:
+
+```yaml
+  open_meteo_forecast:
+    - postcode: BS1 4DJ
+      kwp: 1.56
+      declination: 23
+      azimuth: -133
+    - postcode: BS1 4DJ
+      kwp: 2.73
+      declination: 45
+      azimuth: 45
+```
+
 ### Solcast Home Assistant integration method
 
 Install the Solcast integration (<https://github.com/BJReplay/ha-solcast-solar>), create a free [Solcast account](https://solcast.com/),
@@ -341,6 +388,18 @@ Predbat can now update itself, just select the version of Predbat you want to in
 the latest version will be at the top of the list. Predbat will update itself and automatically restart.
 
 Alternatively, if you turn On **switch.predbat_auto_update**, Predbat will automatically update itself as new releases are published on GitHub.
+
+For testing against a fork, you can override the repository used when updating to **main** by setting this under your Predbat app in `apps.yaml`:
+
+```yaml
+pred_bat:
+  # ... existing Predbat config ...
+  predbat_repository: your-github-user/batpred
+```
+
+Only the `main` update path uses this override; release tags in **select.predbat_update** are still read from the official upstream repository.
+
+You can also set environment variable `PREDBAT_REPOSITORY` (same `owner/repo` format).
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/56bca491-1069-4abb-be29-a50b0a67a6b9)
 

@@ -15,21 +15,29 @@ GraphQL schema notes (validated against live EDF/E.ON APIs):
 
 import aiohttp
 import asyncio
+import types as _types
 from datetime import datetime, timedelta, timezone
 
 from component_base import ComponentBase
 
-# Auth strategy selection — priority: OAuthMixin > KrakenAuthMixin > no-op
+# Auth strategy selection — OAuthMixin for SaaS OAuth, KrakenAuthMixin for local auth.
+# Both may ship in the same release package.  _KrakenAuthMixin is stored at module level
+# so that initialize() can bind its methods to instances requiring local email/api_key auth
+# even when OAuthMixin occupies the class-level _AUTH_BASE slot.
+_KrakenAuthMixin = None
+try:
+    from kraken_auth_mixin import KrakenAuthMixin as _KrakenAuthMixin
+except ImportError:
+    pass
+
 try:
     from oauth_mixin import OAuthMixin
 
     _AUTH_BASE = OAuthMixin
 except ImportError:
-    try:
-        from kraken_auth_mixin import KrakenAuthMixin
-
-        _AUTH_BASE = KrakenAuthMixin
-    except ImportError:
+    if _KrakenAuthMixin is not None:
+        _AUTH_BASE = _KrakenAuthMixin
+    else:
 
         class _NoAuth:
             def _init_oauth(self, *args, **kwargs):
@@ -79,6 +87,22 @@ KRAKEN_ACCOUNT_QUERY = """{{
 # Viewer query to discover all account numbers under the authenticated user
 KRAKEN_VIEWER_QUERY = """{ viewer { accounts { number } } }"""
 
+# GraphQL applicableRates query — fallback when REST product endpoint returns 404
+# (product code removed/replaced while customer is still on the tariff).
+# Returns value (pence/kWh inc VAT), validFrom, validTo for the requested window.
+KRAKEN_APPLICABLE_RATES_QUERY = """{{
+  applicableRates(
+    accountNumber: "{account_number}"
+    mpxn: "{mpan}"
+    startAt: "{start_at}"
+    endAt: "{end_at}"
+  ) {{
+    value
+    validFrom
+    validTo
+  }}
+}}"""
+
 KRAKEN_BASE_URLS = {
     "edf": "https://api.edfgb-kraken.energy",
     "eon": "https://api.eonnext-kraken.energy",
@@ -115,6 +139,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
 
         self.account_id = account_id
         self.configured_mpan = mpan  # From SaaS config — preferred MPAN to match
+        self.import_mpan = None  # Set after first successful tariff discovery
         self.current_tariff = None
         self.export_tariff = None  # Export tariff (discovered dynamically)
         self.wired = False
@@ -130,8 +155,19 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         if export_account_id or export_mpan:
             self.log(f"Kraken: Export account configured — {export_account_id or 'same account'} MPAN {export_mpan or 'auto'}")
 
-        # Init auth — OAuthMixin or KrakenAuthMixin depending on import
-        if hasattr(self, "_init_oauth") and hasattr(_AUTH_BASE, "_init_oauth") and not hasattr(_AUTH_BASE, "_init_kraken_auth"):
+        # Init auth — prefer KrakenAuthMixin for local email/password or API key auth,
+        # use OAuthMixin only for SaaS OAuth mode (where tokens come from edge functions).
+        # NOTE: both mixins may ship in the same release, so we check the module-level
+        # _KrakenAuthMixin reference rather than hasattr() which only sees the class hierarchy.
+        use_local_auth = auth_method in ("email", "api_key") and _KrakenAuthMixin is not None
+        if use_local_auth:
+            _KrakenAuthMixin._init_kraken_auth(self, auth_method, key=key, email=email, password=password)
+            # Bind KrakenAuthMixin token methods directly to this instance so they take
+            # priority over OAuthMixin when both are present in the class hierarchy.
+            self.check_and_refresh_oauth_token = _types.MethodType(_KrakenAuthMixin.check_and_refresh_oauth_token, self)
+            self.handle_oauth_401 = _types.MethodType(_KrakenAuthMixin.handle_oauth_401, self)
+            self._kraken_token_request = _types.MethodType(_KrakenAuthMixin._kraken_token_request, self)
+        elif hasattr(self, "_init_oauth"):
             self._init_oauth(auth_method, key, token_expires_at, "kraken")
             self.token_hash = token_hash or ""
         elif hasattr(self, "_init_kraken_auth"):
@@ -411,6 +447,9 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
 
         new_tariff = {"tariff_code": import_result["tariff_code"], "product_code": import_result["product_code"]}
 
+        # Store MPAN for GraphQL fallback in async_fetch_rates_graphql()
+        self.import_mpan = import_result["mpan"]
+
         # Discover export tariff — always re-discover to detect tariff changes
         await self._discover_export_tariff(all_meter_points, my_address)
 
@@ -474,16 +513,83 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
 
         return results
 
+    async def async_fetch_rates_graphql(self, mpan):
+        """Fetch import rates via GraphQL applicableRates — fallback when REST returns non-200.
+
+        Used when the product code has been removed from the REST API (e.g. product replaced
+        mid-agreement). The applicableRates query returns the rates currently applicable to
+        the customer regardless of product lifecycle.
+
+        Args:
+            mpan: The import MPAN (meter point access number) for the account.
+
+        Returns list of rate dicts with value_inc_vat, value_exc_vat, valid_from, valid_to, or None.
+        """
+        now = datetime.now(timezone.utc)
+        midnight_utc = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        # Mirror the window used by fetch_octopus_rates → minute_data(forecast_days + 1, midnight_utc).
+        # Start one day before midnight so any rate period that began earlier today is included.
+        # End at midnight + (forecast_days + 1) to cover the full planning horizon.
+        forecast_hours = self.get_arg("forecast_hours", 48)
+        forecast_days = int((forecast_hours + 23) / 24)
+        start_at = (midnight_utc - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        end_at = (midnight_utc + timedelta(days=forecast_days + 1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        query = KRAKEN_APPLICABLE_RATES_QUERY.format(
+            account_number=self.account_id,
+            mpan=mpan,
+            start_at=start_at,
+            end_at=end_at,
+        )
+        data = await self.async_graphql_query(query, "applicable-rates-graphql")
+        if not data:
+            return None
+
+        raw_rates = data.get("applicableRates", [])
+        if not raw_rates:
+            self.log("Warn: Kraken: applicableRates GraphQL returned no rate periods")
+            return None
+
+        results = []
+        for r in raw_rates:
+            value = r.get("value")
+            if value is None:
+                continue
+            value_inc_vat = float(value)
+            value_exc_vat = round(value_inc_vat / 1.05, 4)
+            results.append(
+                {
+                    "value_inc_vat": value_inc_vat,
+                    "value_exc_vat": value_exc_vat,
+                    "valid_from": r.get("validFrom"),
+                    "valid_to": r.get("validTo"),
+                }
+            )
+
+        if not results:
+            return None
+
+        results = self._normalize_rate_timestamps(results)
+        self.log(f"Kraken: Fetched {len(results)} rate periods via GraphQL applicableRates for MPAN {mpan}")
+        return results
+
     async def async_fetch_rates(self, tariff=None):
-        """Fetch rates from public REST endpoint. No auth needed. Returns list of rate objects or None."""
+        """Fetch rates from public REST endpoint. No auth needed. Returns list of rate objects or None.
+
+        Falls back to GraphQL applicableRates if the REST endpoint returns a non-200 status
+        (e.g. 404 when the product code has been removed from the API) and self.import_mpan
+        is known. Only applied to import tariff fetches — export rates have no GraphQL fallback.
+        """
         tariff = tariff or self.current_tariff
         if not tariff:
             return None
 
+        is_import = tariff == self.current_tariff
         url = self.build_rates_url(tariff["product_code"], tariff["tariff_code"])
 
         all_results = []
         pages = 0
+        http_error_status = None
         try:
             timeout = aiohttp.ClientTimeout(total=30)
             async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -492,24 +598,34 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                         if response.status != 200:
                             self.log(f"Warn: Kraken: Rates HTTP {response.status} for {url}")
                             self.failures_total += 1
-                            return None
+                            http_error_status = response.status
+                            break
                         data = await response.json()
 
                     all_results.extend(data.get("results", []))
                     url = data.get("next")  # Pagination
                     pages += 1
 
-            if url:
-                self.log(f"Warn: Kraken: Rate pagination capped at {pages} pages, more data available")
-
-            all_results = self._normalize_rate_timestamps(all_results)
-            self.log(f"Kraken: Fetched {len(all_results)} rate periods for {tariff['tariff_code']}")
-            return all_results
-
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             self.log(f"Warn: Kraken: Network error fetching rates: {e}")
             self.failures_total += 1
             return None
+
+        if http_error_status is not None:
+            # Only fall back to GraphQL for permanent "product not found" responses (404/410).
+            # Transient errors (429, 500, 503, …) should surface as failures, not trigger
+            # an extra GraphQL request that would mask the outage.
+            if http_error_status in (404, 410) and is_import and self.import_mpan:
+                self.log(f"Kraken: REST rates returned HTTP {http_error_status}, falling back to GraphQL applicableRates for MPAN {self.import_mpan}")
+                return await self.async_fetch_rates_graphql(self.import_mpan)
+            return None
+
+        if url:
+            self.log(f"Warn: Kraken: Rate pagination capped at {pages} pages, more data available")
+
+        all_results = self._normalize_rate_timestamps(all_results)
+        self.log(f"Kraken: Fetched {len(all_results)} rate periods for {tariff['tariff_code']}")
+        return all_results
 
     def get_entity_name(self, root, suffix):
         """Construct entity name. Same pattern as OctopusAPI.get_entity_name."""

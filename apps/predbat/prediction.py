@@ -928,8 +928,13 @@ class Prediction:
                 else:
                     # Battery draw is only subject to inverter limit for the AC part
                     if inverter_hybrid:
+                        charge_rate_now_dc = battery_rate_max_charge_dc
+                        # Freeze mode
+                        if set_export_freeze and export_window_active and export_limit_now < 100.0 and (export_limit_now == 99.0 or set_export_freeze_only):
+                            charge_rate_now_dc = battery_rate_min  # 0
+
                         charge_rate_now_curve_dc = (
-                            get_charge_rate_curve_cached(soc, battery_rate_max_charge_dc, soc_max, battery_rate_max_charge_dc, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_charge_curve_tuple)
+                            get_charge_rate_curve_cached(soc, charge_rate_now_dc, soc_max, battery_rate_max_charge_dc, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_charge_curve_tuple)
                             * battery_rate_max_scaling
                         )
                         charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step

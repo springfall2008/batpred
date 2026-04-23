@@ -36,18 +36,18 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.35.2"
+THIS_VERSION = "v8.37.3"
 
-from download import predbat_update_move, predbat_update_download, check_install
+from download import predbat_update_move, predbat_update_download, check_install, resolve_predbat_repository, DEFAULT_PREDBAT_REPOSITORY
 from const import MINUTE_WATT
 
 # Only do the self-install/self-update logic if we are NOT compiled.
 if not IS_COMPILED:
     # Sanity check the install and re-download if corrupted
-    passed, modified = check_install(THIS_VERSION)
+    passed, modified = check_install(THIS_VERSION, repository=DEFAULT_PREDBAT_REPOSITORY)
     if not passed:
         print("Warn: Predbat files are not installed correctly, trying to download them")
-        files = predbat_update_download(THIS_VERSION)
+        files = predbat_update_download(THIS_VERSION, repository=DEFAULT_PREDBAT_REPOSITORY)
         if files:
             predbat_update_move(THIS_VERSION, files)
         sys.exit(1)
@@ -76,6 +76,7 @@ from octopus import Octopus
 from energydataservice import Energidataservice
 from components import Components
 from execute import Execute
+from marginal import Marginal
 from plan import Plan
 from fetch import Fetch
 from output import Output
@@ -84,7 +85,7 @@ from compare import Compare
 from plugin_system import PluginSystem
 
 
-class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Output, UserInterface):
+class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Marginal, Execute, Output, UserInterface):
     """Main PredBat orchestrator combining all subsystems via multiple inheritance.
 
     Inherits from Hass (HA interface), Octopus (rate loading), Energidataservice,
@@ -92,6 +93,18 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
     Output (sensor publishing), and UserInterface (config management).
     Runs the main prediction/optimisation loop every 5 minutes via update_pred().
     """
+
+    def get_predbat_repository(self):
+        """Return the GitHub repository used for main-branch self-update operations.
+
+        This override is applied to ``download_predbat_version('main')`` only.
+        Release discovery and tagged-version updates remain pinned to
+        ``DEFAULT_PREDBAT_REPOSITORY``.
+        """
+        repository = self.get_arg("predbat_repository", default="", indirect=False)
+        if isinstance(repository, str):
+            repository = repository.strip()
+        return resolve_predbat_repository(repository=repository)
 
     def download_predbat_releases_url(self, url):
         """
@@ -132,7 +145,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         """
         global PREDBAT_UPDATE_OPTIONS
         auto_update = self.get_arg("auto_update")
-        url = "https://api.github.com/repos/springfall2008/batpred/releases"
+        repository = DEFAULT_PREDBAT_REPOSITORY
+        url = "https://api.github.com/repos/{}/releases".format(repository)
         data = self.download_predbat_releases_url(url)
         self.releases = {}
         if data and isinstance(data, list):
@@ -161,7 +175,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                     self.releases["latest_beta_body"] = release.get("body", "Unknown")
                     found_latest_beta = True
 
-            self.log("Predbat {} version {} currently running, latest version is {}, latest beta is {}".format(__file__, self.releases["this"], self.releases["latest"], self.releases["latest_beta"]))
+            self.log("Predbat {} repository {} version {} currently running, latest version is {}, latest beta is {}".format(__file__, repository, self.releases["this"], self.releases["latest"], self.releases["latest_beta"]))
             PREDBAT_UPDATE_OPTIONS = ["main"]
             this_tag = THIS_VERSION
             new_version = False
@@ -391,6 +405,22 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         """
         return (self.midnight + timedelta(minutes=minute)).strftime("%m-%d %H:%M:%S")
 
+    def cleanup_pool(self):
+        """
+        Terminate and clean up the multiprocessing pool if it is active.
+
+        Ensures worker processes are properly terminated to prevent orphaned
+        processes when the prediction loop exits unexpectedly.
+        """
+        if getattr(self, "pool", None):
+            try:
+                self.pool.terminate()
+                self.pool.join()
+            except Exception as e:
+                self.log("Warn: Failed to terminate multiprocessing pool: {}".format(e))
+                self.log(traceback.format_exc())
+            self.pool = None
+
     def reset(self):
         """
         Init stub
@@ -418,6 +448,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
 
         # Forecast.solar API request metrics for monitoring
         self.currency_symbols = self.args.get("currency_symbols", "£p")
+        self.cleanup_pool()
         self.pool = None
         self.watch_list = []
         self.restart_active = False
@@ -849,6 +880,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                 export_limits=self.export_limits_best,
                 charge_rate_w=int(self.battery_rate_max_charge * MINUTE_WATT),
                 discharge_rate_w=int(self.battery_rate_max_discharge * MINUTE_WATT),
+                soc_max=self.soc_max,
+                reserve=self.reserve,
                 timezone=str(self.local_tz),
             )
 
@@ -1124,10 +1157,16 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             self.log("Warn: Predbat update requested for the same version as we are running ({}), no update required".format(version))
             return
 
-        self.log("Update Predbat to version {}".format(version))
+        selected_tag = version.split(" ")[0] if version else ""
+        if selected_tag == "main":
+            repository = self.get_predbat_repository()
+        else:
+            repository = DEFAULT_PREDBAT_REPOSITORY
+
+        self.log("Update Predbat to version {} from repository {}".format(version, repository))
         self.expose_config("version", True, force=True, in_progress=True)
 
-        files = predbat_update_download(version)
+        files = predbat_update_download(version, repository=repository)
         if files:
             # Notify before killing threads so the WebSocket is still healthy
             if self.get_arg("set_system_notify"):
@@ -1362,7 +1401,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                                     errors += 1
                                     break
                     elif expected_type == "int_float_dict":
-                        if isinstance(value, dict):
+                        if spec.get("or_auto", False) and value == "auto":
+                            matches = True
+                        elif isinstance(value, dict):
                             matches = True
                             for key in value:
                                 if not self.validate_is_int(key):
@@ -1669,6 +1710,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                 raise e
             finally:
                 self.prediction_started = False
+                self.cleanup_pool()
         elif not self.prediction_started:
             time_now = datetime.now()
             inverter_data_last_fetch = self.inverter_data_last_fetch
@@ -1747,6 +1789,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                 raise e
             finally:
                 self.prediction_started = False
+                self.cleanup_pool()
 
     def run_time_loop_balance(self, cb_args):
         """

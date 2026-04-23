@@ -343,7 +343,7 @@ Once you are happy with the predictions Load ML is producing you can set Predbat
 Before enabling load_ml_source:
 
 - Make sure you do not have [PredAI](https://github.com/springfall2008/predai) enabled at the same time
-- Disable in day adjustment (**switch.predbat_calculate_inday_adjustment**) as the Load ML model will do that for you and otherwise Predbat will double-count in-day load
+- In-day adjustment (**switch.predbat_calculate_inday_adjustment**) is ignored while `load_ml_enable: true` is active to avoid double-counting in-day load
 
 Then set load_ml_source to true in `apps.yaml` so that the Load ML forecast is used in Predbat's planning:
 
@@ -479,11 +479,15 @@ Large shifts in `mean` or `std` for a group (e.g. `import_rate` after a tariff c
     - If you have an EV, check that **switch.predbat_car_charging_hold** is On, **car_charging_energy** is set correctly in `apps.yaml` and that the sensor it is configured to looks correct
     - Consider adding PV data if you have solar panels
 
-**Issue**: Load ML predicts much greater load than expected**
+**Issue**: Load ML predicts much greater load than expected
 
-- **Cause**: In-day adjustment has been left turned on and both Load ML and inday adjustment are increasing the load in line with daily household use
+- **Cause**: This usually comes down to which load source Predbat is using for planning:
+    - If `load_ml_enable: true` is set, Load ML can train and publish forecasts, but those forecasts are **not** used for planning unless `load_ml_source` is also configured to use them.
+    - If Load ML is enabled but `load_ml_source` is still using the classic load source, Predbat will continue to apply the classic in-day adjustment based on the switch setting. In that case, you may see an ML forecast entity, but it is not the forecast driving the plan.
+    - If `load_ml_source` is set to use the ML forecast, Predbat uses the ML forecast directly as the planning load source and the classic in-day adjustment is ignored, because that adjustment only applies to the classic load forecast path.
 - **Solution**:
-    - Ensure that **switch.predbat_calculate_inday_adjustment** is turned off
+    - If you want to use Load ML for planning, ensure both `load_ml_enable: true` is set and `load_ml_source` is configured to use the ML forecast.
+    - If you want to keep using the classic load source, review the in-day adjustment setting instead; changes there can affect the planned load even when ML forecasts are visible for monitoring.
 
 ### Viewing Predictions
 

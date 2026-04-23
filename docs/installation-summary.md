@@ -7,7 +7,7 @@ see the [video guides](video-guides.md) section for those and other videos
 2. Make sure the right [inverter control module](install.md#inverter-control-install) is installed and running
 3. Install a file editor (either the File editor or Studio Code Server app) to enable you to edit configuration files if you haven't already - [Editing configuration files](install.md#editing-configuration-files-in-home-assistant)
 4. Install - [Predbat app install](install.md#predbat-app-install) for HAOS, or as a [Docker install](install.md#docker-install)
-5. Decide on and setup a Solar Forecast. It's recommended that you use [Solcast](install.md#solcast-install), or you can use [Forecast.solar](install.md#predbat-direct-to-forecastsolar).<BR>For Solcast:
+5. Decide on and setup a Solar Forecast. It's recommended that you use [Solcast](install.md#solcast-install), or you can use [Open-Meteo](install.md#predbat-direct-to-open-meteo) (free, no API key required) or [Forecast.solar](install.md#predbat-direct-to-forecastsolar).<BR>For Solcast:
     - Register for a Solcast hobbyist account if you haven't already [Solcast install](install.md#solcast-install) and either:
     - [Configure Predbat to call Solcast](install.md#predbat-direct-solcast-method) for the Solar forecast, or
     - [Install and configure the Solcast integration](install.md#solcast-home-assistant-integration-method), and check that you see the Solcast data in Home Assistant

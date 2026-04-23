@@ -33,7 +33,7 @@ message BatteryStatus {
   uint32 cycle_count     = 7;
   int32  capacity_wh     = 8;  // rated capacity
   uint32 rate_max_w      = 9;  // max charge/discharge rate in W
-  uint32 depth_of_discharge_pct = 10;  // usable % 0-100 (e.g. 95 = 0.95); 0 = unknown (use 95)
+  uint32 depth_of_discharge_pct = 10;  // usable % 0-100 (e.g. 95 = 0.95); 0 = unknown (use 100)
 }
 
 message PvStatus {
@@ -57,7 +57,7 @@ message InverterData {
 }
 
 message ControlStatus {
-  uint32 mode               = 1;  // OperatingMode enum (0=auto,1=charge,2=discharge,3=idle)
+  uint32 mode               = 1;  // Plan Mode enum (0=auto,1=charge,2=discharge)
   bool   charge_enabled     = 2;
   bool   discharge_enabled  = 3;
   uint32 charge_rate_w      = 4;

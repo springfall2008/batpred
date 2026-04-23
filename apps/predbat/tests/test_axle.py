@@ -43,6 +43,7 @@ class MockAxleAPI(AxleAPI):
         self.updated_at = None
         self.history_loaded = False
         self._now_utc = datetime.now(timezone.utc)
+        self.local_tz = timezone.utc
         self._state_store = {}  # Mock state storage
 
         # Managed mode defaults

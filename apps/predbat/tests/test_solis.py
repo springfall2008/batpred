@@ -9,8 +9,8 @@
 # pylint: disable=attribute-defined-outside-init
 
 import asyncio
-from datetime import timezone
-from unittest.mock import patch, MagicMock
+from datetime import datetime
+from unittest.mock import MagicMock
 from solis import SolisAPI, SOLIS_CID_CHARGE_ENABLE_BASE, SOLIS_CID_CHARGE_TIME, SOLIS_CID_CHARGE_SOC_BASE, SOLIS_CID_CHARGE_CURRENT, SOLIS_CID_DISCHARGE_ENABLE_BASE
 from solis import SOLIS_CID_BATTERY_FORCE_CHARGE_SOC, SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC, SOLIS_CID_CHARGE_DISCHARGE_SETTINGS
 from solis import SOLIS_CID_STORAGE_MODE, SOLIS_BIT_GRID_CHARGING, SOLIS_BIT_TOU_MODE
@@ -64,6 +64,10 @@ class MockSolisAPI(SolisAPI):
         self.cached_infos = {}
         self.slots_reset = set()
 
+        # Timezone for now_utc_exact property (from ComponentBase)
+        self.local_tz = datetime.now().astimezone().tzinfo
+        self._test_now_utc_exact = None  # Set to a datetime to override now_utc_exact in tests
+
         # Logging
         self.log_messages = []
         self.dashboard_items = {}
@@ -98,6 +102,13 @@ class MockSolisAPI(SolisAPI):
     def get_arg(self, name, default=None):
         """Mock get_arg"""
         return default
+
+    @property
+    def now_utc_exact(self):
+        """Allow tests to override the current time via _test_now_utc_exact"""
+        if self._test_now_utc_exact is not None:
+            return self._test_now_utc_exact
+        return datetime.now(self.local_tz)
 
     def is_tou_v2_mode(self, sn):
         """Mock is_tou_v2_mode - can be overridden in tests"""
@@ -325,8 +336,11 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_write_time_windows_v2_mode())
         failed |= asyncio.run(test_write_time_windows_v1_mode())
         failed |= asyncio.run(test_write_time_windows_v2_no_changes())
+        failed |= asyncio.run(test_write_time_windows_v2_stale_slot_clearing())
         failed |= asyncio.run(test_write_time_windows_zero_charge_current())
         failed |= asyncio.run(test_write_time_windows_v1_slot_detection())
+        failed |= asyncio.run(test_write_time_windows_v1_discharge_slot_detection())
+        failed |= asyncio.run(test_write_time_windows_v1_local_time_not_utc())
         failed |= asyncio.run(test_encode_time_windows_variant1())
         failed |= asyncio.run(test_encode_time_windows_variant2())
         failed |= asyncio.run(test_encode_time_windows_empty())
@@ -1099,13 +1113,14 @@ async def test_write_time_windows_v2_mode():
     # Verify results
     assert result == True, "write_time_windows_if_changed should return True"
 
-    # Check that read_and_write_cid was called for all V2 fields (no enable gating)
+    # Check that read_and_write_cid was called with two-pass ordering:
+    # Pass 1 (clear disabled slots):
+    #   discharge: enable=0, time=00:00-00:00 (2 calls)
+    # Pass 2 (write active slots):
+    #   charge: enable=1, time, soc, current (4 calls)
+    # = 6 calls total (disabled slots do NOT get SOC/current written)
     calls = api.read_and_write_cid_calls
-    # All fields written regardless of enable state:
-    # charge: enable, time, soc, current (4 calls)
-    # discharge: enable, time, soc, current (4 calls)
-    # = 8 calls total
-    assert len(calls) == 8, f"Expected 8 calls for V2 mode (4 charge + 4 discharge), got {len(calls)}"
+    assert len(calls) == 6, f"Expected 6 calls for V2 mode (2 discharge clear + 4 charge active), got {len(calls)}"
 
     # Verify charge enable was written
     charge_enable_call = next((c for c in calls if c["cid"] == SOLIS_CID_CHARGE_ENABLE_BASE), None)
@@ -1132,18 +1147,16 @@ async def test_write_time_windows_v2_mode():
     assert discharge_enable_call is not None, "Discharge enable should be written"
     assert discharge_enable_call["value"] == "0", "Discharge enable should be 0"
 
-    # Verify discharge time/SOC/current were also written (no enable gating)
+    # For disabled discharge: only enable and time are cleared (SOC/current not written)
     from solis import SOLIS_CID_DISCHARGE_TIME, SOLIS_CID_DISCHARGE_SOC, SOLIS_CID_DISCHARGE_CURRENT
 
     discharge_time_call = next((c for c in calls if c["cid"] == SOLIS_CID_DISCHARGE_TIME[0]), None)
-    assert discharge_time_call is not None, "Discharge time should be written"
-    assert discharge_time_call["value"] == "16:00-19:00", "Discharge time should be 16:00-19:00"
+    assert discharge_time_call is not None, "Discharge time should be written (cleared) for disabled slot"
+    assert discharge_time_call["value"] == "00:00-00:00", "Disabled discharge time should be cleared to 00:00-00:00"
     discharge_soc_call = next((c for c in calls if c["cid"] == SOLIS_CID_DISCHARGE_SOC[0]), None)
-    assert discharge_soc_call is not None, "Discharge SOC should be written"
-    assert discharge_soc_call["value"] == "10", "Discharge SOC should be 10"
+    assert discharge_soc_call is None, "Discharge SOC should NOT be written for a disabled slot"
     discharge_current_call = next((c for c in calls if c["cid"] == SOLIS_CID_DISCHARGE_CURRENT[0]), None)
-    assert discharge_current_call is not None, "Discharge current should be written"
-    assert discharge_current_call["value"] == "30.0", "Discharge current should be 30.0"
+    assert discharge_current_call is None, "Discharge current should NOT be written for a disabled slot"
 
     # Verify storage mode was set to Self-Use (non-zero charge current)
     storage_mode_calls = api.set_storage_mode_calls
@@ -1151,6 +1164,103 @@ async def test_write_time_windows_v2_mode():
     assert storage_mode_calls[0]["mode"] == "Self-Use", "Storage mode should be Self-Use for non-zero charge current"
 
     print("PASSED: V2 mode writes all fields and sets storage mode")
+    return False
+
+
+async def test_write_time_windows_v2_stale_slot_clearing():
+    """Test that stale times on disabled slots are cleared (Pass 1) before the active slot is written (Pass 2).
+
+    Scenario: slot 2 was previously active and has stale 02:00-05:30 times on the inverter
+    (reflected in cache).  Slot 1 is the new active window.  The two-pass approach must send
+    the slot-2 clear writes *before* the slot-1 active writes so the API never sees an
+    overlap conflict.
+    """
+    print("\n=== Test: write_time_windows_if_changed V2 mode stale slot clearing ===")
+
+    api = MockSolisAPI()
+    api._test_v2_mode = True
+    api._mock_storage_mode = True
+    inverter_sn = "TEST_STALE"
+    api.inverter_sn = [inverter_sn]
+
+    from solis import SOLIS_CID_DISCHARGE_TIME
+
+    # Desired state: slot 1 charge-active, everything else disabled/cleared
+    api.charge_discharge_time_windows[inverter_sn] = {
+        1: {
+            "charge_enable": 1,
+            "charge_start_time": "02:00",
+            "charge_end_time": "05:00",
+            "charge_soc": 100,
+            "charge_current": 50,
+            "discharge_enable": 0,
+            "discharge_start_time": "00:00",
+            "discharge_end_time": "00:00",
+            "discharge_soc": 10,
+            "discharge_current": 0,
+        },
+        2: {
+            "charge_enable": 0,
+            "charge_start_time": "00:00",
+            "charge_end_time": "00:00",
+            "charge_soc": 0,
+            "charge_current": 0,
+            "discharge_enable": 0,
+            "discharge_start_time": "00:00",
+            "discharge_end_time": "00:00",
+            "discharge_soc": 0,
+            "discharge_current": 0,
+        },
+    }
+
+    # Cache reflects stale inverter state: slot 2 still has old active times.
+    # Slot 1 charge time is STALE (03:00-06:00 != 02:00-05:00 desired) so Pass 2 must write it,
+    # giving us a concrete slot-1 active write to assert ordering against.
+    api.cached_values[inverter_sn] = {
+        # Slot 1 charge - enable/SOC/current already match, but time is STALE so Pass 2 must write it
+        SOLIS_CID_CHARGE_ENABLE_BASE: "1",
+        SOLIS_CID_CHARGE_TIME[0]: "03:00-06:00",
+        SOLIS_CID_CHARGE_SOC_BASE: "100",
+        SOLIS_CID_CHARGE_CURRENT[0]: "50.0",
+        # Slot 1 discharge - already cleared in cache
+        SOLIS_CID_DISCHARGE_ENABLE_BASE: "0",
+        SOLIS_CID_DISCHARGE_TIME[0]: "00:00-00:00",
+        # Slot 2 charge - STALE: was previously enabled with old times
+        SOLIS_CID_CHARGE_ENABLE_BASE + 1: "1",
+        SOLIS_CID_CHARGE_TIME[1]: "02:00-05:30",
+        # Slot 2 discharge - already cleared
+        SOLIS_CID_DISCHARGE_ENABLE_BASE + 1: "0",
+        SOLIS_CID_DISCHARGE_TIME[1]: "00:00-00:00",
+    }
+
+    result = await api.write_time_windows_if_changed(inverter_sn)
+    assert result == True, "write_time_windows_if_changed should return True"
+
+    calls = api.read_and_write_cid_calls
+
+    # Pass 1 should clear slot 2 charge (enable + time) even though slot 1 is also processed.
+    # Slot 1 charge is active so Pass 1 skips it; slot 1 discharge is already clear.
+    # Slot 2 charge is disabled AND stale → 2 clear writes expected.
+    slot2_enable_clear = next((c for c in calls if c["cid"] == SOLIS_CID_CHARGE_ENABLE_BASE + 1 and c["value"] == "0"), None)
+    assert slot2_enable_clear is not None, "Pass 1 must clear stale slot 2 charge enable"
+
+    slot2_time_clear = next((c for c in calls if c["cid"] == SOLIS_CID_CHARGE_TIME[1] and c["value"] == "00:00-00:00"), None)
+    assert slot2_time_clear is not None, "Pass 1 must clear stale slot 2 charge time"
+
+    # Verify ordering: both slot-2 clears must appear before the slot-1 time write from Pass 2.
+    # Narrowing to SOLIS_CID_CHARGE_TIME[0] only ensures we only match the stale time update,
+    # not an enable write that might have come from Pass 1 (which doesn't write active slots).
+    call_cids = [c["cid"] for c in calls]
+    slot2_enable_idx = call_cids.index(SOLIS_CID_CHARGE_ENABLE_BASE + 1)
+    slot2_time_idx = call_cids.index(SOLIS_CID_CHARGE_TIME[1])
+    # Slot 1 time write must exist (cache was stale) and must come after both Pass-1 clears
+    slot1_active_idxs = [i for i, c in enumerate(calls) if c["cid"] == SOLIS_CID_CHARGE_TIME[0]]
+    assert len(slot1_active_idxs) > 0, "Pass 2 must write slot 1 charge time (stale in cache)"
+    first_slot1_active = min(slot1_active_idxs)
+    assert slot2_enable_idx < first_slot1_active, "Slot 2 enable clear must precede slot 1 active write"
+    assert slot2_time_idx < first_slot1_active, "Slot 2 time clear must precede slot 1 active write"
+
+    print("PASSED: V2 mode two-pass clears stale disabled slots before writing active slot")
     return False
 
 
@@ -1254,12 +1364,17 @@ async def test_write_time_windows_v2_no_changes():
         }
     }
 
-    # Initialize cache with same values (no changes)
+    # Initialize cache with same values (no changes) - including discharge cleared state
+    # so Pass 1 finds no diff and generates zero calls for discharge too
+    from solis import SOLIS_CID_DISCHARGE_TIME
+
     api.cached_values[inverter_sn] = {
         SOLIS_CID_CHARGE_ENABLE_BASE: "1",
         SOLIS_CID_CHARGE_TIME[0]: "02:00-05:00",
         SOLIS_CID_CHARGE_SOC_BASE: "100",
         SOLIS_CID_CHARGE_CURRENT[0]: "50",
+        SOLIS_CID_DISCHARGE_ENABLE_BASE: "0",
+        SOLIS_CID_DISCHARGE_TIME[0]: "00:00-00:00",
     }
 
     # Call the function
@@ -1368,14 +1483,13 @@ async def test_write_time_windows_v1_slot_detection():
     api.cached_values[inverter_sn] = {}
 
     # Mock current time to be during charge slot (03:00)
-    with patch("solis.datetime") as mock_datetime:
-        mock_now = MagicMock()
-        mock_now.strftime.return_value = "03:00"
-        mock_datetime.now.return_value = mock_now
-        mock_datetime.UTC = timezone.utc
+    mock_now = MagicMock()
+    mock_now.strftime.return_value = "03:00"
+    api._test_now_utc_exact = mock_now
 
-        # Call the function
-        result = await api.write_time_windows_if_changed(inverter_sn)
+    # Call the function
+    result = await api.write_time_windows_if_changed(inverter_sn)
+    api._test_now_utc_exact = None
 
     # Verify results
     assert result == True, "write_time_windows_if_changed should return True"
@@ -1385,6 +1499,123 @@ async def test_write_time_windows_v1_slot_detection():
     assert charge_log, "Should log that we're in charge slot with target SOC"
 
     print("PASSED: V1 mode detects active time slots correctly")
+    return False
+
+
+async def test_write_time_windows_v1_discharge_slot_detection():
+    """Test V1 mode discharge slot detection — reproduces the bug where a discharge window
+    was set up but Predbat set storage mode to 'Self-Use - No Timed Charge/Discharge', blocking
+    the discharge.  The root cause was using UTC time instead of local time for slot comparison."""
+    print("\n=== Test: write_time_windows_if_changed V1 mode discharge slot detection ===")
+
+    api = MockSolisAPI()
+    api._test_v2_mode = False  # V1 mode
+    api._mock_storage_mode = True  # Track storage mode calls
+    inverter_sn = "TEST123"
+    api.inverter_sn = [inverter_sn]
+
+    # Discharge window 21:30-23:59 (like the reporter's slot)
+    api.charge_discharge_time_windows[inverter_sn] = {
+        1: {
+            "charge_start_time": "00:00",
+            "charge_end_time": "00:00",
+            "charge_soc": 100,
+            "charge_current": 50,
+            "charge_enable": 0,
+            "discharge_start_time": "21:30",
+            "discharge_end_time": "23:59",
+            "discharge_soc": 15,
+            "discharge_current": 30,
+            "discharge_enable": 1,
+            "field_length": 18,
+        },
+    }
+    api.cached_values[inverter_sn] = {}
+    api.inverter_details[inverter_sn] = {"batteryCapacitySoc": 50}
+
+    # Mock local time to 21:43 — inside the discharge window
+    mock_now = MagicMock()
+    mock_now.strftime.return_value = "21:43"
+    api._test_now_utc_exact = mock_now
+
+    result = await api.write_time_windows_if_changed(inverter_sn)
+    api._test_now_utc_exact = None
+
+    assert result == True, "write_time_windows_if_changed should return True"
+
+    # Must detect we are inside the discharge slot and use 'Self-Use', NOT 'Self-Use - No Timed Charge/Discharge'
+    discharge_log = any("In discharge slot" in msg for msg in api.log_messages)
+    assert discharge_log, "Should log that we're in discharge slot"
+
+    storage_calls = api.set_storage_mode_calls
+    assert len(storage_calls) == 1, f"Expected 1 storage mode call, got {len(storage_calls)}"
+    assert storage_calls[0]["mode"] == "Self-Use", f"Storage mode should be 'Self-Use' when inside discharge window, got '{storage_calls[0]['mode']}'"
+
+    print("PASSED: V1 mode correctly detects active discharge slot and sets Self-Use storage mode")
+    return False
+
+
+async def test_write_time_windows_v1_local_time_not_utc():
+    """Regression test: V1 slot detection must use local time, not UTC.
+    A BST user (UTC+1) with a discharge window at 21:30-23:59 local time would see
+    UTC time as 20:30-22:59.  At local 21:43 (UTC 20:43) the window is active in local
+    time but would appear inactive if UTC were used, causing TOU to be disabled."""
+    print("\n=== Test: write_time_windows_if_changed V1 mode uses local time not UTC ===")
+
+    api = MockSolisAPI()
+    api._test_v2_mode = False
+    api._mock_storage_mode = True
+    inverter_sn = "TEST123"
+    api.inverter_sn = [inverter_sn]
+
+    # Discharge window 21:30-23:59 local time
+    api.charge_discharge_time_windows[inverter_sn] = {
+        1: {
+            "charge_start_time": "00:00",
+            "charge_end_time": "00:00",
+            "charge_soc": 100,
+            "charge_current": 50,
+            "charge_enable": 0,
+            "discharge_start_time": "21:30",
+            "discharge_end_time": "23:59",
+            "discharge_soc": 15,
+            "discharge_current": 30,
+            "discharge_enable": 1,
+            "field_length": 18,
+        },
+    }
+    api.cached_values[inverter_sn] = {}
+    api.inverter_details[inverter_sn] = {"batteryCapacitySoc": 50}
+
+    # Simulate local time 21:43 (inside window) — this is what now_utc_exact returns
+    mock_local = MagicMock()
+    mock_local.strftime.return_value = "21:43"
+    api._test_now_utc_exact = mock_local
+    result_inside = await api.write_time_windows_if_changed(inverter_sn)
+    api._test_now_utc_exact = None
+
+    assert result_inside == True
+    assert any("In discharge slot" in m for m in api.log_messages), "Should detect discharge slot at local 21:43"
+    inside_mode = api.set_storage_mode_calls[-1]["mode"]
+    assert inside_mode == "Self-Use", f"Expected 'Self-Use' at local 21:43, got '{inside_mode}'"
+
+    # Now simulate UTC time 20:43 (1 hour behind, outside window) — the old buggy behaviour
+    api.log_messages.clear()
+    api.set_storage_mode_calls.clear()
+
+    mock_utc = MagicMock()
+    mock_utc.strftime.return_value = "20:43"
+    api._test_now_utc_exact = mock_utc
+    result_outside = await api.write_time_windows_if_changed(inverter_sn)
+    api._test_now_utc_exact = None
+
+    assert result_outside == True
+    outside_mode = api.set_storage_mode_calls[-1]["mode"]
+    assert outside_mode == "Self-Use - No Timed Charge/Discharge", f"With UTC time 20:43 (outside window) expected 'Self-Use - No Timed Charge/Discharge', got '{outside_mode}'"
+
+    # The fix ensures now_utc_exact (local time) is used, so 21:43 local → Self-Use (in slot)
+    # If UTC were used (20:43), result would be Self-Use - No Timed Charge/Discharge (outside slot)
+    print("PASSED: V1 mode uses local time for slot detection (regression: UTC offset no longer causes missed discharge windows)")
     return False
 
 
@@ -2689,6 +2920,10 @@ async def test_automatic_config():
     # Create API with multiple inverters
     api = MockSolisAPI(prefix="predbat")
     api.inverter_sn = ["ABC123", "DEF456"]
+    api.inverter_details = {
+        "ABC123": {"batteryHealthSoh": 95},
+        "DEF456": {"batteryHealthSoh": 88},
+    }
 
     # Track set_arg calls
     set_arg_calls = {}
@@ -2748,9 +2983,12 @@ async def test_automatic_config():
     assert "export_today" in set_arg_calls, "export_today not configured"
     assert "pv_today" in set_arg_calls, "pv_today not configured"
 
-    # Verify reserve and limits configured
+    # Verify reserve and limits use over_discharge_soc (not reserve_soc)
     assert "reserve" in set_arg_calls, "reserve not configured"
+    expected_reserve = ["number.predbat_solis_abc123_over_discharge_soc", "number.predbat_solis_def456_over_discharge_soc"]
+    assert set_arg_calls["reserve"] == expected_reserve, f"Expected {expected_reserve}, got {set_arg_calls['reserve']}"
     assert "battery_min_soc" in set_arg_calls, "battery_min_soc not configured"
+    assert set_arg_calls["battery_min_soc"] == expected_reserve, f"Expected {expected_reserve}, got {set_arg_calls['battery_min_soc']}"
 
     # Verify rate controls configured
     assert "battery_rate_max" in set_arg_calls, "battery_rate_max not configured"
@@ -2762,6 +3000,7 @@ async def test_automatic_config():
     # Test with single inverter
     api2 = MockSolisAPI(prefix="test_prefix")
     api2.inverter_sn = ["SINGLE123"]
+    api2.inverter_details = {"SINGLE123": {"batteryHealthSoh": 90}}
 
     set_arg_calls2 = {}
 
@@ -2796,6 +3035,27 @@ async def test_automatic_config():
     assert any("No inverters to configure" in msg for msg in api3.log_messages), "Should log warning about no inverters"
 
     print("PASSED: automatic_config handles empty inverter list")
+
+    # Test with inverters that have no batteries (batteryHealthSoh absent)
+    api4 = MockSolisAPI()
+    api4.inverter_sn = ["GOOD123"]
+    # inverter_details exists but has no batteryHealthSoh entry
+    api4.inverter_details = {"GOOD123": {"someOtherField": "value"}}
+
+    set_arg_calls4 = {}
+
+    def mock_set_arg4(key, value):
+        set_arg_calls4[key] = value
+
+    api4.set_arg = mock_set_arg4
+
+    await api4.automatic_config()
+
+    # Should log warning and not configure anything
+    assert len(set_arg_calls4) == 0, "Should not configure entities when no inverters have batteries"
+    assert any("No inverters with batteries found" in msg for msg in api4.log_messages), "Should log warning about no inverters with batteries"
+
+    print("PASSED: automatic_config skips inverters without batteries")
 
     return False
 

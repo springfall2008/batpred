@@ -76,6 +76,7 @@ from component_base import ComponentBase
 from config import APPS_SCHEMA
 from web_metrics_dashboard import get_metrics_dashboard_css, get_metrics_dashboard_body
 from predbat_metrics import metrics_handler, metrics_json_handler, metrics, PROMETHEUS_AVAILABLE
+from marginal import MARGINAL_EXTRA_KWH_LEVEL_NAMES, MARGINAL_EXTRA_KWH_LEVELS, MARGINAL_TIME_OFFSETS
 
 ROOT_YAML_KEY = "pred_bat"
 
@@ -118,6 +119,84 @@ class WebInterface(ComponentBase):
                 results[key] = hist1[key] - hist2[key]
             else:
                 results[key] = hist1[key]
+        return results
+
+    def history_daily_at_hour(self, history_raw, hour_limit=3):
+        """
+        For each calendar day (local time), return the last recorded entity state
+        whose local hour falls in [0, hour_limit).  This captures the result of
+        the overnight compare run (which completes around 1am) without being
+        influenced by any later manual re-runs during the day.
+        Returns {YYYY-MM-DD: float} with values in the raw unit of the entity state.
+        """
+        results = {}
+        if not isinstance(history_raw, list) or not history_raw:
+            return results
+        history = history_raw[0] if isinstance(history_raw[0], list) else history_raw
+        for item in history:
+            last_updated = item.get("last_updated")
+            state = item.get("state")
+            if not last_updated or state in (None, "unavailable", "unknown"):
+                continue
+            try:
+                state = float(state)
+            except (ValueError, TypeError):
+                continue
+            try:
+                ts = str2time(last_updated).astimezone()
+            except (ValueError, TypeError):
+                continue
+            if ts.hour >= hour_limit:
+                continue
+            day_str = ts.strftime(TIME_FORMAT_DAILY)
+            # Keep the latest record within the overnight window for this day
+            results[day_str] = state
+        return results
+
+    def average_cost_window(self, daily_pence, days):
+        """
+        Return the mean daily cost (in pence) and the number of days with data
+        over the last `days` calendar days, excluding today.
+        Returns (None, 0) when there are no data points in the window.
+        """
+        today = self.now_utc.astimezone().date()
+        total = 0.0
+        count = 0
+        for d in range(1, days + 1):
+            day_str = (today - timedelta(days=d)).strftime(TIME_FORMAT_DAILY)
+            if day_str in daily_pence:
+                total += daily_pence[day_str]
+                count += 1
+        return ((total / count), count) if count else (None, 0)
+
+    def rolling_7d_average(self, daily_pence):
+        """
+        For every date that has a data point, compute the 7-day trailing average
+        (the mean of that day and up to 6 preceding days that have data).
+        Returns {YYYY-MM-DD: float} in the same unit as daily_pence (pence),
+        only for days where at least one data point exists in the window.
+        """
+        if not daily_pence:
+            return {}
+        from datetime import date as date_cls
+
+        # Sort dates so we can iterate chronologically
+        sorted_days = sorted(daily_pence.keys())
+        results = {}
+        for day_str in sorted_days:
+            try:
+                anchor = date_cls.fromisoformat(day_str)
+            except (ValueError, TypeError):
+                continue
+            total = 0.0
+            count = 0
+            for d in range(7):
+                candidate = (anchor - timedelta(days=d)).strftime(TIME_FORMAT_DAILY)
+                if candidate in daily_pence:
+                    total += daily_pence[candidate]
+                    count += 1
+            if count:
+                results[day_str] = dp2(total / count)
         return results
 
     async def start(self):
@@ -1493,6 +1572,74 @@ var options = {
         text += "</script>\n"
         return text
 
+    def render_heatmap_chart(self, series_data, title, range_min, range_max, chart_id="chart", fixed_height=None):
+        """
+        Render a rounded heatmap chart using ApexCharts.
+
+        series_data is a list of dicts: [{"name": str, "data": [{"x": str, "y": float}, ...]}, ...]
+        range_min and range_max define the full colour scale (green -> red).
+        chart_id is the DOM element id to render into.
+        fixed_height overrides the responsive height calculation when set.
+        """
+        # Build a 5-stop green-to-red colour gradient across the value range
+        span = max(range_max - range_min, 0.01)
+        gradient_colors = ["#00B050", "#85C21A", "#FFFF00", "#FFA500", "#FF0000"]
+        num_stops = len(gradient_colors)
+        ranges_js = ""
+        for i, color in enumerate(gradient_colors):
+            from_val = round(range_min + span * i / num_stops, 4)
+            to_val = round(range_min + span * (i + 1) / num_stops, 4)
+            if i == num_stops - 1:
+                to_val = round(range_max + 0.01, 4)
+            name_str = "{:.1f}-{:.1f}".format(from_val, to_val)
+            ranges_js += "            {{ from: {}, to: {}, color: '{}', name: '{}' }},\n".format(from_val, to_val, color, name_str)
+
+        # Build series JSON inline
+        series_js = ""
+        for series in series_data:
+            name = series.get("name", "")
+            data_points = series.get("data", [])
+            points_js = ", ".join("{{ x: '{}', y: {} }}".format(p["x"], "null" if p["y"] is None else p["y"]) for p in data_points)
+            series_js += "    {{ name: '{}', data: [{}] }},\n".format(name, points_js)
+
+        text = ""
+        text += "<script>\n"
+        text += "window.onresize = function(){ location.reload(); };\n"
+        text += "var width = window.innerWidth;\n"
+        text += "var height = window.innerHeight;\n"
+        text += "if (width < 400) { width = 400; }\n"
+        text += "width = width - 50;\n"
+        if fixed_height is not None:
+            text += "var height_{} = {};\n".format(chart_id, fixed_height)
+        else:
+            num_rows = max(len(series_data), 1)
+            text += "var height_{} = {};\n".format(chart_id, num_rows * 80 + 80)
+        text += "var options = {\n"
+        text += "  chart: {{ type: 'heatmap', width: width, height: height_{}, animations: {{ enabled: false }} }},\n".format(chart_id)
+        text += "  plotOptions: {\n"
+        text += "    heatmap: {\n"
+        text += "      radius: 2,\n"
+        text += "      enableShades: false,\n"
+        text += "      colorScale: {\n"
+        text += "        ranges: [\n"
+        text += ranges_js
+        text += "        ]\n"
+        text += "      }\n"
+        text += "    }\n"
+        text += "  },\n"
+        text += "  dataLabels: { enabled: true, style: { colors: ['#000'] } },\n"
+        text += "  series: [\n"
+        text += series_js
+        text += "  ],\n"
+        text += "  xaxis: { type: 'category' },\n"
+        text += "  title: {{ text: '{}' }},\n".format(title)
+        text += "  tooltip: { y: { formatter: function(val) { return val !== null ? val.toFixed(2) : 'N/A'; } } }\n"
+        text += "};\n"
+        text += "var chart_{cid} = new ApexCharts(document.querySelector('#{cid}'), options);\n".format(cid=chart_id)
+        text += "chart_{}.render();\n".format(chart_id)
+        text += "</script>\n"
+        return text
+
     def render_timeline_chart(self, timeline_data, tagname, days):
         """
         Render a timeline chart for non-numerical data (like on/off states)
@@ -2676,6 +2823,101 @@ chart.render();
             ]
 
             text += self.render_chart(series_data, f"Daily Savings ({self.currency_symbols[0]})", "Cost Savings Analysis", now_str, daily_chart=False, extra_yaxis=secondary_axis)
+        elif chart == "MarginalCosts":
+            sensor_attrs = self.base.dashboard_values.get("sensor." + self.prefix + "_marginal_energy_costs", {}).get("attributes", {})
+            matrix = sensor_attrs.get("matrix", {})
+            energy_labels = list(matrix.keys())
+            time_labels = list(next(iter(matrix.values()), {}).keys())
+            if not matrix:
+                text += "<br><h2>Marginal cost data not yet available &mdash; run a plan first</h2>"
+            else:
+                grid_import = sensor_attrs.get("grid_import", {})
+                grid_export = sensor_attrs.get("grid_export", {})
+                all_grid_vals = list(grid_import.values()) + list(grid_export.values())
+                range_min = min(getattr(self.base, "rate_min", 0), getattr(self.base, "marginal_costs_min", 0), min(all_grid_vals) if all_grid_vals else 0)
+                range_max = max(getattr(self.base, "rate_max", 100), getattr(self.base, "marginal_costs_max", 100), max(all_grid_vals) if all_grid_vals else 0)
+                # Status table — cheap/moderate for each level
+                curr = self.currency_symbols[1]
+                text += "<br><h2>Marginal Energy Costs</h2>\n"
+                text += "<p>Marginal costs for each additional kWh of load, based on current plan. Shows how much more expensive (or cheaper) it is to use more energy than forecasted.</p>\n"
+                text += "<table style='border-collapse:collapse;margin-bottom:16px;font-size:0.95em;'>\n"
+                text += "<tr><th style='padding:6px 12px;border:1px solid #555;text-align:left;'>Level</th>"
+                text += "<th style='padding:6px 12px;border:1px solid #555;'>kWh</th>"
+                text += "<th style='padding:6px 12px;border:1px solid #555;'>Cost now ({}/kWh)</th>".format(curr)
+                text += "<th style='padding:6px 12px;border:1px solid #555;'>Cheap?</th>"
+                text += "<th style='padding:6px 12px;border:1px solid #555;'>Moderate?</th></tr>\n"
+                for state_name, kwh in zip(MARGINAL_EXTRA_KWH_LEVEL_NAMES, MARGINAL_EXTRA_KWH_LEVELS):
+                    cost = sensor_attrs.get("rate_now_{}_consumption".format(state_name), "")
+                    cheap_key = "binary_sensor.{}_marginal_rate_now_{}_is_cheap".format(self.prefix, state_name)
+                    mod_key = "binary_sensor.{}_marginal_rate_now_{}_is_moderate".format(self.prefix, state_name)
+                    is_cheap = self.base.dashboard_values.get(cheap_key, {}).get("state") == "on"
+                    is_moderate = self.base.dashboard_values.get(mod_key, {}).get("state") == "on"
+                    cheap_cell = "<td style='padding:6px 12px;border:1px solid #555;text-align:center;background:#00B050;color:#fff;'>Yes</td>" if is_cheap else "<td style='padding:6px 12px;border:1px solid #555;text-align:center;'>No</td>"
+                    mod_cell = "<td style='padding:6px 12px;border:1px solid #555;text-align:center;background:#FFFF00;color:#333;'>Yes</td>" if is_moderate else "<td style='padding:6px 12px;border:1px solid #555;text-align:center;'>No</td>"
+                    text += "<tr><td style='padding:6px 12px;border:1px solid #555;'>{}</td>".format(state_name.capitalize())
+                    text += "<td style='padding:6px 12px;border:1px solid #555;text-align:center;'>{}</td>".format(kwh)
+                    text += "<td style='padding:6px 12px;border:1px solid #555;text-align:center;'>{}</td>".format(cost)
+                    text += cheap_cell + mod_cell + "</tr>\n"
+                text += "</table>\n"
+                # Grid rates chart (compact, separate div)
+                if grid_import or grid_export:
+                    grid_series = []
+                    if grid_export:
+                        grid_series.append({"name": "Export", "data": [{"x": t, "y": grid_export.get(t, 0)} for t in time_labels]})
+                    if grid_import:
+                        grid_series.append({"name": "Import", "data": [{"x": t, "y": grid_import.get(t, 0)} for t in time_labels]})
+                    text += "<div id='chart_grid'></div>\n"
+                    text += self.render_heatmap_chart(grid_series, "Grid Rates ({}/kWh)".format(self.currency_symbols[1]), range_min, range_max, chart_id="chart_grid")
+                # Marginal costs chart
+                title = "Marginal Energy Cost ({}/kWh)".format(self.currency_symbols[1])
+                marginal_series = []
+                for label in energy_labels:
+                    row = matrix.get(label, {})
+                    data_points = [{"x": t, "y": row.get(t, 0)} for t in time_labels]
+                    marginal_series.append({"name": "{}kWh".format(label), "data": data_points})
+                text += "<div id='chart'></div>\n"
+                text += self.render_heatmap_chart(marginal_series, title, range_min, range_max, chart_id="chart")
+                # Historical + forecast line chart
+                marginal_hist = self.get_history_with_now_attrs("sensor." + self.prefix + "_marginal_energy_costs", 7)
+
+                def _marginal_history(key):
+                    return prune_today(history_attribute(marginal_hist, attributes=True, state_key=key), self.now_utc, self.midnight_utc, prune=False, prune_past_days=7, prune_future=True)
+
+                hist_low = _marginal_history("rate_now_low_consumption")
+                hist_med = _marginal_history("rate_now_med_consumption")
+                hist_high = _marginal_history("rate_now_high_consumption")
+                hist_ev = _marginal_history("rate_now_ev_consumption")
+                hist_import = _marginal_history("grid_import_now")
+                hist_export = _marginal_history("grid_export_now")
+
+                # Build forward-looking series from matrix — use actual datetime from offset, not just HH:MM
+                fwd_low, fwd_med, fwd_high, fwd_ev, fwd_import_fwd, fwd_export_fwd = {}, {}, {}, {}, {}, {}
+                for idx, offset in enumerate(MARGINAL_TIME_OFFSETS):
+                    t_label = time_labels[idx]
+                    ts = (self.now_utc + timedelta(minutes=offset)).isoformat()
+                    fwd_low[ts] = matrix.get(MARGINAL_EXTRA_KWH_LEVELS[0], {}).get(t_label, 0)
+                    fwd_med[ts] = matrix.get(MARGINAL_EXTRA_KWH_LEVELS[1], {}).get(t_label, 0)
+                    fwd_high[ts] = matrix.get(MARGINAL_EXTRA_KWH_LEVELS[2], {}).get(t_label, 0)
+                    fwd_ev[ts] = matrix.get(MARGINAL_EXTRA_KWH_LEVELS[3], {}).get(t_label, 0)
+                    fwd_import_fwd[ts] = grid_import.get(t_label, 0)
+                    fwd_export_fwd[ts] = grid_export.get(t_label, 0)
+
+                line_series = [
+                    {"name": "Low 1kWh", "data": hist_low, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": "#3291a8"},
+                    {"name": "Low 1kWh (future)", "data": fwd_low, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": "#3291a8"},
+                    {"name": "Med 2kWh", "data": hist_med, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": "#f5a442"},
+                    {"name": "Med 2kWh (future)", "data": fwd_med, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": "#f5a442"},
+                    {"name": "High 4kWh", "data": hist_high, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": "#eb2323"},
+                    {"name": "High 4kWh (future)", "data": fwd_high, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": "#eb2323"},
+                    {"name": "EV 8kWh (future)", "data": fwd_ev, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": "#9b59b6"},
+                    {"name": "EV 8kWh", "data": hist_ev, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": "#9b59b6"},
+                    {"name": "Import rate", "data": hist_import, "opacity": "1.0", "stroke_width": "4", "stroke_curve": "stepline", "color": "#15eb8b"},
+                    {"name": "Export rate", "data": hist_export, "opacity": "1.0", "stroke_width": "4", "stroke_curve": "stepline", "color": "#15eb1c"},
+                    {"name": "Import rate (future)", "data": fwd_import_fwd, "opacity": "1.0", "stroke_width": "4", "stroke_curve": "stepline", "color": "#15eb8b"},
+                    {"name": "Export rate (future)", "data": fwd_export_fwd, "opacity": "1.0", "stroke_width": "4", "stroke_curve": "stepline", "color": "#15eb1c"},
+                ]
+                text += "<div id='chart_marginal_hist'></div>\n"
+                text += self.render_chart(line_series, curr, "Marginal Energy Rates \u2014 History & Forecast", now_str, tagname="chart_marginal_hist", daily_chart=False)
         else:
             text += "<br><h2>Unknown chart type</h2>"
 
@@ -2702,13 +2944,15 @@ chart.render();
         text += f'<a href="./charts?chart=PV" class="{"active" if chart == "PV" else ""}">PV</a>'
         text += f'<a href="./charts?chart=PV7" class="{"active" if chart == "PV7" else ""}">PV7</a>'
         text += f'<a href="./charts?chart=Savings" class="{"active" if chart == "Savings" else ""}">Savings</a>'
+        text += f'<a href="./charts?chart=MarginalCosts" class="{"active" if chart == "MarginalCosts" else ""}">MarginalCosts</a>'
         # Only show LoadML chart if ML is enabled
         if self.base.get_arg("load_ml_enable", False):
             text += f'<a href="./charts?chart=LoadML" class="{"active" if chart == "LoadML" else ""}">LoadML</a>'
             text += f'<a href="./charts?chart=LoadMLPower" class="{"active" if chart == "LoadMLPower" else ""}">LoadMLPower</a>'
         text += "</div>"
 
-        text += '<div id="chart"></div>'
+        if chart != "MarginalCosts":
+            text += '<div id="chart"></div>'
         text += self.get_chart(chart=chart)
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
@@ -2798,7 +3042,7 @@ chart.render();
         for arg in args:
             value = args[arg]
             raw_value = self.resolve_value_raw(arg, value)
-            if ("_key" in arg) or ("_password" in arg):
+            if ("_key" in arg) or ("_password" in arg) or ("_secret" in arg):
                 value = '<span title = "{}"> (hidden)</span>'.format(value)
             arg_errors = self.base.arg_errors.get(arg, "")
 
@@ -3153,7 +3397,7 @@ chart.render();
         text += "</form>"
 
         text += "<table class='comparison-table'>\n"
-        text += "<tr><th>ID</th><th>Name</th><th>Date</th><th>True cost</th><th>Cost</th><th>Cost 10%</th><th>Export</th><th>Import</th><th>Final SoC</th>"
+        text += "<tr><th>ID</th><th>Name</th><th>Date</th><th>True cost</th><th>Cost</th><th>Cost 10%</th><th>7d avg</th><th>Export</th><th>Import</th><th>Final SoC</th>"
         if self.base.iboost_enable:
             text += "<th>Iboost</th>"
         if self.base.carbon_enable:
@@ -3178,8 +3422,10 @@ chart.render();
                 compare_hist[id] = {}
                 result = self.base.comparison.get_comparison(id)
                 if result:
-                    compare_hist[id]["cost"] = history_attribute(self.get_history_wrapper(result["entity_id"], 28, required=False), daily=True, pounds=True)
-                    compare_hist[id]["metric"] = history_attribute(self.get_history_wrapper(result["entity_id"], 28, required=False), state_key="metric", attributes=True, daily=True, pounds=True)
+                    entity_hist = self.get_history_wrapper(result["entity_id"], 28, required=False)
+                    compare_hist[id]["cost"] = history_attribute(entity_hist, daily=True, pounds=True)
+                    compare_hist[id]["metric"] = history_attribute(entity_hist, state_key="metric", attributes=True, daily=True, pounds=True)
+                    compare_hist[id]["cost_1am"] = self.history_daily_at_hour(entity_hist)
 
         compare_list = self.get_arg("compare_list", [])
 
@@ -3225,8 +3471,15 @@ chart.render();
             metric_str = self.to_pounds(metric)
             cost_str = self.to_pounds(cost)
             cost10_str = self.to_pounds(cost10)
+            cost_1am = compare_hist.get(id, {}).get("cost_1am", {})
+            avg7, avg7_count = self.average_cost_window(cost_1am, 7)
+            if avg7 is not None:
+                avg7_pounds = self.currency_symbols[0] + "{:.2f}".format(avg7 / 100.0)
+                avg7_str = "{}&nbsp;({}d)".format(avg7_pounds, avg7_count)
+            else:
+                avg7_str = ""
 
-            text += "<tr><td><a href='#heading-{}'>{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td>".format(id, id, name, date, metric_str, cost_str, cost10_str, export, imported, soc)
+            text += "<tr><td><a href='#heading-{}'>{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td>".format(id, id, name, date, metric_str, cost_str, cost10_str, avg7_str, export, imported, soc)
             if self.base.iboost_enable:
                 text += "<td>{}</td>".format(final_iboost)
             if self.base.carbon_enable:
@@ -3252,6 +3505,22 @@ chart.render();
             text += self.render_chart(series_data, self.currency_symbols[0], "Tariff Comparison - True cost", now_str, daily_chart=False)
         else:
             text += "<br><h2>Loading chart (please wait)...</h2><br>"
+
+        # 7-day rolling average chart
+        text += '<div id="chart7d"></div>'
+        series_7d = []
+        for compare in compare_list:
+            name = compare.get("name", "")
+            id = compare.get("id", "")
+            rolling_pence = self.rolling_7d_average(compare_hist.get(id, {}).get("cost_1am", {}))
+            # cost_1am is stored in pence; convert to pounds to match the chart axis
+            rolling = {k: dp2(v / 100) for k, v in rolling_pence.items()}
+            if rolling:
+                series_7d.append({"name": name, "data": rolling, "chart_type": "line", "stroke_width": "2"})
+        if series_7d:
+            text += self.render_chart(series_7d, self.currency_symbols[0], "Tariff Comparison - 7 day rolling average", now_str, tagname="chart7d", daily_chart=False)
+        else:
+            text += "<br><h2>7 day rolling average chart loading (please wait)...</h2><br>"
 
         # HTML Plans
         for compare in compare_list:

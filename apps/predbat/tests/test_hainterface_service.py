@@ -655,6 +655,150 @@ def test_hainterface_set_state_external_domain_select(my_predbat=None):
     return failed
 
 
+def test_hainterface_set_state_external_domain_input_datetime_time(my_predbat=None):
+    """Test set_state_external() with domain-based input_datetime time"""
+    print("\n=== Testing HAInterface set_state_external() domain input_datetime time ===")
+    failed = 0
+
+    mock_base = MockBase()
+    ha_interface = create_ha_interface(mock_base, ha_key="test_key")
+
+    mock_base.trigger_callback_calls = []
+
+    async def mock_trigger_callback(data):
+        mock_base.trigger_callback_calls.append(data)
+
+    mock_base.trigger_callback = mock_trigger_callback
+
+    run_async(ha_interface.set_state_external("input_datetime.test_time", "12:30:00", {}))
+
+    if not mock_base.trigger_callback_calls:
+        print("ERROR: trigger_callback should be called")
+        failed += 1
+    else:
+        data = mock_base.trigger_callback_calls[0]
+        if data.get("service") != "set_datetime":
+            print(f"ERROR: Expected service 'set_datetime', got '{data.get('service')}'")
+            failed += 1
+        elif data.get("service_data", {}).get("time") != "12:30:00":
+            print("ERROR: Expected time '12:30:00'")
+            failed += 1
+        else:
+            print("✓ Domain-based input_datetime time handled correctly")
+
+    return failed
+
+
+def test_hainterface_set_state_external_domain_input_datetime_datetime(my_predbat=None):
+    """Test set_state_external() with input_datetime date+time attributes"""
+    print("\n=== Testing HAInterface set_state_external() domain input_datetime datetime ===")
+    failed = 0
+
+    mock_base = MockBase()
+    ha_interface = create_ha_interface(mock_base, ha_key="test_key")
+    ha_interface.state_data["input_datetime.test_datetime"] = {"state": "2026-04-17 12:00:00", "attributes": {"has_date": True, "has_time": True}}
+
+    mock_base.trigger_callback_calls = []
+
+    async def mock_trigger_callback(data):
+        mock_base.trigger_callback_calls.append(data)
+
+    mock_base.trigger_callback = mock_trigger_callback
+
+    run_async(ha_interface.set_state_external("input_datetime.test_datetime", "2026-04-18 13:45:00", {}))
+
+    if not mock_base.trigger_callback_calls:
+        print("ERROR: trigger_callback should be called")
+        failed += 1
+    else:
+        data = mock_base.trigger_callback_calls[0]
+        if data.get("domain") != "input_datetime":
+            print(f"ERROR: Expected domain 'input_datetime', got '{data.get('domain')}'")
+            failed += 1
+        elif data.get("service") != "set_datetime":
+            print(f"ERROR: Expected service 'set_datetime', got '{data.get('service')}'")
+            failed += 1
+        elif data.get("service_data", {}).get("datetime") != "2026-04-18 13:45:00":
+            print("ERROR: Expected datetime payload")
+            failed += 1
+        else:
+            print("✓ input_datetime datetime payload handled correctly")
+
+    return failed
+
+
+def test_hainterface_set_state_external_domain_input_datetime_date(my_predbat=None):
+    """Test set_state_external() with input_datetime date-only attributes"""
+    print("\n=== Testing HAInterface set_state_external() domain input_datetime date ===")
+    failed = 0
+
+    mock_base = MockBase()
+    ha_interface = create_ha_interface(mock_base, ha_key="test_key")
+    ha_interface.state_data["input_datetime.test_date"] = {"state": "2026-04-17", "attributes": {"has_date": True, "has_time": False}}
+
+    mock_base.trigger_callback_calls = []
+
+    async def mock_trigger_callback(data):
+        mock_base.trigger_callback_calls.append(data)
+
+    mock_base.trigger_callback = mock_trigger_callback
+
+    run_async(ha_interface.set_state_external("input_datetime.test_date", "2026-04-18", {}))
+
+    if not mock_base.trigger_callback_calls:
+        print("ERROR: trigger_callback should be called")
+        failed += 1
+    else:
+        data = mock_base.trigger_callback_calls[0]
+        if data.get("domain") != "input_datetime":
+            print(f"ERROR: Expected domain 'input_datetime', got '{data.get('domain')}'")
+            failed += 1
+        elif data.get("service") != "set_datetime":
+            print(f"ERROR: Expected service 'set_datetime', got '{data.get('service')}'")
+            failed += 1
+        elif data.get("service_data", {}).get("date") != "2026-04-18":
+            print("ERROR: Expected date payload")
+            failed += 1
+        else:
+            print("✓ input_datetime date payload handled correctly")
+
+    return failed
+
+
+def test_hainterface_set_state_external_domain_input_text(my_predbat=None):
+    """Test set_state_external() with domain-based input_text"""
+    print("\n=== Testing HAInterface set_state_external() domain input_text ===")
+    failed = 0
+
+    mock_base = MockBase()
+    ha_interface = create_ha_interface(mock_base, ha_key="test_key")
+
+    mock_base.trigger_callback_calls = []
+
+    async def mock_trigger_callback(data):
+        mock_base.trigger_callback_calls.append(data)
+
+    mock_base.trigger_callback = mock_trigger_callback
+
+    run_async(ha_interface.set_state_external("input_text.test", "abc", {}))
+
+    if not mock_base.trigger_callback_calls:
+        print("ERROR: trigger_callback should be called")
+        failed += 1
+    else:
+        data = mock_base.trigger_callback_calls[0]
+        if data.get("service") != "set_value":
+            print(f"ERROR: Expected service 'set_value', got '{data.get('service')}'")
+            failed += 1
+        elif data.get("service_data", {}).get("value") != "abc":
+            print("ERROR: Expected value 'abc'")
+            failed += 1
+        else:
+            print("✓ Domain-based input_text handled correctly")
+
+    return failed
+
+
 def test_hainterface_set_state_external_sensor(my_predbat=None):
     """Test set_state_external() with sensor (direct state set)"""
     print("\n=== Testing HAInterface set_state_external() sensor ===")
@@ -792,6 +936,10 @@ def run_hainterface_service_tests(my_predbat):
     failed += test_hainterface_set_state_external_domain_switch(my_predbat)
     failed += test_hainterface_set_state_external_domain_number(my_predbat)
     failed += test_hainterface_set_state_external_domain_select(my_predbat)
+    failed += test_hainterface_set_state_external_domain_input_datetime_time(my_predbat)
+    failed += test_hainterface_set_state_external_domain_input_datetime_datetime(my_predbat)
+    failed += test_hainterface_set_state_external_domain_input_datetime_date(my_predbat)
+    failed += test_hainterface_set_state_external_domain_input_text(my_predbat)
     failed += test_hainterface_set_state_external_sensor(my_predbat)
     failed += test_hainterface_set_state_external_watch_list(my_predbat)
     failed += test_hainterface_set_state_external_no_change(my_predbat)

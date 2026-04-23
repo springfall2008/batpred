@@ -14,6 +14,8 @@ import ssl
 import time
 import uuid
 import traceback
+from utils import calc_percent_limit
+import pytz as _pytz
 
 from component_base import ComponentBase
 
@@ -43,49 +45,84 @@ except ImportError:
 if not HAS_PROTOBUF:
     raise ImportError("GatewayMQTT requires the 'protobuf' package: pip install protobuf")
 
-
-# Entity mapping: protobuf field path → entity name
-ENTITY_MAP = {
-    # Battery
-    "battery.soc_percent": "predbat_gateway_soc",
-    "battery.power_w": "predbat_gateway_battery_power",
-    "battery.voltage_v": "predbat_gateway_battery_voltage",
-    "battery.current_a": "predbat_gateway_battery_current",
-    "battery.temperature_c": "predbat_gateway_battery_temp",
-    "battery.soh_percent": "predbat_gateway_battery_soh",
-    "battery.cycle_count": "predbat_gateway_battery_cycles",
-    "battery.capacity_wh": "predbat_gateway_battery_capacity",
-    "battery.rate_max_w": "predbat_gateway_battery_rate_max",
-    # Power flows
-    "pv.power_w": "predbat_gateway_pv_power",
-    "grid.power_w": "predbat_gateway_grid_power",
-    "grid.voltage_v": "predbat_gateway_grid_voltage",
-    "grid.frequency_hz": "predbat_gateway_grid_frequency",
-    "load.power_w": "predbat_gateway_load_power",
-    "inverter.active_power_w": "predbat_gateway_inverter_power",
-    "inverter.temperature_c": "predbat_gateway_inverter_temp",
-    # Control
-    "control.mode": "predbat_gateway_mode",
-    "control.charge_enabled": "predbat_gateway_charge_enabled",
-    "control.discharge_enabled": "predbat_gateway_discharge_enabled",
-    "control.charge_rate_w": "predbat_gateway_charge_rate",
-    "control.discharge_rate_w": "predbat_gateway_discharge_rate",
-    "control.reserve_soc": "predbat_gateway_reserve",
-    "control.target_soc": "predbat_gateway_target_soc",
-    "control.force_power_w": "predbat_gateway_force_power",
-    "control.command_expires": "predbat_gateway_command_expires",
-    # Schedule
-    "schedule.charge_start": "predbat_gateway_charge_start",
-    "schedule.charge_end": "predbat_gateway_charge_end",
-    "schedule.discharge_start": "predbat_gateway_discharge_start",
-    "schedule.discharge_end": "predbat_gateway_discharge_end",
-}
-
 # Plan re-publish interval (seconds)
 _PLAN_REPUBLISH_INTERVAL = 5 * 60
 
 # Telemetry staleness threshold (seconds)
 _TELEMETRY_STALE_THRESHOLD = 120
+
+# Time options for schedule select entities (HH:MM:SS, one per minute across 24 h)
+_GATEWAY_BASE_TIME = datetime.datetime.strptime("00:00", "%H:%M")
+_GATEWAY_OPTIONS_TIME = [(_GATEWAY_BASE_TIME + datetime.timedelta(seconds=m * 60)).strftime("%H:%M:%S") for m in range(0, 24 * 60, 5)]
+
+
+# Operating mode selector (0=AUTO, 1=MANUAL; higher values reserved)
+GATEWAY_OPERATING_MODE_NAMES = {0: "AUTO", 1: "MANUAL"}
+GATEWAY_OPERATING_MODE_VALUES = {"AUTO": 0, "MANUAL": 1}
+GATEWAY_OPERATING_MODE_OPTIONS = ["AUTO", "MANUAL"]
+
+PLAN_MODE_AUTO = 0
+PLAN_MODE_CHARGE = 1
+PLAN_MODE_DISCHARGE = 2
+
+# Entity attribute table — keyed by the semantic suffix used in dashboard_item calls
+GATEWAY_ATTRIBUTE_TABLE = {
+    # Binary sensors
+    "gateway_online": {"friendly_name": "Gateway Online", "device_class": "connectivity"},
+    # Timestamps
+    "inverter_time": {"friendly_name": "Inverter Time", "icon": "mdi:clock", "device_class": "timestamp"},
+    # Battery state
+    "soc": {"friendly_name": "Battery SOC", "icon": "mdi:battery", "unit_of_measurement": "%", "device_class": "battery", "state_class": "measurement"},
+    "battery_power": {"friendly_name": "Battery Power", "icon": "mdi:battery", "unit_of_measurement": "W", "device_class": "power", "state_class": "measurement"},
+    "battery_voltage": {"friendly_name": "Battery Voltage", "icon": "mdi:battery", "unit_of_measurement": "V", "device_class": "voltage", "state_class": "measurement"},
+    "battery_current": {"friendly_name": "Battery Current", "icon": "mdi:battery", "unit_of_measurement": "A", "device_class": "current", "state_class": "measurement"},
+    "battery_temperature": {"friendly_name": "Battery Temperature", "icon": "mdi:thermometer", "unit_of_measurement": "°C", "device_class": "temperature", "state_class": "measurement"},
+    "battery_capacity": {"friendly_name": "Battery Capacity", "icon": "mdi:battery", "unit_of_measurement": "kWh", "device_class": "energy"},
+    "battery_soh": {"friendly_name": "Battery State of Health", "icon": "mdi:battery-heart", "unit_of_measurement": "%", "state_class": "measurement"},
+    "battery_rate_max": {"friendly_name": "Battery Max Charge Rate", "icon": "mdi:battery", "unit_of_measurement": "W", "device_class": "power"},
+    "battery_dod": {"friendly_name": "Battery Depth of Discharge", "icon": "mdi:battery", "unit_of_measurement": "*"},
+    "battery_charge_today": {"friendly_name": "Battery Charge Today", "icon": "mdi:battery-plus", "unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total"},
+    "battery_discharge_today": {"friendly_name": "Battery Discharge Today", "icon": "mdi:battery-minus", "unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total"},
+    # PV
+    "pv_power": {"friendly_name": "PV Power", "icon": "mdi:solar-power", "unit_of_measurement": "W", "device_class": "power", "state_class": "measurement"},
+    "pv_today": {"friendly_name": "PV Today", "icon": "mdi:solar-power", "unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total"},
+    # Grid
+    "grid_power": {"friendly_name": "Grid Power", "icon": "mdi:transmission-tower", "unit_of_measurement": "W", "device_class": "power", "state_class": "measurement"},
+    "grid_voltage": {"friendly_name": "Grid Voltage", "icon": "mdi:transmission-tower", "unit_of_measurement": "V", "device_class": "voltage", "state_class": "measurement"},
+    "grid_frequency": {"friendly_name": "Grid Frequency", "icon": "mdi:transmission-tower", "unit_of_measurement": "Hz", "device_class": "frequency", "state_class": "measurement"},
+    "import_today": {"friendly_name": "Grid Import Today", "icon": "mdi:transmission-tower", "unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total"},
+    "export_today": {"friendly_name": "Grid Export Today", "icon": "mdi:transmission-tower", "unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total"},
+    # Load
+    "load_power": {"friendly_name": "Load Power", "icon": "mdi:flash", "unit_of_measurement": "W", "device_class": "power", "state_class": "measurement"},
+    "load_today": {"friendly_name": "Load Today", "icon": "mdi:flash", "unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total"},
+    # Inverter
+    "inverter_power": {"friendly_name": "Inverter Power", "icon": "mdi:flash", "unit_of_measurement": "W", "device_class": "power", "state_class": "measurement"},
+    "inverter_temperature": {"friendly_name": "Inverter Temperature", "icon": "mdi:thermometer", "unit_of_measurement": "°C", "device_class": "temperature", "state_class": "measurement"},
+    # Control switches
+    "charge_enabled": {"friendly_name": "Charge Enabled", "icon": "mdi:battery-plus"},
+    "discharge_enabled": {"friendly_name": "Discharge Enabled", "icon": "mdi:battery-minus"},
+    # Operating mode selector
+    "mode_select": {"friendly_name": "Operating Mode", "icon": "mdi:cog", "options": GATEWAY_OPERATING_MODE_OPTIONS},
+    # Control numbers
+    "charge_rate": {"friendly_name": "Charge Rate", "icon": "mdi:battery-plus", "unit_of_measurement": "W", "min": 0, "max": 10000, "step": 10},
+    "discharge_rate": {"friendly_name": "Discharge Rate", "icon": "mdi:battery-minus", "unit_of_measurement": "W", "min": 0, "max": 10000, "step": 10},
+    "reserve_soc": {"friendly_name": "Reserve SOC", "icon": "mdi:battery-lock", "unit_of_measurement": "%", "min": 0, "max": 100, "step": 1},
+    "target_soc": {"friendly_name": "Target SOC", "icon": "mdi:battery-arrow-up", "unit_of_measurement": "%", "min": 0, "max": 100, "step": 1},
+    # Schedule selects (HH:MM:SS options)
+    "charge_slot1_start": {"friendly_name": "Charge Slot 1 Start", "icon": "mdi:clock-start", "options": _GATEWAY_OPTIONS_TIME},
+    "charge_slot1_end": {"friendly_name": "Charge Slot 1 End", "icon": "mdi:clock-end", "options": _GATEWAY_OPTIONS_TIME},
+    "discharge_slot1_start": {"friendly_name": "Discharge Slot 1 Start", "icon": "mdi:clock-start", "options": _GATEWAY_OPTIONS_TIME},
+    "discharge_slot1_end": {"friendly_name": "Discharge Slot 1 End", "icon": "mdi:clock-end", "options": _GATEWAY_OPTIONS_TIME},
+    # EMS aggregate entities
+    "ems_total_soc": {"friendly_name": "EMS Total SOC", "icon": "mdi:battery", "unit_of_measurement": "%", "device_class": "battery", "state_class": "measurement"},
+    "ems_total_charge": {"friendly_name": "EMS Total Charge Power", "icon": "mdi:battery-plus", "unit_of_measurement": "W", "device_class": "power", "state_class": "measurement"},
+    "ems_total_discharge": {"friendly_name": "EMS Total Discharge Power", "icon": "mdi:battery-minus", "unit_of_measurement": "W", "device_class": "power", "state_class": "measurement"},
+    "ems_total_grid": {"friendly_name": "EMS Total Grid Power", "icon": "mdi:transmission-tower", "unit_of_measurement": "W", "device_class": "power", "state_class": "measurement"},
+    "ems_total_pv": {"friendly_name": "EMS Total PV Power", "icon": "mdi:solar-power", "unit_of_measurement": "W", "device_class": "power", "state_class": "measurement"},
+    "ems_total_load": {"friendly_name": "EMS Total Load Power", "icon": "mdi:flash", "unit_of_measurement": "W", "device_class": "power", "state_class": "measurement"},
+    # Sub-inverter temperature (entity suffix is "_temp")
+    "temp": {"friendly_name": "Sub-Inverter Temperature", "icon": "mdi:thermometer", "unit_of_measurement": "°C", "device_class": "temperature", "state_class": "measurement"},
+}
 
 
 class GatewayMQTT(ComponentBase):
@@ -138,6 +175,7 @@ class GatewayMQTT(ComponentBase):
         self._auto_configured = False
         self._last_published_plan = None
         self._pending_plan = None
+        self._suffix_to_serial = {}  # maps entity suffix (last 6 chars of serial) -> full serial string
 
         # Predbat data publish state (price/timeline for device display)
         self._last_predbat_data = None
@@ -146,7 +184,7 @@ class GatewayMQTT(ComponentBase):
         if hasattr(self.base, "register_hook"):
             self.base.register_hook("on_plan_executed", self._on_plan_executed)
 
-    def _on_plan_executed(self, charge_windows=None, charge_limits=None, export_windows=None, export_limits=None, charge_rate_w=0, discharge_rate_w=0, timezone="Europe/London"):
+    def _on_plan_executed(self, charge_windows=None, charge_limits=None, export_windows=None, export_limits=None, charge_rate_w=0, discharge_rate_w=0, soc_max=10, reserve=0, timezone="Europe/London"):
         """Handle plan execution hook — convert PredBat plan to gateway protobuf format.
 
         Called by the plugin system after execute_plan() completes. Converts
@@ -157,19 +195,30 @@ class GatewayMQTT(ComponentBase):
 
         # Convert charge windows to plan entries
         for i, window in enumerate(charge_windows or []):
-            limit = charge_limits[i] if i < len(charge_limits or []) else 100
-            if limit <= 0:
+            limit_kwh = charge_limits[i] if i < len(charge_limits or []) else soc_max
+            if limit_kwh <= 0:
                 continue
+            # XXX: If limit_khw == reserve then its a hold charge, need logic for this to be added
+            limit = calc_percent_limit(limit_kwh, soc_max)
             start_minutes = window.get("start", 0)
             end_minutes = window.get("end", 0)
+            # Work out hours and minutes
+            start_hour = start_minutes // 60
+            start_minute = start_minutes % 60
+            end_hour = end_minutes // 60
+            end_minute = end_minutes % 60
+            # Skip zero-duration windows (start == end after midnight wrap)
+            if start_hour == end_hour and start_minute == end_minute:
+                self.log(f"Warn: GatewayMQTT: Skipping zero-duration charge window {i} ({start_minutes}-{end_minutes})")
+                continue
             plan_entries.append(
                 {
                     "enabled": True,
-                    "start_hour": start_minutes // 60,
-                    "start_minute": start_minutes % 60,
-                    "end_hour": end_minutes // 60,
-                    "end_minute": end_minutes % 60,
-                    "mode": 1,  # charge
+                    "start_hour": start_hour,
+                    "start_minute": start_minute,
+                    "end_hour": end_hour,
+                    "end_minute": end_minute,
+                    "mode": PLAN_MODE_CHARGE,  # charge
                     "power_w": charge_rate_w,
                     "target_soc": int(limit),
                     "days_of_week": 0x7F,
@@ -184,14 +233,23 @@ class GatewayMQTT(ComponentBase):
                 continue
             start_minutes = window.get("start", 0)
             end_minutes = window.get("end", 0)
+            # Work out hours and minutes
+            start_hour = start_minutes // 60
+            start_minute = start_minutes % 60
+            end_hour = end_minutes // 60
+            end_minute = end_minutes % 60
+            # Skip zero-duration windows
+            if start_hour == end_hour and start_minute == end_minute:
+                self.log(f"Warn: GatewayMQTT: Skipping zero-duration discharge window {i} ({start_minutes}-{end_minutes})")
+                continue
             plan_entries.append(
                 {
                     "enabled": True,
-                    "start_hour": start_minutes // 60,
-                    "start_minute": start_minutes % 60,
-                    "end_hour": end_minutes // 60,
-                    "end_minute": end_minutes % 60,
-                    "mode": 2,  # discharge
+                    "start_hour": start_hour,
+                    "start_minute": start_minute,
+                    "end_hour": end_hour,
+                    "end_minute": end_minute,
+                    "mode": PLAN_MODE_DISCHARGE,  # discharge
                     "power_w": discharge_rate_w,
                     "target_soc": int(limit),
                     "days_of_week": 0x7F,
@@ -204,6 +262,8 @@ class GatewayMQTT(ComponentBase):
         if len(plan_entries) > MAX_PLAN_ENTRIES:
             self.log(f"Warn: GatewayMQTT: Plan has {len(plan_entries)} entries, capping to {MAX_PLAN_ENTRIES}")
             plan_entries = plan_entries[:MAX_PLAN_ENTRIES]
+
+        self.log(f"Info: GatewayMQTT: Plan entries ({len(plan_entries)}): " + ", ".join(f"mode={e['mode']} {e['start_hour']:02d}:{e['start_minute']:02d}-{e['end_hour']:02d}:{e['end_minute']:02d}" for e in plan_entries))
 
         # Queue plan for async publishing (picked up by run() cycle)
         if self._plan_changed(plan_entries):
@@ -352,10 +412,11 @@ class GatewayMQTT(ComponentBase):
                 self._gateway_online = payload == "1"
                 if self._gateway_online != was_online:
                     self.log(f"Info: GatewayMQTT: Gateway is {'online' if self._gateway_online else 'offline'}")
-                    self.set_state_wrapper(
+                    self.dashboard_item(
                         f"binary_sensor.{self.prefix}_gateway_online",
                         self._gateway_online,
-                        attributes={"friendly_name": "Gateway Online"},
+                        attributes=GATEWAY_ATTRIBUTE_TABLE.get("gateway_online", {}),
+                        app="gateway",
                     )
         except Exception as e:
             self._error_count += 1
@@ -401,20 +462,23 @@ class GatewayMQTT(ComponentBase):
         device_id = status.device_id
         firmware = status.firmware
 
-        self.set_state_wrapper(
+        self.dashboard_item(
             f"binary_sensor.{self.prefix}_gateway_online",
             True,
-            attributes={"device_id": device_id, "firmware": firmware},
+            attributes={**GATEWAY_ATTRIBUTE_TABLE.get("gateway_online", {}), "device_id": device_id, "firmware": firmware},
+            app="gateway",
         )
 
         # Inverter time from gateway timestamp — use first primary inverter's serial
         if status.timestamp > 0 and len(status.inverters) > 0:
             primary_inv = next((inv for inv in status.inverters if inv.primary), status.inverters[0])
             ts_suffix = primary_inv.serial[-6:].lower() if len(primary_inv.serial) > 6 else primary_inv.serial.lower()
-            dt = datetime.datetime.fromtimestamp(status.timestamp)
-            self.set_state_wrapper(
+            dt = datetime.datetime.fromtimestamp(status.timestamp, tz=self.local_tz)
+            self.dashboard_item(
                 f"sensor.{self.prefix}_gateway_{ts_suffix}_inverter_time",
-                dt.strftime("%Y-%m-%d %H:%M:%S"),
+                dt.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                attributes=GATEWAY_ATTRIBUTE_TABLE.get("inverter_time", {}),
+                app="gateway",
             )
 
         for inv in status.inverters:
@@ -429,20 +493,20 @@ class GatewayMQTT(ComponentBase):
         inv0 = status.inverters[0]
         if inv0.type == pb.INVERTER_TYPE_GIVENERGY_EMS and inv0.ems.num_inverters > 0:
             pfx = f"{self.prefix}_gateway"
-            self.set_state_wrapper(f"sensor.{pfx}_ems_total_soc", inv0.ems.total_soc)
-            self.set_state_wrapper(f"sensor.{pfx}_ems_total_charge", inv0.ems.total_charge_w)
-            self.set_state_wrapper(f"sensor.{pfx}_ems_total_discharge", inv0.ems.total_discharge_w)
-            self.set_state_wrapper(f"sensor.{pfx}_ems_total_grid", inv0.ems.total_grid_w)
-            self.set_state_wrapper(f"sensor.{pfx}_ems_total_pv", inv0.ems.total_pv_w)
-            self.set_state_wrapper(f"sensor.{pfx}_ems_total_load", inv0.ems.total_load_w)
+            self.dashboard_item(f"sensor.{pfx}_ems_total_soc", inv0.ems.total_soc, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ems_total_soc", {}), app="gateway")
+            self.dashboard_item(f"sensor.{pfx}_ems_total_charge", inv0.ems.total_charge_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ems_total_charge", {}), app="gateway")
+            self.dashboard_item(f"sensor.{pfx}_ems_total_discharge", inv0.ems.total_discharge_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ems_total_discharge", {}), app="gateway")
+            self.dashboard_item(f"sensor.{pfx}_ems_total_grid", inv0.ems.total_grid_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ems_total_grid", {}), app="gateway")
+            self.dashboard_item(f"sensor.{pfx}_ems_total_pv", inv0.ems.total_pv_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ems_total_pv", {}), app="gateway")
+            self.dashboard_item(f"sensor.{pfx}_ems_total_load", inv0.ems.total_load_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ems_total_load", {}), app="gateway")
 
             for idx, sub in enumerate(inv0.ems.sub_inverters):
                 sp = f"sensor.{pfx}_sub{idx}"
-                self.set_state_wrapper(f"{sp}_soc", sub.soc)
-                self.set_state_wrapper(f"{sp}_battery_power", sub.battery_w)
-                self.set_state_wrapper(f"{sp}_pv_power", sub.pv_w)
-                self.set_state_wrapper(f"{sp}_grid_power", sub.grid_w)
-                self.set_state_wrapper(f"{sp}_temp", sub.temp_c)
+                self.dashboard_item(f"{sp}_soc", sub.soc, attributes=GATEWAY_ATTRIBUTE_TABLE.get("soc", {}), app="gateway")
+                self.dashboard_item(f"{sp}_battery_power", sub.battery_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_power", {}), app="gateway")
+                self.dashboard_item(f"{sp}_pv_power", sub.pv_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("pv_power", {}), app="gateway")
+                self.dashboard_item(f"{sp}_grid_power", sub.grid_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("grid_power", {}), app="gateway")
+                self.dashboard_item(f"{sp}_temp", sub.temp_c, attributes=GATEWAY_ATTRIBUTE_TABLE.get("temp", {}), app="gateway")
 
     def _inject_inverter_entities(self, inv, suffix):
         """Inject entities for a single inverter using HA-style naming.
@@ -452,41 +516,43 @@ class GatewayMQTT(ComponentBase):
         pfx = f"{self.prefix}_gateway_{suffix}"
 
         bat = inv.battery
-        self.set_state_wrapper(f"sensor.{pfx}_soc", bat.soc_percent)
+        self.dashboard_item(f"sensor.{pfx}_soc", bat.soc_percent, attributes=GATEWAY_ATTRIBUTE_TABLE.get("soc", {}), app="gateway")
         # Negate battery_power: firmware uses +ve=charging, PredBat uses +ve=discharging
-        self.set_state_wrapper(f"sensor.{pfx}_battery_power", -bat.power_w)
-        self.set_state_wrapper(f"sensor.{pfx}_battery_voltage", bat.voltage_v)
-        self.set_state_wrapper(f"sensor.{pfx}_battery_current", bat.current_a)
-        self.set_state_wrapper(f"sensor.{pfx}_battery_temperature", bat.temperature_c)
+        self.dashboard_item(f"sensor.{pfx}_battery_power", -bat.power_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_power", {}), app="gateway")
+        self.dashboard_item(f"sensor.{pfx}_battery_voltage", bat.voltage_v, attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_voltage", {}), app="gateway")
+        self.dashboard_item(f"sensor.{pfx}_battery_current", bat.current_a, attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_current", {}), app="gateway")
+        self.dashboard_item(f"sensor.{pfx}_battery_temperature", bat.temperature_c, attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_temperature", {}), app="gateway")
         if bat.capacity_wh:
-            self.set_state_wrapper(f"sensor.{pfx}_battery_capacity", round(bat.capacity_wh / 1000.0, 2))
+            self.dashboard_item(f"sensor.{pfx}_battery_capacity", round(bat.capacity_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_capacity", {}), app="gateway")
         if bat.soh_percent > 0:
-            self.set_state_wrapper(f"sensor.{pfx}_battery_soh", bat.soh_percent)
+            self.dashboard_item(f"sensor.{pfx}_battery_soh", bat.soh_percent, attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_soh", {}), app="gateway")
         if bat.rate_max_w > 0:
-            self.set_state_wrapper(f"sensor.{pfx}_battery_rate_max", bat.rate_max_w)
+            self.dashboard_item(f"sensor.{pfx}_battery_rate_max", bat.rate_max_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_rate_max", {}), app="gateway")
 
-        self.set_state_wrapper(f"sensor.{pfx}_pv_power", inv.pv.power_w)
+        self.dashboard_item(f"sensor.{pfx}_pv_power", inv.pv.power_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("pv_power", {}), app="gateway")
 
         grid = inv.grid
-        self.set_state_wrapper(f"sensor.{pfx}_grid_power", grid.power_w)
+        self.dashboard_item(f"sensor.{pfx}_grid_power", grid.power_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("grid_power", {}), app="gateway")
         if grid.voltage_v:
-            self.set_state_wrapper(f"sensor.{pfx}_grid_voltage", grid.voltage_v)
+            self.dashboard_item(f"sensor.{pfx}_grid_voltage", grid.voltage_v, attributes=GATEWAY_ATTRIBUTE_TABLE.get("grid_voltage", {}), app="gateway")
         if grid.frequency_hz:
-            self.set_state_wrapper(f"sensor.{pfx}_grid_frequency", grid.frequency_hz)
+            self.dashboard_item(f"sensor.{pfx}_grid_frequency", grid.frequency_hz, attributes=GATEWAY_ATTRIBUTE_TABLE.get("grid_frequency", {}), app="gateway")
 
-        self.set_state_wrapper(f"sensor.{pfx}_load_power", inv.load.power_w)
+        self.dashboard_item(f"sensor.{pfx}_load_power", inv.load.power_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("load_power", {}), app="gateway")
 
-        self.set_state_wrapper(f"sensor.{pfx}_inverter_power", inv.inverter.active_power_w)
+        self.dashboard_item(f"sensor.{pfx}_inverter_power", inv.inverter.active_power_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("inverter_power", {}), app="gateway")
         if inv.inverter.temperature_c:
-            self.set_state_wrapper(f"sensor.{pfx}_inverter_temperature", inv.inverter.temperature_c)
+            self.dashboard_item(f"sensor.{pfx}_inverter_temperature", inv.inverter.temperature_c, attributes=GATEWAY_ATTRIBUTE_TABLE.get("inverter_temperature", {}), app="gateway")
 
         control = inv.control
-        self.set_state_wrapper(f"switch.{pfx}_charge_enabled", control.charge_enabled)
-        self.set_state_wrapper(f"switch.{pfx}_discharge_enabled", control.discharge_enabled)
-        self.set_state_wrapper(f"number.{pfx}_charge_rate", control.charge_rate_w)
-        self.set_state_wrapper(f"number.{pfx}_discharge_rate", control.discharge_rate_w)
-        self.set_state_wrapper(f"number.{pfx}_reserve_soc", control.reserve_soc)
-        self.set_state_wrapper(f"number.{pfx}_target_soc", control.target_soc)
+        self.dashboard_item(f"switch.{pfx}_charge_enabled", "on" if control.charge_enabled else "off", attributes=GATEWAY_ATTRIBUTE_TABLE.get("charge_enabled", {}), app="gateway")
+        self.dashboard_item(f"switch.{pfx}_discharge_enabled", "on" if control.discharge_enabled else "off", attributes=GATEWAY_ATTRIBUTE_TABLE.get("discharge_enabled", {}), app="gateway")
+        self.dashboard_item(f"number.{pfx}_charge_rate", control.charge_rate_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("charge_rate", {}), app="gateway")
+        self.dashboard_item(f"number.{pfx}_discharge_rate", control.discharge_rate_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("discharge_rate", {}), app="gateway")
+        self.dashboard_item(f"number.{pfx}_reserve_soc", control.reserve_soc, attributes=GATEWAY_ATTRIBUTE_TABLE.get("reserve_soc", {}), app="gateway")
+        self.dashboard_item(f"number.{pfx}_target_soc", control.target_soc, attributes=GATEWAY_ATTRIBUTE_TABLE.get("target_soc", {}), app="gateway")
+        mode_name = GATEWAY_OPERATING_MODE_NAMES.get(getattr(control, "mode", 0), "AUTO")
+        self.dashboard_item(f"select.{pfx}_mode_select", mode_name, attributes=GATEWAY_ATTRIBUTE_TABLE.get("mode_select", {}), app="gateway")
 
         # Schedule times (convert HHMM uint32 → HH:MM:SS string)
         # Always set with defaults so PredBat doesn't crash on missing charge_start_time
@@ -503,31 +569,31 @@ class GatewayMQTT(ComponentBase):
             if hours >= 24:
                 hours = 0  # firmware sends 2400 for midnight end-of-day
             time_str = f"{hours:02d}:{minutes:02d}:00"
-            self.set_state_wrapper(f"select.{pfx}_{name}", time_str)
+            self.dashboard_item(f"select.{pfx}_{name}", time_str, attributes=GATEWAY_ATTRIBUTE_TABLE.get(name, {}), app="gateway")
 
         # Inverter time (from GatewayStatus timestamp for clock drift detection)
         if self._last_status and self._last_status.timestamp:
-            dt = datetime.datetime.fromtimestamp(self._last_status.timestamp, tz=datetime.timezone.utc)
-            self.set_state_wrapper(f"sensor.{pfx}_inverter_time", dt.strftime("%Y-%m-%d %H:%M:%S"))
+            dt = datetime.datetime.fromtimestamp(self._last_status.timestamp, tz=self.local_tz)
+            self.dashboard_item(f"sensor.{pfx}_inverter_time", dt.strftime("%Y-%m-%dT%H:%M:%S%z"), attributes=GATEWAY_ATTRIBUTE_TABLE.get("inverter_time", {}), app="gateway")
 
-        # Battery scaling (depth of discharge) — from firmware pct, apps.yaml override, or 0.95 default
+        # Battery scaling (depth of discharge) — from firmware pct, apps.yaml override, or 1.0 default
         dod_pct = 0
         if inv.battery.ByteSize() > 0 and inv.battery.depth_of_discharge_pct > 0:
             dod_pct = inv.battery.depth_of_discharge_pct
         if dod_pct <= 0:
-            dod_pct = int(self.args.get("gateway_battery_dod_pct", 95)) if isinstance(self.args, dict) else 95
-        self.set_state_wrapper(f"sensor.{pfx}_battery_dod", round(dod_pct / 100.0, 3))
+            dod_pct = int(self.args.get("gateway_battery_dod_pct", 100)) if isinstance(self.args, dict) else 100
+        self.dashboard_item(f"sensor.{pfx}_battery_dod", round(dod_pct / 100.0, 3), attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_dod", {}), app="gateway")
 
         # Energy counters (Wh → kWh)
         # Always set with defaults so PredBat doesn't crash on missing load_today
         energy = inv.energy if inv.energy.ByteSize() > 0 else None
-        self.set_state_wrapper(f"sensor.{pfx}_pv_today", round(getattr(energy, "pv_today_wh", 0) / 1000.0, 2) if energy else 0)
-        self.set_state_wrapper(f"sensor.{pfx}_import_today", round(getattr(energy, "grid_import_today_wh", 0) / 1000.0, 2) if energy else 0)
-        self.set_state_wrapper(f"sensor.{pfx}_export_today", round(getattr(energy, "grid_export_today_wh", 0) / 1000.0, 2) if energy else 0)
-        self.set_state_wrapper(f"sensor.{pfx}_load_today", round(getattr(energy, "consumption_today_wh", 0) / 1000.0, 2) if energy else 0)
+        self.dashboard_item(f"sensor.{pfx}_pv_today", round(getattr(energy, "pv_today_wh", 0) / 1000.0, 2) if energy else 0, attributes=GATEWAY_ATTRIBUTE_TABLE.get("pv_today", {}), app="gateway")
+        self.dashboard_item(f"sensor.{pfx}_import_today", round(getattr(energy, "grid_import_today_wh", 0) / 1000.0, 2) if energy else 0, attributes=GATEWAY_ATTRIBUTE_TABLE.get("import_today", {}), app="gateway")
+        self.dashboard_item(f"sensor.{pfx}_export_today", round(getattr(energy, "grid_export_today_wh", 0) / 1000.0, 2) if energy else 0, attributes=GATEWAY_ATTRIBUTE_TABLE.get("export_today", {}), app="gateway")
+        self.dashboard_item(f"sensor.{pfx}_load_today", round(getattr(energy, "consumption_today_wh", 0) / 1000.0, 2) if energy else 0, attributes=GATEWAY_ATTRIBUTE_TABLE.get("load_today", {}), app="gateway")
         if energy:
-            self.set_state_wrapper(f"sensor.{pfx}_battery_charge_today", round(energy.battery_charge_today_wh / 1000.0, 2))
-            self.set_state_wrapper(f"sensor.{pfx}_battery_discharge_today", round(energy.battery_discharge_today_wh / 1000.0, 2))
+            self.dashboard_item(f"sensor.{pfx}_battery_charge_today", round(energy.battery_charge_today_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_charge_today", {}), app="gateway")
+            self.dashboard_item(f"sensor.{pfx}_battery_discharge_today", round(energy.battery_discharge_today_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_discharge_today", {}), app="gateway")
 
     def automatic_config(self):
         """Register gateway entities with PredBat's inverter model.
@@ -590,6 +656,7 @@ class GatewayMQTT(ComponentBase):
         for inv in inverters:
             suffix = inv.serial[-6:].lower()
             base = f"{self.prefix}_gateway_{suffix}"
+            self._suffix_to_serial[suffix] = inv.serial
 
             soc_entities.append(f"sensor.{base}_soc")
             battery_power_entities.append(f"sensor.{base}_battery_power")
@@ -715,19 +782,18 @@ class GatewayMQTT(ComponentBase):
             plan_raw = self.get_state_wrapper(self.prefix + ".plan_html", attribute="raw")
             if plan_raw and isinstance(plan_raw, dict) and "rows" in plan_raw:
                 rows = plan_raw["rows"]
-                now = datetime.datetime.now(datetime.timezone.utc)
+                now = datetime.datetime.now(self.local_tz)
 
                 state_map = {
-                    "Charging": 1,
-                    "Freeze charging": 1,
-                    "Hold charging": 1,
-                    "Discharging": 2,
-                    "Freeze discharging": 2,
+                    "Chrg": 1,
+                    "FrzChrg": 1,
+                    "HoldChrg": 1,
+                    "Exp": 2,
+                    "HoldExp": 2,
+                    "FrzExp": 2,
                 }
 
                 slot_idx = 0
-                current_block_state = None
-                block_done = False
                 for row in rows:
                     try:
                         row_time = datetime.datetime.strptime(row.get("time", ""), "%Y-%m-%dT%H:%M:%S%z")
@@ -749,45 +815,117 @@ class GatewayMQTT(ComponentBase):
                     if slot_idx < 12:
                         timeline[slot_idx] = code
 
-                    # Track current block: consecutive rows with same state.
-                    # If first block is only 1 slot, extend into next block
-                    # so the sparkline always has >= 2 points to render.
-                    if not block_done:
-                        if current_block_state is None:
-                            current_block_state = state
-                            block_state_name = state
-                        if state == current_block_state:
-                            block_soc.append(int(float(row.get("soc_percent", 0) or 0)))
-                        elif len(block_soc) < 2:
-                            # Single-slot block — extend into next block
-                            current_block_state = state
-                            block_state_name = state
-                            block_soc.append(int(float(row.get("soc_percent", 0) or 0)))
-                        else:
-                            block_done = True
+                    if slot_idx == 0:
+                        block_state_name = state
+
+                    if slot_idx < 24:
+                        block_soc.append(int(float(row.get("soc_percent", 0) or 0)))
 
                     slot_idx += 1
 
+                # Ensure at least 2 points so sparkline renderers have a valid range
+                if len(block_soc) == 1:
+                    block_soc.append(block_soc[0])
+
             # Build payload
+            saving_start_date = self.get_state_wrapper(self.prefix + ".savings_total_predbat", attribute="start_date")
+            saving_total = self.get_state_wrapper(self.prefix + ".savings_total_predbat") or 0
+            saving_yesterday = self.get_state_wrapper(self.prefix + ".savings_yesterday_predbat") or 0
+            predbat_status = self.get_state_wrapper(self.prefix + ".status") or "Unknown"
+            predbat_status_detail = self.get_state_wrapper(self.prefix + ".status", attribute="detail") or ""
+            if "error" in predbat_status.lower():
+                # Remove long complex text
+                predbat_status_detail = predbat_status
+                predbat_status = "Server Error"
+            if "warn" in predbat_status.lower():
+                predbat_status_detail = predbat_status
+                predbat_status = "Server warning"
+
+            try:
+                saving_total = float(saving_total) / 100.0  # pence → pounds
+                saving_yesterday = float(saving_yesterday) / 100.0  # pence → pounds
+            except ValueError:
+                saving_total = 0
+                saving_yesterday = 0
+            total_days_of_savings = 1
+            if saving_start_date:
+                try:
+                    start_date = datetime.datetime.strptime(saving_start_date, "%Y-%m-%d").date()
+                    total_days_of_savings = max((datetime.date.today() - start_date).days, 1)
+                except ValueError:
+                    pass
+            saving_month_average = round(float(saving_total) * 365 / 12 / total_days_of_savings, 2)
+
+            # Marginal cost matrix — "what does an extra 1/2/4/8 kWh of load cost
+            # me right now and in each of the next 6 two-hour windows?". Computed
+            # by the Marginal mixin via what-if prediction runs. Used by the
+            # gateway's appliance RAG to pick a colour that actually reflects the
+            # cost of running the dryer/EV/etc, rather than inferring from slot
+            # categories alone.
+            marginal_costs = []
+            marginal_time_labels = []
+            try:
+                matrix = self.get_state_wrapper("sensor." + self.prefix + "_marginal_energy_costs", attribute="matrix")
+                if isinstance(matrix, dict) and matrix:
+                    # Canonical level order matches MARGINAL_EXTRA_KWH_LEVELS in marginal.py.
+                    # Keys are integers when the HA state cache holds the dict directly;
+                    # defensive fallback to the string form covers any JSON-round-tripped path.
+                    levels = [1, 2, 4, 8]
+                    # Determine the column shape first from the first non-empty row, then
+                    # build all rows against that fixed set of labels so the matrix stays
+                    # rectangular even when lower levels are missing.
+                    time_labels = []
+                    for lvl in levels:
+                        row = matrix.get(lvl) or matrix.get(str(lvl)) or {}
+                        if isinstance(row, dict) and row:
+                            time_labels = list(row.keys())
+                            break
+
+                    # Only publish once we have something meaningful.
+                    if time_labels:
+                        tmp_costs = []
+                        for lvl in levels:
+                            row = matrix.get(lvl) or matrix.get(str(lvl)) or {}
+                            if not isinstance(row, dict):
+                                row = {}
+                            # Missing rows or columns are padded with 0 rather than dropped.
+                            tmp_costs.append([round(float(row.get(tl, 0) or 0), 2) for tl in time_labels])
+
+                        marginal_time_labels = time_labels
+                        marginal_costs = tmp_costs
+            except (TypeError, ValueError, AttributeError, KeyError) as exc:
+                self.log(f"Warn: GatewayMQTT: failed to read marginal costs: {exc}")
+                marginal_costs = []
+                marginal_time_labels = []
+
             payload = {
                 "current_price": round(float(current_price), 1),
                 "avg_price": round(float(avg_price or 0), 1),
-                "total_saved": round(float(cost_today or 0) / 100.0, 2),  # pence → pounds
+                "total_cost": round(float(cost_today or 0) / 100.0, 2),  # pence → pounds
                 "timeline": timeline,
                 "block_soc": block_soc,
                 "block_state": block_state_name,
+                "savings_yesterday": saving_yesterday,
+                "savings_total": saving_total,
+                "savings_total_days": total_days_of_savings,
+                "savings_month_average": saving_month_average,
+                "predbat_status": predbat_status,
+                "predbat_status_detail": predbat_status_detail,
+                "marginal_costs": marginal_costs,
+                "marginal_time_labels": marginal_time_labels,
             }
 
             # Only publish if data changed
             if payload == self._last_predbat_data:
                 return
 
+            self._last_predbat_data = dict(payload)  # store copy without timestamp so dedup works next cycle
+            payload["timestamp"] = int(time.time())
             payload_json = json.dumps(payload)
             topic = f"{self._topic_base}/predbat_data"
 
             await self._publish_raw(topic, payload_json.encode(), retain=True)
-            self._last_predbat_data = payload
-            self.log(f"Info: Published predbat_data: price={payload['current_price']}p avg={payload['avg_price']}p saved=£{payload['total_saved']}")
+            self.log(f"Info: Published predbat_data: price={payload['current_price']}p avg={payload['avg_price']}p cost=£{payload['total_cost']}")
 
         except Exception as e:
             self.log(f"Warn: Failed to publish predbat_data: {e}")
@@ -873,19 +1011,41 @@ class GatewayMQTT(ComponentBase):
         """Return the cumulative error count (decode failures, MQTT disconnects, publish failures)."""
         return self._error_count
 
+    def _serial_from_entity_id(self, entity_id):
+        """Extract the full inverter serial from a gateway entity_id.
+
+        Entity IDs follow the pattern {domain}.{prefix}_gateway_{suffix}_{attribute}
+        where suffix is the last 6 chars of the inverter serial, lowercased.
+        Returns the full serial string, or None if the suffix is not in the map.
+        """
+        marker = "_gateway_"
+        idx = entity_id.find(marker)
+        if idx == -1:
+            return None
+        after = entity_id[idx + len(marker) :]
+        # Extract everything up to the next underscore (handles serials shorter than 6 chars)
+        underscore = after.find("_")
+        suffix = after[:underscore].lower() if underscore != -1 else after.lower()
+        serial = self._suffix_to_serial.get(suffix)
+        if serial is None:
+            self.log(f"Warn: GatewayMQTT: _serial_from_entity_id: no serial found for suffix '{suffix}' in entity '{entity_id}'")
+        return serial
+
     async def select_event(self, entity_id, value):
         """Handle select entity changes (mode, schedule times).
 
         Args:
             entity_id: The entity ID that changed.
-            value: The new selected value (HH:MM:SS for times).
+            value: The new selected value (HH:MM:SS for times, or mode name).
         """
-        if "gateway_mode" in entity_id:
-            mode_map = {"auto": 0, "charge": 1, "discharge": 2, "idle": 3}
-            mode_val = mode_map.get(str(value).lower())
-            if mode_val is not None:
-                await self.publish_command("set_mode", mode=mode_val)
-                self.log(f"Info: GatewayMQTT: Mode set to {value} ({mode_val})")
+
+        self.log("Info: GatewayMQTT: select_event: entity_id={}, value={}".format(entity_id, value))
+        serial = self._serial_from_entity_id(entity_id)
+        # Operating mode selector
+        if "_mode_select" in entity_id:
+            mode_int = GATEWAY_OPERATING_MODE_VALUES.get(str(value).strip(), 0)
+            await self.publish_command("set_mode", mode=mode_int, **({"serial": serial} if serial else {}))
+            self.log(f"Info: GatewayMQTT: Operating mode set to {value} ({mode_int})")
             return
 
         # Schedule time changes — convert HH:MM:SS to HHMM and send slot command
@@ -897,29 +1057,29 @@ class GatewayMQTT(ComponentBase):
             except (ValueError, IndexError):
                 return
 
-            if "charge_slot1_start" in entity_id or "charge_slot1_end" in entity_id:
+            if "_discharge_slot1_start" in entity_id or "_discharge_slot1_end" in entity_id:
+                await self._update_discharge_slot(entity_id, hhmm, serial=serial)
+            elif "_charge_slot1_start" in entity_id or "_charge_slot1_end" in entity_id:
                 # Read current charge slot times to send both start and end
-                await self._update_charge_slot(entity_id, hhmm)
-            elif "discharge_slot1_start" in entity_id or "discharge_slot1_end" in entity_id:
-                await self._update_discharge_slot(entity_id, hhmm)
+                await self._update_charge_slot(entity_id, hhmm, serial=serial)
 
-    async def _update_charge_slot(self, entity_id, hhmm):
+    async def _update_charge_slot(self, entity_id, hhmm, serial=None):
         """Send set_charge_slot command with updated start or end time."""
         # Determine which field changed
-        if "start" in entity_id:
+        if "_start" in entity_id:
             schedule = {"start": hhmm}
         else:
             schedule = {"end": hhmm}
-        await self.publish_command("set_charge_slot", schedule_json=json.dumps(schedule))
+        await self.publish_command("set_charge_slot", schedule_json=json.dumps(schedule), **({"serial": serial} if serial else {}))
         self.log(f"Info: GatewayMQTT: Charge slot update: {schedule}")
 
-    async def _update_discharge_slot(self, entity_id, hhmm):
+    async def _update_discharge_slot(self, entity_id, hhmm, serial=None):
         """Send set_discharge_slot command with updated start or end time."""
-        if "start" in entity_id:
+        if "_start" in entity_id:
             schedule = {"start": hhmm}
         else:
             schedule = {"end": hhmm}
-        await self.publish_command("set_discharge_slot", schedule_json=json.dumps(schedule))
+        await self.publish_command("set_discharge_slot", schedule_json=json.dumps(schedule), **({"serial": serial} if serial else {}))
         self.log(f"Info: GatewayMQTT: Discharge slot update: {schedule}")
 
     async def number_event(self, entity_id, value):
@@ -929,60 +1089,58 @@ class GatewayMQTT(ComponentBase):
             entity_id: The entity ID that changed.
             value: The new numeric value.
         """
+
+        self.log("Info: GatewayMQTT: number_event: entity_id={}, value={}".format(entity_id, value))
         try:
             val = int(float(value))
         except (ValueError, TypeError):
             self.log(f"Warn: GatewayMQTT: Invalid number value: {value}")
             return
 
-        if "charge_rate" in entity_id:
-            await self.publish_command("set_charge_rate", power_w=val)
-        elif "discharge_rate" in entity_id:
-            await self.publish_command("set_discharge_rate", power_w=val)
-        elif "reserve" in entity_id:
-            await self.publish_command("set_reserve", target_soc=val)
-        elif "target_soc" in entity_id:
-            await self.publish_command("set_target_soc", target_soc=val)
+        serial = self._serial_from_entity_id(entity_id)
+        serial_kwarg = {"serial": serial} if serial else {}
+        if "_discharge_rate" in entity_id:
+            await self.publish_command("set_discharge_rate", power_w=val, **serial_kwarg)
+        elif "_charge_rate" in entity_id:
+            await self.publish_command("set_charge_rate", power_w=val, **serial_kwarg)
+        elif "_reserve" in entity_id:
+            await self.publish_command("set_reserve", target_soc=val, **serial_kwarg)
+        elif "_target_soc" in entity_id:
+            await self.publish_command("set_target_soc", target_soc=val, **serial_kwarg)
 
     async def switch_event(self, entity_id, service):
         """Handle switch entity service calls (charge/discharge enable).
-
-        Maps enable/disable to set_mode commands:
-        - charge_enabled off → idle mode
-        - discharge_enabled off → charge mode (hold, no discharge)
-        - either on → auto mode (resume normal operation)
 
         Args:
             entity_id: The entity ID being controlled.
             service: The service being called (turn_on/turn_off).
         """
-        is_on = service == "turn_on"
 
-        if "charge_enabled" in entity_id:
-            if is_on:
-                await self.publish_command("set_mode", mode=0)  # auto
-                self.log("Info: GatewayMQTT: Charge enabled → AUTO mode")
-            else:
-                await self.publish_command("set_mode", mode=3)  # idle
-                self.log("Info: GatewayMQTT: Charge disabled → IDLE mode")
-        elif "discharge_enabled" in entity_id:
-            if is_on:
-                await self.publish_command("set_mode", mode=0)  # auto
-                self.log("Info: GatewayMQTT: Discharge enabled → AUTO mode")
-            else:
-                await self.publish_command("set_mode", mode=1)  # charge (prevents discharge)
-                self.log("Info: GatewayMQTT: Discharge disabled → CHARGE mode")
+        self.log("Info: GatewayMQTT: switch_event: entity_id={}, service={}".format(entity_id, service))
+
+        old_value = self.get_state_wrapper(entity_id)
+        old_value = True if old_value in [True, "on"] else False
+        if service == "turn_on":
+            is_on = True
+        elif service == "turn_off":
+            is_on = False
+        elif service == "toggle":
+            is_on = not old_value
+        else:
+            self.log("Warn: GatewayMQTT: switch_event: Unsupported service={} for entity_id={}".format(service, entity_id))
+            return
+
+        serial = self._serial_from_entity_id(entity_id)
+        serial_kwarg = {"serial": serial} if serial else {}
+        if "_charge_enabled" in entity_id:
+            await self.publish_command("set_charge_enable", enable=is_on, **serial_kwarg)
+            self.log(f"Info: GatewayMQTT: Charge {'enabled' if is_on else 'disabled'}")
+        elif "_discharge_enabled" in entity_id:
+            await self.publish_command("set_discharge_enable", enable=is_on, **serial_kwarg)
+            self.log(f"Info: GatewayMQTT: Discharge {'enabled' if is_on else 'disabled'}")
 
     async def final(self):
-        """Cleanup: send AUTO mode, cancel listener task, disconnect."""
-        try:
-            # Send AUTO mode before disconnecting
-            if self._mqtt_connected:
-                await self.publish_command("set_mode", mode=0)
-                self.log("Info: GatewayMQTT: Sent AUTO mode on shutdown")
-        except Exception as e:
-            self.log(f"Warn: GatewayMQTT: Error sending final AUTO mode: {e}")
-
+        """Cleanup: cancel listener task, disconnect."""
         # Cancel the MQTT listener task
         if self._mqtt_task and not self._mqtt_task.done():
             self._mqtt_task.cancel()
@@ -1079,56 +1237,65 @@ class GatewayMQTT(ComponentBase):
             self._refresh_in_progress = False
 
     @staticmethod
-    def decode_telemetry(data):
-        """Decode protobuf GatewayStatus -> dict of entity_name: value.
+    def iana_to_posix_tz(iana_tz):
+        """Convert an IANA timezone name to a POSIX TZ string for ESP32 firmware.
+
+        TZif v2/v3 binary files embed the POSIX TZ string as the last newline-delimited
+        record. This method looks up the tzfile in the pytz package's bundled
+        ``zoneinfo`` directory and reads the string directly — no lookup table
+        required, works for any valid zone.
 
         Args:
-            data: Raw protobuf bytes from /status topic.
+            iana_tz: IANA timezone string (e.g. "Europe/London").
 
         Returns:
-            Dict mapping entity names to values. Uses first inverter entry.
+            POSIX TZ string (e.g. "GMT0BST,M3.5.0/1,M10.5.0"), or "UTC0" on failure.
         """
-        status = pb.GatewayStatus()
-        status.ParseFromString(data)
 
-        if len(status.inverters) == 0:
-            return {}
+        iana_tz = str(iana_tz)
+        rel_path = iana_tz.replace("/", os.sep)
+        pytz_zones = os.path.join(os.path.dirname(_pytz.__file__), "zoneinfo")
+        path = os.path.join(pytz_zones, rel_path)
 
-        inv = status.inverters[0]
-        entities = {}
+        if os.path.isfile(path):
+            try:
+                with open(path, "rb") as f:
+                    data = f.read()
+                # TZif v2/v3: POSIX string is appended after the main data block as \nSTRING\n
+                if data[:4] == b"TZif" and data[4:5] in (b"2", b"3") and data[-1:] == b"\n":
+                    nl = data.rfind(b"\n", 0, -1)
+                    if nl >= 0:
+                        posix = data[nl + 1 : -1].decode("ascii", errors="replace").strip()
+                        if posix:
+                            return posix
+            except OSError:
+                pass
 
-        for field_path, entity_name in ENTITY_MAP.items():
-            parts = field_path.split(".")
-            obj = inv
-            for part in parts:
-                obj = getattr(obj, part, None)
-                if obj is None:
-                    break
-            if obj is not None:
-                # Convert Wh to kWh for capacity
-                if field_path == "battery.capacity_wh" and obj:
-                    obj = round(obj / 1000.0, 2)
-                entities[entity_name] = obj
-
-        # EMS aggregate entities (when type is GIVENERGY_EMS)
-        if inv.type == pb.INVERTER_TYPE_GIVENERGY_EMS and inv.ems.num_inverters > 0:
-            entities["predbat_gateway_ems_total_soc"] = inv.ems.total_soc
-            entities["predbat_gateway_ems_total_charge"] = inv.ems.total_charge_w
-            entities["predbat_gateway_ems_total_discharge"] = inv.ems.total_discharge_w
-            entities["predbat_gateway_ems_total_grid"] = inv.ems.total_grid_w
-            entities["predbat_gateway_ems_total_pv"] = inv.ems.total_pv_w
-            entities["predbat_gateway_ems_total_load"] = inv.ems.total_load_w
-
-            # Per-sub-inverter entities
-            for idx, sub in enumerate(inv.ems.sub_inverters):
-                prefix = f"predbat_gateway_sub{idx}"
-                entities[f"{prefix}_soc"] = sub.soc
-                entities[f"{prefix}_battery_power"] = sub.battery_w
-                entities[f"{prefix}_pv_power"] = sub.pv_w
-                entities[f"{prefix}_grid_power"] = sub.grid_w
-                entities[f"{prefix}_temp"] = sub.temp_c
-
-        return entities
+        # Fall back: derive a no-DST POSIX string from the pytz UTC offset
+        try:
+            tz = _pytz.timezone(iana_tz)
+            # Probe both hemispheres' winters to find standard time (smaller UTC offset).
+            # Jan is winter in NH but summer in SH, so we take whichever probe gives the
+            # smaller (less positive) offset — that is always the non-DST offset.
+            dt_jan = datetime.datetime(2024, 1, 15, 12, 0, 0)
+            dt_jul = datetime.datetime(2024, 7, 15, 12, 0, 0)
+            off_jan = tz.utcoffset(dt_jan).total_seconds()
+            off_jul = tz.utcoffset(dt_jul).total_seconds()
+            std_dt = dt_jan if off_jan <= off_jul else dt_jul
+            offset = tz.utcoffset(std_dt)
+            total_minutes = int(offset.total_seconds() / 60)
+            # POSIX sign is opposite to UTC offset; use divmod to avoid floor-division
+            # errors on negative fractional offsets (e.g. UTC-03:30 → -210 min)
+            posix_total_minutes = -total_minutes
+            posix_hours, posix_mins = divmod(abs(posix_total_minutes), 60)
+            if posix_total_minutes < 0:
+                posix_hours = -posix_hours
+            abbr = tz.tzname(std_dt) or "TZ"
+            if posix_mins:
+                return "{}{:d}:{:02d}".format(abbr, posix_hours, posix_mins)
+            return "{}{:d}".format(abbr, posix_hours)
+        except Exception:
+            return "UTC0"
 
     @staticmethod
     def build_execution_plan(entries, plan_version, timezone):
@@ -1137,7 +1304,7 @@ class GatewayMQTT(ComponentBase):
         Args:
             entries: List of dicts with keys matching PlanEntry fields.
             plan_version: Monotonic version number.
-            timezone: IANA timezone string (e.g. "Europe/London").
+            timezone: IANA timezone string (e.g. "Europe/London") — converted to POSIX format internally.
 
         Returns:
             Serialized protobuf bytes.
@@ -1145,7 +1312,7 @@ class GatewayMQTT(ComponentBase):
         plan = pb.ExecutionPlan()
         plan.timestamp = int(time.time())
         plan.plan_version = plan_version
-        plan.timezone = timezone
+        plan.timezone = GatewayMQTT.iana_to_posix_tz(timezone)
 
         for entry_dict in entries:
             pe = plan.entries.add()
@@ -1202,7 +1369,7 @@ class GatewayMQTT(ComponentBase):
         """Build JSON command string for ad-hoc control.
 
         Args:
-            command: Command name (set_mode, set_charge_rate, etc.)
+            command: Command name (set_charge_enable, set_charge_rate, etc.)
             **kwargs: Command-specific fields (mode, power_w, target_soc).
 
         Returns:
@@ -1221,9 +1388,9 @@ class GatewayMQTT(ComponentBase):
             cmd["target_soc"] = kwargs["target_soc"]
         if "schedule_json" in kwargs:
             cmd["schedule_json"] = kwargs["schedule_json"]
-
-        # Mode commands need expires_at (5-minute deadman)
-        if command == "set_mode":
-            cmd["expires_at"] = int(time.time()) + 300
+        if "enable" in kwargs:
+            cmd["enable"] = bool(kwargs["enable"])
+        if "serial" in kwargs:
+            cmd["serial"] = kwargs["serial"]
 
         return json.dumps(cmd)

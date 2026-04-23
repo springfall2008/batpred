@@ -143,3 +143,49 @@ For each tariff a new sensor is created in Home Assistant called **predbat.compa
 You can create charts from these sensors to show how the different tariffs compare on a daily basis.
 
 ![image](https://github.com/user-attachments/assets/6d5c30f6-822f-4d9c-b4a6-701c0b676c61)
+
+## Overriding Predbat configuration per tariff
+
+You can override any standard Predbat configuration setting for a specific tariff comparison using the `config:` block.
+This is applied before the scenario is run and is used to model that comparison scenario.
+
+For example, to model a tariff combined with a higher minimum SoC target:
+
+```yaml
+    - id: 'agile_high_soc'
+      name: 'Agile with higher SoC floor'
+      rates_import_octopus_url: 'https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-{dno_region}/standard-unit-rates/'
+      config:
+        best_soc_min: 2.0
+```
+
+## Modelling a different battery or inverter
+
+You can model what your costs would look like with a **different battery size, charge rate, or inverter limit** using the hardware override keys.
+These are applied after live inverter data is fetched, so they fully replace the real hardware values for the duration of the comparison scenario.
+
+All four keys are optional and can be combined freely:
+
+| Key | Description | Unit |
+|-----|-------------|------|
+| `override_soc_max_kwh` | Battery usable capacity | kWh |
+| `override_battery_rate_max_charge_kw` | Maximum battery charge rate | kW |
+| `override_battery_rate_max_discharge_kw` | Maximum battery discharge rate | kW |
+| `override_inverter_limit_kw` | AC inverter output limit | kW |
+
+When `override_soc_max_kwh` is set the starting SoC is automatically clamped to the new capacity if needed.
+
+**Example — evaluating a battery upgrade from 10 kWh to 20 kWh:**
+
+```yaml
+    - id: 'current'
+      name: 'Current setup'
+    - id: 'double_battery'
+      name: '20kWh battery upgrade'
+      override_soc_max_kwh: 20.0
+      override_battery_rate_max_charge_kw: 5.0
+      override_battery_rate_max_discharge_kw: 5.0
+      override_inverter_limit_kw: 7.5
+```
+
+This lets you predict whether investing in a larger battery (or faster inverter) would pay back based on your actual usage and your current tariff.

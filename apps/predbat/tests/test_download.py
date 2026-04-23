@@ -10,6 +10,7 @@
 
 import os
 import sys
+import importlib
 import tempfile
 import shutil
 from unittest.mock import patch
@@ -20,7 +21,16 @@ parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
-from download import get_github_directory_listing, check_install, predbat_update_download, compute_file_sha1, download_predbat_file_from_github, predbat_update_move
+from download import (
+    get_github_directory_listing,
+    check_install,
+    predbat_update_download,
+    compute_file_sha1,
+    download_predbat_file_from_github,
+    predbat_update_move,
+    resolve_predbat_repository,
+    DEFAULT_PREDBAT_REPOSITORY,
+)
 
 
 def test_download(my_predbat):
@@ -37,9 +47,15 @@ def test_download(my_predbat):
 
     # Registry of all sub-tests
     sub_tests = [
+        ("resolve_repo_default", _test_resolve_predbat_repository_default, "Repository resolver falls back to upstream default"),
+        ("resolve_repo_env", _test_resolve_predbat_repository_env_override, "Repository resolver honours PREDBAT_REPOSITORY env var"),
+        ("resolve_repo_env_empty", _test_resolve_predbat_repository_env_empty_falls_back_default, "Repository resolver ignores empty/whitespace PREDBAT_REPOSITORY"),
+        ("resolve_repo_explicit", _test_resolve_predbat_repository_explicit_overrides_env, "Repository resolver explicit arg overrides env var"),
         ("github_listing_success", _test_get_github_directory_listing_success, "GitHub directory listing success"),
         ("github_listing_failure", _test_get_github_directory_listing_failure, "GitHub API failure (404)"),
         ("github_listing_exception", _test_get_github_directory_listing_exception, "GitHub API exception handling"),
+        ("github_listing_env_repo", _test_get_github_directory_listing_uses_env_repository, "GitHub listing uses repository from env var"),
+        ("github_listing_explicit_repo", _test_get_github_directory_listing_explicit_repository, "GitHub listing explicit repository overrides env var"),
         ("compute_sha1", _test_compute_file_sha1, "Compute file SHA1"),
         ("compute_sha1_missing", _test_compute_file_sha1_missing_file, "SHA1 computation on missing file"),
         ("check_install_valid", _test_check_install_with_valid_manifest, "Check install with valid manifest"),
@@ -60,6 +76,9 @@ def test_download(my_predbat):
         ("update_move_invalid_version", _test_predbat_update_move_invalid_version, "Move files invalid version"),
         ("update_download_skip_matching", _test_predbat_update_download_skip_matching_sha, "Update download skips files with matching SHA"),
         ("update_download_skip_mixed", _test_predbat_update_download_skip_mixed, "Update download skips some files, downloads others"),
+        ("predbat_main_repo_override", _test_predbat_download_main_uses_configured_repository, "Predbat main update uses configured repository override"),
+        ("predbat_tag_repo_upstream", _test_predbat_download_tag_uses_default_repository, "Predbat tagged update always uses upstream repository"),
+        ("predbat_startup_pins_upstream", _test_predbat_startup_self_check_uses_default_repository, "Predbat startup self-check pins repository to upstream"),
     ]
 
     print("\n" + "=" * 70)
@@ -92,6 +111,54 @@ def test_download(my_predbat):
     print("=" * 70)
 
     return failed
+
+
+def _import_predbat_module_for_tests():
+    """Import predbat safely for unit tests without triggering real update/download side effects."""
+    if "predbat" in sys.modules:
+        return sys.modules["predbat"]
+
+    with patch("download.check_install", return_value=(True, False)):
+        with patch("download.predbat_update_download", return_value=None):
+            with patch("download.predbat_update_move", return_value=True):
+                with patch("builtins.print"):
+                    return importlib.import_module("predbat")
+
+
+def _test_resolve_predbat_repository_default(my_predbat):
+    """Test repository resolution defaults to upstream when no override is present."""
+    with patch.dict("download.os.environ", {}, clear=True):
+        repository = resolve_predbat_repository()
+        assert repository == DEFAULT_PREDBAT_REPOSITORY
+    return 0
+
+
+def _test_resolve_predbat_repository_env_override(my_predbat):
+    """Test repository resolution uses PREDBAT_REPOSITORY environment override."""
+    env_repo = "example/forked-batpred"
+    with patch.dict("download.os.environ", {"PREDBAT_REPOSITORY": env_repo}, clear=True):
+        repository = resolve_predbat_repository()
+        assert repository == env_repo
+    return 0
+
+
+def _test_resolve_predbat_repository_env_empty_falls_back_default(my_predbat):
+    """Test empty/whitespace PREDBAT_REPOSITORY values fall back to upstream default."""
+    for env_value in ["", "   ", "\t\n"]:
+        with patch.dict("download.os.environ", {"PREDBAT_REPOSITORY": env_value}, clear=True):
+            repository = resolve_predbat_repository()
+            assert repository == DEFAULT_PREDBAT_REPOSITORY
+    return 0
+
+
+def _test_resolve_predbat_repository_explicit_overrides_env(my_predbat):
+    """Test explicit repository argument takes precedence over environment override."""
+    env_repo = "example/forked-batpred"
+    explicit_repo = "owner/explicit-repo"
+    with patch.dict("download.os.environ", {"PREDBAT_REPOSITORY": env_repo}, clear=True):
+        repository = resolve_predbat_repository(repository=explicit_repo)
+        assert repository == explicit_repo
+    return 0
 
 
 def _test_get_github_directory_listing_success(my_predbat):
@@ -144,6 +211,44 @@ def _test_get_github_directory_listing_exception(my_predbat):
         result = get_github_directory_listing("v8.30.8")
 
         assert result is None
+    return 0
+
+
+def _test_get_github_directory_listing_uses_env_repository(my_predbat):
+    """Test GitHub listing resolves repository from PREDBAT_REPOSITORY env var."""
+    mock_response = [{"name": "predbat.py", "sha": "abc", "size": 1, "type": "file"}]
+    env_repo = "example/forked-batpred"
+
+    with patch.dict("download.os.environ", {"PREDBAT_REPOSITORY": env_repo}, clear=True):
+        with patch("requests.get") as mock_get:
+            mock_get.return_value.ok = True
+            mock_get.return_value.json.return_value = mock_response
+
+            result = get_github_directory_listing("v8.30.8")
+
+            assert result is not None
+            called_url = mock_get.call_args[0][0]
+            assert "/repos/{}/contents/apps/predbat?ref=v8.30.8".format(env_repo) in called_url
+    return 0
+
+
+def _test_get_github_directory_listing_explicit_repository(my_predbat):
+    """Test explicit repository for GitHub listing overrides PREDBAT_REPOSITORY env var."""
+    mock_response = [{"name": "predbat.py", "sha": "abc", "size": 1, "type": "file"}]
+    env_repo = "example/forked-batpred"
+    explicit_repo = "springfall2008/batpred"
+
+    with patch.dict("download.os.environ", {"PREDBAT_REPOSITORY": env_repo}, clear=True):
+        with patch("requests.get") as mock_get:
+            mock_get.return_value.ok = True
+            mock_get.return_value.json.return_value = mock_response
+
+            result = get_github_directory_listing("v8.30.8", repository=explicit_repo)
+
+            assert result is not None
+            called_url = mock_get.call_args[0][0]
+            assert "/repos/{}/contents/apps/predbat?ref=v8.30.8".format(explicit_repo) in called_url
+            assert env_repo not in called_url
     return 0
 
 
@@ -568,7 +673,7 @@ def _test_predbat_update_download_skip_matching_sha(my_predbat):
 
         download_called = False
 
-        def mock_download(tag, filename, output_path):
+        def mock_download(tag, filename, output_path, repository=None):
             nonlocal download_called
             download_called = True
             return "downloaded content"
@@ -625,7 +730,7 @@ def _test_predbat_update_download_skip_mixed(my_predbat):
 
         download_calls = []
 
-        def mock_download(tag, filename, output_path):
+        def mock_download(tag, filename, output_path, repository=None):
             download_calls.append(filename)
             with open(output_path, "w") as f:
                 f.write("downloaded content for {}\n".format(filename))
@@ -662,4 +767,91 @@ def _test_predbat_update_download_skip_mixed(my_predbat):
 
     finally:
         shutil.rmtree(temp_dir)
+    return 0
+
+
+def _test_predbat_download_main_uses_configured_repository(my_predbat):
+    """Test download_predbat_version('main') uses get_predbat_repository() value."""
+    predbat_module = _import_predbat_module_for_tests()
+
+    class DummyPredBat:
+        def __init__(self):
+            self.stop_thread = False
+            self.pool = None
+
+        def log(self, *_args, **_kwargs):
+            return None
+
+        def expose_config(self, *_args, **_kwargs):
+            return None
+
+        def get_arg(self, *_args, **_kwargs):
+            return False
+
+        def get_predbat_repository(self):
+            return "example/forked-batpred"
+
+        def call_notify(self, *_args, **_kwargs):
+            return None
+
+    dummy = DummyPredBat()
+    with patch("predbat.predbat_update_download", return_value=None) as mock_download:
+        predbat_module.PredBat.download_predbat_version(dummy, "main")
+        assert mock_download.called
+        assert mock_download.call_args.kwargs.get("repository") == "example/forked-batpred"
+    return 0
+
+
+def _test_predbat_download_tag_uses_default_repository(my_predbat):
+    """Test download_predbat_version('<tag>') ignores override and uses upstream default."""
+    predbat_module = _import_predbat_module_for_tests()
+
+    class DummyPredBat:
+        def __init__(self):
+            self.stop_thread = False
+            self.pool = None
+
+        def log(self, *_args, **_kwargs):
+            return None
+
+        def expose_config(self, *_args, **_kwargs):
+            return None
+
+        def get_arg(self, *_args, **_kwargs):
+            return False
+
+        def get_predbat_repository(self):
+            return "example/forked-batpred"
+
+        def call_notify(self, *_args, **_kwargs):
+            return None
+
+    dummy = DummyPredBat()
+    with patch("predbat.predbat_update_download", return_value=None) as mock_download:
+        predbat_module.PredBat.download_predbat_version(dummy, "v8.30.8")
+        assert mock_download.called
+        assert mock_download.call_args.kwargs.get("repository") == DEFAULT_PREDBAT_REPOSITORY
+    return 0
+
+
+def _test_predbat_startup_self_check_uses_default_repository(my_predbat):
+    """Test startup self-check/update pins repository to DEFAULT_PREDBAT_REPOSITORY at runtime."""
+    with patch("download.check_install", return_value=(False, False)) as mock_check_install:
+        with patch("download.predbat_update_download", return_value=["predbat.py"]) as mock_update_download:
+            with patch("download.predbat_update_move", return_value=True):
+                with patch("builtins.print"):
+                    with patch("sys.exit", side_effect=SystemExit):
+                        try:
+                            if "predbat" in sys.modules:
+                                importlib.reload(sys.modules["predbat"])
+                            else:
+                                importlib.import_module("predbat")
+                        except SystemExit:
+                            pass
+
+    assert mock_check_install.called
+    assert mock_check_install.call_args.kwargs.get("repository") == DEFAULT_PREDBAT_REPOSITORY
+
+    assert mock_update_download.called
+    assert mock_update_download.call_args.kwargs.get("repository") == DEFAULT_PREDBAT_REPOSITORY
     return 0

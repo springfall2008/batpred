@@ -605,7 +605,7 @@ class Fetch:
 
         return import_today
 
-    def minute_data_load(self, now_utc, entity_name, max_days_previous, load_scaling=1.0, required_unit=None, interpolate=False, pad=True):
+    def minute_data_load(self, now_utc, entity_name, max_days_previous, load_scaling=1.0, required_unit=None, interpolate=False, pad=True, clean_increment=True):
         """
         Download one or more entities for load data
         """
@@ -652,7 +652,7 @@ class Fetch:
                     backwards=True,
                     smoothing=True,
                     scale=load_scaling,
-                    clean_increment=True,
+                    clean_increment=clean_increment,
                     accumulate=load_minutes,
                     required_unit=required_unit,
                     interpolate=interpolate,
@@ -744,9 +744,8 @@ class Fetch:
             self.download_ge_data(self.now_utc)
 
             if ("load_power" in self.args) and self.get_arg("load_power_fill_enable", True):
-                # Use power data to make load data more accurate
                 self.log("Using load_power data to fill gaps in load_today data")
-                load_power_data, _ = self.minute_data_load(self.now_utc, "load_power", self.max_days_previous, required_unit="W", load_scaling=1.0, interpolate=True)
+                load_power_data, _ = self.minute_data_load(self.now_utc, "load_power", self.max_days_previous, required_unit="W", load_scaling=1.0, interpolate=True, clean_increment=False)
                 self.load_minutes = self.fill_load_from_power(self.load_minutes, load_power_data)
         else:
             # Load data
@@ -757,9 +756,12 @@ class Fetch:
                 self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
 
                 if ("load_power" in self.args) and self.get_arg("load_power_fill_enable", True):
-                    # Use power data to make load data more accurate
+                    # Use power data to make load data more accurate.
+                    # clean_increment=False: power sensors report instantaneous W, not cumulative kWh.
+                    # clean_incrementing_reverse would distort fluctuating power readings into an
+                    # ever-growing cumulative series, inflating fill_load_from_power gap-fills.
                     self.log("Using load_power data to fill gaps in load_today data")
-                    load_power_data, _ = self.minute_data_load(self.now_utc, "load_power", self.max_days_previous, required_unit="W", load_scaling=1.0, interpolate=True)
+                    load_power_data, _ = self.minute_data_load(self.now_utc, "load_power", self.max_days_previous, required_unit="W", load_scaling=1.0, interpolate=True, clean_increment=False)
                     self.load_minutes = self.fill_load_from_power(self.load_minutes, load_power_data)
             else:
                 if self.load_forecast:
@@ -1512,7 +1514,7 @@ class Fetch:
                 rate = float(rate)
             except (ValueError, TypeError):
                 self.log("Warn: Bad rate {} provided in manual rates".format(rate))
-                self.record_status("Bad rate {} provided in manual rates".format(rate), had_errors=True)
+                self.record_status("Warn: Bad rate {} provided in manual rates".format(rate), had_errors=True)
                 continue
             rates[minute] = rate
             rate_replicate[minute] = "manual"
@@ -1545,10 +1547,10 @@ class Fetch:
         midnight = time_string_to_stamp("00:00:00")
         for this_rate in info + manual_items:
             if this_rate and isinstance(this_rate, dict):
-                start_str = this_rate.get("start", "00:00:00")
-                start_str = self.resolve_arg("start", start_str, "00:00:00")
-                end_str = this_rate.get("end", "00:00:00")
-                end_str = self.resolve_arg("end", end_str, "00:00:00")
+                start_str = this_rate.get("start") or "00:00:00"
+                start_str = self.resolve_arg("start", start_str, "00:00:00") or "00:00:00"
+                end_str = this_rate.get("end") or "00:00:00"
+                end_str = self.resolve_arg("end", end_str, "00:00:00") or "00:00:00"
                 load_scaling = this_rate.get("load_scaling", None)
 
                 if start_str.count(":") < 2:
@@ -1560,14 +1562,14 @@ class Fetch:
                     start = time_string_to_stamp(start_str)
                 except (ValueError, TypeError):
                     self.log("Warn: Bad start time {} provided in energy rates".format(start_str))
-                    self.record_status("Bad start time {} provided in energy rates".format(start_str), had_errors=True)
+                    self.record_status("Warn: Bad start time {} provided in energy rates".format(start_str), had_errors=True)
                     continue
 
                 try:
                     end = time_string_to_stamp(end_str)
                 except (ValueError, TypeError):
                     self.log("Warn: Bad end time {} provided in energy rates".format(end_str))
-                    self.record_status("Bad end time {} provided in energy rates".format(end_str), had_errors=True)
+                    self.record_status("Warn: Bad end time {} provided in energy rates".format(end_str), had_errors=True)
                     continue
 
                 date = None
@@ -1577,7 +1579,7 @@ class Fetch:
                         date = datetime.strptime(date_str, "%Y-%m-%d")
                     except (ValueError, TypeError):
                         self.log("Warn: Bad date {} provided in energy rates".format(this_rate["date"]))
-                        self.record_status("Bad date {} provided in energy rates".format(this_rate["date"]), had_errors=True)
+                        self.record_status("Warn: Bad date {} provided in energy rates".format(this_rate["date"]), had_errors=True)
                         continue
                 day_of_week = []
                 if "day_of_week" in this_rate:
@@ -1588,11 +1590,11 @@ class Fetch:
                             day = int(day)
                         except (ValueError, TypeError):
                             self.log("Warn: Bad day_of_week {} provided in energy rates, should be 1-7".format(day_of_week))
-                            self.record_status("Bad day_of_week {} provided in energy rates, should be 1-7".format(day_of_week), had_errors=True)
+                            self.record_status("Warn: Bad day_of_week {} provided in energy rates, should be 1-7".format(day_of_week), had_errors=True)
                             continue
                         if day < 1 or day > 7:
                             self.log("Warn: Bad day_of_week {} provided in energy rates, should be 1-7".format(day))
-                            self.record_status("Bad day_of_week {} provided in energy rates, should be 1-7".format(day), had_errors=True)
+                            self.record_status("Warn: Bad day_of_week {} provided in energy rates, should be 1-7".format(day), had_errors=True)
                             continue
                         # Store as Python day of week
                         day_of_week.append(day - 1)
@@ -1619,7 +1621,7 @@ class Fetch:
                     rate = float(rate)
                 except (ValueError, TypeError):
                     self.log("Warn: Bad rate {} provided in energy rates".format(rate))
-                    self.record_status("Bad rate {} provided in energy rates".format(rate), had_errors=True)
+                    self.record_status("Warn:Bad rate {} provided in energy rates".format(rate), had_errors=True)
                     continue
 
                 if load_scaling is not None:
@@ -2055,7 +2057,7 @@ class Fetch:
         """
         if not isinstance(curve, dict):
             self.log("Warn: {} is incorrectly configured - ignoring".format(curve_name))
-            self.record_status("{} is incorrectly configured - ignoring".format(curve_name), had_errors=True)
+            self.record_status("Warn: {} is incorrectly configured - ignoring".format(curve_name), had_errors=True)
             return {}
 
         validated_curve = {}
@@ -2066,7 +2068,7 @@ class Fetch:
                 validated_curve[int_key] = value
             except (ValueError, TypeError):
                 self.log("Warn: {} has bad key/value for key {} - ignoring".format(curve_name, key))
-                self.record_status("{} has bad key/value for key {} - ignoring".format(curve_name, key), had_errors=True)
+                self.record_status("Warn: {} has bad key/value for key {} - ignoring".format(curve_name, key), had_errors=True)
 
         return validated_curve
 
