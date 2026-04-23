@@ -2170,8 +2170,6 @@ class SolaxAPI(ComponentBase):
                 deviceStatus = realtime.get("deviceStatus", 0)
                 deviceStatusText = SOLAX_BATTERY_STATUS_RESIDENTIAL.get(deviceStatus, "Unknown Status")
 
-                save_battery_power = charge_discharge_power
-
                 # Store per-plant battery value for load-power calculation (second pass)
                 if plant_id not in plant_save:
                     plant_save[plant_id] = {
