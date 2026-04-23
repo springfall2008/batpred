@@ -2176,7 +2176,7 @@ class SolaxAPI(ComponentBase):
 
                 # Store per-plant battery value for load-power calculation (second pass)
                 if plant_id in plant_save:
-                    plant_save[plant_id]["battery"] = charge_discharge_power if charge_discharge_power is not None else 0
+                    plant_save[plant_id]["battery"] += charge_discharge_power if charge_discharge_power is not None else 0
 
                 self.dashboard_item(
                     f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_device_status",
