@@ -31,18 +31,27 @@ def run_test_manual_select(my_predbat):
         print("ERROR: T1 No options found for manual_charge")
         return 1
 
-    # Find first non-off option (should be a future time)
-    future_time = None
+    # Find first selectable option, preferring a non-today day label to avoid past-slot parsing at day boundaries
+    future_time_label = None
+    today_label = my_predbat.now_utc.strftime("%a")
     for option in charge_item["options"]:
-        if option != "off" and not option.startswith("+") and not option.startswith("["):
-            future_time = option
+        if option != "off" and not option.startswith("+") and not option.startswith("[") and not option.startswith(today_label + " "):
+            future_time_label = option
             break
 
-    if not future_time:
+    # Fallback to any selectable option if all options are for today
+    if not future_time_label:
+        for option in charge_item["options"]:
+            if option != "off" and not option.startswith("+") and not option.startswith("["):
+                future_time_label = option
+                break
+
+    if not future_time_label:
         print("ERROR: T2 No future time options found")
         return 1
 
-    print(f"Using test time: {future_time}")
+    future_time = future_time_label
+    print(f"Using test time: {future_time_label}")
 
     # Test 1: Select a time for force charge
     my_predbat.manual_select("manual_charge", future_time)

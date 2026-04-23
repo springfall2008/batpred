@@ -2215,11 +2215,12 @@ def _test_publish_registers(my_predbat):
         56: {"name": "Enable AC Charge", "validation_rules": ["boolean"], "validation": "", "value": "1"},
         66: {"name": "Battery Reserve Percent Limit", "validation_rules": ["between:0,100"], "validation": "", "value": "20"},
         77: {"name": "AC Charge 1 Start Time", "validation_rules": ["date_format:H:i"], "validation": "", "value": "23:30:00"},
+        88: {"name": "Charge Power Rate", "validation_rules": ["between:0,100"], "validation": "", "value": "50"},
     }
 
     ge_cloud.register_list["test123"] = registers
 
-    ge_cloud.settings["test123"] = {56: "1", 66: "20", 77: "23:30:00"}
+    ge_cloud.settings["test123"] = {56: "1", 66: "20", 77: "23:30:00", 88: "50"}
 
     run_async(ge_cloud.publish_registers("test123", registers))
 
@@ -2236,6 +2237,19 @@ def _test_publish_registers(my_predbat):
     # Check select entity
     if "select.predbat_gecloud_test123_ac_charge_1_start_time" not in ge_cloud.dashboard_items:
         print("ERROR: Expected select entity to be published")
+        return 1
+
+    # Check power rate number entity has percent attributes
+    entity_id = "number.predbat_gecloud_test123_charge_power_rate"
+    if entity_id not in ge_cloud.dashboard_items:
+        print("ERROR: Expected charge power rate number entity to be published")
+        return 1
+    attrs = ge_cloud.dashboard_items[entity_id]["attributes"]
+    if attrs.get("unit_of_measurement") != "%":
+        print("ERROR: Expected charge power rate unit '%', got '{}'".format(attrs.get("unit_of_measurement")))
+        return 1
+    if attrs.get("device_class") != "power_factor":
+        print("ERROR: Expected charge power rate device_class 'power_factor', got '{}'".format(attrs.get("device_class")))
         return 1
 
     return 0
@@ -2342,6 +2356,7 @@ def _test_async_automatic_config(my_predbat):
                 "reg7": {"name": "Battery_Discharge_Power"},
                 "reg8": {"name": "Battery_Reserve_Percent_Limit"},
                 "reg9": {"name": "AC_Charge_Upper_Percent_Limit"},
+                "reg10": {"name": "Inverter_Discharge_Power_Percentage"},
             }
         }
 
@@ -2435,8 +2450,10 @@ def _test_async_automatic_config(my_predbat):
         devices = {"ems": None, "gateway": None, "battery": ["battery003"]}
         await ge.async_automatic_config(devices)
 
-        assert ge.config_args.get("charge_rate") == ["number.predbat_gecloud_battery003_charge_power_rate"]
-        assert ge.config_args.get("discharge_rate") == ["number.predbat_gecloud_battery003_discharge_power_rate"]
+        assert ge.config_args.get("charge_rate") is None
+        assert ge.config_args.get("discharge_rate") is None
+        assert ge.config_args.get("charge_rate_percent") == ["number.predbat_gecloud_battery003_charge_power_rate"]
+        assert ge.config_args.get("discharge_rate_percent") == ["number.predbat_gecloud_battery003_discharge_power_rate"]
         assert ge.config_args.get("reserve") == ["number.predbat_gecloud_battery003_battery_reserve_percent"]
         assert ge.config_args.get("charge_limit") == ["number.predbat_gecloud_battery003_ac_charge_1_upper_soc_percent_limit"]
         assert ge.config_args.get("scheduled_charge_enable") == ["switch.predbat_gecloud_battery003_enable_ac_charge"]
