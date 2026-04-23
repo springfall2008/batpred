@@ -2073,13 +2073,15 @@ class SolaxAPI(ComponentBase):
                         if "Power" in key:
                             pvPower += mpptMap.get(key, 0)  # cSpell:disable-line
 
-                # Store per-plant values for load-power calculation (second pass)
+                # Store per-plant values for load-power calculation (second pass).
+                # Aggregate PV and grid across all inverters in the plant.
+                # The entity SN is pinned to plant_inverters[plant_id][0] for stability; it is
+                # only set once (first inverter processed) so it never gets overwritten.
                 if plant_id not in plant_save:
-                    plant_save[plant_id] = {"grid": 0, "pv": 0, "battery": 0, "inverter_sn": device_sn, "friendly_name": friendly_name}
-                plant_save[plant_id]["pv"] = pvPower
-                plant_save[plant_id]["grid"] = gridPower
-                plant_save[plant_id]["inverter_sn"] = device_sn
-                plant_save[plant_id]["friendly_name"] = friendly_name
+                    stable_sn = self.plant_inverters.get(plant_id, [device_sn])[0]
+                    plant_save[plant_id] = {"grid": 0, "pv": 0, "battery": 0, "inverter_sn": stable_sn, "friendly_name": friendly_name}
+                plant_save[plant_id]["pv"] = (plant_save[plant_id]["pv"] or 0) + (pvPower or 0)
+                plant_save[plant_id]["grid"] = (plant_save[plant_id]["grid"] or 0) + (gridPower or 0)
 
                 self.dashboard_item(
                     f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_device_status",
@@ -2173,9 +2175,8 @@ class SolaxAPI(ComponentBase):
                 save_battery_power = charge_discharge_power
 
                 # Store per-plant battery value for load-power calculation (second pass)
-                if plant_id not in plant_save:
-                    plant_save[plant_id] = {"grid": 0, "pv": 0, "battery": 0, "inverter_sn": None, "friendly_name": friendly_name}
-                plant_save[plant_id]["battery"] = charge_discharge_power if charge_discharge_power is not None else 0
+                if plant_id in plant_save:
+                    plant_save[plant_id]["battery"] = charge_discharge_power if charge_discharge_power is not None else 0
 
                 self.dashboard_item(
                     f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_device_status",

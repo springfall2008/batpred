@@ -5027,6 +5027,70 @@ async def test_publish_device_realtime_data_main():
     else:
         print(f"✓ load_power with None chargeDischargePower treated as 0 ({expected_load9}W)")
 
+    # Test 10: Multi-inverter plant — PV and grid are aggregated; entity SN uses plant_inverters[0]
+    # Plant has two inverters: INV_A (PV=1500W, grid=-200W) and INV_B (PV=500W, grid=-100W)
+    # Battery charging at 800W; expected load = (1500+500) - 800 - (-200-100) = 2000 - 800 + 300 = 1500W
+    print("Test 10: Multi-inverter plant - PV/grid aggregated, entity tied to first inverter SN")
+    api10 = MockSolaxAPI()
+    api10.initialize(client_id="test", client_secret="test", region="eu")
+
+    api10.plant_inverters["multi_inv_plant"] = ["INV_A", "INV_B"]
+    api10.device_info["INV_A"] = {"deviceSn": "INV_A", "deviceType": 1, "deviceModel": 3, "plantId": "multi_inv_plant"}
+    api10.device_info["INV_B"] = {"deviceSn": "INV_B", "deviceType": 1, "deviceModel": 3, "plantId": "multi_inv_plant"}
+    api10.device_info["BAT_MULTI"] = {"deviceSn": "BAT_MULTI", "deviceType": 2, "deviceModel": 0, "plantId": "multi_inv_plant"}
+
+    api10.realtime_device_data["INV_A"] = {
+        "deviceSn": "INV_A",
+        "acPower1": 1300,
+        "acPower2": 0,
+        "acPower3": 0,
+        "gridPower": -200,  # Importing 200W
+        "pvMap": {"pv1Power": 1500},
+        "totalActivePower": 1300,
+        "totalReactivePower": 0,
+        "totalYield": 1000.0,
+        "deviceStatus": 102,
+    }
+    api10.realtime_device_data["INV_B"] = {
+        "deviceSn": "INV_B",
+        "acPower1": 400,
+        "acPower2": 0,
+        "acPower3": 0,
+        "gridPower": -100,  # Importing 100W
+        "pvMap": {"pv1Power": 500},
+        "totalActivePower": 400,
+        "totalReactivePower": 0,
+        "totalYield": 500.0,
+        "deviceStatus": 102,
+    }
+    api10.realtime_device_data["BAT_MULTI"] = {
+        "deviceSn": "BAT_MULTI",
+        "batterySOC": 50,
+        "batteryVoltage": 400.0,
+        "chargeDischargePower": 800,  # Charging 800W
+        "batteryCurrent": 2.0,
+        "batteryTemperature": 22.0,
+        "deviceStatus": 1,
+    }
+
+    await api10.publish_device_realtime_data()
+
+    # Entity must be named after INV_A (plant_inverters[0]), not INV_B
+    load_sensor10 = "sensor.predbat_solax_multi_inv_plant_INV_A_load_power"
+    wrong_sensor10 = "sensor.predbat_solax_multi_inv_plant_INV_B_load_power"
+    expected_load10 = 1500  # (1500+500) pv - 800 battery - (-200-100) grid = 2000 - 800 + 300
+    if load_sensor10 not in api10.dashboard_items:
+        print(f"**** ERROR: load_power sensor not found (expected {load_sensor10}) ****")
+        failed = True
+    elif wrong_sensor10 in api10.dashboard_items:
+        print(f"**** ERROR: load_power incorrectly published under second inverter SN {wrong_sensor10} ****")
+        failed = True
+    elif api10.dashboard_items[load_sensor10]["state"] != expected_load10:
+        print(f"**** ERROR: Expected aggregated load_power {expected_load10}W, got {api10.dashboard_items[load_sensor10]['state']} ****")
+        failed = True
+    else:
+        print(f"✓ Multi-inverter load_power aggregated correctly ({expected_load10}W) and tied to first inverter SN")
+
     if not failed:
         print("✓ publish_device_realtime_data tests passed")
 
