@@ -673,7 +673,7 @@ class SolaxAPI(ComponentBase):
                 # If now is before the end time (we're in the after-midnight portion), pull start
                 # back to yesterday so start < now < end.  Otherwise push end to tomorrow so the
                 # window is treated as fully in the future (or already passed today).
-                if now < charge_end:
+                if now <= charge_end:
                     charge_start -= timedelta(days=1)
                 else:
                     charge_end += timedelta(days=1)
@@ -685,7 +685,7 @@ class SolaxAPI(ComponentBase):
             export_end_minutes = export_end.hour * 60 + export_end.minute
             if export_end <= export_start:
                 # Window spans midnight: same logic as charge window above.
-                if now < export_end:
+                if now <= export_end:
                     export_start -= timedelta(days=1)
                 else:
                     export_end += timedelta(days=1)
