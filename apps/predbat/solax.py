@@ -2037,8 +2037,6 @@ class SolaxAPI(ComponentBase):
             plant_id = device.get("plantId", "unknown").lower().replace(" ", "_")
             device_model_code = device.get("deviceModel", 0)
 
-            self.log("Real-time data for device SN {}: {}".format(device_sn, realtime))
-
             if device_type == 1:  # Inverter
                 device_model = SOLAX_DEVICE_MODEL_RESIDENTIAL.get(1, {}).get(device_model_code, "Unknown Inverter")
             elif device_type == 2:  # Battery
@@ -2172,11 +2170,16 @@ class SolaxAPI(ComponentBase):
                 deviceStatus = realtime.get("deviceStatus", 0)
                 deviceStatusText = SOLAX_BATTERY_STATUS_RESIDENTIAL.get(deviceStatus, "Unknown Status")
 
-                save_battery_power = charge_discharge_power
-
                 # Store per-plant battery value for load-power calculation (second pass)
-                if plant_id in plant_save:
-                    plant_save[plant_id]["battery"] += charge_discharge_power if charge_discharge_power is not None else 0
+                if plant_id not in plant_save:
+                    plant_save[plant_id] = {
+                        "battery": 0,
+                        "pv": 0,
+                        "feedin": 0,
+                        "eps": 0,
+                        "inverter_exists": False,
+                    }
+                plant_save[plant_id]["battery"] += charge_discharge_power if charge_discharge_power is not None else 0
 
                 self.dashboard_item(
                     f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_device_status",
