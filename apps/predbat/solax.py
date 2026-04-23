@@ -2073,9 +2073,6 @@ class SolaxAPI(ComponentBase):
                         if "Power" in key:
                             pvPower += mpptMap.get(key, 0)  # cSpell:disable-line
 
-                save_pv_power = pvPower
-                save_grid_power = gridPower
-
                 # Store per-plant values for load-power calculation (second pass)
                 if plant_id not in plant_save:
                     plant_save[plant_id] = {"grid": 0, "pv": 0, "battery": 0, "inverter_sn": device_sn, "friendly_name": friendly_name}
