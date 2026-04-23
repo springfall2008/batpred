@@ -500,6 +500,95 @@ async def test_apply_controls(solax_api, test_plant_id):
             else:
                 print(f"✓ Freeze export mode applied correctly at 18:00 (target_soc >= current_soc)")
 
+    # Test 9: Midnight-spanning charge window - currently after midnight (00:30) inside 23:30-05:30 window
+    # This was the bug: charge_start (23:30 today) > now (00:30 today) so the window was missed
+    print("\n--- Test 9: Midnight-spanning charge window at 00:30 (window 23:30-05:30) ---")
+    test_time = datetime.now(solax_api.local_tz).replace(hour=0, minute=30, second=0, microsecond=0)
+
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
+        mock_datetime.now.return_value = test_time
+        mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = True
+        solax_api.current_mode_hash = None  # Reset hash
+
+        solax_api.controls[test_plant_id]["charge"]["start_time"] = "23:30:00"
+        solax_api.controls[test_plant_id]["charge"]["end_time"] = "05:30:00"
+        solax_api.controls[test_plant_id]["charge"]["enable"] = True
+        solax_api.controls[test_plant_id]["charge"]["target_soc"] = 90
+        solax_api.controls[test_plant_id]["export"]["enable"] = False
+
+        result = await solax_api.apply_controls(test_plant_id)
+
+        if not result:
+            print("**** ERROR: apply_controls returned False for midnight-spanning charge window ****")
+            failed = True
+        elif mock_send.call_count == 0:
+            print("**** ERROR: No API calls made - charge window not detected after midnight ****")
+            failed = True
+        else:
+            # Charge mode sends soc_target_control_mode; eco mode sends self_consume/charge_or_discharge_mode
+            calls_str = " ".join(str(c) for c in mock_send.call_args_list)
+            if "soc_target_control_mode" not in calls_str:
+                print(f"**** ERROR: Expected soc_target_control_mode (charge mode) after midnight, got: {calls_str} ****")
+                failed = True
+            else:
+                print(f"✓ Midnight-spanning charge window correctly detected at 00:30")
+
+    # Test 10: Midnight-spanning charge window - currently before midnight (23:45) inside 23:30-05:30 window
+    print("\n--- Test 10: Midnight-spanning charge window at 23:45 (window 23:30-05:30) ---")
+    test_time = datetime.now(solax_api.local_tz).replace(hour=23, minute=45, second=0, microsecond=0)
+
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
+        mock_datetime.now.return_value = test_time
+        mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = True
+        solax_api.current_mode_hash = None  # Reset hash
+
+        result = await solax_api.apply_controls(test_plant_id)
+
+        if not result:
+            print("**** ERROR: apply_controls returned False for midnight-spanning charge window before midnight ****")
+            failed = True
+        elif mock_send.call_count == 0:
+            print("**** ERROR: No API calls made - charge window not detected before midnight ****")
+            failed = True
+        else:
+            calls_str = " ".join(str(c) for c in mock_send.call_args_list)
+            if "soc_target_control_mode" not in calls_str:
+                print(f"**** ERROR: Expected soc_target_control_mode (charge mode) before midnight, got: {calls_str} ****")
+                failed = True
+            else:
+                print(f"✓ Midnight-spanning charge window correctly detected at 23:45")
+
+    # Test 11: After window end (06:00) should be eco mode, not charge mode
+    print("\n--- Test 11: After midnight-spanning window end at 06:00 (window 23:30-05:30) ---")
+    test_time = datetime.now(solax_api.local_tz).replace(hour=6, minute=0, second=0, microsecond=0)
+
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
+        mock_datetime.now.return_value = test_time
+        mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = True
+        solax_api.current_mode_hash = None  # Reset hash
+
+        result = await solax_api.apply_controls(test_plant_id)
+
+        if not result:
+            print("**** ERROR: apply_controls returned False at 06:00 ****")
+            failed = True
+        elif mock_send.call_count == 0:
+            print("**** ERROR: No API calls made at 06:00 ****")
+            failed = True
+        else:
+            calls_str = " ".join(str(c) for c in mock_send.call_args_list)
+            if "soc_target_control_mode" in calls_str:
+                print(f"**** ERROR: Expected eco mode at 06:00 (after window end), got charge mode: {calls_str} ****")
+                failed = True
+            elif "charge_or_discharge_mode" not in calls_str:
+                print(f"**** ERROR: Expected eco mode (charge_or_discharge_mode) at 06:00, got: {calls_str} ****")
+                failed = True
+            else:
+                print(f"✓ After midnight-spanning window end (06:00) correctly uses eco mode")
+
     return failed
 
 
@@ -4845,6 +4934,162 @@ async def test_publish_device_realtime_data_main():
         failed = True
     else:
         print(f"✓ Multiple devices test passed")
+
+    # Test 8: load_power is calculated correctly from inverter + battery data
+    # load_power = pv - battery_charge_discharge - grid
+    # PV=2000, grid=-500 (importing), battery=1000 (charging) => load = 2000 - 1000 - (-500) = 1500W
+    print("Test 8: load_power sensor calculated correctly")
+    api8 = MockSolaxAPI()
+    api8.initialize(client_id="test", client_secret="test", region="eu")
+
+    api8.device_info["INV_LOAD"] = {"deviceSn": "INV_LOAD", "deviceType": 1, "deviceModel": 3, "plantId": "load_plant"}
+    api8.device_info["BAT_LOAD"] = {"deviceSn": "BAT_LOAD", "deviceType": 2, "deviceModel": 0, "plantId": "load_plant"}
+
+    api8.realtime_device_data["INV_LOAD"] = {
+        "deviceSn": "INV_LOAD",
+        "acPower1": 500,
+        "acPower2": 0,
+        "acPower3": 0,
+        "gridPower": -500,  # Importing 500W
+        "pvMap": {"pv1Power": 2000},
+        "totalActivePower": 500,
+        "totalReactivePower": 0,
+        "totalYield": 1000.0,
+        "deviceStatus": 102,
+    }
+    api8.realtime_device_data["BAT_LOAD"] = {
+        "deviceSn": "BAT_LOAD",
+        "batterySOC": 60,
+        "batteryVoltage": 400.0,
+        "chargeDischargePower": 1000,  # Charging at 1000W
+        "batteryCurrent": 2.5,
+        "batteryTemperature": 21.0,
+        "deviceStatus": 1,
+    }
+
+    await api8.publish_device_realtime_data()
+
+    load_sensor = "sensor.predbat_solax_load_plant_INV_LOAD_load_power"
+    expected_load = 1500  # 2000 pv - 1000 battery - (-500 grid) = 1500
+    if load_sensor not in api8.dashboard_items:
+        print(f"**** ERROR: load_power sensor not found (expected {load_sensor}) ****")
+        failed = True
+    elif api8.dashboard_items[load_sensor]["state"] != expected_load:
+        print(f"**** ERROR: Expected load_power {expected_load}W, got {api8.dashboard_items[load_sensor]['state']} ****")
+        failed = True
+    elif api8.dashboard_items[load_sensor]["attributes"]["unit_of_measurement"] != "W":
+        print(f"**** ERROR: Wrong load_power unit_of_measurement ****")
+        failed = True
+    else:
+        print(f"✓ load_power sensor calculated correctly ({expected_load}W)")
+
+    # Test 9: load_power with None battery power (API returns None for chargeDischargePower)
+    # load_power should treat None as 0: load = pv - 0 - grid
+    print("Test 9: load_power with None chargeDischargePower defaults to 0")
+    api9 = MockSolaxAPI()
+    api9.initialize(client_id="test", client_secret="test", region="eu")
+
+    api9.device_info["INV_NOBAT"] = {"deviceSn": "INV_NOBAT", "deviceType": 1, "deviceModel": 3, "plantId": "nobat_plant"}
+    api9.device_info["BAT_NOBAT"] = {"deviceSn": "BAT_NOBAT", "deviceType": 2, "deviceModel": 0, "plantId": "nobat_plant"}
+
+    api9.realtime_device_data["INV_NOBAT"] = {
+        "deviceSn": "INV_NOBAT",
+        "acPower1": 800,
+        "acPower2": 0,
+        "acPower3": 0,
+        "gridPower": 300,  # Exporting 300W
+        "pvMap": {"pv1Power": 1100},
+        "totalActivePower": 800,
+        "totalReactivePower": 0,
+        "totalYield": 500.0,
+        "deviceStatus": 102,
+    }
+    api9.realtime_device_data["BAT_NOBAT"] = {
+        "deviceSn": "BAT_NOBAT",
+        "batterySOC": 100,
+        "batteryVoltage": 400.0,
+        "chargeDischargePower": None,  # API returned None
+        "batteryCurrent": 0,
+        "batteryTemperature": 20.0,
+        "deviceStatus": 1,
+    }
+
+    await api9.publish_device_realtime_data()
+
+    load_sensor9 = "sensor.predbat_solax_nobat_plant_INV_NOBAT_load_power"
+    expected_load9 = 800  # 1100 pv - 0 (None->0) - 300 grid = 800
+    if load_sensor9 not in api9.dashboard_items:
+        print(f"**** ERROR: load_power sensor not found (expected {load_sensor9}) ****")
+        failed = True
+    elif api9.dashboard_items[load_sensor9]["state"] != expected_load9:
+        print(f"**** ERROR: Expected load_power {expected_load9}W with None battery, got {api9.dashboard_items[load_sensor9]['state']} ****")
+        failed = True
+    else:
+        print(f"✓ load_power with None chargeDischargePower treated as 0 ({expected_load9}W)")
+
+    # Test 10: Multi-inverter plant — PV and grid are aggregated; entity SN uses plant_inverters[0]
+    # Plant has two inverters: INV_A (PV=1500W, grid=-200W) and INV_B (PV=500W, grid=-100W)
+    # Battery charging at 800W; expected load = (1500+500) - 800 - (-200-100) = 2000 - 800 + 300 = 1500W
+    print("Test 10: Multi-inverter plant - PV/grid aggregated, entity tied to first inverter SN")
+    api10 = MockSolaxAPI()
+    api10.initialize(client_id="test", client_secret="test", region="eu")
+
+    api10.plant_inverters["multi_inv_plant"] = ["INV_A", "INV_B"]
+    api10.device_info["INV_A"] = {"deviceSn": "INV_A", "deviceType": 1, "deviceModel": 3, "plantId": "multi_inv_plant"}
+    api10.device_info["INV_B"] = {"deviceSn": "INV_B", "deviceType": 1, "deviceModel": 3, "plantId": "multi_inv_plant"}
+    api10.device_info["BAT_MULTI"] = {"deviceSn": "BAT_MULTI", "deviceType": 2, "deviceModel": 0, "plantId": "multi_inv_plant"}
+
+    api10.realtime_device_data["INV_A"] = {
+        "deviceSn": "INV_A",
+        "acPower1": 1300,
+        "acPower2": 0,
+        "acPower3": 0,
+        "gridPower": -200,  # Importing 200W
+        "pvMap": {"pv1Power": 1500},
+        "totalActivePower": 1300,
+        "totalReactivePower": 0,
+        "totalYield": 1000.0,
+        "deviceStatus": 102,
+    }
+    api10.realtime_device_data["INV_B"] = {
+        "deviceSn": "INV_B",
+        "acPower1": 400,
+        "acPower2": 0,
+        "acPower3": 0,
+        "gridPower": -100,  # Importing 100W
+        "pvMap": {"pv1Power": 500},
+        "totalActivePower": 400,
+        "totalReactivePower": 0,
+        "totalYield": 500.0,
+        "deviceStatus": 102,
+    }
+    api10.realtime_device_data["BAT_MULTI"] = {
+        "deviceSn": "BAT_MULTI",
+        "batterySOC": 50,
+        "batteryVoltage": 400.0,
+        "chargeDischargePower": 800,  # Charging 800W
+        "batteryCurrent": 2.0,
+        "batteryTemperature": 22.0,
+        "deviceStatus": 1,
+    }
+
+    await api10.publish_device_realtime_data()
+
+    # Entity must be named after INV_A (plant_inverters[0]), not INV_B
+    load_sensor10 = "sensor.predbat_solax_multi_inv_plant_INV_A_load_power"
+    wrong_sensor10 = "sensor.predbat_solax_multi_inv_plant_INV_B_load_power"
+    expected_load10 = 1500  # (1500+500) pv - 800 battery - (-200-100) grid = 2000 - 800 + 300
+    if load_sensor10 not in api10.dashboard_items:
+        print(f"**** ERROR: load_power sensor not found (expected {load_sensor10}) ****")
+        failed = True
+    elif wrong_sensor10 in api10.dashboard_items:
+        print(f"**** ERROR: load_power incorrectly published under second inverter SN {wrong_sensor10} ****")
+        failed = True
+    elif api10.dashboard_items[load_sensor10]["state"] != expected_load10:
+        print(f"**** ERROR: Expected aggregated load_power {expected_load10}W, got {api10.dashboard_items[load_sensor10]['state']} ****")
+        failed = True
+    else:
+        print(f"✓ Multi-inverter load_power aggregated correctly ({expected_load10}W) and tied to first inverter SN")
 
     if not failed:
         print("✓ publish_device_realtime_data tests passed")
