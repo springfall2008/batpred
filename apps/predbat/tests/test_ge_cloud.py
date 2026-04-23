@@ -2356,6 +2356,7 @@ def _test_async_automatic_config(my_predbat):
                 "reg7": {"name": "Battery_Discharge_Power"},
                 "reg8": {"name": "Battery_Reserve_Percent_Limit"},
                 "reg9": {"name": "AC_Charge_Upper_Percent_Limit"},
+                "reg10": {"name": "Inverter_Discharge_Power_Percentage"},
             }
         }
 
