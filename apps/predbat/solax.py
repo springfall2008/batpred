@@ -2037,8 +2037,6 @@ class SolaxAPI(ComponentBase):
             plant_id = device.get("plantId", "unknown").lower().replace(" ", "_")
             device_model_code = device.get("deviceModel", 0)
 
-            self.log("Real-time data for device SN {}: {}".format(device_sn, realtime))
-
             if device_type == 1:  # Inverter
                 device_model = SOLAX_DEVICE_MODEL_RESIDENTIAL.get(1, {}).get(device_model_code, "Unknown Inverter")
             elif device_type == 2:  # Battery
