@@ -17,7 +17,7 @@ schedules, rate window sensors, and financial metric summaries.
 """
 
 import math
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from config import THIS_VERSION
 from const import TIME_FORMAT, PREDICT_STEP
 from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state
@@ -2471,11 +2471,32 @@ class Output:
 
     def _publish_system_alerts(self):
         """Prune expired entries and publish the current active list."""
-        now_iso = self.now_utc_exact.isoformat() if hasattr(self, "now_utc_exact") and self.now_utc_exact else None
+        # Parse expires_at to timezone-aware datetime and compare against a UTC
+        # now so producers can pass ISO strings with any offset (e.g. CAP
+        # weather alerts arrive as +00:00, octopus alerts as local offset).
+        # Lex comparison on mixed-offset ISO strings would order wrongly.
+        now_dt = datetime.now(timezone.utc) if hasattr(self, "now_utc_exact") and self.now_utc_exact else None
 
-        # Prune expired
-        if now_iso:
-            expired_keys = [k for k, a in self._active_alerts.items() if a.get("expires_at") and a["expires_at"] < now_iso]
+        if now_dt is not None:
+            expired_keys = []
+            for k, a in self._active_alerts.items():
+                expires_at = a.get("expires_at")
+                if not expires_at:
+                    continue
+                try:
+                    # Python 3.11+: fromisoformat handles the trailing "Z"; older
+                    # versions don't. Normalise by replacing "Z" with "+00:00".
+                    iso = expires_at.replace("Z", "+00:00") if isinstance(expires_at, str) else None
+                    if iso is None:
+                        continue
+                    expires_dt = datetime.fromisoformat(iso)
+                except (TypeError, ValueError):
+                    continue
+                # Treat naive timestamps as UTC for backward compatibility.
+                if expires_dt.tzinfo is None:
+                    expires_dt = expires_dt.replace(tzinfo=timezone.utc)
+                if expires_dt < now_dt:
+                    expired_keys.append(k)
             for k in expired_keys:
                 del self._active_alerts[k]
 

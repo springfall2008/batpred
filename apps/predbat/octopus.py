@@ -591,6 +591,15 @@ class OctopusAPI(ComponentBase):
                 self.saving_sessions = data.get("saving_sessions", {})
                 self.intelligent_devices = data.get("intelligent_devices", {})
                 self.graphql_token = data.get("kraken_token")
+                # Restore first-seen timestamps for the IOG smart-control
+                # degradation check so the 24h clock survives restarts.
+                raw = data.get("smart_control_degraded_since", {}) or {}
+                self.smart_control_degraded_since = {}
+                for device_id, iso in raw.items():
+                    try:
+                        self.smart_control_degraded_since[device_id] = datetime.fromisoformat(iso)
+                    except (TypeError, ValueError):
+                        pass
 
         # Load tariffs from individual shared cache files
         # Tariffs will be loaded on-demand when needed via load_tariff_from_cache()
@@ -619,6 +628,9 @@ class OctopusAPI(ComponentBase):
         octopus_cache["saving_sessions"] = self.saving_sessions
         octopus_cache["intelligent_devices"] = self.intelligent_devices
         octopus_cache["kraken_token"] = self.graphql_token
+        # Persist the smart-control degradation first-seen timestamps as ISO
+        # strings so the 24h alert window survives AppDaemon restarts.
+        octopus_cache["smart_control_degraded_since"] = {device_id: dt.isoformat() for device_id, dt in self.smart_control_degraded_since.items()}
         with open(self.user_cache_file, "w") as f:
             yaml.dump(octopus_cache, f)
 
