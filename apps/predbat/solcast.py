@@ -879,12 +879,20 @@ class SolarAPI(ComponentBase):
                     },
                 )
 
-    def pv_calibration(self, pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10, divide_by, max_kwh, forecast_days):
+    def pv_calibration(self, pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10, divide_by, max_kwh, forecast_days, period=None):
         """
         Perform PV calibration based on historical data and forecast data.
         This will adjust the forecast data based on historical PV production and forecast data.
         It will also create pv_estimate10 and pv_estimate90 data if create_pv10 is True.
         """
+        # If no period is given, default to the plan interval (backward-compatible for unit tests).
+        if period is None:
+            period = self.plan_interval_minutes
+        # Number of plan-interval slots that span one forecast entry period.
+        # For 30-min plan slots with a 60-min forecast (Open-Meteo) this is 2,
+        # for 30-min plan slots with a 30-min forecast (Solcast) this is 1.
+        slots_per_period = max(1, int(round(period / self.plan_interval_minutes)))
+
         self.log("PV Calibration: Fetching PV data for calibration")
 
         days = 7
@@ -1075,16 +1083,38 @@ class SolarAPI(ComponentBase):
             if period_start:
                 minutes_since_midnight = (datetime.strptime(period_start, TIME_FORMAT) - self.midnight_utc).total_seconds() / 60
                 slot = int(minutes_since_midnight / self.plan_interval_minutes) * self.plan_interval_minutes
-                calibrated = pv_estimateCL.get(slot, None)
-                calibrated10 = pv_estimate10.get(slot, None)
-                calibrated90 = pv_estimate90.get(slot, None)
+
+                # Sum all plan-interval slots that fall within this forecast entry's period.
+                # When the forecast resolution is coarser than plan_interval_minutes (e.g. 60-min
+                # Open-Meteo entries with 30-min plan slots) we must accumulate multiple slots so
+                # that the annotated value covers the full entry duration, not just the first half.
+                calibrated = 0
+                calibrated10 = 0
+                calibrated90 = 0
+                has_calibrated = False
+                has_calibrated10 = False
+                has_calibrated90 = False
+                for i in range(slots_per_period):
+                    s = slot + i * self.plan_interval_minutes
+                    v = pv_estimateCL.get(s, None)
+                    if v is not None:
+                        calibrated += v
+                        has_calibrated = True
+                    v10 = pv_estimate10.get(s, None)
+                    if v10 is not None:
+                        calibrated10 += v10
+                        has_calibrated10 = True
+                    v90 = pv_estimate90.get(s, None)
+                    if v90 is not None:
+                        calibrated90 += v90
+                        has_calibrated90 = True
 
                 # When we store the data we have to reverse the divide_by factor
-                if calibrated is not None:
+                if has_calibrated:
                     entry["pv_estimateCL"] = calibrated * divide_by
-                if create_pv10 and (calibrated10 is not None):
+                if create_pv10 and has_calibrated10:
                     entry["pv_estimate10"] = calibrated10 * divide_by
-                if create_pv10 and (calibrated90 is not None):
+                if create_pv10 and has_calibrated90:
                     entry["pv_estimate90"] = calibrated90 * divide_by
 
         # Creation of PV10 data using worst day scaling factor
@@ -1245,7 +1275,7 @@ class SolarAPI(ComponentBase):
             )
 
             # Run calibration on the data
-            pv_forecast_minute, pv_forecast_minute10, pv_forecast_data = self.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10, divide_by / period, max_kwh, self.forecast_days)
+            pv_forecast_minute, pv_forecast_minute10, pv_forecast_data = self.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10, divide_by / period, max_kwh, self.forecast_days, period)
             self.publish_pv_stats(pv_forecast_data, divide_by / period, period)
             self.pack_and_store_forecast(pv_forecast_minute, pv_forecast_minute10)
             self.update_success_timestamp()
