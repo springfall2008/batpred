@@ -373,6 +373,10 @@ class OctopusAPI(ComponentBase):
         self.commands = []
         self.mpan = None
         self.free_electricity_events = []
+        # Track when each intelligent device first reported a non-capable
+        # currentState (e.g. SMART_CONTROL_NOT_AVAILABLE). When the condition
+        # persists beyond 24h we raise a user-facing alert via record_alert.
+        self.smart_control_degraded_since = {}
 
         # API request metrics for monitoring
         self.requests_total = 0
@@ -1676,9 +1680,19 @@ class OctopusAPI(ComponentBase):
                                         if vehicle_info.get("model", None) == model:
                                             vehicleBatterySizeInKwh = vehicle_info.get("batterySize", None)
 
+                        # currentState comes from the dispatches query's devices node.
+                        # Example values seen: SMART_CONTROL_CAPABLE, SMART_CONTROL_NOT_AVAILABLE.
+                        current_state = None
+                        if dispatch_result:
+                            for dev in dispatch_result.get("devices", []) or []:
+                                if dev.get("id") == IntelligentdeviceID:
+                                    current_state = (dev.get("status") or {}).get("currentState")
+                                    break
+
                         intelligent_device = {
                             "deviceType": deviceType,
                             "status": status,
+                            "current_state": current_state,
                             "provider": make,
                             "model": model,
                             "is_charger": isCharger,
@@ -1842,6 +1856,65 @@ class OctopusAPI(ComponentBase):
                 self.get_entity_name("select", "intelligent_target_time", index=device_index), target_time, attributes={"friendly_name": "Octopus Intelligent Target Time", "icon": "mdi:clock-outline", "options": OPTIONS_TIME}, app="octopus"
             )
             self.dashboard_item(self.get_entity_name("number", "intelligent_target_soc", index=device_index), target_soc, attributes={"friendly_name": "Octopus Intelligent Target SOC", "icon": "mdi:battery-percent", "min": 0, "max": 100}, app="octopus")
+
+            # Surface SMART_CONTROL_NOT_AVAILABLE as a user-facing alert when
+            # it persists beyond 24h. The customer's charger has lost Octopus's
+            # smart control — PredBat will ignore IOG slots, but there is no
+            # feedback in the app beyond empty plannedDispatches. Alert nudges
+            # them to re-authorise MyEnergi in the Octopus app.
+            self._maybe_raise_smart_control_alert(device_id, device)
+
+    def _maybe_raise_smart_control_alert(self, device_id, device):
+        """Check the device's currentState and raise / refresh a system alert
+        if it has been non-capable for more than 24h. TTL-only: while the
+        condition persists we re-record each sensor cycle to keep the alert
+        alive; when currentState returns to capable we stop re-recording and
+        the alert expires on its own."""
+        current_state = device.get("current_state")
+        # SMART_CONTROL_CAPABLE is the healthy state. Treat anything else
+        # (e.g. SMART_CONTROL_NOT_AVAILABLE) as degraded. None means we did
+        # not observe a state this cycle — leave tracking as-is.
+        if not current_state:
+            return
+
+        if current_state == "SMART_CONTROL_CAPABLE":
+            self.smart_control_degraded_since.pop(device_id, None)
+            return
+
+        now = self.now_utc_exact
+        first_seen = self.smart_control_degraded_since.get(device_id)
+        if first_seen is None:
+            self.smart_control_degraded_since[device_id] = now
+            return
+
+        degraded_seconds = (now - first_seen).total_seconds()
+        if degraded_seconds < 24 * 60 * 60:
+            return
+
+        # TTL slightly longer than our sensor refresh cadence so the alert
+        # survives between cycles but drops off once we stop re-recording.
+        from datetime import timedelta
+
+        ttl = timedelta(hours=2)
+        expires_at = (now + ttl).isoformat()
+
+        model = device.get("model") or device.get("provider") or "charger"
+        self.record_alert(
+            category="system",
+            severity="warning",
+            title="Octopus has lost smart control of your {}".format(model),
+            message=("Octopus can't schedule Intelligent charging sessions right " "now — PredBat can't see your charging slots. Re-authorise " "MyEnergi in the Octopus app (Smart devices) to fix it."),
+            dedup_key="iog_smart_control_lost:{}".format(device_id),
+            metadata={
+                "device_id": device_id,
+                "current_state": current_state,
+                "provider": device.get("provider"),
+                "model": device.get("model"),
+                "degraded_since": first_seen.isoformat(),
+                "degraded_hours": round(degraded_seconds / 3600, 1),
+            },
+            expires_at=expires_at,
+        )
 
     async def async_get_account(self, account_id):
         """
