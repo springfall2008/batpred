@@ -2475,7 +2475,10 @@ class Output:
         # now so producers can pass ISO strings with any offset (e.g. CAP
         # weather alerts arrive as +00:00, octopus alerts as local offset).
         # Lex comparison on mixed-offset ISO strings would order wrongly.
-        now_dt = datetime.now(timezone.utc) if hasattr(self, "now_utc_exact") and self.now_utc_exact else None
+        # Use the engine's canonical "now" (aware, local tz) so mocked-time
+        # tests and deterministic plan cycles stay consistent. Python compares
+        # aware datetimes across timezones correctly.
+        now_dt = self.now_utc_exact if hasattr(self, "now_utc_exact") and self.now_utc_exact else None
 
         if now_dt is not None:
             expired_keys = []
