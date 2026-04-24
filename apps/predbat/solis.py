@@ -2140,11 +2140,9 @@ class SolisAPI(ComponentBase):
             if max_export_power_value == 0.0:
                 max_export_power_value = 99999  # Use large number to indicate no limit
 
-            # Export power seems to have a weird issue with units
+            # Export power seems to be in 100w units, so convert to watts if value is small
             if max_export_power_value < 200:
                 max_export_power_value *= 100
-            elif max_export_power_value < 1000:
-                max_export_power_value *= 10                
 
             self.dashboard_item(
                 entity_id,
@@ -2547,6 +2545,13 @@ class SolisAPI(ComponentBase):
                     "max_export_power": SOLIS_CID_MAX_EXPORT_POWER,
                 }
                 cid = cid_map[field]
+
+                if cid == SOLIS_CID_MAX_EXPORT_POWER:
+                    try:
+                        value_str = str(int(value) // 100)  # Convert watts to 100w units for inverter
+                    except (ValueError, TypeError):
+                        self.log(f"Warn: Solis API: Invalid value for max export power: {value}")
+                        return
 
                 # Write to inverter
                 await self.read_and_write_cid(inverter_sn, cid, value_str, field_description=f"{field} to {value_str}")
