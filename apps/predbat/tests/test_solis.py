@@ -380,6 +380,7 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_fetch_entity_data_power_clamping())
         failed |= asyncio.run(test_fetch_entity_data_invalid_values())
         failed |= asyncio.run(test_automatic_config())
+        failed |= asyncio.run(test_publish_entities_export_power_unit_conversion())
 
     except Exception as e:
         print(f"Error running Solis tests: {e}")
@@ -2686,6 +2687,8 @@ async def test_number_event_power_controls():
     """Test number_event for power control limits"""
     print("\n=== Test: number_event power controls ===")
 
+    from solis import SOLIS_CID_MAX_EXPORT_POWER
+
     api = MockSolisAPI()
     inverter_sn = "789012"
     api.inverter_sn = [inverter_sn]
@@ -2703,7 +2706,7 @@ async def test_number_event_power_controls():
 
     api.read_and_write_cid = mock_read_and_write_cid
 
-    # Test power_limit
+    # Test power_limit (no unit conversion — value sent as-is)
     entity_id = f"number.predbat_solis_{inverter_sn}_power_limit"
     await api.number_event(entity_id, 3000)
 
@@ -2711,6 +2714,29 @@ async def test_number_event_power_controls():
     call = api.read_and_write_cid_calls[0]
     assert call["cid"] == SOLIS_CID_POWER_LIMIT, f"Expected CID {SOLIS_CID_POWER_LIMIT}, got {call['cid']}"
     assert call["value"] == "3000", f"Expected '3000', got {call['value']}"
+
+    # Test max_export_power: HA sends watts, inverter expects 100W units (÷100)
+    api.read_and_write_cid_calls = []
+    entity_id = f"number.predbat_solis_{inverter_sn}_max_export_power"
+    await api.number_event(entity_id, 5000)  # 5000 W → 50 (100W units)
+
+    assert len(api.read_and_write_cid_calls) == 1, "Should call read_and_write_cid once for max_export_power"
+    call = api.read_and_write_cid_calls[0]
+    assert call["cid"] == SOLIS_CID_MAX_EXPORT_POWER, f"Expected CID {SOLIS_CID_MAX_EXPORT_POWER}, got {call['cid']}"
+    assert call["value"] == "50", f"Expected '50' (5000÷100), got {call['value']}"
+
+    # Test with a value that truncates (e.g. 550W → 5 in 100W units, not 5.5)
+    api.read_and_write_cid_calls = []
+    await api.number_event(entity_id, 550)
+    call = api.read_and_write_cid_calls[0]
+    assert call["value"] == "5", f"Expected '5' (550÷100 truncated), got {call['value']}"
+
+    # Test with an invalid value — str(int(value)) at the top of number_event raises
+    # ValueError before reaching the max_export_power branch; caught by outer except handler.
+    api.read_and_write_cid_calls = []
+    await api.number_event(entity_id, "not_a_number")
+    assert len(api.read_and_write_cid_calls) == 0, "Should not write CID for invalid max_export_power value"
+    assert any("number_event failed" in msg for msg in api.log_messages), "Should log error for invalid value"
 
     print("PASSED: Power controls number event handled correctly")
     return False
@@ -3057,6 +3083,83 @@ async def test_automatic_config():
 
     print("PASSED: automatic_config skips inverters without batteries")
 
+    return False
+
+
+async def test_publish_entities_export_power_unit_conversion():
+    """Test publish_entities converts max export power CID value to watts correctly.
+
+    The Solis API returns CID 499 (max export power) in either 100W units (when value < 200)
+    or watts (when value >= 200).  A value of 0 is treated as 'no limit' and mapped to 99999.
+    """
+    print("\n=== Test: publish_entities export power unit conversion ===")
+
+    from solis import SOLIS_CID_MAX_EXPORT_POWER, SOLIS_CID_STORAGE_MODE
+
+    def _make_api(export_power_cid_value):
+        """Helper: create a minimal MockSolisAPI with a single inverter."""
+        api = MockSolisAPI()
+        sn = "EXPORT_TEST"
+        api.inverter_sn = [sn]
+        api.inverter_details[sn] = {"inverterName": "Test"}
+        api.cached_values[sn] = {
+            SOLIS_CID_STORAGE_MODE: "33",
+            SOLIS_CID_MAX_EXPORT_POWER: export_power_cid_value,
+        }
+        api.charge_discharge_time_windows[sn] = {}
+        api.max_charge_current[sn] = 50
+        api.max_discharge_current[sn] = 50
+        return api, sn
+
+    # Case 1: value >= 200 — already in watts, no conversion applied
+    api, sn = _make_api("5000")
+    await api.publish_entities()
+    entity_id = f"number.predbat_solis_{sn.lower()}_max_export_power"
+    item = api.dashboard_items[entity_id]
+    assert item["state"] == 5000.0, f"Expected 5000W unchanged, got {item['state']}"
+
+    # Case 2: value < 200 — treated as 100W units, multiplied by 100
+    api, sn = _make_api("50")
+    await api.publish_entities()
+    item = api.dashboard_items[entity_id]
+    assert item["state"] == 5000.0, f"Expected 50 * 100 = 5000W, got {item['state']}"
+
+    # Case 3: value is "0" — no limit sentinel, should become 99999
+    api, sn = _make_api("0")
+    await api.publish_entities()
+    item = api.dashboard_items[entity_id]
+    assert item["state"] == 99999, f"Expected 99999 for zero value, got {item['state']}"
+
+    # Case 4: value is None (CID missing from cache) — treated as no limit
+    api, sn = _make_api(None)
+    # Remove the key entirely so values.get() returns None
+    del api.cached_values[sn][SOLIS_CID_MAX_EXPORT_POWER]
+    await api.publish_entities()
+    item = api.dashboard_items[entity_id]
+    assert item["state"] == 99999, f"Expected 99999 for missing CID, got {item['state']}"
+
+    # Case 5: value is non-numeric string — treated as no limit
+    api, sn = _make_api("invalid")
+    await api.publish_entities()
+    item = api.dashboard_items[entity_id]
+    assert item["state"] == 99999, f"Expected 99999 for invalid value, got {item['state']}"
+
+    # Case 6: boundary — value exactly 200 is NOT multiplied (only < 200 triggers conversion)
+    api, sn = _make_api("200")
+    await api.publish_entities()
+    item = api.dashboard_items[entity_id]
+    assert item["state"] == 200.0, f"Expected 200W unchanged at boundary, got {item['state']}"
+
+    # Case 7: value is 199 — last value that triggers 100W-unit conversion
+    api, sn = _make_api("199")
+    await api.publish_entities()
+    item = api.dashboard_items[entity_id]
+    assert item["state"] == 19900.0, f"Expected 199 * 100 = 19900W, got {item['state']}"
+
+    # Verify unit of measurement on the published entity
+    assert item["attributes"]["unit_of_measurement"] == "W", "unit_of_measurement should be W"
+
+    print("PASSED: publish_entities converts max export power CID correctly in all cases")
     return False
 
 
