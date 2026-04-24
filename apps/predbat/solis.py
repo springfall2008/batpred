@@ -2134,11 +2134,17 @@ class SolisAPI(ComponentBase):
             entity_id = f"number.{prefix}_solis_{inverter_sn_lower}_max_export_power"
             max_export_power_value = values.get(SOLIS_CID_MAX_EXPORT_POWER, None)
             try:
-                max_export_power = float(max_export_power_value)
+                max_export_power_value = float(max_export_power_value)
             except (ValueError, TypeError):
-                max_export_power = 0.0
-            if max_export_power == 0.0:
+                max_export_power_value = 0.0
+            if max_export_power_value == 0.0:
                 max_export_power_value = 99999  # Use large number to indicate no limit
+
+            # Export power seems to have a weird issue with units
+            if max_export_power_value < 200:
+                max_export_power_value *= 100
+            elif max_export_power_value < 1000:
+                max_export_power_value *= 10                
 
             self.dashboard_item(
                 entity_id,
