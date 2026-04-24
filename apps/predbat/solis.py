@@ -2144,7 +2144,7 @@ class SolisAPI(ComponentBase):
             if max_export_power_value < 200:
                 max_export_power_value *= 100
             elif max_export_power_value < 1000:
-                max_export_power_value *= 10                
+                max_export_power_value *= 10
 
             self.dashboard_item(
                 entity_id,
