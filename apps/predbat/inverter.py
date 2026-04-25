@@ -1771,6 +1771,10 @@ class Inverter:
 
         old_value = self.base.get_state_wrapper(entity_id, refresh=True)
 
+        # Ensure new_value is a string for string operations (e.g. when an integer hour/minute is passed for a time entity)
+        if not isinstance(new_value, str):
+            new_value = str(new_value)
+
         # If time format of the selector is %H:%M and we pass in %H:%M:%S then we need to strip the seconds
         if old_value and (":" in old_value) and (":" in new_value) and (len(old_value) == 5) and (len(new_value) == 8):
             new_value = new_value[:5]
@@ -2147,8 +2151,17 @@ class Inverter:
 
                 if self.inv_charge_time_format == "H M":
                     # If the inverter uses hours and minutes then write to these entities too
-                    self.write_and_poll_option("discharge_start_hour", self.base.get_arg("discharge_start_hour", indirect=False, index=self.id), int(new_start[:2]))
-                    self.write_and_poll_option("discharge_start_minute", self.base.get_arg("discharge_start_minute", indirect=False, index=self.id), int(new_start[3:5]))
+                    # If the entity is a time entity (e.g. for FB00 firmware), write the full time string instead of just the integer component
+                    start_hour_id = self.base.get_arg("discharge_start_hour", indirect=False, index=self.id)
+                    if start_hour_id and isinstance(start_hour_id, str) and start_hour_id.startswith("time."):
+                        self.write_and_poll_option("discharge_start_hour", start_hour_id, new_start)
+                    else:
+                        self.write_and_poll_option("discharge_start_hour", start_hour_id, int(new_start[:2]))
+                    start_minute_id = self.base.get_arg("discharge_start_minute", indirect=False, index=self.id)
+                    if start_minute_id and isinstance(start_minute_id, str) and start_minute_id.startswith("time."):
+                        self.write_and_poll_option("discharge_start_minute", start_minute_id, new_start)
+                    else:
+                        self.write_and_poll_option("discharge_start_minute", start_minute_id, int(new_start[3:5]))
                 elif self.inv_charge_time_format == "H:M-H:M":
                     # If the inverter uses hours and minutes then write to these entities too
                     discharge_time = new_start + "-" + new_end
@@ -2169,8 +2182,17 @@ class Inverter:
 
                 # If the inverter uses hours and minutes then write to these entities too
                 if self.inv_charge_time_format == "H M":
-                    self.write_and_poll_option("discharge_end_hour", self.base.get_arg("discharge_end_hour", indirect=False, index=self.id), int(new_end[:2]))
-                    self.write_and_poll_option("discharge_end_minute", self.base.get_arg("discharge_end_minute", indirect=False, index=self.id), int(new_end[3:5]))
+                    # If the entity is a time entity (e.g. for FB00 firmware), write the full time string instead of just the integer component
+                    end_hour_id = self.base.get_arg("discharge_end_hour", indirect=False, index=self.id)
+                    if end_hour_id and isinstance(end_hour_id, str) and end_hour_id.startswith("time."):
+                        self.write_and_poll_option("discharge_end_hour", end_hour_id, new_end)
+                    else:
+                        self.write_and_poll_option("discharge_end_hour", end_hour_id, int(new_end[:2]))
+                    end_minute_id = self.base.get_arg("discharge_end_minute", indirect=False, index=self.id)
+                    if end_minute_id and isinstance(end_minute_id, str) and end_minute_id.startswith("time."):
+                        self.write_and_poll_option("discharge_end_minute", end_minute_id, new_end)
+                    else:
+                        self.write_and_poll_option("discharge_end_minute", end_minute_id, int(new_end[3:5]))
                 elif self.inv_charge_time_format == "H:M-H:M":
                     pass
             else:
@@ -2587,8 +2609,17 @@ class Inverter:
 
                 if self.inv_charge_time_format == "H M":
                     # If the inverter uses hours and minutes then write to these entities too
-                    self.write_and_poll_option("charge_start_hour", self.base.get_arg("charge_start_hour", indirect=False, index=self.id), int(new_start[:2]))
-                    self.write_and_poll_option("charge_start_minute", self.base.get_arg("charge_start_minute", indirect=False, index=self.id), int(new_start[3:5]))
+                    # If the entity is a time entity (e.g. for FB00 firmware), write the full time string instead of just the integer component
+                    start_hour_id = self.base.get_arg("charge_start_hour", indirect=False, index=self.id)
+                    if start_hour_id and isinstance(start_hour_id, str) and start_hour_id.startswith("time."):
+                        self.write_and_poll_option("charge_start_hour", start_hour_id, new_start)
+                    else:
+                        self.write_and_poll_option("charge_start_hour", start_hour_id, int(new_start[:2]))
+                    start_minute_id = self.base.get_arg("charge_start_minute", indirect=False, index=self.id)
+                    if start_minute_id and isinstance(start_minute_id, str) and start_minute_id.startswith("time."):
+                        self.write_and_poll_option("charge_start_minute", start_minute_id, new_start)
+                    else:
+                        self.write_and_poll_option("charge_start_minute", start_minute_id, int(new_start[3:5]))
                 elif self.inv_charge_time_format == "H:M-H:M":
                     # If the inverter uses hours and minutes then write to these entities too
                     charge_time = new_start + "-" + new_end
@@ -2606,8 +2637,17 @@ class Inverter:
                 self.write_and_poll_option("charge_end_time", entity_id_end, new_end)
 
                 if self.inv_charge_time_format == "H M":
-                    self.write_and_poll_option("charge_end_hour", self.base.get_arg("charge_end_hour", indirect=False, index=self.id), int(new_end[:2]))
-                    self.write_and_poll_option("charge_end_minute", self.base.get_arg("charge_end_minute", indirect=False, index=self.id), int(new_end[3:5]))
+                    # If the entity is a time entity (e.g. for FB00 firmware), write the full time string instead of just the integer component
+                    end_hour_id = self.base.get_arg("charge_end_hour", indirect=False, index=self.id)
+                    if end_hour_id and isinstance(end_hour_id, str) and end_hour_id.startswith("time."):
+                        self.write_and_poll_option("charge_end_hour", end_hour_id, new_end)
+                    else:
+                        self.write_and_poll_option("charge_end_hour", end_hour_id, int(new_end[:2]))
+                    end_minute_id = self.base.get_arg("charge_end_minute", indirect=False, index=self.id)
+                    if end_minute_id and isinstance(end_minute_id, str) and end_minute_id.startswith("time."):
+                        self.write_and_poll_option("charge_end_minute", end_minute_id, new_end)
+                    else:
+                        self.write_and_poll_option("charge_end_minute", end_minute_id, int(new_end[3:5]))
                 elif self.inv_charge_time_format == "H:M-H:M":
                     pass
             else:

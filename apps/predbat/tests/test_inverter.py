@@ -1393,6 +1393,94 @@ def test_discharge_window_none_value(test_name, my_predbat, dummy_items):
     return failed
 
 
+def test_time_entity_hour_write(test_name, ha, inv, dummy_rest, direction, new_start, new_end):
+    """
+    Test that when *_start_hour / *_end_hour args resolve to time.* entities the full
+    time string is written (not just the integer hour component) and that no TypeError
+    is raised.
+
+    direction: "discharge" or "charge"
+    """
+    failed = False
+    print("Test: {} direction={}".format(test_name, direction))
+
+    inv.rest_data = None
+    inv.inv_charge_time_format = "H M"
+
+    new_start_ts = datetime.strptime(new_start, "%H:%M:%S")
+    new_end_ts = datetime.strptime(new_end, "%H:%M:%S")
+
+    if direction == "discharge":
+        # Wire up time entities for discharge slot
+        ha.dummy_items["select.discharge_start_time"] = "00:00:00"
+        ha.dummy_items["select.discharge_end_time"] = "00:00:00"
+        ha.dummy_items["time.discharge_start_hour"] = "00:00:00"
+        ha.dummy_items["time.discharge_end_hour"] = "00:00:00"
+        ha.dummy_items["sensor.predbat_GE_0_scheduled_discharge_enable"] = "off"
+        ha.dummy_items["number.discharge_target_soc"] = inv.reserve_percent
+        ha.dummy_items["select.inverter_mode"] = "Eco"
+        ha.dummy_items["switch.inverter_button"] = "off"
+
+        inv.base.args["discharge_start_time"] = "select.discharge_start_time"
+        inv.base.args["discharge_end_time"] = "select.discharge_end_time"
+        inv.base.args["discharge_start_hour"] = "time.discharge_start_hour"
+        inv.base.args["discharge_end_hour"] = "time.discharge_end_hour"
+        # No discharge_start_minute / discharge_end_minute – those args are absent
+
+        try:
+            inv.adjust_force_export(True, new_start_ts, new_end_ts)
+        except TypeError as e:
+            print("ERROR: TypeError raised: {}".format(e))
+            return True
+
+        if ha.dummy_items.get("time.discharge_start_hour") != new_start:
+            print("ERROR: discharge_start_hour time entity should be {} got {}".format(new_start, ha.dummy_items.get("time.discharge_start_hour")))
+            failed = True
+        if ha.dummy_items.get("time.discharge_end_hour") != new_end:
+            print("ERROR: discharge_end_hour time entity should be {} got {}".format(new_end, ha.dummy_items.get("time.discharge_end_hour")))
+            failed = True
+        if ha.dummy_items.get("select.discharge_start_time") != new_start:
+            print("ERROR: discharge_start_time select entity should be {} got {}".format(new_start, ha.dummy_items.get("select.discharge_start_time")))
+            failed = True
+        if ha.dummy_items.get("select.discharge_end_time") != new_end:
+            print("ERROR: discharge_end_time select entity should be {} got {}".format(new_end, ha.dummy_items.get("select.discharge_end_time")))
+            failed = True
+
+    else:  # charge
+        ha.dummy_items["select.charge_start_time"] = "00:00:00"
+        ha.dummy_items["select.charge_end_time"] = "00:00:00"
+        ha.dummy_items["time.charge_start_hour"] = "00:00:00"
+        ha.dummy_items["time.charge_end_hour"] = "00:00:00"
+        ha.dummy_items["switch.scheduled_charge_enable"] = "off"
+        ha.dummy_items["switch.inverter_button"] = "off"
+
+        inv.base.args["charge_start_time"] = "select.charge_start_time"
+        inv.base.args["charge_end_time"] = "select.charge_end_time"
+        inv.base.args["charge_start_hour"] = "time.charge_start_hour"
+        inv.base.args["charge_end_hour"] = "time.charge_end_hour"
+
+        try:
+            inv.adjust_charge_window(new_start_ts, new_end_ts, inv.base.minutes_now)
+        except TypeError as e:
+            print("ERROR: TypeError raised: {}".format(e))
+            return True
+
+        if ha.dummy_items.get("time.charge_start_hour") != new_start:
+            print("ERROR: charge_start_hour time entity should be {} got {}".format(new_start, ha.dummy_items.get("time.charge_start_hour")))
+            failed = True
+        if ha.dummy_items.get("time.charge_end_hour") != new_end:
+            print("ERROR: charge_end_hour time entity should be {} got {}".format(new_end, ha.dummy_items.get("time.charge_end_hour")))
+            failed = True
+        if ha.dummy_items.get("select.charge_start_time") != new_start:
+            print("ERROR: charge_start_time select entity should be {} got {}".format(new_start, ha.dummy_items.get("select.charge_start_time")))
+            failed = True
+        if ha.dummy_items.get("select.charge_end_time") != new_end:
+            print("ERROR: charge_end_time select entity should be {} got {}".format(new_end, ha.dummy_items.get("select.charge_end_time")))
+            failed = True
+
+    return failed
+
+
 def run_inverter_tests(my_predbat_dummy):
     """
     Test the inverter functions
@@ -2081,6 +2169,20 @@ charge_start_service:
         return failed
 
     failed |= test_discharge_window_none_value("discharge_window_none_value", my_predbat, dummy_items)
+    if failed:
+        return failed
+
+    # Tests for time.* entities used for discharge/charge hour config (GS_fb00 firmware)
+    failed |= test_time_entity_hour_write("time_entity_discharge_hour1", ha, inv, dummy_rest, "discharge", "22:30:00", "23:59:00")
+    if failed:
+        return failed
+    failed |= test_time_entity_hour_write("time_entity_discharge_hour2", ha, inv, dummy_rest, "discharge", "00:00:00", "06:30:00")
+    if failed:
+        return failed
+    failed |= test_time_entity_hour_write("time_entity_charge_hour1", ha, inv, dummy_rest, "charge", "01:00:00", "05:30:00")
+    if failed:
+        return failed
+    failed |= test_time_entity_hour_write("time_entity_charge_hour2", ha, inv, dummy_rest, "charge", "23:00:00", "23:59:00")
     if failed:
         return failed
 
