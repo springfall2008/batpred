@@ -2506,6 +2506,7 @@ def test_pv_calibration_60min_period(my_predbat):
     expected_kwh = FORECAST_KW * FORECAST_PERIOD / 60.0
     half_expected = expected_kwh / 2.0
 
+    entries_validated = 0
     for entry in adj_data:
         cl = entry.get("pv_estimateCL")
         e10 = entry.get("pv_estimate10")
@@ -2513,6 +2514,8 @@ def test_pv_calibration_60min_period(my_predbat):
 
         if cl is None or cl == 0:
             continue
+
+        entries_validated += 1
 
         # The calibrated value must be close to the full 60-min kWh (not the buggy half-period value).
         if abs(cl - expected_kwh) > TOL * expected_kwh:
@@ -2531,6 +2534,10 @@ def test_pv_calibration_60min_period(my_predbat):
             print("ERROR: pv_estimate90 ({:.4f}) should be >= pv_estimateCL ({:.4f})".format(e90, cl))
             failed = True
             break
+
+    if entries_validated == 0:
+        print("ERROR: pv_calibration() annotated no entries with pv_estimateCL; annotation step may have regressed")
+        failed = True
 
     test_api.cleanup()
     return failed
