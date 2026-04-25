@@ -993,8 +993,11 @@ class Prediction:
                 total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybrid)
                 if total_inverted > inverter_limit:
                     over_limit = total_inverted - inverter_limit
-                    clipped_today += over_limit
+                    pv_ac_before = pv_ac
                     pv_ac = max(pv_ac - over_limit * inverter_loss, 0)
+                    pv_ac_no_loss = max(pv_ac_before - over_limit, 0)
+                    clipped_today += pv_ac_before - pv_ac_no_loss
+                    total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybrid)
             else:
                 total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybrid)
                 if total_inverted > inverter_limit:
@@ -1008,8 +1011,10 @@ class Prediction:
             diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp)
             if diff < 0 and abs(diff) > export_limit:
                 over_limit = abs(diff) - export_limit
-                clipped_today += over_limit
+                # Only solar PV is truly "clipped" (lost energy); excess battery discharge just gets limited
+                pv_ac_before = pv_ac
                 pv_ac = max(pv_ac - over_limit, 0)
+                clipped_today += pv_ac_before - pv_ac
 
             # Adjust battery soc
             if battery_draw > 0:

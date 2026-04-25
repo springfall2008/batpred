@@ -591,6 +591,7 @@ def simple_scenario(
     ignore_failed=False,
     set_charge_freeze=True,
     calculate_export_on_pv=True,
+    assert_clipped=0,
 ):
     """
     No PV, No Load
@@ -817,6 +818,13 @@ def simple_scenario(
         if not ignore_failed:
             print("ERROR: iBoost running full should be {}".format(assert_iboost_running_full))
         failed = True
+
+    if save != "none":
+        total_clipped = prediction.predict_clipped_best[max(prediction.predict_clipped_best.keys())] if prediction.predict_clipped_best else 0
+        if abs(total_clipped - assert_clipped) >= 0.9:
+            if not ignore_failed:
+                print("ERROR: Total clipped {} should be {}".format(total_clipped, assert_clipped))
+            failed = True
 
     if failed and not ignore_failed:
         (
