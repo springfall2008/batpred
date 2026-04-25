@@ -88,10 +88,28 @@ KRAKEN_ACCOUNT_QUERY = """{{
 KRAKEN_VIEWER_QUERY = """{ viewer { accounts { number } } }"""
 
 # GraphQL applicableRates query — fallback when REST product endpoint returns 404
-# (product code removed/replaced while customer is still on the tariff).
+# (product code removed/replaced while customer is still on the tariff, or TOU tariff
+# with no /standard-unit-rates/ REST endpoint e.g. E-TOU-* tariffs on E.ON Next).
 # Returns value (pence/kWh inc VAT), validFrom, validTo for the requested window.
 KRAKEN_APPLICABLE_RATES_QUERY = """{{
   applicableRates(
+    accountNumber: "{account_number}"
+    mpxn: "{mpan}"
+    startAt: "{start_at}"
+    endAt: "{end_at}"
+  ) {{
+    value
+    validFrom
+    validTo
+  }}
+}}"""
+
+# GraphQL applicableStandingCharges query — fallback when REST /standing-charges/ returns 404
+# (same scenarios as KRAKEN_APPLICABLE_RATES_QUERY above — product removed from REST API,
+# or TOU tariffs whose /standing-charges/ endpoint is unavailable on the provider API).
+# Returns value (pence/day inc VAT) for the requested window.
+KRAKEN_STANDING_CHARGES_QUERY = """{{
+  applicableStandingCharges(
     accountNumber: "{account_number}"
     mpxn: "{mpan}"
     startAt: "{start_at}"
@@ -632,14 +650,62 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         entity_name = root + "." + self.prefix + "_kraken_" + self.account_id.replace("-", "_") + "_" + suffix
         return entity_name.lower()
 
+    async def async_fetch_standing_charges_graphql(self, mpan):
+        """Fetch standing charge via GraphQL applicableStandingCharges — fallback when REST returns non-200.
+
+        Used when the product code has been removed from the REST API (e.g. TOU tariffs on E.ON Next
+        whose /standing-charges/ REST endpoint returns 404). Returns the standing charge in pounds/day
+        (pence/day divided by 100), or None on failure.
+
+        Args:
+            mpan: The import MPAN (meter point access number) for the account.
+
+        Returns the standing charge as pounds/day (float), or None.
+        """
+        now = datetime.now(timezone.utc)
+        midnight_utc = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        # Use a 3-day window (yesterday → tomorrow+1) to ensure the current standing charge
+        # is captured regardless of when the agreement period started or ends.
+        start_at = (midnight_utc - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        end_at = (midnight_utc + timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        query = KRAKEN_STANDING_CHARGES_QUERY.format(
+            account_number=self.account_id,
+            mpan=mpan,
+            start_at=start_at,
+            end_at=end_at,
+        )
+        data = await self.async_graphql_query(query, "applicable-standing-charges-graphql")
+        if not data:
+            return None
+
+        applicable_charges = data.get("applicableStandingCharges", [])
+        if not applicable_charges:
+            self.log("Warn: Kraken: applicableStandingCharges GraphQL returned no results")
+            return None
+
+        # Take the first (most applicable) standing charge entry; value is pence/day inc VAT.
+        # Divide by 100 to match the units expected by the caller (pounds/day).
+        charge = applicable_charges[0]
+        value = charge.get("value")
+        if value is None:
+            return None
+        self.log(f"Kraken: Fetched standing charge via GraphQL applicableStandingCharges for MPAN {mpan}: {value}p/day")
+        return float(value) / 100.0
+
     async def async_fetch_standing_charges(self, tariff=None):
-        """Fetch standing charges from public REST endpoint. No auth needed."""
+        """Fetch standing charges from public REST endpoint. No auth needed.
+
+        Falls back to GraphQL applicableStandingCharges if the REST endpoint returns a non-200
+        status (e.g. 404 for TOU tariffs on E.ON Next whose product is not in the REST API)
+        and self.import_mpan is known.
+        """
         tariff = tariff or self.current_tariff
         if not tariff:
             return None
 
         url = self.build_standing_charge_url(tariff["product_code"], tariff["tariff_code"])
 
+        http_error_status = None
         try:
             timeout = aiohttp.ClientTimeout(total=30)
             async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -647,20 +713,30 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                     if response.status != 200:
                         self.log(f"Warn: Kraken: Standing charges HTTP {response.status}")
                         self.failures_total += 1
-                        return None
-                    data = await response.json()
-
-            results = data.get("results", [])
-            if results:
-                # API returns pence/day; fetch.py multiplies by 100 expecting pounds/day
-                value = results[0].get("value_inc_vat")
-                return value / 100.0 if value is not None else None
-            return None
+                        http_error_status = response.status
+                    else:
+                        data = await response.json()
 
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             self.log(f"Warn: Kraken: Network error fetching standing charges: {e}")
             self.failures_total += 1
             return None
+
+        if http_error_status is not None:
+            # Only fall back to GraphQL for permanent "product not found" responses (404/410).
+            # Transient errors (429, 500, 503, …) should surface as failures, not trigger
+            # an extra GraphQL request that would mask the outage.
+            if http_error_status in (404, 410) and self.import_mpan:
+                self.log(f"Kraken: REST standing charges returned HTTP {http_error_status}, falling back to GraphQL applicableStandingCharges for MPAN {self.import_mpan}")
+                return await self.async_fetch_standing_charges_graphql(self.import_mpan)
+            return None
+
+        results = data.get("results", [])
+        if results:
+            # API returns pence/day; fetch.py multiplies by 100 expecting pounds/day
+            value = results[0].get("value_inc_vat")
+            return value / 100.0 if value is not None else None
+        return None
 
     async def run(self, seconds, first):
         """Component run method — called by ComponentBase.start() every 60s.
