@@ -16,6 +16,7 @@ Feedin), real-time monitoring, and device settings via the Fox ESS Cloud API.
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+import os
 import time
 import hashlib
 from predbat_metrics import record_api_call
@@ -134,13 +135,20 @@ def sort_schedule_by_start_time(schedule):
     return schedule
 
 
-def validate_schedule(new_schedule, reserve, fdPwr_max):
+def pad_schedule(schedule, target_count, reserve, fdPwr_max):
+    """Pad schedule to target_count with disabled SelfUse zero-time entries."""
+    disabled_entry = {"enable": 0, "startHour": 0, "startMinute": 0, "endHour": 0, "endMinute": 0, "workMode": "SelfUse", "fdSoc": reserve, "maxSoc": 100, "fdPwr": fdPwr_max, "minSocOnGrid": reserve}
+    while target_count > 0 and len(schedule) < target_count:
+        schedule.append(disabled_entry.copy())
+    return schedule
+
+def validate_schedule(new_schedule, reserve, fdPwr_max, target_count=0):
     # Sort schedule by start time, closest to midnight first
     new_schedule = sort_schedule_by_start_time(new_schedule)
     if not new_schedule:
         # No schedule entries so disable
-        new_schedule = [{"enable": 1, "startHour": 0, "startMinute": 0, "endHour": 23, "endMinute": 59, "workMode": "SelfUse", "fdSoc": reserve, "maxSoc": 100, "fdPwr": fdPwr_max, "minSocOnGrid": reserve}]
-        return new_schedule
+        result = [{"enable": 1, "startHour": 0, "startMinute": 0, "endHour": 23, "endMinute": 59, "workMode": "SelfUse", "fdSoc": reserve, "maxSoc": 100, "fdPwr": fdPwr_max, "minSocOnGrid": reserve}]
+        return pad_schedule(result, target_count, reserve, fdPwr_max)
 
     # Process all schedule entries
     result_schedule = []
@@ -203,7 +211,8 @@ def validate_schedule(new_schedule, reserve, fdPwr_max):
             demand_start_minute += 1
         result_schedule.append({"enable": 1, "startHour": demand_start_hour, "startMinute": demand_start_minute, "endHour": 23, "endMinute": 59, "workMode": "SelfUse", "fdSoc": reserve, "maxSoc": 100, "fdPwr": fdPwr_max, "minSocOnGrid": reserve})
 
-    return result_schedule
+    # Pad to target_count with disabled SelfUse entries if the device originally had more slots
+    return pad_schedule(result_schedule, target_count, reserve, fdPwr_max)
 
 
 class FoxAPI(ComponentBase, OAuthMixin):
@@ -224,10 +233,10 @@ class FoxAPI(ComponentBase, OAuthMixin):
         self.device_production_year = {}
         self.device_battery_charging_time = {}
         self.device_scheduler = {}
-        self.device_current_schedule = {}
         self.local_schedule = {}
         self.fdpwr_max = {}
         self.fdsoc_min = {}
+        self.device_scheduler_count = {}
         # Rate limiting tracking
         self.requests_today = 0
         self.rate_limit_errors_today = 0
@@ -710,8 +719,6 @@ class FoxAPI(ComponentBase, OAuthMixin):
                         "minSocOnGrid": reserve,
                         "maxSoc": 100,
                     }
-        self.device_current_schedule[deviceSN] = battery_slots
-
         # Sort the groups so that group 0 is the first charge slot and group 1 is the first discharge slot
         # For multiple slots pick the enabled one first
         charge_group = {}
@@ -808,7 +815,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
         # Do change enable if not already modified
         if self.device_scheduler.get(deviceSN, {}).get("enable", None) == enabled_value:
             self.log("Fox: Debug: Scheduler for {} already set to enabled {}".format(deviceSN, enabled))
-            return
+            return False
 
         self.log("Fox: Debug: Setting scheduler enabled={} was {} for {}".format(enabled, self.device_scheduler.get(deviceSN, {}).get("enable", None), deviceSN))
 
@@ -818,6 +825,8 @@ class FoxAPI(ComponentBase, OAuthMixin):
             if deviceSN not in self.device_scheduler:
                 self.device_scheduler[deviceSN] = {}
             self.device_scheduler[deviceSN]["enable"] = enabled_value
+            return True
+        return False
 
     async def set_scheduler(self, deviceSN, groups):
         """
@@ -829,7 +838,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
         if not groups:
             if current_enable:
                 # Disable scheduler if enabled and no groups
-                await self.set_scheduler_enabled(deviceSN, False)
+                return await self.set_scheduler_enabled(deviceSN, False)
         else:
             # Compare old and new schedule to see if it needs setting
             same = schedules_are_equal(datetime.now(), current_groups, groups)
@@ -841,6 +850,8 @@ class FoxAPI(ComponentBase, OAuthMixin):
                         self.device_scheduler[deviceSN] = {}
                     self.device_scheduler[deviceSN]["enable"] = True
                     self.device_scheduler[deviceSN]["groups"] = groups
+                    return True
+        return False
 
     async def publish_schedule_settings_ha(self, deviceSN):
         """
@@ -1029,7 +1040,8 @@ class FoxAPI(ComponentBase, OAuthMixin):
 
             # Min SOC On grid can change as Predbat writes reserve so this must be the real min
             self.fdsoc_min[deviceSN] = result.get("properties", {}).get("fdsoc", {}).get("range", {}).get("min", 10)
-            self.log("Fox: Fetched schedule got {} fdPwr max {} fdSoc min {}".format(result, self.fdpwr_max[deviceSN], self.fdsoc_min[deviceSN]))
+            self.device_scheduler_count[deviceSN] = len(result.get("groups", []))
+            self.log("Fox: Fetched schedule got {} fdPwr max {} fdSoc min {} groups {}".format(result, self.fdpwr_max[deviceSN], self.fdsoc_min[deviceSN], self.device_scheduler_count[deviceSN]))
             self.device_scheduler[deviceSN] = result
             return result
         return {}
@@ -1514,7 +1526,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
         entity_id = entity_id.replace(f"number.{self.prefix}_fox_", "")
         sn = entity_id.split("_")[0]
         serial = None
-        for s in self.device_current_schedule:
+        for s in self.device_detail:
             if s.lower() == sn.lower():
                 serial = s
                 break
@@ -1619,12 +1631,10 @@ class FoxAPI(ComponentBase, OAuthMixin):
                     new_schedule.append(
                         {"enable": 1, "startHour": start_hour, "startMinute": start_minute, "endHour": end_hour, "endMinute": end_minute, "workMode": "ForceDischarge", "fdSoc": max(soc, reserve), "maxSoc": reserve, "fdPwr": power, "minSocOnGrid": reserve}
                     )
-        new_schedule = validate_schedule(new_schedule, reserve, fdPwr_max)
+        new_schedule = validate_schedule(new_schedule, reserve, fdPwr_max, self.device_scheduler_count.get(serial, 0))
         self.log("Fox: New schedule for {}: {}".format(serial, new_schedule))
-        result = await self.set_scheduler(serial, new_schedule)
-        if result is not None:
-            self.device_current_schedule[serial] = new_schedule
-            await self.publish_data()
+        await self.set_scheduler(serial, new_schedule)
+        await self.publish_data()
 
     async def automatic_config(self):
         """
@@ -1753,21 +1763,92 @@ class MockBase:  # pragma: no cover
             state = "n/a"
         print(f"Set arg {key} = {value} (state={state})")
 
+async def test_write_schedule(sn, api_key, token_hash, token_expires, supabase_url, supabase_key, user_id):  # pragma: no cover
+    """
+    Write a hardcoded test schedule to the Fox API and read it back to verify
+    """
+    if supabase_url:
+        os.environ["SUPABASE_URL"] = supabase_url
+    if supabase_key:
+        os.environ["SUPABASE_KEY"] = supabase_key
 
-async def test_fox_api(sn, api_key, token_hash):  # pragma: no cover
+    schedule = [
+        {'endHour': 20, 'fdPwr': 7000, 'minSocOnGrid': 10, 'workMode': 'ForceDischarge', 'fdSoc': 10, 'enable': 1, 'startHour': 20, 'maxSoc': 100, 'startMinute': 16, 'endMinute': 30},  # 20:16 - 20:30
+    ]
+
+    mock_base = MockBase()
+    if user_id:
+        mock_base.args["user_id"] = user_id
+
+    arg_dict = {"key": api_key or "", "automatic": False}
+    if token_hash or supabase_url:
+        arg_dict["auth_method"] = "oauth"
+        arg_dict["token_hash"] = token_hash
+        arg_dict["token_expires_at"] = token_expires
+    fox_api = FoxAPI(mock_base, **arg_dict)
+
+    # Discover devices if no SN provided
+    devices = await fox_api.get_device_list()
+    if not devices:
+        print("No devices found")
+        return
+    serial = sn if sn else devices[0].get("deviceSN")
+    print(f"Using device SN: {serial}")
+
+    # Fetch device detail so hasBattery check passes
+    await fox_api.get_device_detail(serial)
+
+    # Initial read back to check connectivity
+    read_back = await fox_api.get_scheduler(serial, checkBattery=False)
+
+    # Write the schedule
+    print(f"Writing schedule:\n{json.dumps(schedule, indent=2)}")
+    schedule = validate_schedule(schedule, 10, 7000, fox_api.device_scheduler_count.get(serial, 0))
+    write_ok = await fox_api.set_scheduler(serial, schedule)
+    print(f"Write result: {write_ok}")
+
+    # Read back and print
+    print("Reading back schedule...")
+    read_back = await fox_api.get_scheduler(serial, checkBattery=False)
+    read_back_groups = read_back.get("groups", [])
+    print(f"Read back schedule:\n{json.dumps(read_back, indent=2)}")
+
+    # Compare written schedule against read-back groups
+    from datetime import datetime as _dt
+
+    match = schedules_are_equal(_dt.now(), schedule, read_back_groups)
+    print(f"Schedule match: {match}")
+    if not match:
+        print("WARNING: Written schedule does not match read-back schedule")
+
+
+
+
+async def test_fox_api(sn, api_key, token_hash, token_expires, supabase_url, supabase_key, user_id):  # pragma: no cover
     """
     Run a test
     """
-    print(f"Testing Fox API with key: {api_key[:10]}...")
+    # Set supabase env vars before constructing FoxAPI so OAuthMixin can find them
+    if supabase_url:
+        os.environ["SUPABASE_URL"] = supabase_url
+    if supabase_key:
+        os.environ["SUPABASE_KEY"] = supabase_key
+
+    if api_key:
+        print(f"Testing Fox API with api-key: {api_key[:10]}...")
+    else:
+        print("Testing Fox API with OAuth token-hash...")
 
     # Create a mock base object
     mock_base = MockBase()
+    if user_id:
+        mock_base.args["user_id"] = user_id
 
-    # Create FoxAPI instance with a lambda that returns the API key
-    arg_dict = {}
-    arg_dict = {"key": api_key, "automatic": True, "token_hash": token_hash}
-    if token_hash:
+    arg_dict = {"key": api_key or "", "automatic": True}
+    if token_hash or supabase_url:
         arg_dict["auth_method"] = "oauth"
+        arg_dict["token_hash"] = token_hash
+        arg_dict["token_expires_at"] = token_expires
     fox_api = FoxAPI(mock_base, **arg_dict)
 
     # Call run() once
@@ -1782,16 +1863,29 @@ def main():  # pragma: no cover
     """
     parser = argparse.ArgumentParser(description="Test Fox API")
     parser.add_argument("--serial", action="store", default=None, help="Fox API serial number")
-    parser.add_argument("--api-key", required=True, help="Fox API key")
-    parser.add_argument("--token-hash", action="store", help="Fox API token hash")
+    auth_group = parser.add_mutually_exclusive_group(required=True)
+    auth_group.add_argument("--api-key", help="Fox API key")
+    auth_group.add_argument("--token-hash", action="store", help="Fox API OAuth token hash")
+    parser.add_argument("--token-expires", action="store", help="Fox API OAuth token expiry timestamp")
+    parser.add_argument("--supabase-url", action="store", help="Supabase URL for OAuth token refresh")
+    parser.add_argument("--supabase-key", action="store", help="Supabase anon key for OAuth token refresh")
+    parser.add_argument("--user-id", action="store", help="Supabase user ID for OAuth token refresh")
+    parser.add_argument("--write-schedule", action="store_true", help="Write a test schedule and read it back instead of running a full test")
 
     args = parser.parse_args()
-    key = args.api_key
     serial = args.serial
+    api_key = args.api_key
     token_hash = args.token_hash
+    token_expires = args.token_expires
+    supabase_url = args.supabase_url
+    supabase_key = args.supabase_key
+    user_id = args.user_id
 
     # Run the test
-    asyncio.run(test_fox_api(serial, key, token_hash))
+    if args.write_schedule:
+        asyncio.run(test_write_schedule(serial, api_key, token_hash, token_expires, supabase_url, supabase_key, user_id))
+    else:
+        asyncio.run(test_fox_api(serial, api_key, token_hash, token_expires, supabase_url, supabase_key, user_id))
 
 
 if __name__ == "__main__":

@@ -22,11 +22,11 @@ class MockFoxAPI:
     def __init__(self):
         self.device_battery_charging_time = {}
         self.device_scheduler = {}
-        self.device_settings = {}
         self.local_schedule = {}
-        self.device_current_schedule = {}
+        self.device_settings = {}
         self.fdpwr_max = {}
         self.fdsoc_min = {}
+        self.device_scheduler_count = {}
         self.inverter_sn_filter = []
 
     def getMinSocOnGrid(self, deviceSN):
@@ -56,10 +56,10 @@ class MockFoxAPIWithRequests(FoxAPI):
         self.device_production_year = {}
         self.device_battery_charging_time = {}
         self.device_scheduler = {}
-        self.device_current_schedule = {}
         self.local_schedule = {}
         self.fdpwr_max = {}
         self.fdsoc_min = {}
+        self.device_scheduler_count = {}
         self.local_tz = pytz.timezone("Europe/London")
         self.inverter_sn_filter = []
 
@@ -642,6 +642,90 @@ def test_validate_schedule_discharge_ending_at_midnight(my_predbat):
     assert result[1]["endMinute"] == 59
     assert result[1]["fdSoc"] == 10
     assert result[1]["fdPwr"] == 5000
+
+    return False
+
+
+def test_validate_schedule_padding_normal(my_predbat):
+    """
+    Test validate_schedule pads to target_count with disabled SelfUse entries when result is shorter
+    """
+    print("  - test_validate_schedule_padding_normal")
+
+    # Single ForceCharge window 02:30 - 05:30 with target_count=8
+    new_schedule = [
+        {"enable": 1, "startHour": 2, "startMinute": 30, "endHour": 5, "endMinute": 30, "workMode": "ForceCharge", "fdSoc": 100, "maxSoc": 100, "fdPwr": 8000, "minSocOnGrid": 10}
+    ]
+    reserve = 10
+    fdPwr_max = 8000
+
+    result = validate_schedule(new_schedule, reserve, fdPwr_max, target_count=8)
+
+    # Should be padded to 8 entries
+    assert len(result) == 8, f"Expected 8 entries after padding, got {len(result)}"
+
+    # All padding entries should be disabled SelfUse with zero start/end
+    for entry in result[3:]:
+        assert entry["enable"] == 0, f"Padding entry should be disabled: {entry}"
+        assert entry["workMode"] == "SelfUse", f"Padding entry should be SelfUse: {entry}"
+        assert entry["startHour"] == 0
+        assert entry["startMinute"] == 0
+        assert entry["endHour"] == 0
+        assert entry["endMinute"] == 0
+
+    return False
+
+
+def test_validate_schedule_padding_empty(my_predbat):
+    """
+    Test validate_schedule pads even when input is empty (early-return path)
+    """
+    print("  - test_validate_schedule_padding_empty")
+
+    reserve = 15
+    fdPwr_max = 7000
+
+    result = validate_schedule([], reserve, fdPwr_max, target_count=8)
+
+    # Should be padded to 8 entries
+    assert len(result) == 8, f"Expected 8 entries after padding, got {len(result)}"
+
+    # First entry should be the default full-day SelfUse
+    assert result[0]["enable"] == 1
+    assert result[0]["workMode"] == "SelfUse"
+    assert result[0]["startHour"] == 0
+    assert result[0]["endHour"] == 23
+    assert result[0]["endMinute"] == 59
+
+    # Remaining entries should be disabled padding
+    for entry in result[1:]:
+        assert entry["enable"] == 0, f"Padding entry should be disabled: {entry}"
+        assert entry["workMode"] == "SelfUse"
+        assert entry["startHour"] == 0
+        assert entry["startMinute"] == 0
+        assert entry["endHour"] == 0
+        assert entry["endMinute"] == 0
+
+    return False
+
+
+def test_validate_schedule_padding_no_target(my_predbat):
+    """
+    Test validate_schedule does not pad when target_count=0 (default)
+    """
+    print("  - test_validate_schedule_padding_no_target")
+
+    new_schedule = [
+        {"enable": 1, "startHour": 2, "startMinute": 0, "endHour": 5, "endMinute": 0, "workMode": "ForceCharge", "fdSoc": 100, "maxSoc": 100, "fdPwr": 8000, "minSocOnGrid": 10}
+    ]
+    reserve = 10
+    fdPwr_max = 8000
+
+    result = validate_schedule(new_schedule, reserve, fdPwr_max)
+
+    # No padding: all entries should be enabled (natural gap-fill entries)
+    for entry in result:
+        assert entry["enable"] == 1, f"Unexpected disabled entry without target_count: {entry}"
 
     return False
 
@@ -1905,6 +1989,7 @@ def test_api_get_scheduler(my_predbat):
 
     assert fox.fdpwr_max[deviceSN] == 8000
     assert fox.fdsoc_min[deviceSN] == 10
+    assert fox.device_scheduler_count[deviceSN] == 2
 
     return False
 
@@ -3809,7 +3894,6 @@ def test_write_battery_schedule_event_reserve(my_predbat):
     fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
     fox.fdpwr_max[deviceSN] = 8000
     fox.fdsoc_min[deviceSN] = 10
-    fox.device_current_schedule[deviceSN] = []
     fox.local_schedule[deviceSN] = {"reserve": 10}
     fox.device_scheduler[deviceSN] = {"enable": False, "groups": []}
 
@@ -3835,7 +3919,6 @@ def test_write_battery_schedule_event_charge_enable(my_predbat):
     fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
     fox.fdpwr_max[deviceSN] = 8000
     fox.fdsoc_min[deviceSN] = 10
-    fox.device_current_schedule[deviceSN] = []
     fox.local_schedule[deviceSN] = {"reserve": 10, "charge": {"enable": 0}}
 
     run_async(fox.write_battery_schedule_event("switch.predbat_fox_test123456_battery_schedule_charge_enable", "turn_on"))
@@ -3860,7 +3943,6 @@ def test_write_battery_schedule_event_time_change(my_predbat):
     fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
     fox.fdpwr_max[deviceSN] = 8000
     fox.fdsoc_min[deviceSN] = 10
-    fox.device_current_schedule[deviceSN] = []
     fox.local_schedule[deviceSN] = {"reserve": 10, "charge": {"start_time": "00:00:00", "end_time": "00:00:00"}}
 
     run_async(fox.write_battery_schedule_event("select.predbat_fox_test123456_battery_schedule_charge_start_time", "02:30:00"))
@@ -3885,7 +3967,6 @@ def test_write_battery_schedule_event_soc_change(my_predbat):
     fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
     fox.fdpwr_max[deviceSN] = 8000
     fox.fdsoc_min[deviceSN] = 10
-    fox.device_current_schedule[deviceSN] = []
     fox.local_schedule[deviceSN] = {"reserve": 10, "discharge": {"soc": 10}}
 
     run_async(fox.write_battery_schedule_event("number.predbat_fox_test123456_battery_schedule_discharge_soc", "20"))
@@ -3910,7 +3991,6 @@ def test_write_battery_schedule_event_power_change(my_predbat):
     fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
     fox.fdpwr_max[deviceSN] = 8000
     fox.fdsoc_min[deviceSN] = 10
-    fox.device_current_schedule[deviceSN] = []
     fox.local_schedule[deviceSN] = {"reserve": 10, "discharge": {"power": 8000}}
 
     run_async(fox.write_battery_schedule_event("number.predbat_fox_test123456_battery_schedule_discharge_power", "5000"))
@@ -3923,14 +4003,13 @@ def test_write_battery_schedule_event_power_change(my_predbat):
 
 def test_write_battery_schedule_event_unknown_serial(my_predbat):
     """
-    Test write_battery_schedule_event with unknown serial number (not in device_current_schedule)
+    Test write_battery_schedule_event with unknown serial number (not in device_detail)
     """
     print("  - test_write_battery_schedule_event_unknown_serial")
 
     fox = MockFoxAPIWithRequests()
 
-    # Setup empty device_current_schedule
-    fox.device_current_schedule = {}
+    # device_detail is empty by default (no known devices)
 
     # Try to write with unknown serial
     run_async(fox.write_battery_schedule_event("number.predbat_fox_unknown123_battery_schedule_reserve", "20"))
@@ -3955,7 +4034,6 @@ def test_write_battery_schedule_event_reserve_invalid_value(my_predbat):
     fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
     fox.fdpwr_max[deviceSN] = 8000
     fox.fdsoc_min[deviceSN] = 15
-    fox.device_current_schedule[deviceSN] = []
     fox.local_schedule[deviceSN] = {"reserve": 20}
     fox.device_scheduler[deviceSN] = {"enable": False, "groups": []}
 
@@ -3982,7 +4060,6 @@ def test_write_battery_schedule_event_unknown_direction(my_predbat):
     fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
     fox.fdpwr_max[deviceSN] = 8000
     fox.fdsoc_min[deviceSN] = 10
-    fox.device_current_schedule[deviceSN] = []
     fox.local_schedule[deviceSN] = {"reserve": 10}
 
     # Entity ID without _charge_ or _discharge_ in it (not reserve either)
@@ -4010,7 +4087,6 @@ def test_write_battery_schedule_event_initialize_direction_dict(my_predbat):
     fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
     fox.fdpwr_max[deviceSN] = 8000
     fox.fdsoc_min[deviceSN] = 10
-    fox.device_current_schedule[deviceSN] = []
     # local_schedule exists but no charge/discharge dict
     fox.local_schedule[deviceSN] = {"reserve": 10}
 
@@ -4037,7 +4113,6 @@ def test_write_battery_schedule_event_soc_invalid_value(my_predbat):
     fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
     fox.fdpwr_max[deviceSN] = 8000
     fox.fdsoc_min[deviceSN] = 10
-    fox.device_current_schedule[deviceSN] = []
     fox.local_schedule[deviceSN] = {"reserve": 10, "charge": {"soc": 80}, "discharge": {"soc": 20}}
 
     # Test charge with invalid value - should default to 100
@@ -4065,7 +4140,6 @@ def test_write_battery_schedule_event_power_invalid_value(my_predbat):
     fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
     fox.fdpwr_max[deviceSN] = 8000
     fox.fdsoc_min[deviceSN] = 10
-    fox.device_current_schedule[deviceSN] = []
     fox.local_schedule[deviceSN] = {"reserve": 10, "charge": {"power": 5000}}
 
     # Try to set power to invalid value - should default to fdpwr_max (8000)
@@ -4089,7 +4163,6 @@ def test_write_battery_schedule_event_start_time_invalid(my_predbat):
     fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
     fox.fdpwr_max[deviceSN] = 8000
     fox.fdsoc_min[deviceSN] = 10
-    fox.device_current_schedule[deviceSN] = []
     fox.local_schedule[deviceSN] = {"reserve": 10, "charge": {"start_time": "02:30:00"}}
 
     # Try to set start_time to invalid value - should default to "00:00:00"
@@ -4113,7 +4186,6 @@ def test_write_battery_schedule_event_end_time_invalid(my_predbat):
     fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
     fox.fdpwr_max[deviceSN] = 8000
     fox.fdsoc_min[deviceSN] = 10
-    fox.device_current_schedule[deviceSN] = []
     fox.local_schedule[deviceSN] = {"reserve": 10, "discharge": {"end_time": "19:00:00"}}
 
     # Try to set end_time to invalid value - should default to "00:00:00"
@@ -4137,7 +4209,6 @@ def test_write_battery_schedule_event_write_trigger(my_predbat):
     fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
     fox.fdpwr_max[deviceSN] = 8000
     fox.fdsoc_min[deviceSN] = 10
-    fox.device_current_schedule[deviceSN] = []
     fox.local_schedule[deviceSN] = {
         "reserve": 10,
         "charge": {"enable": 1, "start_time": "02:30:00", "end_time": "05:30:00", "soc": 100, "power": 8000},
@@ -4182,7 +4253,6 @@ def test_write_battery_schedule_event_unknown_attribute(my_predbat):
     fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
     fox.fdpwr_max[deviceSN] = 8000
     fox.fdsoc_min[deviceSN] = 10
-    fox.device_current_schedule[deviceSN] = []
     fox.local_schedule[deviceSN] = {"reserve": 10, "charge": {}}
 
     # Try with unknown attribute
@@ -4208,7 +4278,6 @@ def test_write_battery_schedule_event_initialize_local_schedule(my_predbat):
     fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
     fox.fdpwr_max[deviceSN] = 8000
     fox.fdsoc_min[deviceSN] = 15
-    fox.device_current_schedule[deviceSN] = []
     # local_schedule doesn't have deviceSN key
     fox.local_schedule = {}
     fox.device_scheduler[deviceSN] = {"enable": False, "groups": []}
@@ -4258,7 +4327,6 @@ def test_select_event_battery_schedule(my_predbat):
     fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
     fox.fdpwr_max[deviceSN] = 8000
     fox.fdsoc_min[deviceSN] = 10
-    fox.device_current_schedule[deviceSN] = []
     fox.local_schedule[deviceSN] = {"reserve": 10, "charge": {"start_time": "00:00:00"}}
 
     run_async(fox.select_event("select.predbat_fox_test123456_battery_schedule_charge_start_time", "02:30:00"))
@@ -4304,7 +4372,6 @@ def test_number_event_battery_schedule(my_predbat):
     fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
     fox.fdpwr_max[deviceSN] = 8000
     fox.fdsoc_min[deviceSN] = 10
-    fox.device_current_schedule[deviceSN] = []
     fox.local_schedule[deviceSN] = {"reserve": 10, "charge": {"soc": 80}}
 
     run_async(fox.number_event("number.predbat_fox_test123456_battery_schedule_charge_soc", "100"))
@@ -4329,7 +4396,6 @@ def test_switch_event_battery_schedule(my_predbat):
     fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
     fox.fdpwr_max[deviceSN] = 8000
     fox.fdsoc_min[deviceSN] = 10
-    fox.device_current_schedule[deviceSN] = []
     fox.local_schedule[deviceSN] = {"reserve": 10, "charge": {"enable": 0}}
 
     run_async(fox.switch_event("switch.predbat_fox_test123456_battery_schedule_charge_enable", "turn_on"))
@@ -4354,7 +4420,6 @@ def test_switch_event_toggle(my_predbat):
     fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
     fox.fdpwr_max[deviceSN] = 8000
     fox.fdsoc_min[deviceSN] = 10
-    fox.device_current_schedule[deviceSN] = []
     fox.local_schedule[deviceSN] = {"reserve": 10, "discharge": {"enable": 1}}
 
     run_async(fox.switch_event("switch.predbat_fox_test123456_battery_schedule_discharge_enable", "turn_off"))
@@ -5380,6 +5445,9 @@ def run_fox_api_tests(my_predbat):
         failed |= test_validate_schedule_multiple_windows(my_predbat)
         failed |= test_validate_schedule_both_charge_and_discharge(my_predbat)
         failed |= test_validate_schedule_discharge_ending_at_midnight(my_predbat)
+        failed |= test_validate_schedule_padding_normal(my_predbat)
+        failed |= test_validate_schedule_padding_empty(my_predbat)
+        failed |= test_validate_schedule_padding_no_target(my_predbat)
         if failed:
             return failed
 
