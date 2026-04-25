@@ -2543,6 +2543,134 @@ def test_pv_calibration_60min_period(my_predbat):
     return failed
 
 
+def test_pv_calibration_15min_period(my_predbat):
+    """
+    Test that pv_calibration correctly annotates pv_forecast_data entries when the
+    forecast period (15 min) is finer than the plan interval (30 min by default).
+
+    Each 15-min entry covers half a 30-min plan slot, so slots_per_period=1 and only
+    the single plan slot that starts at the entry's timestamp is used.  The annotated
+    pv_estimateCL should therefore be close to FORECAST_KW * 15/60 kWh (not double).
+    """
+    print("  - test_pv_calibration_15min_period")
+    failed = False
+
+    GEN_START = 480  # 8:00 UTC in minutes since midnight
+    GEN_END = 600  # 10:00 UTC (2 hours = 8 × 15-min entries)
+    FORECAST_KW = 2.0  # kW during generation window
+    PLAN_INTERVAL = 30  # minutes (production default)
+    FORECAST_PERIOD = 15  # minutes (forecast.solar / fine-resolution Solcast)
+    TOL = 0.15  # 15% tolerance
+
+    test_api = create_test_solar_api()
+    solar = test_api.solar
+    base = test_api.mock_base
+    base.plan_interval_minutes = PLAN_INTERVAL
+
+    # Flat historical production matching the forecast → calibration ratio ~1.0
+    hist = {}
+    days = 5
+    minutes_now = base.minutes_now  # 720 (noon)
+    for day_idx in range(days):
+        day = day_idx + 1
+        midnight_ago = day * 1440 + minutes_now
+        for step in range(0, 24 * 60, 5):
+            minute_ago = midnight_ago - step
+            if minute_ago < 0:
+                continue
+            actual_min = step
+            if actual_min < GEN_START:
+                cumulative = 0.0
+            elif actual_min < GEN_END:
+                cumulative = FORECAST_KW * (actual_min - GEN_START) / 60.0
+            else:
+                cumulative = FORECAST_KW * (GEN_END - GEN_START) / 60.0
+            hist[minute_ago] = cumulative
+
+    def mock_minute_import_export(max_days_prev, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True, _hist=hist):
+        """Mock historical PV data."""
+        return dict(_hist) if key == "pv_today" else {}
+
+    base.minute_data_import_export = mock_minute_import_export
+    solar.get_history_wrapper = lambda entity_id, days, required=False: []
+
+    # Build per-minute forecast arrays
+    total_minutes = 4 * 24 * 60
+    pv_m = {}
+    pv_m10 = {}
+    for m in range(total_minutes):
+        val = (FORECAST_KW / 60.0) if GEN_START <= m < GEN_END else 0.0
+        pv_m[m] = val
+        pv_m10[m] = val
+
+    # Build 15-min forecast data entries.
+    # Each entry covers FORECAST_PERIOD minutes and holds FORECAST_KW * (FORECAST_PERIOD/60) kWh.
+    midnight = datetime(2025, 6, 15, 0, 0, 0, tzinfo=pytz.utc)
+    pv_data = []
+    for slot in range(GEN_START, GEN_END, FORECAST_PERIOD):
+        ts = midnight + timedelta(minutes=slot)
+        kwh_per_entry = FORECAST_KW * FORECAST_PERIOD / 60.0
+        pv_data.append({"period_start": ts.strftime("%Y-%m-%dT%H:%M:%S+0000"), "pv_estimate": kwh_per_entry, "pv_estimate10": kwh_per_entry, "pv_estimate90": kwh_per_entry})
+
+    divide_by_factor = 1.0
+
+    pv_forecast_hist = {}
+    for day_num in range(1, days + 1):
+        for m_of_day in range(GEN_START, GEN_END):
+            minutes_ago = day_num * 1440 + (minutes_now - m_of_day)
+            pv_forecast_hist[minutes_ago] = float(FORECAST_KW)
+
+    with patch("solcast.history_attribute_to_minute_data", return_value=(pv_forecast_hist, days)):
+        adj_m, adj_m10, adj_data = solar.pv_calibration(pv_m, pv_m10, pv_data, create_pv10=True, divide_by=divide_by_factor, max_kwh=10.0, forecast_days=solar.forecast_days, period=FORECAST_PERIOD)
+
+    # Each 15-min entry should be annotated with the single 30-min plan slot that
+    # starts at the entry timestamp.  slots_per_period=max(1,round(15/30))=1, so
+    # the value should be one plan-slot's worth of calibrated kWh ≈ FORECAST_KW*30/60=1.0.
+    # (The plan slot is 30 min wide; each 15-min entry maps to one such slot.)
+    expected_kwh_per_slot = FORECAST_KW * PLAN_INTERVAL / 60.0  # 1.0 kWh
+
+    entries_validated = 0
+    for entry in adj_data:
+        cl = entry.get("pv_estimateCL")
+        e10 = entry.get("pv_estimate10")
+        e90 = entry.get("pv_estimate90")
+
+        if cl is None or cl == 0:
+            continue
+
+        entries_validated += 1
+
+        # pv_estimateCL must not be doubled (which would happen if slots_per_period were
+        # incorrectly set to 2 for a 15-min forecast with a 30-min plan interval).
+        double_expected = expected_kwh_per_slot * 2.0
+        if cl > double_expected * (1.0 + TOL):
+            print("ERROR: pv_estimateCL ({:.4f}) is larger than double the expected slot kWh ({:.4f}); slots may be over-accumulated".format(cl, expected_kwh_per_slot))
+            failed = True
+            break
+
+        if cl < expected_kwh_per_slot * (1.0 - TOL):
+            print("ERROR: pv_estimateCL ({:.4f}) is less than expected slot kWh ({:.4f})".format(cl, expected_kwh_per_slot))
+            failed = True
+            break
+
+        if e10 is not None and e10 > cl * 2.0:
+            print("ERROR: pv_estimate10 ({:.4f}) is unexpectedly much larger than pv_estimateCL ({:.4f})".format(e10, cl))
+            failed = True
+            break
+
+        if e90 is not None and e90 < cl * (1.0 - TOL):
+            print("ERROR: pv_estimate90 ({:.4f}) should be >= pv_estimateCL ({:.4f})".format(e90, cl))
+            failed = True
+            break
+
+    if entries_validated == 0:
+        print("ERROR: pv_calibration() annotated no entries with pv_estimateCL; annotation step may have regressed")
+        failed = True
+
+    test_api.cleanup()
+    return failed
+
+
 # ============================================================================
 # Main Test Runner
 # ============================================================================
@@ -2611,5 +2739,6 @@ def run_solcast_tests(my_predbat):
     failed |= test_pv_calibration_partial_history(my_predbat)
     failed |= test_pv_calibration_synthetic_values(my_predbat)
     failed |= test_pv_calibration_60min_period(my_predbat)
+    failed |= test_pv_calibration_15min_period(my_predbat)
 
     return failed
