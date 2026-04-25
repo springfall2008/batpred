@@ -1558,6 +1558,21 @@ class OctopusAPI(ComponentBase):
             headers = {"Authorization": f"{auth_prefix}{self.graphql_token}", integration_context_header: request_context}
             self.log("OctopusAPI: Making GraphQL request to {} payload {} headers {}".format(url, payload, headers))
             async with client.post(url, json=payload, headers=headers) as response:
+                # Check for HTTP-level 401/403 (transport-level auth failure) and retry once.
+                # This handles cases where the JWT has been revoked server-side and the server
+                # returns a bare 401/403 status rather than a GraphQL error body — which would
+                # otherwise loop forever without ever refreshing the token.
+                if response.status in [401, 403] and _retry_count == 0:
+                    self.log(f"OctopusAPI: HTTP {response.status} for graphql query {request_context}, forcing token refresh and retry")
+                    record_api_call("octopus", False, "auth_error")
+                    self.graphql_token = None
+                    retry_token = await self.async_refresh_token()
+                    if retry_token is None:
+                        self.failures_total += 1
+                        self.log(f"Warn: OctopusAPI: Failed to refresh token for retry of graphql query {request_context}")
+                        return None
+                    return await self.async_graphql_query(query, request_context, returns_data=returns_data, ignore_errors=ignore_errors, _retry_count=1, use_backend=use_backend)
+
                 # Process response (which reads the text)
                 response_body = await self.async_read_response_retry(response, url, ignore_errors=ignore_errors)
 
