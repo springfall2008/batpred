@@ -891,7 +891,10 @@ class SolarAPI(ComponentBase):
         # Number of plan-interval slots that span one forecast entry period.
         # For 30-min plan slots with a 60-min forecast (Open-Meteo) this is 2,
         # for 30-min plan slots with a 30-min forecast (Solcast) this is 1.
-        slots_per_period = max(1, int(round(period / self.plan_interval_minutes)))
+        # Use ceiling so partial forecast periods are fully covered rather than rounded down.
+        if period % self.plan_interval_minutes != 0:
+            self.log("Warn: PV calibration forecast period {} does not divide evenly into plan interval {} - using ceiling slot coverage".format(period, self.plan_interval_minutes))
+        slots_per_period = max(1, int(math.ceil(period / self.plan_interval_minutes)))
 
         self.log("PV Calibration: Fetching PV data for calibration")
 
