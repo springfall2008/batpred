@@ -142,6 +142,7 @@ def pad_schedule(schedule, target_count, reserve, fdPwr_max):
         schedule.append(disabled_entry.copy())
     return schedule
 
+
 def validate_schedule(new_schedule, reserve, fdPwr_max, target_count=0):
     # Sort schedule by start time, closest to midnight first
     new_schedule = sort_schedule_by_start_time(new_schedule)
@@ -1763,6 +1764,7 @@ class MockBase:  # pragma: no cover
             state = "n/a"
         print(f"Set arg {key} = {value} (state={state})")
 
+
 async def test_write_schedule(sn, api_key, token_hash, token_expires, supabase_url, supabase_key, user_id):  # pragma: no cover
     """
     Write a hardcoded test schedule to the Fox API and read it back to verify
@@ -1773,7 +1775,7 @@ async def test_write_schedule(sn, api_key, token_hash, token_expires, supabase_u
         os.environ["SUPABASE_KEY"] = supabase_key
 
     schedule = [
-        {'endHour': 20, 'fdPwr': 7000, 'minSocOnGrid': 10, 'workMode': 'ForceDischarge', 'fdSoc': 10, 'enable': 1, 'startHour': 20, 'maxSoc': 100, 'startMinute': 16, 'endMinute': 30},  # 20:16 - 20:30
+        {"endHour": 20, "fdPwr": 7000, "minSocOnGrid": 10, "workMode": "ForceDischarge", "fdSoc": 10, "enable": 1, "startHour": 20, "maxSoc": 100, "startMinute": 16, "endMinute": 30},  # 20:16 - 20:30
     ]
 
     mock_base = MockBase()
@@ -1820,8 +1822,6 @@ async def test_write_schedule(sn, api_key, token_hash, token_expires, supabase_u
     print(f"Schedule match: {match}")
     if not match:
         print("WARNING: Written schedule does not match read-back schedule")
-
-
 
 
 async def test_fox_api(sn, api_key, token_hash, token_expires, supabase_url, supabase_key, user_id):  # pragma: no cover

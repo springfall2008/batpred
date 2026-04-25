@@ -653,9 +653,7 @@ def test_validate_schedule_padding_normal(my_predbat):
     print("  - test_validate_schedule_padding_normal")
 
     # Single ForceCharge window 02:30 - 05:30 with target_count=8
-    new_schedule = [
-        {"enable": 1, "startHour": 2, "startMinute": 30, "endHour": 5, "endMinute": 30, "workMode": "ForceCharge", "fdSoc": 100, "maxSoc": 100, "fdPwr": 8000, "minSocOnGrid": 10}
-    ]
+    new_schedule = [{"enable": 1, "startHour": 2, "startMinute": 30, "endHour": 5, "endMinute": 30, "workMode": "ForceCharge", "fdSoc": 100, "maxSoc": 100, "fdPwr": 8000, "minSocOnGrid": 10}]
     reserve = 10
     fdPwr_max = 8000
 
@@ -715,9 +713,7 @@ def test_validate_schedule_padding_no_target(my_predbat):
     """
     print("  - test_validate_schedule_padding_no_target")
 
-    new_schedule = [
-        {"enable": 1, "startHour": 2, "startMinute": 0, "endHour": 5, "endMinute": 0, "workMode": "ForceCharge", "fdSoc": 100, "maxSoc": 100, "fdPwr": 8000, "minSocOnGrid": 10}
-    ]
+    new_schedule = [{"enable": 1, "startHour": 2, "startMinute": 0, "endHour": 5, "endMinute": 0, "workMode": "ForceCharge", "fdSoc": 100, "maxSoc": 100, "fdPwr": 8000, "minSocOnGrid": 10}]
     reserve = 10
     fdPwr_max = 8000
 
