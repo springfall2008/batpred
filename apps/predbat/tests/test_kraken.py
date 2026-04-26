@@ -447,6 +447,152 @@ def test_standing_charge_converts_pence_to_pounds():
     assert result == 0.53
 
 
+def test_fetch_standing_charges_rest_404_falls_back_to_graphql():
+    """async_fetch_standing_charges() falls back to GraphQL when REST returns 404.
+
+    Reproduces the E.ON Next TOU tariff scenario: NEXT_SMART_SAVER_FIXED_12M_V8 has no
+    /standing-charges/ REST endpoint, returns HTTP 404, GraphQL fallback must be used.
+    """
+    api = make_kraken_api(provider="eon", account_id="A-AA8A473C")
+    api.current_tariff = {"tariff_code": "E-TOU-NEXT_SMART_SAVER_FIXED_12M_V8-M", "product_code": "NEXT_SMART_SAVER_FIXED_12M_V8"}
+    api.import_mpan = "1900000000456"
+    api.async_fetch_standing_charges_graphql = AsyncMock(return_value=0.6195)
+
+    mock_response = AsyncMock()
+    mock_response.status = 404
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_response),
+            __aexit__=AsyncMock(return_value=None),
+        )
+    )
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(api.async_fetch_standing_charges())
+
+    assert result == 0.6195
+    api.async_fetch_standing_charges_graphql.assert_called_once_with("1900000000456")
+
+
+def test_fetch_standing_charges_rest_404_no_fallback_without_import_mpan():
+    """async_fetch_standing_charges() returns None (no fallback) when REST 404 and import_mpan not set."""
+    api = make_kraken_api()
+    api.current_tariff = {"tariff_code": "E-TOU-OLD-M", "product_code": "OLD"}
+    api.import_mpan = None
+
+    mock_response = AsyncMock()
+    mock_response.status = 404
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_response),
+            __aexit__=AsyncMock(return_value=None),
+        )
+    )
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(api.async_fetch_standing_charges())
+
+    assert result is None
+
+
+def test_fetch_standing_charges_rest_410_falls_back_to_graphql():
+    """async_fetch_standing_charges() also falls back on HTTP 410 Gone."""
+    api = make_kraken_api(provider="eon", account_id="A-AA8A473C")
+    api.current_tariff = {"tariff_code": "E-TOU-GONE-V1-M", "product_code": "GONE-V1"}
+    api.import_mpan = "1900000000456"
+    api.async_fetch_standing_charges_graphql = AsyncMock(return_value=0.53)
+
+    mock_response = AsyncMock()
+    mock_response.status = 410
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_response),
+            __aexit__=AsyncMock(return_value=None),
+        )
+    )
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(api.async_fetch_standing_charges())
+
+    assert result == 0.53
+    api.async_fetch_standing_charges_graphql.assert_called_once_with("1900000000456")
+
+
+def test_fetch_standing_charges_graphql_returns_value():
+    """async_fetch_standing_charges_graphql() converts GraphQL value to pounds/day."""
+    api = make_kraken_api()
+    api.account_id = "A-AA8A473C"
+    api.async_graphql_query = AsyncMock(
+        return_value={
+            "applicableStandingCharges": [
+                {"value": 61.95, "validFrom": "2026-04-10T00:00:00Z", "validTo": None},
+            ]
+        }
+    )
+
+    result = asyncio.run(api.async_fetch_standing_charges_graphql("1900000000456"))
+
+    # 61.95 pence/day → 0.6195 pounds/day
+    assert result is not None
+    assert abs(result - 0.6195) < 1e-6
+
+
+def test_fetch_standing_charges_graphql_returns_none_on_empty():
+    """async_fetch_standing_charges_graphql() returns None when applicableStandingCharges is empty."""
+    api = make_kraken_api()
+    api.account_id = "A-AA8A473C"
+    api.async_graphql_query = AsyncMock(return_value={"applicableStandingCharges": []})
+
+    result = asyncio.run(api.async_fetch_standing_charges_graphql("1900000000456"))
+    assert result is None
+
+
+def test_fetch_standing_charges_graphql_returns_none_on_graphql_failure():
+    """async_fetch_standing_charges_graphql() returns None when GraphQL query fails."""
+    api = make_kraken_api()
+    api.account_id = "A-AA8A473C"
+    api.async_graphql_query = AsyncMock(return_value=None)
+
+    result = asyncio.run(api.async_fetch_standing_charges_graphql("1900000000456"))
+    assert result is None
+
+
+def test_fetch_standing_charges_transient_error_does_not_fall_back_to_graphql():
+    """async_fetch_standing_charges() returns None (no fallback) for transient errors like 500/429."""
+    for status_code in (429, 500, 503):
+        api = make_kraken_api()
+        api.current_tariff = {"tariff_code": "E-1R-VAR-01-J", "product_code": "VAR-01"}
+        api.import_mpan = "1900000000456"
+        api.async_fetch_standing_charges_graphql = AsyncMock()
+
+        mock_response = AsyncMock()
+        mock_response.status = status_code
+        mock_session = AsyncMock()
+        mock_session.get = MagicMock(
+            return_value=AsyncMock(
+                __aenter__=AsyncMock(return_value=mock_response),
+                __aexit__=AsyncMock(return_value=None),
+            )
+        )
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            result = asyncio.run(api.async_fetch_standing_charges())
+
+        assert result is None, f"Expected None for HTTP {status_code}, got {result}"
+        api.async_fetch_standing_charges_graphql.assert_not_called()
+
+
 def test_export_discovery_clears_stale_when_not_found():
     """Export tariff is cleared if all strategies fail (prevents stale rates)."""
     api = make_kraken_api()
@@ -977,6 +1123,13 @@ def run_kraken_tests(my_predbat=None):
         test_fetch_rates_rest_404_no_fallback_for_export_tariff,
         test_fetch_rates_rest_410_falls_back_to_graphql_for_import,
         test_fetch_rates_transient_error_does_not_fall_back_to_graphql,
+        test_fetch_standing_charges_rest_404_falls_back_to_graphql,
+        test_fetch_standing_charges_rest_404_no_fallback_without_import_mpan,
+        test_fetch_standing_charges_rest_410_falls_back_to_graphql,
+        test_fetch_standing_charges_graphql_returns_value,
+        test_fetch_standing_charges_graphql_returns_none_on_empty,
+        test_fetch_standing_charges_graphql_returns_none_on_graphql_failure,
+        test_fetch_standing_charges_transient_error_does_not_fall_back_to_graphql,
     ]
     for test_func in tests:
         try:
