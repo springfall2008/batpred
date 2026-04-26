@@ -54,7 +54,10 @@ class TemperatureAPI(ComponentBase):
         Main run loop - polls API every hour
         """
         try:
-            if not self.temperature_enable:
+            # Re-read enable flag dynamically so runtime UI toggles are respected
+            temperature_enable = self.get_arg("temperature_enable", self.temperature_enable)
+            if not temperature_enable:
+                self.update_success_timestamp()
                 return True
             if first or (seconds % (60 * 60) == 0):
                 # Fetch temperature data every hour
