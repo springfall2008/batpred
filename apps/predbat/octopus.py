@@ -781,9 +781,9 @@ class OctopusAPI(ComponentBase):
                             already_exists = True
                     if not already_exists and dispatch.get("start", None) and dispatch.get("end", None) and dispatch.get("charge_in_kwh", None):
                         current_completed.append(dispatch)
-            current_completed = sorted(current_completed, key=lambda x: parse_date_time(x["start"]))
+            current_completed = sorted([x for x in current_completed if x.get("start")], key=lambda x: parse_date_time(x["start"]))
             # Prune completed dispatches for results older than 5 days
-            current_completed = [x for x in current_completed if parse_date_time(x["start"]) > self.now_utc_exact - timedelta(days=5)]
+            current_completed = [x for x in current_completed if x.get("start") and parse_date_time(x["start"]) > self.now_utc_exact - timedelta(days=5)]
             intelligent_device["completed_dispatches"] = current_completed
 
     def join_saving_session_event(self, event_code):
@@ -1760,7 +1760,7 @@ class OctopusAPI(ComponentBase):
                                         # Check if the dispatch is already in the completed list, if its already there then don't add it again
                                         found = False
                                         for cached in completed:
-                                            if cached["start"] == completed_start_time.strftime(DATE_TIME_STR_FORMAT):
+                                            if cached.get("start") == completed_start_time.strftime(DATE_TIME_STR_FORMAT):
                                                 cached.update(completed_dispatch)
                                                 found = True
                                                 break
@@ -1796,7 +1796,7 @@ class OctopusAPI(ComponentBase):
                                 # Check if the dispatch is already in the completed list, if its already there then don't add it again
                                 found = False
                                 for cached in completed:
-                                    if cached["start"] == start:
+                                    if cached.get("start") == start:
                                         cached.update(dispatch)
                                         found = True
                                         break
@@ -1804,11 +1804,11 @@ class OctopusAPI(ComponentBase):
                                     completed.append(dispatch)
 
                         # Sort by start time
-                        planned = sorted(planned, key=lambda x: parse_date_time(x["start"]))
-                        completed = sorted(completed, key=lambda x: parse_date_time(x["start"]))
+                        planned = sorted([x for x in planned if x.get("start")], key=lambda x: parse_date_time(x["start"]))
+                        completed = sorted([x for x in completed if x.get("start")], key=lambda x: parse_date_time(x["start"]))
 
                         # Prune completed dispatches for results older than 5 days
-                        completed = [x for x in completed if parse_date_time(x["start"]) > self.now_utc_exact - timedelta(days=5)]
+                        completed = [x for x in completed if x.get("start") and parse_date_time(x["start"]) > self.now_utc_exact - timedelta(days=5)]
                         # Store results
                         result = {**intelligent_device, **device_setting_result, "planned_dispatches": planned, "completed_dispatches": completed}
                         results[IntelligentdeviceID] = result
