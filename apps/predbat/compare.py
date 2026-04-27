@@ -76,14 +76,14 @@ class Compare:
             pb.rate_import = pb.download_octopus_rates(pb.resolve_arg("rates_import_octopus_url", tariff["rates_import_octopus_url"], indirect=False))
         elif "metric_octopus_import" in tariff:
             # Octopus import rates
-            entity_id = pb.resolve_arg("metric_octopus_import", tariff["metric_octopus_import"])
+            entity_id = pb.resolve_arg("metric_octopus_import", tariff["metric_octopus_import"], indirect=False)
             if entity_id:
                 pb.rate_import = pb.fetch_octopus_rates(entity_id, adjust_key="is_intelligent_adjusted")
             else:
                 self.log("Warn: Compare tariff {} bad Octopus entity id {}".format(tariff.get("id", ""), entity_id))
         elif "metric_energidataservice_import" in tariff:
             # Octopus import rates
-            entity_id = pb.resolve_arg("metric_energidataservice_import", tariff["metric_energidataservice_import"])
+            entity_id = pb.resolve_arg("metric_energidataservice_import", tariff["metric_energidataservice_import"], indirect=False)
             if entity_id:
                 pb.rate_import = pb.fetch_energidataservice_rates(entity_id, adjust_key="is_intelligent_adjusted")
             else:
@@ -98,14 +98,14 @@ class Compare:
             pb.rate_export = pb.download_octopus_rates(pb.resolve_arg("rates_export_octopus_url", tariff["rates_export_octopus_url"], indirect=False))
         elif "metric_octopus_export" in tariff:
             # Octopus export rates
-            entity_id = pb.resolve_arg("metric_octopus_export", tariff["metric_octopus_export"])
+            entity_id = pb.resolve_arg("metric_octopus_export", tariff["metric_octopus_export"], indirect=False)
             if entity_id:
                 pb.rate_export = pb.fetch_octopus_rates(entity_id)
             else:
                 self.log("Warn: Compare tariff {} bad Octopus entity id {}".format(tariff.get("id", ""), entity_id))
         elif "metric_energidataservice_export" in tariff:
             # Octopus import rates
-            entity_id = pb.resolve_arg("metric_energidataservice_export", tariff["metric_energidataservice_export"])
+            entity_id = pb.resolve_arg("metric_energidataservice_export", tariff["metric_energidataservice_export"], indirect=False)
             if entity_id:
                 pb.rate_export = pb.fetch_energidataservice_rates(entity_id, adjust_key="is_intelligent_adjusted")
             else:
