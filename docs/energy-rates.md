@@ -508,6 +508,62 @@ Or, if you prefer to set import/export calibration manually rather than auto-det
   futurerate_peak_end: "19:00:00"
 ```
 
+### Future rates from Home Assistant sensors
+
+You can source future-rate predictions from Home Assistant sensors instead of, or
+alongside, `futurerate_url`. Each side has its own sensor option:
+
+- **futurerate_sensor_import** - import predictions (e.g. [AgilePredict](https://prices.fly.dev/api_how_to))
+- **futurerate_sensor_export** - export predictions
+
+Either, both, or neither may be set. When a sensor is set it overrides whatever
+the URL produced for that side. The URL still runs (if configured) and provides
+fallback values for any side without a sensor, or whose sensor returned no data.
+
+If neither URL nor sensor is set, no future-rate prediction is used.
+
+Each sensor must expose a list of `{timestamp, rate}` items as an attribute.
+Defaults match AgilePredict's shape and are shared between both sensors, on the
+assumption you'll template each side alike. Override the keys if your sensors
+use a different format.
+
+- **futurerate_sensor_import** - entity_id of the import-side sensor
+- **futurerate_sensor_export** - entity_id of the export-side sensor
+- **futurerate_sensor_attribute** - attribute with the list (default `prices`)
+- **futurerate_sensor_time_key** - timestamp key in each item (default `date_time`)
+- **futurerate_sensor_rate_key** - rate key in each item, in p/kWh (default `agile_pred`)
+
+Import sensor (AgilePredict) + URL for export (typical Agile + Outgoing Agile setup):
+
+```yaml
+  futurerate_sensor_import: sensor.agilepredict
+  futurerate_url: 'https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices?date=DATE&market=N2EX_DayAhead&deliveryArea=UK&currency=GBP'
+  futurerate_adjust_import: true
+  futurerate_adjust_export: true
+  futurerate_peak_start: "16:00:00"
+  futurerate_peak_end: "19:00:00"
+```
+
+Both sides from sensors, no URL:
+
+```yaml
+  futurerate_sensor_import: sensor.my_import_forecast
+  futurerate_sensor_export: sensor.my_export_forecast
+  futurerate_adjust_import: true
+  futurerate_adjust_export: true
+  futurerate_peak_start: "16:00:00"
+  futurerate_peak_end: "19:00:00"
+```
+
+Import sensor only (no export forecast at all):
+
+```yaml
+  futurerate_sensor_import: sensor.agilepredict
+  futurerate_adjust_import: true
+  futurerate_peak_start: "16:00:00"
+  futurerate_peak_end: "19:00:00"
+```
+
 ## Axle VPP
 
 [Axle in the UK](https://vpp.axle.energy/landing) provide a Virtual Power Plant (VPP) service to the National Grid. In times of strain in the energy grid, Axle will command inverters to export, and in return you get paid £1/kWh.

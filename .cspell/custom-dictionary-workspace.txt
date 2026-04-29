@@ -3,6 +3,8 @@ activepower
 adata
 adbase
 afci
+agilepredict
+AgilePredict
 AIO
 AIO's
 aiohttp

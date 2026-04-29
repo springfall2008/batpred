@@ -311,28 +311,135 @@ class FutureRate:
         self.log("Predicted future rates: {}".format(future_data))
         return mdata_import, mdata_export
 
+    def futurerate_analysis_sensor(self, real_rates, side):
+        """
+        Read futurerate predictions for one side (import or export) from a HA sensor.
+
+        Defaults match the AgilePredict integration (attribute "prices", item keys
+        "date_time" and "agile_pred"); `futurerate_sensor_attribute`,
+        `futurerate_sensor_time_key`, and `futurerate_sensor_rate_key` override these
+        for other forecast sensors. The same shape options apply to both sides on the
+        assumption that an import and export forecast sensor will be templated alike.
+        """
+        is_import = side == "import"
+        entity_arg = "futurerate_sensor_import" if is_import else "futurerate_sensor_export"
+        adjust_arg = "futurerate_adjust_import" if is_import else "futurerate_adjust_export"
+
+        entity_id = self.get_arg(entity_arg, None, indirect=False)
+        attribute = self.get_arg("futurerate_sensor_attribute", "prices", indirect=False)
+        time_key = self.get_arg("futurerate_sensor_time_key", "date_time", indirect=False)
+        rate_key = self.get_arg("futurerate_sensor_rate_key", "agile_pred", indirect=False)
+
+        peak_start = datetime.strptime(self.get_arg("futurerate_peak_start", "00:00:00"), "%H:%M:%S")
+        peak_end = datetime.strptime(self.get_arg("futurerate_peak_end", "00:00:00"), "%H:%M:%S")
+        peak_start_minutes = peak_start.minute + peak_start.hour * 60
+        peak_end_minutes = peak_end.minute + peak_end.hour * 60
+        if peak_end_minutes < peak_start_minutes:
+            peak_end_minutes += 24 * 60
+
+        prices = self.get_state_wrapper(entity_id, attribute=attribute)
+        if not prices or not isinstance(prices, list):
+            self.log("Warn: {} {} attribute {} returned no list data".format(entity_arg, entity_id, attribute))
+            self.record_status("Warn: {} returned no data".format(entity_arg), debug=entity_id, had_errors=True)
+            return {}
+
+        slot_minutes = self.plan_interval_minutes
+        rate_field = "rate_import" if is_import else "rate_export"
+        extracted_keys = []
+        extracted_data = {}
+
+        for item in prices:
+            if not isinstance(item, dict):
+                continue
+            raw_time = item.get(time_key)
+            raw_rate = item.get(rate_key)
+            if raw_time is None or raw_rate is None:
+                continue
+            try:
+                time_date_start = datetime.fromisoformat(str(raw_time))
+            except ValueError:
+                continue
+            if time_date_start.tzinfo is None:
+                time_date_start = time_date_start.replace(tzinfo=self.midnight_utc.tzinfo)
+            try:
+                rate_value = float(raw_rate)
+            except (TypeError, ValueError):
+                continue
+
+            time_date_end = time_date_start + timedelta(minutes=slot_minutes)
+
+            entry = {
+                "from": time_date_start.strftime(TIME_FORMAT),
+                "to": time_date_end.strftime(TIME_FORMAT),
+                rate_field: dp2(rate_value),
+            }
+            if time_date_start not in extracted_keys:
+                extracted_keys.append(time_date_start)
+                extracted_data[time_date_start] = entry
+
+        mdata = {}
+        if extracted_keys:
+            extracted_keys.sort()
+            array_values = [extracted_data[key] for key in extracted_keys]
+            self.log("Loaded {} datapoints of futurerate sensor analysis ({})".format(len(extracted_keys), side))
+            mdata, _ = minute_data(array_values, self.forecast_days + 1, self.midnight_utc, rate_field, "from", backwards=False, to_key="to")
+
+        adjust = self.get_arg(adjust_arg, False)
+        mdata = self.futurerate_calibrate(real_rates if adjust else {}, mdata, is_import=is_import, peak_start_minutes=peak_start_minutes, peak_end_minutes=peak_end_minutes)
+
+        future_data = []
+        minute_now_hour = int(self.minutes_now / 60) * 60
+        for minute in range(0, self.forecast_plan_hours * 60 + minute_now_hour, 60):
+            if mdata.get(minute):
+                future_data.append("{} => {}".format(self.time_abs_str(minute), mdata.get(minute)))
+        self.log("Predicted future {} rates (sensor): {}".format(side, future_data))
+        return mdata
+
     def futurerate_analysis(self, rate_import_real, rate_export_real):
         """
-        Analyse futurerate energy data
+        Analyse futurerate energy data.
+
+        The URL and sensor sources coexist. Each side is taken from the highest-priority
+        source that produced data:
+          - `futurerate_sensor_import` / `futurerate_sensor_export` (per side, override URL)
+          - `futurerate_url` (provides both sides as a fallback)
+
+        Sensor-only setups work — `futurerate_url` is optional. If neither is configured
+        the result is empty.
         """
 
-        url = None
-        if "futurerate_url" in self.base.args:
-            url = self.base.args["futurerate_url"]
-        if not url:
-            return {}, {}
+        url = self.base.args.get("futurerate_url") if "futurerate_url" in self.base.args else None
+        sensor_import = self.get_arg("futurerate_sensor_import", None, indirect=False)
+        sensor_export = self.get_arg("futurerate_sensor_export", None, indirect=False)
 
-        if "DATE" in url:
-            import_agile = self.get_arg("futurerate_adjust_import", False)
-            export_agile = self.get_arg("futurerate_adjust_export", False)
-            if not import_agile and not export_agile:
-                self.log("FutureRate: No futurerate adjustment enabled, skipping futurerate analysis")
-                return {}, {}
-            self.log("Fetching futurerate data from {}".format(url))
-            return self.futurerate_analysis_new(url, rate_import_real, rate_export_real)
-        else:
-            print("Warning: Old futurerate URL, you must update this in apps.yaml")
-            return {}, {}
+        mdata_import = {}
+        mdata_export = {}
+
+        if url:
+            if "DATE" in url:
+                import_agile = self.get_arg("futurerate_adjust_import", False)
+                export_agile = self.get_arg("futurerate_adjust_export", False)
+                if import_agile or export_agile:
+                    self.log("Fetching futurerate data from {}".format(url))
+                    mdata_import, mdata_export = self.futurerate_analysis_new(url, rate_import_real, rate_export_real)
+                else:
+                    self.log("FutureRate: No futurerate adjustment enabled, skipping futurerate URL analysis")
+            else:
+                print("Warning: Old futurerate URL, you must update this in apps.yaml")
+
+        if sensor_import:
+            self.log("Fetching futurerate import data from sensor {}".format(sensor_import))
+            sensor_data = self.futurerate_analysis_sensor(rate_import_real, "import")
+            if sensor_data:
+                mdata_import = sensor_data
+
+        if sensor_export:
+            self.log("Fetching futurerate export data from sensor {}".format(sensor_export))
+            sensor_data = self.futurerate_analysis_sensor(rate_export_real, "export")
+            if sensor_data:
+                mdata_export = sensor_data
+
+        return mdata_import, mdata_export
 
     def clean_futurerate_cache(self):
         """
