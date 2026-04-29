@@ -287,6 +287,7 @@ Because integrations format their attribute data differently, a template sensor 
 ```
 
 ### Czech Republic example
+
 Czech republic has moved to 15 minute spot pricing.
 
 To make sure predbat calculated 15 minute pricing add plan_interval_minutes: 15 to apps.yaml
