@@ -290,7 +290,7 @@ Because integrations format their attribute data differently, a template sensor 
 
 Czech republic has moved to 15 minute spot pricing.
 
-To make sure predbat calculated 15 minute pricing add plan_interval_minutes: 15 to apps.yaml
+To make sure Predbat calculates 15-minute pricing correctly, add `plan_interval_minutes: 15` to `apps.yaml`.
 <https://github.com/rnovacek/homeassistant_cz_energy_spot_prices>
 
 ```yaml
