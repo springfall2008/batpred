@@ -1389,15 +1389,25 @@ class Fetch:
                     rate_offset = rate_last
                     using_last = True
 
-                # Only offset once not every day
+                # Two ways to activate future-rate input on a side:
+                #   - futurerate_adjust_<side>=True (the historic URL opt-in)
+                #   - FutureRate.futurerate_analysis() set future_rates_active_<side>
+                #     because a `futurerate_sensor_<side>` actually produced data.
+                # We deliberately do NOT activate just because `futurerate_sensor_<side>`
+                # is set in config: a typo'd entity would otherwise open the gate, and
+                # if URL+adjust on the OTHER side populated this side's dict as a side
+                # effect, the planner would silently use URL-derived data on a side the
+                # user never enabled.
                 futurerate_adjust_import = self.get_arg("futurerate_adjust_import", False)
                 futurerate_adjust_export = self.get_arg("futurerate_adjust_export", False)
+                use_future_import = futurerate_adjust_import or getattr(self, "future_rates_active_import", False)
+                use_future_export = futurerate_adjust_export or getattr(self, "future_rates_active_export", False)
                 if minute_mod not in adjusted_rates:
-                    if is_import and futurerate_adjust_import and (minute in self.future_energy_rates_import) and (minute_mod in self.future_energy_rates_import):
+                    if is_import and use_future_import and (minute in self.future_energy_rates_import) and (minute_mod in self.future_energy_rates_import):
                         rate_offset = self.future_energy_rates_import[minute]
                         adjust_type = "future"
                         using_last = False
-                    elif (not is_import) and (not is_gas) and futurerate_adjust_export and (minute in self.future_energy_rates_export) and (minute_mod in self.future_energy_rates_export):
+                    elif (not is_import) and (not is_gas) and use_future_export and (minute in self.future_energy_rates_export) and (minute_mod in self.future_energy_rates_export):
                         rate_offset = max(self.future_energy_rates_export[minute], 0)
                         adjust_type = "future"
                         using_last = False

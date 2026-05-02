@@ -357,7 +357,14 @@ class FutureRate:
             if raw_time is None or raw_rate is None:
                 continue
             try:
-                time_date_start = datetime.fromisoformat(str(raw_time))
+                # Pre-3.11 datetime.fromisoformat doesn't accept the trailing Z
+                # zulu suffix that AgilePredict and many other UTC feeds emit.
+                # Normalise it to +00:00 so we work on AppDaemon images that
+                # still ship Python 3.10.
+                iso_text = str(raw_time)
+                if iso_text.endswith("Z"):
+                    iso_text = iso_text[:-1] + "+00:00"
+                time_date_start = datetime.fromisoformat(iso_text)
             except ValueError:
                 continue
             if time_date_start.tzinfo is None:
@@ -417,6 +424,15 @@ class FutureRate:
 
         Sensor-only setups work; `futurerate_url` is optional. If neither is configured
         the result is empty.
+
+        Side-effect: sets `self.base.future_rates_active_import` / `_active_export` to
+        True only when that side was activated by an explicit user opt-in: either the
+        matching `futurerate_adjust_*` flag (URL path) or a `futurerate_sensor_*` that
+        actually returned usable data. The URL fetch populates BOTH sides whenever
+        EITHER adjust flag is set, so without these per-side activation flags the
+        planner would silently start using URL-derived data on a side the user never
+        enabled (e.g. URL+adjust_import=True+sensor_export=typo would feed URL export
+        data into the planner). `rate_replicate` reads these flags as the gate.
         """
 
         url = self.base.args.get("futurerate_url") if "futurerate_url" in self.base.args else None
@@ -425,6 +441,8 @@ class FutureRate:
 
         mdata_import = {}
         mdata_export = {}
+        self.base.future_rates_active_import = False
+        self.base.future_rates_active_export = False
 
         if url:
             if "DATE" in url:
@@ -433,6 +451,10 @@ class FutureRate:
                 if import_agile or export_agile:
                     self.log("Fetching futurerate data from {}".format(url))
                     mdata_import, mdata_export = self.futurerate_analysis_new(url, rate_import_real, rate_export_real)
+                    if import_agile and mdata_import:
+                        self.base.future_rates_active_import = True
+                    if export_agile and mdata_export:
+                        self.base.future_rates_active_export = True
                 else:
                     self.log("FutureRate: No futurerate adjustment enabled, skipping futurerate URL analysis")
             else:
@@ -443,12 +465,14 @@ class FutureRate:
             sensor_data = self.futurerate_analysis_sensor("import")
             if sensor_data:
                 mdata_import = sensor_data
+                self.base.future_rates_active_import = True
 
         if sensor_export:
             self.log("Fetching futurerate export data from sensor {}".format(sensor_export))
             sensor_data = self.futurerate_analysis_sensor("export")
             if sensor_data:
                 mdata_export = sensor_data
+                self.base.future_rates_active_export = True
 
         return mdata_import, mdata_export
 
