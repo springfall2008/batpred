@@ -417,22 +417,23 @@ class FutureRate:
         """
         Analyse futurerate energy data.
 
-        The URL and sensor sources coexist. Each side is taken from the highest-priority
-        source that produced data:
-          - `futurerate_sensor_import` / `futurerate_sensor_export` (per side, override URL)
-          - `futurerate_url` (provides both sides as a fallback)
+        Sensor and URL sources are independent. A sensor activates the planner for
+        its side as soon as it returns non-empty data, no `futurerate_adjust_*`
+        flag required. The URL only fetches when `futurerate_adjust_import` or
+        `futurerate_adjust_export` is True (note that `futurerate_adjust_auto` is
+        resolved into the per-side flags in `__init__` before this method runs),
+        and a URL fetch only activates the planner for a side whose matching
+        `futurerate_adjust_<side>` is set. URL data therefore fills in for an
+        empty sensor on side X only when `futurerate_adjust_X` is also set;
+        otherwise the URL is not the fallback.
 
-        Sensor-only setups work; `futurerate_url` is optional. If neither is configured
-        the result is empty.
-
-        Side-effect: sets `self.base.future_rates_active_import` / `_active_export` to
-        True only when that side was activated by an explicit user opt-in: either the
-        matching `futurerate_adjust_*` flag (URL path) or a `futurerate_sensor_*` that
-        actually returned usable data. The URL fetch populates BOTH sides whenever
-        EITHER adjust flag is set, so without these per-side activation flags the
-        planner would silently start using URL-derived data on a side the user never
-        enabled (e.g. URL+adjust_import=True+sensor_export=typo would feed URL export
-        data into the planner). `rate_replicate` reads these flags as the gate.
+        Side-effect: sets `self.base.future_rates_active_import` /
+        `_active_export` True only on sides the user explicitly opted into per
+        the rules above. The URL populates both sides whenever either adjust
+        flag is set, so without the per-side activation flag a typo'd
+        `futurerate_sensor_<other_side>` could otherwise leak URL data on a
+        side the user never enabled. `rate_replicate` reads these flags as the
+        gate.
         """
 
         url = self.base.args.get("futurerate_url") if "futurerate_url" in self.base.args else None

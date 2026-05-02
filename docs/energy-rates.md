@@ -516,11 +516,17 @@ alongside, `futurerate_url`. Each side has its own sensor option:
 - **futurerate_sensor_import** - import predictions (e.g. [AgilePredict](https://prices.fly.dev/api_how_to))
 - **futurerate_sensor_export** - export predictions
 
-Either, both, or neither may be set. When a sensor is set it overrides whatever
-the URL produced for that side. The URL still runs (if configured) and provides
-fallback values for any side without a sensor, or whose sensor returned no data.
+Either, both, or neither may be set. When a sensor is set and returns data it
+applies for that side, no `futurerate_adjust_*` flag needed.
 
-If neither URL nor sensor is set, no future-rate prediction is used.
+The URL path is separate. It only runs when `futurerate_adjust_import` or
+`futurerate_adjust_export` is true (or `futurerate_adjust_auto` resolves true),
+and the planner only uses URL-derived rates on a side whose matching
+`futurerate_adjust_<side>` is set. URL data is therefore a fallback for an empty
+sensor only when the URL and that side's adjust flag are both set; a configured
+URL with no adjust flag does nothing.
+
+If nothing is configured, no future-rate prediction is used.
 
 Each sensor must expose a list of `{timestamp, rate}` items as an attribute.
 Rates from the sensor are assumed to be in consumer p/kWh already (AgilePredict

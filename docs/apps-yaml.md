@@ -1482,8 +1482,8 @@ These are described in detail in [Energy Rates](energy-rates.md) and are listed 
 - **rates_import_override** - Over-ride import rate for specific date and time range, e.g. Octopus Power-up events
 - **rates_export_override** - Over-ride export rate for specific date and time range
 - **futurerate_url** - URL of future energy market prices for Agile users
-- **futurerate_sensor_import** - HA sensor with predicted import rates (e.g. AgilePredict). Values are used as-is in p/kWh. Overrides URL-derived import data when set
-- **futurerate_sensor_export** - HA sensor with predicted export rates. Values are used as-is in p/kWh. Overrides URL-derived export data when set
+- **futurerate_sensor_import** - HA sensor with predicted import rates (e.g. AgilePredict). Values are used as-is in p/kWh. Activates the planner for the import side without needing `futurerate_adjust_import`
+- **futurerate_sensor_export** - HA sensor with predicted export rates. Values are used as-is in p/kWh. Activates the planner for the export side without needing `futurerate_adjust_export`
 - **futurerate_sensor_attribute** - Sensor attribute with the price list, shared by both import and export sensors (default: `prices`)
 - **futurerate_sensor_time_key** - Key in each list item for the timestamp (default: `date_time`)
 - **futurerate_sensor_rate_key** - Key in each list item for the rate in p/kWh (default: `agile_pred`)

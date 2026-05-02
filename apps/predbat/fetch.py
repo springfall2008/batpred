@@ -1397,17 +1397,25 @@ class Fetch:
                 # is set in config: a typo'd entity would otherwise open the gate, and
                 # if URL+adjust on the OTHER side populated this side's dict as a side
                 # effect, the planner would silently use URL-derived data on a side the
-                # user never enabled.
+                # user never enabled. Once the side is active, membership in
+                # future_energy_rates_<side> for the specific minute is sufficient —
+                # we no longer require today's same-time-of-day to also be present,
+                # so sensor feeds publishing only future data work correctly.
                 futurerate_adjust_import = self.get_arg("futurerate_adjust_import", False)
                 futurerate_adjust_export = self.get_arg("futurerate_adjust_export", False)
                 use_future_import = futurerate_adjust_import or getattr(self, "future_rates_active_import", False)
                 use_future_export = futurerate_adjust_export or getattr(self, "future_rates_active_export", False)
                 if minute_mod not in adjusted_rates:
-                    if is_import and use_future_import and (minute in self.future_energy_rates_import) and (minute_mod in self.future_energy_rates_import):
+                    # Historic gate also required `minute_mod in future_energy_rates_*`
+                    # (i.e. today's same-time-of-day must exist in the dict). That made
+                    # sense when the only feed was Nord Pool URL data covering ~48h, but
+                    # it silently ignores AgilePredict-style sensors that publish only
+                    # tomorrow's prices. The membership check on `minute` is sufficient.
+                    if is_import and use_future_import and (minute in self.future_energy_rates_import):
                         rate_offset = self.future_energy_rates_import[minute]
                         adjust_type = "future"
                         using_last = False
-                    elif (not is_import) and (not is_gas) and use_future_export and (minute in self.future_energy_rates_export) and (minute_mod in self.future_energy_rates_export):
+                    elif (not is_import) and (not is_gas) and use_future_export and (minute in self.future_energy_rates_export):
                         rate_offset = max(self.future_energy_rates_export[minute], 0)
                         adjust_type = "future"
                         using_last = False

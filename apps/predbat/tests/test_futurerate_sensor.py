@@ -443,10 +443,9 @@ def _test_sensor_drives_rate_replicate_without_adjust_flags(my_predbat):
 
         # Register sensor state and the AgilePredict-shaped attribute on the test HA
         # interface. 30-minute slots covering today + tomorrow (96 × 30min) at 22.0p
-        # import / 8.0p export. AgilePredict publishes ~48h forward, and the
-        # rate_replicate gate also checks `minute_mod in future_energy_rates_import`
-        # (i.e. the same time-of-day must exist on the today side of the dict), so
-        # the test must seed both halves to mirror real-world data.
+        # import / 8.0p export — this mirrors AgilePredict's typical ~48h forward
+        # publication. Tomorrow-only feeds (the case where today's data is absent)
+        # are exercised separately by _test_sensor_tomorrow_only_feed_drives_planner.
         import_prices = []
         export_prices = []
         for slot in range(96):  # 96 × 30min = 48h
@@ -525,6 +524,102 @@ def _test_sensor_drives_rate_replicate_without_adjust_flags(my_predbat):
 # activate the planner's future-rate gate when the URL+adjust on the OTHER
 # side has populated this side's dict as a side effect.
 # ---------------------------------------------------------------------------
+
+
+def _test_sensor_tomorrow_only_feed_drives_planner(my_predbat):
+    """Sensor feed that only publishes tomorrow's prices (no today coverage) must still drive rate_replicate.
+
+    Real-world AgilePredict sometimes only publishes the next 24h forward; the
+    historic `minute_mod in future_energy_rates_*` gate in rate_replicate would
+    silently ignore such a feed even though futurerate_analysis_sensor parsed it
+    successfully. This test seeds only minutes 1440-2879 (tomorrow) and asserts
+    the planner picks them up.
+    """
+    if my_predbat is None or not getattr(my_predbat, "ha_interface", None):
+        return False
+
+    from futurerate import FutureRate
+
+    saved_args = dict(my_predbat.args)
+    saved_midnight = my_predbat.midnight
+    saved_midnight_utc = my_predbat.midnight_utc
+    saved_now_utc = my_predbat.now_utc
+    saved_minutes_now = my_predbat.minutes_now
+    saved_forecast_minutes = my_predbat.forecast_minutes
+    saved_offsets = (my_predbat.metric_future_rate_offset_import, my_predbat.metric_future_rate_offset_export)
+    saved_future_import = my_predbat.future_energy_rates_import
+    saved_future_export = my_predbat.future_energy_rates_export
+    saved_rate_max = my_predbat.rate_max
+    saved_active_import = getattr(my_predbat, "future_rates_active_import", None)
+    saved_active_export = getattr(my_predbat, "future_rates_active_export", None)
+    saved_dummy_import = my_predbat.ha_interface.dummy_items.get(IMPORT_SENSOR)
+
+    try:
+        my_predbat.args.pop("futurerate_adjust_import", None)
+        my_predbat.args.pop("futurerate_adjust_export", None)
+        my_predbat.args.pop("futurerate_adjust_auto", None)
+        my_predbat.args.pop("futurerate_url", None)
+        my_predbat.args["futurerate_sensor_import"] = IMPORT_SENSOR
+        my_predbat.args.pop("futurerate_sensor_export", None)
+
+        my_predbat.midnight_utc = my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        my_predbat.midnight = my_predbat.midnight_utc.replace(tzinfo=None)
+        my_predbat.minutes_now = int((my_predbat.now_utc - my_predbat.midnight_utc).total_seconds() / 60)
+        my_predbat.forecast_minutes = 2880
+        my_predbat.metric_future_rate_offset_import = 0
+        my_predbat.metric_future_rate_offset_export = 0
+        my_predbat.rate_max = 99.0
+
+        # Tomorrow-only feed: 48 × 30min slots starting from tomorrow midnight.
+        # Today is intentionally absent — this is the case real AgilePredict can
+        # produce when only the next ~24h forward is published.
+        tomorrow_midnight = my_predbat.midnight_utc + timedelta(days=1)
+        prices = []
+        for slot in range(48):
+            ts = (tomorrow_midnight + timedelta(minutes=slot * 30)).isoformat()
+            prices.append({"date_time": ts, "agile_pred": 19.5})
+        my_predbat.ha_interface.set_state(IMPORT_SENSOR, "ok", attributes={"prices": prices})
+
+        future_rate = FutureRate(my_predbat)
+        my_predbat.future_energy_rates_import, my_predbat.future_energy_rates_export = future_rate.futurerate_analysis({}, {})
+
+        # Sanity-check: dispatcher populated only tomorrow's minutes.
+        if 600 in my_predbat.future_energy_rates_import:
+            print("ERROR: test setup expected today (minute 600) to be absent from dict, found {}".format(my_predbat.future_energy_rates_import.get(600)))
+            return True
+        if 1440 + 600 not in my_predbat.future_energy_rates_import:
+            print("ERROR: test setup expected tomorrow (minute 2040) populated, was missing")
+            return True
+
+        rates_import = {minute: 12.0 for minute in range(0, 1440)}
+        result_import, replicated_import = my_predbat.rate_replicate(rates_import, is_import=True, is_gas=False)
+
+        probe = 1440 + 600  # tomorrow at 10:00
+        if result_import.get(probe) != 19.5:
+            print("ERROR: tomorrow-only sensor feed was ignored by rate_replicate (expected 19.5 at minute {}, got {}); minute_mod gate likely still active".format(probe, result_import.get(probe)))
+            return True
+        if replicated_import.get(probe) != "future":
+            print("ERROR: replicated[{}] should be 'future', got {}".format(probe, replicated_import.get(probe)))
+            return True
+        return False
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        my_predbat.midnight = saved_midnight
+        my_predbat.midnight_utc = saved_midnight_utc
+        my_predbat.now_utc = saved_now_utc
+        my_predbat.minutes_now = saved_minutes_now
+        my_predbat.forecast_minutes = saved_forecast_minutes
+        my_predbat.metric_future_rate_offset_import, my_predbat.metric_future_rate_offset_export = saved_offsets
+        my_predbat.future_energy_rates_import = saved_future_import
+        my_predbat.future_energy_rates_export = saved_future_export
+        my_predbat.rate_max = saved_rate_max
+        my_predbat.future_rates_active_import = False if saved_active_import is None else saved_active_import
+        my_predbat.future_rates_active_export = False if saved_active_export is None else saved_active_export
+        if saved_dummy_import is None:
+            my_predbat.ha_interface.dummy_items.pop(IMPORT_SENSOR, None)
+        else:
+            my_predbat.ha_interface.dummy_items[IMPORT_SENSOR] = saved_dummy_import
 
 
 def _test_sensor_z_suffix_iso_timestamps(my_predbat=None):
@@ -628,6 +723,7 @@ _SUBTESTS = [
     ("dispatch_only_export_sensor_keeps_url_import", _test_dispatch_only_export_sensor_keeps_url_import),
     ("dispatch_sensor_empty_falls_back_to_url", _test_dispatch_sensor_empty_falls_back_to_url),
     ("sensor_drives_rate_replicate_without_adjust_flags", _test_sensor_drives_rate_replicate_without_adjust_flags),
+    ("sensor_tomorrow_only_feed_drives_planner", _test_sensor_tomorrow_only_feed_drives_planner),
     ("sensor_z_suffix_iso_timestamps", _test_sensor_z_suffix_iso_timestamps),
     ("typo_sensor_with_adjust_uses_url_fallback", _test_typo_sensor_with_adjust_uses_url_fallback),
     ("typo_sensor_does_not_self_activate", _test_typo_sensor_does_not_self_activate),
