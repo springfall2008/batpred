@@ -613,7 +613,7 @@ class WebInterface(ComponentBase):
         text += "<tr><td>Predbat Active</td><td>"
         text += f'<form style="display: inline;" method="post" action="./dash">'
         toggle_class = "toggle-switch active" if predbat_active else "toggle-switch"
-        text += f'<button class="{toggle_class}" type="button" onclick="toggleSwitch(this, \'active\')"></button>'
+        text += f'<button class="{toggle_class}" type="button" onclick="toggleSwitch(this, \'active\')" title="On during calculations, off otherwise"></button>'
         text += "</form></td></tr>\n"
         if self.arg_errors:
             count_errors = len(self.arg_errors)
