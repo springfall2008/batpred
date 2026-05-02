@@ -16,6 +16,19 @@ from fox import validate_schedule, minutes_to_schedule_time, end_minute_inclusiv
 from tests.test_infra import run_async, create_aiohttp_mock_response, create_aiohttp_mock_session
 
 
+class MockBase:
+    """Mock base object for ComponentBase properties in Fox API tests."""
+
+    def __init__(self):
+        """Initialise MockBase with default config."""
+        self.midnight_utc = datetime.now(pytz.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        self.config = {}
+
+    def get_arg(self, key, default=None, **kwargs):
+        """Return config value or default."""
+        return self.config.get(key, default)
+
+
 class MockFoxAPI:
     """Mock FoxAPI class for testing compute_schedule"""
 
@@ -44,6 +57,7 @@ class MockFoxAPIWithRequests(FoxAPI):
         # Don't call parent __init__ since we're not using ComponentBase properly
         self.key = "test_api_key"
         self.automatic = False
+        self.automatic_ignore_pv = False
         self.failures_total = 0
         self.prefix = "predbat"  # Add default prefix
         self.device_list = []
@@ -90,7 +104,7 @@ class MockFoxAPIWithRequests(FoxAPI):
         self.last_midnight_utc = None
 
         # Mock base object for ComponentBase properties
-        self.base = type("obj", (object,), {"midnight_utc": datetime.now(pytz.utc).replace(hour=0, minute=0, second=0, microsecond=0)})()
+        self.base = MockBase()
 
     def log(self, message):
         """Mock log method"""
@@ -3093,7 +3107,7 @@ class MockFoxAPIForRequestTesting(FoxAPI):
         self.last_midnight_utc = None
 
         # Mock base object for ComponentBase properties
-        self.base = type("obj", (object,), {"midnight_utc": datetime.now(pytz.utc).replace(hour=0, minute=0, second=0, microsecond=0)})()
+        self.base = MockBase()
 
     def log(self, message):
         """Mock log method - captures messages"""
@@ -5055,6 +5069,54 @@ def test_automatic_config_export_limit_case_insensitive(my_predbat):
     return False
 
 
+def test_automatic_config_pv_ignore_enabled(my_predbat):
+    """
+    Test automatic_config skips pv_today and pv_power when fox_pv_ignore=True
+    """
+    print("  - test_automatic_config_pv_ignore_enabled")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    fox.device_list = [{"deviceSN": deviceSN}]
+    fox.device_detail[deviceSN] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {"scheduler": True}}
+    fox.automatic_ignore_pv = True  # Enable PV ignoring
+    run_async(fox.automatic_config())
+
+    # pv_today and pv_power must NOT be set when fox_pv_ignore is enabled
+    assert fox.args_set.get("pv_today") is None, f"pv_today should not be set when fox_pv_ignore=True, got {fox.args_set.get('pv_today')}"
+    assert fox.args_set.get("pv_power") is None, f"pv_power should not be set when fox_pv_ignore=True, got {fox.args_set.get('pv_power')}"
+    # Other args should still be set
+    assert fox.args_set.get("soc_percent") is not None
+    assert fox.args_set.get("battery_power") is not None
+    fox.automatic_ignore_pv = False
+
+    return False
+
+
+def test_automatic_config_pv_ignore_disabled(my_predbat):
+    """
+    Test automatic_config sets pv_today and pv_power when fox_pv_ignore=False (default)
+    """
+    print("  - test_automatic_config_pv_ignore_disabled")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+    sn_lower = deviceSN.lower()
+
+    fox.device_list = [{"deviceSN": deviceSN}]
+    fox.device_detail[deviceSN] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {"scheduler": True}}
+    # fox_pv_ignore defaults to False when not set
+
+    run_async(fox.automatic_config())
+
+    # pv_today and pv_power MUST be set when fox_pv_ignore is False
+    assert fox.args_set.get("pv_today") == [f"sensor.predbat_fox_{sn_lower}_pvenergytotal_today"], f"pv_today should be set, got {fox.args_set.get('pv_today')}"
+    assert fox.args_set.get("pv_power") == [f"sensor.predbat_fox_{sn_lower}_pvpower"], f"pv_power should be set, got {fox.args_set.get('pv_power')}"
+
+    return False
+
+
 def test_fox_rate_limiting_normal_operation(my_predbat):
     """Test that normal operation under 60/hour allows retries"""
     print("  - test_fox_rate_limiting_normal_operation")
@@ -5599,6 +5661,8 @@ def run_fox_api_tests(my_predbat):
         failed |= test_automatic_config_export_limit_some_devices(my_predbat)
         failed |= test_automatic_config_export_limit_no_devices(my_predbat)
         failed |= test_automatic_config_export_limit_case_insensitive(my_predbat)
+        failed |= test_automatic_config_pv_ignore_enabled(my_predbat)
+        failed |= test_automatic_config_pv_ignore_disabled(my_predbat)
 
         # Rate limiting tests
         failed |= test_fox_rate_limiting_normal_operation(my_predbat)

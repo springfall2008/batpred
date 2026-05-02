@@ -219,10 +219,11 @@ def validate_schedule(new_schedule, reserve, fdPwr_max, target_count=0):
 class FoxAPI(ComponentBase, OAuthMixin):
     """Fox API client."""
 
-    def initialize(self, key, automatic, inverter_sn=None, auth_method=None, token_expires_at=None, token_hash=None):
+    def initialize(self, key, automatic, automatic_ignore_pv=False, inverter_sn=None, auth_method=None, token_expires_at=None, token_hash=None):
         """Initialise the Fox API component"""
         self.key = key
         self.automatic = automatic
+        self.automatic_ignore_pv = automatic_ignore_pv
         self.failures_total = 0
         self.device_list = []
         self.device_detail = {}
@@ -1685,12 +1686,14 @@ class FoxAPI(ComponentBase, OAuthMixin):
         self.set_arg("load_today", [f"sensor.{self.prefix}_fox_{device}_loads" for device in batteries])
         self.set_arg("import_today", [f"sensor.{self.prefix}_fox_{device}_gridconsumption" for device in batteries])
         self.set_arg("export_today", [f"sensor.{self.prefix}_fox_{device}_feedin" for device in batteries])
-        self.set_arg("pv_today", [f"sensor.{self.prefix}_fox_{device}_pvenergytotal_today" for device in pvs])
+        if not self.automatic_ignore_pv:
+            self.set_arg("pv_today", [f"sensor.{self.prefix}_fox_{device}_pvenergytotal_today" for device in pvs])
         self.set_arg("battery_rate_max", [f"sensor.{self.prefix}_fox_{device}_battery_rate_max" for device in batteries])
         self.set_arg("battery_power", [f"sensor.{self.prefix}_fox_{device}_invbatpower" for device in batteries])
         self.set_arg("grid_power", [f"sensor.{self.prefix}_fox_{device}_meterpower" for device in batteries])
         self.set_arg("grid_power_invert", [True for device in batteries])
-        self.set_arg("pv_power", [f"sensor.{self.prefix}_fox_{device}_pvpower" for device in pvs])
+        if not self.automatic_ignore_pv:
+            self.set_arg("pv_power", [f"sensor.{self.prefix}_fox_{device}_pvpower" for device in pvs])
         self.set_arg("load_power", [f"sensor.{self.prefix}_fox_{device}_loadspower" for device in batteries])
         self.set_arg("soc_percent", [f"sensor.{self.prefix}_fox_{device}_soc" for device in batteries])
         self.set_arg("soc_max", [f"sensor.{self.prefix}_fox_{device}_battery_capacity" for device in batteries])
