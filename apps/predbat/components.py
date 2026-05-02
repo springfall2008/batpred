@@ -211,6 +211,11 @@ COMPONENT_LIST = {
                 "default": False,
                 "config": "fox_automatic",
             },
+            "automatic_ignore_pv": {
+                "required": False,
+                "default": False,
+                "config": "fox_automatic_ignore_pv",
+            },
             "inverter_sn": {
                 "required": False,
                 "config": "fox_inverter_sn",
