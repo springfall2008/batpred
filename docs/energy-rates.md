@@ -523,6 +523,14 @@ fallback values for any side without a sensor, or whose sensor returned no data.
 If neither URL nor sensor is set, no future-rate prediction is used.
 
 Each sensor must expose a list of `{timestamp, rate}` items as an attribute.
+Rates from the sensor are assumed to be in consumer p/kWh already (AgilePredict
+publishes prices in this form) and are used directly. Predbat does not apply
+the Nord Pool wholesale-to-retail calibration to sensor data, so the
+`futurerate_adjust_import` and `futurerate_adjust_export` flags only affect
+the URL path. The slot duration is read from the gap between consecutive
+timestamps in the feed, so a 30-minute AgilePredict feed and a 5-minute or
+hourly feed all work without extra configuration.
+
 Defaults match AgilePredict's shape and are shared between both sensors, on the
 assumption you'll template each side alike. Override the keys if your sensors
 use a different format.
@@ -538,30 +546,22 @@ Import sensor (AgilePredict) + URL for export (typical Agile + Outgoing Agile se
 ```yaml
   futurerate_sensor_import: sensor.agilepredict
   futurerate_url: 'https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices?date=DATE&market=N2EX_DayAhead&deliveryArea=UK&currency=GBP'
-  futurerate_adjust_import: true
   futurerate_adjust_export: true
   futurerate_peak_start: "16:00:00"
   futurerate_peak_end: "19:00:00"
 ```
 
-Both sides from sensors, no URL:
+Both sides from sensors, no URL (the `futurerate_adjust_*` flags are not needed here, they apply only to the URL path):
 
 ```yaml
   futurerate_sensor_import: sensor.my_import_forecast
   futurerate_sensor_export: sensor.my_export_forecast
-  futurerate_adjust_import: true
-  futurerate_adjust_export: true
-  futurerate_peak_start: "16:00:00"
-  futurerate_peak_end: "19:00:00"
 ```
 
 Import sensor only (no export forecast at all):
 
 ```yaml
   futurerate_sensor_import: sensor.agilepredict
-  futurerate_adjust_import: true
-  futurerate_peak_start: "16:00:00"
-  futurerate_peak_end: "19:00:00"
 ```
 
 ## Axle VPP

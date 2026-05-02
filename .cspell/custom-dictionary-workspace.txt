@@ -3,8 +3,8 @@ activepower
 adata
 adbase
 afci
-agilepredict
 AgilePredict
+agilepredict
 AIO
 AIO's
 aiohttp
@@ -389,6 +389,7 @@ treforsiphone
 twinx
 tzfile
 tzpath
+unparseable
 unsmoothed
 unstaged
 useid
