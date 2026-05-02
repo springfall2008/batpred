@@ -1367,7 +1367,7 @@ class WebInterface(ComponentBase):
                         row_vals.append(str(val))
                     csv_all_rows.append(row_vals)
                 csv_data_json = json.dumps({"headers": csv_col_headers, "rows": csv_all_rows})
-                text += f'<script>var csvData = {csv_data_json};\n'
+                text += f"<script>var csvData = {csv_data_json};\n"
                 text += """function downloadEntityCSV() {
     var h = csvData.headers.map(function(v) { return '"' + String(v).replace(/"/g, '""') + '"'; });
     var lines = [h.join(',')];
@@ -1839,6 +1839,7 @@ var options = {
         Render a timeline chart for non-numerical data (like on/off states)
         Shows horizontal bars with different states as colored segments
         """
+
         # Escape a value for embedding inside a JS single-quoted string literal
         def js_str(val):
             return str(val).replace("\\", "\\\\").replace("'", "\\'")
@@ -1846,7 +1847,8 @@ var options = {
         # Build the initial template - use direct substitution, NOT .format(), to avoid
         # breakage when state values or entity names contain { or } characters
         series_count = len(timeline_data)
-        text = """
+        text = (
+            """
 <script>
 window.onresize = function() { location.reload(); };
 var width = window.innerWidth;
@@ -1856,7 +1858,9 @@ var height = window.innerHeight;
 width = Math.max(800, width - 100);
 
 // Calculate height based on number of series (compact timeline view)
-var seriesCount = """ + str(series_count) + """;
+var seriesCount = """
+            + str(series_count)
+            + """;
 var baseHeight = Math.max(200, seriesCount * 50 + 100);
 height = Math.min(400, baseHeight);
 
@@ -1881,6 +1885,7 @@ var options = {
   },
   series: [
 """
+        )
 
         # Process each entity's timeline data
         first_series = True
@@ -1968,7 +1973,8 @@ var options = {
             text += "      ]\n"
             text += "    }\n"
 
-        text += """
+        text += (
+            """
   ],
   xaxis: {
     type: 'datetime',
@@ -2017,10 +2023,13 @@ var options = {
   }
 };
 
-var chart = new ApexCharts(document.querySelector('#""" + tagname + """'), options);
+var chart = new ApexCharts(document.querySelector('#"""
+            + tagname
+            + """'), options);
 chart.render();
 </script>
 """
+        )
 
         return text
 
