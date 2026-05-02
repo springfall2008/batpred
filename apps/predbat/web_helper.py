@@ -145,14 +145,14 @@ def get_entity_detailed_row_js():
                 row.style.display = 'none';
             });
             mainRow.classList.remove('expanded');
-            timeCell.innerHTML = timeCell.innerHTML.replace('▼', '▶');
+            timeCell.innerHTML = timeCell.innerHTML.replace('\u25bc', '\u25b6');
         } else {
             // Expand
             detailRows.forEach(function(row) {
                 row.style.display = 'table-row';
             });
             mainRow.classList.add('expanded');
-            timeCell.innerHTML = timeCell.innerHTML.replace('▶', '▼');
+            timeCell.innerHTML = timeCell.innerHTML.replace('\u25b6', '\u25bc');
         }
     }
     </script>
@@ -180,12 +180,13 @@ def get_entity_js(selected_entities_json, entity_attributes_json):
 
         document.addEventListener('DOMContentLoaded', function() {
             // Load entity data from API
-            loadEntityData();
+            loadEntityData(false);
         });
 
-        async function loadEntityData() {
+        async function loadEntityData(showAll) {
             try {
-                const response = await fetch('./api/entities');
+                const url = showAll ? './api/entities?all=1' : './api/entities';
+                const response = await fetch(url);
                 if (!response.ok) {
                     throw new Error('Failed to load entities');
                 }
@@ -199,6 +200,14 @@ def get_entity_js(selected_entities_json, entity_attributes_json):
                 allEntities = [];
                 setupEventListeners();
             }
+        }
+
+        function toggleShowAll(checked) {
+            loadEntityData(checked).then(function() {
+                if (isDropdownVisible) {
+                    filterEntityOptions();
+                }
+            });
         }
 
         function setupEventListeners() {

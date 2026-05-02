@@ -214,6 +214,7 @@ class WebInterface(ComponentBase):
         app.router.add_post("/config", self.html_config_post)
         app.router.add_get("/dash", self.html_dash)
         app.router.add_post("/dash", self.html_dash_post)
+        app.router.add_get("/dash_content", self.html_dash_content)
         app.router.add_get("/components", self.html_components)
         app.router.add_get("/component_entities", self.html_component_entities)
         app.router.add_post("/component_restart", self.html_component_restart)
@@ -767,12 +768,38 @@ class WebInterface(ComponentBase):
 
         return entity_data_list
 
+    def get_all_entity_list_data(self):
+        """
+        Return all Home Assistant entities grouped by domain.
+        """
+        state_data = self.get_state_wrapper()
+        entity_data_list = []
+        if isinstance(state_data, dict):
+            for entity_id in sorted(state_data.keys()):
+                state_info = state_data[entity_id]
+                if isinstance(state_info, dict):
+                    attributes = state_info.get("attributes", {})
+                    friendly_name = attributes.get("friendly_name", entity_id)
+                    unit = attributes.get("unit_of_measurement", "")
+                    if unit:
+                        friendly_name = f"{friendly_name} ({unit})"
+                else:
+                    friendly_name = entity_id
+                domain = entity_id.split(".")[0] if "." in entity_id else "other"
+                group = domain[0].upper() + domain[1:] + " Entities"
+                entity_data_list.append({"id": entity_id, "name": friendly_name, "group": group})
+        return entity_data_list
+
     async def html_api_get_entities(self, request):
         """
         API endpoint to get entity list as JSON
         """
         try:
-            entity_list = self.get_entity_list_data()
+            show_all = request.query.get("all", "0") == "1"
+            if show_all:
+                entity_list = self.get_all_entity_list_data()
+            else:
+                entity_list = self.get_entity_list_data()
             return web.json_response(entity_list)
         except Exception as e:
             self.base.log(f"Error in html_api_get_entities: {e}")
@@ -907,7 +934,46 @@ class WebInterface(ComponentBase):
 
         days = int(request.query.get("days", 7))  # Default to 7 days if not specified
 
-        text = self.get_header("Predbat Entity", refresh=60)
+        text = self.get_header("Predbat Entity", refresh=0)
+        text += """
+<script>
+(function() {
+    // Restore scroll position and expanded rows saved before last reload
+    window.addEventListener('load', function() {
+        var savedPos = sessionStorage.getItem('entityScrollPos');
+        if (savedPos) {
+            savedPos = JSON.parse(savedPos);
+            sessionStorage.removeItem('entityScrollPos');
+            window.scrollTo(savedPos.x, savedPos.y);
+        }
+        var savedExpanded = sessionStorage.getItem('entityExpandedRows');
+        if (savedExpanded) {
+            sessionStorage.removeItem('entityExpandedRows');
+            JSON.parse(savedExpanded).forEach(function(rowIndex) {
+                var mainRow = document.getElementById('row_' + rowIndex);
+                if (mainRow) {
+                    var detailRows = document.querySelectorAll('#detail_' + rowIndex);
+                    detailRows.forEach(function(row) { row.style.display = 'table-row'; });
+                    mainRow.classList.add('expanded');
+                    var timeCell = mainRow.cells[0];
+                    timeCell.innerHTML = timeCell.innerHTML.replace('\u25b6', '\u25bc');
+                }
+            });
+        }
+    });
+    // Schedule reload, saving scroll position and expanded rows first
+    setTimeout(function() {
+        var expandedRows = [];
+        document.querySelectorAll('tr.history-row.expanded').forEach(function(row) {
+            expandedRows.push(row.id.replace('row_', ''));
+        });
+        sessionStorage.setItem('entityExpandedRows', JSON.stringify(expandedRows));
+        sessionStorage.setItem('entityScrollPos', JSON.stringify({x: window.scrollX, y: window.scrollY}));
+        location.reload();
+    }, 60000);
+})();
+</script>
+"""
 
         # Include a back button to return the previous page
         text += """<div style="margin-bottom: 15px;">
@@ -948,6 +1014,7 @@ class WebInterface(ComponentBase):
         text += """<div style="margin-bottom: 20px;">
             <form id="entitySelectForm" method="get" action="./entity">
                 <label for="entitySearchInput" style="margin-right: 10px; font-weight: bold;">Select Entities: </label>
+                <label style="margin-right: 15px; font-weight: normal; white-space: nowrap;"><input type="checkbox" id="showAllEntities" onchange="toggleShowAll(this.checked)" /> Show All</label>
                 <div class="entity-search-container" style="position: relative; max-width: 800px;">
                     <input type="text" id="entitySearchInput" name="entity_search"
                            placeholder="Type to search entities... (click to show all)"
@@ -1096,8 +1163,13 @@ class WebInterface(ComponentBase):
                 .detail-row { display: none; background-color: var(--detail-bg, #fafafa); }
                 .detail-row td { padding-left: 30px; font-size: 0.9em; color: var(--text-secondary, #666); }
                 .expanded { background-color: var(--expanded-bg, #e8f4f8) !important; }
+                .changed-cell { font-weight: bold; background-color: #ffd6e0; }
+                body.dark-mode .changed-cell { background-color: #5c1a2e; color: #ffb3c6; }
+                .reverted-cell { font-weight: bold; background-color: #cce8ff; }
+                body.dark-mode .reverted-cell { background-color: #0d2e4a; color: #90caff; }
                 </style>
                 """
+                text += '<button onclick="downloadEntityCSV()" style="margin-bottom: 10px; padding: 7px 14px; background-color: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">&#11015; Download CSV</button>\n'
                 text += "<table>\n"
 
                 # Build header row
@@ -1162,35 +1234,157 @@ class WebInterface(ComponentBase):
                 # Sort timestamps in reverse chronological order
                 sorted_timestamps_30min = sorted(all_timestamps_30min, reverse=True)
 
-                # Build table rows with expandable detail
-                row_index = 0
+                # Collect all display slots so we can precompute carry-forward fill
+                # Detail rows go BACKWARDS from the 30-min parent timestamp (offsets -5 to -25)
+                all_display_slots_5min = set()
+                for ts_30 in sorted_timestamps_30min:
+                    for offset in range(-5, -30, -5):
+                        all_display_slots_5min.add(ts_30 + timedelta(minutes=offset))
+
+                # Precompute filled dicts: {slot: (value, is_changed, prev_value)} per entity using carry-forward
+                entity_filled_30min = []
+                entity_filled_5min = []
+                for data_30min, data_5min in zip(entity_histories_30min, entity_histories_5min):
+                    # --- 30-min fill ---
+                    sorted_known_30 = sorted(data_30min.keys())
+                    filled_30 = {}
+                    last_val = None
+                    ki = 0
+                    for slot in sorted(sorted_timestamps_30min):
+                        prev_val = last_val
+                        while ki < len(sorted_known_30) and sorted_known_30[ki] <= slot:
+                            last_val = data_30min[sorted_known_30[ki]]
+                            ki += 1
+                        filled_30[slot] = (last_val if last_val is not None else "-", slot in data_30min, prev_val)
+                    entity_filled_30min.append(filled_30)
+
+                    # --- 5-min fill ---
+                    sorted_known_5 = sorted(data_5min.keys())
+                    filled_5 = {}
+                    last_val = None
+                    ki = 0
+                    for slot in sorted(all_display_slots_5min):
+                        prev_val = last_val
+                        while ki < len(sorted_known_5) and sorted_known_5[ki] <= slot:
+                            last_val = data_5min[sorted_known_5[ki]]
+                            ki += 1
+                        filled_5[slot] = (last_val if last_val is not None else "-", slot in data_5min, prev_val)
+                    entity_filled_5min.append(filled_5)
+
+                # Pre-compute per-row cell classes so we can decide which rows to show
+                num_cols = len(entity_selections)
+                row_data = []  # list of (timestamp_30, [(value, cell_class), ...], has_highlight)
                 for timestamp_30 in sorted_timestamps_30min:
+                    cells = []
+                    has_highlight = False
+                    for filled_30, filled_5 in zip(entity_filled_30min, entity_filled_5min):
+                        value, is_changed, prev_value = filled_30.get(timestamp_30, ("-", False, None))
+                        if is_changed:
+                            if prev_value is None or value != prev_value:
+                                cell_class = ' class="changed-cell"'
+                                has_highlight = True
+                            else:
+                                sub_vals = [filled_5.get(timestamp_30 + timedelta(minutes=off), ("-", False, None))[0] for off in range(-5, -26, -5)]
+                                if any(v != value for v in sub_vals):
+                                    cell_class = ' class="reverted-cell"'
+                                    has_highlight = True
+                                else:
+                                    cell_class = ""
+                        else:
+                            cell_class = ""
+                        cells.append((value, cell_class))
+                    row_data.append((timestamp_30, cells, has_highlight))
+
+                # Build table rows — skip unchanged rows (except the oldest), inserting gap rows on skips
+                row_index = 0
+                oldest_idx = len(row_data) - 1
+                skipped_count = 0
+                prev_row_ts = None  # Previous row_data entry (visible or skipped) — for detecting history gaps
+                for i, (timestamp_30, cells, has_highlight) in enumerate(row_data):
+                    is_oldest = i == oldest_idx
+
+                    # Count slots absent from history entirely (gap between consecutive row_data entries).
+                    # Using prev_row_ts (not prev visible ts) avoids double-counting rows already
+                    # incremented via skipped_count += 1 below.
+                    if prev_row_ts is not None:
+                        gap_minutes = int((prev_row_ts - timestamp_30).total_seconds() / 60)
+                        missing_slots = max(0, (gap_minutes // 30) - 1)
+                        skipped_count += missing_slots
+
+                    prev_row_ts = timestamp_30
+
+                    if not has_highlight and not is_oldest:
+                        skipped_count += 1
+                        continue
+
+                    # If we skipped rows (present-but-unchanged OR absent from history), emit a gap separator
+                    if skipped_count > 0:
+                        col_span = 1 + num_cols
+                        text += f'<tr class="gap-row"><td colspan="{col_span}" style="text-align:center; font-style:italic; font-size:0.85em; color:var(--text-secondary,#888); border-top:2px dashed #aaa; border-bottom:2px dashed #aaa; padding:4px;">— {skipped_count} unchanged slot{"s" if skipped_count != 1 else ""} hidden —</td></tr>\n'
+                        skipped_count = 0
+
                     # Main 30-minute row (clickable)
                     text += f'<tr class="history-row" onclick="toggleDetailRow({row_index})" id="row_{row_index}">'
                     text += f"<td>▶ {timestamp_30.strftime(TIME_FORMAT)}</td>"
-                    for entity_data in entity_histories_30min:
-                        state = entity_data.get(timestamp_30, "-")
-                        text += f"<td>{state}</td>"
+                    for value, cell_class in cells:
+                        text += f"<td{cell_class}>{value}</td>"
                     text += "</tr>\n"
 
-                    # Detail rows (5-minute intervals within this 30-minute period)
-                    # Calculate 5-minute timestamps for this 30-minute period
-                    detail_timestamps = []
-                    for offset in range(0, 30, 5):
+                    # Detail rows: 5-minute slots leading UP TO the parent timestamp
+                    for offset in range(-5, -26, -5):
                         detail_time = timestamp_30 + timedelta(minutes=offset)
-                        detail_timestamps.append(detail_time)
-
-                    for detail_time in detail_timestamps:
                         text += f'<tr class="detail-row" id="detail_{row_index}">'
                         text += f"<td>  {detail_time.strftime(TIME_FORMAT)}</td>"
-                        for entity_data_5min in entity_histories_5min:
-                            state = entity_data_5min.get(detail_time, "-")
-                            text += f"<td>{state}</td>"
+                        for filled in entity_filled_5min:
+                            value, is_changed, prev_value = filled.get(detail_time, ("-", False, None))
+                            if is_changed and (prev_value is None or value != prev_value):
+                                cell_class = ' class="changed-cell"'
+                            else:
+                                cell_class = ""
+                            text += f"<td{cell_class}>{value}</td>"
                         text += "</tr>\n"
 
                     row_index += 1
 
                 text += "</table><br>\n"
+
+                # Build CSV data for download (all 30-min slots, unfiltered, with carry-forward values)
+                csv_col_headers = ["Time"]
+                for sel in entity_selections:
+                    sel_eid = sel["entity_id"]
+                    sel_attr = sel["attribute"]
+                    sel_attrs = self.base.dashboard_values.get(sel_eid, {}).get("attributes", {})
+                    sel_friendly = sel_attrs.get("friendly_name", sel_eid)
+                    sel_unit = sel_attrs.get("unit_of_measurement", "")
+                    sel_unit_disp = f" ({sel_unit})" if sel_unit else ""
+                    sel_attr_disp = f" - {sel_attr}" if sel_attr else ""
+                    csv_col_headers.append(f"{sel_friendly}{sel_attr_disp}{sel_unit_disp}")
+                csv_all_rows = []
+                for ts in sorted_timestamps_30min:
+                    row_vals = [ts.strftime(TIME_FORMAT)]
+                    for filled_30 in entity_filled_30min:
+                        val, _, _ = filled_30.get(ts, ("-", False, None))
+                        row_vals.append(str(val))
+                    csv_all_rows.append(row_vals)
+                csv_data_json = json.dumps({"headers": csv_col_headers, "rows": csv_all_rows})
+                text += f'<script>var csvData = {csv_data_json};\n'
+                text += """function downloadEntityCSV() {
+    var h = csvData.headers.map(function(v) { return '"' + String(v).replace(/"/g, '""') + '"'; });
+    var lines = [h.join(',')];
+    for (var i = 0; i < csvData.rows.length; i++) {
+        var r = csvData.rows[i].map(function(v) { return '"' + String(v).replace(/"/g, '""') + '"'; });
+        lines.push(r.join(','));
+    }
+    var blob = new Blob([lines.join('\\n')], {type: 'text/csv'});
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'entity_history.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+}
+</script>"""
 
                 # Add JavaScript for toggling detail rows
                 text += get_entity_detailed_row_js()
@@ -1645,10 +1839,16 @@ var options = {
         Render a timeline chart for non-numerical data (like on/off states)
         Shows horizontal bars with different states as colored segments
         """
-        # Build the initial template
+        # Escape a value for embedding inside a JS single-quoted string literal
+        def js_str(val):
+            return str(val).replace("\\", "\\\\").replace("'", "\\'")
+
+        # Build the initial template - use direct substitution, NOT .format(), to avoid
+        # breakage when state values or entity names contain { or } characters
+        series_count = len(timeline_data)
         text = """
 <script>
-window.onresize = function() {{ location.reload(); }};
+window.onresize = function() { location.reload(); };
 var width = window.innerWidth;
 var height = window.innerHeight;
 
@@ -1656,29 +1856,29 @@ var height = window.innerHeight;
 width = Math.max(800, width - 100);
 
 // Calculate height based on number of series (compact timeline view)
-var seriesCount = {0};
+var seriesCount = """ + str(series_count) + """;
 var baseHeight = Math.max(200, seriesCount * 50 + 100);
 height = Math.min(400, baseHeight);
 
-var options = {{
-  chart: {{
+var options = {
+  chart: {
     type: 'rangeBar',
     width: width,
     height: height,
-    animations: {{
+    animations: {
       enabled: false
-    }},
-    toolbar: {{
+    },
+    toolbar: {
       show: true
-    }}
-  }},
-  plotOptions: {{
-    bar: {{
+    }
+  },
+  plotOptions: {
+    bar: {
       horizontal: true,
       barHeight: '70%',
       rangeBarGroupRows: false
-    }}
-  }},
+    }
+  },
   series: [
 """
 
@@ -1749,8 +1949,8 @@ var options = {{
                 text += ","
             first_series = False
 
-            text += "\n    {{\n"
-            text += f"      name: '{entity_name}',\n"
+            text += "\n    {\n"
+            text += f"      name: '{js_str(entity_name)}',\n"
             text += "      data: [\n"
 
             first_range = True
@@ -1758,34 +1958,34 @@ var options = {{
                 if not first_range:
                     text += ","
                 first_range = False
-                text += "        {{\n"
-                text += f"          x: '{range_data['x']}',\n"
+                text += "        {\n"
+                text += f"          x: '{js_str(range_data['x'])}',\n"
                 text += f"          y: [{range_data['y'][0]}, {range_data['y'][1]}],\n"
-                text += f"          fillColor: '{range_data['fillColor']}',\n"
-                text += f"          label: '{range_data['label']}'\n"
-                text += "        }}\n"
+                text += f"          fillColor: '{js_str(range_data['fillColor'])}',\n"
+                text += f"          label: '{js_str(range_data['label'])}'\n"
+                text += "        }\n"
 
             text += "      ]\n"
-            text += "    }}\n"
+            text += "    }\n"
 
         text += """
   ],
-  xaxis: {{
+  xaxis: {
     type: 'datetime',
-    labels: {{
+    labels: {
       datetimeUTC: false
-    }}
-  }},
-  yaxis: {{
+    }
+  },
+  yaxis: {
     show: true,
-    labels: {{
-      style: {{
+    labels: {
+      style: {
         fontSize: '14px'
-      }}
-    }}
-  }},
-  tooltip: {{
-    custom: function({{ seriesIndex, dataPointIndex, w }}) {{
+      }
+    }
+  },
+  tooltip: {
+    custom: function({ seriesIndex, dataPointIndex, w }) {
       var data = w.config.series[seriesIndex].data[dataPointIndex];
       var start = new Date(data.y[0]);
       var end = new Date(data.y[1]);
@@ -1798,32 +1998,31 @@ var options = {{
         'To: ' + end.toLocaleString() + '<br/>' +
         'Duration: ' + duration.toFixed(0) + ' minutes' +
         '</div>';
-    }}
-  }},
-  legend: {{
+    }
+  },
+  legend: {
     show: false
-  }},
-  dataLabels: {{
+  },
+  dataLabels: {
     enabled: true,
-    formatter: function(val, opts) {{
+    formatter: function(val, opts) {
       var label = opts.w.config.series[opts.seriesIndex].data[opts.dataPointIndex].label;
       return label;
-    }},
-    style: {{
+    },
+    style: {
       colors: ['#fff'],
       fontSize: '14px',
       fontWeight: 'bold'
-    }}
-  }}
-}};
+    }
+  }
+};
 
-var chart = new ApexCharts(document.querySelector('#{1}'), options);
+var chart = new ApexCharts(document.querySelector('#""" + tagname + """'), options);
 chart.render();
 </script>
 """
 
-        # Now format the entire string at once
-        return text.format(len(timeline_data), tagname)
+        return text
 
     def get_state_color(self, state):
         """
@@ -2517,17 +2716,61 @@ chart.render();
             html_plan = None
         return await self.html_file("predbat_plan.html", html_plan)
 
+    async def html_dash_content(self, request):
+        """
+        Return just the dashboard body content for AJAX refresh (preserves scroll position)
+        """
+        text = self.get_status_html(THIS_VERSION)
+        return web.Response(content_type="text/html", text=text)
+
     async def html_dash(self, request):
         """
         Render apps.yaml as an HTML page
         """
 
         self.default_page = "./dash"
-        text = self.get_header("Predbat Dashboard", refresh=60)
+        text = self.get_header("Predbat Dashboard", refresh=0)
         text += get_dashboard_css()
         text += get_dashboard_collapsible_js()
+        text += """
+<script>
+(function() {
+    var DASH_REFRESH_INTERVAL = 60000; // 60 seconds
+    var dashRefreshTimer = null;
+
+    function refreshDashContent() {
+        fetch('./dash_content')
+            .then(function(response) { return response.text(); })
+            .then(function(html) {
+                var scrollX = window.scrollX;
+                var scrollY = window.scrollY;
+                var container = document.getElementById('dash-content-container');
+                if (container) {
+                    container.innerHTML = html;
+                }
+                window.scrollTo(scrollX, scrollY);
+                scheduleRefresh();
+            })
+            .catch(function() {
+                scheduleRefresh();
+            });
+    }
+
+    function scheduleRefresh() {
+        if (dashRefreshTimer) { clearTimeout(dashRefreshTimer); }
+        dashRefreshTimer = setTimeout(refreshDashContent, DASH_REFRESH_INTERVAL);
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        scheduleRefresh();
+    });
+})();
+</script>
+"""
         text += "<body>\n"
+        text += '<div id="dash-content-container">\n'
         text += self.get_status_html(THIS_VERSION)
+        text += "</div>\n"
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
