@@ -388,12 +388,13 @@ class FutureRate:
             if positive_diffs:
                 slot_minutes = min(positive_diffs)
 
+        # Each slot covers exactly the inferred typical interval. Using the next
+        # *valid* timestamp here would silently stretch a rate across any
+        # missing or unparseable entry (e.g. a malformed 00:30 in a 30-minute
+        # feed would cause 00:00's rate to apply through to 01:00).
         array_values = []
-        for i, key in enumerate(sorted_keys):
-            if i + 1 < len(sorted_keys):
-                end = sorted_keys[i + 1]
-            else:
-                end = key + timedelta(minutes=slot_minutes)
+        for key in sorted_keys:
+            end = key + timedelta(minutes=slot_minutes)
             array_values.append(
                 {
                     "from": key.strftime(TIME_FORMAT),

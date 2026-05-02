@@ -240,6 +240,44 @@ def _test_sensor_skips_malformed_items(my_predbat):
     return False
 
 
+def _test_sensor_malformed_entry_does_not_stretch_neighbour(my_predbat):
+    """A malformed entry inside an otherwise-regular 30-min feed must not silently extend the previous rate across the gap.
+
+    Mirrors Copilot's R4 example: a 30-minute feed with the 00:30 entry corrupted.
+    The feed has enough surrounding valid entries that slot_minutes infers as 30,
+    so the 00:00 rate should occupy 00:00-00:29 only, and 00:30-00:59 should
+    remain unpopulated (a real gap), not be filled by stretching 00:00's value.
+    """
+    base = MockFutureRateBase()
+    prices = []
+    for slot in range(8):  # 4 hours of 30-min entries
+        ts = (base.midnight_utc + timedelta(minutes=slot * 30)).isoformat()
+        if slot == 1:
+            # Malformed 00:30 entry — wrong type, should be skipped by parser.
+            prices.append({"date_time": ts, "agile_pred": "not-a-number"})
+        else:
+            prices.append({"date_time": ts, "agile_pred": 10.0 + slot})  # 10.0, _, 12.0, 13.0, ...
+    base.set_entity_attr(IMPORT_SENSOR, "prices", prices)
+    future = _make_sensor_future(base)
+
+    mdata = future.futurerate_analysis_sensor("import")
+
+    # 00:00 slot gets 10.0 across 00:00-00:29.
+    if mdata.get(0) != 10.0 or mdata.get(29) != 10.0:
+        print("ERROR: 00:00 slot should be 10.0, got mdata[0]={} mdata[29]={}".format(mdata.get(0), mdata.get(29)))
+        return True
+    # The malformed 00:30 slot should NOT inherit 00:00's rate. minute 45 should
+    # not be 10.0 (the previous-rate stretch would put it there).
+    if mdata.get(45) == 10.0:
+        print("ERROR: 00:45 inherited 00:00's rate of 10.0; malformed 00:30 should be a real gap, not filled by stretching")
+        return True
+    # 01:00 slot resumes with the next valid entry (slot index 2 → 12.0).
+    if mdata.get(60) != 12.0:
+        print("ERROR: 01:00 should be 12.0, got mdata[60]={}".format(mdata.get(60)))
+        return True
+    return False
+
+
 def _test_sensor_all_items_unparseable_warns(my_predbat):
     """Non-empty list but no item parses → returns {} and emits a diagnostic warning (don't fail silently)."""
     base = MockFutureRateBase()
@@ -716,6 +754,7 @@ _SUBTESTS = [
     ("sensor_missing_entity", _test_sensor_missing_entity),
     ("sensor_empty_prices", _test_sensor_empty_prices),
     ("sensor_skips_malformed_items", _test_sensor_skips_malformed_items),
+    ("sensor_malformed_entry_does_not_stretch_neighbour", _test_sensor_malformed_entry_does_not_stretch_neighbour),
     ("sensor_all_items_unparseable_warns", _test_sensor_all_items_unparseable_warns),
     ("dispatch_sensors_only_no_url", _test_dispatch_sensors_only_no_url),
     ("dispatch_neither_set", _test_dispatch_neither_set),
