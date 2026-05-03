@@ -2156,6 +2156,7 @@ class Fetch:
         self.battery_loss_discharge = 1.0 - self.get_arg("battery_loss_discharge")
         self.inverter_loss = 1.0 - self.get_arg("inverter_loss")
         self.inverter_hybrid = self.get_arg("inverter_hybrid")
+        self.pv_ac_limit = self.get_arg("pv_ac_limit", 0.0) / MINUTE_WATT
         self.base_load = self.get_arg("base_load", 0) / 1000.0
 
         # Charge curve

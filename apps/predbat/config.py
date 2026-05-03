@@ -2082,6 +2082,7 @@ APPS_SCHEMA = {
     "pause_start_time": {"type": "sensor_list", "sensor_type": "none|string", "modify": True, "entries": "num_inverters"},
     "pause_end_time": {"type": "sensor_list", "sensor_type": "none|string", "modify": True, "entries": "num_inverters"},
     "inverter_limit": {"type": "sensor_list", "sensor_type": "float", "modify": False, "zero": False, "entries": "num_inverters"},
+    "pv_ac_limit": {"type": "float", "zero": True},
     "inverter_limit_charge": {"type": "sensor_list", "sensor_type": "integer", "modify": False, "zero": False, "entries": "num_inverters"},
     "inverter_limit_charge_dc": {"type": "sensor_list", "sensor_type": "integer", "modify": False, "zero": False, "entries": "num_inverters"},
     "inverter_limit_discharge": {"type": "sensor_list", "sensor_type": "integer", "modify": False, "zero": False, "entries": "num_inverters"},

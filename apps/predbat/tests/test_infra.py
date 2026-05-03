@@ -448,6 +448,7 @@ def reset_inverter(my_predbat):
     my_predbat.inverter_limit = 1 / 60.0
     my_predbat.num_inverters = 1
     my_predbat.export_limit = 10 / 60.0
+    my_predbat.pv_ac_limit = 0
     my_predbat.inverters = [TestInverter()]
     my_predbat.charge_window = []
     my_predbat.export_window = []
@@ -598,6 +599,7 @@ def simple_scenario(
     set_charge_freeze=True,
     calculate_export_on_pv=True,
     assert_clipped=0,
+    pv_ac_limit=0,
 ):
     """
     No PV, No Load
@@ -656,6 +658,7 @@ def simple_scenario(
     my_predbat.inverter_hybrid = hybrid
     my_predbat.export_limit = export_limit / 60.0
     my_predbat.inverter_limit = inverter_limit / 60.0
+    my_predbat.pv_ac_limit = pv_ac_limit / 60.0
     my_predbat.reserve = reserve
     my_predbat.inverter_loss = inverter_loss
     my_predbat.battery_rate_max_charge = battery_rate_max_charge / 60.0

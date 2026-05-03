@@ -157,6 +157,7 @@ class Prediction:
             self.inverter_hybrid = base.inverter_hybrid
             self.inverter_limit = base.inverter_limit
             self.export_limit = base.export_limit
+            self.pv_ac_limit = base.pv_ac_limit
             self.battery_rate_min = base.battery_rate_min
             self.battery_rate_max_charge = base.battery_rate_max_charge
             self.battery_rate_max_charge_dc = base.battery_rate_max_charge_dc
@@ -511,6 +512,7 @@ class Prediction:
         car_energy_reported_load = self.car_energy_reported_load
         inverter_limit = self.inverter_limit * step
         export_limit = self.export_limit * step
+        pv_ac_limit = self.pv_ac_limit * step
         set_charge_low_power = self.set_charge_window and self.set_charge_low_power and (save in ["best", "best10", "test"])
         carbon_enable = self.carbon_enable
         reserve = self.reserve
@@ -656,6 +658,12 @@ class Prediction:
 
             # Count PV kWh
             pv_kwh += pv_now
+
+            # Clip PV for AC-coupled inverters with a PV AC limit (e.g. microinverters).
+            # For non-hybrid systems pv_dc=0 and inverter_loss_ac=1.0, so pv_ac == pv_now; clipping pv_now here is mathematically equivalent to clipping pv_ac in each branch.
+            if not inverter_hybrid and pv_ac_limit > 0 and pv_now > pv_ac_limit:
+                clipped_today += pv_now - pv_ac_limit
+                pv_now = pv_ac_limit
 
             # Modelling reset of charge/discharge rate
             if set_charge_window or set_export_window:
@@ -912,6 +920,7 @@ class Prediction:
                 # ECO Mode
                 pv_ac = pv_now * inverter_loss_ac
                 pv_dc = 0
+
                 diff = get_diff(0, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp)
 
                 potential_to_charge = pv_ac
