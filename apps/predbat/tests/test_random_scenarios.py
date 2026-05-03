@@ -12,6 +12,7 @@ import math
 import json
 import random
 import datetime
+import time
 import traceback
 
 import yaml
@@ -540,6 +541,7 @@ def run_scenario(my_predbat, scenario, debug=False):
         "soc_final": None,
         "battery_cycles": None,
         "carbon_g": None,
+        "runtime_s": None,
         "failed": False,
         "error": None,
     }
@@ -548,6 +550,7 @@ def run_scenario(my_predbat, scenario, debug=False):
         apply_scenario_to_predbat(my_predbat, scenario)
         my_predbat.args["threads"] = 0
         my_predbat.plan_valid = False
+        t_start = time.perf_counter()
         my_predbat.calculate_plan(recompute=True)
 
         # Normal prediction (cost = raw import/export money)
@@ -588,6 +591,7 @@ def run_scenario(my_predbat, scenario, debug=False):
             export_kwh,
         )
 
+        t_elapsed = time.perf_counter() - t_start
         base_result.update(
             {
                 "metric": round(float(metric), 4),
@@ -599,6 +603,7 @@ def run_scenario(my_predbat, scenario, debug=False):
                 "soc_final": round(float(soc), 4),
                 "battery_cycles": round(float(battery_cycle), 4),
                 "carbon_g": round(float(final_carbon_g), 2),
+                "runtime_s": round(t_elapsed, 3),
             }
         )
 
@@ -663,7 +668,7 @@ def run_scenarios_from_file(my_predbat, scenarios_file, template_yaml, results_f
     for i, scenario in enumerate(scenarios):
         result = run_scenario(my_predbat, scenario, debug=debug)
         status = "FAILED" if result["failed"] else "ok"
-        print("Scenario {}/{} seed={} metric={} cost={} [{}]".format(i + 1, total, result["seed"], result["metric"], result["cost"], status))
+        print("Scenario {}/{} seed={} metric={} cost={} runtime={}s [{}]".format(i + 1, total, result["seed"], result["metric"], result["cost"], result["runtime_s"], status))
         if result["failed"]:
             print("  ERROR: {}".format(result["error"]))
         results.append(result)
@@ -732,14 +737,15 @@ def compare_results(file_a, file_b):
     print("")
 
     # Column widths
-    header = "{:>4}  {:>12}  {:>12}  {:>10}  {:>12}  {:>12}  {:>10}  {:>8}".format(
-        "ID", "metric_A", "metric_B", "met_diff", "cost_A", "cost_B", "cost_diff", "status"
+    header = "{:>4}  {:>12}  {:>12}  {:>10}  {:>12}  {:>12}  {:>10}  {:>8}  {:>8}  {:>8}".format(
+        "ID", "metric_A", "metric_B", "met_diff", "cost_A", "cost_B", "cost_diff", "time_A", "time_B", "status"
     )
     print(header)
     print("-" * len(header))
 
     metric_diffs = []
     cost_diffs = []
+    runtime_diffs = []
 
     for sid in common_ids:
         ra = results_a[sid]
@@ -753,6 +759,8 @@ def compare_results(file_a, file_b):
         mb = rb.get("metric")
         ca = ra.get("cost")
         cb = rb.get("cost")
+        ta = ra.get("runtime_s")
+        tb = rb.get("runtime_s")
 
         if ma is not None and mb is not None:
             met_diff = mb - ma
@@ -776,8 +784,17 @@ def compare_results(file_a, file_b):
             ca_str = "n/a"
             cb_str = "n/a"
 
-        print("{:>4}  {:>12}  {:>12}  {:>10}  {:>12}  {:>12}  {:>10}  {:>8}".format(
-            sid, ma_str, mb_str, met_diff_str, ca_str, cb_str, cost_diff_str, status
+        ta_str = "n/a"
+        tb_str = "n/a"
+        if ta is not None:
+            ta_str = "{:.3f}s".format(ta)
+        if tb is not None:
+            tb_str = "{:.3f}s".format(tb)
+        if ta is not None and tb is not None:
+            runtime_diffs.append(tb - ta)
+
+        print("{:>4}  {:>12}  {:>12}  {:>10}  {:>12}  {:>12}  {:>10}  {:>8}  {:>8}  {:>8}".format(
+            sid, ma_str, mb_str, met_diff_str, ca_str, cb_str, cost_diff_str, ta_str, tb_str, status
         ))
 
     print("-" * len(header))
@@ -806,6 +823,18 @@ def compare_results(file_a, file_b):
         print("  Average diff : {:+.4f}".format(avg_cost))
         print("  Min diff     : {:+.4f}".format(min(cost_diffs)))
         print("  Max diff     : {:+.4f}".format(max(cost_diffs)))
+
+    if runtime_diffs:
+        avg_rt_a = sum(ra.get("runtime_s") or 0 for ra in results_a.values() if ra.get("runtime_s") is not None) / max(1, sum(1 for ra in results_a.values() if ra.get("runtime_s") is not None))
+        avg_rt_b = sum(rb.get("runtime_s") or 0 for rb in results_b.values() if rb.get("runtime_s") is not None) / max(1, sum(1 for rb in results_b.values() if rb.get("runtime_s") is not None))
+        avg_rt_diff = sum(runtime_diffs) / len(runtime_diffs)
+        print("")
+        print("Runtime summary (optimisation wall-clock time):")
+        print("  Average A    : {:.3f}s".format(avg_rt_a))
+        print("  Average B    : {:.3f}s".format(avg_rt_b))
+        print("  Average diff : {:+.3f}s  (+ = B slower, - = B faster)".format(avg_rt_diff))
+        print("  Min diff     : {:+.3f}s".format(min(runtime_diffs)))
+        print("  Max diff     : {:+.3f}s".format(max(runtime_diffs)))
 
 
 # ---------------------------------------------------------------------------
