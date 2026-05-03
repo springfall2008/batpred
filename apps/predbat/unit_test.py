@@ -99,6 +99,7 @@ from tests.test_integer_config import test_integer_config_entities, test_expose_
 from tests.test_plan_json_rate_adjust import run_test_plan_json_rate_adjust
 from tests.test_rate_replicate_missing_slots import test_rate_replicate
 from tests.test_find_charge_window import test_find_charge_window
+from tests.test_random_scenarios import generate_scenarios, save_scenarios, run_scenarios_from_file, compare_results
 from tests.test_carbon import test_carbon
 from tests.test_download import test_download
 from tests.test_ohme import test_ohme
@@ -304,6 +305,16 @@ def main():
     parser.add_argument("--keyword", "-k", action="store", help="Run tests matching keyword pattern (e.g., -k carbon_ runs all carbon tests)")
     parser.add_argument("--list", "-l", action="store_true", help="List all available tests")
     parser.add_argument("--quick", "-q", action="store_true", help="Skip slow tests (optimise_levels, optimise_windows, debug_cases)")
+    parser.add_argument("--random-generate", action="store_true", help="Generate random benchmark scenarios and write to a YAML file")
+    parser.add_argument("--random-count", type=int, default=100, metavar="N", help="Number of random scenarios to generate (default: 100)")
+    parser.add_argument("--random-seed", type=int, default=0, metavar="N", help="Starting random seed (default: 0)")
+    parser.add_argument("--random-output", default="random_scenarios.yaml", metavar="PATH", help="Output YAML file for generated scenarios (default: random_scenarios.yaml)")
+    parser.add_argument("--random-run", action="store_true", help="Run all scenarios from a scenarios YAML file and save results to JSON")
+    parser.add_argument("--random-scenarios", default="random_scenarios.yaml", metavar="PATH", help="Scenarios YAML file to load for --random-run (default: random_scenarios.yaml)")
+    parser.add_argument("--random-scenario", type=int, default=None, metavar="N", help="Run only scenario with this id number (default: run all)")
+    parser.add_argument("--random-template", metavar="PATH", help="Template debug YAML file to use as baseline for --random-run (required)")
+    parser.add_argument("--random-results", default="random_results.json", metavar="PATH", help="Output JSON file for benchmark results (default: random_results.json)")
+    parser.add_argument("--random-compare", nargs=2, metavar=("FILE_A", "FILE_B"), help="Compare two random_results JSON files and print a diff table")
     args = parser.parse_args()
 
     # List available tests
@@ -321,10 +332,27 @@ def main():
         print("       python unit_test.py --quick  # Skip slow tests")
         sys.exit(0)
 
+    if args.random_generate:
+        print("**** Generating {} random scenario(s) starting from seed {} ****".format(args.random_count, args.random_seed))
+        scenarios = generate_scenarios(args.random_count, args.random_seed)
+        save_scenarios(scenarios, args.random_output)
+        sys.exit(0)
+
     print("**** Starting Predbat tests ****")
     my_predbat = create_predbat()
     print("**** Testing Predbat ****")
     failed = False
+
+    if args.random_run:
+        if not args.random_template:
+            print("ERROR: --random-template is required with --random-run")
+            sys.exit(1)
+        run_scenarios_from_file(my_predbat, args.random_scenarios, args.random_template, args.random_results, debug=args.full_debug, scenario_id=args.random_scenario)
+        sys.exit(0)
+
+    if args.random_compare:
+        compare_results(args.random_compare[0], args.random_compare[1])
+        sys.exit(0)
 
     if args.debug_file:
         run_single_debug(args.debug_file, my_predbat, args.debug_file, compare=args.compare, debug=args.full_debug)
