@@ -892,9 +892,12 @@ class GECloudDirect(ComponentBase):
             all_meter_serials = []
             for bat in batteries:
                 all_meter_serials.extend(battery_meters.get(bat, []))
-            has_shared_ct = (len(all_meter_serials) == 0) or (len(all_meter_serials) != len(set(all_meter_serials)))
+            no_dedicated_meters = len(all_meter_serials) == 0
+            has_duplicate_serials = len(all_meter_serials) != len(set(all_meter_serials))
+            has_shared_ct = no_dedicated_meters or has_duplicate_serials
             if has_shared_ct:
-                self.log("GECloud: Multiple inverters sharing a single CT clamp detected, using first inverter only for grid and load measurements")
+                reason = "no dedicated meters" if no_dedicated_meters else "duplicate meter serials"
+                self.log("GECloud: Multiple inverters sharing a single CT clamp detected ({}) — using first inverter only for grid and load measurements".format(reason))
                 self.set_arg("grid_power", [f"sensor.{self.prefix}_gecloud_{batteries[0]}_grid_power"] + [0 for _ in range(num_inverters - 1)])
                 self.set_arg("load_power", [f"sensor.{self.prefix}_gecloud_{batteries[0]}_consumption_power"] + [0 for _ in range(num_inverters - 1)])
                 self.set_arg("import_today", [f"sensor.{self.prefix}_gecloud_{batteries[0]}_grid_import_total"])
