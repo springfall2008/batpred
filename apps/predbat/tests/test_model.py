@@ -1874,7 +1874,7 @@ def run_model_tests(my_predbat):
     reset_rates(my_predbat, import_rate, export_rate)
     reset_inverter(my_predbat)
     # No clipping when pv_ac_limit is above the actual PV output
-    failed |= simple_scenario("pv_ac_limit_no_clip", my_predbat, 0, 1.0, assert_final_metric=-export_rate * 24, assert_final_soc=0, with_battery=False, pv_ac_limit=2.0)
+    failed |= simple_scenario("pv_ac_limit_no_clip", my_predbat, 0, 1.0, assert_final_metric=-export_rate * 24, assert_final_soc=0, with_battery=False, pv_ac_limit=2.0, assert_clipped=0)
     # Clipping when pv_ac_limit is below the actual PV output (non-hybrid AC-coupled)
     failed |= simple_scenario("pv_ac_limit_ac_clip", my_predbat, 0, 2.0, assert_final_metric=-export_rate * 24 * 1.5, assert_final_soc=0, with_battery=False, pv_ac_limit=1.5, assert_clipped=24 * 0.5)
     # With a load, clipping still applies; load is met from grid when pv is capped
@@ -1890,9 +1890,7 @@ def run_model_tests(my_predbat):
         assert_clipped=24 * 0.5,
     )
     # pv_ac_limit must NOT apply to hybrid inverters (PV is DC-coupled, clipping handled by inverter_limit)
-    failed |= simple_scenario("pv_ac_limit_hybrid_ignored", my_predbat, 0, 2.0, assert_final_metric=-export_rate * 24, assert_final_soc=24, with_battery=True, hybrid=True, pv_ac_limit=1.5)
-    if failed:
-        return failed
+    failed |= simple_scenario("pv_ac_limit_hybrid_ignored", my_predbat, 0, 2.0, assert_final_metric=-export_rate * 24, assert_final_soc=24, with_battery=True, hybrid=True, pv_ac_limit=1.5, assert_clipped=0)
 
     if failed:
         print("**** ERROR: Some Model tests failed ****")
