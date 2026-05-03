@@ -659,7 +659,8 @@ class Prediction:
             # Count PV kWh
             pv_kwh += pv_now
 
-            # Clip PV for AC-coupled inverters with a PV AC limit (e.g. microinverters); pv_dc is always zero for AC-coupled
+            # Clip PV for AC-coupled inverters with a PV AC limit (e.g. microinverters).
+            # For non-hybrid systems pv_dc=0 and inverter_loss_ac=1.0, so pv_ac == pv_now; clipping pv_now here is mathematically equivalent to clipping pv_ac in each branch.
             if not inverter_hybrid and pv_ac_limit > 0 and pv_now > pv_ac_limit:
                 clipped_today += pv_now - pv_ac_limit
                 pv_now = pv_ac_limit
