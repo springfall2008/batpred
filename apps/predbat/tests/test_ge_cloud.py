@@ -621,8 +621,8 @@ def _test_async_get_devices_with_batteries(my_predbat):
         ge_cloud = MockGECloudDirect()
 
         mock_devices = [
-            {"inverter": {"serial": "inv001", "info": {"model": "All-In-One"}, "connections": {"batteries": [{"serial": "bat1"}]}}},
-            {"inverter": {"serial": "inv002", "info": {"model": "Hybrid"}, "connections": {"batteries": [{"serial": "bat2"}]}}},
+            {"inverter": {"serial": "inv001", "info": {"model": "All-In-One"}, "connections": {"batteries": [{"serial": "bat1"}], "meters": []}}},
+            {"inverter": {"serial": "inv002", "info": {"model": "Hybrid"}, "connections": {"batteries": [{"serial": "bat2"}], "meters": [{"serial_number": 12345}]}}},
         ]
 
         async def mock_retry(*args, **kwargs):
@@ -635,6 +635,13 @@ def _test_async_get_devices_with_batteries(my_predbat):
 
             if result["battery"] != ["inv001", "inv002"]:
                 print("ERROR: Expected battery=['inv001', 'inv002'], got {}".format(result))
+                return 1
+            # Verify battery_meters: inv001 has no meters, inv002 has meter serial 12345
+            if result["battery_meters"].get("inv001") != []:
+                print("ERROR: Expected battery_meters['inv001']=[], got {}".format(result["battery_meters"]))
+                return 1
+            if result["battery_meters"].get("inv002") != [12345]:
+                print("ERROR: Expected battery_meters['inv002']=[12345], got {}".format(result["battery_meters"]))
                 return 1
         return 0
 
@@ -655,7 +662,7 @@ def _test_async_get_devices_empty(my_predbat):
 
             result = await ge_cloud.async_get_devices()
 
-            if result != {"gateway": None, "ems": None, "battery": []}:
+            if result != {"gateway": None, "ems": None, "battery": [], "battery_meters": {}}:
                 print("ERROR: Expected empty result dict, got {}".format(result))
                 return 1
         return 0
@@ -2420,7 +2427,9 @@ def _test_async_automatic_config(my_predbat):
         assert ge.config_args.get("discharge_rate_percent") is None, "discharge_rate_percent should be None"
         assert ge.config_args.get("inverter_mode") is None, "inverter_mode should be None when eco toggle switch is not available"
 
-        # Test 3: Multiple batteries
+        # Test 3: Multiple batteries with no battery_meters (default: shared CT — no dedicated meters detected)
+        # When battery_meters is absent or all batteries have empty meters, shared CT is assumed and
+        # grid/load sensors should use only the first battery to avoid double-counting.
         ge.config_args = {}
         ge.settings = {"battery001": {"reg1": {"name": "Enable_Eco_Mode"}}, "battery002": {"reg1": {"name": "Enable_Eco_Mode"}}}
 
@@ -2430,12 +2439,55 @@ def _test_async_automatic_config(my_predbat):
 
         assert ge.config_args.get("num_inverters") == 2, "num_inverters should be 2"
         assert ge.config_args.get("inverter_type") == ["GEC", "GEC"], "inverter_type should have 2 entries"
-        assert len(ge.config_args.get("load_today")) == 2, "load_today should have 2 entries"
-        assert ge.config_args.get("load_today")[0] == "sensor.predbat_gecloud_battery001_consumption_total"
-        assert ge.config_args.get("load_today")[1] == "sensor.predbat_gecloud_battery002_consumption_total"
+        # Shared CT: load_today, import_today, export_today use first battery only to avoid double-counting
+        assert ge.config_args.get("load_today") == ["sensor.predbat_gecloud_battery001_consumption_total"], "load_today should use first battery only (shared CT)"
+        assert ge.config_args.get("import_today") == ["sensor.predbat_gecloud_battery001_grid_import_total"], "import_today should use first battery only (shared CT)"
+        assert ge.config_args.get("export_today") == ["sensor.predbat_gecloud_battery001_grid_export_total"], "export_today should use first battery only (shared CT)"
+        # Shared CT: grid_power and load_power use first battery + zeros
+        assert ge.config_args.get("grid_power") == ["sensor.predbat_gecloud_battery001_grid_power", 0], "grid_power should use first battery + zero (shared CT)"
+        assert ge.config_args.get("load_power") == ["sensor.predbat_gecloud_battery001_consumption_power", 0], "load_power should use first battery + zero (shared CT)"
+        # Per-inverter sensors should still use all batteries
+        assert ge.config_args.get("pv_today") == ["sensor.predbat_gecloud_battery001_solar_total", "sensor.predbat_gecloud_battery002_solar_total"], "pv_today should use all batteries"
+        assert ge.config_args.get("battery_power") == ["sensor.predbat_gecloud_battery001_battery_power", "sensor.predbat_gecloud_battery002_battery_power"], "battery_power should use all batteries"
         assert ge.config_args.get("inverter_mode") == ["switch.predbat_gecloud_battery001_enable_eco_mode", "switch.predbat_gecloud_battery002_enable_eco_mode"], "inverter_mode should have 2 eco toggle entries"
 
-        # Test 3b: Three-phase alternative names should be auto-selected when default names do not exist
+        # Test 3b: Multiple batteries with unique dedicated meters (independent CT clamps)
+        # When each battery has a distinct dedicated meter serial, per-inverter readings are used.
+        ge.config_args = {}
+        ge.settings = {"battery001": {"reg1": {"name": "Enable_Eco_Mode"}}, "battery002": {"reg1": {"name": "Enable_Eco_Mode"}}}
+
+        devices = {
+            "ems": None,
+            "gateway": None,
+            "battery": ["battery001", "battery002"],
+            "battery_meters": {"battery001": [1001], "battery002": [1002]},
+        }
+
+        await ge.async_automatic_config(devices)
+
+        assert ge.config_args.get("num_inverters") == 2, "num_inverters should be 2 with unique meters"
+        # Unique meters: all sensors use both batteries (no shared-CT fixup applied)
+        assert ge.config_args.get("import_today") == ["sensor.predbat_gecloud_battery001_grid_import_total", "sensor.predbat_gecloud_battery002_grid_import_total"], "import_today should use both batteries when meters are unique"
+        assert ge.config_args.get("export_today") == ["sensor.predbat_gecloud_battery001_grid_export_total", "sensor.predbat_gecloud_battery002_grid_export_total"], "export_today should use both batteries when meters are unique"
+        assert ge.config_args.get("grid_power") == ["sensor.predbat_gecloud_battery001_grid_power", "sensor.predbat_gecloud_battery002_grid_power"], "grid_power should use both batteries when meters are unique"
+
+        # Test 3c: Multiple batteries with shared/duplicate meter serial (same CT clamp explicitly detected)
+        ge.config_args = {}
+        ge.settings = {"battery001": {"reg1": {"name": "Enable_Eco_Mode"}}, "battery002": {"reg1": {"name": "Enable_Eco_Mode"}}}
+
+        devices = {
+            "ems": None,
+            "gateway": None,
+            "battery": ["battery001", "battery002"],
+            "battery_meters": {"battery001": [9999], "battery002": [9999]},  # same serial = shared meter
+        }
+
+        await ge.async_automatic_config(devices)
+
+        assert ge.config_args.get("grid_power") == ["sensor.predbat_gecloud_battery001_grid_power", 0], "grid_power should use first battery + zero when meter serial is shared"
+        assert ge.config_args.get("import_today") == ["sensor.predbat_gecloud_battery001_grid_import_total"], "import_today should use first battery only when meter serial is shared"
+
+        # Test 3d: Three-phase alternative names should be auto-selected when default names do not exist
         ge.config_args = {}
         ge.settings = {
             "battery003": {
