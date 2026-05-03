@@ -1568,11 +1568,11 @@ class Output:
             json_row["soc_change"] = dp2(soc_change)
             json_row["soc_sym"] = soc_sym
             json_row["cost_change"] = dp2(metric_change / 100.0)
-            json_row["total_cost"] = dp2(metric_end / 100.0)
+            json_row["total_cost"] = dp2(metric_start / 100.0)
             if self.carbon_enable:
                 json_row["carbon_intensity"] = carbon_intensity
                 json_row["carbon_change"] = carbon_change
-                json_row["total_carbon"] = dp2(carbon_amount_end / 1000.0)
+                json_row["total_carbon"] = dp2(carbon_amount / 1000.0)
                 json_row["carbon_intensity_color"] = carbon_intensity_color
                 json_row["carbon_color"] = carbon_color
             # Add rowspan hints for client-side rendering
