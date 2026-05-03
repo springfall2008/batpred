@@ -157,6 +157,7 @@ class Prediction:
             self.inverter_hybrid = base.inverter_hybrid
             self.inverter_limit = base.inverter_limit
             self.export_limit = base.export_limit
+            self.pv_ac_limit = base.pv_ac_limit
             self.battery_rate_min = base.battery_rate_min
             self.battery_rate_max_charge = base.battery_rate_max_charge
             self.battery_rate_max_charge_dc = base.battery_rate_max_charge_dc
@@ -511,6 +512,7 @@ class Prediction:
         car_energy_reported_load = self.car_energy_reported_load
         inverter_limit = self.inverter_limit * step
         export_limit = self.export_limit * step
+        pv_ac_limit = self.pv_ac_limit * step
         set_charge_low_power = self.set_charge_window and self.set_charge_low_power and (save in ["best", "best10", "test"])
         carbon_enable = self.carbon_enable
         reserve = self.reserve
@@ -1006,6 +1008,12 @@ class Prediction:
                         battery_draw = max(battery_draw - over_limit, 0)
                     else:
                         battery_draw = min(battery_draw + over_limit * inverter_loss, 0)
+
+                # Clip PV AC for non-hybrid (AC coupled) inverters with a PV AC limit (e.g. microinverters)
+                if pv_ac_limit > 0 and pv_ac > pv_ac_limit:
+                    pv_ac_before = pv_ac
+                    pv_ac = pv_ac_limit
+                    clipped_today += pv_ac_before - pv_ac
 
             # Export limit, clip PV output
             diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp)

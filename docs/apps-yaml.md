@@ -913,6 +913,28 @@ If you have multiple inverters then set the value of each one in a list format.
 
 NB: inverter_limit is ONLY used by Predbat to improve the quality of the plan, any solar clipping is done by the inverter and is not controlled by Predbat.
 
+### **pv_ac_limit**
+
+Optional, applies to **non-hybrid (AC coupled) inverters only**.
+
+Controls the way Predbat models the maximum AC output of your PV system.
+This does not change the way the inverter is controlled.
+
+When set, defines the maximum AC output power in watts for your PV system (e.g. microinverters).
+This is used by Predbat to model clipping that occurs when your PV generation exceeds the AC output limit,
+for example if you have microinverters with a rated maximum AC output.
+
+This setting is ignored for hybrid inverters (`inverter_hybrid: true`) because in a hybrid system the PV
+connects directly to the DC bus and clipping is already modelled via `inverter_limit`.
+
+Example:
+
+```yaml
+  pv_ac_limit: 3600
+```
+
+NB: pv_ac_limit is ONLY used by Predbat to improve the quality of the plan, any solar clipping is done by the inverter and is not controlled by Predbat.
+
 ### **export_limit**
 
 One per inverter (optional).
