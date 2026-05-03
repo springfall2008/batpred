@@ -883,6 +883,28 @@ class GECloudDirect(ComponentBase):
         # Use the first battery serial for the ge_cloud_serial (for status)
         self.set_arg("ge_cloud_serial", devices["battery"][0])
 
+        # Detect shared CT clamp: when multiple inverters share a single physical grid CT clamp
+        # (no dedicated external meters, or duplicate meter serial numbers), grid and load
+        # measurements are identical across all inverters and must not be summed.
+        # Apply the same "single source + zeros" pattern used by the EMS path.
+        if num_inverters > 1 and not devices.get("ems"):
+            battery_meters = devices.get("battery_meters", {})
+            all_meter_serials = []
+            for bat in batteries:
+                all_meter_serials.extend(battery_meters.get(bat, []))
+            no_dedicated_meters = len(all_meter_serials) == 0
+            has_duplicate_serials = len(all_meter_serials) != len(set(all_meter_serials))
+            has_shared_ct = no_dedicated_meters or has_duplicate_serials
+            if has_shared_ct:
+                reason = "no dedicated meters" if no_dedicated_meters else "duplicate meter serials"
+                self.log("GECloud: Multiple inverters sharing a single CT clamp detected ({}) — using first inverter only for grid and load measurements".format(reason))
+                self.set_arg("grid_power", [f"sensor.{self.prefix}_gecloud_{batteries[0]}_grid_power"] + [0 for _ in range(num_inverters - 1)])
+                self.set_arg("load_power", [f"sensor.{self.prefix}_gecloud_{batteries[0]}_consumption_power"] + [0 for _ in range(num_inverters - 1)])
+                self.set_arg("import_today", [f"sensor.{self.prefix}_gecloud_{batteries[0]}_grid_import_total"])
+                self.set_arg("export_today", [f"sensor.{self.prefix}_gecloud_{batteries[0]}_grid_export_total"])
+                if not self.get_arg("ge_cloud_load_today_ignore", default=False):
+                    self.set_arg("load_today", [f"sensor.{self.prefix}_gecloud_{batteries[0]}_consumption_total"])
+
         # reconfigure for EMS
         if devices["ems"]:
             self.log("GECloud: EMS detected, using EMS for control")
@@ -1378,7 +1400,7 @@ class GECloudDirect(ComponentBase):
         """
 
         device_list = await self.async_get_inverter_data_retry(GE_API_DEVICES)
-        result = {"gateway": None, "ems": None, "battery": []}
+        result = {"gateway": None, "ems": None, "battery": [], "battery_meters": {}}
         if device_list is None:
             return result
 
@@ -1391,6 +1413,8 @@ class GECloudDirect(ComponentBase):
             model = info.get("model", "").lower()
             # battery = info.get("battery_type", {})
             batteries = inverter.get("connections", {}).get("batteries", [])
+            meters = inverter.get("connections", {}).get("meters", [])
+            meter_serials = [m.get("serial_number") for m in meters if m.get("serial_number") is not None]
             if serial:
                 serial = serial.lower()
                 if "plant ems" in model:
@@ -1399,6 +1423,7 @@ class GECloudDirect(ComponentBase):
                     result["gateway"] = serial
                 elif batteries:
                     result["battery"].append(serial)
+                    result["battery_meters"][serial] = meter_serials
             else:
                 self.log("GECloud: Warn: Device without serial found: {}".format(device))
         return result
