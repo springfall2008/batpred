@@ -659,6 +659,11 @@ class Prediction:
             # Count PV kWh
             pv_kwh += pv_now
 
+            # Clip PV for AC-coupled inverters with a PV AC limit (e.g. microinverters); pv_dc is always zero for AC-coupled
+            if not inverter_hybrid and pv_ac_limit > 0 and pv_now > pv_ac_limit:
+                clipped_today += pv_now - pv_ac_limit
+                pv_now = pv_ac_limit
+
             # Modelling reset of charge/discharge rate
             if set_charge_window or set_export_window:
                 charge_rate_now = battery_rate_max_charge
@@ -795,11 +800,6 @@ class Prediction:
                 pv_ac = pv_now * inverter_loss_ac
                 pv_dc = 0
 
-                # Clip PV AC for non-hybrid (AC coupled) inverters with a PV AC limit (e.g. microinverters)
-                if not inverter_hybrid and pv_ac_limit > 0 and pv_ac > pv_ac_limit:
-                    clipped_today += pv_ac - pv_ac_limit
-                    pv_ac = pv_ac_limit
-
                 # Exceed export limit?
                 diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp)
                 if diff < 0 and abs(diff) > export_limit:
@@ -905,11 +905,6 @@ class Prediction:
                     pv_dc = 0
                 pv_ac = (pv_now - pv_dc) * inverter_loss_ac
 
-                # Clip PV AC for non-hybrid (AC coupled) inverters with a PV AC limit (e.g. microinverters)
-                if not inverter_hybrid and pv_ac_limit > 0 and pv_ac > pv_ac_limit:
-                    clipped_today += pv_ac - pv_ac_limit
-                    pv_ac = pv_ac_limit
-
                 if (charge_limit_n - soc) < (charge_rate_now_curve_step):
                     # The battery will hit the charge limit in this period, so if the charge was spread over the period
                     # it could be done from solar, but in reality it will be full rate and then stop meaning the solar
@@ -924,11 +919,6 @@ class Prediction:
                 # ECO Mode
                 pv_ac = pv_now * inverter_loss_ac
                 pv_dc = 0
-
-                # Clip PV AC for non-hybrid (AC coupled) inverters with a PV AC limit (e.g. microinverters)
-                if not inverter_hybrid and pv_ac_limit > 0 and pv_ac > pv_ac_limit:
-                    clipped_today += pv_ac - pv_ac_limit
-                    pv_ac = pv_ac_limit
 
                 diff = get_diff(0, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp)
 
@@ -972,10 +962,6 @@ class Prediction:
                     else:
                         pv_dc = 0
                     pv_ac = (pv_now - pv_dc) * inverter_loss_ac
-
-                    # Re-apply AC limit cap for non-hybrid; clipping was already tracked at initial pv_ac computation above
-                    if not inverter_hybrid and pv_ac_limit > 0 and pv_ac > pv_ac_limit:
-                        pv_ac = pv_ac_limit
 
             # Clamp at inverter limit
             if inverter_hybrid:
