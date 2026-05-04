@@ -290,7 +290,7 @@ class SolisAPI(ComponentBase):
         # Tracking
         self.slots_reset = set()  # Track which inverters had slots reset
 
-        self.log(f"Solis API: Initialised with inverter_sn={self.inverter_sn}, automatic={automatic}")
+        self.log(f"Solis API: Initialised with inverter_sn={self.configured_inverter_sn}, automatic={automatic}")
 
     # ==================== Helper Methods ====================
 
