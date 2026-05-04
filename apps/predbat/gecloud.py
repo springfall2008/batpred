@@ -1427,7 +1427,7 @@ class GECloudDirect(ComponentBase):
                     result["ems"] = serial
                 elif "gateway" in model:
                     result["gateway"] = serial
-                elif batteries:
+                elif batteries or info.get("battery"):
                     result["battery"].append(serial)
                     result["battery_meters"][serial] = meter_serials
             else:
