@@ -135,6 +135,8 @@ def run_debug_cases(my_predbat):
     for filename in glob.glob("cases/*.yaml"):
         basename = os.path.basename(filename)
         pathname = os.path.dirname(filename)
+        if basename == "random_scenarios.yaml":
+            continue  # Skip the random scenarios template file
         test_failed = run_single_debug(basename, my_predbat, filename, pathname + "/" + basename + ".expected.json")
         if test_failed:
             print(f"**** Debug case {basename}: FAILED ****")

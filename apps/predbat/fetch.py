@@ -2265,7 +2265,6 @@ class Fetch:
         self.calculate_export_on_pv = self.get_arg("calculate_export_on_pv")
         self.calculate_second_pass = self.get_arg("calculate_second_pass")
         self.calculate_inday_adjustment = self.get_arg("calculate_inday_adjustment")
-        self.calculate_tweak_plan = self.get_arg("calculate_tweak_plan")
         self.calculate_regions = True
         self.calculate_import_low_export = self.get_arg("calculate_import_low_export")
         self.calculate_export_high_import = self.get_arg("calculate_export_high_import")

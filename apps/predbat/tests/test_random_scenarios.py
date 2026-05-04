@@ -478,6 +478,7 @@ def apply_scenario_to_predbat(my_predbat, scenario):
     pv_normal, pv10 = expand_pv_forecast(data["pv_day_kw"], forecast_minutes)
     my_predbat.pv_forecast_minute = pv_normal
     my_predbat.pv_forecast_minute10 = pv10
+    my_predbat.calculate_second_pass = False
 
     # --- Rebuild PV step dicts via step_data_history ---
     my_predbat.pv_forecast_minute_step = my_predbat.step_data_history(

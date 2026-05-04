@@ -2,7 +2,7 @@
   "run_info": {
     "template_yaml": "cases/predbat_debug_agile1.yaml",
     "scenarios_file": "cases/random_scenarios.yaml",
-    "timestamp": "2026-05-04T17:27:36.058331+00:00"
+    "timestamp": "2026-05-04T17:47:21.551527+00:00"
   },
   "results": [
     {
@@ -17,23 +17,23 @@
       "soc_final": 9.5,
       "battery_cycles": 12.4096,
       "carbon_g": 13475.64,
-      "runtime_s": 1.774,
+      "runtime_s": 1.809,
       "failed": false,
       "error": null
     },
     {
       "id": 1,
       "seed": 1,
-      "metric": 482.9681,
-      "cost": 564.9604,
-      "import_kwh_battery": 6.3512,
-      "import_kwh_house": 0.0521,
-      "export_kwh": 24.1682,
+      "metric": 482.7461,
+      "cost": 564.7084,
+      "import_kwh_battery": 6.3417,
+      "import_kwh_house": 0.069,
+      "export_kwh": 24.1757,
       "soc_min": 1.858,
       "soc_final": 4.579,
       "battery_cycles": 11.8031,
-      "carbon_g": 5203.19,
-      "runtime_s": 1.747,
+      "carbon_g": 5203.13,
+      "runtime_s": 1.844,
       "failed": false,
       "error": null
     },
@@ -49,7 +49,7 @@
       "soc_final": 0.38,
       "battery_cycles": 4.5489,
       "carbon_g": 8893.62,
-      "runtime_s": 2.974,
+      "runtime_s": 3.055,
       "failed": false,
       "error": null
     },
@@ -65,7 +65,7 @@
       "soc_final": 4.7001,
       "battery_cycles": 10.5325,
       "carbon_g": 11603.64,
-      "runtime_s": 2.798,
+      "runtime_s": 2.951,
       "failed": false,
       "error": null
     },
@@ -81,7 +81,7 @@
       "soc_final": 4.6215,
       "battery_cycles": 12.1001,
       "carbon_g": 16185.77,
-      "runtime_s": 2.541,
+      "runtime_s": 2.607,
       "failed": false,
       "error": null
     },
@@ -97,14 +97,14 @@
       "soc_final": 12.9568,
       "battery_cycles": 16.0606,
       "carbon_g": 5197.29,
-      "runtime_s": 1.737,
+      "runtime_s": 1.798,
       "failed": false,
       "error": null
     },
     {
       "id": 6,
       "seed": 6,
-      "metric": 261.2061,
+      "metric": 261.261,
       "cost": 437.7227,
       "import_kwh_battery": 25.6081,
       "import_kwh_house": 0.0,
@@ -113,7 +113,7 @@
       "soc_final": 13.3727,
       "battery_cycles": 42.8268,
       "carbon_g": 12954.28,
-      "runtime_s": 11.477,
+      "runtime_s": 11.702,
       "failed": false,
       "error": null
     },
@@ -129,7 +129,7 @@
       "soc_final": 0.38,
       "battery_cycles": 0.9215,
       "carbon_g": 17836.83,
-      "runtime_s": 1.8,
+      "runtime_s": 1.82,
       "failed": false,
       "error": null
     },
@@ -145,14 +145,14 @@
       "soc_final": 0.38,
       "battery_cycles": 6.9101,
       "carbon_g": 13346.35,
-      "runtime_s": 1.571,
+      "runtime_s": 1.596,
       "failed": false,
       "error": null
     },
     {
       "id": 9,
       "seed": 9,
-      "metric": 121.4525,
+      "metric": 120.4679,
       "cost": 243.0113,
       "import_kwh_battery": 12.2543,
       "import_kwh_house": 0.0,
@@ -161,23 +161,23 @@
       "soc_final": 7.4499,
       "battery_cycles": 24.9913,
       "carbon_g": 4045.5,
-      "runtime_s": 4.597,
+      "runtime_s": 4.8,
       "failed": false,
       "error": null
     },
     {
       "id": 10,
       "seed": 10,
-      "metric": 312.5657,
-      "cost": 432.0776,
-      "import_kwh_battery": 14.0029,
+      "metric": 308.4479,
+      "cost": 418.1807,
+      "import_kwh_battery": 14.3194,
       "import_kwh_house": 0.0,
-      "export_kwh": 22.0304,
+      "export_kwh": 22.6707,
       "soc_min": 0.7599,
-      "soc_final": 8.0379,
-      "battery_cycles": 39.2596,
-      "carbon_g": 9244.09,
-      "runtime_s": 6.786,
+      "soc_final": 7.6085,
+      "battery_cycles": 41.1011,
+      "carbon_g": 9117.07,
+      "runtime_s": 7.08,
       "failed": false,
       "error": null
     },
@@ -193,7 +193,7 @@
       "soc_final": 0.38,
       "battery_cycles": 43.6449,
       "carbon_g": 14534.1,
-      "runtime_s": 4.403,
+      "runtime_s": 4.742,
       "failed": false,
       "error": null
     },
@@ -209,7 +209,7 @@
       "soc_final": 0.433,
       "battery_cycles": 72.6936,
       "carbon_g": 16408.73,
-      "runtime_s": 8.422,
+      "runtime_s": 9.274,
       "failed": false,
       "error": null
     },
@@ -225,7 +225,7 @@
       "soc_final": 0.38,
       "battery_cycles": 10.9678,
       "carbon_g": 10462.19,
-      "runtime_s": 3.938,
+      "runtime_s": 4.219,
       "failed": false,
       "error": null
     },
@@ -241,23 +241,23 @@
       "soc_final": 1.0744,
       "battery_cycles": 8.8048,
       "carbon_g": 16993.46,
-      "runtime_s": 1.887,
+      "runtime_s": 2.145,
       "failed": false,
       "error": null
     },
     {
       "id": 15,
       "seed": 15,
-      "metric": 805.4674,
-      "cost": 871.7098,
-      "import_kwh_battery": 18.0532,
-      "import_kwh_house": 2.3018,
-      "export_kwh": 6.9954,
+      "metric": 804.0381,
+      "cost": 870.1838,
+      "import_kwh_battery": 18.6478,
+      "import_kwh_house": 1.8621,
+      "export_kwh": 7.1387,
       "soc_min": 0.2978,
       "soc_final": 4.7793,
-      "battery_cycles": 25.8386,
-      "carbon_g": 17278.99,
-      "runtime_s": 6.338,
+      "battery_cycles": 26.1255,
+      "carbon_g": 17282.78,
+      "runtime_s": 6.516,
       "failed": false,
       "error": null
     },
@@ -273,7 +273,7 @@
       "soc_final": 0.38,
       "battery_cycles": 4.1652,
       "carbon_g": 15925.89,
-      "runtime_s": 2.532,
+      "runtime_s": 2.571,
       "failed": false,
       "error": null
     },
@@ -289,7 +289,7 @@
       "soc_final": 13.3873,
       "battery_cycles": 44.0482,
       "carbon_g": 5325.4,
-      "runtime_s": 6.177,
+      "runtime_s": 6.322,
       "failed": false,
       "error": null
     },
@@ -305,7 +305,7 @@
       "soc_final": 4.5266,
       "battery_cycles": 8.7378,
       "carbon_g": 11634.51,
-      "runtime_s": 1.186,
+      "runtime_s": 1.224,
       "failed": false,
       "error": null
     },
@@ -321,7 +321,7 @@
       "soc_final": 19.9184,
       "battery_cycles": 30.4672,
       "carbon_g": 17634.98,
-      "runtime_s": 5.407,
+      "runtime_s": 5.642,
       "failed": false,
       "error": null
     }
