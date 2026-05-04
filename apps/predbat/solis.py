@@ -269,13 +269,13 @@ class SolisAPI(ComponentBase):
         self.nominal_voltage = 48.0  # Default nominal battery voltage
         self.control_enable = control_enable
 
-        # Convert inverter_sn to list
+        # Handle inverter SN configuration - can be None, a single string, or a list of strings
         if inverter_sn is None:
-            self.inverter_sn = []
+            self.configured_inverter_sn = []
         elif isinstance(inverter_sn, str):
-            self.inverter_sn = [inverter_sn]
+            self.configured_inverter_sn = [inverter_sn]
         else:
-            self.inverter_sn = inverter_sn
+            self.configured_inverter_sn = list(inverter_sn)
 
         # Cache structures
         self.cached_values = {}  # {inverter_sn: {cid: str_value}}
@@ -285,6 +285,7 @@ class SolisAPI(ComponentBase):
         self.max_charge_current = {}  # {inverter_sn: int}
         self.max_discharge_current = {}  # {inverter_sn: int}
         self.charge_discharge_time_windows = {}  # {inverter_sn: time_window_dict}
+        self.inverter_sn = []
 
         # Tracking
         self.slots_reset = set()  # Track which inverters had slots reset
@@ -2821,6 +2822,28 @@ class SolisAPI(ComponentBase):
         if value > 20:
             await self.read_and_write_cid(device_sn, SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC, "20", field_description="Set over discharge soc to 20 default")
 
+    def filter_inverter_sn(self, configured_inverter_sn, all_inverters):
+        """
+        Filter by configured inverter_sn if specified, otherwise use all.
+        """
+        if configured_inverter_sn:
+            # inverter_sn was configured, filter to only those (case-insensitive: user may
+            # type lowercase SNs in apps.yaml while the API returns uppercase hex digits)
+            configured_lower = {sn.lower() for sn in configured_inverter_sn}
+            filtered = [inv for inv in all_inverters if inv.get("sn") and inv.get("sn").lower() in configured_lower]
+            # Warn about any configured SNs that were not found in the account
+            found_lower = {inv.get("sn").lower() for inv in filtered if inv.get("sn")}
+            for sn in configured_inverter_sn:
+                if sn.lower() not in found_lower:
+                    self.log(f"Warn: Solis API: Configured inverter SN '{sn}' not found in account")
+            self.log(f"Solis API: Filtered to {len(filtered)} of {len(all_inverters)} inverter(s) based on config")
+            inverter_sn = [inv.get("sn") for inv in filtered if inv.get("sn")]
+        else:
+            # No filter configured, use all discovered inverters
+            inverter_sn = [inv.get("sn") for inv in all_inverters if inv.get("sn")]
+            self.log(f"Solis API: Using all {len(inverter_sn)} discovered inverter(s)")
+        return inverter_sn
+
     async def run(self, seconds, first):
         """Main run cycle called every 5 seconds"""
         poll_success = True
@@ -2837,17 +2860,7 @@ class SolisAPI(ComponentBase):
                 all_inverters = await self.get_inverter_list()
 
                 if all_inverters:
-                    # Filter by configured inverter_sn if specified, otherwise use all
-                    if self.inverter_sn:
-                        # inverter_sn was configured, filter to only those
-                        filtered = [inv for inv in all_inverters if inv.get("sn") in self.inverter_sn]
-                        self.log(f"Solis API: Filtered to {len(filtered)} of {len(all_inverters)} inverter(s) based on config")
-                        self.inverter_sn = [inv.get("sn") for inv in filtered if inv.get("sn")]
-                    else:
-                        # No filter configured, use all discovered inverters
-                        self.inverter_sn = [inv.get("sn") for inv in all_inverters if inv.get("sn")]
-                        self.log(f"Solis API: Using all {len(self.inverter_sn)} discovered inverter(s)")
-
+                    self.inverter_sn = self.filter_inverter_sn(self.configured_inverter_sn, all_inverters)
                     if not self.inverter_sn:
                         self.log("Warn: Solis API: No inverters found after filtering")
                 else:
