@@ -6375,8 +6375,9 @@ def get_plan_renderer_js():
             // Render header
             html += '<tr>';
             html += '<th><b>Time</b></th>';
-            html += showDebug ? '<th><b>Import p (w/loss)</b></th>' : '<th><b>Import p</b></th>';
-            html += showDebug ? '<th><b>Export p (w/loss)</b></th>' : '<th><b>Export p</b></th>';
+            const currencyMinor = jsonData.currency_symbols ? jsonData.currency_symbols[1] : 'p';
+            html += showDebug ? `<th><b>Import ${currencyMinor} (w/loss)</b></th>` : `<th><b>Import ${currencyMinor}</b></th>`;
+            html += showDebug ? `<th><b>Export ${currencyMinor} (w/loss)</b></th>` : `<th><b>Export ${currencyMinor}</b></th>`;
             html += '<th colspan="2"><b>State</b></th>';
             html += '<th><b>Limit %</b></th>';
             html += showDebug ? '<th><b>PV kWh (10%)</b></th>' : '<th><b>PV kWh</b></th>';
@@ -6554,7 +6555,7 @@ def get_plan_renderer_js():
                 const totals = jsonData.totals;
                 html += '<tr style="color:black">';
 
-                // Empty cells for Time, Import p, Export p, State (colspan 2), Limit %
+                // Empty cells for Time, Import, Export, State (colspan 2), Limit %
                 html += '<td></td><td></td><td></td><td></td><td></td><td></td>';
 
                 // PV forecast total
