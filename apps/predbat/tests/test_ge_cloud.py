@@ -1881,13 +1881,14 @@ def _test_async_write_inverter_setting_success(my_predbat):
         with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
 
             async def mock_get_data(*args, **kwargs):
-                return {"success": True}
+                # Include a valid value (not an error code) so the write succeeds
+                return {"success": True, "value": 100}
 
             ge_cloud.async_get_inverter_data = mock_get_data
 
             result = await ge_cloud.async_write_inverter_setting("test123", 77, "100")
 
-            if result != {"success": True}:
+            if result != {"success": True, "value": 100}:
                 print("ERROR: Expected success response, got {}".format(result))
                 return 1
 
@@ -1901,8 +1902,31 @@ def _test_async_write_inverter_setting_success(my_predbat):
             if ge_cloud.pending_writes["test123"][0]["setting_id"] != 77:
                 print("ERROR: Expected setting_id 77, got {}".format(ge_cloud.pending_writes["test123"][0].get("setting_id")))
                 return 1
-            if ge_cloud.pending_writes["test123"][0]["value"] != "100":
+            if ge_cloud.pending_writes["test123"][0]["value"] != 100:
                 print("ERROR: Expected value 100, got {}".format(ge_cloud.pending_writes["test123"][0].get("value")))
+                return 1
+
+        # Test that a response with an error value code (-1) causes a retry and ultimately fails
+        ge_cloud2 = MockGECloudDirect()
+        ge_cloud2.pending_writes["test123"] = []
+
+        with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+            call_count = [0]
+
+            async def mock_get_data_timeout(*args, **kwargs):
+                call_count[0] += 1
+                return {"success": True, "value": -1}  # Inverter timeout code
+
+            ge_cloud2.async_get_inverter_data = mock_get_data_timeout
+
+            result2 = await ge_cloud2.async_write_inverter_setting("test123", 77, "100")
+
+            if result2 is not None:
+                print("ERROR: Expected None when value is error code, got {}".format(result2))
+                return 1
+
+            if call_count[0] != 10:
+                print("ERROR: Expected 10 retry attempts for error value code, got {}".format(call_count[0]))
                 return 1
 
             return 0
