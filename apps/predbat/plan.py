@@ -3239,7 +3239,7 @@ class Plan:
             )
         else:
             # Tweak plan (faster)
-            best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import = self.tweak_plan(self.end_record, best_metric, metric_keep)
+            best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import = self.tweak_plan(self.end_record, best_metric, best_keep)
 
         self.plan_write_debug(debug_mode, "plan_raw.html", self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
 
