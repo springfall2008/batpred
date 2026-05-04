@@ -337,7 +337,6 @@ class MockConfigProvider:
             "calculate_export_on_pv": True,
             "calculate_second_pass": True,
             "calculate_inday_adjustment": True,
-            "calculate_tweak_plan": True,
             "calculate_import_low_export": True,
             "calculate_export_high_import": True,
             "balance_inverters_enable": False,

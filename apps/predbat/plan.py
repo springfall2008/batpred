@@ -351,9 +351,9 @@ class Plan:
         for loop_price in all_prices:
             if best_level_score is not None:
                 this_level_score = levels_score.get(loop_price, 9999999)
-                if abs(this_level_score - best_level_score) > (0.3 * level_score_range):
+                if abs(this_level_score - best_level_score) > (0.2 * level_score_range):
                     if self.debug_enable:
-                        self.log("Skipping price {} as level score {} is not within 30% of best {}".format(loop_price, this_level_score, best_level_score))
+                        self.log("Skipping price {} as level score {} is not within 20% of best {}".format(loop_price, this_level_score, best_level_score))
                     continue
 
             for coarse in [True, False] if enable_coarse_fine else [False]:
@@ -567,8 +567,8 @@ class Plan:
         """
         Launch a thread to run a prediction
         """
-        charge_limit = copy.deepcopy(charge_limit)
-        export_limits = copy.deepcopy(export_limits)
+        charge_limit = list(charge_limit)
+        export_limits = list(export_limits)
         if self.pool and self.pool._state == "RUN":
             han = self.pool.apply_async(wrapped_run_prediction_single, (charge_limit, charge_window, export_window, export_limits, pv10, end_record, step))
         else:
@@ -1304,7 +1304,7 @@ class Plan:
         best_carbon = 0
         all_max_soc = self.soc_max
         all_min_soc = 0
-        try_charge_limit = copy.deepcopy(charge_limit)
+        try_charge_limit = list(charge_limit)
         resultmid = {}
         result10 = {}
 
@@ -1614,7 +1614,7 @@ class Plan:
         this_export_limit = 100.0
         window = export_window[window_n]
         try_export_window = copy.deepcopy(export_window)
-        try_export = copy.deepcopy(export_limit)
+        try_export = list(export_limit)
         best_start = window["start"]
         best_size = window["end"] - best_start
         export_step = 5
@@ -2298,7 +2298,7 @@ class Plan:
         """
         record_charge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.charge_window_best), 1)
         record_export_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.export_window_best), 1)
-        self.log("Tweak optimisation started")
+        self.log("Tweak plan optimisation started")
         best_soc = self.soc_max
         best_cost = best_metric
         best_keep = metric_keep
@@ -2349,6 +2349,7 @@ class Plan:
                 break
 
         self.log("Tweak optimisation finished metric {} cost {} metric_keep {} cycle {} carbon {} import {}".format(dp2(best_metric), dp2(best_cost), dp2(best_keep), dp2(best_cycle), dp0(best_carbon), dp2(best_import)))
+        return best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import
 
     def plan_write_debug(self, debug_mode, name, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, end_record, test=False):
         """
@@ -3226,20 +3227,19 @@ class Plan:
             record_export_windows,
             debug_mode=debug_mode,
         )
-
-        # Second pass optimisation
-        if self.calculate_second_pass:
-            best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value = self.optimise_full_second_pass(
-                best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value, record_charge_windows, record_export_windows, debug_mode=debug_mode
-            )
-
         # Swaps
         self.optimise_swap_export(record_charge_windows, record_export_windows, debug_mode=debug_mode)
         self.plan_write_debug(debug_mode, "plan_swap_final.html", self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
 
-        # Tweak plan
-        if self.calculate_tweak_plan:
-            self.tweak_plan(self.end_record, best_metric, metric_keep)
+        # Second pass optimisation
+        if self.calculate_second_pass:
+            # Full second pass (slower)
+            best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value = self.optimise_full_second_pass(
+                best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value, record_charge_windows, record_export_windows, debug_mode=debug_mode
+            )
+        else:
+            # Tweak plan (faster)
+            best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import = self.tweak_plan(self.end_record, best_metric, best_keep)
 
         self.plan_write_debug(debug_mode, "plan_raw.html", self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
 

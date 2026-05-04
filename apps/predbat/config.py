@@ -772,13 +772,6 @@ CONFIG_ITEMS = [
         "default": False,
     },
     {
-        "name": "calculate_tweak_plan",
-        "friendly_name": "Calculate tweak second pass",
-        "type": "switch",
-        "enable": "expert_mode",
-        "default": False,
-    },
-    {
         "name": "calculate_import_low_export",
         "friendly_name": "Calculate import slots on low export rate slots first",
         "type": "switch",

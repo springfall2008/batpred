@@ -1,0 +1,2 @@
+source setup.csh
+python3 ../apps/predbat/unit_test.py --random-profile --random-template cases/predbat_debug_agile1.yaml --random-scenarios random_scenarios.yaml --random-scenario 0 --random-profile-sort tottime --random-profile-lines 500 2>&1 | tee profile_cprofile.log
