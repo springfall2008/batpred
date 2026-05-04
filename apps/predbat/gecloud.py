@@ -1105,8 +1105,14 @@ class GECloudDirect(ComponentBase):
                 if not data["success"]:
                     data = None
             if data:
-                self.pending_writes[serial].append({"setting_id": setting_id, "value": value})
-                break
+                data_value = data.get("value", -1)
+                if data_value in [-1, -2, -5, -6]:
+                    data = None
+                    # Inverter timeout, try to spread requests out
+                    await asyncio.sleep(random.random() * (3 + retry))
+                else:
+                    self.pending_writes[serial].append({"setting_id": setting_id, "value": data_value})
+                    break
             await asyncio.sleep(RETRY_FACTOR * (retry + 1))
         if data is None:
             self.log("GECloud: Warn: Failed to write setting id {}, value {}".format(setting_id, value))
@@ -1871,7 +1877,7 @@ class MockBase:  # pragma: no cover
         print(f"Set arg {key} = {value} (state={state})")
 
 
-async def test_gecloud_direct(api_key):  # pragma: no cover
+async def test_gecloud_direct(api_key, write_entity=None, write_value=None):  # pragma: no cover
     """
     Test the GECloud Direct API
     """
@@ -1889,7 +1895,33 @@ async def test_gecloud_direct(api_key):  # pragma: no cover
     }
     gecloud_direct = GECloudDirect(mock_base, **arg_dict)
     await gecloud_direct.run(0, True)
-    await gecloud_direct.run(1, False)
+    # await gecloud_direct.run(1, False)
+
+    if write_entity and write_value is not None:
+        mapping = gecloud_direct.register_entity_map.get(write_entity, None)
+        if mapping is None:
+            # Try case-insensitive match
+            write_entity_lower = write_entity.lower()
+            for entity_id, m in gecloud_direct.register_entity_map.items():
+                if entity_id.lower() == write_entity_lower:
+                    mapping = m
+                    break
+        if mapping is None:
+            print(f"ERROR: Entity '{write_entity}' not found in register map")
+            print("Available entities:")
+            for entity_id in sorted(gecloud_direct.register_entity_map):
+                m = gecloud_direct.register_entity_map[entity_id]
+                print(f"  {entity_id}  (device={m['device']}, key={m['key']})")
+        else:
+            device = mapping["device"]
+            key = mapping["key"]
+            print(f"Writing entity '{write_entity}' (device={device}, setting_id={key}) = {write_value}")
+            result = await gecloud_direct.async_write_inverter_setting(device, key, write_value)
+            if result:
+                print(f"Write succeeded: {result}")
+            else:
+                print(f"Write failed for entity '{write_entity}'")
+
     await gecloud_direct.final()
 
     print("Test completed")
@@ -1903,11 +1935,13 @@ def main():  # pragma: no cover
 
     parser = argparse.ArgumentParser(description="Test GECloud Direct API")
     parser.add_argument("--api-key", required=True, help="GECloud Direct API key")
+    parser.add_argument("--write-entity", default=None, help="Entity ID to write (e.g. number.predbat_gecloud_SA1234_battery_charge_power)")
+    parser.add_argument("--write-value", default=None, help="Value to write to the entity")
 
     args = parser.parse_args()
 
     # Run the test
-    asyncio.run(test_gecloud_direct(args.api_key))
+    asyncio.run(test_gecloud_direct(args.api_key, write_entity=args.write_entity, write_value=args.write_value))
 
 
 if __name__ == "__main__":
