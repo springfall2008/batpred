@@ -177,6 +177,7 @@ def test_ge_cloud(my_predbat=None):
         ("devices_ems", _test_async_get_devices_with_ems, "Get devices with EMS"),
         ("devices_gateway", _test_async_get_devices_with_gateway, "Get devices with Gateway"),
         ("devices_batteries", _test_async_get_devices_with_batteries, "Get devices with batteries"),
+        ("devices_legacy_battery", _test_async_get_devices_legacy_battery, "Get devices with legacy battery (empty connections)"),
         ("devices_empty", _test_async_get_devices_empty, "Get empty devices"),
         ("evc_devices", _test_async_get_evc_devices, "Get EV charger devices"),
         ("smart_devices", _test_async_get_smart_devices, "Get smart devices"),
@@ -642,6 +643,52 @@ def _test_async_get_devices_with_batteries(my_predbat):
                 return 1
             if result["battery_meters"].get("inv002") != [12345]:
                 print("ERROR: Expected battery_meters['inv002']=[12345], got {}".format(result["battery_meters"]))
+                return 1
+        return 0
+
+    return run_async(test())
+
+
+def _test_async_get_devices_legacy_battery(my_predbat):
+    """Test device discovery with legacy inverter that has empty connections.batteries but has info.battery set (e.g. GIV-HY3.6)"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+
+        # Mirrors the real GIV-HY3.6 device structure seen in production
+        mock_devices = [
+            {
+                "serial_number": "WE1913G005",
+                "inverter": {
+                    "serial": "SA1919G001",
+                    "info": {
+                        "battery_type": "LITHIUM",
+                        "battery": {"nominal_capacity": 204, "nominal_voltage": 51.2, "depth_of_discharge": 1},
+                        "model": "GIV-HY3.6",
+                        "max_charge_rate": 2600,
+                        "max_discharge_rate": 2600,
+                    },
+                    "connections": {"batteries": [], "meters": []},
+                },
+            }
+        ]
+
+        async def mock_retry(*args, **kwargs):
+            return mock_devices
+
+        with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+            ge_cloud.async_get_inverter_data_retry = mock_retry
+
+            result = await ge_cloud.async_get_devices()
+
+            if result["battery"] != ["sa1919g001"]:
+                print("ERROR: Expected battery=['sa1919g001'] for legacy device, got {}".format(result))
+                return 1
+            if result["ems"] is not None:
+                print("ERROR: Expected ems=None, got {}".format(result["ems"]))
+                return 1
+            if result["gateway"] is not None:
+                print("ERROR: Expected gateway=None, got {}".format(result["gateway"]))
                 return 1
         return 0
 
