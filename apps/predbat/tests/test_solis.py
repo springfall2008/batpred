@@ -9,8 +9,9 @@
 # pylint: disable=attribute-defined-outside-init
 
 import asyncio
+import solis as solis_module
 from datetime import datetime
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from solis import SolisAPI, SOLIS_CID_CHARGE_ENABLE_BASE, SOLIS_CID_CHARGE_TIME, SOLIS_CID_CHARGE_SOC_BASE, SOLIS_CID_CHARGE_CURRENT, SOLIS_CID_DISCHARGE_ENABLE_BASE
 from solis import SOLIS_CID_BATTERY_FORCE_CHARGE_SOC, SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC, SOLIS_CID_CHARGE_DISCHARGE_SETTINGS
 from solis import SOLIS_CID_STORAGE_MODE, SOLIS_BIT_GRID_CHARGING, SOLIS_BIT_TOU_MODE
@@ -319,6 +320,350 @@ async def test_fetch_entity_data_invalid_values():
     return False
 
 
+def _run_discovery_filter(configured_sns, api_sns):
+    """
+    Helper: create a MockSolisAPI with the given configured SNs, call the real
+    filter_inverter_sn() method, then replicate the post-filter warning from run().
+    Returns (filtered_sn_list, log_messages).
+    """
+    api = MockSolisAPI()
+    api.configured_inverter_sn = list(configured_sns)
+    api.inverter_sn = []
+
+    all_inverters = [{"sn": sn} for sn in api_sns]
+    result = api.filter_inverter_sn(api.configured_inverter_sn, all_inverters)
+    if all_inverters and not result:
+        api.log("Warn: Solis API: No inverters found after filtering")
+
+    return result, api.log_messages
+
+
+async def test_inverter_sn_filter_exact_match():
+    """Exact SN match: configured SN equals API SN"""
+    print("\n=== Test: inverter_sn_filter exact match ===")
+
+    result, _ = _run_discovery_filter(["ABC123"], ["ABC123", "XYZ999"])
+    assert result == ["ABC123"], f"Expected ['ABC123'], got {result}"
+    print("PASSED: exact match returns the correct inverter")
+    return False
+
+
+async def test_inverter_sn_filter_case_insensitive():
+    """Case-insensitive match: configured lowercase, API returns uppercase"""
+    print("\n=== Test: inverter_sn_filter case insensitive ===")
+
+    # User configured lowercase; API returns uppercase hex digits
+    result, _ = _run_discovery_filter(["abc123ff"], ["ABC123FF", "XYZ999"])
+    assert result == ["ABC123FF"], f"Expected ['ABC123FF'], got {result}"
+    print("PASSED: case-insensitive filter picks up uppercase API SN")
+
+    # User configured uppercase; API returns lowercase
+    result, _ = _run_discovery_filter(["ABC123FF"], ["abc123ff", "xyz999"])
+    assert result == ["abc123ff"], f"Expected ['abc123ff'], got {result}"
+    print("PASSED: case-insensitive filter picks up lowercase API SN")
+    return False
+
+
+async def test_inverter_sn_filter_not_found():
+    """Configured SN not present in account: empty result + warning logged"""
+    print("\n=== Test: inverter_sn_filter SN not found ===")
+
+    result, logs = _run_discovery_filter(["DOESNOTEXIST"], ["ABC123", "XYZ999"])
+    assert result == [], f"Expected [], got {result}"
+    warn_logs = [m for m in logs if "not found in account" in m]
+    assert len(warn_logs) == 1, f"Expected 1 warning, got {warn_logs}"
+    assert "DOESNOTEXIST" in warn_logs[0], f"Warning should mention the missing SN: {warn_logs[0]}"
+    no_filter_logs = [m for m in logs if "No inverters found after filtering" in m]
+    assert len(no_filter_logs) == 1, f"Expected 'No inverters found' warning, got {no_filter_logs}"
+    print("PASSED: missing SN logs warning and returns empty list")
+    return False
+
+
+async def test_inverter_sn_filter_no_config_uses_all():
+    """No configured SN: all discovered inverters are used"""
+    print("\n=== Test: inverter_sn_filter no config uses all ===")
+
+    result, logs = _run_discovery_filter([], ["ABC123", "XYZ999", "PQR456"])
+    assert result == ["ABC123", "XYZ999", "PQR456"], f"Expected all 3 inverters, got {result}"
+    all_logs = [m for m in logs if "Using all" in m]
+    assert len(all_logs) == 1, f"Expected 'Using all' log, got {all_logs}"
+    print("PASSED: no configured SN uses all discovered inverters")
+    return False
+
+
+async def test_inverter_sn_filter_retry_stability():
+    """Retry stability: after a failed first run empties inverter_sn, the retry still
+    filters to the originally configured SN (not all inverters)."""
+    print("\n=== Test: inverter_sn_filter retry stability ===")
+
+    api = MockSolisAPI()
+    # Simulate initialize(): configured_inverter_sn holds the user config; inverter_sn starts empty
+    api.configured_inverter_sn = ["ABC123FF"]
+    api.inverter_sn = []
+
+    all_inverters = [{"sn": "ABC123FF"}, {"sn": "XYZ999"}, {"sn": "PQR456"}]
+
+    # First run: filter succeeds
+    api.inverter_sn = api.filter_inverter_sn(api.configured_inverter_sn, all_inverters)
+    assert api.inverter_sn == ["ABC123FF"], f"First run: expected ['ABC123FF'], got {api.inverter_sn}"
+
+    # Simulate a failed run that empties inverter_sn (e.g. network error mid-run)
+    api.inverter_sn = []
+
+    # Second run (retry): configured_inverter_sn is unchanged, so filter still returns the right SN
+    api.inverter_sn = api.filter_inverter_sn(api.configured_inverter_sn, all_inverters)
+    assert api.inverter_sn == ["ABC123FF"], f"Retry: expected ['ABC123FF'], got {api.inverter_sn}"
+    print("PASSED: retry uses configured_inverter_sn, not the mutated empty inverter_sn")
+    return False
+
+
+async def test_inverter_sn_filter_multiple_sns():
+    """Multiple configured SNs: only matching ones are returned"""
+    print("\n=== Test: inverter_sn_filter multiple SNs ===")
+
+    result, logs = _run_discovery_filter(["ABC123", "XYZ999"], ["ABC123", "XYZ999", "PQR456"])
+    assert set(result) == {"ABC123", "XYZ999"}, f"Expected ABC123+XYZ999, got {result}"
+    assert "PQR456" not in result, "PQR456 should not be included"
+
+    # One configured SN present, one missing
+    result, logs = _run_discovery_filter(["ABC123", "MISSING"], ["ABC123", "XYZ999"])
+    assert result == ["ABC123"], f"Expected ['ABC123'], got {result}"
+    warn_logs = [m for m in logs if "not found in account" in m and "MISSING" in m]
+    assert len(warn_logs) == 1, f"Expected warning for MISSING SN, got {warn_logs}"
+    print("PASSED: multiple SNs - only matching ones included, missing ones warned")
+    return False
+
+
+# ---------------------------------------------------------------------------
+# run() method tests
+# ---------------------------------------------------------------------------
+
+
+class _FakeAiohttpSession:
+    """Minimal fake aiohttp session — avoids real network connections in run() tests."""
+
+    async def close(self):
+        """Pretend to close the session."""
+        pass
+
+
+def _make_run_api(configured_sns=None, control_enable=True, automatic=False):
+    """
+    Return a MockSolisAPI with no-op async mocks for every method called by run().
+    Tests override only the methods they care about.
+    """
+    api = MockSolisAPI()
+    api.configured_inverter_sn = list(configured_sns or [])
+    api.inverter_sn = []
+    api.control_enable = control_enable
+    api.automatic = automatic
+
+    # Call-tracking lists/counters used by assertions
+    api.fetch_inverter_details_calls = []
+    api.poll_inverter_data_calls = []
+    api.startup_reset_registers_calls = []
+    api.reset_charge_windows_calls = []
+    api.write_time_windows_calls = []
+    api.publish_entities_calls = 0
+    api.decode_time_windows_calls = []
+    api.decode_time_windows_v2_calls = []
+    api.fetch_entity_data_calls = []
+    api.automatic_config_calls = 0
+    api.update_success_timestamp_calls = 0
+
+    async def mock_get_inverter_list():
+        return []
+
+    api.get_inverter_list = mock_get_inverter_list
+
+    async def mock_fetch_inverter_details(sn):
+        api.fetch_inverter_details_calls.append(sn)
+        return True
+
+    api.fetch_inverter_details = mock_fetch_inverter_details
+
+    async def mock_poll_inverter_data(sn, cids, batch=True):
+        api.poll_inverter_data_calls.append((sn, cids))
+        return True
+
+    api.poll_inverter_data = mock_poll_inverter_data
+
+    async def mock_startup_reset_registers(sn):
+        api.startup_reset_registers_calls.append(sn)
+
+    api.startup_reset_registers = mock_startup_reset_registers
+
+    async def mock_reset_charge_windows_if_needed(sn):
+        api.reset_charge_windows_calls.append(sn)
+
+    api.reset_charge_windows_if_needed = mock_reset_charge_windows_if_needed
+
+    async def mock_write_time_windows_if_changed(sn):
+        api.write_time_windows_calls.append(sn)
+
+    api.write_time_windows_if_changed = mock_write_time_windows_if_changed
+
+    async def mock_publish_entities():
+        api.publish_entities_calls += 1
+
+    api.publish_entities = mock_publish_entities
+
+    async def mock_decode_time_windows(sn):
+        api.decode_time_windows_calls.append(sn)
+
+    api.decode_time_windows = mock_decode_time_windows
+
+    async def mock_decode_time_windows_v2(sn):
+        api.decode_time_windows_v2_calls.append(sn)
+
+    api.decode_time_windows_v2 = mock_decode_time_windows_v2
+
+    async def mock_fetch_entity_data(sn):
+        api.fetch_entity_data_calls.append(sn)
+
+    api.fetch_entity_data = mock_fetch_entity_data
+
+    def mock_calculate_max_currents(sn):
+        pass
+
+    api._calculate_max_currents = mock_calculate_max_currents
+
+    def mock_update_success_timestamp():
+        api.update_success_timestamp_calls += 1
+
+    api.update_success_timestamp = mock_update_success_timestamp
+
+    async def mock_automatic_config():
+        api.automatic_config_calls += 1
+
+    api.automatic_config = mock_automatic_config
+
+    return api
+
+
+async def test_run_first_success():
+    """First run: discovery succeeds, inverters configured, writes and publish called, returns True."""
+    print("\n=== Test: run first success ===")
+
+    sn = "INV001"
+    api = _make_run_api(configured_sns=[sn], control_enable=True)
+
+    async def mock_get_inverter_list():
+        return [{"sn": sn}]
+
+    api.get_inverter_list = mock_get_inverter_list
+
+    with patch.object(solis_module.aiohttp, "ClientSession", return_value=_FakeAiohttpSession()), patch.object(solis_module.aiohttp, "ClientTimeout", return_value=None):
+        result = await api.run(0, True)
+
+    assert result is True, f"Expected True, got {result}"
+    assert api.inverter_sn == [sn], f"Expected inverter_sn=['{sn}'], got {api.inverter_sn}"
+    assert sn in api.fetch_inverter_details_calls, "fetch_inverter_details not called for inverter"
+    assert sn in api.startup_reset_registers_calls, "startup_reset_registers not called"
+    assert sn in api.write_time_windows_calls, "write_time_windows_if_changed not called"
+    assert api.publish_entities_calls == 1, f"publish_entities should be called once, got {api.publish_entities_calls}"
+    assert api.update_success_timestamp_calls == 1, "update_success_timestamp not called"
+    print("PASSED: first successful run sets up inverters and calls all expected methods")
+    return False
+
+
+async def test_run_first_no_inverters_found():
+    """First run: configured SN not present in account — no inverters to manage, returns False."""
+    print("\n=== Test: run first no inverters found ===")
+
+    api = _make_run_api(configured_sns=["MISSING_XX"])
+
+    async def mock_get_inverter_list():
+        return [{"sn": "OTHER001"}]  # Doesn't match configured SN
+
+    api.get_inverter_list = mock_get_inverter_list
+
+    with patch.object(solis_module.aiohttp, "ClientSession", return_value=_FakeAiohttpSession()), patch.object(solis_module.aiohttp, "ClientTimeout", return_value=None):
+        result = await api.run(0, True)
+
+    assert result is False, f"Expected False when no inverters found, got {result}"
+    assert api.inverter_sn == [], f"inverter_sn should be empty, got {api.inverter_sn}"
+    no_inv_logs = [m for m in api.log_messages if "No inverters to manage" in m]
+    assert no_inv_logs, "Expected 'No inverters to manage' error log"
+    assert api.write_time_windows_calls == [], "write_time_windows should not be called with no inverters"
+    print("PASSED: no matching inverters returns False and skips further processing")
+    return False
+
+
+async def test_run_first_discovery_exception():
+    """First run: get_inverter_list raises — poll_success=False, returns False."""
+    print("\n=== Test: run first discovery exception ===")
+
+    api = _make_run_api()
+
+    async def mock_get_inverter_list_fails():
+        raise Exception("Network timeout")
+
+    api.get_inverter_list = mock_get_inverter_list_fails
+
+    with patch.object(solis_module.aiohttp, "ClientSession", return_value=_FakeAiohttpSession()), patch.object(solis_module.aiohttp, "ClientTimeout", return_value=None):
+        result = await api.run(0, True)
+
+    assert result is False, f"Expected False on discovery exception, got {result}"
+    error_logs = [m for m in api.log_messages if "Inverter discovery failed" in m]
+    assert error_logs, f"Expected 'discovery failed' error log, got {api.log_messages}"
+    assert api.update_success_timestamp_calls == 0, "update_success_timestamp should not be called on failure"
+    print("PASSED: discovery exception returns False and logs error")
+    return False
+
+
+async def test_run_subsequent_polling_intervals():
+    """Subsequent runs: polling fires at minute/hour boundaries but not in between."""
+    print("\n=== Test: run subsequent polling intervals ===")
+
+    sn = "INV001"
+    api = _make_run_api(configured_sns=[sn])
+    api.inverter_sn = [sn]  # Already discovered on first run
+
+    # seconds=5: not on a minute boundary — nothing should fire
+    result = await api.run(5, False)
+    assert result is True, f"Expected True at seconds=5, got {result}"
+    assert api.fetch_inverter_details_calls == [], "fetch_inverter_details should not fire at seconds=5"
+    assert api.publish_entities_calls == 0, "publish_entities should not fire at seconds=5"
+
+    # seconds=60: minute boundary — fetch_inverter_details, writes, publish should fire; hourly poll should not
+    result = await api.run(60, False)
+    assert result is True, f"Expected True at seconds=60, got {result}"
+    assert sn in api.fetch_inverter_details_calls, "fetch_inverter_details should fire at seconds=60"
+    assert sn in api.write_time_windows_calls, "write_time_windows should fire at seconds=60"
+    assert api.publish_entities_calls == 1, "publish_entities should fire once at seconds=60"
+    assert api.poll_inverter_data_calls == [], "hourly poll should not fire at seconds=60"
+
+    # seconds=3600: hour boundary — hourly poll also fires
+    result = await api.run(3600, False)
+    assert result is True, f"Expected True at seconds=3600, got {result}"
+    hourly_polls = [c for c in api.poll_inverter_data_calls if c[0] == sn]
+    assert hourly_polls, "poll_inverter_data should fire at seconds=3600"
+
+    print("PASSED: polling respects minute/hour interval gates")
+    return False
+
+
+async def test_run_read_only_skips_write():
+    """Read-only switch active: write calls are suppressed."""
+    print("\n=== Test: run read-only skips write ===")
+
+    sn = "INV001"
+    api = _make_run_api(configured_sns=[sn], control_enable=True)
+    api.inverter_sn = [sn]
+    api.dashboard_items[f"switch.predbat_set_read_only"] = {"state": "on", "attributes": {}}
+
+    result = await api.run(60, False)
+
+    assert result is True, f"Expected True, got {result}"
+    assert api.write_time_windows_calls == [], "write_time_windows should be skipped in read-only mode"
+    assert api.reset_charge_windows_calls == [], "reset_charge_windows should be skipped in read-only mode"
+    skip_logs = [m for m in api.log_messages if "skipping" in m.lower()]
+    assert skip_logs, f"Expected a 'skipping' log message, got {api.log_messages}"
+    print("PASSED: read-only switch prevents write calls")
+    return False
+
+
 def run_solis_tests(my_predbat):
     """
     Run all Solis API tests
@@ -381,6 +726,17 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_fetch_entity_data_invalid_values())
         failed |= asyncio.run(test_automatic_config())
         failed |= asyncio.run(test_publish_entities_export_power_unit_conversion())
+        failed |= asyncio.run(test_inverter_sn_filter_exact_match())
+        failed |= asyncio.run(test_inverter_sn_filter_case_insensitive())
+        failed |= asyncio.run(test_inverter_sn_filter_not_found())
+        failed |= asyncio.run(test_inverter_sn_filter_no_config_uses_all())
+        failed |= asyncio.run(test_inverter_sn_filter_retry_stability())
+        failed |= asyncio.run(test_inverter_sn_filter_multiple_sns())
+        failed |= asyncio.run(test_run_first_success())
+        failed |= asyncio.run(test_run_first_no_inverters_found())
+        failed |= asyncio.run(test_run_first_discovery_exception())
+        failed |= asyncio.run(test_run_subsequent_polling_intervals())
+        failed |= asyncio.run(test_run_read_only_skips_write())
 
     except Exception as e:
         print(f"Error running Solis tests: {e}")
