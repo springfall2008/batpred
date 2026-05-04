@@ -100,7 +100,7 @@ def generate_rates_day(rate_type, params, seed):
         rng = random.Random(seed)
         base = float(params.get("base_rate", 10.0))
         spread = float(params.get("spread", 20.0))
-        slots = [max(0.0, base + rng.uniform(-spread / 2, spread)) for _ in range(48)]
+        slots = [max(0.0, base + rng.uniform(-spread / 2, spread / 2)) for _ in range(48)]
         for m in range(MINUTES_PER_DAY):
             slot = m // 30
             profile[m] = slots[slot]
