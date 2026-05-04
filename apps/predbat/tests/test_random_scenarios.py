@@ -441,6 +441,7 @@ def apply_scenario_to_predbat(my_predbat, scenario):
     my_predbat.soc_max = bat["soc_max_kwh"]
     my_predbat.soc_kw = bat["soc_max_kwh"] * bat["initial_soc_percent"] / 100.0
     my_predbat.battery_rate_max_charge = bat["rate_max_charge_kw"] / 60.0
+    my_predbat.battery_rate_max_charge_dc = bat["rate_max_charge_kw"] / 60.0
     my_predbat.battery_rate_max_discharge = bat["rate_max_discharge_kw"] / 60.0
 
     # --- Inverter scalars ---
