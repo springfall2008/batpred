@@ -13,6 +13,9 @@ import json
 import random
 import datetime
 import time
+import cProfile
+import pstats
+import io
 import traceback
 
 import yaml
@@ -550,6 +553,7 @@ def run_scenario(my_predbat, scenario, debug=False):
         apply_scenario_to_predbat(my_predbat, scenario)
         my_predbat.args["threads"] = 0
         my_predbat.plan_valid = False
+        my_predbat.debug_enable = False  # disable debug output for normal scenario runs (huge overhead)
         t_start = time.perf_counter()
         my_predbat.calculate_plan(recompute=True)
 
@@ -625,6 +629,128 @@ def run_scenario(my_predbat, scenario, debug=False):
         base_result["error"] = str(e) + "\n" + traceback.format_exc()
 
     return base_result
+
+
+
+# ---------------------------------------------------------------------------
+# Profiling
+# ---------------------------------------------------------------------------
+
+
+def profile_scenario(my_predbat, scenarios_file, template_yaml, scenario_id=0, top_n=30, sort_key="cumulative", prof_output=None, callers_of=None, line_profile_funcs=None):
+    """Run cProfile on a single scenario's optimisation and print the top hotspots.
+
+    Args:
+        my_predbat: PredBat instance
+        scenarios_file: path to scenarios YAML file
+        template_yaml: path to template debug YAML
+        scenario_id: which scenario id to profile (default 0)
+        top_n: number of top functions to print (default 30)
+        sort_key: pstats sort key, e.g. "cumulative", "tottime", "calls" (default "cumulative")
+        prof_output: if set, also write a .prof binary file to this path
+        callers_of: if set, print pstats caller breakdown for this function name (e.g. "round")
+        line_profile_funcs: if set, list of fully qualified "module:function" strings to line-profile
+                            instead of cProfile (requires line_profiler package)
+    """
+    from tests.test_infra import reset_inverter
+
+    print("Loading template: {}".format(template_yaml))
+    reset_inverter(my_predbat)
+    my_predbat.read_debug_yaml(template_yaml)
+    my_predbat.config_root = "./"
+    my_predbat.save_restore_dir = "./"
+    my_predbat.load_user_config()
+
+    scenarios = load_scenarios(scenarios_file)
+
+    matching = [s for s in scenarios if s["id"] == scenario_id]
+    if not matching:
+        print("ERROR: No scenario with id={} found in {}".format(scenario_id, scenarios_file))
+        return
+
+    scenario = matching[0]
+    print("Profiling scenario id={} seed={} ...".format(scenario["id"], scenario["seed"]))
+
+    apply_scenario_to_predbat(my_predbat, scenario)
+    my_predbat.args["threads"] = 0
+    my_predbat.plan_valid = False
+    # Disable debug output for profiling - the template may have debug_enable=true which forces
+    # stat recording on every minute step of every prediction call (huge overhead).
+    # Must set self.debug_enable directly since expose_config only updates item["value"] and
+    # self.debug_enable is assigned by fetch_config_options() which is not called here.
+    my_predbat.debug_enable = False
+
+    # --- line_profiler mode ---
+    if line_profile_funcs:
+        try:
+            import line_profiler  # type: ignore
+        except ImportError:
+            print("ERROR: line_profiler is not installed. Run: pip install line_profiler")
+            return
+
+        lp = line_profiler.LineProfiler()
+        import sys as _sys
+        import inspect as _inspect
+        for spec in line_profile_funcs:
+            if ":" in spec:
+                mod_name, func_name = spec.rsplit(":", 1)
+            else:
+                mod_name, func_name = None, spec
+
+            found = False
+            for mod in list(_sys.modules.values()):
+                if mod_name and not (getattr(mod, "__name__", "").endswith(mod_name) or (getattr(mod, "__file__", None) or "").endswith(mod_name + ".py")):
+                    continue
+                # Search module-level functions first
+                func = getattr(mod, func_name, None)
+                if callable(func):
+                    lp.add_function(func)
+                    print("  line-profiling {}.{}".format(getattr(mod, "__name__", "?"), func_name))
+                    found = True
+                    break
+                # Search classes inside the module
+                for _name, obj in _inspect.getmembers(mod, _inspect.isclass):
+                    method = getattr(obj, func_name, None)
+                    if method and callable(method):
+                        lp.add_function(method)
+                        print("  line-profiling {}.{}.{}".format(getattr(mod, "__name__", "?"), _name, func_name))
+                        found = True
+                        break
+                if found:
+                    break
+            if not found:
+                print("  WARNING: could not find function '{}' to line-profile".format(spec))
+
+        lp_wrapper = lp(my_predbat.calculate_plan)
+        lp_wrapper(recompute=True)
+        lp.print_stats()
+        return
+
+    # --- cProfile mode ---
+    pr = cProfile.Profile()
+    pr.enable()
+    my_predbat.calculate_plan(recompute=True)
+    pr.disable()
+
+    if prof_output:
+        pr.dump_stats(prof_output)
+        print("Profile data written to {}".format(prof_output))
+
+    stream = io.StringIO()
+    ps = pstats.Stats(pr, stream=stream)
+    ps.strip_dirs()
+    ps.sort_stats(sort_key)
+    ps.print_stats(top_n)
+    print(stream.getvalue())
+
+    if callers_of:
+        print("\n--- Callers of '{}' ---".format(callers_of))
+        caller_stream = io.StringIO()
+        ps2 = pstats.Stats(pr, stream=caller_stream)
+        ps2.strip_dirs()
+        ps2.sort_stats("cumulative")
+        ps2.print_callers(callers_of)
+        print(caller_stream.getvalue())
 
 
 # ---------------------------------------------------------------------------

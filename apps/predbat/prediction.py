@@ -1030,7 +1030,6 @@ class Prediction:
                 soc = max(soc - battery_draw / battery_loss_discharge, reserve_expected)
             else:
                 soc = min(soc - battery_draw * battery_loss, soc_max)
-            soc = round(soc, 6)
 
             # Iboost finally count
             if self.iboost_enable:

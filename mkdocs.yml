@@ -29,6 +29,7 @@ nav:
   - 'Predbat development':
     - todo-list.md
     - developing.md
+    - random-scenarios.md
     - rest_api.md
     - plugins.md
   - 'Predheat':

@@ -567,8 +567,8 @@ class Plan:
         """
         Launch a thread to run a prediction
         """
-        charge_limit = copy.deepcopy(charge_limit)
-        export_limits = copy.deepcopy(export_limits)
+        charge_limit = list(charge_limit)
+        export_limits = list(export_limits)
         if self.pool and self.pool._state == "RUN":
             han = self.pool.apply_async(wrapped_run_prediction_single, (charge_limit, charge_window, export_window, export_limits, pv10, end_record, step))
         else:
@@ -1304,7 +1304,7 @@ class Plan:
         best_carbon = 0
         all_max_soc = self.soc_max
         all_min_soc = 0
-        try_charge_limit = copy.deepcopy(charge_limit)
+        try_charge_limit = list(charge_limit)
         resultmid = {}
         result10 = {}
 
@@ -1614,7 +1614,7 @@ class Plan:
         this_export_limit = 100.0
         window = export_window[window_n]
         try_export_window = copy.deepcopy(export_window)
-        try_export = copy.deepcopy(export_limit)
+        try_export = list(export_limit)
         best_start = window["start"]
         best_size = window["end"] - best_start
         export_step = 5

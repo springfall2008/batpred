@@ -55,6 +55,7 @@ compareform
 configform
 Consolas
 coro
+cprofile
 creds
 crosscharge
 customisation
@@ -125,6 +126,7 @@ Forestfire
 foxess
 freephase
 fronius
+funcs
 futurerate
 gecloud
 gekey
@@ -144,6 +146,7 @@ HACS
 hadashboard
 hahistory
 hainterface
+halfhourly
 hanres
 HAOS
 hass
@@ -382,6 +385,7 @@ timestr
 timezone
 tmrw
 tojson
+tottime
 trapz
 Trefor
 treforsiphone

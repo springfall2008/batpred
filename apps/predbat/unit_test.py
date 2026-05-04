@@ -99,7 +99,7 @@ from tests.test_integer_config import test_integer_config_entities, test_expose_
 from tests.test_plan_json_rate_adjust import run_test_plan_json_rate_adjust
 from tests.test_rate_replicate_missing_slots import test_rate_replicate
 from tests.test_find_charge_window import test_find_charge_window
-from tests.test_random_scenarios import generate_scenarios, save_scenarios, run_scenarios_from_file, compare_results
+from tests.test_random_scenarios import generate_scenarios, save_scenarios, run_scenarios_from_file, compare_results, profile_scenario
 from tests.test_carbon import test_carbon
 from tests.test_download import test_download
 from tests.test_ohme import test_ohme
@@ -315,6 +315,12 @@ def main():
     parser.add_argument("--random-template", metavar="PATH", help="Template debug YAML file to use as baseline for --random-run (required)")
     parser.add_argument("--random-results", default="random_results.json", metavar="PATH", help="Output JSON file for benchmark results (default: random_results.json)")
     parser.add_argument("--random-compare", nargs=2, metavar=("FILE_A", "FILE_B"), help="Compare two random_results JSON files and print a diff table")
+    parser.add_argument("--random-profile", action="store_true", help="Run cProfile on a single scenario's optimisation")
+    parser.add_argument("--random-profile-lines", type=int, default=30, metavar="N", help="Number of top functions to show in profile output (default: 30)")
+    parser.add_argument("--random-profile-sort", default="cumulative", metavar="KEY", help="pstats sort key: cumulative, tottime, calls (default: cumulative)")
+    parser.add_argument("--random-profile-output", default=None, metavar="PATH", help="Optional .prof file to write raw profile data to")
+    parser.add_argument("--random-profile-callers", default=None, metavar="FUNC", help="Print caller breakdown for a specific function name (e.g. round)")
+    parser.add_argument("--random-profile-line", action="append", metavar="MOD:FUNC", dest="random_profile_line", help="Line-profile a specific function (e.g. prediction:run_prediction). Can be used multiple times. Requires line_profiler.")
     args = parser.parse_args()
 
     # List available tests
@@ -352,6 +358,23 @@ def main():
 
     if args.random_compare:
         compare_results(args.random_compare[0], args.random_compare[1])
+        sys.exit(0)
+
+    if args.random_profile:
+        if not args.random_template:
+            print("ERROR: --random-template is required with --random-profile")
+            sys.exit(1)
+        profile_scenario(
+            my_predbat,
+            args.random_scenarios,
+            args.random_template,
+            scenario_id=args.random_scenario if args.random_scenario is not None else 0,
+            top_n=args.random_profile_lines,
+            sort_key=args.random_profile_sort,
+            prof_output=args.random_profile_output,
+            callers_of=args.random_profile_callers,
+            line_profile_funcs=args.random_profile_line,
+        )
         sys.exit(0)
 
     if args.debug_file:
