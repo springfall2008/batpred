@@ -351,9 +351,9 @@ class Plan:
         for loop_price in all_prices:
             if best_level_score is not None:
                 this_level_score = levels_score.get(loop_price, 9999999)
-                if abs(this_level_score - best_level_score) > (0.3 * level_score_range):
+                if abs(this_level_score - best_level_score) > (0.2 * level_score_range):
                     if self.debug_enable:
-                        self.log("Skipping price {} as level score {} is not within 30% of best {}".format(loop_price, this_level_score, best_level_score))
+                        self.log("Skipping price {} as level score {} is not within 20% of best {}".format(loop_price, this_level_score, best_level_score))
                     continue
 
             for coarse in [True, False] if enable_coarse_fine else [False]:
