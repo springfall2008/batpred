@@ -193,15 +193,12 @@ intelligent_dispatches_query = """query {{
       currentState
     }}
   }}
-	plannedDispatches(accountNumber: "{account_id}") {{
-		start
-		end
-    delta
-    meta {{
-			source
-      location
-		}}
-	}}
+  flexPlannedDispatches(deviceId:"{device_id}") {{
+    start
+    end
+    type
+    energyAddedKwh
+  }}
 	completedDispatches(accountNumber: "{account_id}") {{
 		start
 		end
@@ -1702,7 +1699,7 @@ class OctopusAPI(ComponentBase):
                             "device_id": IntelligentdeviceID,
                         }
                         if dispatch_result:
-                            plannedDispatches = dispatch_result.get("plannedDispatches", [])
+                            plannedDispatches = dispatch_result.get("flexPlannedDispatches", [])
                             completedDispatches = dispatch_result.get("completedDispatches", [])
                             for plannedDispatch in plannedDispatches:
                                 start = plannedDispatch.get("start", None)
@@ -1710,14 +1707,15 @@ class OctopusAPI(ComponentBase):
                                 if not (start and end):
                                     self.log("Warn: OctopusAPI: Planned dispatch missing start or end time, skipping: {}".format(plannedDispatch))
                                     continue
-                                delta = plannedDispatch.get("delta", None)
+                                delta = plannedDispatch.get("energyAddedKwh", plannedDispatch.get("delta", None))
+                                dispatch_type = plannedDispatch.get("type", "")
                                 meta = plannedDispatch.get("meta", {})
                                 try:
                                     delta = dp4(float(delta))
                                 except (ValueError, TypeError):
                                     delta = None
 
-                                dispatch = {"start": start, "end": end, "charge_in_kwh": delta, "source": meta.get("source", None), "location": meta.get("location", None)}
+                                dispatch = {"start": start, "end": end, "charge_in_kwh": delta, "source": meta.get("source", dispatch_type), "location": meta.get("location", None)}
                                 keep = True
                                 if start and end:
                                     start_date_time = parse_date_time(start)
@@ -1756,7 +1754,7 @@ class OctopusAPI(ComponentBase):
                                             "start": completed_start_time.strftime(DATE_TIME_STR_FORMAT),
                                             "end": completed_end_time.strftime(DATE_TIME_STR_FORMAT),
                                             "charge_in_kwh": adjusted_delta,
-                                            "source": meta.get("source", None),
+                                            "source": meta.get("source", dispatch_type),
                                             "location": meta.get("location", None),
                                         }
 
