@@ -6375,7 +6375,7 @@ def get_plan_renderer_js():
             // Render header
             html += '<tr>';
             html += '<th><b>Time</b></th>';
-            const currencyMinor = jsonData.currency_symbols ? jsonData.currency_symbols[1] : 'p';
+            const currencyMinor = jsonData.currency_symbols?.[1] ?? 'p';
             html += showDebug ? `<th><b>Import ${currencyMinor} (w/loss)</b></th>` : `<th><b>Import ${currencyMinor}</b></th>`;
             html += showDebug ? `<th><b>Export ${currencyMinor} (w/loss)</b></th>` : `<th><b>Export ${currencyMinor}</b></th>`;
             html += '<th colspan="2"><b>State</b></th>';
