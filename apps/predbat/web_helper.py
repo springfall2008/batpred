@@ -6738,7 +6738,7 @@ def get_plan_renderer_js():
         html += '<div class="dropdown">';
         html += `<div id="${dropdownId}" class="dropdown-content">`;
         html += `<label>Override ${type} rate:</label>`;
-        html += `<input type="number" id="rate_${dropdownId}" value="${inputValue}" step="0.01">`;
+        html += `<input type="number" id="rate_${dropdownId}" value="${inputValue}" step="0.1">`;
         html += `<button onclick="handleRateOverride('${timeDisplay}', '${type}', '${dropdownId}')">Set Override</button>`;
         if (isOverride) {
             html += `<a onclick="handleRateOverride('${timeDisplay}', '${type}', null, true)">Clear</a>`;
