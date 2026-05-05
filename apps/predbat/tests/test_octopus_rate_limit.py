@@ -231,7 +231,7 @@ async def test_octopus_rate_limit(my_predbat):
         }
 
         dispatch_data = {
-            "plannedDispatches": [],
+            "flexPlannedDispatches": [],
             "completedDispatches": [
                 {
                     "start": "2025-12-22T01:00:00Z",

@@ -1702,7 +1702,6 @@ class OctopusAPI(ComponentBase):
                             plannedDispatches = dispatch_result.get("flexPlannedDispatches", [])
                             completedDispatches = dispatch_result.get("completedDispatches", [])
                             for plannedDispatch in plannedDispatches:
-                                self.log("Planned dispatch: {}".format(plannedDispatch))
                                 start = plannedDispatch.get("start", None)
                                 end = plannedDispatch.get("end", None)
                                 if not (start and end):
@@ -1755,7 +1754,7 @@ class OctopusAPI(ComponentBase):
                                             "start": completed_start_time.strftime(DATE_TIME_STR_FORMAT),
                                             "end": completed_end_time.strftime(DATE_TIME_STR_FORMAT),
                                             "charge_in_kwh": adjusted_delta,
-                                            "source": meta.get("source", None),
+                                            "source": meta.get("source", dispatch_type),
                                             "location": meta.get("location", None),
                                         }
 
