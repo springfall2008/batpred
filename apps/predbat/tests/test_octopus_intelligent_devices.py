@@ -5,7 +5,7 @@ and the energyAddedKwh delta field used by the new Octopus dispatch API.
 
 import asyncio
 from datetime import datetime, timezone, timedelta
-from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 from octopus import OctopusAPI, DATE_TIME_STR_FORMAT
 
