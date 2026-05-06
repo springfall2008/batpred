@@ -2156,6 +2156,10 @@ class Plan:
             )
         if load_scaling10 != self.load_scaling10:
             self.log("Warn: load_scaling10 {} is below load_scaling ({}) so the PV10 scenario would have less load than the central case - using {} for this plan".format(self.load_scaling10, self.load_scaling, load_scaling10))
+
+        load_adjust = self.manual_load_adjust.copy()
+        for minute, adjustment in self.house_load_additional_forecast_adjust.items():
+            load_adjust[minute] = load_adjust.get(minute, 0.0) + adjustment
         load_minutes_step = self.step_data_history(
             self.load_minutes,
             self.minutes_now,
@@ -2166,7 +2170,7 @@ class Plan:
             load_forecast=self.load_forecast,
             load_scaling_dynamic=self.load_scaling_dynamic,
             cloud_factor=self.metric_load_divergence,
-            load_adjust=self.manual_load_adjust,
+            load_adjust=load_adjust,
             load_baseline=self.dynamic_load_baseline,
         )
         load_minutes_step10 = self.step_data_history(
@@ -2179,7 +2183,7 @@ class Plan:
             load_forecast=self.load_forecast,
             load_scaling_dynamic=self.load_scaling_dynamic,
             cloud_factor=min(self.metric_load_divergence + 0.5, 1.0) if self.metric_load_divergence else None,
-            load_adjust=self.manual_load_adjust,
+            load_adjust=load_adjust,
             load_baseline=self.dynamic_load_baseline,
         )
         # load_scaling90 is an ABSOLUTE multiplier of the historical load, exactly like load_scaling10
@@ -2200,7 +2204,7 @@ class Plan:
             load_forecast=self.load_forecast,
             load_scaling_dynamic=self.load_scaling_dynamic,
             cloud_factor=self.metric_load_divergence,
-            load_adjust=self.manual_load_adjust,
+            load_adjust=load_adjust,
             load_baseline=self.dynamic_load_baseline,
         )
         # The p90 refresh has to happen before the p50 series is stepped, not after it: the envelope
