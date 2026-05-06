@@ -22,6 +22,13 @@ def configure_additional_load_test(my_predbat):
     my_predbat.house_load_additional_forecast_overrides = {}
 
 
+def configure_additional_load_rates(my_predbat, cheap_start, cheap_end):
+    """Configure deterministic import rates for flexible load tests."""
+    my_predbat.rate_import = {minute: 30.0 for minute in range(0, 3 * 24 * 60)}
+    for minute in range(cheap_start, cheap_end):
+        my_predbat.rate_import[minute] = 5.0
+
+
 def check_slot(load_adjust, minute, expected, label):
     """Check one generated load adjustment minute value."""
     actual = load_adjust.get(minute, 0.0)
@@ -45,6 +52,25 @@ def test_additional_load_disabled(my_predbat):
         failed = 1
     if forecasts.get("dishwasher", {}).get("state") != "off":
         print("ERROR: Disabled additional load should publish off state")
+        failed = 1
+    return failed
+
+
+def test_additional_load_enabled_false_profile(my_predbat):
+    """Test enabled false publishes a disabled profile without load adjustment."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.args["house_load_additional_forecast"] = [
+        {"name": "dishwasher", "enabled": False, "start_time": "20:00", "duration": 2.0, "energy": 1.2},
+    ]
+
+    load_adjust, forecasts = my_predbat.fetch_additional_load_forecast()
+    if load_adjust:
+        print("ERROR: enabled false profile should not produce adjustments, got {}".format(load_adjust))
+        failed = 1
+    forecast = forecasts.get("dishwasher", {})
+    if forecast.get("state") != "off" or forecast.get("enabled"):
+        print("ERROR: enabled false profile should publish off and enabled false, got {}".format(forecast))
         failed = 1
     return failed
 
@@ -75,6 +101,24 @@ def test_additional_load_dishwasher_simple(my_predbat):
         failed = 1
     if len(sensor.get("attributes", {}).get("target_times", [])) != 4:
         print("ERROR: Dishwasher binary sensor should publish target_times")
+        failed = 1
+    return failed
+
+
+def test_additional_load_end_time_without_duration(my_predbat):
+    """Test fixed additional load can use end_time instead of duration."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.args["house_load_additional_forecast"] = [
+        {"name": "cooking", "start_time": "18:00", "end_time": "19:30", "energy": 1.2},
+    ]
+
+    load_adjust, forecasts = my_predbat.fetch_additional_load_forecast()
+    failed |= check_slot(load_adjust, 18 * 60, 0.4, "end time without duration")
+    failed |= check_slot(load_adjust, 18 * 60 + 30, 0.4, "end time without duration")
+    failed |= check_slot(load_adjust, 19 * 60, 0.4, "end time without duration")
+    if forecasts.get("cooking", {}).get("slots") != 3:
+        print("ERROR: end_time without duration should create 3 slots")
         failed = 1
     return failed
 
@@ -280,12 +324,81 @@ def test_additional_load_switch_disables_and_enables(my_predbat):
     return failed
 
 
+def test_additional_load_switch_enables_disabled_profile(my_predbat):
+    """Test companion switch can enable a disabled configured profile."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.args["house_load_additional_forecast"] = [
+        {"name": "dishwasher", "enabled": False, "start_time": "20:00", "duration": 2.0, "energy": 1.2},
+    ]
+    my_predbat.refresh_additional_load_forecast_api()
+
+    if my_predbat.dashboard_values.get("switch.predbat_load_forecast_delta_dishwasher", {}).get("state") != "off":
+        print("ERROR: Disabled profile companion switch should publish off")
+        failed = 1
+
+    service_data = {
+        "domain": "switch",
+        "service": "turn_on",
+        "service_data": {"entity_id": "switch.predbat_load_forecast_delta_dishwasher"},
+    }
+    run_async(my_predbat.trigger_callback(service_data))
+    failed |= check_slot(my_predbat.house_load_additional_forecast_adjust, 20 * 60, 0.3, "switch enabled disabled profile")
+    if my_predbat.dashboard_values.get("switch.predbat_load_forecast_delta_dishwasher", {}).get("state") != "on":
+        print("ERROR: Disabled profile switch should publish on after enable")
+        failed = 1
+
+    my_predbat.house_load_additional_forecast_overrides = {}
+    return failed
+
+
+def test_additional_load_flexible_cheapest_slot(my_predbat):
+    """Test flexible additional load is placed in the cheapest available block."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    configure_additional_load_rates(my_predbat, 18 * 60, 20 * 60)
+    my_predbat.args["house_load_additional_forecast"] = [
+        {"name": "dishwasher", "mode": "flexible", "duration": 2.0, "energy": 1.2},
+    ]
+
+    load_adjust, forecasts = my_predbat.fetch_additional_load_forecast()
+    failed |= check_slot(load_adjust, 18 * 60, 0.3, "flexible cheapest slot")
+    failed |= check_slot(load_adjust, 19 * 60 + 30, 0.3, "flexible cheapest slot")
+    forecast = forecasts.get("dishwasher", {})
+    if forecast.get("mode") != "flexible" or "T18:00:00" not in forecast.get("suggested_start", ""):
+        print("ERROR: Flexible load should suggest 18:00, got {}".format(forecast))
+        failed = 1
+    return failed
+
+
+def test_additional_load_flexible_overnight_window(my_predbat):
+    """Test flexible additional load supports an overnight allowed window."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.minutes_now = 23 * 60
+    configure_additional_load_rates(my_predbat, 25 * 60, 27 * 60)
+    my_predbat.args["house_load_additional_forecast"] = [
+        {"name": "dishwasher", "mode": "flexible", "start_time": "22:00", "end_time": "07:00", "duration": 2.0, "energy": 1.2},
+    ]
+
+    load_adjust, forecasts = my_predbat.fetch_additional_load_forecast()
+    failed |= check_slot(load_adjust, 25 * 60, 0.3, "flexible overnight window")
+    failed |= check_slot(load_adjust, 26 * 60 + 30, 0.3, "flexible overnight window")
+    forecast = forecasts.get("dishwasher", {})
+    if "T01:00:00" not in forecast.get("suggested_start", ""):
+        print("ERROR: Flexible overnight load should suggest 01:00, got {}".format(forecast))
+        failed = 1
+    return failed
+
+
 def run_additional_load_forecast_tests(my_predbat):
     """Run additional load forecast tests."""
     failed = 0
     print("Test additional load forecast")
     failed |= test_additional_load_disabled(my_predbat)
+    failed |= test_additional_load_enabled_false_profile(my_predbat)
     failed |= test_additional_load_dishwasher_simple(my_predbat)
+    failed |= test_additional_load_end_time_without_duration(my_predbat)
     failed |= test_additional_load_slot_energy_weighting(my_predbat)
     failed |= test_additional_load_dishwasher_total_energy(my_predbat)
     failed |= test_additional_load_dishwasher_total_energy_weighting(my_predbat)
@@ -294,4 +407,7 @@ def run_additional_load_forecast_tests(my_predbat):
     failed |= test_additional_load_select_api_weighting(my_predbat)
     failed |= test_additional_load_select_event_updates_adjustment(my_predbat)
     failed |= test_additional_load_switch_disables_and_enables(my_predbat)
+    failed |= test_additional_load_switch_enables_disabled_profile(my_predbat)
+    failed |= test_additional_load_flexible_cheapest_slot(my_predbat)
+    failed |= test_additional_load_flexible_overnight_window(my_predbat)
     return failed
