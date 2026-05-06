@@ -1698,6 +1698,8 @@ With a 30-minute plan interval this redistributes 1.2kWh as 0.4kWh, 0.4kWh, 0.2k
 
 Predbat publishes each named load as a binary sensor, for example **binary_sensor.predbat_load_forecast_delta_dishwasher**, with a **target_times** attribute showing the generated slots. The sensor attributes also show **energy**, **slot_energy**, **load_mode**, **plan_interval_minutes**, **slots**, and **total_energy** so you can confirm how much load will be added.
 
+Predbat also publishes a companion switch for each named load, for example **switch.predbat_load_forecast_delta_dishwasher**. Turn this switch off to temporarily disable that forecast if you no longer want the scheduled load included in the plan; turn it back on to re-enable the configured or API-supplied forecast.
+
 To update a named load from a Home Assistant automation, call **select.select_option** on **select.predbat_load_forecast_delta_api** with the format `name?start_time=HH:MM&duration=hours&energy=kWh`:
 
 ```yaml

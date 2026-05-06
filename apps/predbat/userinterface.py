@@ -409,8 +409,23 @@ class UserInterface:
         if isinstance(entities, str):
             entities = [entities]
 
+        if self.components:
+            for entity_id in entities:
+                await self.components.switch_event(entity_id, service)
+
         for entity_id in entities:
-            await self.components.switch_event(entity_id, service)
+            if entity_id.startswith("switch.{}_load_forecast_delta_".format(self.prefix)):
+                name = self.additional_load_name_from_entity(entity_id)
+                if name:
+                    if service == "turn_on":
+                        self.set_additional_load_enabled(name, True)
+                    elif service == "turn_off":
+                        self.set_additional_load_enabled(name, False)
+                    elif service == "toggle":
+                        forecast = self.house_load_additional_forecasts.get(name, {})
+                        self.set_additional_load_enabled(name, forecast.get("state", "off") != "on")
+                    self.update_pending = True
+                    self.plan_valid = False
 
         for item in self.CONFIG_ITEMS:
             if ("entity" in item) and (item["entity"] in entities):

@@ -172,6 +172,8 @@ data:
 
 The **energy** value is the total kWh across the full duration. Predbat divides it across the generated plan slots.
 
+To cancel a scheduled named load, turn off its companion switch, for example **switch.predbat_load_forecast_delta_dishwasher**. Turning the switch back on re-enables the configured or API-supplied forecast.
+
 For advanced cases, you can use **slot_energy** instead when you want to set kWh per Predbat plan slot directly. With the default 30-minute plan interval, `slot_energy: 0.5` adds 0.5kWh to each slot for two hours.
 
 You can also include **weighting** to model a higher load at the start of a cycle:
