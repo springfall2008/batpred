@@ -26,6 +26,7 @@ from futurerate import FutureRate
 from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
 
 import copy
+import re
 
 
 class Fetch:
@@ -60,6 +61,190 @@ class Fetch:
             return pv_factor
         else:
             return None
+
+    def parse_additional_load_weighting(self, weighting, periods):
+        """
+        Parse additional load forecast weighting into per-slot multipliers.
+        """
+        if periods <= 0:
+            return []
+        if weighting is None:
+            return [1.0 for _ in range(periods)]
+        if isinstance(weighting, (int, float)):
+            return [float(weighting) for _ in range(periods)]
+
+        weighting = str(weighting).strip()
+        if not weighting:
+            return [1.0 for _ in range(periods)]
+
+        weights = []
+        for weight in weighting.split(","):
+            weight = weight.strip()
+            if weight == "*":
+                weights.append(1.0)
+            else:
+                try:
+                    weights.append(float(weight))
+                except (ValueError, TypeError):
+                    self.log("Warn: Bad weighting {} provided in house_load_additional_forecast, using 1.0".format(weight))
+                    weights.append(1.0)
+
+        if not weights:
+            weights = [1.0]
+        while len(weights) < periods:
+            weights.append(weights[-1])
+        return weights[:periods]
+
+    def get_additional_load_time_minutes(self, load_item, key, default=None):
+        """
+        Resolve a time field on an additional load forecast item to minutes from midnight.
+        """
+        value = load_item.get(key, default)
+        if value is None:
+            return None
+        value = self.resolve_arg(key, value, default)
+        if value is None:
+            return None
+        value = str(value)
+        if value.count(":") < 2:
+            value += ":00"
+        try:
+            stamp = time_string_to_stamp(value)
+        except (ValueError, TypeError):
+            self.log("Warn: Bad {} {} provided in house_load_additional_forecast".format(key, value))
+            self.record_status("Warn: Bad {} {} provided in house_load_additional_forecast".format(key, value), had_errors=True)
+            return None
+        return minutes_to_time(stamp, time_string_to_stamp("00:00:00"))
+
+    def get_additional_load_float(self, load_item, key, default=0.0):
+        """
+        Resolve a numeric field on an additional load forecast item.
+        """
+        value = load_item.get(key, default)
+        value = self.resolve_arg(key, value, default)
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            self.log("Warn: Bad {} {} provided in house_load_additional_forecast".format(key, value))
+            self.record_status("Warn: Bad {} {} provided in house_load_additional_forecast".format(key, value), had_errors=True)
+            return float(default)
+
+    def additional_load_entity_name(self, name):
+        """
+        Make the binary sensor entity name for a named additional load forecast.
+        """
+        safe_name = re.sub(r"[^a-z0-9_]+", "_", str(name).lower()).strip("_")
+        if not safe_name:
+            safe_name = "unknown"
+        return "binary_sensor.{}_load_forecast_delta_{}".format(self.prefix, safe_name)
+
+    def get_additional_load_forecast_config(self):
+        """
+        Return additional load forecast config with runtime API overrides applied by name.
+        """
+        config = self.get_arg("house_load_additional_forecast", [], indirect=False)
+        if not config:
+            config = []
+        if isinstance(config, dict):
+            config = [config]
+        if isinstance(config, str):
+            self.log("Warn: house_load_additional_forecast should be a list of dictionaries")
+            return []
+
+        forecast_items = []
+        for load_item in config:
+            if not isinstance(load_item, dict):
+                self.log("Warn: Bad house_load_additional_forecast item {}, expected dictionary".format(load_item))
+                continue
+            forecast_items.append(load_item.copy())
+
+        for name, override in self.house_load_additional_forecast_overrides.items():
+            found = False
+            for index, load_item in enumerate(forecast_items):
+                if str(load_item.get("name", "")) == name:
+                    forecast_items[index].update(override)
+                    found = True
+                    break
+            if not found:
+                forecast_items.append(override.copy())
+        return forecast_items
+
+    def fetch_additional_load_forecast(self):
+        """
+        Build per-minute additional load adjustments from named forecast config.
+        """
+        load_adjust = {}
+        forecasts = {}
+        plan_interval = self.get_arg("plan_interval_minutes", 30)
+        minutes_now_slot = int(self.minutes_now / plan_interval) * plan_interval
+
+        for load_item in self.get_additional_load_forecast_config():
+            name = load_item.get("name")
+            if not name:
+                self.log("Warn: house_load_additional_forecast item missing name")
+                continue
+            name = str(name)
+            entity_id = self.additional_load_entity_name(name)
+            start_minutes = self.get_additional_load_time_minutes(load_item, "start_time")
+            end_minutes = self.get_additional_load_time_minutes(load_item, "end_time") if "end_time" in load_item else None
+            duration = self.get_additional_load_float(load_item, "duration", 0.0)
+            load = self.get_additional_load_float(load_item, "load", 0.0)
+            weighting = self.resolve_arg("weighting", load_item.get("weighting", None), None)
+            target_times = []
+
+            if start_minutes is None or load == 0 or duration == 0 and end_minutes is None:
+                forecasts[name] = {"entity_id": entity_id, "state": "off", "target_times": target_times, "load": load, "duration": duration, "weighting": weighting}
+                continue
+
+            if end_minutes is None:
+                end_minutes = start_minutes + int(duration * 60)
+            elif end_minutes <= start_minutes:
+                end_minutes += 24 * 60
+
+            if end_minutes <= minutes_now_slot:
+                start_minutes += 24 * 60
+                end_minutes += 24 * 60
+
+            periods = int((end_minutes - start_minutes + plan_interval - 1) / plan_interval)
+            weights = self.parse_additional_load_weighting(weighting, periods)
+
+            for period in range(periods):
+                slot_start = start_minutes + period * plan_interval
+                slot_end = min(slot_start + plan_interval, end_minutes)
+                if slot_end <= minutes_now_slot:
+                    continue
+                if (slot_start - minutes_now_slot) >= self.forecast_minutes:
+                    continue
+                energy = dp4(load * weights[period])
+                for minute in range(slot_start, slot_end):
+                    load_adjust[minute] = dp4(load_adjust.get(minute, 0.0) + energy)
+                target_times.append(
+                    {
+                        "start": (self.midnight_utc + timedelta(minutes=slot_start)).isoformat(),
+                        "end": (self.midnight_utc + timedelta(minutes=slot_end)).isoformat(),
+                        "energy": energy,
+                    }
+                )
+
+            forecasts[name] = {"entity_id": entity_id, "state": "on" if target_times else "off", "target_times": target_times, "load": load, "duration": duration, "weighting": weighting}
+
+        return load_adjust, forecasts
+
+    def publish_additional_load_forecasts(self):
+        """
+        Publish named additional load forecast binary sensors for visibility and automation targeting.
+        """
+        for name, forecast in self.house_load_additional_forecasts.items():
+            attributes = {
+                "friendly_name": "Predbat load forecast delta {}".format(name),
+                "icon": "mdi:dishwasher",
+                "name": name,
+                "load": forecast.get("load", 0.0),
+                "duration": forecast.get("duration", 0.0),
+                "weighting": forecast.get("weighting", None),
+                "target_times": forecast.get("target_times", []),
+            }
+            self.dashboard_item(forecast["entity_id"], state=forecast.get("state", "off"), attributes=attributes)
 
     def filtered_today(self, time_data, resetmidnight=False, stamp=None):
         """
@@ -700,6 +885,8 @@ class Fetch:
         self.load_minutes_age = 0
         self.load_forecast = {}
         self.load_forecast_array = []
+        self.house_load_additional_forecast_adjust = {}
+        self.house_load_additional_forecasts = {}
         self.pv_forecast_minute = {}
         self.pv_forecast_minute10 = {}
         self.load_scaling_dynamic = {}
@@ -738,6 +925,10 @@ class Fetch:
 
         # Fetch extra load forecast
         self.load_forecast, self.load_forecast_array = self.fetch_extra_load_forecast(self.now_utc, load_ml_forecast)
+
+        # Fetch named additional load forecast deltas
+        self.house_load_additional_forecast_adjust, self.house_load_additional_forecasts = self.fetch_additional_load_forecast()
+        self.publish_additional_load_forecasts()
 
         # Load previous load data
         if self.get_arg("ge_cloud_data", False):

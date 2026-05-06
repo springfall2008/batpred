@@ -1628,6 +1628,49 @@ Set **load_forecast_only** to `true` if you do not wish to use the Predbat forec
     - sensor.givtcp_{geserial}_load_energy_today_kwh_prediction$results
 ```
 
+## Additional House Load Forecast
+
+In addition to the normal historical or ML load forecast, Predbat can add named future load deltas to the forward plan. This is intended for known loads that may not be represented well by history, such as a dishwasher, cooking, hot water, or heating demand.
+
+Each item in **house_load_additional_forecast** is labelled by **name** and can be updated later from a Home Assistant automation using the published binary sensor for that name.
+
+```yaml
+  house_load_additional_forecast:
+    - name: dishwasher
+      start_time: "20:00"
+      duration: 2.0
+      load: 0.5
+```
+
+The **load** value is kWh per Predbat plan slot, not the total energy for the full duration. With the default 30-minute plan interval, the example above adds 0.5kWh to each of the four slots from 20:00 to 22:00.
+
+Set **duration** to `0` to leave a named load configured but disabled by default.
+
+You can optionally set **end_time** instead of **duration**:
+
+```yaml
+  house_load_additional_forecast:
+    - name: cooking
+      start_time: "18:00"
+      end_time: "19:30"
+      load: 0.4
+```
+
+You can optionally set **weighting** to multiply the slot load across the duration. A `*` means normal weight `1.0`; if fewer weights are supplied than slots, the final weight is repeated.
+
+```yaml
+  house_load_additional_forecast:
+    - name: dishwasher
+      start_time: "20:00"
+      duration: 2.0
+      load: 0.5
+      weighting: "2,2,*"
+```
+
+With a 30-minute plan interval this adds 1.0kWh, 1.0kWh, 0.5kWh, and 0.5kWh over the four slots.
+
+Predbat publishes each named load as a binary sensor, for example **binary_sensor.predbat_load_forecast_delta_dishwasher**, with a **target_times** attribute showing the generated slots.
+
 ## Balance Inverters
 
 When you have two or more inverters it's possible they get out of sync so they are at different charge levels or they start to cross-charge (one discharges into another).

@@ -858,8 +858,37 @@ class UserInterface:
                 # self.log("Trigger callback for {} {}".format(item["domain"], item["service"]))
                 await item["callback"](item["service"], service_data, None)
 
+    async def load_forecast_delta_event(self, service, data, kwargs):
+        """
+        Update a named additional load forecast from a Home Assistant service call.
+        """
+        service_data = data.get("service_data", {}) if data else {}
+        target = data.get("target", {}) if data else {}
+        entity_id = service_data.get("entity_id", None) or target.get("entity_id", None)
+        if isinstance(entity_id, list):
+            entity_id = entity_id[0] if entity_id else None
+        name = service_data.get("name", None)
+        if not name and entity_id:
+            marker = "_load_forecast_delta_"
+            if marker in entity_id:
+                name = entity_id.split(marker, 1)[1]
+        if not name:
+            self.log("Warn: update_load_forecast_delta called without name or target entity_id")
+            self.record_status("Warn: update_load_forecast_delta called without name or target entity_id", had_errors=True)
+            return
+
+        forecast = {"name": str(name)}
+        for key in ["start_time", "end_time", "duration", "load", "weighting"]:
+            if key in service_data:
+                forecast[key] = service_data[key]
+        self.house_load_additional_forecast_overrides[str(name)] = forecast
+        self.plan_valid = False
+        self.update_pending = True
+        self.log("Updated additional load forecast {} via service {}".format(name, service))
+
     def define_service_list(self):
         self.SERVICE_REGISTER_LIST = [
+            {"domain": "predbat", "service": "update_load_forecast_delta"},
             {"domain": "input_number", "service": "set_value"},
             {"domain": "input_number", "service": "increment"},
             {"domain": "input_number", "service": "decrement"},
@@ -873,6 +902,7 @@ class UserInterface:
             {"domain": "select", "service": "select_previous"},
         ]
         self.EVENT_LISTEN_LIST = [
+            {"domain": "predbat", "service": "update_load_forecast_delta", "callback": self.load_forecast_delta_event},
             {"domain": "switch", "service": "turn_on", "callback": self.switch_event},
             {"domain": "switch", "service": "turn_off", "callback": self.switch_event},
             {"domain": "switch", "service": "toggle", "callback": self.switch_event},
