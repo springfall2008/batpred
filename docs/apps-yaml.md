@@ -1646,17 +1646,17 @@ For appliances where you know the total cycle energy, use **energy** in kWh. Pre
 
 With a 15-minute plan interval this adds 0.15kWh to each of the eight slots from 20:00 to 22:00, for a total of 1.2kWh.
 
-Alternatively, use **load** when you want to set the kWh for each Predbat plan slot directly:
+For advanced cases, use **slot_energy** when you want to set the kWh for each Predbat plan slot directly:
 
 ```yaml
   house_load_additional_forecast:
-    - name: dishwasher
+    - name: heating
       start_time: "20:00"
       duration: 2.0
-      load: 0.5
+      slot_energy: 0.5
 ```
 
-The **load** value is kWh per Predbat plan slot, not the total energy for the full duration. With the default 30-minute plan interval, the example above adds 0.5kWh to each of the four slots from 20:00 to 22:00, for a total of 2.0kWh. With a 15-minute plan interval it would add 0.5kWh to each of eight slots, for a total of 4.0kWh.
+The **slot_energy** value is kWh per Predbat plan slot, not the total energy for the full duration. With the default 30-minute plan interval, the example above adds 0.5kWh to each of the four slots from 20:00 to 22:00, for a total of 2.0kWh. With a 15-minute plan interval it would add 0.5kWh to each of eight slots, for a total of 4.0kWh.
 
 Set **duration** to `0` to leave a named load configured but disabled by default.
 
@@ -1667,17 +1667,17 @@ You can optionally set **end_time** instead of **duration**:
     - name: cooking
       start_time: "18:00"
       end_time: "19:30"
-      load: 0.4
+      energy: 1.2
 ```
 
-You can optionally set **weighting** to change the load profile across the duration. A `*` means normal weight `1.0`; if fewer weights are supplied than slots, the final weight is repeated. With **load**, weighting multiplies the per-slot load. With **energy**, weighting redistributes the total energy without changing the total.
+You can optionally set **weighting** to change the load profile across the duration. A `*` means normal weight `1.0`; if fewer weights are supplied than slots, the final weight is repeated. With **energy**, weighting redistributes the total energy without changing the total. With **slot_energy**, weighting multiplies the per-slot energy.
 
 ```yaml
   house_load_additional_forecast:
-    - name: dishwasher
+    - name: heating
       start_time: "20:00"
       duration: 2.0
-      load: 0.5
+      slot_energy: 0.5
       weighting: "2,2,*"
 ```
 
@@ -1696,7 +1696,7 @@ Using total **energy** with weighting:
 
 With a 30-minute plan interval this redistributes 1.2kWh as 0.4kWh, 0.4kWh, 0.2kWh, and 0.2kWh.
 
-Predbat publishes each named load as a binary sensor, for example **binary_sensor.predbat_load_forecast_delta_dishwasher**, with a **target_times** attribute showing the generated slots. The sensor attributes also show **load_mode**, **plan_interval_minutes**, **slots**, and **total_energy** so you can confirm how much load will be added.
+Predbat publishes each named load as a binary sensor, for example **binary_sensor.predbat_load_forecast_delta_dishwasher**, with a **target_times** attribute showing the generated slots. The sensor attributes also show **energy**, **slot_energy**, **load_mode**, **plan_interval_minutes**, **slots**, and **total_energy** so you can confirm how much load will be added.
 
 To update a named load from a Home Assistant automation, call **select.select_option** on **select.predbat_load_forecast_delta_api** with the format `name?start_time=HH:MM&duration=hours&energy=kWh`:
 
