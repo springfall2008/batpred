@@ -213,6 +213,37 @@ def test_additional_load_select_api_weighting(my_predbat):
     return failed
 
 
+def test_additional_load_select_event_updates_adjustment(my_predbat):
+    """Test HA select event immediately rebuilds additional load adjustment."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.args["house_load_additional_forecast"] = [
+        {"name": "dishwasher", "start_time": "20:00", "duration": 0, "energy": 0},
+    ]
+
+    service_data = {
+        "domain": "select",
+        "service": "select_option",
+        "service_data": {
+            "entity_id": "select.predbat_load_forecast_delta_api",
+            "option": "dishwasher?start_time=18:00&duration=2.0&energy=1.2",
+        },
+    }
+    run_async(my_predbat.trigger_callback(service_data))
+
+    failed |= check_slot(my_predbat.house_load_additional_forecast_adjust, 18 * 60, 0.3, "select event immediate adjustment")
+    failed |= check_slot(my_predbat.house_load_additional_forecast_adjust, 19 * 60 + 30, 0.3, "select event immediate adjustment")
+    sensor = my_predbat.dashboard_values.get("binary_sensor.predbat_load_forecast_delta_dishwasher", {})
+    attributes = sensor.get("attributes", {})
+    if sensor.get("state") != "on" or attributes.get("total_energy") != 1.2:
+        print("ERROR: Select event should immediately publish dishwasher forecast, got {}".format(sensor))
+        failed = 1
+
+    my_predbat.api_select("load_forecast_delta_api", "off")
+    my_predbat.house_load_additional_forecast_overrides = {}
+    return failed
+
+
 def run_additional_load_forecast_tests(my_predbat):
     """Run additional load forecast tests."""
     failed = 0
@@ -225,4 +256,5 @@ def run_additional_load_forecast_tests(my_predbat):
     failed |= test_additional_load_multiple_and_service_override(my_predbat)
     failed |= test_additional_load_select_api_override(my_predbat)
     failed |= test_additional_load_select_api_weighting(my_predbat)
+    failed |= test_additional_load_select_event_updates_adjustment(my_predbat)
     return failed
