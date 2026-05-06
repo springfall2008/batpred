@@ -244,6 +244,42 @@ def test_additional_load_select_event_updates_adjustment(my_predbat):
     return failed
 
 
+def test_additional_load_switch_disables_and_enables(my_predbat):
+    """Test companion switch disables and re-enables a named additional load."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.args["house_load_additional_forecast"] = [
+        {"name": "dishwasher", "start_time": "20:00", "duration": 2.0, "energy": 1.2},
+    ]
+    my_predbat.refresh_additional_load_forecast_api()
+
+    switch = my_predbat.dashboard_values.get("switch.predbat_load_forecast_delta_dishwasher", {})
+    if switch.get("state") != "on":
+        print("ERROR: Dishwasher companion switch should publish on, got {}".format(switch))
+        failed = 1
+
+    service_data = {
+        "domain": "switch",
+        "service": "turn_off",
+        "service_data": {"entity_id": "switch.predbat_load_forecast_delta_dishwasher"},
+    }
+    run_async(my_predbat.trigger_callback(service_data))
+    failed |= check_slot(my_predbat.house_load_additional_forecast_adjust, 20 * 60, 0.0, "switch disabled dishwasher")
+    if my_predbat.dashboard_values.get("switch.predbat_load_forecast_delta_dishwasher", {}).get("state") != "off":
+        print("ERROR: Dishwasher companion switch should publish off")
+        failed = 1
+
+    service_data["service"] = "turn_on"
+    run_async(my_predbat.trigger_callback(service_data))
+    failed |= check_slot(my_predbat.house_load_additional_forecast_adjust, 20 * 60, 0.3, "switch enabled dishwasher")
+    if my_predbat.dashboard_values.get("switch.predbat_load_forecast_delta_dishwasher", {}).get("state") != "on":
+        print("ERROR: Dishwasher companion switch should publish on after re-enable")
+        failed = 1
+
+    my_predbat.house_load_additional_forecast_overrides = {}
+    return failed
+
+
 def run_additional_load_forecast_tests(my_predbat):
     """Run additional load forecast tests."""
     failed = 0
@@ -257,4 +293,5 @@ def run_additional_load_forecast_tests(my_predbat):
     failed |= test_additional_load_select_api_override(my_predbat)
     failed |= test_additional_load_select_api_weighting(my_predbat)
     failed |= test_additional_load_select_event_updates_adjustment(my_predbat)
+    failed |= test_additional_load_switch_disables_and_enables(my_predbat)
     return failed
