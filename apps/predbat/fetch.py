@@ -218,19 +218,19 @@ class Fetch:
             start_minutes = self.get_additional_load_time_minutes(load_item, "start_time")
             end_minutes = self.get_additional_load_time_minutes(load_item, "end_time") if "end_time" in load_item else None
             duration = self.get_additional_load_float(load_item, "duration", 0.0)
-            load = self.get_additional_load_float(load_item, "load", 0.0)
+            slot_energy = self.get_additional_load_float(load_item, "slot_energy", 0.0)
             energy_total = self.get_additional_load_float(load_item, "energy", 0.0) if "energy" in load_item else None
             weighting = self.resolve_arg("weighting", load_item.get("weighting", None), None)
             target_times = []
-            load_mode = "total_energy" if energy_total is not None else "per_slot"
+            load_mode = "total_energy" if energy_total is not None else "slot_energy"
 
-            if start_minutes is None or (energy_total is None and load == 0) or (energy_total == 0) or duration == 0 and end_minutes is None:
+            if start_minutes is None or (energy_total is None and slot_energy == 0) or (energy_total == 0) or duration == 0 and end_minutes is None:
                 forecasts[name] = {
                     "entity_id": entity_id,
                     "state": "off",
                     "target_times": target_times,
-                    "load": load,
                     "energy": energy_total,
+                    "slot_energy": slot_energy,
                     "duration": duration,
                     "weighting": weighting,
                     "load_mode": load_mode,
@@ -264,7 +264,7 @@ class Fetch:
                 if energy_total is not None:
                     energy = dp4(energy_total * weights[period] / weight_total) if weight_total else 0.0
                 else:
-                    energy = dp4(load * weights[period])
+                    energy = dp4(slot_energy * weights[period])
                 total_energy += energy
                 for minute in range(slot_start, slot_end):
                     load_adjust[minute] = dp4(load_adjust.get(minute, 0.0) + energy)
@@ -280,8 +280,8 @@ class Fetch:
                 "entity_id": entity_id,
                 "state": "on" if target_times else "off",
                 "target_times": target_times,
-                "load": load,
                 "energy": energy_total,
+                "slot_energy": slot_energy,
                 "duration": duration,
                 "weighting": weighting,
                 "load_mode": load_mode,
@@ -301,11 +301,11 @@ class Fetch:
                 "friendly_name": "Predbat load forecast delta {}".format(name),
                 "icon": "mdi:dishwasher",
                 "name": name,
-                "load": forecast.get("load", 0.0),
                 "energy": forecast.get("energy", None),
+                "slot_energy": forecast.get("slot_energy", 0.0),
                 "duration": forecast.get("duration", 0.0),
                 "weighting": forecast.get("weighting", None),
-                "load_mode": forecast.get("load_mode", "per_slot"),
+                "load_mode": forecast.get("load_mode", "total_energy"),
                 "plan_interval_minutes": forecast.get("plan_interval_minutes", self.plan_interval_minutes),
                 "slots": forecast.get("slots", 0),
                 "total_energy": forecast.get("total_energy", 0.0),
