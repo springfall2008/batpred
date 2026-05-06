@@ -146,6 +146,32 @@ class Fetch:
             safe_name = "unknown"
         return "binary_sensor.{}_load_forecast_delta_{}".format(self.prefix, safe_name)
 
+    def additional_load_switch_entity_name(self, name):
+        """
+        Make the switch entity name for a named additional load forecast.
+        """
+        return self.additional_load_entity_name(name).replace("binary_sensor.", "switch.", 1)
+
+    def additional_load_name_from_entity(self, entity_id):
+        """
+        Return additional load forecast name from a binary sensor or switch entity id.
+        """
+        marker = "_load_forecast_delta_"
+        if entity_id and marker in entity_id:
+            return entity_id.split(marker, 1)[1]
+        return None
+
+    def set_additional_load_enabled(self, name, enabled):
+        """
+        Enable or disable a named additional load forecast using a runtime override.
+        """
+        name = str(name)
+        if enabled:
+            self.house_load_additional_forecast_overrides.pop(name, None)
+        else:
+            self.house_load_additional_forecast_overrides[name] = {"name": name, "energy": 0, "duration": 0}
+        self.refresh_additional_load_forecast_api()
+
     def parse_additional_load_api_command(self, api_command):
         """
         Parse one load_forecast_delta_api command into a forecast override.
@@ -335,6 +361,15 @@ class Fetch:
                 "target_times": forecast.get("target_times", []),
             }
             self.dashboard_item(forecast["entity_id"], state=forecast.get("state", "off"), attributes=attributes)
+            self.dashboard_item(
+                self.additional_load_switch_entity_name(name),
+                state=forecast.get("state", "off"),
+                attributes={
+                    "friendly_name": "Predbat load forecast delta {} enabled".format(name),
+                    "icon": "mdi:dishwasher",
+                    "name": name,
+                },
+            )
 
     def filtered_today(self, time_data, resetmidnight=False, stamp=None):
         """
