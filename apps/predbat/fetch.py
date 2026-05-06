@@ -146,6 +146,48 @@ class Fetch:
             safe_name = "unknown"
         return "binary_sensor.{}_load_forecast_delta_{}".format(self.prefix, safe_name)
 
+    def parse_additional_load_api_command(self, api_command):
+        """
+        Parse one load_forecast_delta_api command into a forecast override.
+        """
+        if "?" not in api_command:
+            self.log("Warn: Bad load_forecast_delta_api command {}, expected name?start_time=...&duration=...".format(api_command))
+            return None
+
+        name, command_args = api_command.split("?", 1)
+        if not name:
+            self.log("Warn: Bad load_forecast_delta_api command {}, missing name".format(api_command))
+            return None
+
+        override = {"name": name}
+        for arg in command_args.split("&"):
+            arg_split = arg.split("=", 1)
+            if len(arg_split) > 1:
+                override[arg_split[0]] = arg_split[1]
+            else:
+                override[arg_split[0]] = True
+        return override
+
+    def get_additional_load_api_overrides(self):
+        """
+        Return load_forecast_delta_api overrides by name.
+        """
+        api_forecast_overrides = {}
+        api_overrides = self.api_select_update("load_forecast_delta_api") if "load_forecast_delta_api" in self.config_index else []
+        for api_command in api_overrides:
+            override = self.parse_additional_load_api_command(api_command)
+            if override:
+                api_forecast_overrides[str(override["name"])] = override
+        return api_forecast_overrides
+
+    def refresh_additional_load_forecast_api(self):
+        """
+        Rebuild additional load forecast data after the HA select API changes.
+        """
+        self.load_forecast_delta_api = self.api_select_update("load_forecast_delta_api") if "load_forecast_delta_api" in self.config_index else []
+        self.house_load_additional_forecast_adjust, self.house_load_additional_forecasts = self.fetch_additional_load_forecast()
+        self.publish_additional_load_forecasts()
+
     def get_additional_load_forecast_config(self):
         """
         Return additional load forecast config with runtime API overrides applied by name.
@@ -166,27 +208,8 @@ class Fetch:
                 continue
             forecast_items.append(load_item.copy())
 
-        api_forecast_overrides = {}
-        api_overrides = self.api_select_update("load_forecast_delta_api") if "load_forecast_delta_api" in self.config_index else []
-        for api_command in api_overrides:
-            if "?" not in api_command:
-                self.log("Warn: Bad load_forecast_delta_api command {}, expected name?start_time=...&duration=...".format(api_command))
-                continue
-            name, command_args = api_command.split("?", 1)
-            if not name:
-                self.log("Warn: Bad load_forecast_delta_api command {}, missing name".format(api_command))
-                continue
-            override = {"name": name}
-            for arg in command_args.split("&"):
-                arg_split = arg.split("=", 1)
-                if len(arg_split) > 1:
-                    override[arg_split[0]] = arg_split[1]
-                else:
-                    override[arg_split[0]] = True
-            api_forecast_overrides[str(name)] = override
-
         runtime_overrides = {}
-        runtime_overrides.update(api_forecast_overrides)
+        runtime_overrides.update(self.get_additional_load_api_overrides())
         runtime_overrides.update(self.house_load_additional_forecast_overrides)
         for name, override in runtime_overrides.items():
             found = False

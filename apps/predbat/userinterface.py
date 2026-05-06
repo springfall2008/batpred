@@ -309,8 +309,9 @@ class UserInterface:
         if isinstance(entities, str):
             entities = [entities]
 
-        for entity_id in entities:
-            await self.components.select_event(entity_id, value)
+        if self.components:
+            for entity_id in entities:
+                await self.components.select_event(entity_id, value)
 
         for item in self.CONFIG_ITEMS:
             if ("entity" in item) and (item["entity"] in entities):
@@ -331,6 +332,8 @@ class UserInterface:
                     await self.async_manual_select(item["name"], value)
                 elif item.get("api"):
                     await self.async_api_select(item["name"], value)
+                    if item["name"] == "load_forecast_delta_api":
+                        await self.run_in_executor(self.refresh_additional_load_forecast_api)
                 else:
                     if item.get("value", None) != value:
                         await self.async_expose_config(item["name"], value, event=True)
