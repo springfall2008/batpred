@@ -95,6 +95,51 @@ def test_additional_load_dishwasher_weighting(my_predbat):
     return failed
 
 
+def test_additional_load_dishwasher_total_energy(my_predbat):
+    """Test dishwasher total energy is distributed across plan slots."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.plan_interval_minutes = 15
+    my_predbat.args["plan_interval_minutes"] = 15
+    my_predbat.args["house_load_additional_forecast"] = [
+        {"name": "dishwasher", "start_time": "20:00", "duration": 2.0, "energy": 1.2},
+    ]
+
+    load_adjust, forecasts = my_predbat.fetch_additional_load_forecast()
+    for minute in [20 * 60, 20 * 60 + 15, 20 * 60 + 30, 20 * 60 + 45, 21 * 60, 21 * 60 + 15, 21 * 60 + 30, 21 * 60 + 45]:
+        failed |= check_slot(load_adjust, minute, 0.15, "dishwasher total energy")
+    forecast = forecasts.get("dishwasher", {})
+    if forecast.get("load_mode") != "total_energy":
+        print("ERROR: Dishwasher energy mode should be total_energy")
+        failed = 1
+    if forecast.get("slots") != 8:
+        print("ERROR: Dishwasher energy mode should create 8 slots, got {}".format(forecast.get("slots")))
+        failed = 1
+    if forecast.get("total_energy") != 1.2:
+        print("ERROR: Dishwasher total energy should be 1.2, got {}".format(forecast.get("total_energy")))
+        failed = 1
+    return failed
+
+
+def test_additional_load_dishwasher_total_energy_weighting(my_predbat):
+    """Test total energy weighting redistributes, rather than increases, energy."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.args["house_load_additional_forecast"] = [
+        {"name": "dishwasher", "start_time": "20:00", "duration": 2.0, "energy": 1.2, "weighting": "2,2,*"},
+    ]
+
+    load_adjust, forecasts = my_predbat.fetch_additional_load_forecast()
+    failed |= check_slot(load_adjust, 20 * 60, 0.4, "dishwasher total energy weighting")
+    failed |= check_slot(load_adjust, 20 * 60 + 30, 0.4, "dishwasher total energy weighting")
+    failed |= check_slot(load_adjust, 21 * 60, 0.2, "dishwasher total energy weighting")
+    failed |= check_slot(load_adjust, 21 * 60 + 30, 0.2, "dishwasher total energy weighting")
+    if forecasts.get("dishwasher", {}).get("total_energy") != 1.2:
+        print("ERROR: Dishwasher weighted total energy should remain 1.2")
+        failed = 1
+    return failed
+
+
 def test_additional_load_multiple_and_service_override(my_predbat):
     """Test multiple loads add together and service override updates one named load."""
     failed = 0
@@ -123,6 +168,51 @@ def test_additional_load_multiple_and_service_override(my_predbat):
     return failed
 
 
+def test_additional_load_select_api_override(my_predbat):
+    """Test standard HA select API updates a named load forecast."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.args["house_load_additional_forecast"] = [
+        {"name": "dishwasher", "start_time": "20:00", "duration": 0, "energy": 0},
+    ]
+
+    my_predbat.api_select("load_forecast_delta_api", "dishwasher?start_time=18:00&duration=2.0&energy=1.2")
+    load_adjust, forecasts = my_predbat.fetch_additional_load_forecast()
+    failed |= check_slot(load_adjust, 18 * 60, 0.3, "select API dishwasher")
+    failed |= check_slot(load_adjust, 18 * 60 + 30, 0.3, "select API dishwasher")
+    failed |= check_slot(load_adjust, 19 * 60, 0.3, "select API dishwasher")
+    failed |= check_slot(load_adjust, 19 * 60 + 30, 0.3, "select API dishwasher")
+    forecast = forecasts.get("dishwasher", {})
+    if forecast.get("state") != "on" or forecast.get("total_energy") != 1.2:
+        print("ERROR: Select API dishwasher forecast not enabled correctly: {}".format(forecast))
+        failed = 1
+
+    my_predbat.api_select("load_forecast_delta_api", "off")
+    my_predbat.house_load_additional_forecast_overrides = {}
+    return failed
+
+
+def test_additional_load_select_api_weighting(my_predbat):
+    """Test select API accepts pipe-separated weighting."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.args["house_load_additional_forecast"] = []
+
+    my_predbat.api_select("load_forecast_delta_api", "dishwasher?start_time=18:00&duration=2.0&energy=1.2&weighting=2|2|*")
+    load_adjust, forecasts = my_predbat.fetch_additional_load_forecast()
+    failed |= check_slot(load_adjust, 18 * 60, 0.4, "select API weighting dishwasher")
+    failed |= check_slot(load_adjust, 18 * 60 + 30, 0.4, "select API weighting dishwasher")
+    failed |= check_slot(load_adjust, 19 * 60, 0.2, "select API weighting dishwasher")
+    failed |= check_slot(load_adjust, 19 * 60 + 30, 0.2, "select API weighting dishwasher")
+    if forecasts.get("dishwasher", {}).get("total_energy") != 1.2:
+        print("ERROR: Select API weighted dishwasher total energy should remain 1.2")
+        failed = 1
+
+    my_predbat.api_select("load_forecast_delta_api", "off")
+    my_predbat.house_load_additional_forecast_overrides = {}
+    return failed
+
+
 def run_additional_load_forecast_tests(my_predbat):
     """Run additional load forecast tests."""
     failed = 0
@@ -130,5 +220,9 @@ def run_additional_load_forecast_tests(my_predbat):
     failed |= test_additional_load_disabled(my_predbat)
     failed |= test_additional_load_dishwasher_simple(my_predbat)
     failed |= test_additional_load_dishwasher_weighting(my_predbat)
+    failed |= test_additional_load_dishwasher_total_energy(my_predbat)
+    failed |= test_additional_load_dishwasher_total_energy_weighting(my_predbat)
     failed |= test_additional_load_multiple_and_service_override(my_predbat)
+    failed |= test_additional_load_select_api_override(my_predbat)
+    failed |= test_additional_load_select_api_weighting(my_predbat)
     return failed
