@@ -1316,7 +1316,6 @@ class Plan:
         # Created optimised step data
         self.metric_cloud_coverage = self.get_cloud_factor(self.minutes_now, self.pv_forecast_minute, self.pv_forecast_minute10)
         self.metric_load_divergence = self.get_load_divergence(self.minutes_now, self.load_minutes)
-
         # Clamp the three load scalings so load_scaling90 <= load_scaling <= load_scaling10 always
         # holds: the PV90 case can never end up with more load than the central case, and the PV10
         # case can never end up with less. Without this, any load_scaling below load_scaling90 turns
@@ -1337,6 +1336,10 @@ class Plan:
             )
         if load_scaling10 != self.load_scaling10:
             self.log("Warn: load_scaling10 {} is below load_scaling ({}) so the PV10 scenario would have less load than the central case - using {} for this plan".format(self.load_scaling10, self.load_scaling, load_scaling10))
+
+        load_adjust = self.manual_load_adjust.copy()
+        for minute, adjustment in self.house_load_additional_forecast_adjust.items():
+            load_adjust[minute] = load_adjust.get(minute, 0.0) + adjustment
         load_minutes_step = self.step_data_history(
             self.load_minutes,
             self.minutes_now,
@@ -1347,7 +1350,7 @@ class Plan:
             load_forecast=self.load_forecast,
             load_scaling_dynamic=self.load_scaling_dynamic,
             cloud_factor=self.metric_load_divergence,
-            load_adjust=self.manual_load_adjust,
+            load_adjust=load_adjust,
             load_baseline=self.dynamic_load_baseline,
         )
         load_minutes_step10 = self.step_data_history(
@@ -1360,7 +1363,7 @@ class Plan:
             load_forecast=self.load_forecast,
             load_scaling_dynamic=self.load_scaling_dynamic,
             cloud_factor=min(self.metric_load_divergence + 0.5, 1.0) if self.metric_load_divergence else None,
-            load_adjust=self.manual_load_adjust,
+            load_adjust=load_adjust,
             load_baseline=self.dynamic_load_baseline,
         )
         # load_scaling90 is an ABSOLUTE multiplier of the historical load, exactly like load_scaling10
@@ -1381,7 +1384,7 @@ class Plan:
             load_forecast=self.load_forecast,
             load_scaling_dynamic=self.load_scaling_dynamic,
             cloud_factor=self.metric_load_divergence,
-            load_adjust=self.manual_load_adjust,
+            load_adjust=load_adjust,
             load_baseline=self.dynamic_load_baseline,
         )
         pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)

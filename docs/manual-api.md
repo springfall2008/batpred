@@ -155,3 +155,34 @@ entities:
 
 You simply enter the date, start time, end time and load percentage adjustment (e.g. 0.5=50%), then click the 'Execute' button.
 The load adjustment details will be sent to the Predbat manual API and you will see the load change and a small +/- symbol against the export rate in the Predbat plan.
+
+## Updating additional house load forecasts
+
+Named entries configured with [house_load_additional_forecast](apps-yaml.md#additional-house-load-forecast) can be updated from a Home Assistant automation using the Predbat action **predbat.update_load_forecast_delta**.
+
+For example, to schedule a dishwasher load:
+
+```yaml
+action: predbat.update_load_forecast_delta
+data:
+  start_time: "20:00"
+  duration: 2.0
+  load: 0.5
+target:
+  entity_id: binary_sensor.predbat_load_forecast_delta_dishwasher
+```
+
+The **load** value is kWh per Predbat plan slot. With the default 30-minute plan interval, this example adds 0.5kWh to each slot for two hours.
+
+You can also include **weighting** to model a higher load at the start of a cycle:
+
+```yaml
+action: predbat.update_load_forecast_delta
+data:
+  start_time: "20:00"
+  duration: 2.0
+  load: 0.5
+  weighting: "2,2,*"
+target:
+  entity_id: binary_sensor.predbat_load_forecast_delta_dishwasher
+```
