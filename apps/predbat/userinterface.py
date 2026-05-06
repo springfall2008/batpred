@@ -896,10 +896,11 @@ class UserInterface:
             return
 
         forecast = {"name": str(name)}
-        for key in ["start_time", "end_time", "duration", "energy", "slot_energy", "weighting"]:
+        for key in ["start_time", "end_time", "duration", "energy", "slot_energy", "weighting", "enabled", "mode"]:
             if key in service_data:
                 forecast[key] = service_data[key]
         self.house_load_additional_forecast_overrides[str(name)] = forecast
+        await self.run_in_executor(self.refresh_additional_load_forecast_api)
         self.plan_valid = False
         self.update_pending = True
         self.log("Updated additional load forecast {} via service {}".format(name, service))

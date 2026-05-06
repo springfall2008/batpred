@@ -174,6 +174,18 @@ The **energy** value is the total kWh across the full duration. Predbat divides 
 
 To cancel a scheduled named load, turn off its companion switch, for example **switch.predbat_load_forecast_delta_dishwasher**. Turning the switch back on re-enables the configured or API-supplied forecast.
 
+If the appliance can run at any time, send `mode=flexible`. Predbat will choose the cheapest available block from the requested window, or from the remaining forecast horizon if no window is supplied:
+
+```yaml
+action: select.select_option
+target:
+  entity_id: select.predbat_load_forecast_delta_api
+data:
+  option: "dishwasher?enabled=true&mode=flexible&start_time=22:00&end_time=07:00&duration=2.0&energy=1.2"
+```
+
+Use `enabled=false` in `apps.yaml` to keep reusable appliance profiles visible but inactive until an automation or the companion switch enables them.
+
 For advanced cases, you can use **slot_energy** instead when you want to set kWh per Predbat plan slot directly. With the default 30-minute plan interval, `slot_energy: 0.5` adds 0.5kWh to each slot for two hours.
 
 You can also include **weighting** to model a higher load at the start of a cycle:
