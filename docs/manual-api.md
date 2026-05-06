@@ -158,31 +158,30 @@ The load adjustment details will be sent to the Predbat manual API and you will 
 
 ## Updating additional house load forecasts
 
-Named entries configured with [house_load_additional_forecast](apps-yaml.md#additional-house-load-forecast) can be updated from a Home Assistant automation using the Predbat action **predbat.update_load_forecast_delta**.
+Named entries configured with [house_load_additional_forecast](apps-yaml.md#additional-house-load-forecast) can be updated from a Home Assistant automation using **select.predbat_load_forecast_delta_api**. This uses Home Assistant's standard **select.select_option** action, so it is visible in Developer Tools and automations.
 
 For example, to schedule a dishwasher load:
 
 ```yaml
-action: predbat.update_load_forecast_delta
-data:
-  start_time: "20:00"
-  duration: 2.0
-  load: 0.5
+action: select.select_option
 target:
-  entity_id: binary_sensor.predbat_load_forecast_delta_dishwasher
+  entity_id: select.predbat_load_forecast_delta_api
+data:
+  option: "dishwasher?start_time=20:00&duration=2.0&energy=1.2"
 ```
 
-The **load** value is kWh per Predbat plan slot. With the default 30-minute plan interval, this example adds 0.5kWh to each slot for two hours.
+The **energy** value is the total kWh across the full duration. Predbat divides it across the generated plan slots.
+
+You can use **load** instead when you want to set kWh per Predbat plan slot directly. With the default 30-minute plan interval, `load: 0.5` adds 0.5kWh to each slot for two hours.
 
 You can also include **weighting** to model a higher load at the start of a cycle:
 
 ```yaml
-action: predbat.update_load_forecast_delta
-data:
-  start_time: "20:00"
-  duration: 2.0
-  load: 0.5
-  weighting: "2,2,*"
+action: select.select_option
 target:
-  entity_id: binary_sensor.predbat_load_forecast_delta_dishwasher
+  entity_id: select.predbat_load_forecast_delta_api
+data:
+  option: "dishwasher?start_time=20:00&duration=2.0&energy=1.2&weighting=2|2|*"
 ```
+
+With **energy**, weighting redistributes the total energy without changing the total. With **load**, weighting multiplies the per-slot load. Use `|` as the weighting separator when sending commands through **select.predbat_load_forecast_delta_api**, because Home Assistant select options are stored as comma-separated values internally.
