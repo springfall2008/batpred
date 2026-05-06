@@ -785,8 +785,7 @@ class Prediction:
                 discharge_min = max(soc_max * export_limit_now / 100.0, reserve, self.best_soc_min)
 
             if not set_export_freeze_only and export_window_active and export_limit_now < 99.0 and (soc > discharge_min):
-                # Discharge enable
-                discharge_rate_now = battery_rate_max_export  # Assume discharge becomes enabled here, capped at export limit
+                # Discharge enable, capped at export limit
                 if self.set_export_low_power:
                     export_rate_adjust = 1 - (export_limit_now - int(export_limit_now))
                 else:
