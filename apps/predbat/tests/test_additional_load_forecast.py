@@ -36,7 +36,7 @@ def test_additional_load_disabled(my_predbat):
     failed = 0
     configure_additional_load_test(my_predbat)
     my_predbat.args["house_load_additional_forecast"] = [
-        {"name": "dishwasher", "start_time": "20:00", "duration": 0, "load": 0.5},
+        {"name": "dishwasher", "start_time": "20:00", "duration": 0, "energy": 1.2},
     ]
 
     load_adjust, forecasts = my_predbat.fetch_additional_load_forecast()
@@ -50,11 +50,11 @@ def test_additional_load_disabled(my_predbat):
 
 
 def test_additional_load_dishwasher_simple(my_predbat):
-    """Test a simple dishwasher additional load forecast."""
+    """Test a simple dishwasher total energy forecast."""
     failed = 0
     configure_additional_load_test(my_predbat)
     my_predbat.args["house_load_additional_forecast"] = [
-        {"name": "dishwasher", "start_time": "20:00", "duration": 2.0, "load": 0.5},
+        {"name": "dishwasher", "start_time": "20:00", "duration": 2.0, "energy": 2.0},
     ]
 
     load_adjust, forecasts = my_predbat.fetch_additional_load_forecast()
@@ -79,19 +79,19 @@ def test_additional_load_dishwasher_simple(my_predbat):
     return failed
 
 
-def test_additional_load_dishwasher_weighting(my_predbat):
-    """Test dishwasher weighting multiplies the per-slot load."""
+def test_additional_load_slot_energy_weighting(my_predbat):
+    """Test advanced slot energy weighting multiplies the per-slot energy."""
     failed = 0
     configure_additional_load_test(my_predbat)
     my_predbat.args["house_load_additional_forecast"] = [
-        {"name": "dishwasher", "start_time": "20:00", "duration": 2.0, "load": 0.5, "weighting": "2,2,*"},
+        {"name": "heating", "start_time": "20:00", "duration": 2.0, "slot_energy": 0.5, "weighting": "2,2,*"},
     ]
 
     load_adjust, _ = my_predbat.fetch_additional_load_forecast()
-    failed |= check_slot(load_adjust, 20 * 60, 1.0, "dishwasher weighting")
-    failed |= check_slot(load_adjust, 20 * 60 + 30, 1.0, "dishwasher weighting")
-    failed |= check_slot(load_adjust, 21 * 60, 0.5, "dishwasher weighting")
-    failed |= check_slot(load_adjust, 21 * 60 + 30, 0.5, "dishwasher weighting")
+    failed |= check_slot(load_adjust, 20 * 60, 1.0, "slot energy weighting")
+    failed |= check_slot(load_adjust, 20 * 60 + 30, 1.0, "slot energy weighting")
+    failed |= check_slot(load_adjust, 21 * 60, 0.5, "slot energy weighting")
+    failed |= check_slot(load_adjust, 21 * 60 + 30, 0.5, "slot energy weighting")
     return failed
 
 
@@ -145,8 +145,8 @@ def test_additional_load_multiple_and_service_override(my_predbat):
     failed = 0
     configure_additional_load_test(my_predbat)
     my_predbat.args["house_load_additional_forecast"] = [
-        {"name": "dishwasher", "start_time": "20:00", "duration": 2.0, "load": 0.5},
-        {"name": "heating", "start_time": "20:30", "duration": 1.0, "load": 0.25},
+        {"name": "dishwasher", "start_time": "20:00", "duration": 2.0, "energy": 2.0},
+        {"name": "heating", "start_time": "20:30", "duration": 1.0, "energy": 0.5},
     ]
 
     load_adjust, _ = my_predbat.fetch_additional_load_forecast()
@@ -157,7 +157,7 @@ def test_additional_load_multiple_and_service_override(my_predbat):
     service_data = {
         "domain": "predbat",
         "service": "update_load_forecast_delta",
-        "service_data": {"entity_id": "binary_sensor.predbat_load_forecast_delta_dishwasher", "start_time": "18:00", "duration": 1.0, "load": 0.4},
+        "service_data": {"entity_id": "binary_sensor.predbat_load_forecast_delta_dishwasher", "start_time": "18:00", "duration": 1.0, "energy": 0.8},
     }
     run_async(my_predbat.trigger_callback(service_data))
     load_adjust, _ = my_predbat.fetch_additional_load_forecast()
@@ -219,7 +219,7 @@ def run_additional_load_forecast_tests(my_predbat):
     print("Test additional load forecast")
     failed |= test_additional_load_disabled(my_predbat)
     failed |= test_additional_load_dishwasher_simple(my_predbat)
-    failed |= test_additional_load_dishwasher_weighting(my_predbat)
+    failed |= test_additional_load_slot_energy_weighting(my_predbat)
     failed |= test_additional_load_dishwasher_total_energy(my_predbat)
     failed |= test_additional_load_dishwasher_total_energy_weighting(my_predbat)
     failed |= test_additional_load_multiple_and_service_override(my_predbat)
