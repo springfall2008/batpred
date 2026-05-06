@@ -2008,7 +2008,7 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
-    # Test inverter_limit_export: export rate should be capped to battery_max_export_rate (500) not battery_max_rate (1000)
+    # Test inverter_limit_export: discharge rate during forced export should be capped to battery_max_export_rate (500) not battery_max_rate (1000)
     failed |= run_execute_test(
         my_predbat,
         "discharge_limit_export",
