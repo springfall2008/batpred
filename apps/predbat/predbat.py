@@ -462,6 +462,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Marginal, Exec
         self.manual_demand_times = []
         self.manual_all_times = []
         self.manual_api = []
+        self.load_forecast_delta_api = []
         self.manual_import_rates = {}
         self.manual_export_rates = {}
         self.manual_load_adjust = {}

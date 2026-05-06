@@ -1632,7 +1632,21 @@ Set **load_forecast_only** to `true` if you do not wish to use the Predbat forec
 
 In addition to the normal historical or ML load forecast, Predbat can add named future load deltas to the forward plan. This is intended for known loads that may not be represented well by history, such as a dishwasher, cooking, hot water, or heating demand.
 
-Each item in **house_load_additional_forecast** is labelled by **name** and can be updated later from a Home Assistant automation using the published binary sensor for that name.
+Each item in **house_load_additional_forecast** is labelled by **name** and can be updated later from a Home Assistant automation using **select.predbat_load_forecast_delta_api**.
+
+For appliances where you know the total cycle energy, use **energy** in kWh. Predbat will divide the total across the generated plan slots:
+
+```yaml
+  house_load_additional_forecast:
+    - name: dishwasher
+      start_time: "20:00"
+      duration: 2.0
+      energy: 1.2
+```
+
+With a 15-minute plan interval this adds 0.15kWh to each of the eight slots from 20:00 to 22:00, for a total of 1.2kWh.
+
+Alternatively, use **load** when you want to set the kWh for each Predbat plan slot directly:
 
 ```yaml
   house_load_additional_forecast:
@@ -1642,7 +1656,7 @@ Each item in **house_load_additional_forecast** is labelled by **name** and can 
       load: 0.5
 ```
 
-The **load** value is kWh per Predbat plan slot, not the total energy for the full duration. With the default 30-minute plan interval, the example above adds 0.5kWh to each of the four slots from 20:00 to 22:00.
+The **load** value is kWh per Predbat plan slot, not the total energy for the full duration. With the default 30-minute plan interval, the example above adds 0.5kWh to each of the four slots from 20:00 to 22:00, for a total of 2.0kWh. With a 15-minute plan interval it would add 0.5kWh to each of eight slots, for a total of 4.0kWh.
 
 Set **duration** to `0` to leave a named load configured but disabled by default.
 
@@ -1656,7 +1670,7 @@ You can optionally set **end_time** instead of **duration**:
       load: 0.4
 ```
 
-You can optionally set **weighting** to multiply the slot load across the duration. A `*` means normal weight `1.0`; if fewer weights are supplied than slots, the final weight is repeated.
+You can optionally set **weighting** to change the load profile across the duration. A `*` means normal weight `1.0`; if fewer weights are supplied than slots, the final weight is repeated. With **load**, weighting multiplies the per-slot load. With **energy**, weighting redistributes the total energy without changing the total.
 
 ```yaml
   house_load_additional_forecast:
@@ -1669,7 +1683,30 @@ You can optionally set **weighting** to multiply the slot load across the durati
 
 With a 30-minute plan interval this adds 1.0kWh, 1.0kWh, 0.5kWh, and 0.5kWh over the four slots.
 
-Predbat publishes each named load as a binary sensor, for example **binary_sensor.predbat_load_forecast_delta_dishwasher**, with a **target_times** attribute showing the generated slots.
+Using total **energy** with weighting:
+
+```yaml
+  house_load_additional_forecast:
+    - name: dishwasher
+      start_time: "20:00"
+      duration: 2.0
+      energy: 1.2
+      weighting: "2,2,*"
+```
+
+With a 30-minute plan interval this redistributes 1.2kWh as 0.4kWh, 0.4kWh, 0.2kWh, and 0.2kWh.
+
+Predbat publishes each named load as a binary sensor, for example **binary_sensor.predbat_load_forecast_delta_dishwasher**, with a **target_times** attribute showing the generated slots. The sensor attributes also show **load_mode**, **plan_interval_minutes**, **slots**, and **total_energy** so you can confirm how much load will be added.
+
+To update a named load from a Home Assistant automation, call **select.select_option** on **select.predbat_load_forecast_delta_api** with the format `name?start_time=HH:MM&duration=hours&energy=kWh`:
+
+```yaml
+action: select.select_option
+target:
+  entity_id: select.predbat_load_forecast_delta_api
+data:
+  option: "dishwasher?start_time=20:00&duration=2.0&energy=1.2"
+```
 
 ## Balance Inverters
 

@@ -78,7 +78,10 @@ class Fetch:
             return [1.0 for _ in range(periods)]
 
         weights = []
-        for weight in weighting.split(","):
+        weight_separator = ","
+        if "|" in weighting:
+            weight_separator = "|"
+        for weight in weighting.split(weight_separator):
             weight = weight.strip()
             if weight == "*":
                 weights.append(1.0)
@@ -121,6 +124,11 @@ class Fetch:
         Resolve a numeric field on an additional load forecast item.
         """
         value = load_item.get(key, default)
+        if isinstance(value, str):
+            try:
+                return float(value)
+            except (ValueError, TypeError):
+                pass
         value = self.resolve_arg(key, value, default)
         try:
             return float(value)
@@ -158,7 +166,29 @@ class Fetch:
                 continue
             forecast_items.append(load_item.copy())
 
-        for name, override in self.house_load_additional_forecast_overrides.items():
+        api_forecast_overrides = {}
+        api_overrides = self.api_select_update("load_forecast_delta_api") if "load_forecast_delta_api" in self.config_index else []
+        for api_command in api_overrides:
+            if "?" not in api_command:
+                self.log("Warn: Bad load_forecast_delta_api command {}, expected name?start_time=...&duration=...".format(api_command))
+                continue
+            name, command_args = api_command.split("?", 1)
+            if not name:
+                self.log("Warn: Bad load_forecast_delta_api command {}, missing name".format(api_command))
+                continue
+            override = {"name": name}
+            for arg in command_args.split("&"):
+                arg_split = arg.split("=", 1)
+                if len(arg_split) > 1:
+                    override[arg_split[0]] = arg_split[1]
+                else:
+                    override[arg_split[0]] = True
+            api_forecast_overrides[str(name)] = override
+
+        runtime_overrides = {}
+        runtime_overrides.update(api_forecast_overrides)
+        runtime_overrides.update(self.house_load_additional_forecast_overrides)
+        for name, override in runtime_overrides.items():
             found = False
             for index, load_item in enumerate(forecast_items):
                 if str(load_item.get("name", "")) == name:
@@ -189,11 +219,25 @@ class Fetch:
             end_minutes = self.get_additional_load_time_minutes(load_item, "end_time") if "end_time" in load_item else None
             duration = self.get_additional_load_float(load_item, "duration", 0.0)
             load = self.get_additional_load_float(load_item, "load", 0.0)
+            energy_total = self.get_additional_load_float(load_item, "energy", 0.0) if "energy" in load_item else None
             weighting = self.resolve_arg("weighting", load_item.get("weighting", None), None)
             target_times = []
+            load_mode = "total_energy" if energy_total is not None else "per_slot"
 
-            if start_minutes is None or load == 0 or duration == 0 and end_minutes is None:
-                forecasts[name] = {"entity_id": entity_id, "state": "off", "target_times": target_times, "load": load, "duration": duration, "weighting": weighting}
+            if start_minutes is None or (energy_total is None and load == 0) or (energy_total == 0) or duration == 0 and end_minutes is None:
+                forecasts[name] = {
+                    "entity_id": entity_id,
+                    "state": "off",
+                    "target_times": target_times,
+                    "load": load,
+                    "energy": energy_total,
+                    "duration": duration,
+                    "weighting": weighting,
+                    "load_mode": load_mode,
+                    "plan_interval_minutes": plan_interval,
+                    "slots": 0,
+                    "total_energy": 0.0,
+                }
                 continue
 
             if end_minutes is None:
@@ -207,6 +251,8 @@ class Fetch:
 
             periods = int((end_minutes - start_minutes + plan_interval - 1) / plan_interval)
             weights = self.parse_additional_load_weighting(weighting, periods)
+            weight_total = sum(weights)
+            total_energy = 0.0
 
             for period in range(periods):
                 slot_start = start_minutes + period * plan_interval
@@ -215,7 +261,11 @@ class Fetch:
                     continue
                 if (slot_start - minutes_now_slot) >= self.forecast_minutes:
                     continue
-                energy = dp4(load * weights[period])
+                if energy_total is not None:
+                    energy = dp4(energy_total * weights[period] / weight_total) if weight_total else 0.0
+                else:
+                    energy = dp4(load * weights[period])
+                total_energy += energy
                 for minute in range(slot_start, slot_end):
                     load_adjust[minute] = dp4(load_adjust.get(minute, 0.0) + energy)
                 target_times.append(
@@ -226,7 +276,19 @@ class Fetch:
                     }
                 )
 
-            forecasts[name] = {"entity_id": entity_id, "state": "on" if target_times else "off", "target_times": target_times, "load": load, "duration": duration, "weighting": weighting}
+            forecasts[name] = {
+                "entity_id": entity_id,
+                "state": "on" if target_times else "off",
+                "target_times": target_times,
+                "load": load,
+                "energy": energy_total,
+                "duration": duration,
+                "weighting": weighting,
+                "load_mode": load_mode,
+                "plan_interval_minutes": plan_interval,
+                "slots": len(target_times),
+                "total_energy": dp4(total_energy),
+            }
 
         return load_adjust, forecasts
 
@@ -240,8 +302,13 @@ class Fetch:
                 "icon": "mdi:dishwasher",
                 "name": name,
                 "load": forecast.get("load", 0.0),
+                "energy": forecast.get("energy", None),
                 "duration": forecast.get("duration", 0.0),
                 "weighting": forecast.get("weighting", None),
+                "load_mode": forecast.get("load_mode", "per_slot"),
+                "plan_interval_minutes": forecast.get("plan_interval_minutes", self.plan_interval_minutes),
+                "slots": forecast.get("slots", 0),
+                "total_energy": forecast.get("total_energy", 0.0),
                 "target_times": forecast.get("target_times", []),
             }
             self.dashboard_item(forecast["entity_id"], state=forecast.get("state", "off"), attributes=attributes)
@@ -2528,6 +2595,7 @@ class Fetch:
         self.manual_demand_times = self.manual_times("manual_demand")
         self.manual_all_times = self.manual_charge_times + self.manual_export_times + self.manual_demand_times + self.manual_freeze_charge_times + self.manual_freeze_export_times
         self.manual_api = self.api_select_update("manual_api")
+        self.load_forecast_delta_api = self.api_select_update("load_forecast_delta_api")
         self.manual_import_rates = self.manual_rates("manual_import_rates", default_rate=self.get_arg("manual_import_value"))
         self.manual_export_rates = self.manual_rates("manual_export_rates", default_rate=self.get_arg("manual_export_value"))
         self.manual_load_adjust = self.manual_rates("manual_load_adjust", default_rate=self.get_arg("manual_load_value"))

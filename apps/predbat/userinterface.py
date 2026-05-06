@@ -878,7 +878,7 @@ class UserInterface:
             return
 
         forecast = {"name": str(name)}
-        for key in ["start_time", "end_time", "duration", "load", "weighting"]:
+        for key in ["start_time", "end_time", "duration", "load", "energy", "weighting"]:
             if key in service_data:
                 forecast[key] = service_data[key]
         self.house_load_additional_forecast_overrides[str(name)] = forecast

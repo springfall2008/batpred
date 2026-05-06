@@ -1134,6 +1134,16 @@ CONFIG_ITEMS = [
         "api": True,
     },
     {
+        "name": "load_forecast_delta_api",
+        "friendly_name": "Load forecast delta API controls",
+        "type": "select",
+        "options": ["off"],
+        "icon": "mdi:dishwasher",
+        "default": "off",
+        "restore": False,
+        "api": True,
+    },
+    {
         "name": "manual_freeze_charge",
         "friendly_name": "Manual force charge freeze",
         "type": "select",
