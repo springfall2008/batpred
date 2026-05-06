@@ -162,6 +162,7 @@ class Prediction:
             self.battery_rate_max_charge = base.battery_rate_max_charge
             self.battery_rate_max_charge_dc = base.battery_rate_max_charge_dc
             self.battery_rate_max_discharge = base.battery_rate_max_discharge
+            self.battery_rate_max_export = base.battery_rate_max_export
             self.battery_charge_power_curve = base.battery_charge_power_curve
             self.battery_discharge_power_curve = base.battery_discharge_power_curve
             self.battery_temperature = base.battery_temperature
@@ -533,6 +534,7 @@ class Prediction:
         battery_rate_max_charge = self.battery_rate_max_charge
         battery_rate_max_charge_dc = self.battery_rate_max_charge_dc
         battery_rate_max_discharge = self.battery_rate_max_discharge
+        battery_rate_max_export = self.battery_rate_max_export
         battery_rate_min = self.battery_rate_min
         carbon_intensity = self.carbon_intensity
         set_discharge_during_charge = self.set_discharge_during_charge
@@ -784,12 +786,12 @@ class Prediction:
 
             if not set_export_freeze_only and export_window_active and export_limit_now < 99.0 and (soc > discharge_min):
                 # Discharge enable
-                discharge_rate_now = battery_rate_max_discharge  # Assume discharge becomes enabled here
+                discharge_rate_now = battery_rate_max_export  # Assume discharge becomes enabled here, capped at export limit
                 if self.set_export_low_power:
                     export_rate_adjust = 1 - (export_limit_now - int(export_limit_now))
                 else:
                     export_rate_adjust = 1.0
-                discharge_rate_now = battery_rate_max_discharge * export_rate_adjust
+                discharge_rate_now = battery_rate_max_export * export_rate_adjust
                 discharge_rate_now_curve = (
                     get_discharge_rate_curve_cached(soc, discharge_rate_now, soc_max, battery_rate_max_discharge, battery_discharge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_discharge_curve_tuple)
                     * self.battery_rate_max_scaling_discharge

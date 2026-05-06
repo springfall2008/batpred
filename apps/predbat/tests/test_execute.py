@@ -51,6 +51,7 @@ class ActiveTestInverter:
         self.battery_rate_max_charge = 1 / 60.0
         self.battery_rate_max_charge_dc = 1 / 60.0
         self.battery_rate_max_discharge = 1 / 60.0
+        self.battery_rate_max_export = 1 / 60.0
         self.reserve_max = 100.0
         self.now_utc = now_utc
         self.midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -200,6 +201,7 @@ def run_execute_test(
     has_ge_eco_toggle=False,
     inverter_hybrid=False,
     battery_max_rate=1000,
+    battery_max_export_rate=None,
     minutes_now=12 * 60,
     update_plan=False,
     reserve=1,
@@ -234,11 +236,14 @@ def run_execute_test(
         assert_charge_rate = battery_max_rate
     if assert_discharge_rate is None:
         assert_discharge_rate = battery_max_rate
+    if battery_max_export_rate is None:
+        battery_max_export_rate = battery_max_rate
 
     total_inverters = len(my_predbat.inverters)
     my_predbat.battery_rate_max_charge = battery_max_rate / 1000.0 * total_inverters / 60.0
     my_predbat.battery_rate_max_charge_dc = battery_max_rate / 1000.0 * total_inverters / 60.0
     my_predbat.battery_rate_max_discharge = battery_max_rate / 1000.0 * total_inverters / 60.0
+    my_predbat.battery_rate_max_export = battery_max_export_rate / 1000.0 * total_inverters / 60.0
     my_predbat.set_reserve_enable = set_reserve_enable
     for inverter in my_predbat.inverters:
         inverter.charge_start_time_minutes = inverter_charge_time_minutes_start
@@ -253,6 +258,7 @@ def run_execute_test(
         inverter.battery_rate_max_charge = my_predbat.battery_rate_max_charge / total_inverters
         inverter.battery_rate_max_charge_dc = my_predbat.battery_rate_max_charge_dc / total_inverters
         inverter.battery_rate_max_discharge = my_predbat.battery_rate_max_discharge / total_inverters
+        inverter.battery_rate_max_export = my_predbat.battery_rate_max_export / total_inverters
         inverter.inv_has_timed_pause = has_timed_pause
         inverter.inv_has_target_soc = has_target_soc
         inverter.inv_has_charge_enable_time = has_charge_enable_time
@@ -1998,6 +2004,27 @@ def run_execute_tests(my_predbat):
         assert_immediate_soc_target=0,
         assert_discharge_start_time_minutes=my_predbat.minutes_now,
         assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
+    )
+    if failed:
+        return failed
+
+    # Test inverter_limit_export: export rate should be capped to battery_max_export_rate (500) not battery_max_rate (1000)
+    failed |= run_execute_test(
+        my_predbat,
+        "discharge_limit_export",
+        export_window_best=export_window_best,
+        export_limits_best=export_limits_best,
+        assert_force_export=True,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=10,
+        assert_status="Exporting",
+        assert_immediate_soc_target=0,
+        assert_discharge_start_time_minutes=my_predbat.minutes_now,
+        assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
+        battery_max_rate=1000,
+        battery_max_export_rate=500,
+        assert_discharge_rate=500,
     )
     if failed:
         return failed
