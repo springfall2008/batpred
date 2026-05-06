@@ -304,6 +304,7 @@ from tests.test_annual_export_sweep import (
 )
 from tests.test_debug_history import test_debug_history
 from tests.test_debug_history_capture import test_debug_history_capture, test_debug_history_capture_slot_alignment
+from tests.test_additional_load_forecast import run_additional_load_forecast_tests
 
 # Mock the components and plugin system
 
@@ -477,6 +478,7 @@ def main():
         ("dynamic_load_high", test_dynamic_load_high_load_baseline, "Dynamic load high-load baseline tests", False),
         ("units", run_test_units, "Unit tests", False),
         ("manual_api", run_test_manual_api, "Manual API tests", False),
+        ("additional_load_forecast", run_additional_load_forecast_tests, "Additional load forecast tests", False),
         ("manual_soc", run_test_manual_soc, "Manual SOC target tests", False),
         ("manual_times", run_test_manual_times, "Manual times tests", False),
         ("manual_select", run_test_manual_select, "Manual select tests", False),
