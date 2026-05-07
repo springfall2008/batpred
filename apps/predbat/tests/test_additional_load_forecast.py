@@ -494,6 +494,56 @@ def test_additional_load_flexible_done_by_window(my_predbat):
     return failed
 
 
+def test_additional_load_flexible_api_omitted_start_is_frozen(my_predbat):
+    """Test API flexible forecasts without start_time keep their initial requested start."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.minutes_now = 16 * 60 + 15
+    my_predbat.plan_interval_minutes = 15
+    my_predbat.args["plan_interval_minutes"] = 15
+    my_predbat.args["house_load_additional_forecast"] = []
+    my_predbat.api_select("load_forecast_delta_api", "dishwasher?enabled=true&mode=flexible&end_time=07:00&duration=2.0&energy=1.2")
+    my_predbat.refresh_additional_load_forecast_api()
+
+    forecast = my_predbat.house_load_additional_forecasts.get("dishwasher", {})
+    first_requested_start = forecast.get("requested_start", "")
+    if "T16:15:00" not in first_requested_start:
+        print("ERROR: Flexible API omitted start should stamp initial plan slot, got {}".format(forecast))
+        failed = 1
+
+    my_predbat.minutes_now = 17 * 60
+    my_predbat.refresh_additional_load_forecast_api()
+    forecast = my_predbat.house_load_additional_forecasts.get("dishwasher", {})
+    if forecast.get("requested_start", "") != first_requested_start:
+        print("ERROR: Flexible API omitted start should not drift after refresh, got {}".format(forecast))
+        failed = 1
+
+    my_predbat.api_select("load_forecast_delta_api", "off")
+    my_predbat.house_load_additional_forecast_overrides = {}
+    return failed
+
+
+def test_additional_load_flexible_yaml_omitted_start_rolls(my_predbat):
+    """Test YAML flexible forecasts without start_time continue using the current plan slot."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.minutes_now = 16 * 60
+    my_predbat.args["house_load_additional_forecast"] = [
+        {"name": "dishwasher", "mode": "flexible", "end_time": "07:00", "duration": 2.0, "energy": 1.2},
+    ]
+
+    _, forecasts = my_predbat.fetch_additional_load_forecast()
+    first_requested_start = forecasts.get("dishwasher", {}).get("requested_start", "")
+    my_predbat.minutes_now = 17 * 60
+    _, forecasts = my_predbat.fetch_additional_load_forecast()
+    second_requested_start = forecasts.get("dishwasher", {}).get("requested_start", "")
+
+    if "T16:00:00" not in first_requested_start or "T17:00:00" not in second_requested_start:
+        print("ERROR: Flexible YAML omitted start should roll with current time, got {} then {}".format(first_requested_start, second_requested_start))
+        failed = 1
+    return failed
+
+
 def test_additional_load_flexible_prediction_metric_selection(my_predbat):
     """Test flexible additional load uses prediction metric, not raw import rate order."""
     failed = 0
@@ -597,6 +647,8 @@ def run_additional_load_forecast_tests(my_predbat):
     failed |= test_additional_load_flexible_api_selection_survives_refresh(my_predbat)
     failed |= test_additional_load_flexible_pending_until_plan(my_predbat)
     failed |= test_additional_load_flexible_done_by_window(my_predbat)
+    failed |= test_additional_load_flexible_api_omitted_start_is_frozen(my_predbat)
+    failed |= test_additional_load_flexible_yaml_omitted_start_rolls(my_predbat)
     failed |= test_additional_load_flexible_prediction_metric_selection(my_predbat)
     failed |= test_additional_load_textual_plan_summary(my_predbat)
     return failed
