@@ -10,6 +10,7 @@
 
 """Tests for named additional house load forecasts."""
 
+import plan as plan_module
 from tests.test_infra import run_async
 
 
@@ -288,105 +289,159 @@ def test_additional_load_select_event_updates_adjustment(my_predbat):
     return failed
 
 
-def test_additional_load_switch_disables_and_enables(my_predbat):
-    """Test companion switch disables and re-enables a named additional load."""
+def test_additional_load_delete_button_removes_api_forecast(my_predbat):
+    """Test delete button removes a one-shot API forecast."""
     failed = 0
     configure_additional_load_test(my_predbat)
+    my_predbat.args["house_load_additional_forecast"] = []
+    my_predbat.api_select("load_forecast_delta_api", "dishwasher?start_time=20:00&duration=2.0&energy=1.2")
+    my_predbat.refresh_additional_load_forecast_api()
+
+    button = my_predbat.dashboard_values.get("button.predbat_load_forecast_delta_dishwasher_delete", {})
+    if button.get("state") != "idle":
+        print("ERROR: Dishwasher delete button should publish idle, got {}".format(button))
+        failed = 1
+
+    service_data = {
+        "domain": "button",
+        "service": "press",
+        "service_data": {"entity_id": "button.predbat_load_forecast_delta_dishwasher_delete"},
+    }
+    run_async(my_predbat.trigger_callback(service_data))
+    failed |= check_slot(my_predbat.house_load_additional_forecast_adjust, 20 * 60, 0.0, "delete button removed dishwasher")
+    if my_predbat.api_select_update("load_forecast_delta_api"):
+        print("ERROR: Delete button should clear API forecast")
+        failed = 1
+
+    my_predbat.house_load_additional_forecast_overrides = {}
+    return failed
+
+
+def test_additional_load_yaml_does_not_publish_delete_button(my_predbat):
+    """Test YAML forecasts do not get one-shot delete buttons."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.dashboard_values.pop("button.predbat_load_forecast_delta_dishwasher_delete", None)
     my_predbat.args["house_load_additional_forecast"] = [
         {"name": "dishwasher", "start_time": "20:00", "duration": 2.0, "energy": 1.2},
     ]
     my_predbat.refresh_additional_load_forecast_api()
 
-    switch = my_predbat.dashboard_values.get("switch.predbat_load_forecast_delta_dishwasher", {})
-    if switch.get("state") != "on":
-        print("ERROR: Dishwasher companion switch should publish on, got {}".format(switch))
-        failed = 1
-
-    service_data = {
-        "domain": "switch",
-        "service": "turn_off",
-        "service_data": {"entity_id": "switch.predbat_load_forecast_delta_dishwasher"},
-    }
-    run_async(my_predbat.trigger_callback(service_data))
-    failed |= check_slot(my_predbat.house_load_additional_forecast_adjust, 20 * 60, 0.0, "switch disabled dishwasher")
-    if my_predbat.dashboard_values.get("switch.predbat_load_forecast_delta_dishwasher", {}).get("state") != "off":
-        print("ERROR: Dishwasher companion switch should publish off")
-        failed = 1
-
-    service_data["service"] = "turn_on"
-    run_async(my_predbat.trigger_callback(service_data))
-    failed |= check_slot(my_predbat.house_load_additional_forecast_adjust, 20 * 60, 0.3, "switch enabled dishwasher")
-    if my_predbat.dashboard_values.get("switch.predbat_load_forecast_delta_dishwasher", {}).get("state") != "on":
-        print("ERROR: Dishwasher companion switch should publish on after re-enable")
+    if "button.predbat_load_forecast_delta_dishwasher_delete" in my_predbat.dashboard_values:
+        print("ERROR: YAML forecast should not publish delete button")
         failed = 1
 
     my_predbat.house_load_additional_forecast_overrides = {}
     return failed
 
 
-def test_additional_load_switch_enables_disabled_profile(my_predbat):
-    """Test companion switch can enable a disabled configured profile."""
+def test_additional_load_api_forecast_auto_expires(my_predbat):
+    """Test one-shot API forecasts are removed after their finish time."""
     failed = 0
     configure_additional_load_test(my_predbat)
-    my_predbat.args["house_load_additional_forecast"] = [
-        {"name": "dishwasher", "enabled": False, "start_time": "20:00", "duration": 2.0, "energy": 1.2},
-    ]
+    my_predbat.args["house_load_additional_forecast"] = []
+    my_predbat.api_select("load_forecast_delta_api", "dishwasher?start_time=18:00&duration=1.0&energy=0.8")
     my_predbat.refresh_additional_load_forecast_api()
+    failed |= check_slot(my_predbat.house_load_additional_forecast_adjust, 18 * 60, 0.4, "api forecast before expiry")
 
-    if my_predbat.dashboard_values.get("switch.predbat_load_forecast_delta_dishwasher", {}).get("state") != "off":
-        print("ERROR: Disabled profile companion switch should publish off")
+    my_predbat.minutes_now = 19 * 60
+    my_predbat.refresh_additional_load_forecast_api()
+    if my_predbat.api_select_update("load_forecast_delta_api"):
+        print("ERROR: API forecast should be removed after expiry")
         failed = 1
-
-    service_data = {
-        "domain": "switch",
-        "service": "turn_on",
-        "service_data": {"entity_id": "switch.predbat_load_forecast_delta_dishwasher"},
-    }
-    run_async(my_predbat.trigger_callback(service_data))
-    failed |= check_slot(my_predbat.house_load_additional_forecast_adjust, 20 * 60, 0.3, "switch enabled disabled profile")
-    if my_predbat.dashboard_values.get("switch.predbat_load_forecast_delta_dishwasher", {}).get("state") != "on":
-        print("ERROR: Disabled profile switch should publish on after enable")
+    if my_predbat.house_load_additional_forecasts:
+        print("ERROR: Expired API forecast should not remain active, got {}".format(my_predbat.house_load_additional_forecasts))
         failed = 1
 
     my_predbat.house_load_additional_forecast_overrides = {}
     return failed
 
 
-def test_additional_load_flexible_cheapest_slot(my_predbat):
-    """Test flexible additional load is placed in the cheapest available block."""
+def test_additional_load_flexible_pending_until_plan(my_predbat):
+    """Test flexible additional load is left for plan-time prediction selection."""
     failed = 0
     configure_additional_load_test(my_predbat)
-    configure_additional_load_rates(my_predbat, 18 * 60, 20 * 60)
     my_predbat.args["house_load_additional_forecast"] = [
         {"name": "dishwasher", "mode": "flexible", "duration": 2.0, "energy": 1.2},
     ]
 
     load_adjust, forecasts = my_predbat.fetch_additional_load_forecast()
-    failed |= check_slot(load_adjust, 18 * 60, 0.3, "flexible cheapest slot")
-    failed |= check_slot(load_adjust, 19 * 60 + 30, 0.3, "flexible cheapest slot")
+    if load_adjust:
+        print("ERROR: Flexible load should not produce adjustments until plan-time selection, got {}".format(load_adjust))
+        failed = 1
     forecast = forecasts.get("dishwasher", {})
-    if forecast.get("mode") != "flexible" or "T18:00:00" not in forecast.get("suggested_start", ""):
-        print("ERROR: Flexible load should suggest 18:00, got {}".format(forecast))
+    if forecast.get("state") != "off" or forecast.get("selection_reason") != "pending_prediction_metric":
+        print("ERROR: Flexible load should publish pending prediction selection, got {}".format(forecast))
         failed = 1
     return failed
 
 
-def test_additional_load_flexible_overnight_window(my_predbat):
-    """Test flexible additional load supports an overnight allowed window."""
+def test_additional_load_flexible_done_by_window(my_predbat):
+    """Test flexible end_time means done by, with omitted start_time using now."""
     failed = 0
     configure_additional_load_test(my_predbat)
-    my_predbat.minutes_now = 23 * 60
-    configure_additional_load_rates(my_predbat, 25 * 60, 27 * 60)
+    my_predbat.minutes_now = 16 * 60
     my_predbat.args["house_load_additional_forecast"] = [
-        {"name": "dishwasher", "mode": "flexible", "start_time": "22:00", "end_time": "07:00", "duration": 2.0, "energy": 1.2},
+        {"name": "dishwasher", "mode": "flexible", "end_time": "07:00", "duration": 2.0, "energy": 1.2},
     ]
 
-    load_adjust, forecasts = my_predbat.fetch_additional_load_forecast()
-    failed |= check_slot(load_adjust, 25 * 60, 0.3, "flexible overnight window")
-    failed |= check_slot(load_adjust, 26 * 60 + 30, 0.3, "flexible overnight window")
+    _, forecasts = my_predbat.fetch_additional_load_forecast()
     forecast = forecasts.get("dishwasher", {})
-    if "T01:00:00" not in forecast.get("suggested_start", ""):
-        print("ERROR: Flexible overnight load should suggest 01:00, got {}".format(forecast))
+    if "T16:00:00" not in forecast.get("requested_start", "") or "T07:00:00" not in forecast.get("requested_end", ""):
+        print("ERROR: Flexible done-by window should run from now until 07:00, got {}".format(forecast))
+        failed = 1
+    return failed
+
+
+def test_additional_load_flexible_prediction_metric_selection(my_predbat):
+    """Test flexible additional load uses prediction metric, not raw import rate order."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.minutes_now = 16 * 60
+    my_predbat.forecast_minutes = 24 * 60
+    my_predbat.args["house_load_additional_forecast"] = [
+        {"name": "dishwasher", "mode": "flexible", "end_time": "07:00", "duration": 2.0, "energy": 1.2},
+    ]
+    my_predbat.house_load_additional_forecast_adjust, my_predbat.house_load_additional_forecasts = my_predbat.fetch_additional_load_forecast()
+    my_predbat.charge_limit_best = []
+    my_predbat.charge_window_best = []
+    my_predbat.export_window_best = []
+    my_predbat.export_limits_best = []
+    my_predbat.end_record = my_predbat.forecast_minutes
+
+    original_prediction = plan_module.Prediction
+
+    class FakePrediction:
+        """Fake prediction scores 01:00 as cheapest regardless of candidate order."""
+
+        def __init__(self, base, pv_step, pv10_step, load_step, load10_step):
+            """Store load step data."""
+            self.load_step = load_step
+
+        def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv10, end_record):
+            """Return a metric based on when the injected load appears."""
+            metric = 1000.0
+            first_load_minute = None
+            for minute, load in self.load_step.items():
+                if load > 0:
+                    first_load_minute = my_predbat.minutes_now + minute if first_load_minute is None else min(first_load_minute, my_predbat.minutes_now + minute)
+            if first_load_minute is not None:
+                metric = abs(first_load_minute - 25 * 60)
+            return (metric, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+
+    try:
+        plan_module.Prediction = FakePrediction
+        selected, _, _ = my_predbat.select_flexible_additional_loads({}, {}, {}, {})
+    finally:
+        plan_module.Prediction = original_prediction
+
+    if not selected:
+        print("ERROR: Flexible prediction metric selection should select a slot")
+        failed = 1
+    failed |= check_slot(my_predbat.house_load_additional_forecast_adjust, 25 * 60, 0.3, "flexible prediction metric")
+    forecast = my_predbat.house_load_additional_forecasts.get("dishwasher", {})
+    if "T01:00:00" not in forecast.get("suggested_start", "") or forecast.get("selection_reason") != "prediction_metric":
+        print("ERROR: Flexible prediction metric should select 01:00, got {}".format(forecast))
         failed = 1
     return failed
 
@@ -406,8 +461,10 @@ def run_additional_load_forecast_tests(my_predbat):
     failed |= test_additional_load_select_api_override(my_predbat)
     failed |= test_additional_load_select_api_weighting(my_predbat)
     failed |= test_additional_load_select_event_updates_adjustment(my_predbat)
-    failed |= test_additional_load_switch_disables_and_enables(my_predbat)
-    failed |= test_additional_load_switch_enables_disabled_profile(my_predbat)
-    failed |= test_additional_load_flexible_cheapest_slot(my_predbat)
-    failed |= test_additional_load_flexible_overnight_window(my_predbat)
+    failed |= test_additional_load_delete_button_removes_api_forecast(my_predbat)
+    failed |= test_additional_load_yaml_does_not_publish_delete_button(my_predbat)
+    failed |= test_additional_load_api_forecast_auto_expires(my_predbat)
+    failed |= test_additional_load_flexible_pending_until_plan(my_predbat)
+    failed |= test_additional_load_flexible_done_by_window(my_predbat)
+    failed |= test_additional_load_flexible_prediction_metric_selection(my_predbat)
     return failed
