@@ -2736,15 +2736,21 @@ class Output:
         past_rates_no_io = self.history_to_future_rates(self.rate_import_no_io, 24 * 60, end_record + self.minutes_now)
         past_rates_export = self.history_to_future_rates(self.rate_export, 24 * 60, end_record + self.minutes_now)
 
-        # Assume user might charge at the lowest rate only, for fix tariff
+        # Assume user might charge at the lowest rate only, for fixed tariff
+        # Only use yesterday's rate range (k < end_record) for the threshold to prevent today's rates
+        # (which are added progressively as minutes_now increases) from changing the baseline charge
+        # windows on each hourly recalculation and causing savings_yesterday to fluctuate.
         charge_window_best = []
-        rate_low = min(past_rates.values())
+        rate_low = self.compute_rate_low_for_yesterday(past_rates, end_record)
         combine_charge = self.combine_charge_slots
 
         # Find the best charge windows yesterday
         if self.calculate_savings_max_charge_slots > 0:
             self.combine_charge_slots = True
-            if past_rates_no_io and (min(past_rates_no_io.values()) != max(past_rates_no_io.values())):
+            # Only check variability in yesterday's rates to avoid today's variable tariff rates
+            # triggering charge window detection when yesterday had a flat tariff
+            no_io_yesterday_values = [v for k, v in past_rates_no_io.items() if k < end_record]
+            if no_io_yesterday_values and (min(no_io_yesterday_values) != max(no_io_yesterday_values)):
                 # Use the Non-IO rates when finding charge windows as hardwired charge wouldn't account for this
                 charge_window_best, lowest, highest = self.rate_scan_window(past_rates_no_io, 5, rate_low, False, return_raw=True)
             self.combine_charge_slots = combine_charge
@@ -3232,6 +3238,22 @@ class Output:
         if self.carbon_enable:
             opts += ", metric_carbon({}{}/kg) ".format(self.carbon_metric, curr)
         self.log("Calculate Best options: " + opts)
+
+    def compute_rate_low_for_yesterday(self, past_rates, end_record):
+        """
+        Compute the lowest rate from yesterday's rate range only (k < end_record).
+
+        Restricts the threshold to yesterday's window so that today's rates, which are
+        progressively appended to past_rates as minutes_now increases, cannot lower the
+        threshold and cause different charge windows to be found on each hourly savings
+        recalculation.
+        """
+        yesterday_values = [v for k, v in past_rates.items() if k < end_record]
+        if yesterday_values:
+            return min(yesterday_values)
+        if past_rates:
+            return min(past_rates.values())
+        return 0.0
 
     def history_to_future_rates(self, rates, offset, end_record):
         """
