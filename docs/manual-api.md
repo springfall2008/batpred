@@ -172,9 +172,9 @@ data:
 
 The **energy** value is the total kWh across the full duration. Predbat divides it across the generated plan slots.
 
-To cancel a scheduled named load, turn off its companion switch, for example **switch.predbat_load_forecast_delta_dishwasher**. Turning the switch back on re-enables the configured or API-supplied forecast.
+Forecasts created through **select.predbat_load_forecast_delta_api** are one-shot dynamic loads. Predbat publishes a delete button for each of these forecasts, for example **button.predbat_load_forecast_delta_dishwasher_delete**, and automatically removes the forecast after its finish time. If you want the same forecast again, send the select command again.
 
-If the appliance can run at any time, send `mode=flexible`. Predbat will choose the cheapest available block from the requested window, or from the remaining forecast horizon if no window is supplied:
+If the appliance can run at any time before a deadline, send `mode=flexible`. For flexible loads, `start_time` is the earliest allowed start and `end_time` means done by. Predbat chooses the best block using the full prediction metric, so the selection considers solar, battery state, import/export rates, losses, and the current plan rather than just the import rate:
 
 ```yaml
 action: select.select_option
@@ -184,7 +184,17 @@ data:
   option: "dishwasher?enabled=true&mode=flexible&start_time=22:00&end_time=07:00&duration=2.0&energy=1.2"
 ```
 
-Use `enabled=false` in `apps.yaml` to keep reusable appliance profiles visible but inactive until an automation or the companion switch enables them.
+To allow the dishwasher to start any time from now but be done by 07:00, omit `start_time`:
+
+```yaml
+action: select.select_option
+target:
+  entity_id: select.predbat_load_forecast_delta_api
+data:
+  option: "dishwasher?enabled=true&mode=flexible&end_time=07:00&duration=2.0&energy=1.2"
+```
+
+Use `enabled=false` in `apps.yaml` to keep static load injection profiles visible but inactive until an automation sends an API forecast with the same name.
 
 For advanced cases, you can use **slot_energy** instead when you want to set kWh per Predbat plan slot directly. With the default 30-minute plan interval, `slot_energy: 0.5` adds 0.5kWh to each slot for two hours.
 

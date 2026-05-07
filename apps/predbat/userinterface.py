@@ -413,20 +413,6 @@ class UserInterface:
             for entity_id in entities:
                 await self.components.switch_event(entity_id, service)
 
-        for entity_id in entities:
-            if entity_id.startswith("switch.{}_load_forecast_delta_".format(self.prefix)):
-                name = self.additional_load_name_from_entity(entity_id)
-                if name:
-                    if service == "turn_on":
-                        self.set_additional_load_enabled(name, True)
-                    elif service == "turn_off":
-                        self.set_additional_load_enabled(name, False)
-                    elif service == "toggle":
-                        forecast = self.house_load_additional_forecasts.get(name, {})
-                        self.set_additional_load_enabled(name, forecast.get("state", "off") != "on")
-                    self.update_pending = True
-                    self.plan_valid = False
-
         for item in self.CONFIG_ITEMS:
             if ("entity" in item) and (item["entity"] in entities):
                 value = item["value"]
@@ -443,6 +429,24 @@ class UserInterface:
                 if item.get("value", None) != value:
                     self.log("switch_event: {} = {}".format(entity, value))
                     await self.async_expose_config(item["name"], value, event=True)
+                    self.update_pending = True
+                    self.plan_valid = False
+
+    async def button_event(self, event, data, kwargs):
+        """
+        Catch HA button press events.
+        """
+        service_data = data.get("service_data", {})
+        entities = service_data.get("entity_id", [])
+
+        if isinstance(entities, str):
+            entities = [entities]
+
+        for entity_id in entities:
+            if entity_id.startswith("button.{}_load_forecast_delta_".format(self.prefix)) and entity_id.endswith("_delete"):
+                name = self.additional_load_name_from_entity(entity_id)
+                if name:
+                    self.delete_additional_load_forecast(name)
                     self.update_pending = True
                     self.plan_valid = False
 
@@ -895,7 +899,7 @@ class UserInterface:
             self.record_status("Warn: update_load_forecast_delta called without name or target entity_id", had_errors=True)
             return
 
-        forecast = {"name": str(name)}
+        forecast = {"name": str(name), "_source": "service", "_auto_expire": True}
         for key in ["start_time", "end_time", "duration", "energy", "slot_energy", "weighting", "enabled", "mode"]:
             if key in service_data:
                 forecast[key] = service_data[key]
@@ -914,6 +918,7 @@ class UserInterface:
             {"domain": "switch", "service": "turn_on"},
             {"domain": "switch", "service": "turn_off"},
             {"domain": "switch", "service": "toggle"},
+            {"domain": "button", "service": "press"},
             {"domain": "select", "service": "select_option"},
             {"domain": "select", "service": "select_first"},
             {"domain": "select", "service": "select_last"},
@@ -925,6 +930,7 @@ class UserInterface:
             {"domain": "switch", "service": "turn_on", "callback": self.switch_event},
             {"domain": "switch", "service": "turn_off", "callback": self.switch_event},
             {"domain": "switch", "service": "toggle", "callback": self.switch_event},
+            {"domain": "button", "service": "press", "callback": self.button_event},
             {"domain": "input_number", "service": "set_value", "callback": self.number_event},
             {"domain": "input_number", "service": "increment", "callback": self.number_event},
             {"domain": "input_number", "service": "decrement", "callback": self.number_event},
@@ -1214,6 +1220,9 @@ class UserInterface:
         if value.startswith("+"):
             # Ignore selections which are just the current value
             return
+        if config_item == "load_forecast_delta_api" and value != "off":
+            name = value.split("?", 1)[0].split("=", 1)[0].replace("[", "").replace("]", "")
+            self.house_load_additional_forecast_overrides.pop(name, None)
         values = item.get("value", "")
         if not values:
             values = ""
