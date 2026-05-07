@@ -32,6 +32,43 @@ class Output:
     charging schedules, and financial metric summaries.
     """
 
+    def additional_load_plan_time(self, timestamp):
+        """
+        Return a compact local time string for an additional load timestamp.
+        """
+        return datetime.fromisoformat(timestamp).strftime("%H:%M")
+
+    def get_additional_load_text(self):
+        """
+        Return a textual summary of confirmed planned additional load forecasts.
+        """
+        planned_loads = []
+        for name, forecast in sorted(getattr(self, "house_load_additional_forecasts", {}).items()):
+            target_times = forecast.get("target_times", [])
+            total_energy = forecast.get("total_energy", 0.0)
+            if not forecast.get("enabled", False) or not target_times or total_energy <= 0:
+                continue
+            start = target_times[0].get("start")
+            end = target_times[-1].get("end")
+            if not start or not end:
+                continue
+            planned_loads.append(
+                {
+                    "name": name,
+                    "start": start,
+                    "end": end,
+                    "text": "{} from {} to {} using {:.2f} kWh".format(name, self.additional_load_plan_time(start), self.additional_load_plan_time(end), dp2(total_energy)),
+                }
+            )
+
+        if not planned_loads:
+            return ""
+
+        planned_loads = sorted(planned_loads, key=lambda load: load["start"])
+        if len(planned_loads) == 1:
+            return "- Additional load {} is planned.\n".format(planned_loads[0]["text"])
+        return "- Additional loads are planned: {}.\n".format("; ".join(load["text"] for load in planned_loads))
+
     def publish_car_plan(self):
         """
         Publish the car charging plan
@@ -914,6 +951,8 @@ class Output:
         car_charging_kwh = self.car_charge_slot_kwh(self.minutes_now, self.minutes_now + 5)
         if car_charging_kwh > 0:
             sentence += "- Your car is currently charging.\n"
+
+        sentence += self.get_additional_load_text()
 
         charge_window_n_next = self.get_next_charge_window(self.minutes_now)
         export_window_n_next = self.get_next_export_window(self.minutes_now)
