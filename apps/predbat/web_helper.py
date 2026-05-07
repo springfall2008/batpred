@@ -6731,7 +6731,7 @@ def get_plan_renderer_js():
         const rateDisplay = displayText !== undefined ? displayText : rate.toFixed(2);
 
         // Use the actual stored override rate for the input field if one exists
-        const inputValue = isOverride ? override.rate : rate;
+        const inputValue = parseFloat((isOverride ? override.rate : rate).toFixed(1));
 
         let html = `<td id=${type} data-minute="${minutesFromMidnight}" data-rate="${rate}" ${cellStyle} bgcolor=${bgColor} onclick="toggleForceDropdown('${dropdownId}')" class="clickable-time-cell">`;
         html += `${rateDisplay}${isOverride ? ' &#8526;' : ''}`;
