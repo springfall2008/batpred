@@ -162,6 +162,41 @@ class AlertFeed(ComponentBase):
             alert_show.append(item)
         self.dashboard_item("sensor." + self.prefix + "_alertfeed_status", state=active_alert_text, attributes={"friendly_name": "Weather alerts", "icon": "mdi:alert-outline", "keep": alert_keep, "alerts": alert_show}, app="alertfeed")
 
+        # Also publish to the unified alerts framework so downstream consumers
+        # (dashboards, gateways, SaaS) see weather alerts alongside other
+        # categories. TTL-only lifecycle: we re-record each cycle, entries
+        # drop off when no longer active (stops being re-recorded + TTL expires).
+        for alert in alerts or []:
+            expires = alert.get("expires")
+            if not expires:
+                continue
+            cap_severity = (alert.get("severity") or "").lower()
+            framework_severity = "critical" if cap_severity == "extreme" else "warning" if cap_severity == "severe" else "info"
+            event = alert.get("event") or alert.get("title") or "Weather alert"
+            onset = alert.get("onset")
+            area = alert.get("areaDesc") or "your area"
+            metadata = {
+                "event": alert.get("event"),
+                "severity_cap": alert.get("severity"),
+                "certainty": alert.get("certainty"),
+                "urgency": alert.get("urgency"),
+                "area": area,
+                "onset": str(onset) if onset else None,
+            }
+            if keep and keep > 0:
+                metadata["action"] = "keep_reserve"
+                metadata["keep_percent"] = keep
+            dedup_key = "weather:{}:{}".format(event, str(onset) if onset else "no-onset")
+            self.record_alert(
+                category="weather",
+                severity=framework_severity,
+                title=event,
+                message="{} until {} ({}/{}/{})".format(area, expires, alert.get("severity") or "unknown", alert.get("certainty") or "unknown", alert.get("urgency") or "unknown"),
+                dedup_key=dedup_key,
+                metadata=metadata,
+                expires_at=expires.isoformat() if hasattr(expires, "isoformat") else str(expires),
+            )
+
         return alert_active_keep
 
     def is_point_in_polygon(self, lat, lon, polygon):

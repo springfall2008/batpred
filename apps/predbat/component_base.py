@@ -87,6 +87,22 @@ class ComponentBase(ABC):
         """
         return self.base.get_ha_config(name, default)
 
+    def record_alert(self, category, severity, title, message, dedup_key=None, metadata=None, expires_at=None, action_url=None):
+        """
+        Record a user-facing alert via the base system. See
+        `PredBat.record_alert` for full semantics.
+        """
+        return self.base.record_alert(
+            category=category,
+            severity=severity,
+            title=title,
+            message=message,
+            dedup_key=dedup_key,
+            metadata=metadata,
+            expires_at=expires_at,
+            action_url=action_url,
+        )
+
     def set_arg(self, arg, value):
         """
         Set a configuration argument in the base system.
