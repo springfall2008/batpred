@@ -2973,8 +2973,8 @@ chart.render();
             pv_actual_hist = history_attribute(self.get_history_wrapper(self.prefix + ".pv_energy_h0", 7, required=False))
             pv_actual = prune_today(pv_actual_hist, self.now_utc, self.midnight_utc, prune=False)
             series_data = [
-                {"name": "PV Forecast (so far)", "data": pv_forecast_sofar, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "color": "#a8a8a7"},
-                {"name": "PV Actual", "data": pv_actual, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#f5c43d"},
+                {"name": "PV Forecast (so far)", "data": pv_forecast_sofar, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline", "color": "#a8a8a7"},
+                {"name": "PV Actual", "data": pv_actual, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": "#f5c43d"},
             ]
             text += self.render_chart(series_data, "kWh", "PV Forecast vs Actual", now_str)
         elif chart == "LoadML":
