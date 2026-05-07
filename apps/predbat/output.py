@@ -2742,7 +2742,12 @@ class Output:
         # windows on each hourly recalculation and causing savings_yesterday to fluctuate.
         charge_window_best = []
         past_rates_yesterday_values = [v for k, v in past_rates.items() if k < end_record]
-        rate_low = min(past_rates_yesterday_values) if past_rates_yesterday_values else (min(past_rates.values()) if past_rates else 0.0)
+        if past_rates_yesterday_values:
+            rate_low = min(past_rates_yesterday_values)
+        elif past_rates:
+            rate_low = min(past_rates.values())
+        else:
+            rate_low = 0.0
         combine_charge = self.combine_charge_slots
 
         # Find the best charge windows yesterday
