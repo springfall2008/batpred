@@ -434,6 +434,9 @@ def test_additional_load_flexible_api_selection_survives_refresh(my_predbat):
         "_candidate_count": 50,
         "_selected_metric": 1615.32,
         "_baseline_metric": 1600.0,
+        "_candidate_scores": [
+            {"start": "2026-05-07T11:15:00+02:00", "end": "2026-05-07T13:15:00+02:00", "metric": 1615.32},
+        ],
         "_expires_minutes": 13 * 60 + 15,
     }
     my_predbat.refresh_additional_load_forecast_api()
@@ -450,6 +453,9 @@ def test_additional_load_flexible_api_selection_survives_refresh(my_predbat):
         failed = 1
     if "T11:15:00" not in forecast.get("suggested_start", "") or "T13:15:00" not in forecast.get("suggested_end", ""):
         print("ERROR: Flexible API forecast should publish selected window after refresh, got {}".format(forecast))
+        failed = 1
+    if not forecast.get("candidate_scores"):
+        print("ERROR: Flexible API forecast should keep candidate scores after refresh, got {}".format(forecast))
         failed = 1
 
     my_predbat.api_select("load_forecast_delta_api", "off")
@@ -542,6 +548,9 @@ def test_additional_load_flexible_prediction_metric_selection(my_predbat):
     forecast = my_predbat.house_load_additional_forecasts.get("dishwasher", {})
     if "T01:00:00" not in forecast.get("suggested_start", "") or forecast.get("selection_reason") != "prediction_metric":
         print("ERROR: Flexible prediction metric should select 01:00, got {}".format(forecast))
+        failed = 1
+    if not forecast.get("candidate_scores") or forecast.get("candidate_scores", [{}])[0].get("metric") != 0:
+        print("ERROR: Flexible prediction metric should publish sorted candidate scores, got {}".format(forecast))
         failed = 1
     return failed
 
