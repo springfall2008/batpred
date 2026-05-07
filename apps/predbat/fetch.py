@@ -427,7 +427,11 @@ class Fetch:
             selected_start_minutes = load_item.get("_selected_start_minutes", None)
             if selected_start_minutes is not None:
                 start_minutes = int(selected_start_minutes)
+                if requested_start_minutes is not None and start_minutes < requested_start_minutes:
+                    start_minutes = requested_start_minutes
                 end_minutes = start_minutes + int(duration * 60)
+                if auto_expire:
+                    expires_minutes = end_minutes
             if auto_expire and expires_minutes is None and end_minutes is not None:
                 expires_minutes = end_minutes
             if auto_expire and source != "yaml" and expires_minutes is not None:
