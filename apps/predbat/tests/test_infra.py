@@ -663,6 +663,7 @@ def simple_scenario(
     my_predbat.battery_rate_max_charge = battery_rate_max_charge / 60.0
     my_predbat.battery_rate_max_charge_dc = battery_rate_max_charge_dc / 60.0
     my_predbat.battery_rate_max_discharge = battery_rate_max_charge / 60.0
+    my_predbat.battery_rate_max_export = battery_rate_max_charge / 60.0
     my_predbat.car_charging_from_battery = car_charging_from_battery
     my_predbat.car_energy_reported_load = car_energy_reported_load
     my_predbat.set_charge_low_power = set_charge_low_power

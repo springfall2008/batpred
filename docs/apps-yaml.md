@@ -967,6 +967,25 @@ This can be used if you need Predbat to cap your inverter battery rate (e.g. due
 By default Predbat will normally configure all timed charges or discharges to be at the inverter's maximum rate and these options enable you to reduce that maximum rate.
 [Low rate charging](customisation.md#inverter-control-options) could also be used to slow down Predbat's charge rate whilst still meeting the battery plan.
 
+### **inverter_limit_export**
+
+An optional list of values with one entry per inverter.
+
+e.g.
+
+```yaml
+  inverter_limit_export:
+    - 2000
+```
+
+When set in Watts, caps the maximum discharge rate used specifically during forced export windows, without affecting the ECO mode discharge rate.
+
+This is useful when you want to limit how fast the battery discharges to the grid during forced export periods (e.g. to reduce battery wear or meet grid export limits)
+while still allowing the battery to discharge at full rate during ECO mode to cover house load.
+
+If not set, the value defaults to `inverter_limit_discharge` (or the inverter maximum if that is also not set).
+Predbat will also use this rate when modelling the plan so the prediction accurately reflects the capped export rate.
+
 ### **inverter_limit_charge_dc**
 
 An optional list of values with one entry per inverter. Only relevant for hybrid inverters (`inverter_hybrid: true`).
