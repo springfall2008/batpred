@@ -114,6 +114,25 @@ class Plan:
             modified_load[step_minute] = dp4(modified_load.get(step_minute, 0.0) + energy * PREDICT_STEP / float(self.plan_interval_minutes))
         return modified_load
 
+    def additional_load_candidate_rate_stats(self, start_minutes, duration_minutes):
+        """
+        Return import/export rate summary for one flexible load candidate window.
+        """
+        end_minutes = start_minutes + duration_minutes
+        import_rates = [self.rate_import.get(minute, 0.0) for minute in range(start_minutes, end_minutes)]
+        export_rates = [self.rate_export.get(minute, 0.0) for minute in range(start_minutes, end_minutes)]
+        stats = {}
+        for prefix, rates in [("import", import_rates), ("export", export_rates)]:
+            if rates:
+                stats["{}_rate_avg".format(prefix)] = dp2(sum(rates) / len(rates))
+                stats["{}_rate_min".format(prefix)] = dp2(min(rates))
+                stats["{}_rate_max".format(prefix)] = dp2(max(rates))
+            else:
+                stats["{}_rate_avg".format(prefix)] = None
+                stats["{}_rate_min".format(prefix)] = None
+                stats["{}_rate_max".format(prefix)] = None
+        return stats
+
     def select_flexible_additional_loads(self, load_minutes_step, load_minutes_step10, pv_forecast_minute_step, pv_forecast_minute10_step):
         """
         Select flexible additional load start times using full prediction metric impact.
@@ -154,13 +173,13 @@ class Plan:
                 candidate_prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, candidate_load_step, candidate_load_step10)
                 candidate_metric = candidate_prediction.run_prediction(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, False, self.end_record)[0]
                 candidate_count += 1
-                candidate_scores.append(
-                    {
-                        "start": (self.midnight_utc + timedelta(minutes=candidate)).isoformat(),
-                        "end": (self.midnight_utc + timedelta(minutes=candidate + duration_minutes)).isoformat(),
-                        "metric": dp2(candidate_metric),
-                    }
-                )
+                candidate_score = {
+                    "start": (self.midnight_utc + timedelta(minutes=candidate)).isoformat(),
+                    "end": (self.midnight_utc + timedelta(minutes=candidate + duration_minutes)).isoformat(),
+                    "metric": dp2(candidate_metric),
+                }
+                candidate_score.update(self.additional_load_candidate_rate_stats(candidate, duration_minutes))
+                candidate_scores.append(candidate_score)
                 if best_metric is None or candidate_metric < best_metric:
                     best_metric = candidate_metric
                     best_start = candidate
@@ -182,7 +201,7 @@ class Plan:
                 if forecast.get("auto_expire", False):
                     self.house_load_additional_forecast_overrides[name] = {"name": name, **selected_flexible[name]}
                 self.log("Flexible additional load {} selected {}-{} using prediction metric {} from {} candidates".format(name, self.time_abs_str(best_start), self.time_abs_str(best_start + duration_minutes), dp2(best_metric), candidate_count))
-                self.log("Flexible additional load {} best candidates {}".format(name, selected_flexible[name]["_candidate_scores"][:10]))
+                self.log("Flexible additional load {} candidate scores {}".format(name, selected_flexible[name]["_candidate_scores"]))
 
         if not selected_flexible:
             return False, load_minutes_step, load_minutes_step10
