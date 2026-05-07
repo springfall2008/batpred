@@ -178,11 +178,21 @@ class Fetch:
         name = str(name)
         if not self.has_additional_load_api_command(name) and name not in self.house_load_additional_forecast_overrides:
             self.log("Warn: Ignoring delete for inactive additional load forecast {}".format(name))
+            self.unpublish_additional_load_name(name)
             return False
         self.house_load_additional_forecast_overrides.pop(name, None)
         self.remove_additional_load_api_command(name)
         self.refresh_additional_load_forecast_api()
         return True
+
+    def unpublish_additional_load_name(self, name):
+        """
+        Remove stale additional load forecast entities for a named forecast without replanning.
+        """
+        for entity_id in [self.additional_load_entity_name(name), self.additional_load_delete_entity_name(name)]:
+            self.unpublish_additional_load_entity(entity_id)
+            if hasattr(self, "house_load_additional_forecast_entities"):
+                self.house_load_additional_forecast_entities.discard(entity_id)
 
     def has_additional_load_api_command(self, name):
         """
