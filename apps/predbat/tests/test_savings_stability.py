@@ -11,144 +11,95 @@
 
 def test_savings_stability(my_predbat):
     """
-    Test that the rate_low threshold computed in calculate_yesterday is derived only from
-    yesterday's rate range (k < end_record = 1440) and not from today's rates.
+    Test that compute_rate_low_for_yesterday (used in calculate_yesterday) returns a
+    stable rate_low regardless of which point in the day the calculation runs.
 
-    Bug: rate_low = min(past_rates.values()) included today's dynamically-added rates
-    (beyond minute 1440), so as minutes_now increased through the day and cheaper
-    today-rates entered the dict, the threshold dropped.  That caused rate_scan_window to
-    find fewer (or no) charge windows for yesterday, producing a different metric_baseline
-    and thus a different savings_yesterday value on each hourly recalculation.
+    Bug: when past_rates was built with end_record + minutes_now entries, today's
+    cheap/negative tariff slots (e.g. Agile 0p) entered the dict as minutes_now grew,
+    dropping rate_low and causing rate_scan_window to find no charge windows for
+    yesterday, making savings_yesterday fluctuate hourly.
 
-    Fix: compute rate_low only from k < end_record (yesterday's window).
+    Fix: compute_rate_low_for_yesterday filters to k < end_record (yesterday only).
+    This test calls the production methods directly (history_to_future_rates and
+    compute_rate_low_for_yesterday) to verify the fix is exercised.
     """
     failed = 0
-    end_record = 24 * 60  # 1440
+    end_record = 24 * 60  # 1440 minutes
 
-    # Build a set of "yesterday" rates (minutes 0..1439 relative to yesterday midnight)
-    # using a simple two-band Agile-like tariff: cheap 5p / expensive 25p
+    # Build rate_import dict representing:
+    #   Yesterday (keys -1440..-1): cheap 00:00-06:00 (5p), expensive otherwise (25p)
+    #   Today (keys 0+): expensive mostly, but a 0p slot at 60-120 min (like Agile)
     cheap_rate = 5.0
     expensive_rate = 25.0
-    yesterday_rates = {}
-    for minute in range(0, end_record):
-        # Cheap rate 00:00-06:00 (minutes 0..359), expensive otherwise
-        yesterday_rates[minute] = cheap_rate if minute < 360 else expensive_rate
-
-    # Simulate how history_to_future_rates constructs past_rates:
-    # past_rates[k] = rate_import.get(k - 1440, 0.0)
-    # For k < 1440 we need rate_import to have entries at (k - 1440), i.e. negative keys.
-    # Build a rate_import dict with negative keys for yesterday.
-    rate_import = {}
-    for minute in range(0, end_record):
-        rate_import[minute - end_record] = yesterday_rates[minute]
-
-    # Today has a very cheap slot (0 p, like a negative Agile rate) at minutes 60..120
     today_cheap_rate = 0.0
+
+    rate_import = {}
+    # Yesterday: negative keys -1440 to -1
     for minute in range(0, end_record):
-        rate = today_cheap_rate if 60 <= minute < 120 else expensive_rate
-        rate_import[minute] = rate
+        rate_import[minute - end_record] = cheap_rate if minute < 360 else expensive_rate
+    # Today: keys 0 to 1439
+    for minute in range(0, end_record):
+        rate_import[minute] = today_cheap_rate if 60 <= minute < 120 else expensive_rate
 
-    # Build past_rates as calculate_yesterday does, for two different values of minutes_now
-    def build_past_rates(minutes_now_val):
-        """Build past_rates covering end_record + minutes_now_val entries."""
-        fut = {}
-        for k in range(0, end_record + minutes_now_val):
-            fut[k] = rate_import.get(k - end_record, 0.0)
-        return fut
+    # Test compute_rate_low_for_yesterday (production helper) at three points in time.
+    # Uses history_to_future_rates (production code) to build past_rates exactly as
+    # calculate_yesterday() does.
+    for minutes_now_val, label in [(0, "midnight"), (240, "mid-morning"), (720, "noon")]:
+        past_rates = my_predbat.history_to_future_rates(rate_import, end_record, end_record + minutes_now_val)
+        rate_low = my_predbat.compute_rate_low_for_yesterday(past_rates, end_record)
+        print("rate_low at {} (minutes_now={}): {}".format(label, minutes_now_val, rate_low))
+        if rate_low != cheap_rate:
+            print("ERROR: rate_low at {} should be {} (yesterday's min), got {}".format(label, cheap_rate, rate_low))
+            failed = 1
 
-    # ---- Case 1: midnight (minutes_now=0) ----
-    past_rates_midnight = build_past_rates(0)
-    yesterday_vals_midnight = [v for k, v in past_rates_midnight.items() if k < end_record]
-    rate_low_midnight = min(yesterday_vals_midnight) if yesterday_vals_midnight else 0.0
-
-    # ---- Case 2: mid-morning (minutes_now=240) – today's 0p slot is now included ----
-    past_rates_morning = build_past_rates(240)
-    yesterday_vals_morning = [v for k, v in past_rates_morning.items() if k < end_record]
-    rate_low_morning = min(yesterday_vals_morning) if yesterday_vals_morning else 0.0
-
-    # ---- Case 3: noon (minutes_now=720) ----
-    past_rates_noon = build_past_rates(720)
-    yesterday_vals_noon = [v for k, v in past_rates_noon.items() if k < end_record]
-    rate_low_noon = min(yesterday_vals_noon) if yesterday_vals_noon else 0.0
-
-    # The fixed code restricts rate_low to yesterday's range, so it must equal
-    # yesterday's cheap rate (5p) regardless of minutes_now.
-    print("rate_low_midnight={}, rate_low_morning={}, rate_low_noon={}".format(rate_low_midnight, rate_low_morning, rate_low_noon))
-
-    if rate_low_midnight != cheap_rate:
-        print("ERROR: rate_low at midnight should be {} (yesterday's min), got {}".format(cheap_rate, rate_low_midnight))
-        failed = 1
-
-    if rate_low_morning != cheap_rate:
-        print("ERROR: rate_low at morning should be {} (yesterday's min), got {}".format(cheap_rate, rate_low_morning))
-        failed = 1
-
-    if rate_low_noon != cheap_rate:
-        print("ERROR: rate_low at noon should be {} (yesterday's min), got {}".format(cheap_rate, rate_low_noon))
-        failed = 1
-
-    # Demonstrate the OLD (broken) behaviour: using all values instead of yesterday-only
-    rate_low_broken_midnight = min(past_rates_midnight.values()) if past_rates_midnight else 0.0
+    # Confirm the old broken behaviour: min of the full dict drops when today's 0p slot is included
+    past_rates_morning = my_predbat.history_to_future_rates(rate_import, end_record, end_record + 240)
     rate_low_broken_morning = min(past_rates_morning.values()) if past_rates_morning else 0.0
-
-    # At midnight the old code would give cheap_rate (yesterday only, 0p not yet included)
-    # At morning the old code would give 0p (today's 0p slot entered past_rates)
-    print("OLD rate_low_midnight={}, OLD rate_low_morning={}".format(rate_low_broken_midnight, rate_low_broken_morning))
-
-    if rate_low_broken_midnight != cheap_rate:
-        print("INFO: Old midnight rate_low={} (expected {}, this can vary by setup)".format(rate_low_broken_midnight, cheap_rate))
-
+    print("OLD broken rate_low at mid-morning: {} (should be {}, confirms the bug)".format(rate_low_broken_morning, today_cheap_rate))
     if rate_low_broken_morning != today_cheap_rate:
-        print("INFO: Old morning rate_low={} (expected {} to demonstrate bug)".format(rate_low_broken_morning, today_cheap_rate))
-    else:
-        # The bug is confirmed: old code gives a different (lower) threshold in the morning
-        print("Confirmed: old code rate_low drops from {} to {} when today's cheap slot enters past_rates".format(rate_low_broken_midnight, rate_low_broken_morning))
+        print("INFO: broken rate_low at morning={} (expected {} to demonstrate original bug)".format(rate_low_broken_morning, today_cheap_rate))
 
-    # Also verify the variability check (min != max) against yesterday-only values
-    # Yesterday has cheap_rate and expensive_rate, so min != max should be True
-    no_io_yesterday_vals_noon = [v for k, v in past_rates_noon.items() if k < end_record]
-    if not no_io_yesterday_vals_noon:
-        print("ERROR: no_io_yesterday_vals should not be empty")
-        failed = 1
-    else:
-        if min(no_io_yesterday_vals_noon) == max(no_io_yesterday_vals_noon):
-            print("ERROR: variability check should be True for yesterday's Agile rates")
-            failed = 1
-        else:
-            print("OK: yesterday's rates are variable (min={}, max={})".format(min(no_io_yesterday_vals_noon), max(no_io_yesterday_vals_noon)))
-
-    # Ensure charge-window finding (rate_scan_window) uses the correct stable threshold
-    # by directly calling it on a past_rates_no_io equivalent using rate_low from the fix
-    past_rates_no_io = build_past_rates(720)  # noon scenario
+    # Test rate_scan_window behaviour with deterministic state, save/restoring all state
     old_combine_charge_slots = my_predbat.combine_charge_slots
-    my_predbat.combine_charge_slots = True
-    try:
-        charge_window_best, lowest, highest = my_predbat.rate_scan_window(past_rates_no_io, 5, rate_low_noon, False, return_raw=True)
-        # Filter to yesterday's window only (start < end_record)
-        charge_window_best = [c for c in charge_window_best if c["start"] < end_record]
-        print("Charge windows found with FIXED rate_low={}: {}".format(rate_low_noon, charge_window_best))
+    old_minutes_now = my_predbat.minutes_now
+    old_forecast_minutes = my_predbat.forecast_minutes
 
-        if not charge_window_best:
-            print("ERROR: charge windows should be found with fixed rate_low")
+    try:
+        # Set deterministic values required by rate_scan_window / find_charge_window
+        my_predbat.minutes_now = 0
+        my_predbat.forecast_minutes = end_record
+        my_predbat.combine_charge_slots = True
+
+        # Build past_rates at noon (worst case: today's 0p slot is included)
+        past_rates_noon = my_predbat.history_to_future_rates(rate_import, end_record, end_record + 720)
+        rate_low_noon = my_predbat.compute_rate_low_for_yesterday(past_rates_noon, end_record)
+
+        # Fixed rate_low (5p) should find yesterday's cheap window (0-360 minutes)
+        charge_windows, _low, _high = my_predbat.rate_scan_window(past_rates_noon, 5, rate_low_noon, False, return_raw=True)
+        charge_windows_yesterday = [c for c in charge_windows if c["start"] < end_record]
+        print("Charge windows with FIXED rate_low={}: {}".format(rate_low_noon, charge_windows_yesterday))
+        if not charge_windows_yesterday:
+            print("ERROR: charge windows should be found in yesterday's data with fixed rate_low")
             failed = 1
         else:
-            for cw in charge_window_best:
+            for cw in charge_windows_yesterday:
                 if cw["average"] > rate_low_noon + 0.01:
-                    print("ERROR: charge window average rate {} exceeds threshold {}".format(cw["average"], rate_low_noon))
+                    print("ERROR: charge window average {} exceeds fixed rate_low {}".format(cw["average"], rate_low_noon))
                     failed = 1
 
-        # Verify that using the OLD broken rate_low (0p) finds NO windows in yesterday's data
-        charge_window_broken, _, _ = my_predbat.rate_scan_window(past_rates_no_io, 5, today_cheap_rate, False, return_raw=True)
-        charge_window_broken = [c for c in charge_window_broken if c["start"] < end_record]
-        print("Charge windows found with BROKEN rate_low={}: {}".format(today_cheap_rate, charge_window_broken))
+        # Old broken rate_low (0p) finds no charge windows in yesterday's data
+        rate_low_broken = min(past_rates_noon.values()) if past_rates_noon else 0.0
+        charge_windows_broken, _, _ = my_predbat.rate_scan_window(past_rates_noon, 5, rate_low_broken, False, return_raw=True)
+        charge_windows_broken_yesterday = [c for c in charge_windows_broken if c["start"] < end_record]
+        print("Charge windows with BROKEN rate_low={}: {}".format(rate_low_broken, charge_windows_broken_yesterday))
+        # With 0p threshold no yesterday windows should be found (yesterday min is 5p)
+        if charge_windows_broken_yesterday:
+            print("INFO: unexpected windows found at 0p threshold - may be harmless test setup artifact")
 
-        if charge_window_broken:
-            # Only yesterday entries (k < 1440) have non-zero rates, so finding windows at 0p
-            # means the scan accidentally hit entries where past_rates_no_io[k] = 0.0 for k<1440
-            # This could be an artifact of how the test builds rate_import.
-            # The important thing is that the fixed code does NOT use 0p as the threshold.
-            print("INFO: unexpected windows at 0p threshold - may be harmless test setup artifact")
     finally:
+        # Always restore shared my_predbat state
         my_predbat.combine_charge_slots = old_combine_charge_slots
+        my_predbat.minutes_now = old_minutes_now
+        my_predbat.forecast_minutes = old_forecast_minutes
 
     return failed
