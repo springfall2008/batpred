@@ -392,6 +392,10 @@ def test_additional_load_stale_delete_button_no_replan(my_predbat):
     failed = 0
     configure_additional_load_test(my_predbat)
     my_predbat.args["house_load_additional_forecast"] = []
+    my_predbat.dashboard_values["binary_sensor.predbat_load_forecast_delta_dishwasher"] = {"state": "off", "attributes": {}}
+    my_predbat.dashboard_values["button.predbat_load_forecast_delta_dishwasher_delete"] = {"state": "idle", "attributes": {}}
+    my_predbat.dashboard_index.append("binary_sensor.predbat_load_forecast_delta_dishwasher")
+    my_predbat.dashboard_index.append("button.predbat_load_forecast_delta_dishwasher_delete")
     my_predbat.update_pending = False
     my_predbat.plan_valid = True
 
@@ -403,6 +407,12 @@ def test_additional_load_stale_delete_button_no_replan(my_predbat):
     run_async(my_predbat.trigger_callback(service_data))
     if my_predbat.update_pending or not my_predbat.plan_valid:
         print("ERROR: Stale delete button should not invalidate plan")
+        failed = 1
+    if "binary_sensor.predbat_load_forecast_delta_dishwasher" in my_predbat.dashboard_values:
+        print("ERROR: Stale delete button should remove stale dishwasher binary sensor")
+        failed = 1
+    if "button.predbat_load_forecast_delta_dishwasher_delete" in my_predbat.dashboard_values:
+        print("ERROR: Stale delete button should remove stale dishwasher delete button")
         failed = 1
 
     my_predbat.house_load_additional_forecast_overrides = {}
