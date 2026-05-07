@@ -173,10 +173,19 @@ class SolarAPI(ComponentBase):
 
         timestamp = os.path.getmtime(cache_filename)
         age = datetime.now() - datetime.fromtimestamp(timestamp)
-        age_minutes = (age.seconds + age.days * 24 * 60) / 60
+        age_minutes = age.total_seconds() / 60
 
-        with open(cache_filename) as f:
-            data = json.load(f)
+        try:
+            with open(cache_filename) as f:
+                data = json.load(f)
+        except Exception as e:
+            self.log("Warn: Error loading cache file {}, error {}".format(cache_filename, e))
+            self.log("Warn: " + traceback.format_exc())
+            try:
+                os.remove(cache_filename)
+            except OSError:
+                pass
+            return None, None, 0
 
         if max_age_minutes is None or age_minutes < max_age_minutes:
             return data, data, age_minutes
