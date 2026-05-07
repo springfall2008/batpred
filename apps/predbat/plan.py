@@ -118,9 +118,7 @@ class Plan:
         """
         Select flexible additional load start times using full prediction metric impact.
         """
-        flexible_forecasts = {
-            name: forecast for name, forecast in self.house_load_additional_forecasts.items() if forecast.get("enabled") and forecast.get("mode") == "flexible" and not forecast.get("target_times") and not forecast.get("selection_locked", False)
-        }
+        flexible_forecasts = {name: forecast for name, forecast in self.house_load_additional_forecasts.items() if forecast.get("enabled") and forecast.get("mode") == "flexible" and not forecast.get("selection_locked", False)}
         if not flexible_forecasts:
             return False, load_minutes_step, load_minutes_step10
 

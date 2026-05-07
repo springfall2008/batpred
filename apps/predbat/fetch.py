@@ -514,6 +514,41 @@ class Fetch:
                 }
                 continue
 
+            if mode == "flexible" and selected_start_minutes is not None and not selection_locked:
+                forecasts[name] = {
+                    "entity_id": entity_id,
+                    "state": "off",
+                    "target_times": target_times,
+                    "enabled": enabled,
+                    "mode": mode,
+                    "energy": energy_total,
+                    "slot_energy": slot_energy,
+                    "duration": duration,
+                    "weighting": weighting,
+                    "load_mode": load_mode,
+                    "plan_interval_minutes": plan_interval,
+                    "slots": 0,
+                    "total_energy": 0.0,
+                    "requested_start": (self.midnight_utc + timedelta(minutes=requested_start_minutes)).isoformat() if requested_start_minutes is not None else None,
+                    "requested_end": (self.midnight_utc + timedelta(minutes=requested_end_minutes)).isoformat() if requested_end_minutes is not None else None,
+                    "suggested_start": (self.midnight_utc + timedelta(minutes=start_minutes)).isoformat(),
+                    "suggested_end": (self.midnight_utc + timedelta(minutes=end_minutes)).isoformat(),
+                    "selection_reason": load_item.get("_selection_reason", "prediction_metric"),
+                    "candidate_count": load_item.get("_candidate_count", 0),
+                    "selected_metric": load_item.get("_selected_metric", None),
+                    "baseline_metric": load_item.get("_baseline_metric", None),
+                    "selection_locked": False,
+                    "source": source,
+                    "auto_expire": auto_expire,
+                    "expires_at": (self.midnight_utc + timedelta(minutes=expires_minutes)).isoformat() if expires_minutes is not None else None,
+                    "_requested_start_minutes": requested_start_minutes,
+                    "_requested_end_minutes": requested_end_minutes,
+                    "_periods": periods,
+                    "_weights": weights,
+                    "_weight_total": weight_total,
+                }
+                continue
+
             for period in range(periods):
                 slot_start = start_minutes + period * plan_interval
                 slot_end = min(slot_start + plan_interval, end_minutes)
