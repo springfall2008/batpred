@@ -842,6 +842,7 @@ class SolarAPI(ComponentBase):
                         "remainingCL": dp2(total_left_todayCL),
                         "detailedForecast": forecast_day[day],
                     },
+                    app="solar",
                 )
                 self.dashboard_item(
                     "sensor." + self.prefix + "_pv_forecast_h0",
@@ -856,6 +857,7 @@ class SolarAPI(ComponentBase):
                         "now90": dp2(power_now90),
                         "nowCL": dp2(power_nowCL),
                     },
+                    app="solar",
                 )
             else:
                 day_name = "tomorrow" if day == 1 else "d{}".format(day)
@@ -877,6 +879,7 @@ class SolarAPI(ComponentBase):
                         "totalCL": dp2(total_dayCL[day]),
                         "detailedForecast": forecast_day[day],
                     },
+                    app="solar",
                 )
 
     def pv_calibration(self, pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10, divide_by, max_kwh, forecast_days, period=None):
@@ -1167,6 +1170,7 @@ class SolarAPI(ComponentBase):
                 "device_class": "power",
                 "state_class": "measurement",
             },
+            app="solar",
         )
 
     async def fetch_pv_forecast(self):
