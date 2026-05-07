@@ -968,18 +968,23 @@ class SolarAPI(ComponentBase):
                 pv_forecast_by_slot[slot] = dp4(pv_forecast_by_slot[slot] / pv_forecast_by_slot_count[slot])
 
         # Work out the scaling factor for the forecast based on the history, looking at each day and each slot, and find the best and worst case day to use as a guide for scaling the forecast.
+        # More recent days are weighted higher: weight = max(1.0 - 0.1 * (day - 1), 0.3)
+        # so day1=1.0, day2=0.9, day3=0.8 ... day7=0.4, day8+=0.3
         worst_day_scaling = 1.0
         best_day_scaling = 1.0
         average_day_scaling = 0
+        total_weight = 0.0
         for day in past_day_forecast:
             past_day_forecast[day] = dp4(past_day_forecast[day] / 60.0)  # Convert to kWh
             past_day_actual[day] = dp4(past_day_actual.get(day, 0) / 60.0)  # Convert to kWh
             scaling_factor = dp4(past_day_actual[day] / past_day_forecast[day] if past_day_forecast[day] > 0 else 1.0)
             worst_day_scaling = min(worst_day_scaling, scaling_factor)
             best_day_scaling = max(best_day_scaling, scaling_factor)
-            average_day_scaling += scaling_factor
-            self.log("PV Calibration: Past day {} had {} kWh of forecast PV, and actual {} kWh PV generation".format(day, dp2(past_day_forecast[day]), dp2(past_day_actual[day])))
-        average_day_scaling = dp4(average_day_scaling / len(past_day_forecast)) if past_day_forecast else 1.0
+            weight = max(1.0 - 0.1 * (day - 1), 0.3)
+            average_day_scaling += scaling_factor * weight
+            total_weight += weight
+            self.log("PV Calibration: Past day {} had {} kWh of forecast PV, and actual {} kWh PV generation (weight {})".format(day, dp2(past_day_forecast[day]), dp2(past_day_actual[day]), dp2(weight)))
+        average_day_scaling = dp4(average_day_scaling / total_weight) if past_day_forecast else 1.0
         average_day_scaling = min(max(average_day_scaling, 0.1), 2.0)
 
         # Now adjust worst and best day scaling through by average scaling so they are just a factor on the average day, and clamp to sensible values to prevent extreme outliers from causing crazy forecasts.
