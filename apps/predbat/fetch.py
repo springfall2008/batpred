@@ -156,11 +156,11 @@ class Fetch:
             safe_name = "unknown"
         return "binary_sensor.{}_load_forecast_delta_{}".format(self.prefix, safe_name)
 
-    def additional_load_switch_entity_name(self, name):
+    def additional_load_delete_entity_name(self, name):
         """
-        Make the switch entity name for a named additional load forecast.
+        Make the delete button entity name for a named additional load forecast.
         """
-        return self.additional_load_entity_name(name).replace("binary_sensor.", "switch.", 1)
+        return self.additional_load_entity_name(name).replace("binary_sensor.", "button.", 1) + "_delete"
 
     def additional_load_name_from_entity(self, entity_id):
         """
@@ -168,19 +168,37 @@ class Fetch:
         """
         marker = "_load_forecast_delta_"
         if entity_id and marker in entity_id:
-            return entity_id.split(marker, 1)[1]
+            return entity_id.split(marker, 1)[1].replace("_delete", "")
         return None
 
-    def set_additional_load_enabled(self, name, enabled):
+    def delete_additional_load_forecast(self, name):
         """
-        Enable or disable a named additional load forecast using a runtime override.
+        Delete a named one-shot additional load forecast.
         """
         name = str(name)
-        if enabled:
-            self.house_load_additional_forecast_overrides[name] = {"name": name, "enabled": True}
-        else:
-            self.house_load_additional_forecast_overrides[name] = {"name": name, "enabled": False}
+        self.house_load_additional_forecast_overrides.pop(name, None)
+        self.remove_additional_load_api_command(name)
         self.refresh_additional_load_forecast_api()
+
+    def remove_additional_load_api_command(self, name):
+        """
+        Remove a named forecast command from the load_forecast_delta_api selector.
+        """
+        item = self.config_index.get("load_forecast_delta_api") if "load_forecast_delta_api" in self.config_index else None
+        if not item:
+            return
+        values = item.get("value", "") or ""
+        values = values.replace("+", "")
+        values_list = values.split(",") if values else []
+        new_values_list = []
+        for value in values_list:
+            if value == "off":
+                continue
+            command_name = value.split("?", 1)[0].split("=", 1)[0].replace("[", "").replace("]", "")
+            if command_name != name:
+                new_values_list.append(value)
+        new_value = "+" + ",".join(new_values_list) if new_values_list else "off"
+        self.api_select_update("load_forecast_delta_api", new_value=new_value)
 
     def get_additional_load_window(self, load_item, mode, duration, plan_interval, minutes_now_slot):
         """
@@ -226,41 +244,6 @@ class Fetch:
             end_minutes += 24 * 60
         return start_minutes, end_minutes
 
-    def additional_load_slot_cost(self, slot_start, slot_end):
-        """
-        Return approximate cost for using energy in one candidate slot.
-        """
-        total = 0.0
-        count = 0
-        for minute in range(slot_start, slot_end, PREDICT_STEP):
-            total += self.rate_import.get(minute, self.rate_import.get(minute % (24 * 60), 0.0))
-            count += 1
-        return total / count if count else 0.0
-
-    def find_additional_load_flexible_start(self, start_minutes, end_minutes, duration, weights, plan_interval, minutes_now_slot):
-        """
-        Find the lowest-cost start time for a flexible additional load.
-        """
-        duration_minutes = int(duration * 60)
-        latest_start = end_minutes - duration_minutes
-        best_start = None
-        best_cost = None
-        candidate = max(start_minutes, minutes_now_slot)
-        candidate = int((candidate + plan_interval - 1) / plan_interval) * plan_interval
-
-        while candidate <= latest_start and (candidate - minutes_now_slot) < self.forecast_minutes:
-            total_cost = 0.0
-            for period, weight in enumerate(weights):
-                slot_start = candidate + period * plan_interval
-                slot_end = min(slot_start + plan_interval, candidate + duration_minutes)
-                total_cost += self.additional_load_slot_cost(slot_start, slot_end) * weight
-            if best_cost is None or total_cost < best_cost:
-                best_cost = total_cost
-                best_start = candidate
-            candidate += plan_interval
-
-        return best_start, best_cost
-
     def parse_additional_load_api_command(self, api_command):
         """
         Parse one load_forecast_delta_api command into a forecast override.
@@ -274,7 +257,7 @@ class Fetch:
             self.log("Warn: Bad load_forecast_delta_api command {}, missing name".format(api_command))
             return None
 
-        override = {"name": name}
+        override = {"name": name, "_source": "api", "_auto_expire": True}
         for arg in command_args.split("&"):
             arg_split = arg.split("=", 1)
             if len(arg_split) > 1:
@@ -282,6 +265,21 @@ class Fetch:
             else:
                 override[arg_split[0]] = True
         return override
+
+    def expire_additional_load_api_commands(self):
+        """
+        Remove expired one-shot additional load forecast API commands.
+        """
+        expired_names = []
+        minutes_now_slot = int(self.minutes_now / self.get_arg("plan_interval_minutes", 30)) * self.get_arg("plan_interval_minutes", 30)
+        for name, override in list(self.house_load_additional_forecast_overrides.items()):
+            expires_minutes = override.get("_expires_minutes", None)
+            if expires_minutes is not None and expires_minutes <= minutes_now_slot:
+                expired_names.append(name)
+        for name in expired_names:
+            self.log("Expired additional load forecast {}".format(name))
+            self.house_load_additional_forecast_overrides.pop(name, None)
+            self.remove_additional_load_api_command(name)
 
     def get_additional_load_api_overrides(self):
         """
@@ -321,8 +319,12 @@ class Fetch:
             if not isinstance(load_item, dict):
                 self.log("Warn: Bad house_load_additional_forecast item {}, expected dictionary".format(load_item))
                 continue
-            forecast_items.append(load_item.copy())
+            load_item = load_item.copy()
+            load_item["_source"] = "yaml"
+            load_item["_auto_expire"] = False
+            forecast_items.append(load_item)
 
+        self.expire_additional_load_api_commands()
         runtime_overrides = {}
         runtime_overrides.update(self.get_additional_load_api_overrides())
         runtime_overrides.update(self.house_load_additional_forecast_overrides)
@@ -337,10 +339,12 @@ class Fetch:
                 forecast_items.append(override.copy())
         return forecast_items
 
-    def fetch_additional_load_forecast(self):
+    def fetch_additional_load_forecast(self, selected_flexible=None):
         """
         Build per-minute additional load adjustments from named forecast config.
         """
+        if selected_flexible is None:
+            selected_flexible = {}
         load_adjust = {}
         forecasts = {}
         plan_interval = self.get_arg("plan_interval_minutes", 30)
@@ -357,12 +361,17 @@ class Fetch:
             if mode not in ["fixed", "flexible"]:
                 self.log("Warn: Bad mode {} provided in house_load_additional_forecast {}, using fixed".format(mode, name))
                 mode = "fixed"
+            if mode == "flexible" and name in selected_flexible:
+                load_item.update(selected_flexible[name])
             enabled = self.get_additional_load_bool(load_item, "enabled", True)
             duration_configured = "duration" in load_item
             duration = self.get_additional_load_float(load_item, "duration", 0.0)
             slot_energy = self.get_additional_load_float(load_item, "slot_energy", 0.0)
             energy_total = self.get_additional_load_float(load_item, "energy", 0.0) if "energy" in load_item else None
             weighting = self.resolve_arg("weighting", load_item.get("weighting", None), None)
+            source = load_item.get("_source", "yaml")
+            auto_expire = load_item.get("_auto_expire", False)
+            expires_minutes = load_item.get("_expires_minutes", None)
             target_times = []
             load_mode = "total_energy" if energy_total is not None else "slot_energy"
             total_energy = 0.0
@@ -374,6 +383,15 @@ class Fetch:
             periods = int((int(duration * 60) + plan_interval - 1) / plan_interval) if duration > 0 else 0
             weights = self.parse_additional_load_weighting(weighting, periods)
             weight_total = sum(weights)
+
+            selected_start_minutes = load_item.get("_selected_start_minutes", None)
+            if selected_start_minutes is not None:
+                start_minutes = int(selected_start_minutes)
+                end_minutes = start_minutes + int(duration * 60)
+            if auto_expire and expires_minutes is None and end_minutes is not None:
+                expires_minutes = end_minutes
+            if auto_expire and source != "yaml" and expires_minutes is not None:
+                self.house_load_additional_forecast_overrides.setdefault(name, {"name": name})["_expires_minutes"] = expires_minutes
 
             if not enabled or start_minutes is None or (energy_total is None and slot_energy == 0) or (energy_total == 0) or duration == 0 or end_minutes is None:
                 forecasts[name] = {
@@ -394,34 +412,54 @@ class Fetch:
                     "requested_end": (self.midnight_utc + timedelta(minutes=requested_end_minutes)).isoformat() if requested_end_minutes is not None else None,
                     "suggested_start": None,
                     "suggested_end": None,
+                    "selection_reason": None,
+                    "candidate_count": 0,
+                    "selected_metric": None,
+                    "baseline_metric": None,
+                    "source": source,
+                    "auto_expire": auto_expire,
+                    "expires_at": (self.midnight_utc + timedelta(minutes=expires_minutes)).isoformat() if expires_minutes is not None else None,
+                    "_requested_start_minutes": requested_start_minutes,
+                    "_requested_end_minutes": requested_end_minutes,
+                    "_periods": periods,
+                    "_weights": weights,
+                    "_weight_total": weight_total,
                 }
                 continue
 
-            if mode == "flexible":
-                suggested_start_minutes, _ = self.find_additional_load_flexible_start(start_minutes, end_minutes, duration, weights, plan_interval, minutes_now_slot)
-                if suggested_start_minutes is None:
-                    forecasts[name] = {
-                        "entity_id": entity_id,
-                        "state": "off",
-                        "target_times": target_times,
-                        "enabled": enabled,
-                        "mode": mode,
-                        "energy": energy_total,
-                        "slot_energy": slot_energy,
-                        "duration": duration,
-                        "weighting": weighting,
-                        "load_mode": load_mode,
-                        "plan_interval_minutes": plan_interval,
-                        "slots": 0,
-                        "total_energy": 0.0,
-                        "requested_start": (self.midnight_utc + timedelta(minutes=requested_start_minutes)).isoformat() if requested_start_minutes is not None else None,
-                        "requested_end": (self.midnight_utc + timedelta(minutes=requested_end_minutes)).isoformat() if requested_end_minutes is not None else None,
-                        "suggested_start": None,
-                        "suggested_end": None,
-                    }
-                    continue
-                start_minutes = suggested_start_minutes
-                end_minutes = start_minutes + int(duration * 60)
+            if mode == "flexible" and selected_start_minutes is None:
+                forecasts[name] = {
+                    "entity_id": entity_id,
+                    "state": "off",
+                    "target_times": target_times,
+                    "enabled": enabled,
+                    "mode": mode,
+                    "energy": energy_total,
+                    "slot_energy": slot_energy,
+                    "duration": duration,
+                    "weighting": weighting,
+                    "load_mode": load_mode,
+                    "plan_interval_minutes": plan_interval,
+                    "slots": 0,
+                    "total_energy": 0.0,
+                    "requested_start": (self.midnight_utc + timedelta(minutes=requested_start_minutes)).isoformat() if requested_start_minutes is not None else None,
+                    "requested_end": (self.midnight_utc + timedelta(minutes=requested_end_minutes)).isoformat() if requested_end_minutes is not None else None,
+                    "suggested_start": None,
+                    "suggested_end": None,
+                    "selection_reason": "pending_prediction_metric",
+                    "candidate_count": 0,
+                    "selected_metric": None,
+                    "baseline_metric": None,
+                    "source": source,
+                    "auto_expire": auto_expire,
+                    "expires_at": (self.midnight_utc + timedelta(minutes=expires_minutes)).isoformat() if expires_minutes is not None else None,
+                    "_requested_start_minutes": requested_start_minutes,
+                    "_requested_end_minutes": requested_end_minutes,
+                    "_periods": periods,
+                    "_weights": weights,
+                    "_weight_total": weight_total,
+                }
+                continue
 
             for period in range(periods):
                 slot_start = start_minutes + period * plan_interval
@@ -463,6 +501,18 @@ class Fetch:
                 "requested_end": (self.midnight_utc + timedelta(minutes=requested_end_minutes)).isoformat() if requested_end_minutes is not None else None,
                 "suggested_start": (self.midnight_utc + timedelta(minutes=start_minutes)).isoformat() if mode == "flexible" and target_times else None,
                 "suggested_end": (self.midnight_utc + timedelta(minutes=end_minutes)).isoformat() if mode == "flexible" and target_times else None,
+                "selection_reason": load_item.get("_selection_reason", "prediction_metric" if mode == "flexible" and target_times else None),
+                "candidate_count": load_item.get("_candidate_count", 0),
+                "selected_metric": load_item.get("_selected_metric", None),
+                "baseline_metric": load_item.get("_baseline_metric", None),
+                "source": source,
+                "auto_expire": auto_expire,
+                "expires_at": (self.midnight_utc + timedelta(minutes=expires_minutes)).isoformat() if expires_minutes is not None else None,
+                "_requested_start_minutes": requested_start_minutes,
+                "_requested_end_minutes": requested_end_minutes,
+                "_periods": periods,
+                "_weights": weights,
+                "_weight_total": weight_total,
             }
 
         return load_adjust, forecasts
@@ -490,20 +540,27 @@ class Fetch:
                 "requested_end": forecast.get("requested_end", None),
                 "suggested_start": forecast.get("suggested_start", None),
                 "suggested_end": forecast.get("suggested_end", None),
+                "selection_reason": forecast.get("selection_reason", None),
+                "candidate_count": forecast.get("candidate_count", 0),
+                "selected_metric": forecast.get("selected_metric", None),
+                "baseline_metric": forecast.get("baseline_metric", None),
+                "source": forecast.get("source", "yaml"),
+                "auto_expire": forecast.get("auto_expire", False),
+                "expires_at": forecast.get("expires_at", None),
                 "target_times": forecast.get("target_times", []),
             }
             self.dashboard_item(forecast["entity_id"], state=forecast.get("state", "off"), attributes=attributes)
-            self.dashboard_item(
-                self.additional_load_switch_entity_name(name),
-                state=forecast.get("state", "off"),
-                attributes={
-                    "friendly_name": "Predbat load forecast delta {} enabled".format(name),
-                    "icon": "mdi:dishwasher",
-                    "name": name,
-                    "enabled": forecast.get("enabled", False),
-                    "mode": forecast.get("mode", "fixed"),
-                },
-            )
+            if forecast.get("source", "yaml") != "yaml":
+                self.dashboard_item(
+                    self.additional_load_delete_entity_name(name),
+                    state="idle",
+                    attributes={
+                        "friendly_name": "Delete Predbat load forecast delta {}".format(name),
+                        "icon": "mdi:delete",
+                        "name": name,
+                        "source": forecast.get("source", "api"),
+                    },
+                )
 
     def filtered_today(self, time_data, resetmidnight=False, stamp=None):
         """
