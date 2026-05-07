@@ -808,6 +808,8 @@ class SolarAPI(ComponentBase):
                 }
                 forecast_day[day].append(fentry)
 
+        calibration_on = self.get_arg("metric_pv_calibration_enable", default=True)
+
         days = min(days, 7)
         for day in range(days):
             if day == 0:
@@ -825,7 +827,7 @@ class SolarAPI(ComponentBase):
                 )
                 self.dashboard_item(
                     "sensor." + self.prefix + "_pv_today",
-                    state=dp2(total_day[day]),
+                    state=dp2(total_dayCL[day] if calibration_on else total_day[day]),
                     attributes={
                         "friendly_name": "PV Forecast Today",
                         "state_class": "measurement",
@@ -846,16 +848,21 @@ class SolarAPI(ComponentBase):
                 )
                 self.dashboard_item(
                     "sensor." + self.prefix + "_pv_forecast_h0",
-                    state=dp2(power_now),
+                    state=dp2(power_nowCL if calibration_on else power_now),
                     attributes={
                         "friendly_name": "PV Forecast Now",
                         "state_class": "measurement",
                         "unit_of_measurement": "kW",
                         "icon": "mdi:solar-power",
                         "device_class": "power",
+                        "now": dp2(power_now),
                         "now10": dp2(power_now10),
                         "now90": dp2(power_now90),
                         "nowCL": dp2(power_nowCL),
+                        "remaining": dp2(total_left_today),
+                        "remaining10": dp2(total_left_today10),
+                        "remaining90": dp2(total_left_today90),
+                        "remainingCL": dp2(total_left_todayCL),
                     },
                     app="solar",
                 )
@@ -866,7 +873,7 @@ class SolarAPI(ComponentBase):
 
                 self.dashboard_item(
                     "sensor." + self.prefix + "_pv_" + day_name,
-                    state=dp2(total_day[day]),
+                    state=dp2(total_dayCL[day] if calibration_on else total_day[day]),
                     attributes={
                         "friendly_name": "PV Forecast " + day_name_long,
                         "state_class": "measurement",
