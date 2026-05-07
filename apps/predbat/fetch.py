@@ -176,9 +176,31 @@ class Fetch:
         Delete a named one-shot additional load forecast.
         """
         name = str(name)
+        if not self.has_additional_load_api_command(name) and name not in self.house_load_additional_forecast_overrides:
+            self.log("Warn: Ignoring delete for inactive additional load forecast {}".format(name))
+            return False
         self.house_load_additional_forecast_overrides.pop(name, None)
         self.remove_additional_load_api_command(name)
         self.refresh_additional_load_forecast_api()
+        return True
+
+    def has_additional_load_api_command(self, name):
+        """
+        Return True if a named forecast command is active in the load_forecast_delta_api selector.
+        """
+        item = self.config_index.get("load_forecast_delta_api") if "load_forecast_delta_api" in self.config_index else None
+        if not item:
+            return False
+        values = item.get("value", "") or ""
+        values = values.replace("+", "")
+        values_list = values.split(",") if values else []
+        for value in values_list:
+            if value == "off":
+                continue
+            command_name = value.split("?", 1)[0].split("=", 1)[0].replace("[", "").replace("]", "")
+            if command_name == name:
+                return True
+        return False
 
     def remove_additional_load_api_command(self, name):
         """
@@ -325,9 +347,9 @@ class Fetch:
             forecast_items.append(load_item)
 
         self.expire_additional_load_api_commands()
-        runtime_overrides = {}
-        runtime_overrides.update(self.get_additional_load_api_overrides())
-        runtime_overrides.update(self.house_load_additional_forecast_overrides)
+        runtime_overrides = self.get_additional_load_api_overrides()
+        for name, override in self.house_load_additional_forecast_overrides.items():
+            runtime_overrides.setdefault(name, {}).update(override)
         for name, override in runtime_overrides.items():
             found = False
             for index, load_item in enumerate(forecast_items):
@@ -392,6 +414,9 @@ class Fetch:
                 expires_minutes = end_minutes
             if auto_expire and source != "yaml" and expires_minutes is not None:
                 self.house_load_additional_forecast_overrides.setdefault(name, {"name": name})["_expires_minutes"] = expires_minutes
+
+            if source == "yaml" and energy_total is None and slot_energy == 0 and duration == 0 and not duration_configured:
+                continue
 
             if not enabled or start_minutes is None or (energy_total is None and slot_energy == 0) or (energy_total == 0) or duration == 0 or end_minutes is None:
                 forecasts[name] = {
@@ -521,6 +546,9 @@ class Fetch:
         """
         Publish named additional load forecast binary sensors for visibility and automation targeting.
         """
+        if not hasattr(self, "house_load_additional_forecast_entities"):
+            self.house_load_additional_forecast_entities = set()
+        published_entities = set()
         for name, forecast in self.house_load_additional_forecasts.items():
             attributes = {
                 "friendly_name": "Predbat load forecast delta {}".format(name),
@@ -550,9 +578,11 @@ class Fetch:
                 "target_times": forecast.get("target_times", []),
             }
             self.dashboard_item(forecast["entity_id"], state=forecast.get("state", "off"), attributes=attributes)
+            published_entities.add(forecast["entity_id"])
             if forecast.get("source", "yaml") != "yaml":
+                delete_entity = self.additional_load_delete_entity_name(name)
                 self.dashboard_item(
-                    self.additional_load_delete_entity_name(name),
+                    delete_entity,
                     state="idle",
                     attributes={
                         "friendly_name": "Delete Predbat load forecast delta {}".format(name),
@@ -561,6 +591,20 @@ class Fetch:
                         "source": forecast.get("source", "api"),
                     },
                 )
+                published_entities.add(delete_entity)
+        for entity_id in self.house_load_additional_forecast_entities - published_entities:
+            self.unpublish_additional_load_entity(entity_id)
+        self.house_load_additional_forecast_entities = published_entities
+
+    def unpublish_additional_load_entity(self, entity_id):
+        """
+        Remove a stale additional load forecast entity from HA and the local dashboard cache.
+        """
+        if hasattr(self, "delete_state_wrapper"):
+            self.delete_state_wrapper(entity_id)
+        self.dashboard_values.pop(entity_id, None)
+        if entity_id in self.dashboard_index:
+            self.dashboard_index.remove(entity_id)
 
     def filtered_today(self, time_data, resetmidnight=False, stamp=None):
         """
