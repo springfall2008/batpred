@@ -492,6 +492,50 @@ def test_additional_load_flexible_api_stale_selection_not_before_requested_start
     return failed
 
 
+def test_additional_load_flexible_api_locks_after_suggested_start(my_predbat):
+    """Test a selected flexible API forecast locks once the suggested start is reached and then expires."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.minutes_now = 13 * 60
+    my_predbat.plan_interval_minutes = 15
+    my_predbat.args["plan_interval_minutes"] = 15
+    my_predbat.args["house_load_additional_forecast"] = []
+    my_predbat.api_select("load_forecast_delta_api", "dishwasher?enabled=true&mode=flexible&end_time=07:00&duration=5.0&energy=0.7")
+    my_predbat.house_load_additional_forecast_overrides["dishwasher"] = {
+        "name": "dishwasher",
+        "_requested_start_minutes": 12 * 60 + 30,
+        "_selected_start_minutes": 12 * 60 + 30,
+        "_selection_reason": "prediction_metric",
+        "_candidate_count": 57,
+        "_selected_metric": -1737.07,
+        "_baseline_metric": -2007.2,
+        "_expires_minutes": 17 * 60 + 30,
+    }
+    my_predbat.refresh_additional_load_forecast_api()
+
+    forecast = my_predbat.house_load_additional_forecasts.get("dishwasher", {})
+    target_times = forecast.get("target_times", [])
+    if not forecast.get("selection_locked") or not my_predbat.house_load_additional_forecast_overrides.get("dishwasher", {}).get("_selection_locked"):
+        print("ERROR: Flexible API forecast should lock after suggested start, got {}".format(forecast))
+        failed = 1
+    if "T12:30:00" not in forecast.get("suggested_start", "") or forecast.get("slots") != 18 or forecast.get("total_energy") != 0.63:
+        print("ERROR: Locked flexible API forecast should keep original start with remaining slots, got {}".format(forecast))
+        failed = 1
+    if not target_times or "T13:00:00" not in target_times[0].get("start", ""):
+        print("ERROR: Locked flexible API forecast should only publish remaining target slots, got {}".format(target_times))
+        failed = 1
+
+    my_predbat.minutes_now = 17 * 60 + 30
+    my_predbat.refresh_additional_load_forecast_api()
+    if my_predbat.house_load_additional_forecasts or my_predbat.api_select_update("load_forecast_delta_api"):
+        print("ERROR: Locked flexible API forecast should expire at suggested end, got forecasts {} api {}".format(my_predbat.house_load_additional_forecasts, my_predbat.api_select_update("load_forecast_delta_api")))
+        failed = 1
+
+    my_predbat.api_select("load_forecast_delta_api", "off")
+    my_predbat.house_load_additional_forecast_overrides = {}
+    return failed
+
+
 def test_additional_load_flexible_pending_until_plan(my_predbat):
     """Test flexible additional load is left for plan-time prediction selection."""
     failed = 0
@@ -680,6 +724,7 @@ def run_additional_load_forecast_tests(my_predbat):
     failed |= test_additional_load_stale_delete_button_no_replan(my_predbat)
     failed |= test_additional_load_flexible_api_selection_survives_refresh(my_predbat)
     failed |= test_additional_load_flexible_api_stale_selection_not_before_requested_start(my_predbat)
+    failed |= test_additional_load_flexible_api_locks_after_suggested_start(my_predbat)
     failed |= test_additional_load_flexible_pending_until_plan(my_predbat)
     failed |= test_additional_load_flexible_done_by_window(my_predbat)
     failed |= test_additional_load_flexible_api_omitted_start_is_frozen(my_predbat)
