@@ -120,31 +120,35 @@ def test_savings_stability(my_predbat):
     # Ensure charge-window finding (rate_scan_window) uses the correct stable threshold
     # by directly calling it on a past_rates_no_io equivalent using rate_low from the fix
     past_rates_no_io = build_past_rates(720)  # noon scenario
+    old_combine_charge_slots = my_predbat.combine_charge_slots
     my_predbat.combine_charge_slots = True
-    charge_window_best, lowest, highest = my_predbat.rate_scan_window(past_rates_no_io, 5, rate_low_noon, False, return_raw=True)
-    # Filter to yesterday's window only (start < end_record)
-    charge_window_best = [c for c in charge_window_best if c["start"] < end_record]
-    print("Charge windows found with FIXED rate_low={}: {}".format(rate_low_noon, charge_window_best))
+    try:
+        charge_window_best, lowest, highest = my_predbat.rate_scan_window(past_rates_no_io, 5, rate_low_noon, False, return_raw=True)
+        # Filter to yesterday's window only (start < end_record)
+        charge_window_best = [c for c in charge_window_best if c["start"] < end_record]
+        print("Charge windows found with FIXED rate_low={}: {}".format(rate_low_noon, charge_window_best))
 
-    if not charge_window_best:
-        print("ERROR: charge windows should be found with fixed rate_low")
-        failed = 1
-    else:
-        for cw in charge_window_best:
-            if cw["average"] > rate_low_noon + 0.01:
-                print("ERROR: charge window average rate {} exceeds threshold {}".format(cw["average"], rate_low_noon))
-                failed = 1
+        if not charge_window_best:
+            print("ERROR: charge windows should be found with fixed rate_low")
+            failed = 1
+        else:
+            for cw in charge_window_best:
+                if cw["average"] > rate_low_noon + 0.01:
+                    print("ERROR: charge window average rate {} exceeds threshold {}".format(cw["average"], rate_low_noon))
+                    failed = 1
 
-    # Verify that using the OLD broken rate_low (0p) finds NO windows in yesterday's data
-    charge_window_broken, _, _ = my_predbat.rate_scan_window(past_rates_no_io, 5, today_cheap_rate, False, return_raw=True)
-    charge_window_broken = [c for c in charge_window_broken if c["start"] < end_record]
-    print("Charge windows found with BROKEN rate_low={}: {}".format(today_cheap_rate, charge_window_broken))
+        # Verify that using the OLD broken rate_low (0p) finds NO windows in yesterday's data
+        charge_window_broken, _, _ = my_predbat.rate_scan_window(past_rates_no_io, 5, today_cheap_rate, False, return_raw=True)
+        charge_window_broken = [c for c in charge_window_broken if c["start"] < end_record]
+        print("Charge windows found with BROKEN rate_low={}: {}".format(today_cheap_rate, charge_window_broken))
 
-    if charge_window_broken:
-        # Only yesterday entries (k < 1440) have non-zero rates, so finding windows at 0p
-        # means the scan accidentally hit entries where past_rates_no_io[k] = 0.0 for k<1440
-        # This could be an artifact of how the test builds rate_import.
-        # The important thing is that the fixed code does NOT use 0p as the threshold.
-        print("INFO: unexpected windows at 0p threshold - may be harmless test setup artifact")
+        if charge_window_broken:
+            # Only yesterday entries (k < 1440) have non-zero rates, so finding windows at 0p
+            # means the scan accidentally hit entries where past_rates_no_io[k] = 0.0 for k<1440
+            # This could be an artifact of how the test builds rate_import.
+            # The important thing is that the fixed code does NOT use 0p as the threshold.
+            print("INFO: unexpected windows at 0p threshold - may be harmless test setup artifact")
+    finally:
+        my_predbat.combine_charge_slots = old_combine_charge_slots
 
     return failed
