@@ -118,6 +118,7 @@ from tests.test_clip_charge_slots import run_clip_charge_slots_tests
 from tests.test_discard_unused_charge_slots import run_discard_unused_charge_slots_tests
 from tests.test_discard_unused_export_slots import run_discard_unused_export_slots_tests
 from tests.test_marginal_costs import test_marginal_costs
+from tests.test_savings_stability import test_savings_stability
 
 
 # Mock the components and plugin system
@@ -292,6 +293,7 @@ def main():
         ("discard_unused_charge_slots", run_discard_unused_charge_slots_tests, "Discard unused charge slots tests", False),
         ("discard_unused_export_slots", run_discard_unused_export_slots_tests, "Discard unused export slots tests", False),
         ("marginal_costs", test_marginal_costs, "Marginal energy cost matrix tests", False),
+        ("savings_stability", test_savings_stability, "Savings yesterday rate_low stability tests", False),
         ("compare", test_compare, "Compare tariff engine tests (hardware overrides, bleed isolation)", False),
         ("gateway", run_gateway_tests, "GatewayMQTT component tests (protobuf, plan serialization, commands, telemetry)", False),
         ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", False),

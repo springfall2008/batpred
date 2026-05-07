@@ -2736,15 +2736,22 @@ class Output:
         past_rates_no_io = self.history_to_future_rates(self.rate_import_no_io, 24 * 60, end_record + self.minutes_now)
         past_rates_export = self.history_to_future_rates(self.rate_export, 24 * 60, end_record + self.minutes_now)
 
-        # Assume user might charge at the lowest rate only, for fix tariff
+        # Assume user might charge at the lowest rate only, for fixed tariff
+        # Only use yesterday's rate range (k < end_record) for the threshold to prevent today's rates
+        # (which are added progressively as minutes_now increases) from changing the baseline charge
+        # windows on each hourly recalculation and causing savings_yesterday to fluctuate.
         charge_window_best = []
-        rate_low = min(past_rates.values())
+        past_rates_yesterday_values = [v for k, v in past_rates.items() if k < end_record]
+        rate_low = min(past_rates_yesterday_values) if past_rates_yesterday_values else (min(past_rates.values()) if past_rates else 0.0)
         combine_charge = self.combine_charge_slots
 
         # Find the best charge windows yesterday
         if self.calculate_savings_max_charge_slots > 0:
             self.combine_charge_slots = True
-            if past_rates_no_io and (min(past_rates_no_io.values()) != max(past_rates_no_io.values())):
+            # Only check variability in yesterday's rates to avoid today's variable tariff rates
+            # triggering charge window detection when yesterday had a flat tariff
+            no_io_yesterday_values = [v for k, v in past_rates_no_io.items() if k < end_record]
+            if no_io_yesterday_values and (min(no_io_yesterday_values) != max(no_io_yesterday_values)):
                 # Use the Non-IO rates when finding charge windows as hardwired charge wouldn't account for this
                 charge_window_best, lowest, highest = self.rate_scan_window(past_rates_no_io, 5, rate_low, False, return_raw=True)
             self.combine_charge_slots = combine_charge
