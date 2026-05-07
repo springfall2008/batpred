@@ -194,6 +194,164 @@ data:
   option: "dishwasher?enabled=true&mode=flexible&end_time=07:00&duration=2.0&energy=1.2"
 ```
 
+For one-shot forecasts created through **select.predbat_load_forecast_delta_api**, an omitted `start_time` is frozen to the current Predbat plan slot when the command is received. This prevents the published `requested_start` moving forward on later replans. If you send the same command again, Predbat treats it as a fresh request and freezes a new start time. Static YAML forecasts are different: if a YAML flexible load omits `start_time`, it continues to mean the current plan slot each time Predbat refreshes the forecast.
+
+Predbat publishes the result as a binary sensor, for example **binary_sensor.predbat_load_forecast_delta_dishwasher**. For flexible loads, the most useful attributes are **requested_start**, **requested_end**, **suggested_start**, **suggested_end**, **target_times**, and **expires_at**.
+
+A typical dishwasher automation can therefore send a one-shot flexible request when the dishwasher is ready:
+
+```yaml
+action: select.select_option
+target:
+  entity_id: select.predbat_load_forecast_delta_api
+data:
+  option: "dishwasher?enabled=true&mode=flexible&end_time=07:00&duration=5&energy=0.7"
+```
+
+Use **suggested_start** from **binary_sensor.predbat_load_forecast_delta_dishwasher** to trigger the appliance start automation. Use **button.predbat_load_forecast_delta_dishwasher_delete** if you need to cancel the one-shot request before it expires.
+
+### Example dishwasher scheduling automations
+
+The following example uses three Home Assistant automations:
+
+- Request a Predbat flexible load schedule when the dishwasher is ready.
+- Start the dishwasher when Predbat reaches the published **suggested_start**.
+- Clear the Predbat schedule if the dishwasher is started manually instead.
+
+First create a helper to track whether Predbat started the dishwasher. This prevents the manual-start cleanup automation deleting the schedule when Predbat itself starts the appliance:
+
+```yaml
+input_boolean:
+  dishwasher_started_by_predbat:
+    name: Dishwasher started by Predbat
+    icon: mdi:dishwasher
+```
+
+Replace the switch and sensor entity IDs with the entities for your dishwasher.
+
+```yaml
+alias: Dishwasher - Request Predbat Schedule
+description: Request cheapest dishwasher run window from Predbat
+triggers:
+  - trigger: state
+    entity_id: switch.dishwasher_power
+    to: "on"
+actions:
+  - delay:
+      seconds: 20
+  - condition: state
+    entity_id: sensor.dishwasher_operation_state
+    state: ready
+  - wait_template: |
+      {{ is_state('sensor.dishwasher_door', 'closed') }}
+    timeout: "00:01:00"
+    continue_on_timeout: false
+  - action: select.select_option
+    target:
+      entity_id: select.predbat_load_forecast_delta_api
+    data:
+      option: >-
+        dishwasher?enabled=true&mode=flexible&end_time=07:00&duration=5&energy=0.7
+mode: single
+```
+
+The next automation checks every 15 minutes and starts the dishwasher once the current time reaches Predbat's **suggested_start**. Replace **YOUR_DISHWASHER_DEVICE_ID** and the program value with the values for your appliance.
+
+```yaml
+alias: Dishwasher - Start On Predbat Schedule
+description: Start dishwasher at Predbat suggested start time
+triggers:
+  - trigger: time_pattern
+    minutes: /15
+conditions:
+  - condition: template
+    value_template: |
+      {{
+        state_attr(
+          'binary_sensor.predbat_load_forecast_delta_dishwasher',
+          'suggested_start'
+        ) is not none
+      }}
+  - condition: template
+    value_template: |
+      {% set start = state_attr(
+        'binary_sensor.predbat_load_forecast_delta_dishwasher',
+        'suggested_start'
+      ) %}
+      {% if start %}
+        {{ now().timestamp() >= as_timestamp(start) }}
+      {% else %}
+        false
+      {% endif %}
+  - condition: state
+    entity_id: input_boolean.dishwasher_started_by_predbat
+    state: "off"
+actions:
+  - action: input_boolean.turn_on
+    target:
+      entity_id: input_boolean.dishwasher_started_by_predbat
+  - if:
+      - condition: state
+        entity_id: switch.dishwasher_power
+        state: "off"
+    then:
+      - action: switch.turn_on
+        target:
+          entity_id: switch.dishwasher_power
+      - delay:
+          seconds: 20
+  - condition: state
+    entity_id: sensor.dishwasher_operation_state
+    state: ready
+  - condition: state
+    entity_id: sensor.dishwasher_door
+    state: closed
+  - action: home_connect.set_program_and_options
+    data:
+      device_id: YOUR_DISHWASHER_DEVICE_ID
+      affects_to: active_program
+      program: YOUR_DISHWASHER_PROGRAM
+  - delay:
+      seconds: 30
+  - action: input_boolean.turn_off
+    target:
+      entity_id: input_boolean.dishwasher_started_by_predbat
+mode: single
+```
+
+The final automation removes the Predbat request if the dishwasher is started manually before Predbat reaches **suggested_start**:
+
+```yaml
+alias: Dishwasher - Clear Predbat Schedule When Manually Started
+description: Remove Predbat schedule if dishwasher starts manually
+triggers:
+  - trigger: state
+    entity_id: sensor.dishwasher_operation_state
+    from: ready
+    to:
+      - run
+      - pause
+conditions:
+  - condition: state
+    entity_id: input_boolean.dishwasher_started_by_predbat
+    state: "off"
+  - condition: template
+    value_template: |
+      {{
+        state_attr(
+          'binary_sensor.predbat_load_forecast_delta_dishwasher',
+          'suggested_start'
+        ) is not none
+      }}
+actions:
+  - action: button.press
+    target:
+      entity_id: button.predbat_load_forecast_delta_dishwasher_delete
+mode: single
+```
+
+You can add appliance-specific options, such as quiet or night mode, inside the Home Connect action if your appliance supports them.
+
 Use `enabled=false` in `apps.yaml` to keep static load injection profiles visible but inactive until an automation sends an API forecast with the same name.
 
 For advanced cases, you can use **slot_energy** instead when you want to set kWh per Predbat plan slot directly. With the default 30-minute plan interval, `slot_energy: 0.5` adds 0.5kWh to each slot for two hours.

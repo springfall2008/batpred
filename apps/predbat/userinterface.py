@@ -903,6 +903,9 @@ class UserInterface:
         for key in ["start_time", "end_time", "duration", "energy", "slot_energy", "weighting", "enabled", "mode"]:
             if key in service_data:
                 forecast[key] = service_data[key]
+        if "start_time" not in forecast:
+            plan_interval = self.get_arg("plan_interval_minutes", 30)
+            forecast["_requested_start_minutes"] = int(self.minutes_now / plan_interval) * plan_interval
         self.house_load_additional_forecast_overrides[str(name)] = forecast
         await self.run_in_executor(self.refresh_additional_load_forecast_api)
         self.plan_valid = False
@@ -1305,6 +1308,9 @@ class UserInterface:
         if value.startswith("+"):
             # Ignore selections which are just the current value
             return
+        if config_item == "load_forecast_delta_api" and value != "off" and "[" not in value:
+            name = value.split("?", 1)[0].split("=", 1)[0]
+            self.house_load_additional_forecast_overrides.pop(name, None)
         values = item.get("value", "")
         if not values:
             values = ""

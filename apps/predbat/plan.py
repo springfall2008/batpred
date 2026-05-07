@@ -163,6 +163,8 @@ class Plan:
                 working_load_step = self.add_additional_load_to_step_data(working_load_step, best_adjust)
                 working_load_step10 = self.add_additional_load_to_step_data(working_load_step10, best_adjust)
                 selected_flexible[name] = {
+                    "_requested_start_minutes": start_minutes,
+                    "_requested_end_minutes": end_minutes,
                     "_selected_start_minutes": best_start,
                     "_selection_reason": "prediction_metric",
                     "_candidate_count": candidate_count,

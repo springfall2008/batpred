@@ -1707,7 +1707,7 @@ Using total **energy** with weighting:
 
 With a 30-minute plan interval this redistributes 1.2kWh as 0.4kWh, 0.4kWh, 0.2kWh, and 0.2kWh.
 
-Set **mode** to `flexible` when the load can run at any time before a deadline. For flexible loads, **start_time** means the earliest allowed start and **end_time** means the load must be done by that time. If **start_time** is omitted, Predbat uses the current plan slot; if **end_time** is omitted, Predbat uses the remaining forecast horizon.
+Set **mode** to `flexible` when the load can run at any time before a deadline. For flexible loads, **start_time** means the earliest allowed start and **end_time** means the load must be done by that time. If **start_time** is omitted in `apps.yaml`, Predbat uses the current plan slot each time the forecast is refreshed; if **end_time** is omitted, Predbat uses the remaining forecast horizon.
 
 Predbat scores flexible candidates with the prediction metric, not just the import rate. This means the suggested time considers the current plan, solar forecast, battery state, import/export rates, losses, and other predicted load.
 
@@ -1733,7 +1733,7 @@ You can also restrict a flexible load to a same-day or overnight done-by window:
       energy: 1.2
 ```
 
-If this is enabled at 16:00, the example above means the load may start any time from 22:00 and must finish by 07:00. If **start_time** is omitted, for example `end_time: "07:00"`, the load may start any time from now and must finish by 07:00.
+If this is enabled at 16:00, the example above means the load may start any time from 22:00 and must finish by 07:00. If **start_time** is omitted, for example `end_time: "07:00"`, the YAML load may start any time from now and must finish by 07:00. Because YAML entries are static configuration, this "now" rolls forward on each forecast refresh.
 
 Predbat publishes each named load as a binary sensor, for example **binary_sensor.predbat_load_forecast_delta_dishwasher**, with a **target_times** attribute showing the generated slots. The sensor attributes also show **enabled**, **mode**, **energy**, **slot_energy**, **load_mode**, **plan_interval_minutes**, **slots**, **total_energy**, **source**, **auto_expire**, **expires_at**, and for flexible loads **requested_start**, **requested_end**, **suggested_start**, **suggested_end**, **selection_reason**, and **candidate_count** so you can confirm how much load will be added and when.
 
@@ -1768,6 +1768,8 @@ target:
 data:
   option: "dishwasher_eco?enabled=true&mode=flexible&end_time=07:00&duration=2.0&energy=1.2"
 ```
+
+For one-shot forecasts created through **select.predbat_load_forecast_delta_api**, an omitted **start_time** is frozen to the current Predbat plan slot when the command is received. This prevents the published **requested_start** drifting forward on later replans. Sending the command again creates a fresh request and freezes a new start time.
 
 ## Balance Inverters
 

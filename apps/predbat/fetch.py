@@ -236,7 +236,7 @@ class Fetch:
         """
         Return start/end minutes for fixed or flexible additional load scheduling.
         """
-        start_minutes = self.get_additional_load_time_minutes(load_item, "start_time") if "start_time" in load_item else None
+        start_minutes = self.get_additional_load_time_minutes(load_item, "start_time") if "start_time" in load_item else load_item.get("_requested_start_minutes", None)
         end_minutes = self.get_additional_load_time_minutes(load_item, "end_time") if "end_time" in load_item else None
         duration_minutes = int(duration * 60)
 
@@ -296,6 +296,14 @@ class Fetch:
                 override[arg_split[0]] = arg_split[1]
             else:
                 override[arg_split[0]] = True
+        if "start_time" not in override:
+            existing_override = self.house_load_additional_forecast_overrides.get(str(name), {})
+            requested_start_minutes = existing_override.get("_requested_start_minutes", None)
+            if requested_start_minutes is None:
+                plan_interval = self.get_arg("plan_interval_minutes", 30)
+                requested_start_minutes = int(self.minutes_now / plan_interval) * plan_interval
+            override["_requested_start_minutes"] = requested_start_minutes
+            self.house_load_additional_forecast_overrides.setdefault(str(name), {"name": str(name)})["_requested_start_minutes"] = requested_start_minutes
         return override
 
     def expire_additional_load_api_commands(self):
@@ -408,7 +416,7 @@ class Fetch:
             load_mode = "total_energy" if energy_total is not None else "slot_energy"
             total_energy = 0.0
             start_minutes, end_minutes = self.get_additional_load_window(load_item, mode, duration, plan_interval, minutes_now_slot)
-            requested_start_minutes = start_minutes
+            requested_start_minutes = load_item.get("_requested_start_minutes", start_minutes) if "start_time" not in load_item else start_minutes
             requested_end_minutes = end_minutes
             if mode == "fixed" and duration <= 0 and not duration_configured and start_minutes is not None and end_minutes is not None:
                 duration = (end_minutes - start_minutes) / 60.0
