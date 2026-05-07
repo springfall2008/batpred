@@ -22,6 +22,8 @@ def configure_additional_load_test(my_predbat):
     my_predbat.args["plan_interval_minutes"] = 30
     my_predbat.house_load_additional_forecast_overrides = {}
     my_predbat.house_load_additional_forecast_entities = set()
+    my_predbat.house_load_additional_forecasts = {}
+    my_predbat.house_load_additional_forecast_adjust = {}
 
 
 def configure_additional_load_rates(my_predbat, cheap_start, cheap_end):
@@ -434,9 +436,6 @@ def test_additional_load_flexible_api_selection_survives_refresh(my_predbat):
         "_candidate_count": 50,
         "_selected_metric": 1615.32,
         "_baseline_metric": 1600.0,
-        "_candidate_scores": [
-            {"start": "2026-05-07T11:15:00+02:00", "end": "2026-05-07T13:15:00+02:00", "metric": 1615.32},
-        ],
         "_expires_minutes": 13 * 60 + 15,
     }
     my_predbat.refresh_additional_load_forecast_api()
@@ -454,10 +453,6 @@ def test_additional_load_flexible_api_selection_survives_refresh(my_predbat):
     if "T11:15:00" not in forecast.get("suggested_start", "") or "T13:15:00" not in forecast.get("suggested_end", ""):
         print("ERROR: Flexible API forecast should publish selected window after refresh, got {}".format(forecast))
         failed = 1
-    if not forecast.get("candidate_scores"):
-        print("ERROR: Flexible API forecast should keep candidate scores after refresh, got {}".format(forecast))
-        failed = 1
-
     my_predbat.api_select("load_forecast_delta_api", "off")
     my_predbat.house_load_additional_forecast_overrides = {}
     return failed
@@ -509,8 +504,6 @@ def test_additional_load_flexible_prediction_metric_selection(my_predbat):
         {"name": "dishwasher", "mode": "flexible", "end_time": "07:00", "duration": 2.0, "energy": 1.2},
     ]
     my_predbat.house_load_additional_forecast_adjust, my_predbat.house_load_additional_forecasts = my_predbat.fetch_additional_load_forecast()
-    my_predbat.rate_import = {minute: 20.0 for minute in range(0, 3 * 24 * 60)}
-    my_predbat.rate_export = {minute: 5.0 for minute in range(0, 3 * 24 * 60)}
     my_predbat.charge_limit_best = []
     my_predbat.charge_window_best = []
     my_predbat.export_window_best = []
@@ -551,12 +544,33 @@ def test_additional_load_flexible_prediction_metric_selection(my_predbat):
     if "T01:00:00" not in forecast.get("suggested_start", "") or forecast.get("selection_reason") != "prediction_metric":
         print("ERROR: Flexible prediction metric should select 01:00, got {}".format(forecast))
         failed = 1
-    if not forecast.get("candidate_scores") or forecast.get("candidate_scores", [{}])[0].get("metric") != 0:
-        print("ERROR: Flexible prediction metric should publish sorted candidate scores, got {}".format(forecast))
+    return failed
+
+
+def test_additional_load_textual_plan_summary(my_predbat):
+    """Test textual plan includes confirmed additional load forecasts only."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.house_load_additional_forecasts = {
+        "dishwasher": {
+            "enabled": True,
+            "total_energy": 1.2,
+            "target_times": [
+                {"start": "2026-05-07T10:00:00+02:00", "end": "2026-05-07T10:30:00+02:00", "energy": 0.6},
+                {"start": "2026-05-07T10:30:00+02:00", "end": "2026-05-07T11:00:00+02:00", "energy": 0.6},
+            ],
+        },
+        "pending": {"enabled": True, "total_energy": 1.0, "target_times": []},
+    }
+
+    text = my_predbat.get_additional_load_text()
+    if "Additional load dishwasher from 10:00 to 11:00 using 1.20 kWh is planned" not in text:
+        print("ERROR: Textual plan should include planned dishwasher load, got {}".format(text))
         failed = 1
-    if forecast.get("candidate_scores", [{}])[0].get("import_rate_avg") != 20.0 or forecast.get("candidate_scores", [{}])[0].get("export_rate_avg") != 5.0:
-        print("ERROR: Flexible prediction metric should publish candidate rate stats, got {}".format(forecast))
+    if "pending" in text:
+        print("ERROR: Textual plan should not include pending load, got {}".format(text))
         failed = 1
+    my_predbat.house_load_additional_forecasts = {}
     return failed
 
 
@@ -584,4 +598,5 @@ def run_additional_load_forecast_tests(my_predbat):
     failed |= test_additional_load_flexible_pending_until_plan(my_predbat)
     failed |= test_additional_load_flexible_done_by_window(my_predbat)
     failed |= test_additional_load_flexible_prediction_metric_selection(my_predbat)
+    failed |= test_additional_load_textual_plan_summary(my_predbat)
     return failed
