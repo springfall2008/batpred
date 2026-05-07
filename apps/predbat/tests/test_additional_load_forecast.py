@@ -458,6 +458,40 @@ def test_additional_load_flexible_api_selection_survives_refresh(my_predbat):
     return failed
 
 
+def test_additional_load_flexible_api_stale_selection_not_before_requested_start(my_predbat):
+    """Test stale selected flexible metadata is not published before the frozen requested start."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.minutes_now = 12 * 60 + 30
+    my_predbat.plan_interval_minutes = 15
+    my_predbat.args["plan_interval_minutes"] = 15
+    my_predbat.args["house_load_additional_forecast"] = []
+    my_predbat.api_select("load_forecast_delta_api", "dishwasher?enabled=true&mode=flexible&end_time=07:00&duration=5.0&energy=0.7")
+    my_predbat.house_load_additional_forecast_overrides["dishwasher"] = {
+        "name": "dishwasher",
+        "_requested_start_minutes": 12 * 60 + 30,
+        "_selected_start_minutes": 12 * 60,
+        "_selection_reason": "prediction_metric",
+        "_candidate_count": 57,
+        "_selected_metric": -1737.07,
+        "_baseline_metric": -2007.2,
+        "_expires_minutes": 17 * 60,
+    }
+    my_predbat.refresh_additional_load_forecast_api()
+
+    forecast = my_predbat.house_load_additional_forecasts.get("dishwasher", {})
+    if "T12:30:00" not in forecast.get("requested_start", "") or "T12:30:00" not in forecast.get("suggested_start", ""):
+        print("ERROR: Flexible API stale selection should not start before requested_start, got {}".format(forecast))
+        failed = 1
+    if forecast.get("total_energy") != 0.7 or forecast.get("slots") != 20 or "T17:30:00" not in forecast.get("expires_at", ""):
+        print("ERROR: Flexible API stale selection should keep full shifted load and expiry, got {}".format(forecast))
+        failed = 1
+
+    my_predbat.api_select("load_forecast_delta_api", "off")
+    my_predbat.house_load_additional_forecast_overrides = {}
+    return failed
+
+
 def test_additional_load_flexible_pending_until_plan(my_predbat):
     """Test flexible additional load is left for plan-time prediction selection."""
     failed = 0
@@ -645,6 +679,7 @@ def run_additional_load_forecast_tests(my_predbat):
     failed |= test_additional_load_yaml_placeholder_not_published(my_predbat)
     failed |= test_additional_load_stale_delete_button_no_replan(my_predbat)
     failed |= test_additional_load_flexible_api_selection_survives_refresh(my_predbat)
+    failed |= test_additional_load_flexible_api_stale_selection_not_before_requested_start(my_predbat)
     failed |= test_additional_load_flexible_pending_until_plan(my_predbat)
     failed |= test_additional_load_flexible_done_by_window(my_predbat)
     failed |= test_additional_load_flexible_api_omitted_start_is_frozen(my_predbat)
