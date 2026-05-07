@@ -447,12 +447,76 @@ def test_additional_load_flexible_api_selection_survives_refresh(my_predbat):
     if forecast.get("mode") != "flexible" or forecast.get("energy") != 1.2 or forecast.get("duration") != 2.0:
         print("ERROR: Flexible API forecast should keep command fields after selection refresh, got {}".format(forecast))
         failed = 1
-    if forecast.get("state") != "on" or forecast.get("slots") != 8 or not forecast.get("target_times"):
-        print("ERROR: Flexible API forecast should keep selected target slots after refresh, got {}".format(forecast))
+    if forecast.get("state") != "off" or forecast.get("slots") != 0 or forecast.get("target_times") or forecast.get("selection_locked"):
+        print("ERROR: Flexible API forecast before suggested start should publish suggestion only, got {}".format(forecast))
         failed = 1
     if "T11:15:00" not in forecast.get("suggested_start", "") or "T13:15:00" not in forecast.get("suggested_end", ""):
         print("ERROR: Flexible API forecast should publish selected window after refresh, got {}".format(forecast))
         failed = 1
+    my_predbat.api_select("load_forecast_delta_api", "off")
+    my_predbat.house_load_additional_forecast_overrides = {}
+    return failed
+
+
+def test_additional_load_flexible_api_reselects_before_suggested_start(my_predbat):
+    """Test selected flexible API forecasts can be reselected before their suggested start."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.minutes_now = 10 * 60
+    my_predbat.plan_interval_minutes = 15
+    my_predbat.args["plan_interval_minutes"] = 15
+    my_predbat.args["house_load_additional_forecast"] = []
+    my_predbat.api_select("load_forecast_delta_api", "dishwasher?enabled=true&mode=flexible&start_time=10:00&end_time=22:00&duration=2.0&energy=1.2")
+    my_predbat.house_load_additional_forecast_overrides["dishwasher"] = {
+        "name": "dishwasher",
+        "_selected_start_minutes": 18 * 60,
+        "_selection_reason": "prediction_metric",
+        "_candidate_count": 20,
+        "_selected_metric": 200.0,
+        "_baseline_metric": 100.0,
+        "_expires_minutes": 20 * 60,
+    }
+    my_predbat.refresh_additional_load_forecast_api()
+
+    forecast = my_predbat.house_load_additional_forecasts.get("dishwasher", {})
+    if "T18:00:00" not in forecast.get("suggested_start", "") or forecast.get("target_times") or forecast.get("selection_locked"):
+        print("ERROR: Pre-start selected flexible API forecast should be suggestion only before reselection, got {}".format(forecast))
+        failed = 1
+
+    my_predbat.charge_limit_best = []
+    my_predbat.charge_window_best = []
+    my_predbat.export_window_best = []
+    my_predbat.export_limits_best = []
+    my_predbat.end_record = my_predbat.forecast_minutes
+    original_prediction = plan_module.Prediction
+
+    class FakePrediction:
+        """Fake prediction scores 12:00 as cheapest regardless of the previous suggestion."""
+
+        def __init__(self, base, pv_step, pv10_step, load_step, load10_step):
+            """Store load step data."""
+            self.load_step = load_step
+
+        def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv10, end_record):
+            """Return a metric based on when the injected load appears."""
+            first_load_minute = None
+            for minute, load in self.load_step.items():
+                if load > 0:
+                    first_load_minute = my_predbat.minutes_now + minute if first_load_minute is None else min(first_load_minute, my_predbat.minutes_now + minute)
+            metric = abs(first_load_minute - 12 * 60) if first_load_minute is not None else 1000.0
+            return (metric, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+
+    try:
+        plan_module.Prediction = FakePrediction
+        selected, load_step, _ = my_predbat.select_flexible_additional_loads({}, {}, {}, {})
+    finally:
+        plan_module.Prediction = original_prediction
+
+    forecast = my_predbat.house_load_additional_forecasts.get("dishwasher", {})
+    if not selected or "T12:00:00" not in forecast.get("suggested_start", "") or forecast.get("target_times") or forecast.get("selection_locked"):
+        print("ERROR: Pre-start flexible API forecast should reselect to 12:00 without committing target slots, got {}".format(forecast))
+        failed = 1
+
     my_predbat.api_select("load_forecast_delta_api", "off")
     my_predbat.house_load_additional_forecast_overrides = {}
     return failed
@@ -660,17 +724,19 @@ def test_additional_load_flexible_prediction_metric_selection(my_predbat):
 
     try:
         plan_module.Prediction = FakePrediction
-        selected, _, _ = my_predbat.select_flexible_additional_loads({}, {}, {}, {})
+        selected, load_step, _ = my_predbat.select_flexible_additional_loads({}, {}, {}, {})
     finally:
         plan_module.Prediction = original_prediction
 
     if not selected:
         print("ERROR: Flexible prediction metric selection should select a slot")
         failed = 1
-    failed |= check_slot(my_predbat.house_load_additional_forecast_adjust, 25 * 60, 0.3, "flexible prediction metric")
     forecast = my_predbat.house_load_additional_forecasts.get("dishwasher", {})
-    if "T01:00:00" not in forecast.get("suggested_start", "") or forecast.get("selection_reason") != "prediction_metric":
+    if "T01:00:00" not in forecast.get("suggested_start", "") or forecast.get("selection_reason") != "prediction_metric" or forecast.get("target_times"):
         print("ERROR: Flexible prediction metric should select 01:00, got {}".format(forecast))
+        failed = 1
+    if not load_step:
+        print("ERROR: Flexible prediction metric should include selected load in returned plan step data")
         failed = 1
     return failed
 
@@ -723,6 +789,7 @@ def run_additional_load_forecast_tests(my_predbat):
     failed |= test_additional_load_yaml_placeholder_not_published(my_predbat)
     failed |= test_additional_load_stale_delete_button_no_replan(my_predbat)
     failed |= test_additional_load_flexible_api_selection_survives_refresh(my_predbat)
+    failed |= test_additional_load_flexible_api_reselects_before_suggested_start(my_predbat)
     failed |= test_additional_load_flexible_api_stale_selection_not_before_requested_start(my_predbat)
     failed |= test_additional_load_flexible_api_locks_after_suggested_start(my_predbat)
     failed |= test_additional_load_flexible_pending_until_plan(my_predbat)
