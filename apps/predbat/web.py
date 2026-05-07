@@ -2961,8 +2961,8 @@ chart.render();
         elif chart == "PVAccuracy":
             # Get pv_today history once and extract total and remaining attributes per timestamp
             pv_today_hist = self.get_history_wrapper("sensor." + self.prefix + "_pv_today", 7, required=False)
-            pv_total_raw = history_attribute(pv_today_hist, attributes=True, state_key="total")
-            pv_remaining_raw = history_attribute(pv_today_hist, attributes=True, state_key="remaining")
+            pv_total_raw = history_attribute(pv_today_hist, attributes=True, state_key="totalCL")
+            pv_remaining_raw = history_attribute(pv_today_hist, attributes=True, state_key="remainingCL")
             # Compute forecast so far = total - remaining per timestamp
             pv_forecast_sofar_raw = {}
             for ts, total_val in pv_total_raw.items():
