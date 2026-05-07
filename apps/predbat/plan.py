@@ -145,6 +145,7 @@ class Plan:
             best_start = None
             best_metric = None
             candidate_count = 0
+            candidate_scores = []
 
             while candidate <= latest_start:
                 candidate_adjust, _, _ = self.additional_load_candidate_profile(forecast, candidate)
@@ -153,6 +154,13 @@ class Plan:
                 candidate_prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, candidate_load_step, candidate_load_step10)
                 candidate_metric = candidate_prediction.run_prediction(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, False, self.end_record)[0]
                 candidate_count += 1
+                candidate_scores.append(
+                    {
+                        "start": (self.midnight_utc + timedelta(minutes=candidate)).isoformat(),
+                        "end": (self.midnight_utc + timedelta(minutes=candidate + duration_minutes)).isoformat(),
+                        "metric": dp2(candidate_metric),
+                    }
+                )
                 if best_metric is None or candidate_metric < best_metric:
                     best_metric = candidate_metric
                     best_start = candidate
@@ -168,11 +176,13 @@ class Plan:
                     "_candidate_count": candidate_count,
                     "_selected_metric": dp2(best_metric) if best_metric is not None else None,
                     "_baseline_metric": dp2(baseline_metric),
+                    "_candidate_scores": sorted(candidate_scores, key=lambda score: score["metric"]),
                     "_expires_minutes": best_start + duration_minutes if forecast.get("auto_expire", False) else None,
                 }
                 if forecast.get("auto_expire", False):
                     self.house_load_additional_forecast_overrides[name] = {"name": name, **selected_flexible[name]}
                 self.log("Flexible additional load {} selected {}-{} using prediction metric {} from {} candidates".format(name, self.time_abs_str(best_start), self.time_abs_str(best_start + duration_minutes), dp2(best_metric), candidate_count))
+                self.log("Flexible additional load {} best candidates {}".format(name, selected_flexible[name]["_candidate_scores"][:10]))
 
         if not selected_flexible:
             return False, load_minutes_step, load_minutes_step10
