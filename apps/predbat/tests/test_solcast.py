@@ -2196,13 +2196,13 @@ def test_pv_calibration_synthetic_values(my_predbat):
       - pv_estimate10 / pv_estimate90 ≈ pv_estimateCL (worst=best=1.0 → no spread)
 
     Sub-case B – variable performance (3 days: actual = 0.5, 1.0, 1.5 kWh each, forecast=1.0):
-      - average_day_scaling ≈ 1.0  ((0.5+1.0+1.5)/3)
+      - average_day_scaling ≈ 0.963  (weighted: (0.5×1.0 + 1.0×0.9 + 1.5×0.8) / 2.7 ≈ 0.963)
       - total_adjustment ≈ 1.0
-      - worst_day_scaling ≈ 0.5  (min/avg = 0.5/1.0, clamped)
-      - best_day_scaling  ≈ 1.5  (max/avg = 1.5/1.0)
-      - point estimate (pv_estimateCL) ≈ unchanged input (average ratio = 1.0)
-      - pv_estimate10 ≈ 0.5 × pv_estimateCL
-      - pv_estimate90 ≈ 1.5 × pv_estimateCL (may be capped to capped_data)
+      - worst_day_scaling ≈ 0.519  (min/weighted_avg = 0.5/0.963, above floor of 0.5)
+      - best_day_scaling  ≈ 1.558  (max/weighted_avg = 1.5/0.963)
+      - point estimate (pv_estimateCL) ≈ unchanged input (aggregate ratio ≈ 1.0)
+      - pv_estimate10 ≈ 0.519 × pv_estimateCL
+      - pv_estimate90 ≈ 1.558 × pv_estimateCL (may be capped to capped_data)
     """
     print("  - test_pv_calibration_synthetic_values")
     failed = False
@@ -2355,25 +2355,25 @@ def test_pv_calibration_synthetic_values(my_predbat):
                     failed = True
                     break
 
-    # --- Sub-case B: 3 days at 0.5x, 1.0x, 1.5x → avg=1.0, worst=0.5, best=1.5 ---
+    # --- Sub-case B: 3 days at 0.5x, 1.0x, 1.5x → weighted avg=0.963, worst=0.519, best=1.558 ---
     r = run_scenario([0.5, 1.0, 1.5])
 
     if abs(r["total_adj"] - 1.0) > TOL:
         print("ERROR [B]: total_adjustment should be ~1.0 (avg ratio), got {}".format(r["total_adj"]))
         failed = True
 
-    if r["avg_scaling"] is not None and abs(r["avg_scaling"] - 1.0) > TOL:
-        print("ERROR [B]: average_day_scaling should be ~1.0, got {}".format(r["avg_scaling"]))
+    if r["avg_scaling"] is not None and abs(r["avg_scaling"] - 0.963) > TOL:
+        print("ERROR [B]: average_day_scaling should be ~0.963 (weighted avg), got {}".format(r["avg_scaling"]))
         failed = True
 
-    # worst = min_ratio / avg = 0.5 / 1.0 = 0.5 (at the clamp floor)
-    if abs(r["worst"] - 0.5) > TOL:
-        print("ERROR [B]: worst_day_scaling should be ~0.5 (relative to avg=1.0), got {}".format(r["worst"]))
+    # worst = min_ratio / weighted_avg = 0.5 / 0.963 ≈ 0.519 (above the clamp floor of 0.5)
+    if abs(r["worst"] - 0.519) > TOL:
+        print("ERROR [B]: worst_day_scaling should be ~0.519 (relative to weighted avg=0.963), got {}".format(r["worst"]))
         failed = True
 
-    # best = max_ratio / avg = 1.5 / 1.0 = 1.5 (below the clamp ceiling of 1.7)
-    if abs(r["best"] - 1.5) > TOL:
-        print("ERROR [B]: best_day_scaling should be ~1.5 (relative to avg=1.0), got {}".format(r["best"]))
+    # best = max_ratio / weighted_avg = 1.5 / 0.963 ≈ 1.558 (below the clamp ceiling of 1.7)
+    if abs(r["best"] - 1.558) > TOL:
+        print("ERROR [B]: best_day_scaling should be ~1.558 (relative to weighted avg=0.963), got {}".format(r["best"]))
         failed = True
 
     # Calibrated gen-slot minute should be approximately total_adj × raw (within 15%).
@@ -2395,19 +2395,19 @@ def test_pv_calibration_synthetic_values(my_predbat):
         e90 = entry.get("pv_estimate90")
         if cl is not None and cl > 0:
             if e10 is not None:
-                expected_e10 = cl * 0.5
+                expected_e10 = cl * 0.519
                 if abs(e10 - expected_e10) > 0.05 * cl:
-                    print("ERROR [B]: pv_estimate10 ({}) should be ~0.5×pv_estimateCL ({}) = {:.5f}".format(e10, cl, expected_e10))
+                    print("ERROR [B]: pv_estimate10 ({}) should be ~0.519×pv_estimateCL ({}) = {:.5f}".format(e10, cl, expected_e10))
                     failed = True
                     break
             if e90 is not None:
-                # best=1.5, so e90 = min(cl×1.5, capped_data) ≥ cl
+                # best=1.558, so e90 = min(cl×1.558, capped_data) ≥ cl
                 if e90 < cl * (1.0 - TOL):
                     print("ERROR [B]: pv_estimate90 ({}) should be ≥ pv_estimateCL ({})".format(e90, cl))
                     failed = True
                     break
-                if e90 > cl * 1.5 * (1.0 + TOL):
-                    print("ERROR [B]: pv_estimate90 ({}) should be ≤ 1.5 × pv_estimateCL ({})".format(e90, cl))
+                if e90 > cl * 1.558 * (1.0 + TOL):
+                    print("ERROR [B]: pv_estimate90 ({}) should be ≤ 1.558 × pv_estimateCL ({})".format(e90, cl))
                     failed = True
                     break
 
