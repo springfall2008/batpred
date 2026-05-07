@@ -151,10 +151,17 @@ class Fetch:
         """
         Make the binary sensor entity name for a named additional load forecast.
         """
+        safe_name = self.additional_load_safe_name(name)
+        return "binary_sensor.{}_load_forecast_delta_{}".format(self.prefix, safe_name)
+
+    def additional_load_safe_name(self, name):
+        """
+        Return the Home Assistant-safe suffix for a named additional load forecast.
+        """
         safe_name = re.sub(r"[^a-z0-9_]+", "_", str(name).lower()).strip("_")
         if not safe_name:
             safe_name = "unknown"
-        return "binary_sensor.{}_load_forecast_delta_{}".format(self.prefix, safe_name)
+        return safe_name
 
     def additional_load_delete_entity_name(self, name):
         """
@@ -164,18 +171,44 @@ class Fetch:
 
     def additional_load_name_from_entity(self, entity_id):
         """
-        Return additional load forecast name from a binary sensor or switch entity id.
+        Return additional load forecast name from a binary sensor or button entity id.
         """
         marker = "_load_forecast_delta_"
         if entity_id and marker in entity_id:
-            return entity_id.split(marker, 1)[1].replace("_delete", "")
+            safe_name = entity_id.split(marker, 1)[1].replace("_delete", "")
+            for name in list(getattr(self, "house_load_additional_forecasts", {}).keys()) + list(getattr(self, "house_load_additional_forecast_overrides", {}).keys()):
+                if self.additional_load_safe_name(name) == safe_name:
+                    return str(name)
+            return self.resolve_additional_load_name(safe_name)
         return None
+
+    def additional_load_command_name(self, value):
+        """
+        Return the forecast name from a load_forecast_delta_api command.
+        """
+        return value.split("?", 1)[0].split("=", 1)[0].replace("[", "").replace("]", "")
+
+    def resolve_additional_load_name(self, name):
+        """
+        Resolve a forecast name or safe entity suffix to the active configured name.
+        """
+        name = str(name)
+        safe_name = self.additional_load_safe_name(name)
+        candidates = list(getattr(self, "house_load_additional_forecasts", {}).keys()) + list(getattr(self, "house_load_additional_forecast_overrides", {}).keys())
+        item = self.config_index.get("load_forecast_delta_api") if "load_forecast_delta_api" in self.config_index else None
+        if item:
+            values = (item.get("value", "") or "").replace("+", "")
+            candidates += [self.additional_load_command_name(value) for value in values.split(",") if value and value != "off"]
+        for candidate in candidates:
+            if str(candidate) == name or self.additional_load_safe_name(candidate) == safe_name:
+                return str(candidate)
+        return name
 
     def delete_additional_load_forecast(self, name):
         """
         Delete a named one-shot additional load forecast.
         """
-        name = str(name)
+        name = self.resolve_additional_load_name(name)
         if not self.has_additional_load_api_command(name) and name not in self.house_load_additional_forecast_overrides:
             self.log("Warn: Ignoring delete for inactive additional load forecast {}".format(name))
             self.unpublish_additional_load_name(name)
@@ -207,8 +240,8 @@ class Fetch:
         for value in values_list:
             if value == "off":
                 continue
-            command_name = value.split("?", 1)[0].split("=", 1)[0].replace("[", "").replace("]", "")
-            if command_name == name:
+            command_name = self.additional_load_command_name(value)
+            if command_name == name or self.additional_load_safe_name(command_name) == self.additional_load_safe_name(name):
                 return True
         return False
 
@@ -226,11 +259,22 @@ class Fetch:
         for value in values_list:
             if value == "off":
                 continue
-            command_name = value.split("?", 1)[0].split("=", 1)[0].replace("[", "").replace("]", "")
-            if command_name != name:
+            command_name = self.additional_load_command_name(value)
+            if command_name != name and self.additional_load_safe_name(command_name) != self.additional_load_safe_name(name):
                 new_values_list.append(value)
         new_value = "+" + ",".join(new_values_list) if new_values_list else "off"
         self.api_select_update("load_forecast_delta_api", new_value=new_value)
+
+    def additional_load_slot_energies(self, energy_total, slot_energy, weights, weight_total, period, slot_minutes, plan_interval):
+        """
+        Return the published slot energy and adjustment rate for one forecast slot.
+        """
+        if energy_total is not None:
+            target_energy = dp4(energy_total * weights[period] / weight_total) if weight_total else 0.0
+        else:
+            target_energy = dp4(slot_energy * weights[period])
+        adjustment_energy = dp4(target_energy * plan_interval / float(slot_minutes)) if slot_minutes else 0.0
+        return target_energy, adjustment_energy
 
     def get_additional_load_window(self, load_item, mode, duration, plan_interval, minutes_now_slot):
         """
@@ -552,17 +596,15 @@ class Fetch:
             for period in range(periods):
                 slot_start = start_minutes + period * plan_interval
                 slot_end = min(slot_start + plan_interval, end_minutes)
+                slot_minutes = slot_end - slot_start
                 if slot_end <= minutes_now_slot:
                     continue
                 if (slot_start - minutes_now_slot) >= self.forecast_minutes:
                     continue
-                if energy_total is not None:
-                    energy = dp4(energy_total * weights[period] / weight_total) if weight_total else 0.0
-                else:
-                    energy = dp4(slot_energy * weights[period])
+                energy, adjustment_energy = self.additional_load_slot_energies(energy_total, slot_energy, weights, weight_total, period, slot_minutes, plan_interval)
                 total_energy += energy
                 for minute in range(slot_start, slot_end):
-                    load_adjust[minute] = dp4(load_adjust.get(minute, 0.0) + energy)
+                    load_adjust[minute] = dp4(load_adjust.get(minute, 0.0) + adjustment_energy)
                 target_times.append(
                     {
                         "start": (self.midnight_utc + timedelta(minutes=slot_start)).isoformat(),

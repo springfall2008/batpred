@@ -188,6 +188,26 @@ def test_additional_load_dishwasher_total_energy_weighting(my_predbat):
     return failed
 
 
+def test_additional_load_partial_duration_keeps_total_energy(my_predbat):
+    """Test partial final slots preserve the configured total energy."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.args["house_load_additional_forecast"] = [
+        {"name": "dishwasher", "start_time": "20:00", "duration": 1.25, "energy": 1.2},
+    ]
+
+    load_adjust, forecasts = my_predbat.fetch_additional_load_forecast()
+    failed |= check_slot(load_adjust, 20 * 60, 0.4, "partial duration first slot")
+    failed |= check_slot(load_adjust, 20 * 60 + 30, 0.4, "partial duration second slot")
+    failed |= check_slot(load_adjust, 21 * 60, 0.8, "partial duration final half slot")
+    forecast = forecasts.get("dishwasher", {})
+    target_total = round(sum(slot.get("energy", 0.0) for slot in forecast.get("target_times", [])), 4)
+    if forecast.get("total_energy") != 1.2 or target_total != 1.2:
+        print("ERROR: Partial duration should publish the configured total energy, got forecast {} target total {}".format(forecast, target_total))
+        failed = 1
+    return failed
+
+
 def test_additional_load_multiple_and_service_override(my_predbat):
     """Test multiple loads add together and service override updates one named load."""
     failed = 0
@@ -213,6 +233,32 @@ def test_additional_load_multiple_and_service_override(my_predbat):
     failed |= check_slot(load_adjust, 18 * 60 + 30, 0.4, "service override dishwasher")
     failed |= check_slot(load_adjust, 20 * 60, 0.0, "service override removed old dishwasher")
     failed |= check_slot(load_adjust, 20 * 60 + 30, 0.25, "service override kept heating")
+    return failed
+
+
+def test_additional_load_sanitized_entity_name_updates_original(my_predbat):
+    """Test sanitized HA entity names resolve back to the original forecast name."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.args["house_load_additional_forecast"] = [
+        {"name": "Dishwasher Eco", "start_time": "20:00", "duration": 2.0, "energy": 1.2},
+    ]
+    my_predbat.refresh_additional_load_forecast_api()
+
+    service_data = {
+        "domain": "predbat",
+        "service": "update_load_forecast_delta",
+        "service_data": {"entity_id": "binary_sensor.predbat_load_forecast_delta_dishwasher_eco", "start_time": "18:00", "duration": 1.0, "energy": 0.8},
+    }
+    run_async(my_predbat.trigger_callback(service_data))
+    failed |= check_slot(my_predbat.house_load_additional_forecast_adjust, 18 * 60, 0.4, "sanitized service updated original")
+    failed |= check_slot(my_predbat.house_load_additional_forecast_adjust, 20 * 60, 0.0, "sanitized service removed original slot")
+    if "Dishwasher Eco" not in my_predbat.house_load_additional_forecasts:
+        print("ERROR: Sanitized service should keep original forecast name, got {}".format(my_predbat.house_load_additional_forecasts))
+        failed = 1
+
+    my_predbat.api_select("load_forecast_delta_api", "off")
+    my_predbat.house_load_additional_forecast_overrides = {}
     return failed
 
 
@@ -320,6 +366,31 @@ def test_additional_load_delete_button_removes_api_forecast(my_predbat):
         failed = 1
     if "button.predbat_load_forecast_delta_dishwasher_delete" in my_predbat.dashboard_values:
         print("ERROR: Delete button should remove dishwasher delete button")
+        failed = 1
+
+    my_predbat.house_load_additional_forecast_overrides = {}
+    return failed
+
+
+def test_additional_load_delete_button_removes_sanitized_api_forecast(my_predbat):
+    """Test delete buttons remove API forecasts whose names require entity sanitizing."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.args["house_load_additional_forecast"] = []
+    my_predbat.api_select("load_forecast_delta_api", "Dishwasher Eco?start_time=20:00&duration=2.0&energy=1.2")
+    my_predbat.refresh_additional_load_forecast_api()
+
+    service_data = {
+        "domain": "button",
+        "service": "press",
+        "service_data": {"entity_id": "button.predbat_load_forecast_delta_dishwasher_eco_delete"},
+    }
+    run_async(my_predbat.trigger_callback(service_data))
+    if my_predbat.api_select_update("load_forecast_delta_api") or my_predbat.house_load_additional_forecasts:
+        print("ERROR: Sanitized delete button should remove API forecast, got forecasts {} api {}".format(my_predbat.house_load_additional_forecasts, my_predbat.api_select_update("load_forecast_delta_api")))
+        failed = 1
+    if "button.predbat_load_forecast_delta_dishwasher_eco_delete" in my_predbat.dashboard_values:
+        print("ERROR: Sanitized delete button should be unpublished")
         failed = 1
 
     my_predbat.house_load_additional_forecast_overrides = {}
@@ -779,11 +850,14 @@ def run_additional_load_forecast_tests(my_predbat):
     failed |= test_additional_load_slot_energy_weighting(my_predbat)
     failed |= test_additional_load_dishwasher_total_energy(my_predbat)
     failed |= test_additional_load_dishwasher_total_energy_weighting(my_predbat)
+    failed |= test_additional_load_partial_duration_keeps_total_energy(my_predbat)
     failed |= test_additional_load_multiple_and_service_override(my_predbat)
+    failed |= test_additional_load_sanitized_entity_name_updates_original(my_predbat)
     failed |= test_additional_load_select_api_override(my_predbat)
     failed |= test_additional_load_select_api_weighting(my_predbat)
     failed |= test_additional_load_select_event_updates_adjustment(my_predbat)
     failed |= test_additional_load_delete_button_removes_api_forecast(my_predbat)
+    failed |= test_additional_load_delete_button_removes_sanitized_api_forecast(my_predbat)
     failed |= test_additional_load_yaml_does_not_publish_delete_button(my_predbat)
     failed |= test_additional_load_api_forecast_auto_expires(my_predbat)
     failed |= test_additional_load_yaml_placeholder_not_published(my_predbat)
