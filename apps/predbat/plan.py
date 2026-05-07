@@ -86,17 +86,15 @@ class Plan:
         for period in range(periods):
             slot_start = start_minutes + period * plan_interval
             slot_end = min(slot_start + plan_interval, end_minutes)
+            slot_minutes = slot_end - slot_start
             if slot_end <= self.minutes_now:
                 continue
             if (slot_start - self.minutes_now) >= self.forecast_minutes:
                 continue
-            if energy_total is not None:
-                energy = dp4(energy_total * weights[period] / weight_total) if weight_total else 0.0
-            else:
-                energy = dp4(slot_energy * weights[period])
+            energy, adjustment_energy = self.additional_load_slot_energies(energy_total, slot_energy, weights, weight_total, period, slot_minutes, plan_interval)
             total_energy += energy
             for minute in range(slot_start, slot_end):
-                load_adjust[minute] = dp4(load_adjust.get(minute, 0.0) + energy)
+                load_adjust[minute] = dp4(load_adjust.get(minute, 0.0) + adjustment_energy)
             target_times.append({"start": (self.midnight_utc + timedelta(minutes=slot_start)).isoformat(), "end": (self.midnight_utc + timedelta(minutes=slot_end)).isoformat(), "energy": energy})
 
         return load_adjust, target_times, dp4(total_energy)

@@ -898,6 +898,7 @@ class UserInterface:
             self.log("Warn: update_load_forecast_delta called without name or target entity_id")
             self.record_status("Warn: update_load_forecast_delta called without name or target entity_id", had_errors=True)
             return
+        name = self.resolve_additional_load_name(name)
 
         forecast = {"name": str(name), "_source": "service", "_auto_expire": True}
         for key in ["start_time", "end_time", "duration", "energy", "slot_energy", "weighting", "enabled", "mode"]:
