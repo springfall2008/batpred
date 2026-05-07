@@ -21,6 +21,7 @@ def configure_additional_load_test(my_predbat):
     my_predbat.forecast_minutes = 24 * 60
     my_predbat.args["plan_interval_minutes"] = 30
     my_predbat.house_load_additional_forecast_overrides = {}
+    my_predbat.house_load_additional_forecast_entities = set()
 
 
 def configure_additional_load_rates(my_predbat, cheap_start, cheap_end):
@@ -312,6 +313,12 @@ def test_additional_load_delete_button_removes_api_forecast(my_predbat):
     if my_predbat.api_select_update("load_forecast_delta_api"):
         print("ERROR: Delete button should clear API forecast")
         failed = 1
+    if "binary_sensor.predbat_load_forecast_delta_dishwasher" in my_predbat.dashboard_values:
+        print("ERROR: Delete button should remove dishwasher binary sensor")
+        failed = 1
+    if "button.predbat_load_forecast_delta_dishwasher_delete" in my_predbat.dashboard_values:
+        print("ERROR: Delete button should remove dishwasher delete button")
+        failed = 1
 
     my_predbat.house_load_additional_forecast_overrides = {}
     return failed
@@ -352,7 +359,90 @@ def test_additional_load_api_forecast_auto_expires(my_predbat):
     if my_predbat.house_load_additional_forecasts:
         print("ERROR: Expired API forecast should not remain active, got {}".format(my_predbat.house_load_additional_forecasts))
         failed = 1
+    if "binary_sensor.predbat_load_forecast_delta_dishwasher" in my_predbat.dashboard_values:
+        print("ERROR: Expired API forecast should remove dishwasher binary sensor")
+        failed = 1
+    if "button.predbat_load_forecast_delta_dishwasher_delete" in my_predbat.dashboard_values:
+        print("ERROR: Expired API forecast should remove dishwasher delete button")
+        failed = 1
 
+    my_predbat.house_load_additional_forecast_overrides = {}
+    return failed
+
+
+def test_additional_load_yaml_placeholder_not_published(my_predbat):
+    """Test empty YAML placeholders do not publish dead forecast entities."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.args["house_load_additional_forecast"] = [
+        {"name": "dishwasher"},
+    ]
+    my_predbat.refresh_additional_load_forecast_api()
+
+    if "binary_sensor.predbat_load_forecast_delta_dishwasher" in my_predbat.dashboard_values:
+        print("ERROR: Empty YAML placeholder should not publish dishwasher binary sensor")
+        failed = 1
+
+    my_predbat.house_load_additional_forecast_overrides = {}
+    return failed
+
+
+def test_additional_load_stale_delete_button_no_replan(my_predbat):
+    """Test stale delete button press does not invalidate a plan."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.args["house_load_additional_forecast"] = []
+    my_predbat.update_pending = False
+    my_predbat.plan_valid = True
+
+    service_data = {
+        "domain": "button",
+        "service": "press",
+        "service_data": {"entity_id": "button.predbat_load_forecast_delta_dishwasher_delete"},
+    }
+    run_async(my_predbat.trigger_callback(service_data))
+    if my_predbat.update_pending or not my_predbat.plan_valid:
+        print("ERROR: Stale delete button should not invalidate plan")
+        failed = 1
+
+    my_predbat.house_load_additional_forecast_overrides = {}
+    return failed
+
+
+def test_additional_load_flexible_api_selection_survives_refresh(my_predbat):
+    """Test selected flexible API metadata augments, not replaces, the API command."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.plan_interval_minutes = 15
+    my_predbat.args["plan_interval_minutes"] = 15
+    my_predbat.args["house_load_additional_forecast"] = []
+    my_predbat.api_select("load_forecast_delta_api", "dishwasher?enabled=true&mode=flexible&end_time=22:00&duration=2.0&energy=1.2")
+    my_predbat.house_load_additional_forecast_overrides["dishwasher"] = {
+        "name": "dishwasher",
+        "_selected_start_minutes": 11 * 60 + 15,
+        "_selection_reason": "prediction_metric",
+        "_candidate_count": 50,
+        "_selected_metric": 1615.32,
+        "_baseline_metric": 1600.0,
+        "_expires_minutes": 13 * 60 + 15,
+    }
+    my_predbat.refresh_additional_load_forecast_api()
+
+    forecast = my_predbat.house_load_additional_forecasts.get("dishwasher", {})
+    if forecast.get("source") != "api" or not forecast.get("auto_expire"):
+        print("ERROR: Flexible API forecast should keep API source after selection refresh, got {}".format(forecast))
+        failed = 1
+    if forecast.get("mode") != "flexible" or forecast.get("energy") != 1.2 or forecast.get("duration") != 2.0:
+        print("ERROR: Flexible API forecast should keep command fields after selection refresh, got {}".format(forecast))
+        failed = 1
+    if forecast.get("state") != "on" or forecast.get("slots") != 8 or not forecast.get("target_times"):
+        print("ERROR: Flexible API forecast should keep selected target slots after refresh, got {}".format(forecast))
+        failed = 1
+    if "T11:15:00" not in forecast.get("suggested_start", "") or "T13:15:00" not in forecast.get("suggested_end", ""):
+        print("ERROR: Flexible API forecast should publish selected window after refresh, got {}".format(forecast))
+        failed = 1
+
+    my_predbat.api_select("load_forecast_delta_api", "off")
     my_predbat.house_load_additional_forecast_overrides = {}
     return failed
 
@@ -464,6 +554,9 @@ def run_additional_load_forecast_tests(my_predbat):
     failed |= test_additional_load_delete_button_removes_api_forecast(my_predbat)
     failed |= test_additional_load_yaml_does_not_publish_delete_button(my_predbat)
     failed |= test_additional_load_api_forecast_auto_expires(my_predbat)
+    failed |= test_additional_load_yaml_placeholder_not_published(my_predbat)
+    failed |= test_additional_load_stale_delete_button_no_replan(my_predbat)
+    failed |= test_additional_load_flexible_api_selection_survives_refresh(my_predbat)
     failed |= test_additional_load_flexible_pending_until_plan(my_predbat)
     failed |= test_additional_load_flexible_done_by_window(my_predbat)
     failed |= test_additional_load_flexible_prediction_metric_selection(my_predbat)
