@@ -425,13 +425,17 @@ class Fetch:
             weight_total = sum(weights)
 
             selected_start_minutes = load_item.get("_selected_start_minutes", None)
+            selection_locked = False
             if selected_start_minutes is not None:
                 start_minutes = int(selected_start_minutes)
                 if requested_start_minutes is not None and start_minutes < requested_start_minutes:
                     start_minutes = requested_start_minutes
                 end_minutes = start_minutes + int(duration * 60)
+                selection_locked = mode == "flexible" and minutes_now_slot >= start_minutes and minutes_now_slot < end_minutes
                 if auto_expire:
                     expires_minutes = end_minutes
+                if selection_locked and source != "yaml":
+                    self.house_load_additional_forecast_overrides.setdefault(name, {"name": name})["_selection_locked"] = True
             if auto_expire and expires_minutes is None and end_minutes is not None:
                 expires_minutes = end_minutes
             if auto_expire and source != "yaml" and expires_minutes is not None:
@@ -463,6 +467,7 @@ class Fetch:
                     "candidate_count": 0,
                     "selected_metric": None,
                     "baseline_metric": None,
+                    "selection_locked": load_item.get("_selection_locked", False) or selection_locked,
                     "source": source,
                     "auto_expire": auto_expire,
                     "expires_at": (self.midnight_utc + timedelta(minutes=expires_minutes)).isoformat() if expires_minutes is not None else None,
@@ -497,6 +502,7 @@ class Fetch:
                     "candidate_count": 0,
                     "selected_metric": None,
                     "baseline_metric": None,
+                    "selection_locked": load_item.get("_selection_locked", False) or selection_locked,
                     "source": source,
                     "auto_expire": auto_expire,
                     "expires_at": (self.midnight_utc + timedelta(minutes=expires_minutes)).isoformat() if expires_minutes is not None else None,
@@ -552,6 +558,7 @@ class Fetch:
                 "candidate_count": load_item.get("_candidate_count", 0),
                 "selected_metric": load_item.get("_selected_metric", None),
                 "baseline_metric": load_item.get("_baseline_metric", None),
+                "selection_locked": load_item.get("_selection_locked", False) or selection_locked,
                 "source": source,
                 "auto_expire": auto_expire,
                 "expires_at": (self.midnight_utc + timedelta(minutes=expires_minutes)).isoformat() if expires_minutes is not None else None,
@@ -594,6 +601,7 @@ class Fetch:
                 "candidate_count": forecast.get("candidate_count", 0),
                 "selected_metric": forecast.get("selected_metric", None),
                 "baseline_metric": forecast.get("baseline_metric", None),
+                "selection_locked": forecast.get("selection_locked", False),
                 "source": forecast.get("source", "yaml"),
                 "auto_expire": forecast.get("auto_expire", False),
                 "expires_at": forecast.get("expires_at", None),
