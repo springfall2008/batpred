@@ -333,6 +333,18 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Marginal, Exec
         state = self.unit_conversion(entity_id, state, None, required_unit, going_to=True)
         return self.ha_interface.set_state(entity_id, state, attributes=attributes)
 
+    def delete_state_wrapper(self, entity_id):
+        """
+        Wrapper function to delete state from HA.
+        """
+        if not self.ha_interface:
+            self.log("Error: delete_state_wrapper - No HA interface available")
+            return False
+        if not hasattr(self.ha_interface, "delete_state"):
+            return False
+
+        return self.ha_interface.delete_state(entity_id)
+
     def fire_event_wrapper(self, domain, service):
         """
         Wrapper function to fire a HA event

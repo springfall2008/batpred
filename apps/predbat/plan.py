@@ -171,7 +171,7 @@ class Plan:
                     "_expires_minutes": best_start + duration_minutes if forecast.get("auto_expire", False) else None,
                 }
                 if forecast.get("auto_expire", False):
-                    self.house_load_additional_forecast_overrides[name] = {"name": name, "_expires_minutes": best_start + duration_minutes}
+                    self.house_load_additional_forecast_overrides[name] = {"name": name, **selected_flexible[name]}
                 self.log("Flexible additional load {} selected {}-{} using prediction metric {} from {} candidates".format(name, self.time_abs_str(best_start), self.time_abs_str(best_start + duration_minutes), dp2(best_metric), candidate_count))
 
         if not selected_flexible:

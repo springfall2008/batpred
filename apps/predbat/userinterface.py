@@ -446,9 +446,9 @@ class UserInterface:
             if entity_id.startswith("button.{}_load_forecast_delta_".format(self.prefix)) and entity_id.endswith("_delete"):
                 name = self.additional_load_name_from_entity(entity_id)
                 if name:
-                    self.delete_additional_load_forecast(name)
-                    self.update_pending = True
-                    self.plan_valid = False
+                    if self.delete_additional_load_forecast(name):
+                        self.update_pending = True
+                        self.plan_valid = False
 
     def get_ha_config(self, name, default):
         """
