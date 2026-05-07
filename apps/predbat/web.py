@@ -2958,6 +2958,25 @@ chart.render();
                 {"name": "Forecast CL", "data": pv_today_forecastCL, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#e90a0a"},
             ]
             text += self.render_chart(series_data, "kW", "Solar Forecast", now_str)
+        elif chart == "PVAccuracy":
+            # Get pv_today history once and extract total and remaining attributes per timestamp
+            pv_today_hist = self.get_history_wrapper("sensor." + self.prefix + "_pv_today", 7, required=False)
+            pv_total_raw = history_attribute(pv_today_hist, attributes=True, state_key="total")
+            pv_remaining_raw = history_attribute(pv_today_hist, attributes=True, state_key="remaining")
+            # Compute forecast so far = total - remaining per timestamp
+            pv_forecast_sofar_raw = {}
+            for ts, total_val in pv_total_raw.items():
+                remaining_val = pv_remaining_raw.get(ts, 0)
+                pv_forecast_sofar_raw[ts] = dp2(max(total_val - remaining_val, 0))
+            pv_forecast_sofar = prune_today(pv_forecast_sofar_raw, self.now_utc, self.midnight_utc, prune=False)
+            # Get actual PV energy over time
+            pv_actual_hist = history_attribute(self.get_history_wrapper(self.prefix + ".pv_energy_h0", 7, required=False))
+            pv_actual = prune_today(pv_actual_hist, self.now_utc, self.midnight_utc, prune=False)
+            series_data = [
+                {"name": "PV Forecast (so far)", "data": pv_forecast_sofar, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "color": "#a8a8a7"},
+                {"name": "PV Actual", "data": pv_actual, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#f5c43d"},
+            ]
+            text += self.render_chart(series_data, "kWh", "PV Forecast vs Actual", now_str)
         elif chart == "LoadML":
             load_today_history = self.get_history_with_now_attrs("sensor." + self.prefix + "_load_ml_stats", 7)
             # Get historical load data for last 24 hours
@@ -3195,6 +3214,7 @@ chart.render();
         text += f'<a href="./charts?chart=InDay" class="{"active" if chart == "InDay" else ""}">InDay</a>'
         text += f'<a href="./charts?chart=PV" class="{"active" if chart == "PV" else ""}">PV</a>'
         text += f'<a href="./charts?chart=PV7" class="{"active" if chart == "PV7" else ""}">PV7</a>'
+        text += f'<a href="./charts?chart=PVAccuracy" class="{"active" if chart == "PVAccuracy" else ""}">PVAccuracy</a>'
         text += f'<a href="./charts?chart=Savings" class="{"active" if chart == "Savings" else ""}">Savings</a>'
         text += f'<a href="./charts?chart=MarginalCosts" class="{"active" if chart == "MarginalCosts" else ""}">MarginalCosts</a>'
         # Only show LoadML chart if ML is enabled
