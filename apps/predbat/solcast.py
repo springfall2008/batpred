@@ -859,6 +859,10 @@ class SolarAPI(ComponentBase):
                         "now10": dp2(power_now10),
                         "now90": dp2(power_now90),
                         "nowCL": dp2(power_nowCL),
+                        "remaining": dp2(total_left_today),
+                        "remaining10": dp2(total_left_today10),
+                        "remaining90": dp2(total_left_today90),
+                        "remainingCL": dp2(total_left_todayCL),
                     },
                     app="solar",
                 )
