@@ -133,6 +133,109 @@ class SolarAPI(ComponentBase):
             await self.fetch_pv_forecast()
         return True
 
+    def _get_cache_path(self):
+        """Return the local cache path.
+
+        This is used by the default filesystem cache backend.
+        """
+        return self.config_root + "/cache"
+
+    def _make_cache_hash(self, url, params):
+        """Generate the stable cache identifier used by filesystem caching."""
+        cache_hash = url + "_" + hashlib.md5(str(params).encode()).hexdigest()
+        cache_hash = cache_hash.replace("/", "_")
+        cache_hash = cache_hash.replace(":", "_")
+        cache_hash = cache_hash.replace("?", "a")
+        cache_hash = cache_hash.replace("&", "b")
+        cache_hash = cache_hash.replace("*", "c")
+        return cache_hash
+
+    async def cache_load(self, cache_key, max_age_minutes=None):
+        """Load cached JSON data.
+
+        Can be monkey-patched by SaaS overlays to use Redis/KeyDB.
+
+        Args:
+            cache_key: Cache identifier (opaque string).
+            max_age_minutes: If provided, and the cached entry is older than this,
+                treat it as a miss (but still return it as `stale_data`).
+
+        Returns:
+            (fresh_data, stale_data, age_minutes)
+        """
+        cache_path = self._get_cache_path()
+        if not os.path.exists(cache_path):
+            os.makedirs(cache_path)
+
+        cache_filename = cache_path + "/" + cache_key + ".json"
+        if not os.path.exists(cache_filename):
+            return None, None, 0
+
+        timestamp = os.path.getmtime(cache_filename)
+        age = datetime.now() - datetime.fromtimestamp(timestamp)
+        age_minutes = (age.seconds + age.days * 24 * 60) / 60
+
+        with open(cache_filename) as f:
+            data = json.load(f)
+
+        if max_age_minutes is None or age_minutes < max_age_minutes:
+            return data, data, age_minutes
+
+        # Stale: return as stale fallback only.
+        return None, data, age_minutes
+
+    async def cache_save(self, cache_key, data):
+        """Save cached JSON data.
+
+        Can be monkey-patched by SaaS overlays to use Redis/KeyDB.
+        """
+        cache_path = self._get_cache_path()
+        if not os.path.exists(cache_path):
+            os.makedirs(cache_path)
+
+        cache_filename = cache_path + "/" + cache_key + ".json"
+        with open(cache_filename, "w") as f:
+            json.dump(data, f)
+
+    async def state_cache_load(self, name):
+        """Load a component state cache blob (JSON dict).
+
+        Used for intra-day caches like forecast.solar aggregation.
+        Can be monkey-patched by SaaS overlays to use Redis/KeyDB.
+        """
+        cache_path = self._get_cache_path()
+        if not os.path.exists(cache_path):
+            os.makedirs(cache_path)
+
+        cache_file = cache_path + f"/{name}.json"
+        if not os.path.exists(cache_file):
+            return {}
+
+        try:
+            with open(cache_file) as f:
+                return json.load(f) or {}
+        except Exception as e:
+            self.log("Warn: Error loading {} cache file {}, error {}".format(name, cache_file, e))
+            self.log("Warn: " + traceback.format_exc())
+            try:
+                os.remove(cache_file)
+            except OSError:
+                pass
+            return {}
+
+    async def state_cache_save(self, name, data):
+        """Save a component state cache blob (JSON dict).
+
+        Can be monkey-patched by SaaS overlays to use Redis/KeyDB.
+        """
+        cache_path = self._get_cache_path()
+        if not os.path.exists(cache_path):
+            os.makedirs(cache_path)
+
+        cache_file = cache_path + f"/{name}.json"
+        with open(cache_file, "w") as f:
+            json.dump(data, f)
+
     async def cache_get_url(self, url, params, max_age=8 * 60):
         # Check if this is a Solcast API call for metrics tracking
         is_solcast_api = "solcast.com" in url.lower() or "api.solcast" in url.lower()
@@ -153,30 +256,11 @@ class SolarAPI(ComponentBase):
 
         # Get data from cache
         age_minutes = 0
-        data = None
-        hash = url + "_" + hashlib.md5(str(params).encode()).hexdigest()
-        hash = hash.replace("/", "_")
-        hash = hash.replace(":", "_")
-        hash = hash.replace("?", "a")
-        hash = hash.replace("&", "b")
-        hash = hash.replace("*", "c")
-        cache_path = self.config_root + "/cache"
-        if not os.path.exists(cache_path):
-            os.makedirs(cache_path)
-
-        cache_filename = cache_path + "/" + hash + ".json"
-        if os.path.exists(cache_filename):
-            timestamp = os.path.getmtime(cache_filename)
-            age = datetime.now() - datetime.fromtimestamp(timestamp)
-            age_minutes = (age.seconds + age.days * 24 * 60) / 60
-
-            # Read cache data
-            with open(cache_filename) as f:
-                data = json.load(f)
-
-                if age_minutes < max_age:
-                    self.log("Return cached data for {} age {} minutes".format(url, dp1(age_minutes)))
-                    return data
+        cache_key = self._make_cache_hash(url, params)
+        fresh_data, stale_data, age_minutes = await self.cache_load(cache_key, max_age_minutes=max_age)
+        if fresh_data is not None:
+            self.log("Return cached data for {} age {} minutes".format(url, dp1(age_minutes)))
+            return fresh_data
 
         # Perform fetch
         self.log("Fetching {}".format(url))
@@ -197,7 +281,7 @@ class SolarAPI(ComponentBase):
                         if is_open_meteo_api:
                             self.open_meteo_failures_total += 1
                             record_api_call("open_meteo", False, "server_error")
-                        return data
+                        return stale_data
 
                     try:
                         data = await response.json()
@@ -236,13 +320,11 @@ class SolarAPI(ComponentBase):
             if is_open_meteo_api:
                 self.open_meteo_failures_total += 1
                 record_api_call("open_meteo", False, "connection_error")
-            return data
+            return stale_data
 
         # Store data in cache
         if data:
-            self.log("Writing cache data for {} to cache file {}".format(url, cache_filename))
-            with open(cache_filename, "w") as f:
-                json.dump(data, f)
+            await self.cache_save(cache_key, data)
         return data
 
     URL_FREE = "https://api.forecast.solar/estimate/{lat}/{lon}/{dec}/{az}/{kwp}?time=utc"
@@ -424,21 +506,7 @@ class SolarAPI(ComponentBase):
         """
         Download forecast.solar data directly from a URL or return from cache if recent.
         """
-        cache_path = self.config_root + "/cache"
-        if not os.path.exists(cache_path):
-            os.makedirs(cache_path)
-
-        self.forecast_solar_data = {}
-        cache_file = cache_path + "/forecast_solar.json"
-
-        if os.path.exists(cache_file):
-            try:
-                with open(cache_file) as f:
-                    self.forecast_solar_data = json.load(f)
-            except Exception as e:
-                self.log("Warn: Error loading forecast.solar cache file {}, error {}".format(cache_file, e))
-                self.log("Warn: " + traceback.format_exc())
-                os.remove(cache_file)
+        self.forecast_solar_data = await self.state_cache_load("forecast_solar")
 
         configs = self.forecast_solar
         if configs is None:
@@ -541,9 +609,7 @@ class SolarAPI(ComponentBase):
                 new_data[key_txt] = self.forecast_solar_data[key_txt]
         self.forecast_solar_data = new_data
 
-        # Save to cache file
-        with open(cache_file, "w") as f:
-            json.dump(self.forecast_solar_data, f)
+        await self.state_cache_save("forecast_solar", self.forecast_solar_data)
 
         # Fetch the final cached data as timestamps
         period_data = {}
@@ -566,7 +632,7 @@ class SolarAPI(ComponentBase):
         """
         Download solcast data directly from a URL or return from cache if recent.
         """
-        cache_path = self.config_root + "/cache"
+        cache_path = self._get_cache_path()
 
         host = self.solcast_host
         api_keys = self.solcast_api_key
@@ -579,16 +645,7 @@ class SolarAPI(ComponentBase):
             host = host[0:-1]
 
         self.solcast_data = {}
-        cache_file = cache_path + "/solcast.json"
-
-        if os.path.exists(cache_file):
-            try:
-                with open(cache_file) as f:
-                    self.solcast_data = json.load(f)
-            except Exception as e:
-                self.log("Warn: Error loading Solcast cache file {}, error {}".format(cache_file, e))
-                self.log("Warn: " + traceback.format_exc())
-                os.remove(cache_file)
+        self.solcast_data = await self.state_cache_load("solcast")
 
         if isinstance(api_keys, str):
             api_keys = [api_keys]
@@ -657,9 +714,7 @@ class SolarAPI(ComponentBase):
                 new_data[key_txt] = self.solcast_data[key_txt]
         self.solcast_data = new_data
 
-        # Save to cache file
-        with open(cache_file, "w") as f:
-            json.dump(self.solcast_data, f)
+        await self.state_cache_save("solcast", self.solcast_data)
 
         # Fetch the final cached data as timestamps
         period_data = {}

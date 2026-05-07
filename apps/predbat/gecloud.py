@@ -1599,32 +1599,45 @@ class GECloudData(ComponentBase):
         cache_file = cache_path + "/givenergy_data.yaml"
         return cache_file
 
-    def load_ge_cache(self):
-        """
-        Load the GE Cloud cache
+    async def ge_cache_load(self):
+        """Load GECloud URL cache.
+
+        Default implementation reads from the filesystem.
+        SaaS overlays can monkey-patch this to use Redis/KeyDB.
         """
         cache_file = self.get_ge_cache_filename()
-        if os.path.exists(cache_file):
-            try:
-                with open(cache_file, "r") as f:
-                    self.ge_url_cache = yaml.safe_load(f)
-                if not isinstance(self.ge_url_cache, dict):
-                    self.ge_url_cache = {}
-            except (yaml.YAMLError, IOError) as e:
-                self.ge_url_cache = {}
-        else:
-            self.ge_url_cache = {}
+        if not os.path.exists(cache_file):
+            return {}
 
-    def save_ge_cache(self):
-        """
-        Save the GE Cloud cache
+        try:
+            with open(cache_file, "r") as f:
+                cache_data = yaml.safe_load(f)
+            if not isinstance(cache_data, dict):
+                return {}
+            return cache_data
+        except (yaml.YAMLError, IOError):
+            return {}
+
+    async def ge_cache_save(self, cache_data):
+        """Save GECloud URL cache.
+
+        Default implementation writes to the filesystem.
+        SaaS overlays can monkey-patch this to use Redis/KeyDB.
         """
         cache_file = self.get_ge_cache_filename()
         try:
             with open(cache_file, "w") as f:
-                yaml.safe_dump(self.ge_url_cache, f)
-        except IOError as e:
+                yaml.safe_dump(cache_data, f)
+        except IOError:
             pass
+
+    async def load_ge_cache(self):
+        """Load the GE Cloud cache."""
+        self.ge_url_cache = await self.ge_cache_load()
+
+    async def save_ge_cache(self):
+        """Save the GE Cloud cache."""
+        await self.ge_cache_save(self.ge_url_cache)
 
     def clean_ge_url_cache(self, now_utc):
         """
@@ -1737,7 +1750,7 @@ class GECloudData(ComponentBase):
             return False
 
         # Load cache if not already loaded
-        self.load_ge_cache()
+        await self.load_ge_cache()
 
         # Clean old cache entries
         self.clean_ge_url_cache(now_utc)
@@ -1782,8 +1795,8 @@ class GECloudData(ComponentBase):
         self.oldest_data_time = last_updated_time
         self.mdata = mdata
 
-        # Save GE URL cache to disk for next time
-        self.save_ge_cache()
+        # Save GE URL cache for next time
+        await self.save_ge_cache()
         self.ge_url_cache = {}
         return True
 

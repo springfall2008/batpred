@@ -3251,7 +3251,7 @@ def _test_load_save_ge_cache(my_predbat):
         ge_data.ge_url_cache["test_url"] = {"stamp": now, "data": [{"test": "data"}], "next": None}
 
         # Save to disk
-        ge_data.save_ge_cache()
+        run_async(ge_data.save_ge_cache())
 
         # Check file exists
         cache_file = ge_data.get_ge_cache_filename()
@@ -3261,7 +3261,7 @@ def _test_load_save_ge_cache(my_predbat):
 
         # Create new instance and load
         ge_data2 = MockGECloudData(config_root=tmpdir)
-        ge_data2.load_ge_cache()
+        run_async(ge_data2.load_ge_cache())
 
         if "test_url" not in ge_data2.ge_url_cache:
             print("ERROR: Cache should be loaded from disk")
@@ -3285,7 +3285,7 @@ def _test_load_ge_cache_corrupt_file(my_predbat):
             f.write("invalid: yaml: content: [[[")
 
         # Should handle corrupt file gracefully
-        ge_data.load_ge_cache()
+        run_async(ge_data.load_ge_cache())
 
         if ge_data.ge_url_cache != {}:
             print("ERROR: Should initialise empty cache for corrupt file")
