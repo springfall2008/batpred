@@ -509,6 +509,8 @@ def test_additional_load_flexible_prediction_metric_selection(my_predbat):
         {"name": "dishwasher", "mode": "flexible", "end_time": "07:00", "duration": 2.0, "energy": 1.2},
     ]
     my_predbat.house_load_additional_forecast_adjust, my_predbat.house_load_additional_forecasts = my_predbat.fetch_additional_load_forecast()
+    my_predbat.rate_import = {minute: 20.0 for minute in range(0, 3 * 24 * 60)}
+    my_predbat.rate_export = {minute: 5.0 for minute in range(0, 3 * 24 * 60)}
     my_predbat.charge_limit_best = []
     my_predbat.charge_window_best = []
     my_predbat.export_window_best = []
@@ -551,6 +553,9 @@ def test_additional_load_flexible_prediction_metric_selection(my_predbat):
         failed = 1
     if not forecast.get("candidate_scores") or forecast.get("candidate_scores", [{}])[0].get("metric") != 0:
         print("ERROR: Flexible prediction metric should publish sorted candidate scores, got {}".format(forecast))
+        failed = 1
+    if forecast.get("candidate_scores", [{}])[0].get("import_rate_avg") != 20.0 or forecast.get("candidate_scores", [{}])[0].get("export_rate_avg") != 5.0:
+        print("ERROR: Flexible prediction metric should publish candidate rate stats, got {}".format(forecast))
         failed = 1
     return failed
 
