@@ -160,6 +160,7 @@ deadbeefdeadbeef
 dedup
 dedupe
 deepseek
+delayedstart
 dend
 denorm
 derate
