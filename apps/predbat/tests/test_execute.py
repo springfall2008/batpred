@@ -2672,6 +2672,28 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
+    # Discharge-pause must fire even when car_energy_reported_load is False. The carHolding
+    # gate at execute_plan would otherwise block surplus pause-discharge when the user has
+    # not configured a separate car-energy sensor. Same setup as solar_surplus_activates.
+    failed |= run_execute_test(
+        my_predbat,
+        "solar_surplus_pauses_without_car_energy_sensor",
+        set_charge_window=True,
+        set_export_window=True,
+        car_charging_solar_surplus=True,
+        car_charging_planned=[True],
+        car_energy_reported_load=False,
+        grid_power=7500,
+        battery_power=0,
+        car_charging_from_battery=False,
+        assert_status="Hold for car (solar)",
+        assert_pause_discharge=True,
+        assert_immediate_soc_target=0,
+        assert_solar_surplus_active=[True],
+    )
+    if failed:
+        return failed
+
     # Read-only mode skips surplus detection entirely. Predbat cannot enforce battery
     # discharge protection while read-only, so we don't trigger the HA automation either.
     # The inverter loop early-continues in read-only and skips its resetPause path,
