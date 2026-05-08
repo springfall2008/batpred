@@ -2822,6 +2822,17 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
+    # Multi-car priority — only the first eligible car activates per cycle (loop break).
+    failed |= run_solar_surplus_multi_car_test(my_predbat)
+    if failed:
+        return failed
+
+    # Multi-inverter — the carHolding status accumulates correctly across multiple inverters
+    # without double-appending (the "Hold for car" not in status substring check).
+    failed |= run_solar_surplus_multi_inverter_test(my_predbat)
+    if failed:
+        return failed
+
     # Surplus eligible during a planned slot — eligibility stays True (so hysteresis state
     # survives the planned slot ending) but the published cars_active suppresses it
     # because the planned slot is what's actually driving the car right now.
@@ -2829,6 +2840,76 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
+    return failed
+
+
+def run_solar_surplus_multi_car_test(my_predbat):
+    """With two cars planned, only the first eligible activates (the loop break).
+    When the first car is ineligible, the second car wins instead."""
+    print("Run scenario solar_surplus_multi_car_priority")
+    my_predbat.log("Run scenario solar_surplus_multi_car_priority")
+    reset_inverter(my_predbat)
+    my_predbat.set_read_only = False
+    my_predbat.num_cars = 2
+    my_predbat.car_charging_slots = [[], []]
+    my_predbat.car_charging_solar_surplus = True
+    my_predbat.car_charging_solar_surplus_threshold = 500
+    my_predbat.car_charging_solar_surplus_limit = 100
+    my_predbat.car_charging_solar_surplus_active = [False, False]
+    my_predbat._car_surplus_prev = [False, False]
+    my_predbat.car_charging_planned = [True, True]
+    my_predbat.car_charging_battery_size = [75.0, 75.0]
+    my_predbat.car_charging_soc = [0, 0]
+    my_predbat.car_charging_rate = [7.4, 7.4]
+    my_predbat.grid_power = 7500
+    my_predbat.battery_power = 0
+
+    my_predbat.detect_car_solar_surplus(False)
+    failed = False
+    if my_predbat.car_charging_solar_surplus_active != [True, False]:
+        print("ERROR: multi-car priority — expected [True, False], got {}".format(my_predbat.car_charging_solar_surplus_active))
+        failed = True
+
+    # Now make car 0 not eligible, expect car 1 to win.
+    my_predbat.car_charging_planned = [False, True]
+    my_predbat._car_surplus_prev = [False, False]
+    my_predbat.detect_car_solar_surplus(False)
+    if my_predbat.car_charging_solar_surplus_active != [False, True]:
+        print("ERROR: multi-car priority fallback — expected [False, True], got {}".format(my_predbat.car_charging_solar_surplus_active))
+        failed = True
+    return failed
+
+
+def run_solar_surplus_multi_inverter_test(my_predbat):
+    """Status string accumulates correctly across multiple inverters."""
+    print("Run scenario solar_surplus_multi_inverter")
+    my_predbat.log("Run scenario solar_surplus_multi_inverter")
+    reset_inverter(my_predbat)
+    inverters = [ActiveTestInverter(0, 0, 10.0, my_predbat.now_utc), ActiveTestInverter(1, 0, 10.0, my_predbat.now_utc)]
+    my_predbat.inverters = inverters
+    my_predbat.args["num_inverters"] = 2
+    my_predbat.num_inverters = 2
+
+    failed = run_execute_test(
+        my_predbat,
+        "solar_surplus_multi_inverter",
+        set_charge_window=True,
+        set_export_window=True,
+        car_charging_solar_surplus=True,
+        car_charging_planned=[True],
+        grid_power=7500,
+        battery_power=0,
+        car_charging_from_battery=False,
+        assert_status="Hold for car (solar)",
+        assert_pause_discharge=True,
+        assert_immediate_soc_target=0,
+        assert_solar_surplus_active=[True],
+    )
+
+    # Restore single-inverter state for any subsequent tests.
+    my_predbat.inverters = [ActiveTestInverter(0, 0, 10.0, my_predbat.now_utc)]
+    my_predbat.args["num_inverters"] = 1
+    my_predbat.num_inverters = 1
     return failed
 
 
