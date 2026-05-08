@@ -90,6 +90,8 @@ class SolarAPI(ComponentBase):
         pv_scaling,
         open_meteo_forecast,
         open_meteo_forecast_max_age,
+        cache_storage=None,
+        state_storage=None,
     ):
         """Initialise the Solar API component"""
         self.solcast_host = solcast_host
@@ -117,8 +119,8 @@ class SolarAPI(ComponentBase):
         self.last_fetched_timestamp = None
         self.forecast_days = 4
         cache_dir = self._get_cache_path()
-        self.cache_storage: StorageBackend = FilesystemStorageBackend(cache_dir)
-        self.state_storage: StorageBackend = FilesystemStorageBackend(cache_dir)
+        self.cache_storage: StorageBackend = cache_storage or FilesystemStorageBackend(cache_dir)
+        self.state_storage: StorageBackend = state_storage or FilesystemStorageBackend(cache_dir)
 
     async def run(self, seconds, first):
         """

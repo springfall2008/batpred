@@ -1552,7 +1552,7 @@ class GECloudData(ComponentBase):
     GivEnergy Cloud Data download and caching
     """
 
-    def initialize(self, ge_cloud_data, ge_cloud_key, ge_cloud_serial, days_previous):
+    def initialize(self, ge_cloud_data, ge_cloud_key, ge_cloud_serial, days_previous, storage=None):
         """Initialise the GE Cloud Data component"""
         self.ge_cloud_key = ge_cloud_key
         self.ge_cloud_serial_config_item = ge_cloud_serial
@@ -1567,7 +1567,7 @@ class GECloudData(ComponentBase):
         self.requests_total = 0
         self.failures_total = 0
         self.oldest_data_time = None
-        self.storage: StorageBackend = FilesystemStorageBackend(self.config_root + "/cache")
+        self.storage: StorageBackend = storage or FilesystemStorageBackend(self.config_root + "/cache")
 
     async def run(self, seconds, first):
         """
