@@ -76,6 +76,7 @@ dayname
 daynumber
 daysymbol
 dedup
+delayedstart
 dend
 denorm
 derating

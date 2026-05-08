@@ -49,10 +49,16 @@ class Output:
             target_times = forecast.get("target_times", [])
             total_energy = forecast.get("total_energy", 0.0)
             if target_times and total_energy > 0:
-                start = target_times[0].get("start")
-                end = target_times[-1].get("end")
-                status = "planned"
-                text = "{} from {} to {} using {:.2f} kWh is planned".format(name, self.additional_load_plan_time(start), self.additional_load_plan_time(end), dp2(total_energy)) if start and end else None
+                running = forecast.get("selection_locked", False)
+                start = forecast.get("suggested_start") if running and forecast.get("suggested_start") else target_times[0].get("start")
+                end = forecast.get("suggested_end") if running and forecast.get("suggested_end") else target_times[-1].get("end")
+                if running:
+                    total_energy = forecast.get("energy", total_energy) or total_energy
+                    status = "running"
+                    text = "{} is running from {} to {} using {:.2f} kWh".format(name, self.additional_load_plan_time(start), self.additional_load_plan_time(end), dp2(total_energy)) if start and end else None
+                else:
+                    status = "planned"
+                    text = "{} from {} to {} using {:.2f} kWh is planned".format(name, self.additional_load_plan_time(start), self.additional_load_plan_time(end), dp2(total_energy)) if start and end else None
             else:
                 start = forecast.get("suggested_start")
                 end = forecast.get("suggested_end")
