@@ -2738,4 +2738,27 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
+    # Read-only mode skips surplus detection entirely. Predbat cannot enforce battery
+    # discharge protection while read-only, so we don't trigger the HA automation either.
+    # The inverter loop early-continues in read-only and skips its resetPause path,
+    # so clear pause flags from prior tests before running.
+    for inv in my_predbat.inverters:
+        inv.pause_discharge = False
+        inv.pause_charge = False
+    failed |= run_execute_test(
+        my_predbat,
+        "solar_surplus_read_only_skipped",
+        set_charge_window=True,
+        set_export_window=True,
+        car_charging_solar_surplus=True,
+        car_charging_planned=[True],
+        read_only=True,
+        grid_power=7500,
+        battery_power=0,
+        assert_status="Read-Only",
+        assert_solar_surplus_active=[False],
+    )
+    if failed:
+        return failed
+
     return failed
