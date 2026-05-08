@@ -433,8 +433,12 @@ class Execute:
                 status_freeze_export = " [Freeze exporting]"
 
             # Car charging from battery disable? (runs per-inverter for discharge hold)
+            # car_energy_reported_load is normally required (so Predbat can account for
+            # car load in history); for solar surplus we don't need that sensor since
+            # we already have grid_power and battery_power directly.
             carHolding = False
-            if self.set_charge_window and not self.car_charging_from_battery and self.car_energy_reported_load:
+            surplus_any = any(self.car_charging_solar_surplus_active)
+            if self.set_charge_window and not self.car_charging_from_battery and (self.car_energy_reported_load or surplus_any):
                 for car_n in range(self.num_cars):
                     surplus_active = car_n < len(self.car_charging_solar_surplus_active) and self.car_charging_solar_surplus_active[car_n]
                     in_planned_slot = False
