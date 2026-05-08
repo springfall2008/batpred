@@ -21,8 +21,8 @@ import asyncio
 import json
 import random
 import yaml
-import os
 from component_base import ComponentBase
+from storage import FilesystemStorageBackend, StorageBackend
 
 """
 GE Cloud data download
@@ -1567,6 +1567,7 @@ class GECloudData(ComponentBase):
         self.requests_total = 0
         self.failures_total = 0
         self.oldest_data_time = None
+        self.storage: StorageBackend = FilesystemStorageBackend(self.config_root + "/cache")
 
     async def run(self, seconds, first):
         """
@@ -1592,43 +1593,22 @@ class GECloudData(ComponentBase):
         self.update_success_timestamp()
         return True
 
-    def get_ge_cache_filename(self):
-        cache_path = self.config_root + "/cache"
-        if not os.path.exists(cache_path):
-            os.makedirs(cache_path, exist_ok=True)
-        cache_file = cache_path + "/givenergy_data.yaml"
-        return cache_file
-
     async def ge_cache_load(self):
-        """Load GECloud URL cache.
-
-        Default implementation reads from the filesystem.
-        SaaS overlays can monkey-patch this to use Redis/KeyDB.
-        """
-        cache_file = self.get_ge_cache_filename()
-        if not os.path.exists(cache_file):
+        """Load GECloud URL cache from the storage backend."""
+        raw = await self.storage.read("givenergy_data.yaml")
+        if raw is None:
             return {}
-
         try:
-            with open(cache_file, "r") as f:
-                cache_data = yaml.safe_load(f)
-            if not isinstance(cache_data, dict):
-                return {}
-            return cache_data
-        except (yaml.YAMLError, IOError):
+            cache_data = yaml.safe_load(raw.decode())
+            return cache_data if isinstance(cache_data, dict) else {}
+        except (yaml.YAMLError, UnicodeDecodeError):
             return {}
 
     async def ge_cache_save(self, cache_data):
-        """Save GECloud URL cache.
-
-        Default implementation writes to the filesystem.
-        SaaS overlays can monkey-patch this to use Redis/KeyDB.
-        """
-        cache_file = self.get_ge_cache_filename()
+        """Save GECloud URL cache to the storage backend."""
         try:
-            with open(cache_file, "w") as f:
-                yaml.safe_dump(cache_data, f)
-        except IOError:
+            await self.storage.write("givenergy_data.yaml", yaml.safe_dump(cache_data).encode())
+        except Exception:
             pass
 
     async def load_ge_cache(self):

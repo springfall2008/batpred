@@ -19,7 +19,6 @@ personal API tiers.
 import hashlib
 import json
 import math
-import os
 import aiohttp
 import traceback
 import pytz
@@ -57,6 +56,7 @@ from const import TIME_FORMAT, TIME_FORMAT_SOLCAST
 from utils import dp1, dp2, dp4, history_attribute_to_minute_data, minute_data, history_attribute, prune_today
 from predbat_metrics import record_api_call, metrics
 from component_base import ComponentBase
+from storage import FilesystemStorageBackend, StorageBackend
 
 """
 Solcast class deals with fetching solar predictions, processing the data and publishing the results.
@@ -116,6 +116,9 @@ class SolarAPI(ComponentBase):
         self.open_meteo_last_success_timestamp = None
         self.last_fetched_timestamp = None
         self.forecast_days = 4
+        cache_dir = self._get_cache_path()
+        self.cache_storage: StorageBackend = FilesystemStorageBackend(cache_dir)
+        self.state_storage: StorageBackend = FilesystemStorageBackend(cache_dir)
 
     async def run(self, seconds, first):
         """
@@ -151,40 +154,32 @@ class SolarAPI(ComponentBase):
         return cache_hash
 
     async def cache_load(self, cache_key, max_age_minutes=None):
-        """Load cached JSON data.
+        """Load cached JSON data from the cache storage backend.
 
-        Can be monkey-patched by SaaS overlays to use Redis/KeyDB.
+        Age is read from a timestamp embedded in the stored entry, not from
+        filesystem mtime, so the same logic works across filesystem and KeyDB backends.
 
         Args:
             cache_key: Cache identifier (opaque string).
             max_age_minutes: If provided, and the cached entry is older than this,
-                treat it as a miss (but still return it as `stale_data`).
+                treat it as a miss (but still return it as stale_data).
 
         Returns:
             (fresh_data, stale_data, age_minutes)
         """
-        cache_path = self._get_cache_path()
-        if not os.path.exists(cache_path):
-            os.makedirs(cache_path)
-
-        cache_filename = cache_path + "/" + cache_key + ".json"
-        if not os.path.exists(cache_filename):
+        raw = await self.cache_storage.read(cache_key + ".json")
+        if raw is None:
             return None, None, 0
 
-        timestamp = os.path.getmtime(cache_filename)
-        age = datetime.now() - datetime.fromtimestamp(timestamp)
-        age_minutes = age.total_seconds() / 60
-
         try:
-            with open(cache_filename) as f:
-                data = json.load(f)
+            entry = json.loads(raw)
+            stamp = entry.get("stamp", 0)
+            data = entry.get("data")
+            age_minutes = (datetime.now(timezone.utc).timestamp() - stamp) / 60
         except Exception as e:
-            self.log("Warn: Error loading cache file {}, error {}".format(cache_filename, e))
+            self.log("Warn: Error loading cache entry {}, error {}".format(cache_key, e))
             self.log("Warn: " + traceback.format_exc())
-            try:
-                os.remove(cache_filename)
-            except OSError:
-                pass
+            await self.cache_storage.delete(cache_key + ".json")
             return None, None, 0
 
         if max_age_minutes is None or age_minutes < max_age_minutes:
@@ -194,56 +189,34 @@ class SolarAPI(ComponentBase):
         return None, data, age_minutes
 
     async def cache_save(self, cache_key, data):
-        """Save cached JSON data.
+        """Save cached JSON data to the cache storage backend.
 
-        Can be monkey-patched by SaaS overlays to use Redis/KeyDB.
+        Embeds a UTC timestamp so age can be computed on load regardless of
+        whether the backend is filesystem or KeyDB.
         """
-        cache_path = self._get_cache_path()
-        if not os.path.exists(cache_path):
-            os.makedirs(cache_path)
-
-        cache_filename = cache_path + "/" + cache_key + ".json"
-        with open(cache_filename, "w") as f:
-            json.dump(data, f)
+        entry = {"stamp": datetime.now(timezone.utc).timestamp(), "data": data}
+        await self.cache_storage.write(cache_key + ".json", json.dumps(entry).encode())
 
     async def state_cache_load(self, name):
-        """Load a component state cache blob (JSON dict).
+        """Load a component state cache blob (JSON dict) from the state storage backend.
 
-        Used for intra-day caches like forecast.solar aggregation.
-        Can be monkey-patched by SaaS overlays to use Redis/KeyDB.
+        Used for intra-day caches such as forecast.solar aggregation.
         """
-        cache_path = self._get_cache_path()
-        if not os.path.exists(cache_path):
-            os.makedirs(cache_path)
-
-        cache_file = cache_path + f"/{name}.json"
-        if not os.path.exists(cache_file):
+        raw = await self.state_storage.read(name + ".json")
+        if raw is None:
             return {}
 
         try:
-            with open(cache_file) as f:
-                return json.load(f) or {}
+            return json.loads(raw) or {}
         except Exception as e:
-            self.log("Warn: Error loading {} cache file {}, error {}".format(name, cache_file, e))
+            self.log("Warn: Error loading state cache {}, error {}".format(name, e))
             self.log("Warn: " + traceback.format_exc())
-            try:
-                os.remove(cache_file)
-            except OSError:
-                pass
+            await self.state_storage.delete(name + ".json")
             return {}
 
     async def state_cache_save(self, name, data):
-        """Save a component state cache blob (JSON dict).
-
-        Can be monkey-patched by SaaS overlays to use Redis/KeyDB.
-        """
-        cache_path = self._get_cache_path()
-        if not os.path.exists(cache_path):
-            os.makedirs(cache_path)
-
-        cache_file = cache_path + f"/{name}.json"
-        with open(cache_file, "w") as f:
-            json.dump(data, f)
+        """Save a component state cache blob (JSON dict) to the state storage backend."""
+        await self.state_storage.write(name + ".json", json.dumps(data).encode())
 
     async def cache_get_url(self, url, params, max_age=8 * 60):
         # Check if this is a Solcast API call for metrics tracking
