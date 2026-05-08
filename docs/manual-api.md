@@ -212,11 +212,12 @@ Use **suggested_start** from **binary_sensor.predbat_load_forecast_delta_dishwas
 
 ### Example dishwasher scheduling automations
 
-The following example uses three Home Assistant automations:
+The following example uses four Home Assistant automations:
 
 - Request a Predbat flexible load schedule when the dishwasher is ready.
 - Start the dishwasher when Predbat reaches the published **suggested_start**.
 - Clear the Predbat schedule if the dishwasher is started manually instead.
+- Reset the Predbat-start helper after the scheduled run is no longer active.
 
 First create a helper to track whether Predbat started the dishwasher. This prevents the manual-start cleanup automation deleting the schedule when Predbat itself starts the appliance:
 
@@ -311,15 +312,10 @@ actions:
       device_id: YOUR_DISHWASHER_DEVICE_ID
       affects_to: active_program
       program: YOUR_DISHWASHER_PROGRAM
-  - delay:
-      seconds: 30
-  - action: input_boolean.turn_off
-    target:
-      entity_id: input_boolean.dishwasher_started_by_predbat
 mode: single
 ```
 
-The final automation removes the Predbat request if the dishwasher is started manually before Predbat reaches **suggested_start**:
+The next automation removes the Predbat request if the dishwasher is started manually before Predbat reaches **suggested_start**. It only runs when **input_boolean.dishwasher_started_by_predbat** is off, so it will not delete the schedule when the previous automation started the dishwasher for Predbat:
 
 ```yaml
 alias: Dishwasher - Clear Predbat Schedule When Manually Started
@@ -330,6 +326,7 @@ triggers:
     from: ready
     to:
       - run
+      - delayedstart
       - pause
 conditions:
   - condition: state
@@ -347,6 +344,35 @@ actions:
   - action: button.press
     target:
       entity_id: button.predbat_load_forecast_delta_dishwasher_delete
+mode: single
+```
+
+The final automation resets **input_boolean.dishwasher_started_by_predbat** after the Predbat one-shot forecast has disappeared or after the dishwasher returns to a non-running state. This makes the manual-start cleanup automation ready for the next dishwasher cycle without clearing the current Predbat schedule too early:
+
+```yaml
+alias: Dishwasher - Reset Predbat Started Marker
+description: Reset Predbat helper after scheduled dishwasher run
+triggers:
+  - trigger: state
+    entity_id: binary_sensor.predbat_load_forecast_delta_dishwasher
+    to:
+      - unavailable
+      - unknown
+  - trigger: state
+    entity_id: sensor.dishwasher_operation_state
+    to:
+      - ready
+      - inactive
+      - finished
+      - off
+conditions:
+  - condition: state
+    entity_id: input_boolean.dishwasher_started_by_predbat
+    state: "on"
+actions:
+  - action: input_boolean.turn_off
+    target:
+      entity_id: input_boolean.dishwasher_started_by_predbat
 mode: single
 ```
 

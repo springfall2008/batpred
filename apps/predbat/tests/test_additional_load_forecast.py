@@ -813,7 +813,7 @@ def test_additional_load_flexible_prediction_metric_selection(my_predbat):
 
 
 def test_additional_load_textual_plan_summary(my_predbat):
-    """Test textual plan includes confirmed additional load forecasts only."""
+    """Test textual plan includes confirmed and suggested additional load forecasts only."""
     failed = 0
     configure_additional_load_test(my_predbat)
     my_predbat.house_load_additional_forecasts = {
@@ -825,12 +825,27 @@ def test_additional_load_textual_plan_summary(my_predbat):
                 {"start": "2026-05-07T10:30:00+02:00", "end": "2026-05-07T11:00:00+02:00", "energy": 0.6},
             ],
         },
+        "washer": {
+            "enabled": True,
+            "mode": "flexible",
+            "energy": 0.7,
+            "slot_energy": 0.0,
+            "duration": 5.0,
+            "plan_interval_minutes": 15,
+            "target_times": [],
+            "total_energy": 0.0,
+            "suggested_start": "2026-05-07T20:15:00+02:00",
+            "suggested_end": "2026-05-08T01:15:00+02:00",
+        },
         "pending": {"enabled": True, "total_energy": 1.0, "target_times": []},
     }
 
     text = my_predbat.get_additional_load_text()
-    if "Additional load dishwasher from 10:00 to 11:00 using 1.20 kWh is planned" not in text:
+    if "dishwasher from 10:00 to 11:00 using 1.20 kWh is planned" not in text:
         print("ERROR: Textual plan should include planned dishwasher load, got {}".format(text))
+        failed = 1
+    if "washer is suggested from 20:15 to 01:15 using 0.70 kWh" not in text:
+        print("ERROR: Textual plan should include suggested washer load, got {}".format(text))
         failed = 1
     if "pending" in text:
         print("ERROR: Textual plan should not include pending load, got {}".format(text))

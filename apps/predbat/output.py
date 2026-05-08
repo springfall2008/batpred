@@ -40,24 +40,41 @@ class Output:
 
     def get_additional_load_text(self):
         """
-        Return a textual summary of confirmed planned additional load forecasts.
+        Return a textual summary of planned and suggested additional load forecasts.
         """
         planned_loads = []
         for name, forecast in sorted(getattr(self, "house_load_additional_forecasts", {}).items()):
+            if not forecast.get("enabled", False):
+                continue
             target_times = forecast.get("target_times", [])
             total_energy = forecast.get("total_energy", 0.0)
-            if not forecast.get("enabled", False) or not target_times or total_energy <= 0:
-                continue
-            start = target_times[0].get("start")
-            end = target_times[-1].get("end")
+            if target_times and total_energy > 0:
+                start = target_times[0].get("start")
+                end = target_times[-1].get("end")
+                status = "planned"
+                text = "{} from {} to {} using {:.2f} kWh is planned".format(name, self.additional_load_plan_time(start), self.additional_load_plan_time(end), dp2(total_energy)) if start and end else None
+            else:
+                start = forecast.get("suggested_start")
+                end = forecast.get("suggested_end")
+                total_energy = forecast.get("energy", 0.0)
+                if not total_energy:
+                    plan_interval = forecast.get("plan_interval_minutes", self.plan_interval_minutes)
+                    periods = int((int(forecast.get("duration", 0.0) * 60) + plan_interval - 1) / plan_interval) if plan_interval > 0 else 0
+                    total_energy = forecast.get("slot_energy", 0.0) * periods
+                status = "suggested"
+                text = "{} is suggested from {} to {} using {:.2f} kWh".format(name, self.additional_load_plan_time(start), self.additional_load_plan_time(end), dp2(total_energy)) if start and end and total_energy > 0 else None
+
             if not start or not end:
+                continue
+            if not text:
                 continue
             planned_loads.append(
                 {
                     "name": name,
                     "start": start,
                     "end": end,
-                    "text": "{} from {} to {} using {:.2f} kWh".format(name, self.additional_load_plan_time(start), self.additional_load_plan_time(end), dp2(total_energy)),
+                    "status": status,
+                    "text": text,
                 }
             )
 
@@ -66,8 +83,8 @@ class Output:
 
         planned_loads = sorted(planned_loads, key=lambda load: load["start"])
         if len(planned_loads) == 1:
-            return "- Additional load {} is planned.\n".format(planned_loads[0]["text"])
-        return "- Additional loads are planned: {}.\n".format("; ".join(load["text"] for load in planned_loads))
+            return "- Additional load {}.\n".format(planned_loads[0]["text"])
+        return "- Additional loads are planned/suggested: {}.\n".format("; ".join(load["text"] for load in planned_loads))
 
     def publish_car_plan(self):
         """
