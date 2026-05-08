@@ -991,6 +991,16 @@ CONFIG_ITEMS = [
         "enable_condition": "num_cars > 0",
     },
     {
+        "name": "car_charging_plan_date",
+        "friendly_name": "Car charging planned ready date",
+        "type": "select",
+        "options": ["Default"],
+        "icon": "mdi:calendar-end",
+        "default": "Default",
+        "enable": "num_cars",
+        "enable_condition": "num_cars > 0",
+    },
+    {
         "name": "mode",
         "friendly_name": "Predbat mode",
         "type": "select",
