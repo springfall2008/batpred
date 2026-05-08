@@ -237,9 +237,16 @@ triggers:
   - trigger: state
     entity_id: switch.dishwasher_power
     to: "on"
+conditions:
+  - condition: state
+    entity_id: input_boolean.dishwasher_started_by_predbat
+    state: "off"
 actions:
   - delay:
       seconds: 20
+  - condition: state
+    entity_id: input_boolean.dishwasher_started_by_predbat
+    state: "off"
   - condition: state
     entity_id: sensor.dishwasher_operation_state
     state: ready
