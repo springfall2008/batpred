@@ -268,6 +268,28 @@ def run_rate_add_io_slots_tests(my_predbat):
 
     failed |= run_rate_add_io_slots_test("test14_tiny_overlap_issue3328", my_predbat, slots, True, 12, expected_rates)
 
+    # Test 15: Midday-to-midday cap boundary
+    # 14 slots starting at 22:00 today (minute 1320) and crossing midnight into the early hours of tomorrow.
+    # All slots fall within the same midday-to-midday period (noon today → noon tomorrow), so the
+    # 12-slot cap applies across midnight and only the first 12 slots should be cheap.
+    # Under the old midnight-to-midnight logic, today would have 4 cheap slots and tomorrow 10
+    # cheap slots (each under the limit), so ALL 14 would be cheap — the opposite of what we want.
+    print("\n**** Test 15: Midday-to-midday cap spans midnight ****")
+    slots = []
+    expected_rates = {}
+    for i in range(14):
+        slot_start = midnight_utc + timedelta(minutes=1320 + i * 30)  # From 22:00, each 30 min
+        slot_end = slot_start + timedelta(minutes=30)
+        slots.append({"start": slot_start.strftime(TIME_FORMAT), "end": slot_end.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME"})
+        start_minute = 1320 + i * 30
+        for minute in range(start_minute, start_minute + 30):
+            if i < 12:  # First 12 slots (22:00 – 04:00) are cheap; last 2 are not
+                expected_rates[minute] = 4.0
+            else:
+                expected_rates[minute] = 10.0
+
+    failed |= run_rate_add_io_slots_test("test15_midday_to_midday_boundary", my_predbat, slots, True, 12, expected_rates)
+
     # Restore original forecast_minutes
     my_predbat.forecast_minutes = original_forecast_minutes
 

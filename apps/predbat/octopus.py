@@ -2441,10 +2441,10 @@ class Octopus:
         # Octopus limits cheap slots to 6 hours (12 x 30-min slots) per 24-hour period
         """
         octopus_slot_low_rate = self.get_arg("octopus_slot_low_rate", True)
-        octopus_slot_max = self.get_arg("octopus_slot_max", 48)  # Default to 48 so no limit
+        octopus_slot_max = self.get_arg("octopus_slot_max", 12)  # Default to 12 hours as per May 2026
 
-        # Track slots per 24-hour period (keyed by day offset from midnight)
-        # Day 0 = today (minutes 0 to 1440), Day -1 = yesterday (minutes -1440 to 0), etc.
+        # Track slots per 24-hour period (keyed by day offset from midday)
+        # Period 0 = noon today to 11:59 tomorrow, Period -1 = noon yesterday to 11:59 today, etc.
         slots_per_day = {}
 
         # Track which 30-min slot starts were actually added (for filling in the rest of the slot)
@@ -2469,10 +2469,10 @@ class Octopus:
                     if octopus_slot_low_rate:
                         assumed_price = self.rate_min
                         for minute in range(start_minutes, end_minutes):
-                            # Calculate which day this minute belongs to (day boundary at midnight)
-                            # Day 0 = minutes 0-1439, Day 1 = 1440-2879, Day -1 = -1440 to -1, etc.
+                            # Calculate which day this minute belongs to (day boundary at midday)
+                            # Period 0 = noon today (720) to 11:59 tomorrow (2159), etc.
                             # Python's floor division handles negative numbers correctly
-                            day_offset = minute // (24 * 60)
+                            day_offset = (minute - 720) // (24 * 60)
 
                             # Initialise counter for this day if needed
                             if day_offset not in slots_per_day:
