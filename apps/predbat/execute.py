@@ -701,7 +701,9 @@ class Execute:
         rather than per inverter.
         """
         self.car_charging_solar_surplus_active = [False] * self.num_cars
-        if not self.car_charging_solar_surplus or self.num_cars <= 0 or in_force_export_window:
+        # Skip in read-only mode: we cannot enforce battery-discharge protection,
+        # so don't trigger HA automations that would charge the car unprotected.
+        if not self.car_charging_solar_surplus or self.num_cars <= 0 or in_force_export_window or self.set_read_only:
             self._car_surplus_prev = list(self.car_charging_solar_surplus_active)
             return
 
