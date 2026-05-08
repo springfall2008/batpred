@@ -2684,7 +2684,7 @@ def run_execute_tests(my_predbat):
     # Hysteresis: when car was already surplus-charging, it stays on even though grid_power alone
     # is below the turn-on threshold (car load is masking the real available export).
     # car_rate=7400W, threshold=500W, hysteresis=200W → stay-on threshold on effective export is 6700W.
-    # grid_power=0 + car_rate 7400 = 7400 effective → >= 6700, stays on.
+    # grid_power=0 + car_rate 7400 = 7400 effective → >= 6700, battery idle, stays on.
     failed |= run_execute_test(
         my_predbat,
         "solar_surplus_hysteresis_stays_on",
@@ -2694,7 +2694,46 @@ def run_execute_tests(my_predbat):
         car_charging_planned=[True],
         car_surplus_prev=[True],
         grid_power=0,
-        battery_power=500,  # battery discharging — intentionally ignored in the stay-on branch
+        battery_power=0,
+        car_charging_from_battery=False,
+        assert_status="Hold for car (solar)",
+        assert_pause_discharge=True,
+        assert_immediate_soc_target=0,
+        assert_solar_surplus_active=[True],
+    )
+    if failed:
+        return failed
+
+    # Stay-on branch must drop off when the home battery is being drained to feed the car.
+    # grid_power=0 + car_rate 7400 = 7400 effective (passes export check), but battery_power=600
+    # exceeds the 500W stay-on battery discharge limit, so surplus deactivates.
+    failed |= run_execute_test(
+        my_predbat,
+        "solar_surplus_drains_battery_drops_off",
+        set_charge_window=True,
+        set_export_window=True,
+        car_charging_solar_surplus=True,
+        car_charging_planned=[True],
+        car_surplus_prev=[True],
+        grid_power=0,
+        battery_power=600,
+        assert_status="Demand",
+        assert_solar_surplus_active=[False],
+    )
+    if failed:
+        return failed
+
+    # Stay-on branch tolerates small transient battery discharge under the 500W gate.
+    failed |= run_execute_test(
+        my_predbat,
+        "solar_surplus_battery_idle_stays_on",
+        set_charge_window=True,
+        set_export_window=True,
+        car_charging_solar_surplus=True,
+        car_charging_planned=[True],
+        car_surplus_prev=[True],
+        grid_power=0,
+        battery_power=200,
         car_charging_from_battery=False,
         assert_status="Hold for car (solar)",
         assert_pause_discharge=True,
