@@ -138,6 +138,7 @@ deadbanding
 deadbeefdeadbeef
 dedup
 dedupe
+delayedstart
 dend
 denorm
 derate
