@@ -57,6 +57,7 @@ class Execute:
         # Solar surplus car charging runs once up-front since it only reads global state
         in_force_export_window = bool(self.set_export_window and self.export_window_best and self.minutes_now >= self.export_window_best[0]["start"] and self.minutes_now < self.export_window_best[0]["end"] and self.export_limits_best[0] < 100.0)
         self.detect_car_solar_surplus(in_force_export_window)
+        surplus_any = any(self.car_charging_solar_surplus_active)
 
         for inverter in self.inverters:
             if inverter.id not in self.count_inverter_writes:
@@ -437,7 +438,6 @@ class Execute:
             # car load in history); for solar surplus we don't need that sensor since
             # we already have grid_power and battery_power directly.
             carHolding = False
-            surplus_any = any(self.car_charging_solar_surplus_active)
             if self.set_charge_window and not self.car_charging_from_battery and (self.car_energy_reported_load or surplus_any):
                 for car_n in range(self.num_cars):
                     surplus_active = car_n < len(self.car_charging_solar_surplus_active) and self.car_charging_solar_surplus_active[car_n]
