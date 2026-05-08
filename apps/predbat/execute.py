@@ -708,6 +708,10 @@ class Execute:
             return
 
         surplus_hysteresis = 200  # W deadband to prevent flapping
+        # Tolerance for transient battery discharge while surplus is asserted.
+        # Distinct from car_charging_solar_surplus_threshold (the user-facing
+        # shortfall allowance for solar export); not configurable by intent.
+        stay_on_battery_discharge_limit_w = 500
         if len(self._car_surplus_prev) != self.num_cars:
             self._car_surplus_prev = [False] * self.num_cars
 
@@ -729,8 +733,9 @@ class Execute:
                 effective_export += car_rate_w
 
             if previously_active:
-                # Currently on: lower bar to stay on, no battery check needed
-                if effective_export >= car_rate_w - threshold - surplus_hysteresis:
+                # Currently on: lower bar to stay on, but require battery isn't being drained
+                # to feed the car (otherwise effective_export masks the real PV deficit).
+                if effective_export >= car_rate_w - threshold - surplus_hysteresis and self.battery_power <= stay_on_battery_discharge_limit_w:
                     self.car_charging_solar_surplus_active[car_n] = True
             else:
                 # Currently off: higher bar to turn on, require battery not discharging
