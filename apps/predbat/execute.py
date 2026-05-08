@@ -625,7 +625,13 @@ class Execute:
             self.count_inverter_writes[inverter.id] += inverter.count_register_writes
             inverter.count_register_writes = 0
 
-        # Publish solar surplus car charging binary sensor overrides
+        # Publish solar surplus car charging binary sensor overrides.
+        # We track which cars are surplus-eligible AND not already covered by a
+        # planned slot — those are the ones we display as "active" on the
+        # observability sensor. The underlying car_charging_solar_surplus_active
+        # array stays as detect_car_solar_surplus computed it so that
+        # _car_surplus_prev keeps accurate hysteresis memory across cycles.
+        displayed_surplus = []
         for car_n in range(self.num_cars):
             if not self.car_charging_solar_surplus_active[car_n]:
                 continue
@@ -636,6 +642,7 @@ class Execute:
                 if self.minutes_now >= window["start"] and self.minutes_now < window["end"] and window.get("kwh", 0) > 0:
                     in_planned_slot = True
             if not in_planned_slot:
+                displayed_surplus.append(car_n)
                 # Preserve the planned slot list and totals that publish_car_plan published, just flip state on
                 plan = []
                 total_cost = 0.0
@@ -668,15 +675,15 @@ class Execute:
                     },
                 )
 
-        # Publish solar surplus observability sensor
-        any_surplus = any(self.car_charging_solar_surplus_active) if self.car_charging_solar_surplus_active else False
+        # Publish solar surplus observability sensor — reflects "is surplus
+        # actually driving this car right now", not pure eligibility.
         self.dashboard_item(
             "binary_sensor." + self.prefix + "_car_charging_solar_surplus",
-            state="on" if any_surplus else "off",
+            state="on" if displayed_surplus else "off",
             attributes={
                 "friendly_name": "Predbat car charging on solar surplus",
                 "icon": "mdi:solar-power",
-                "cars_active": [i for i, a in enumerate(self.car_charging_solar_surplus_active) if a],
+                "cars_active": displayed_surplus,
             },
         )
 

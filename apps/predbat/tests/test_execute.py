@@ -2717,4 +2717,57 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
+    # Surplus eligible during a planned slot — eligibility stays True (so hysteresis state
+    # survives the planned slot ending) but the published cars_active suppresses it
+    # because the planned slot is what's actually driving the car right now.
+    failed |= run_solar_surplus_planned_slot_display_test(my_predbat)
+    if failed:
+        return failed
+
+    return failed
+
+
+def run_solar_surplus_planned_slot_display_test(my_predbat):
+    """When a planned slot is active for the same car, the published cars_active
+    suppresses that car (planned slot is the real driver), but the underlying
+    eligibility flag stays True so hysteresis memory survives the planned slot ending."""
+    print("Run scenario solar_surplus_eligible_during_planned_slot_not_displayed")
+    my_predbat.log("Run scenario solar_surplus_eligible_during_planned_slot_not_displayed")
+    my_predbat.inverters = [ActiveTestInverter(0, 0, 10.0, my_predbat.now_utc)]
+    my_predbat.args["num_inverters"] = 1
+    my_predbat.num_inverters = 1
+
+    car_slot = [{"start": my_predbat.minutes_now - 10, "end": my_predbat.minutes_now + 50, "kwh": 5.0, "average": 7.0, "cost": 35.0}]
+    failed = run_execute_test(
+        my_predbat,
+        "solar_surplus_eligible_during_planned_slot_not_displayed",
+        set_charge_window=True,
+        set_export_window=True,
+        car_charging_solar_surplus=True,
+        car_charging_planned=[True],
+        car_slot=car_slot,
+        grid_power=7500,
+        battery_power=0,
+        car_charging_from_battery=False,
+        assert_status="Hold for car",
+        assert_pause_discharge=True,
+        assert_immediate_soc_target=0,
+        assert_solar_surplus_active=[True],
+    )
+
+    # Inspect the published surplus sensor: cars_active must be empty because the
+    # planned slot is what's actually driving the car right now.
+    sensor_id = "binary_sensor." + my_predbat.prefix + "_car_charging_solar_surplus"
+    sensor = my_predbat.ha_interface.dummy_items.get(sensor_id, {})
+    if isinstance(sensor, dict):
+        cars_active = sensor.get("cars_active", None)
+        state = sensor.get("state", None)
+    else:
+        cars_active, state = None, sensor
+    if cars_active != []:
+        print("ERROR: planned-slot suppression — expected cars_active=[], got {}".format(cars_active))
+        failed = True
+    if state != "off":
+        print("ERROR: planned-slot suppression — expected surplus sensor state='off', got {}".format(state))
+        failed = True
     return failed
