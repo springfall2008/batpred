@@ -1560,6 +1560,121 @@ def test_time_entity_hour_write(test_name, ha, inv, dummy_rest, direction, new_s
     return failed
 
 
+def test_disable_charge_window_clears_slot_values_hm(test_name, ha, inv):
+    """
+    Ensure disable_charge_window clears H M slot values and timed current when
+    the inverter has explicit schedule enable entities (e.g. GS_fb00 style setup).
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    inv.rest_data = None
+    inv.inv_charge_time_format = "H M"
+    inv.inv_has_charge_enable_time = True
+    inv.inv_clear_slot_on_disable = True
+    inv.inv_time_button_press = False
+
+    ha.dummy_items["switch.scheduled_charge_enable"] = "on"
+    ha.dummy_items["number.charge_start_hour"] = 5
+    ha.dummy_items["number.charge_start_minute"] = 30
+    ha.dummy_items["number.charge_end_hour"] = 7
+    ha.dummy_items["number.charge_end_minute"] = 45
+    ha.dummy_items["number.timed_charge_current"] = 18
+
+    inv.base.args["scheduled_charge_enable"] = "switch.scheduled_charge_enable"
+    inv.base.args["charge_start_hour"] = "number.charge_start_hour"
+    inv.base.args["charge_start_minute"] = "number.charge_start_minute"
+    inv.base.args["charge_end_hour"] = "number.charge_end_hour"
+    inv.base.args["charge_end_minute"] = "number.charge_end_minute"
+    inv.base.args["timed_charge_current"] = "number.timed_charge_current"
+
+    inv.disable_charge_window()
+
+    if ha.get_state("switch.scheduled_charge_enable") != "off":
+        print("ERROR: scheduled_charge_enable should be off got {}".format(ha.get_state("switch.scheduled_charge_enable")))
+        failed = True
+    if ha.get_state("number.charge_start_hour") != 0:
+        print("ERROR: charge_start_hour should be 0 got {}".format(ha.get_state("number.charge_start_hour")))
+        failed = True
+    if ha.get_state("number.charge_start_minute") != 0:
+        print("ERROR: charge_start_minute should be 0 got {}".format(ha.get_state("number.charge_start_minute")))
+        failed = True
+    if ha.get_state("number.charge_end_hour") != 0:
+        print("ERROR: charge_end_hour should be 0 got {}".format(ha.get_state("number.charge_end_hour")))
+        failed = True
+    if ha.get_state("number.charge_end_minute") != 0:
+        print("ERROR: charge_end_minute should be 0 got {}".format(ha.get_state("number.charge_end_minute")))
+        failed = True
+    if ha.get_state("number.timed_charge_current") != 0:
+        print("ERROR: timed_charge_current should be 0 got {}".format(ha.get_state("number.timed_charge_current")))
+        failed = True
+
+    return failed
+
+
+def test_disable_discharge_clears_slot_values_time_entities(test_name, ha, inv):
+    """
+    Ensure discharge disable path clears slot values and timed current, including
+    writing 00:00:00 for time.* entities.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    inv.rest_data = None
+    inv.inv_charge_time_format = "H M"
+    inv.inv_has_discharge_enable_time = True
+    inv.inv_has_ge_inverter_mode = False
+    inv.inv_has_charge_enable_time = True
+    inv.inv_clear_slot_on_disable = True
+    inv.inv_time_button_press = False
+
+    old_start = "10:15:00"
+    old_end = "11:45:00"
+
+    ha.dummy_items["switch.scheduled_discharge_enable"] = "on"
+    ha.dummy_items["select.discharge_start_time"] = old_start
+    ha.dummy_items["select.discharge_end_time"] = old_end
+    ha.dummy_items["time.discharge_start_hour"] = old_start
+    ha.dummy_items["number.discharge_start_minute"] = 15
+    ha.dummy_items["time.discharge_end_hour"] = old_end
+    ha.dummy_items["number.discharge_end_minute"] = 45
+    ha.dummy_items["number.timed_discharge_current"] = 21
+    ha.dummy_items["select.inverter_mode"] = "Timed Export"
+
+    inv.base.args["scheduled_discharge_enable"] = "switch.scheduled_discharge_enable"
+    inv.base.args["discharge_start_time"] = "select.discharge_start_time"
+    inv.base.args["discharge_end_time"] = "select.discharge_end_time"
+    inv.base.args["discharge_start_hour"] = "time.discharge_start_hour"
+    inv.base.args["discharge_start_minute"] = "number.discharge_start_minute"
+    inv.base.args["discharge_end_hour"] = "time.discharge_end_hour"
+    inv.base.args["discharge_end_minute"] = "number.discharge_end_minute"
+    inv.base.args["timed_discharge_current"] = "number.timed_discharge_current"
+    inv.base.args["inverter_mode"] = "select.inverter_mode"
+
+    inv.adjust_force_export(False, datetime.strptime(old_start, "%H:%M:%S"), datetime.strptime(old_end, "%H:%M:%S"))
+
+    if ha.get_state("switch.scheduled_discharge_enable") != "off":
+        print("ERROR: scheduled_discharge_enable should be off got {}".format(ha.get_state("switch.scheduled_discharge_enable")))
+        failed = True
+    if ha.get_state("time.discharge_start_hour") != "00:00:00":
+        print("ERROR: discharge_start_hour time entity should be 00:00:00 got {}".format(ha.get_state("time.discharge_start_hour")))
+        failed = True
+    if ha.get_state("number.discharge_start_minute") != 0:
+        print("ERROR: discharge_start_minute should be 0 got {}".format(ha.get_state("number.discharge_start_minute")))
+        failed = True
+    if ha.get_state("time.discharge_end_hour") != "00:00:00":
+        print("ERROR: discharge_end_hour time entity should be 00:00:00 got {}".format(ha.get_state("time.discharge_end_hour")))
+        failed = True
+    if ha.get_state("number.discharge_end_minute") != 0:
+        print("ERROR: discharge_end_minute should be 0 got {}".format(ha.get_state("number.discharge_end_minute")))
+        failed = True
+    if ha.get_state("number.timed_discharge_current") != 0:
+        print("ERROR: timed_discharge_current should be 0 got {}".format(ha.get_state("number.timed_discharge_current")))
+        failed = True
+
+    return failed
+
+
 def run_inverter_tests(my_predbat_dummy):
     """
     Test the inverter functions
@@ -2270,6 +2385,14 @@ charge_start_service:
     if failed:
         return failed
     failed |= test_time_entity_hour_write("time_entity_charge_hour2", ha, inv, dummy_rest, "charge", "23:00:00", "23:59:00")
+    if failed:
+        return failed
+
+    failed |= test_disable_charge_window_clears_slot_values_hm("disable_charge_clear_values_hm", ha, inv)
+    if failed:
+        return failed
+
+    failed |= test_disable_discharge_clears_slot_values_time_entities("disable_discharge_clear_values_time_entities", ha, inv)
     if failed:
         return failed
 
