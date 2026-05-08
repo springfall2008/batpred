@@ -564,6 +564,13 @@ Surplus car charging will **not** activate during force export windows (when Pre
 
 Built-in hysteresis (200W) prevents the charger from flapping on and off due to passing clouds. When the car is already surplus-charging, Predbat accounts for the car's consumption (`input_number.predbat_car_charging_rate`) when evaluating whether surplus is still available.
 
+While surplus charging is active, Predbat also drops the feature off if the home battery is being discharged at more than 500W to feed the car (rather than simply being idle while solar covers the load). This stops a cloudy evening from quietly draining the battery into the car.
+
+### Prerequisites
+
+- **Grid power sign convention.** Surplus relies on your existing `grid_power` sensor: positive values must mean *exporting*. If your inverter integration reports the opposite sign, set `grid_power_invert: true` in `apps.yaml` (the same flag the rest of Predbat uses). Without that, surplus charging can fire while you are *importing*, running up the import bill instead of using free solar.
+- **Read-only mode.** When Predbat is running read-only it cannot prevent the home battery from discharging into the car, so surplus detection is skipped entirely (the binary sensor stays `off`).
+
 ### Configuration
 
 Enable the feature with these Predbat entities:
