@@ -331,7 +331,7 @@ def run_model_tests(my_predbat):
         my_predbat,
         0.5,
         0,
-        assert_final_metric=0,
+        assert_final_metric=import_rate * 3,
         assert_final_soc=100.0 - 24 * 0.5,
         with_battery=True,
         charge_car=60,

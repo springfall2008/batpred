@@ -2423,6 +2423,7 @@ class Octopus:
                     new_slot["average"] = slot_average
                     new_slot["cost"] = dp2(new_slot["average"] * kwh)
                     new_slot["soc"] = dp2(car_soc)
+                    new_slot["octopus"] = True
                     new_slots.append(new_slot)
 
                     if end_minutes_original > end_minutes:
@@ -2433,6 +2434,7 @@ class Octopus:
                         new_slot["average"] = slot_average
                         new_slot["cost"] = 0.0
                         new_slot["soc"] = dp2(car_soc)
+                        new_slot["octopus"] = True
                         new_slots.append(new_slot)
 
                 else:
@@ -2444,6 +2446,7 @@ class Octopus:
                     new_slot["average"] = slot_average
                     new_slot["cost"] = dp2(new_slot["average"] * kwh)
                     new_slot["soc"] = dp2(car_soc)
+                    new_slot["octopus"] = True
                     new_slots.append(new_slot)
         return new_slots
 

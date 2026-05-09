@@ -2722,6 +2722,41 @@ class Output:
         )
         self.dashboard_item("binary_sensor." + self.prefix + "_demand", state="on" if isDemand else "off", attributes={"friendly_name": "Predbat is in demand mode", "icon": "mdi:battery-arrow-up"})
 
+    def yesterday_reconstruct_car_slots(self, end_record, yesterday_load_step):
+        # Normalize to list for multi-car support
+        entity_id_config = self.get_arg("octopus_intelligent_slot", indirect=False)
+        if entity_id_config and not isinstance(entity_id_config, list):
+            entity_id_list = [entity_id_config]
+        elif entity_id_config:
+            entity_id_list = entity_id_config
+        else:
+            entity_id_list = []
+
+        # re-load car charging slots for yesterday (for octopus if enabled).
+        for car_n in range(min(len(entity_id_list), self.num_cars)):
+            self.car_charging_slots[car_n] = self.load_octopus_slots(car_n, self.octopus_slots[car_n], self.octopus_intelligent_consider_full)
+
+        # re-construct car charging slots from non-octopus using the car energy sensor
+        # sum the energy over each 30 minutes and add it to the car plan if missing
+        if self.num_cars > 0:
+            for start_minute in range(0, end_record, self.plan_interval_minutes):
+                car_energy = 0
+                for minute in range(start_minute, start_minute + self.plan_interval_minutes):
+                    minute_previous = self.minutes_now + 24 * 60 - minute  # How far back in time are we looking
+                    car_energy += self.get_from_incrementing(self.car_charging_energy, minute_previous)
+                if car_energy > 0.1:
+                    # Only add the slot if there isn't already one covering this time period
+                    if not any(slot["start"] <= start_minute < slot["end"] for slot in self.car_charging_slots[0]):
+                        self.car_charging_slots[0].append({"start": start_minute, "end": start_minute + self.plan_interval_minutes, "kwh": car_energy, "octopus": False})
+
+        # Walk through the car charging slots during the period
+        # Subtract the energy for the period from the historical load as it will be added back in again during the simulation
+        # car_load is in kW; convert to kWh per PREDICT_STEP before subtracting from the kWh/step load array
+        for minute in range(0, end_record, PREDICT_STEP):
+            car_load, car_rate_slot = in_car_slot(minute, self.num_cars, self.car_charging_slots)
+            load_value = yesterday_load_step.get(minute, 0)
+            yesterday_load_step[minute] = max(load_value - sum(car_load) * PREDICT_STEP / 60.0, 0)
+
     def calculate_yesterday(self):
         """
         Calculate the base plan for yesterday
@@ -2873,6 +2908,7 @@ class Output:
         rate_import_replicated = self.rate_import_replicated
         rate_export_replicated = self.rate_export_replicated
         car_charging_slots_backup = copy.deepcopy(self.car_charging_slots)
+        car_charging_soc = list(self.car_charging_soc)
 
         # Fake to yesterday state
         self.minutes_now = 0
@@ -2894,26 +2930,13 @@ class Output:
         self.carbon_enable = False
         self.rate_import_replicated = {}
         self.rate_export_replicated = {}
+        # Reset car SOC to 0 so the prediction can add back the full car energy from IOG slots.
+        # The current car_charging_soc reflects today's state; if the car is already at its limit
+        # the Prediction would compute car_load_scale=0 and omit all car energy from the metric.
+        self.car_charging_soc = [0] * len(self.car_charging_soc)
 
-        # Normalize to list for multi-car support
-        entity_id_config = self.get_arg("octopus_intelligent_slot", indirect=False)
-        if entity_id_config and not isinstance(entity_id_config, list):
-            entity_id_list = [entity_id_config]
-        elif entity_id_config:
-            entity_id_list = entity_id_config
-        else:
-            entity_id_list = []
-
-        # re-load car charging slots for yesterday (for octopus if enabled).
-        for car_n in range(min(len(entity_id_list), self.num_cars)):
-            self.car_charging_slots[car_n] = self.load_octopus_slots(car_n, self.octopus_slots[car_n], self.octopus_intelligent_consider_full)
-
-        # Walk through the car charging slots during the period
-        # Subtract the energy for the period from the historical load as it will be added back in again during the simuation
-        for minute in range(0, end_record, PREDICT_STEP):
-            car_load, car_rate_slot = in_car_slot(minute, self.num_cars, self.car_charging_slots)
-            load_value = yesterday_load_step.get(minute, 0)
-            yesterday_load_step[minute] = max(load_value - sum(car_load), 0)
+        # re-construct car charging slots from non-octopus using the sensor
+        self.yesterday_reconstruct_car_slots(end_record, yesterday_load_step)
 
         # Simulate yesterday
         self.prediction = Prediction(self, yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step)
@@ -3219,6 +3242,7 @@ class Output:
         self.rate_import_replicated = rate_import_replicated
         self.rate_export_replicated = rate_export_replicated
         self.car_charging_slots = car_charging_slots_backup
+        self.car_charging_soc = car_charging_soc
 
         # Update timestamp
         self.savings_last_updated = self.now_utc

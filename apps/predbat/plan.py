@@ -4255,6 +4255,7 @@ class Plan:
                 new_slot["kwh"] = dp3(kwh)
                 new_slot["average"] = window["average"]
                 new_slot["cost"] = dp2(new_slot["average"] * kwh)
+                new_slot["octopus"] = False
                 plan.append(new_slot)
 
         # Return sorted back in time order
