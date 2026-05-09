@@ -172,6 +172,20 @@ class Plan:
                 }
                 if forecast.get("auto_expire", False):
                     self.house_load_additional_forecast_overrides[name] = {"name": name, **selected_flexible[name]}
+                    self.update_additional_load_api_command_metadata(
+                        name,
+                        {
+                            "_requested_start": self.additional_load_minutes_to_stamp(start_minutes),
+                            "_requested_end": self.additional_load_minutes_to_stamp(end_minutes),
+                            "_selected_start": self.additional_load_minutes_to_stamp(best_start),
+                            "_selected_end": self.additional_load_minutes_to_stamp(best_start + duration_minutes),
+                            "_expires_at": self.additional_load_minutes_to_stamp(best_start + duration_minutes),
+                            "_selection_reason": "prediction_metric",
+                            "_candidate_count": candidate_count,
+                            "_selected_metric": dp2(best_metric) if best_metric is not None else None,
+                            "_baseline_metric": dp2(baseline_metric),
+                        },
+                    )
                 self.log("Flexible additional load {} selected {}-{} using prediction metric {} from {} candidates".format(name, self.time_abs_str(best_start), self.time_abs_str(best_start + duration_minutes), dp2(best_metric), candidate_count))
 
         if not selected_flexible:

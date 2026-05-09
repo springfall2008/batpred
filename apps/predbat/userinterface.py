@@ -1226,7 +1226,10 @@ class UserInterface:
             return
         if config_item == "load_forecast_delta_api" and value != "off":
             name = value.split("?", 1)[0].split("=", 1)[0].replace("[", "").replace("]", "")
-            self.house_load_additional_forecast_overrides.pop(name, None)
+            if "[" not in value and self.has_additional_load_api_command(name):
+                value = self.preserve_additional_load_api_metadata(value)
+            else:
+                self.house_load_additional_forecast_overrides.pop(name, None)
         values = item.get("value", "")
         if not values:
             values = ""
@@ -1311,7 +1314,10 @@ class UserInterface:
             return
         if config_item == "load_forecast_delta_api" and value != "off" and "[" not in value:
             name = value.split("?", 1)[0].split("=", 1)[0]
-            self.house_load_additional_forecast_overrides.pop(name, None)
+            if self.has_additional_load_api_command(name):
+                value = self.preserve_additional_load_api_metadata(value)
+            else:
+                self.house_load_additional_forecast_overrides.pop(name, None)
         values = item.get("value", "")
         if not values:
             values = ""

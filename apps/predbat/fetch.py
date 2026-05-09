@@ -188,6 +188,97 @@ class Fetch:
         """
         return value.split("?", 1)[0].split("=", 1)[0].replace("[", "").replace("]", "")
 
+    def additional_load_command_args(self, value):
+        """
+        Return a load_forecast_delta_api command name and query arguments.
+        """
+        value = value.replace("[", "").replace("]", "")
+        if "?" not in value:
+            return self.additional_load_command_name(value), {}
+        name, command_args = value.split("?", 1)
+        args = {}
+        for arg in command_args.split("&"):
+            arg_split = arg.split("=", 1)
+            if len(arg_split) > 1:
+                args[arg_split[0]] = arg_split[1]
+            else:
+                args[arg_split[0]] = True
+        return name, args
+
+    def additional_load_build_api_command(self, name, args):
+        """
+        Build a load_forecast_delta_api command from a name and arguments.
+        """
+        return "{}?{}".format(name, "&".join("{}={}".format(key, value) if value is not True else key for key, value in args.items()))
+
+    def additional_load_minutes_to_stamp(self, minutes):
+        """
+        Convert forecast minutes from midnight into a durable timestamp string.
+        """
+        return str(int((self.midnight_utc + timedelta(minutes=int(minutes))).timestamp()))
+
+    def additional_load_stamp_to_minutes(self, stamp):
+        """
+        Convert a durable timestamp string into forecast minutes from the current midnight.
+        """
+        try:
+            stamp_datetime = datetime.fromtimestamp(int(stamp), tz=self.midnight_utc.tzinfo) if str(stamp).isdigit() else datetime.fromisoformat(str(stamp))
+        except (ValueError, TypeError):
+            return None
+        return int((stamp_datetime - self.midnight_utc).total_seconds() / 60)
+
+    def additional_load_api_metadata(self, name):
+        """
+        Return persisted hidden metadata for a stored load_forecast_delta_api command.
+        """
+        item = self.config_index.get("load_forecast_delta_api") if "load_forecast_delta_api" in self.config_index else None
+        if not item:
+            return {}
+        values = (item.get("value", "") or "").replace("+", "")
+        for value in values.split(",") if values else []:
+            command_name, args = self.additional_load_command_args(value)
+            if command_name == name or self.additional_load_safe_name(command_name) == self.additional_load_safe_name(name):
+                return {key: value for key, value in args.items() if str(key).startswith("_")}
+        return {}
+
+    def preserve_additional_load_api_metadata(self, value):
+        """
+        Preserve hidden one-shot metadata when an active API command is sent again.
+        """
+        name, args = self.additional_load_command_args(value)
+        metadata = self.additional_load_api_metadata(name)
+        if not metadata:
+            return value
+        for key, metadata_value in metadata.items():
+            args.setdefault(key, metadata_value)
+        return self.additional_load_build_api_command(name, args)
+
+    def update_additional_load_api_command_metadata(self, name, metadata):
+        """
+        Persist one-shot runtime metadata into the stored API selector command.
+        """
+        item = self.config_index.get("load_forecast_delta_api") if "load_forecast_delta_api" in self.config_index else None
+        if not item:
+            return
+        values = (item.get("value", "") or "").replace("+", "")
+        if not values:
+            return
+        changed = False
+        new_values = []
+        for value in values.split(","):
+            if value == "off":
+                continue
+            command_name, args = self.additional_load_command_args(value)
+            if command_name == name or self.additional_load_safe_name(command_name) == self.additional_load_safe_name(name):
+                for key, metadata_value in metadata.items():
+                    if metadata_value is not None and args.get(key) != str(metadata_value):
+                        args[key] = str(metadata_value)
+                        changed = True
+                value = self.additional_load_build_api_command(command_name, args)
+            new_values.append(value)
+        if changed:
+            self.api_select_update("load_forecast_delta_api", new_value="+" + ",".join(new_values) if new_values else "off")
+
     def resolve_additional_load_name(self, name):
         """
         Resolve a forecast name or safe entity suffix to the active configured name.
@@ -340,14 +431,36 @@ class Fetch:
                 override[arg_split[0]] = arg_split[1]
             else:
                 override[arg_split[0]] = True
+        requested_start_minutes = self.additional_load_stamp_to_minutes(override.get("_requested_start", None)) if "_requested_start" in override else None
+        selected_start_minutes = self.additional_load_stamp_to_minutes(override.get("_selected_start", None)) if "_selected_start" in override else None
+        expires_minutes = self.additional_load_stamp_to_minutes(override.get("_expires_at", None)) if "_expires_at" in override else None
+        if requested_start_minutes is not None:
+            override["_requested_start_minutes"] = requested_start_minutes
+        if selected_start_minutes is not None:
+            override["_selected_start_minutes"] = selected_start_minutes
+        if expires_minutes is not None:
+            override["_expires_minutes"] = expires_minutes
+        for key in ["_candidate_count"]:
+            if key in override:
+                try:
+                    override[key] = int(override[key])
+                except (ValueError, TypeError):
+                    override.pop(key, None)
+        for key in ["_selected_metric", "_baseline_metric"]:
+            if key in override:
+                try:
+                    override[key] = float(override[key])
+                except (ValueError, TypeError):
+                    override.pop(key, None)
         if "start_time" not in override:
             existing_override = self.house_load_additional_forecast_overrides.get(str(name), {})
-            requested_start_minutes = existing_override.get("_requested_start_minutes", None)
+            requested_start_minutes = override.get("_requested_start_minutes", existing_override.get("_requested_start_minutes", None))
             if requested_start_minutes is None:
                 plan_interval = self.get_arg("plan_interval_minutes", 30)
                 requested_start_minutes = int(self.minutes_now / plan_interval) * plan_interval
             override["_requested_start_minutes"] = requested_start_minutes
             self.house_load_additional_forecast_overrides.setdefault(str(name), {"name": str(name)})["_requested_start_minutes"] = requested_start_minutes
+            self.update_additional_load_api_command_metadata(str(name), {"_requested_start": self.additional_load_minutes_to_stamp(requested_start_minutes)})
         return override
 
     def expire_additional_load_api_commands(self):
@@ -356,11 +469,18 @@ class Fetch:
         """
         expired_names = []
         minutes_now_slot = int(self.minutes_now / self.get_arg("plan_interval_minutes", 30)) * self.get_arg("plan_interval_minutes", 30)
+        item = self.config_index.get("load_forecast_delta_api") if "load_forecast_delta_api" in self.config_index else None
+        values = (item.get("value", "") or "").replace("+", "") if item else ""
+        for value in values.split(",") if values else []:
+            name, args = self.additional_load_command_args(value)
+            expires_minutes = self.additional_load_stamp_to_minutes(args.get("_expires_at", None)) if "_expires_at" in args else None
+            if expires_minutes is not None and expires_minutes <= minutes_now_slot:
+                expired_names.append(name)
         for name, override in list(self.house_load_additional_forecast_overrides.items()):
             expires_minutes = override.get("_expires_minutes", None)
             if expires_minutes is not None and expires_minutes <= minutes_now_slot:
                 expired_names.append(name)
-        for name in expired_names:
+        for name in set(expired_names):
             self.log("Expired additional load forecast {}".format(name))
             self.house_load_additional_forecast_overrides.pop(name, None)
             self.remove_additional_load_api_command(name)
