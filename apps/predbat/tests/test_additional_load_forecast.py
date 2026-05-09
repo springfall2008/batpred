@@ -10,6 +10,8 @@
 
 """Tests for named additional house load forecasts."""
 
+from datetime import timedelta
+
 import plan as plan_module
 from tests.test_infra import run_async
 
@@ -671,6 +673,88 @@ def test_additional_load_flexible_api_locks_after_suggested_start(my_predbat):
     return failed
 
 
+def test_additional_load_flexible_api_metadata_survives_restart(my_predbat):
+    """Test omitted start_time and selected flexible metadata survive API command reparse."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    original_midnight = my_predbat.midnight_utc
+    my_predbat.minutes_now = 20 * 60 + 45
+    my_predbat.plan_interval_minutes = 15
+    my_predbat.args["plan_interval_minutes"] = 15
+    my_predbat.args["house_load_additional_forecast"] = []
+    my_predbat.api_select("load_forecast_delta_api", "dishwasher?enabled=true&mode=flexible&end_time=07:00&duration=5.0&energy=0.7")
+    my_predbat.refresh_additional_load_forecast_api()
+    my_predbat.update_additional_load_api_command_metadata(
+        "dishwasher",
+        {
+            "_selected_start": my_predbat.additional_load_minutes_to_stamp(21 * 60),
+            "_selected_end": my_predbat.additional_load_minutes_to_stamp(26 * 60),
+            "_expires_at": my_predbat.additional_load_minutes_to_stamp(26 * 60),
+        },
+    )
+
+    api_command = my_predbat.api_select_update("load_forecast_delta_api")[0]
+    if "_requested_start=" not in api_command or "_selected_start=" not in api_command or "_expires_at=" not in api_command:
+        print("ERROR: API command should persist requested, selected, and expiry metadata, got {}".format(api_command))
+        failed = 1
+
+    my_predbat.house_load_additional_forecast_overrides = {}
+    my_predbat.midnight_utc = original_midnight + timedelta(days=1)
+    my_predbat.minutes_now = 30
+    my_predbat.refresh_additional_load_forecast_api()
+
+    forecast = my_predbat.house_load_additional_forecasts.get("dishwasher", {})
+    if not forecast.get("selection_locked") or "T21:00:00" not in forecast.get("suggested_start", "") or "T02:00:00" not in forecast.get("suggested_end", ""):
+        print("ERROR: Reparsed API command should restore old locked selection after restart, got {}".format(forecast))
+        failed = 1
+
+    my_predbat.minutes_now = 20 * 60 + 45
+    my_predbat.refresh_additional_load_forecast_api()
+    if my_predbat.house_load_additional_forecasts or my_predbat.api_select_update("load_forecast_delta_api"):
+        print("ERROR: Reparsed expired API command should be removed, got forecasts {} api {}".format(my_predbat.house_load_additional_forecasts, my_predbat.api_select_update("load_forecast_delta_api")))
+        failed = 1
+
+    my_predbat.midnight_utc = original_midnight
+    my_predbat.api_select("load_forecast_delta_api", "off")
+    my_predbat.house_load_additional_forecast_overrides = {}
+    return failed
+
+
+def test_additional_load_flexible_api_repeat_preserves_metadata(my_predbat):
+    """Test repeating an active API command preserves existing one-shot metadata."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.minutes_now = 20 * 60 + 45
+    my_predbat.plan_interval_minutes = 15
+    my_predbat.args["plan_interval_minutes"] = 15
+    my_predbat.args["house_load_additional_forecast"] = []
+    api_command = "dishwasher?enabled=true&mode=flexible&end_time=07:00&duration=5.0&energy=0.7"
+    my_predbat.api_select("load_forecast_delta_api", api_command)
+    my_predbat.refresh_additional_load_forecast_api()
+    my_predbat.update_additional_load_api_command_metadata(
+        "dishwasher",
+        {
+            "_selected_start": my_predbat.additional_load_minutes_to_stamp(21 * 60),
+            "_selected_end": my_predbat.additional_load_minutes_to_stamp(26 * 60),
+            "_expires_at": my_predbat.additional_load_minutes_to_stamp(26 * 60),
+        },
+    )
+
+    my_predbat.minutes_now = 21 * 60 + 15
+    my_predbat.api_select("load_forecast_delta_api", api_command)
+    my_predbat.refresh_additional_load_forecast_api()
+
+    stored_command = my_predbat.api_select_update("load_forecast_delta_api")[0]
+    forecast = my_predbat.house_load_additional_forecasts.get("dishwasher", {})
+    if "_selected_start=" not in stored_command or "T21:00:00" not in forecast.get("suggested_start", "") or not forecast.get("selection_locked"):
+        print("ERROR: Repeated active API command should preserve selected metadata, command {} forecast {}".format(stored_command, forecast))
+        failed = 1
+
+    my_predbat.api_select("load_forecast_delta_api", "off")
+    my_predbat.house_load_additional_forecast_overrides = {}
+    return failed
+
+
 def test_additional_load_flexible_pending_until_plan(my_predbat):
     """Test flexible additional load is left for plan-time prediction selection."""
     failed = 0
@@ -900,6 +984,8 @@ def run_additional_load_forecast_tests(my_predbat):
     failed |= test_additional_load_flexible_api_reselects_before_suggested_start(my_predbat)
     failed |= test_additional_load_flexible_api_stale_selection_not_before_requested_start(my_predbat)
     failed |= test_additional_load_flexible_api_locks_after_suggested_start(my_predbat)
+    failed |= test_additional_load_flexible_api_metadata_survives_restart(my_predbat)
+    failed |= test_additional_load_flexible_api_repeat_preserves_metadata(my_predbat)
     failed |= test_additional_load_flexible_pending_until_plan(my_predbat)
     failed |= test_additional_load_flexible_done_by_window(my_predbat)
     failed |= test_additional_load_flexible_api_omitted_start_is_frozen(my_predbat)
