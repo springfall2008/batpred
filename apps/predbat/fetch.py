@@ -920,6 +920,8 @@ class Fetch:
         # Replicate and scan import rates
         if self.rate_import:
             self.rate_scan(self.rate_import, print=False)
+            self.rate_max_base = self.rate_max  # True peak rate before saving sessions / overrides inflate it
+            self.rate_min_base = self.rate_min  # True off-peak rate before free sessions / overrides deflate it
             self.rate_import, self.rate_import_replicated = self.rate_replicate(self.rate_import, self.io_adjusted, is_import=True)
             self.rate_import_no_io = self.rate_import.copy()
             for car_n in range(self.num_cars):

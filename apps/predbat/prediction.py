@@ -672,9 +672,11 @@ class Prediction:
                 charge_rate_now = battery_rate_max_charge
                 discharge_rate_now = battery_rate_max_discharge
 
+            car_rate_premium = 0  # Extra cost above import_rate for beyond-cap IOG slots
+
             # Simulate car charging
             if car_enable:
-                car_load = in_car_slot(minute_absolute, self.num_cars, self.car_charging_slots)
+                car_load, car_rate_slot = in_car_slot(minute_absolute, self.num_cars, self.car_charging_slots)
                 car_load_energy = 0
 
                 # Car charging?
@@ -686,7 +688,9 @@ class Prediction:
                         car_soc[car_n] = car_soc[car_n] + car_load_scale
                         if self.car_energy_reported_load:
                             # Only add load if the car is reporting it as load, otherwise its outside the CT Clamp
-                            load_yesterday += car_load_scale / self.car_charging_loss
+                            car_grid_import = car_load_scale / self.car_charging_loss
+                            load_yesterday += car_grid_import
+                            car_rate_premium += max(0, car_rate_slot[car_n] - import_rate) * car_grid_import
                             # Model not allowing the car to charge from the battery
                             if (car_load_scale > 0) and (not self.car_charging_from_battery) and set_charge_window:
                                 discharge_rate_now = battery_rate_min  # 0
@@ -1085,7 +1089,7 @@ class Prediction:
                     # self.log("importing to minute %s amount %s kW total %s kWh total draw %s" % (minute, energy, import_kwh_house, diff))
                     import_kwh_house += diff
 
-                metric += import_rate * diff
+                metric += import_rate * diff + car_rate_premium
                 grid_state = "<"
             else:
                 # Export

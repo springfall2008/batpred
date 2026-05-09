@@ -1868,6 +1868,23 @@ class Output:
                 day_cost_time_export[stamp] = dp2(day_cost_export)
                 day_carbon_time[stamp] = dp2(carbon_g)
 
+        # Add beyond-cap IOG rate premium for day and hour car cost.
+        # The per-minute loops above charged car energy at house import rate (correct base).
+        # For IOG slots where average > house rate (beyond cap), add the difference.
+        for car_n in range(self.num_cars):
+            for slot in self.car_charging_slots[car_n]:
+                house_rate = self.rate_import.get(slot["start"], 0)
+                premium = max(0, slot.get("average", 0) - house_rate) * slot.get("kwh", 0)
+                if premium > 0:
+                    slot_start = slot["start"]
+                    if 0 <= slot_start < self.minutes_now:
+                        day_cost_car += premium
+                        day_cost += premium
+                        day_cost_nosc += premium
+                    if self.minutes_now - 60 <= slot_start < self.minutes_now:
+                        hour_cost_car += premium
+                        hour_cost += premium
+
         day_pkwh = self.rate_import.get(0, 0)
         day_car_pkwh = self.rate_import.get(0, 0)
         day_import_pkwh = self.rate_import.get(0, 0)

@@ -412,6 +412,8 @@ def reset_rates(my_predbat, ir, xr):
         my_predbat.rate_export[minute] = xr
     my_predbat.rate_export_min = xr
     my_predbat.rate_scan(my_predbat.rate_import, print=False)
+    my_predbat.rate_min_base = my_predbat.rate_min
+    my_predbat.rate_max_base = my_predbat.rate_max
     my_predbat.rate_scan_export(my_predbat.rate_export, print=False)
 
 
@@ -426,6 +428,8 @@ def reset_rates2(my_predbat, ir, xr):
             my_predbat.rate_export[minute] = xr * 2
     my_predbat.rate_export_min = xr
     my_predbat.rate_scan(my_predbat.rate_import, print=False)
+    my_predbat.rate_min_base = my_predbat.rate_min
+    my_predbat.rate_max_base = my_predbat.rate_max
     my_predbat.rate_scan_export(my_predbat.rate_export, print=False)
 
 

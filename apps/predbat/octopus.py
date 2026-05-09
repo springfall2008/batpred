@@ -2354,6 +2354,8 @@ class Octopus:
             # Car not configured, just return the slots as they are (for export or other non-car use)
             return new_slots
         octopus_slot_low_rate = self.get_arg("octopus_slot_low_rate", True)
+        octopus_slot_max = self.get_arg("octopus_slot_max", 12)  # Default to 12 slots (6 hours) per midday-to-midday period
+        slots_per_day = {}  # Track 30-min blocks used per midday-to-midday period
         car_soc = self.car_charging_soc[car_n]
         limit = self.car_charging_limit[car_n]
         slots_decoded = []
@@ -2384,6 +2386,22 @@ class Octopus:
             start_minutes, end_minutes, kwh, source, location = slot
             kwh_original = kwh
             end_minutes_original = end_minutes
+
+            # Determine rate for this slot, applying the midday-to-midday cap
+            slot_average = self.rate_import.get(start_minutes, self.rate_min_base)
+            if octopus_slot_low_rate and source != "bump-charge" and source != "BOOST" and (not location or location == "AT_HOME"):
+                # Count 30-min blocks for this slot against the midday-to-midday cap
+                slot_block_start = (start_minutes // 30) * 30
+                num_blocks = max(1, (end_minutes - slot_block_start + 29) // 30)
+                day_offset = (start_minutes - 720) // (24 * 60)
+                if day_offset not in slots_per_day:
+                    slots_per_day[day_offset] = 0
+                if slots_per_day[day_offset] + num_blocks <= octopus_slot_max:
+                    slots_per_day[day_offset] += num_blocks
+                    slot_average = self.rate_min_base
+                else:
+                    slot_average = self.rate_max_base
+
             if (end_minutes > start_minutes) and (end_minutes > self.minutes_now) and (not location or location == "AT_HOME"):
                 kwh_expected = kwh * self.car_charging_loss
                 if octopus_intelligent_consider_full:
@@ -2402,9 +2420,7 @@ class Octopus:
                     new_slot["start"] = start_minutes
                     new_slot["end"] = end_minutes
                     new_slot["kwh"] = kwh
-                    new_slot["average"] = self.rate_import.get(start_minutes, self.rate_min)
-                    if octopus_slot_low_rate and source != "bump-charge" and source != "BOOST":
-                        new_slot["average"] = self.rate_min  # Assume price in min
+                    new_slot["average"] = slot_average
                     new_slot["cost"] = dp2(new_slot["average"] * kwh)
                     new_slot["soc"] = dp2(car_soc)
                     new_slots.append(new_slot)
@@ -2414,9 +2430,7 @@ class Octopus:
                         new_slot["start"] = end_minutes
                         new_slot["end"] = end_minutes_original
                         new_slot["kwh"] = 0.0
-                        new_slot["average"] = self.rate_import.get(start_minutes, self.rate_min)
-                        if octopus_slot_low_rate and source != "bump-charge" and source != "BOOST":
-                            new_slot["average"] = self.rate_min  # Assume price in min
+                        new_slot["average"] = slot_average
                         new_slot["cost"] = 0.0
                         new_slot["soc"] = dp2(car_soc)
                         new_slots.append(new_slot)
@@ -2427,9 +2441,7 @@ class Octopus:
                     new_slot["start"] = start_minutes
                     new_slot["end"] = end_minutes
                     new_slot["kwh"] = kwh
-                    new_slot["average"] = self.rate_import.get(start_minutes, self.rate_min)
-                    if octopus_slot_low_rate and source != "bump-charge" and source != "BOOST":
-                        new_slot["average"] = self.rate_min  # Assume price in min
+                    new_slot["average"] = slot_average
                     new_slot["cost"] = dp2(new_slot["average"] * kwh)
                     new_slot["soc"] = dp2(car_soc)
                     new_slots.append(new_slot)
@@ -2467,7 +2479,7 @@ class Octopus:
                     end_minutes = min(end_minutes, self.forecast_minutes)
 
                     if octopus_slot_low_rate:
-                        assumed_price = self.rate_min
+                        assumed_price = self.rate_min_base
                         for minute in range(start_minutes, end_minutes):
                             # Calculate which day this minute belongs to (day boundary at midday)
                             # Period 0 = noon today (720) to 11:59 tomorrow (2159), etc.

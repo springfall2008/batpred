@@ -740,6 +740,7 @@ def in_car_slot(minute, num_cars, car_charging_slots):
     Is the given minute inside a car slot
     """
     load_amount = [0 for car_n in range(num_cars)]
+    rate_amount = [0 for car_n in range(num_cars)]
 
     for car_n in range(num_cars):
         if car_charging_slots[car_n]:
@@ -753,8 +754,9 @@ def in_car_slot(minute, num_cars, car_charging_slots):
                 # Return the load in that slot
                 if minute >= start_minutes and minute < end_minutes:
                     load_amount[car_n] = abs(kwh / slot_hours)
+                    rate_amount[car_n] = slot.get("average", 0)
                     break
-    return load_amount
+    return load_amount, rate_amount
 
 
 def time_string_to_stamp(time_string):

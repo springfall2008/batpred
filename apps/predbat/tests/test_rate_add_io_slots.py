@@ -61,6 +61,7 @@ def run_rate_add_io_slots_tests(my_predbat):
 
     reset_rates(my_predbat, 10, 5)
     my_predbat.rate_min = 4
+    my_predbat.rate_min_base = 4
 
     # Test 1: Simple single slot within limit
     print("\n**** Test 1: Single 30-min slot ****")
