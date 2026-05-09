@@ -20,8 +20,6 @@ from predbat_metrics import record_api_call
 import asyncio
 import json
 import random
-import yaml
-import os
 from component_base import ComponentBase
 
 """
@@ -1592,40 +1590,6 @@ class GECloudData(ComponentBase):
         self.update_success_timestamp()
         return True
 
-    def get_ge_cache_filename(self):
-        cache_path = self.config_root + "/cache"
-        if not os.path.exists(cache_path):
-            os.makedirs(cache_path, exist_ok=True)
-        cache_file = cache_path + "/givenergy_data.yaml"
-        return cache_file
-
-    def load_ge_cache(self):
-        """
-        Load the GE Cloud cache
-        """
-        cache_file = self.get_ge_cache_filename()
-        if os.path.exists(cache_file):
-            try:
-                with open(cache_file, "r") as f:
-                    self.ge_url_cache = yaml.safe_load(f)
-                if not isinstance(self.ge_url_cache, dict):
-                    self.ge_url_cache = {}
-            except (yaml.YAMLError, IOError) as e:
-                self.ge_url_cache = {}
-        else:
-            self.ge_url_cache = {}
-
-    def save_ge_cache(self):
-        """
-        Save the GE Cloud cache
-        """
-        cache_file = self.get_ge_cache_filename()
-        try:
-            with open(cache_file, "w") as f:
-                yaml.safe_dump(self.ge_url_cache, f)
-        except IOError as e:
-            pass
-
     def clean_ge_url_cache(self, now_utc):
         """
         Clean up the GE Cloud cache
@@ -1737,7 +1701,10 @@ class GECloudData(ComponentBase):
             return False
 
         # Load cache if not already loaded
-        self.load_ge_cache()
+        if self.storage:
+            self.ge_url_cache = await self.storage.load("gecloud_data", "ge_url_cache") or {}
+        else:
+            self.ge_url_cache = {}
 
         # Clean old cache entries
         self.clean_ge_url_cache(now_utc)
@@ -1783,7 +1750,8 @@ class GECloudData(ComponentBase):
         self.mdata = mdata
 
         # Save GE URL cache to disk for next time
-        self.save_ge_cache()
+        if self.storage:
+            await self.storage.save("gecloud_data", "ge_url_cache", self.ge_url_cache, format="yaml", expiry=None)
         self.ge_url_cache = {}
         return True
 

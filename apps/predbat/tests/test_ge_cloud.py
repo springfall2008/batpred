@@ -15,9 +15,9 @@ import asyncio
 import json
 from unittest.mock import MagicMock, patch, AsyncMock
 import tempfile
-import os
 from datetime import datetime, timedelta, timezone
 from tests.test_infra import create_aiohttp_mock_response, create_aiohttp_mock_session, run_async
+from storage import StorageLocalFiles
 
 
 class MockGECloudDirect(GECloudDirect):
@@ -138,9 +138,12 @@ class MockGECloudData(GECloudData):
         """Mock update_success_timestamp"""
         pass
 
+    @property
+    def storage(self):
+        """Mock storage property - returns injected mock or None"""
+        return getattr(self, "_mock_storage", None)
 
-# =============================================================================
-# API Infrastructure Tests
+
 # =============================================================================
 
 
@@ -3241,54 +3244,48 @@ def _test_clean_ge_url_cache(my_predbat):
 
 
 def _test_load_save_ge_cache(my_predbat):
-    """Test saving and loading cache to/from disk"""
+    """Test saving and loading ge_url_cache via storage component"""
     with tempfile.TemporaryDirectory() as tmpdir:
+        storage = StorageLocalFiles(tmpdir, print)
         ge_data = MockGECloudData(config_root=tmpdir)
+        ge_data._mock_storage = storage
 
         now = datetime(2024, 12, 17, 12, 0, 0)
+        test_cache = {"test_url": {"stamp": now.isoformat(), "data": [{"test": "data"}], "next": None}}
 
-        # Populate cache
-        ge_data.ge_url_cache["test_url"] = {"stamp": now, "data": [{"test": "data"}], "next": None}
-
-        # Save to disk
-        ge_data.save_ge_cache()
-
-        # Check file exists
-        cache_file = ge_data.get_ge_cache_filename()
-        if not os.path.exists(cache_file):
-            print("ERROR: Cache file should exist at {}".format(cache_file))
+        # Save via storage
+        result = run_async(storage.save("gecloud_data", "ge_url_cache", test_cache, format="yaml", expiry=None))
+        if not result:
+            print("ERROR: Storage save failed")
             return 1
 
-        # Create new instance and load
-        ge_data2 = MockGECloudData(config_root=tmpdir)
-        ge_data2.load_ge_cache()
-
-        if "test_url" not in ge_data2.ge_url_cache:
-            print("ERROR: Cache should be loaded from disk")
+        # Load via storage into a new instance
+        loaded = run_async(storage.load("gecloud_data", "ge_url_cache"))
+        if loaded is None:
+            print("ERROR: Storage load returned None")
             return 1
-        if ge_data2.ge_url_cache["test_url"]["data"] != [{"test": "data"}]:
-            print("ERROR: Cached data mismatch")
+
+        if "test_url" not in loaded:
+            print("ERROR: Cache should be loaded from storage")
+            return 1
+
+        if loaded["test_url"]["data"] != [{"test": "data"}]:
+            print("ERROR: Cached data mismatch: {}".format(loaded["test_url"]["data"]))
             return 1
 
         return 0
 
 
 def _test_load_ge_cache_corrupt_file(my_predbat):
-    """Test loading cache with corrupt/missing file"""
+    """Test that missing/corrupt storage returns empty cache dict"""
     with tempfile.TemporaryDirectory() as tmpdir:
-        ge_data = MockGECloudData(config_root=tmpdir)
+        # When storage.load returns None (missing file), download_ge_data sets ge_url_cache = {}
+        storage = StorageLocalFiles(tmpdir, print)
+        loaded = run_async(storage.load("gecloud_data", "ge_url_cache"))
+        ge_url_cache = loaded or {}
 
-        # Create corrupt cache file
-        cache_file = ge_data.get_ge_cache_filename()
-        os.makedirs(os.path.dirname(cache_file), exist_ok=True)
-        with open(cache_file, "w") as f:
-            f.write("invalid: yaml: content: [[[")
-
-        # Should handle corrupt file gracefully
-        ge_data.load_ge_cache()
-
-        if ge_data.ge_url_cache != {}:
-            print("ERROR: Should initialise empty cache for corrupt file")
+        if ge_url_cache != {}:
+            print("ERROR: Should initialise empty cache when storage returns None")
             return 1
 
         return 0

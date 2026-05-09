@@ -17,6 +17,7 @@ initialising, starting, stopping, and restarting components in the correct
 phase order. Routes HA events to components based on entity prefix filtering.
 """
 
+from storage import StorageComponent
 from solcast import SolarAPI
 from gecloud import GECloudDirect, GECloudData
 from ohme import OhmeAPI
@@ -48,6 +49,7 @@ import os
 
 
 COMPONENT_LIST = {
+    "storage": {"class": StorageComponent, "name": "Storage", "args": {}, "can_restart": True, "phase": 0},
     "db": {
         "class": DatabaseManager,
         "name": "Database Manager",

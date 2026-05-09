@@ -10,15 +10,35 @@
 
 import os
 import json
+import hashlib
 import shutil
 import tempfile
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, MagicMock
 import pytz
 import aiohttp
 
 from solcast import SolarAPI
+from storage import StorageLocalFiles
 from tests.test_infra import run_async, create_aiohttp_mock_response
+
+
+class MockComponents:
+    """Minimal components stub that provides a StorageLocalFiles backend."""
+
+    def __init__(self, storage_backend):
+        """Initialise with a storage backend."""
+        self._storage = storage_backend
+
+    def get_component(self, name):
+        """Return the named component, or None if unknown."""
+        if name == "storage":
+            return self._storage
+        return None
+
+    def __bool__(self):
+        """Always truthy so the storage property guard passes."""
+        return True
 
 
 class MockBase:
@@ -44,6 +64,7 @@ class MockBase:
         self.args = {}
         self.currency_symbols = ["p", "£"]
         self.arg_errors = []
+        self.components = MockComponents(StorageLocalFiles(self.config_root, self.log))
 
     def log(self, message):
         """Mock log - print for debugging"""
@@ -330,36 +351,29 @@ def test_cache_get_url_miss(my_predbat):
 
 def test_cache_get_url_hit(my_predbat):
     """
-    Test cache_get_url when cache file exists and is fresh - should return cached data.
+    Test cache_get_url when storage has a fresh entry - should return cached data.
     """
     print("  - test_cache_get_url_hit")
     failed = False
 
     test_api = create_test_solar_api()
     try:
-        import hashlib
-
-        # Create cache directory and file
-        cache_path = test_api.mock_base.config_root + "/cache"
-        os.makedirs(cache_path, exist_ok=True)
-
         url = "https://api.solcast.com.au/test/cached"
         params = {}
 
-        # Create a predictable cache filename (same logic as SolarAPI)
-        hash_str = url + "_" + hashlib.md5(str(params).encode()).hexdigest()
-        hash_str = hash_str.replace("/", "_").replace(":", "_").replace("?", "a").replace("&", "b").replace("*", "c")
-        cache_filename = cache_path + "/" + hash_str + ".json"
+        # Compute hash key same as cache_get_url
+        hash_key = url + "_" + hashlib.md5(str(params).encode()).hexdigest()
+        hash_key = hash_key.replace("/", "_").replace(":", "_").replace("?", "a").replace("&", "b").replace("*", "c")
 
-        # Write cached data
+        # Pre-populate storage with a non-expired, recently-created entry (age ~0 < max_age)
         cached_data = {"cached": True, "from": "file"}
-        with open(cache_filename, "w") as f:
-            json.dump(cached_data, f)
+        expiry = datetime.now(timezone.utc) + timedelta(days=7)
+        run_async(test_api.solar.storage.save("solar", hash_key, cached_data, format="json", expiry=expiry))
 
         # Set up a mock response that returns different data (should NOT be used)
         test_api.set_mock_response("solcast.com.au/test/cached", {"fresh": "data"}, 200)
 
-        # Call cache_get_url with max_age=60 - should use cache since file is fresh
+        # Call cache_get_url with max_age=60 - should use storage since entry is fresh
         def create_mock_session(*args, **kwargs):
             return test_api.mock_aiohttp_session()
 
@@ -382,42 +396,41 @@ def test_cache_get_url_hit(my_predbat):
     return failed
 
 
+def _backdate_storage_meta(cache_root, module, filename, hours_ago):
+    """Backdate the created timestamp in a storage meta file to simulate stale data."""
+    meta_path = os.path.join(cache_root, "cache", "{}_{}.meta".format(module, filename))
+    with open(meta_path, "r") as f:
+        meta = json.load(f)
+    meta["created"] = (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).isoformat()
+    with open(meta_path, "w") as f:
+        json.dump(meta, f)
+
+
 def test_cache_get_url_stale(my_predbat):
     """
-    Test cache_get_url when cache file exists but is stale - should re-fetch.
+    Test cache_get_url when cached data is older than max_age - should re-fetch and return fresh data.
     """
     print("  - test_cache_get_url_stale")
     failed = False
 
     test_api = create_test_solar_api()
     try:
-        import hashlib
-
-        # Create cache directory and stale file
-        cache_path = test_api.mock_base.config_root + "/cache"
-        os.makedirs(cache_path, exist_ok=True)
-
         url = "https://api.solcast.com.au/test/stale"
         params = {}
 
-        hash_str = url + "_" + hashlib.md5(str(params).encode()).hexdigest()
-        hash_str = hash_str.replace("/", "_").replace(":", "_").replace("?", "a").replace("&", "b").replace("*", "c")
-        cache_filename = cache_path + "/" + hash_str + ".json"
+        hash_key = url + "_" + hashlib.md5(str(params).encode()).hexdigest()
+        hash_key = hash_key.replace("/", "_").replace(":", "_").replace("?", "a").replace("&", "b").replace("*", "c")
 
-        # Write stale cached data
-        stale_data = {"stale": True}
-        with open(cache_filename, "w") as f:
-            json.dump(stale_data, f)
-
-        # Make the file old by setting mtime to 2 hours ago
-        old_time = datetime.now().timestamp() - (2 * 60 * 60)
-        os.utime(cache_filename, (old_time, old_time))
+        # Save data with 7-day expiry so it won't be removed, then backdate creation to 2 hours ago
+        old_data = {"stale": True}
+        run_async(test_api.solar.storage.save("solar", hash_key, old_data, format="json", expiry=datetime.now(timezone.utc) + timedelta(days=7)))
+        _backdate_storage_meta(test_api.mock_base.config_root, "solar", hash_key, hours_ago=2)
 
         # Setup mock response for fresh data
         fresh_data = {"fresh": True, "new": "data"}
         test_api.set_mock_response("solcast.com.au/test/stale", fresh_data, 200)
 
-        # Call with max_age of 60 minutes - cache is 2 hours old so should re-fetch
+        # Call with max_age=60 minutes - cached data is 2 hours old so should re-fetch
         def create_mock_session(*args, **kwargs):
             return test_api.mock_aiohttp_session()
 
@@ -449,27 +462,16 @@ def test_cache_get_url_failure_with_stale_cache(my_predbat):
 
     test_api = create_test_solar_api()
     try:
-        import hashlib
-
-        # Create cache directory and stale file
-        cache_path = test_api.mock_base.config_root + "/cache"
-        os.makedirs(cache_path, exist_ok=True)
-
         url = "https://api.solcast.com.au/test/failure"
         params = {}
 
-        hash_str = url + "_" + hashlib.md5(str(params).encode()).hexdigest()
-        hash_str = hash_str.replace("/", "_").replace(":", "_").replace("?", "a").replace("&", "b").replace("*", "c")
-        cache_filename = cache_path + "/" + hash_str + ".json"
+        hash_key = url + "_" + hashlib.md5(str(params).encode()).hexdigest()
+        hash_key = hash_key.replace("/", "_").replace(":", "_").replace("?", "a").replace("&", "b").replace("*", "c")
 
-        # Write stale cached data
+        # Save data with 7-day expiry then backdate creation to 2 hours ago to make it stale
         stale_data = {"stale": True, "fallback": "data"}
-        with open(cache_filename, "w") as f:
-            json.dump(stale_data, f)
-
-        # Make file stale
-        old_time = datetime.now().timestamp() - (2 * 60 * 60)
-        os.utime(cache_filename, (old_time, old_time))
+        run_async(test_api.solar.storage.save("solar", hash_key, stale_data, format="json", expiry=datetime.now(timezone.utc) + timedelta(days=7)))
+        _backdate_storage_meta(test_api.mock_base.config_root, "solar", hash_key, hours_ago=2)
 
         # Don't set mock response - will cause ConnectionError
         test_api.solar.solcast_requests_total = 0
