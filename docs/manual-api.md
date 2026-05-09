@@ -174,6 +174,8 @@ The **energy** value is the total kWh across the full duration. Predbat divides 
 
 Forecasts created through **select.predbat_load_forecast_delta_api** are one-shot dynamic loads. Predbat publishes a delete button for each of these forecasts, for example **button.predbat_load_forecast_delta_dishwasher_delete**, and automatically removes the forecast after its finish time. If you want the same forecast again, send the select command again.
 
+While a one-shot forecast is active, Predbat preserves hidden request and selected-window metadata in the stored selector option so the schedule survives Home Assistant or Predbat restarts. Sending the same command again while it is still active does not reset the frozen request time or move a locked/running forecast. To force a fresh schedule, press the forecast delete button first and then send the request again.
+
 If the appliance can run at any time before a deadline, send `mode=flexible`. For flexible loads, `start_time` is the earliest allowed start and `end_time` means done by. Predbat chooses the best block using the full prediction metric, so the selection considers solar, battery state, import/export rates, losses, and the current plan rather than just the import rate:
 
 ```yaml
