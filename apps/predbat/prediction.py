@@ -696,6 +696,8 @@ class Prediction:
                                 discharge_rate_now = battery_rate_min  # 0
                         else:
                             car_load_energy += car_load_scale
+                            car_grid_import = car_load_scale / self.car_charging_loss
+                            car_rate_premium += max(0, car_rate_slot[car_n] - import_rate) * car_grid_import
 
             # Iboost
             iboost_rate_okay = True

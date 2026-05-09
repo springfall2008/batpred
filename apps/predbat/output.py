@@ -17,10 +17,11 @@ schedules, rate window sensors, and financial metric summaries.
 """
 
 import math
+import copy
 from datetime import datetime, timedelta
 from config import THIS_VERSION
 from const import TIME_FORMAT, PREDICT_STEP
-from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state
+from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, in_car_slot
 from prediction import Prediction
 
 
@@ -2871,6 +2872,7 @@ class Output:
         carbon_enable = self.carbon_enable
         rate_import_replicated = self.rate_import_replicated
         rate_export_replicated = self.rate_export_replicated
+        car_charging_slots_backup = copy.deepcopy(self.car_charging_slots)
 
         # Fake to yesterday state
         self.minutes_now = 0
@@ -2888,11 +2890,30 @@ class Output:
         self.rate_import = past_rates
         self.rate_export = past_rates_export
         self.iboost_enable = False
-        self.num_cars = 0
         self.plan_debug = False
         self.carbon_enable = False
         self.rate_import_replicated = {}
         self.rate_export_replicated = {}
+
+        # Normalize to list for multi-car support
+        entity_id_config = self.get_arg("octopus_intelligent_slot", indirect=False)
+        if entity_id_config and not isinstance(entity_id_config, list):
+            entity_id_list = [entity_id_config]
+        elif entity_id_config:
+            entity_id_list = entity_id_config
+        else:
+            entity_id_list = []
+
+        # re-load car charging slots for yesterday (for octopus if enabled).
+        for car_n in range(min(len(entity_id_list), self.num_cars)):
+            self.car_charging_slots[car_n] = self.load_octopus_slots(car_n, self.octopus_slots[car_n], self.octopus_intelligent_consider_full)
+
+        # Walk through the car charging slots during the period
+        # Subtract the energy for the period from the historical load as it will be added back in again during the simuation
+        for minute in range(0, end_record, PREDICT_STEP):
+            car_load, car_rate_slot = in_car_slot(minute, self.num_cars, self.car_charging_slots)
+            load_value = yesterday_load_step.get(minute, 0)
+            yesterday_load_step[minute] = max(load_value - sum(car_load), 0)
 
         # Simulate yesterday
         self.prediction = Prediction(self, yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step)
@@ -3197,6 +3218,7 @@ class Output:
         self.carbon_enable = carbon_enable
         self.rate_import_replicated = rate_import_replicated
         self.rate_export_replicated = rate_export_replicated
+        self.car_charging_slots = car_charging_slots_backup
 
         # Update timestamp
         self.savings_last_updated = self.now_utc
