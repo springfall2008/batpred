@@ -26,6 +26,7 @@ from carbon import CarbonAPI
 from temperature import TemperatureAPI
 from axle import AxleAPI
 from solax import SolaxAPI
+from sigenergy import SigenergyAPI
 from solis import SolisAPI
 from alertfeed import AlertFeed
 from web import WebInterface
@@ -344,6 +345,21 @@ COMPONENT_LIST = {
         },
         "required_or": ["api_key", "managed_mode"],
         "phase": 1,
+    },
+    "sigenergy": {
+        "class": SigenergyAPI,
+        "name": "Sigenergy Cloud API",
+        "event_filter": "predbat_sigenergy_",
+        "args": {
+            "app_key": {"required": True, "config": "sigenergy_app_key"},
+            "app_secret": {"required": True, "config": "sigenergy_app_secret"},
+            "base_url": {"required": False, "config": "sigenergy_base_url", "default": "https://openapi-eu.sigencloud.com"},
+            "system_id": {"required": False, "config": "sigenergy_system_id"},
+            "automatic": {"required": False, "config": "sigenergy_automatic", "default": False},
+            "enable_controls": {"required": False, "config": "sigenergy_enable_controls", "default": True},
+        },
+        "phase": 1,
+        "can_restart": True,
     },
     "solax": {
         "class": SolaxAPI,
