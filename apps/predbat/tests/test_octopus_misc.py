@@ -649,9 +649,11 @@ async def test_octopus_fetch_tariffs(my_predbat):
     ]
     mock_standing_data = [{"valid_from": "2025-01-01T00:00:00Z", "valid_to": None, "value_inc_vat": 45.0}]
 
-    async def mock_fetch_url(url):
+    async def mock_fetch_url(url, **kwargs):
         if "standing-charges" in url:
             return mock_standing_data
+        elif kwargs.get("json_only"):
+            return {}  # product info: no matching tariff found -> fallback to standard path
         else:
             return mock_rates_data
 
@@ -705,9 +707,11 @@ async def test_octopus_fetch_tariffs(my_predbat):
         {"valid_from": "2025-01-01T00:00:00Z", "valid_to": "2025-01-01T00:30:00Z", "value_inc_vat": 5.5},
     ]
 
-    async def mock_fetch_url2(url):
+    async def mock_fetch_url2(url, **kwargs):
         if "standing-charges" in url:
             return []
+        elif kwargs.get("json_only"):
+            return {}  # product info: no matching tariff found -> fallback to standard path
         else:
             return mock_export_rates
 
@@ -740,7 +744,7 @@ async def test_octopus_fetch_tariffs(my_predbat):
     # Track URLs called
     urls_called = []
 
-    async def mock_fetch_url3(url):
+    async def mock_fetch_url3(url, **kwargs):
         urls_called.append(url)
         if "standing-charges" in url:
             return []
@@ -773,7 +777,9 @@ async def test_octopus_fetch_tariffs(my_predbat):
 
     tariffs_input4 = {"import": {"productCode": "AGILE-FLEX-22-11-25", "tariffCode": "E-1R-AGILE-FLEX-22-11-25-C"}, "export": {"productCode": "AGILE-OUTGOING-19-05-13", "tariffCode": "E-1R-AGILE-OUTGOING-19-05-13-C"}}
 
-    async def mock_fetch_url4(url):
+    async def mock_fetch_url4(url, **kwargs):
+        if kwargs.get("json_only"):
+            return {}  # product info: no matching tariff found -> fallback to standard path
         return [{"valid_from": "2025-01-01T00:00:00Z", "valid_to": "2025-01-01T00:30:00Z", "value_inc_vat": 15.0}]
 
     api4.fetch_url_cached = mock_fetch_url4
@@ -802,7 +808,9 @@ async def test_octopus_fetch_tariffs(my_predbat):
 
     tariffs_input5 = {"import": {"productCode": "TEST-PRODUCT", "tariffCode": "TEST-TARIFF"}}
 
-    async def mock_fetch_url5(url):
+    async def mock_fetch_url5(url, **kwargs):
+        if kwargs.get("json_only"):
+            return {}  # product info: no matching tariff found -> fallback to standard path
         return [{"valid_from": "2025-01-01T00:00:00Z", "valid_to": "2025-01-01T00:30:00Z", "value_inc_vat": 20.0}]
 
     api5.fetch_url_cached = mock_fetch_url5

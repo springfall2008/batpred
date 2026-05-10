@@ -34,16 +34,13 @@ integration_context_header = "Ha-Integration-Context"
 DATE_STR_FORMAT = "%Y-%m-%d"
 DATE_TIME_STR_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 
-# Hard-wired smart meter day/night rate times
-OCTOPUS_NIGHT_RATE_START_HOUR = 0
-OCTOPUS_NIGHT_RATE_START_MINUTE = 30
-OCTOPUS_NIGHT_RATE_END_HOUR = 7
-OCTOPUS_NIGHT_RATE_END_MINUTE = 30
-
-OCTOPUS_DAY_RATE_START_HOUR = 7
-OCTOPUS_DAY_RATE_START_MINUTE = 30
-OCTOPUS_DAY_RATE_END_HOUR = 0
-OCTOPUS_DAY_RATE_END_MINUTE = 30
+# Night-rate window definitions: start time, end time, whether the window crosses midnight.
+# Keys: "eco7" (Economy 7), "go" (Octopus GO / generic day-night), "iog" (Intelligent GO TOU).
+OCTOPUS_NIGHT_RATE_WINDOWS = {
+    "eco7": {"start": (0, 30), "end": (7, 30), "cross_midnight": False},
+    "go":   {"start": (0, 30), "end": (5, 30), "cross_midnight": False},
+    "iog":  {"start": (23, 30), "end": (5, 30), "cross_midnight": True},
+}
 
 OCTOPUS_MAX_RETRIES = 5
 
@@ -386,6 +383,10 @@ class OctopusAPI(ComponentBase):
 
         # User-specific cache file (account_data, intelligent_device, saving_sessions only)
         self.user_cache_file = self.cache_path + "/octopus_user_{}.yaml".format(self.account_id)
+
+        # In-memory cache for product info (keyed by product_code) to avoid repeated API calls
+        self._product_info_cache = {}
+
         self.log("OctopusAPI: Initialised with account ID {}, cache {}, shared {}".format(self.account_id, self.user_cache_file, self.shared_cache_path))
 
     async def select_event(self, entity_id, value):
@@ -1162,9 +1163,53 @@ class OctopusAPI(ComponentBase):
 
         return result
 
-    async def async_get_day_night_rates(self, url):
+    async def _async_get_product_rate_link_types(self, product_code, tariff_code):
         """
-        Get day and night rates from Octopus
+        Fetch the Octopus product info and return the set of rate link rel types for the given tariff_code.
+
+        The product endpoint returns multiple regional entries (e.g. _A, _B, _C) under each tariff type
+        section. We search all regions and payment types to find the entry whose code matches tariff_code,
+        then extract the rel values from its links list.
+
+        Returns a set of strings such as {"standard_unit_rates"} or {"day_unit_rates", "night_unit_rates"},
+        or None if the product info could not be fetched or tariff_code was not found (caller should fall back).
+        """
+        if product_code not in self._product_info_cache:
+            url = f"https://api.octopus.energy/v1/products/{product_code}/"
+            product_info = await self.fetch_url_cached(url, json_only=True)
+            if not product_info or not isinstance(product_info, dict):
+                self.log("Warn: OctopusAPI: Could not fetch product info for {}".format(product_code))
+                return None
+            self._product_info_cache[product_code] = product_info
+
+        product_info = self._product_info_cache[product_code]
+        tariff_sections = ["single_register_electricity_tariffs", "dual_register_electricity_tariffs", "four_rate_ev_electricity_tariffs"]
+        payment_types = ["direct_debit_monthly", "varying"]
+        for section_key in tariff_sections:
+            section = product_info.get(section_key, {})
+            if not section:
+                continue
+            for region_key, region_data in section.items():
+                if not isinstance(region_data, dict):
+                    continue
+                for payment_type in payment_types:
+                    entry = region_data.get(payment_type, {})
+                    if not entry:
+                        continue
+                    if entry.get("code") == tariff_code:
+                        links = entry.get("links", [])
+                        return {link["rel"] for link in links if "rel" in link}
+        self.log("Warn: OctopusAPI: Tariff code {} not found in product info for {}".format(tariff_code, product_code))
+        return None
+
+    async def async_get_day_night_rates(self, url, product_code="", tariff_code=""):
+        """
+        Get day and night rates from Octopus.
+
+        Selects the correct night/day window based on the tariff type:
+        - IOG TOU (product_code contains INTELLI+IOG+TOU): 23:30 to 05:30 (crosses midnight)
+        - Economy 7 (tariff_code starts with E-2R-) or unknown (400-error fallback): 00:30 to 07:30
+        - GO and other day/night tariffs: 00:30 to 05:30
         """
         mdata = []
         self.log("Info: OctopusAPI: tariff has day and night rates, fetching both")
@@ -1172,29 +1217,47 @@ class OctopusAPI(ComponentBase):
         url_night = url.replace("standard-unit-rates", "night-unit-rates")
         result_day = await self.fetch_url_cached(url_day)
         result_night = await self.fetch_url_cached(url_night)
-        # is_night_rate = self.__is_between_times(rate, "00:30:00", "07:30:00", True)
         # Find the current day rate by scanning all the values looking at valid from date and picking the latest that is before now
         current_day_rate = None
         current_night_rate = None
-        for rate in result_day:
-            valid_from_stamp = rate.get("valid_from", "")
-            # Convert from string to datetime
-            valid_from_stamp = datetime.strptime(valid_from_stamp, DATE_TIME_STR_FORMAT)
-            if valid_from_stamp <= self.now_utc_exact:
-                current_day_rate = rate.get("value_inc_vat", None)
-        for rate in result_night:
-            valid_from_stamp = rate.get("valid_from", "")
-            # Convert from string to datetime
-            valid_from_stamp = datetime.strptime(valid_from_stamp, DATE_TIME_STR_FORMAT)
-            if valid_from_stamp <= self.now_utc_exact:
-                current_night_rate = rate.get("value_inc_vat", None)
+        if result_day:
+            for rate in result_day:
+                valid_from_stamp = rate.get("valid_from", "")
+                valid_from_stamp = datetime.strptime(valid_from_stamp, DATE_TIME_STR_FORMAT)
+                if valid_from_stamp <= self.now_utc_exact:
+                    current_day_rate = rate.get("value_inc_vat", None)
+        if result_night:
+            for rate in result_night:
+                valid_from_stamp = rate.get("valid_from", "")
+                valid_from_stamp = datetime.strptime(valid_from_stamp, DATE_TIME_STR_FORMAT)
+                if valid_from_stamp <= self.now_utc_exact:
+                    current_night_rate = rate.get("value_inc_vat", None)
         self.log("Info: OctopusAPI: Current day rate {} night rate {}".format(current_day_rate, current_night_rate))
         if current_day_rate is not None and current_night_rate is not None:
-            # Now create a combined list of rates, start from 2 days back and go forward 3 days with the day and night rates
-            night_start_time = self.now_utc_exact.replace(hour=OCTOPUS_NIGHT_RATE_START_HOUR, minute=OCTOPUS_NIGHT_RATE_START_MINUTE, second=0, microsecond=0) - timedelta(days=2)
-            night_end_time = night_start_time.replace(hour=OCTOPUS_NIGHT_RATE_END_HOUR, minute=OCTOPUS_NIGHT_RATE_END_MINUTE)
-            day_start_time = night_start_time.replace(hour=OCTOPUS_DAY_RATE_START_HOUR, minute=OCTOPUS_DAY_RATE_START_MINUTE)
-            day_end_time = night_start_time.replace(hour=OCTOPUS_DAY_RATE_END_HOUR, minute=OCTOPUS_DAY_RATE_END_MINUTE) + timedelta(days=1)
+            # Select night window based on tariff type
+            if ("INTELLI" in tariff_code) or ("IOG-" in tariff_code):
+                window = OCTOPUS_NIGHT_RATE_WINDOWS["iog"]
+            elif tariff_code and "GO-" in tariff_code:
+                window = OCTOPUS_NIGHT_RATE_WINDOWS["go"]
+            elif tariff_code and tariff_code.startswith("E-2R-"):
+                window = OCTOPUS_NIGHT_RATE_WINDOWS["eco7"]
+            else:
+                self.log("Warn: OctopusAPI: Unknown tariff code {}, defaulting to GO night rate window".format(tariff_code))
+                window = OCTOPUS_NIGHT_RATE_WINDOWS["go"]
+
+            self.log("Info: OctopusAPI: Using night rate window {} based on tariff code {}".format(window, tariff_code))
+            night_start_hour, night_start_minute = window["start"]
+            night_end_hour, night_end_minute = window["end"]
+            cross_midnight = window["cross_midnight"]
+
+            # Build synthetic 8-day schedule starting 2 days back
+            night_start_time = self.now_utc_exact.replace(hour=night_start_hour, minute=night_start_minute, second=0, microsecond=0) - timedelta(days=2)
+            if cross_midnight:
+                night_end_time = (night_start_time + timedelta(days=1)).replace(hour=night_end_hour, minute=night_end_minute)
+            else:
+                night_end_time = night_start_time.replace(hour=night_end_hour, minute=night_end_minute)
+            day_start_time = night_end_time
+            day_end_time = night_start_time + timedelta(days=1)
             for day in range(8):
                 # Night rate
                 mdata.append({"valid_from": night_start_time.strftime(DATE_TIME_STR_FORMAT), "valid_to": night_end_time.strftime(DATE_TIME_STR_FORMAT), "value_inc_vat": current_night_rate})
@@ -1206,9 +1269,11 @@ class OctopusAPI(ComponentBase):
                 day_end_time += timedelta(days=1)
         return mdata
 
-    async def async_download_octopus_url(self, url):
+    async def async_download_octopus_url(self, url, json_only=False):
         """
-        Download octopus rates directly from a URL
+        Download octopus rates directly from a URL.
+        If json_only=True, return the raw JSON dict without results unwrapping or pagination
+        (used for product-info endpoints that return a top-level object rather than a paginated list).
         """
         mdata = []
 
@@ -1219,7 +1284,7 @@ class OctopusAPI(ComponentBase):
             try:
                 async with aiohttp.ClientSession(timeout=timeout) as session:
                     async with session.get(url, headers={"accept": "application/json", "user-agent": "predbat/1.0"}) as response:
-                        if response.status not in [200, 201, 400]:
+                        if response.status not in [200, 201]:
                             self.failures_total += 1
                             self.log("Warn: OctopusAPI: Error downloading Octopus data from URL {}, code {}".format(url, response.status))
                             record_api_call("octopus_url", False, "server_error")
@@ -1234,27 +1299,13 @@ class OctopusAPI(ComponentBase):
                             record_api_call("octopus_url", False, "decode_error")
                             return {}
 
-                        if response.status == 400:
-                            detail = data.get("detail", "")
-                            if "This tariff has day and night rates" in detail:
-                                self.log("Info: OctopusAPI: Octopus tariff has day and night rates, fetching both")
-                                mdata = await self.async_get_day_night_rates(url)
-                                if mdata:
-                                    return mdata
-                                else:
-                                    self.failures_total += 1
-                                    self.log("Warn: OctopusAPI: Error downloading Octopus data from URL {} (No Results)".format(url))
-                                    return {}
-                            else:
-                                self.failures_total += 1
-                                self.log("Warn: Error downloading Octopus data from URL {} (400) - {}".format(url, detail))
-                                return {}
+                        if json_only:
+                            return data
 
                         if "results" in data:
                             mdata += data["results"]
                         else:
                             detail = data.get("detail", "")
-
                             self.failures_total += 1
                             self.log("Warn: OctopusAPI: Error downloading Octopus data from URL {} (No Results) - {}".format(url, detail))
                             return {}
@@ -1290,11 +1341,12 @@ class OctopusAPI(ComponentBase):
                     except Exception as e:
                         self.log(f"Warn: OctopusAPI: Failed to clean cache file {filename}: {e}")
 
-    async def fetch_url_cached(self, url):
+    async def fetch_url_cached(self, url, json_only=False):
         """
         Fetch a URL from the cache or reload it
         Uses individual file per URL in shared cache directory
         Implements stale-while-revalidate to prevent thundering herd
+        If json_only=True, the raw JSON dict is returned without results unwrapping or pagination.
         """
         import hashlib
 
@@ -1319,7 +1371,7 @@ class OctopusAPI(ComponentBase):
                     fd = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
                     try:
                         # We got the lock! Refresh in background
-                        data = await self.async_download_octopus_url(url)
+                        data = await self.async_download_octopus_url(url, json_only=json_only)
                         if data:
                             cache_entry = {"stamp": datetime.now(), "data": data}
                             self.save_url_to_cache(url, cache_entry)
@@ -1336,7 +1388,7 @@ class OctopusAPI(ComponentBase):
                 return cached_data["data"]
 
         # Cache completely missing or too stale (>35 min) - must fetch
-        data = await self.async_download_octopus_url(url)
+        data = await self.async_download_octopus_url(url, json_only=json_only)
         if data:
             # Save to shared file cache
             cache_entry = {"stamp": datetime.now(), "data": data}
@@ -1361,7 +1413,21 @@ class OctopusAPI(ComponentBase):
                 tariff_type = "gas"
             else:
                 tariff_type = "electricity"
-            tariffs[tariff]["data"] = await self.fetch_url_cached(f"https://api.octopus.energy/v1/products/{product_code}/{tariff_type}-tariffs/{tariff_code}/standard-unit-rates/")
+            standard_url = f"https://api.octopus.energy/v1/products/{product_code}/{tariff_type}-tariffs/{tariff_code}/standard-unit-rates/"
+            if tariff_type == "electricity":
+                # Always check product links first to determine the correct rate endpoint type,
+                # avoiding the 400 round-trip for tariffs that only expose day/night rate endpoints.
+                link_types = await self._async_get_product_rate_link_types(product_code, tariff_code)
+                if link_types is not None and "standard_unit_rates" not in link_types and "day_unit_rates" in link_types:
+                    # Day/night tariff (e.g. IOG-TOU, GO): fetch directly without hitting standard-unit-rates
+                    self.log("Info: OctopusAPI: Product {} tariff {} has day/night rate endpoints (no standard-unit-rates), fetching directly".format(product_code, tariff_code))
+                    tariffs[tariff]["data"] = await self.async_get_day_night_rates(standard_url, product_code=product_code, tariff_code=tariff_code)
+                else:
+                    # Standard rates, or product info unavailable — fall back to existing path
+                    # (which handles the 400 "This tariff has day and night rates" error for Economy 7)
+                    tariffs[tariff]["data"] = await self.fetch_url_cached(standard_url)
+            else:
+                tariffs[tariff]["data"] = await self.fetch_url_cached(standard_url)
             if not tariffs[tariff]["data"] and tariff == "export" and "INTELLI-FLUX" in product_code:
                 # INTELLI-FLUX-EXPORT rates are the same as import rates but the product is not on the public REST API
                 # Use the import tariff rates as a fallback
@@ -2759,6 +2825,7 @@ class MockBase:  # pragma: no cover
     def __init__(self):
         self.local_tz = datetime.now().astimezone().tzinfo
         self.now_utc = datetime.now(self.local_tz)
+        self.now_utc_exact = self.now_utc
         self.prefix = "predbat"
         self.args = {}
         self.midnight_utc = datetime.now(self.local_tz).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -2803,6 +2870,84 @@ class MockBase:  # pragma: no cover
         else:
             state = "n/a"
         print(f"Set arg {key} = {value} (state={state})")
+
+
+async def test_fetch_tariffs(product_code, tariff_code):  # pragma: no cover
+    """
+    Fetch real tariff rates from the Octopus API and print a 5-day rate schedule.
+
+    Calls fetch_tariffs with the given product/tariff codes, then extracts the rates
+    attribute from the dashboard item (rates_stamp format) and prints all entries
+    covering 5 days starting 2 days before today.
+    """
+    print(f"\nFetching tariff rates for product={product_code} tariff={tariff_code}")
+
+    class QuietMockBase(MockBase):
+        """MockBase variant that silently stores dashboard items without printing them."""
+
+        def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
+            self.set_state_wrapper(entity_id, state, attributes)
+
+    mock_base = QuietMockBase()
+
+    # Ensure temp cache dir exists
+    os.makedirs(mock_base.config_root, exist_ok=True)
+
+    octopus_api = OctopusAPI(mock_base, key="", account_id="test", automatic=False)
+    octopus_api.tariffs = {"import": {"productCode": product_code, "tariffCode": tariff_code}}
+
+    await octopus_api.fetch_tariffs(octopus_api.tariffs)
+
+    # Extract the rates_stamp from the captured dashboard item
+    entity_id = octopus_api.get_entity_name("sensor", "import_rates")
+    entity = mock_base.entities.get(entity_id, {})
+    rates_stamp = entity.get("attributes", {}).get("rates", [])
+
+    if not rates_stamp:
+        print("No rate data returned — check product/tariff codes are valid.")
+        return
+
+    # Determine 5-day window: 2 days back from today to 3 days ahead
+    local_tz = mock_base.local_tz
+    today_midnight = mock_base.midnight_utc
+    window_start = today_midnight - timedelta(days=2)
+    window_end = today_midnight + timedelta(days=3)
+
+    print(f"\nUnit rates from {window_start.strftime('%Y-%m-%d')} to {window_end.strftime('%Y-%m-%d')}:")
+    print(f"{'Start':<32}  {'End':<32}  {'p/kWh':>8}")
+    print("-" * 76)
+
+    # Collect entries within the 5-day window
+    window_entries = []
+    for entry in rates_stamp:
+        try:
+            start_dt = datetime.strptime(entry["start"], TIME_FORMAT)
+        except (ValueError, KeyError):
+            continue
+        if start_dt.tzinfo is None:
+            start_dt = start_dt.replace(tzinfo=local_tz)
+        if start_dt >= window_start and start_dt < window_end:
+            window_entries.append(entry)
+
+    if not window_entries:
+        print("(No entries in 5-day window — printing all available rates instead)")
+        window_entries = rates_stamp
+
+    # Merge consecutive entries with the same rate into contiguous blocks.
+    # This turns dozens of 30-min same-rate slots (e.g. day/night tariffs) into
+    # clean "23:30 -> 05:30 = 8.5p" lines instead of 12 identical 30-min rows.
+    merged = []
+    for entry in window_entries:
+        rate_pence = round(entry["value_inc_vat"] * 100, 4)
+        if merged and abs(merged[-1]["rate"] - rate_pence) < 0.0001:
+            merged[-1]["end"] = entry["end"]
+        else:
+            merged.append({"start": entry["start"], "end": entry["end"], "rate": rate_pence})
+
+    for entry in merged:
+        print(f"{entry['start']:<32}  {entry['end']:<32}  {entry['rate']:>7.4f}p")
+
+    print(f"\n{len(merged)} rate slot(s) shown.")
 
 
 async def test_octopus_api(api_key, account_id):  # pragma: no cover
@@ -2855,13 +3000,21 @@ def main():  # pragma: no cover
     import argparse
 
     parser = argparse.ArgumentParser(description="Test Octopus API")
-    parser.add_argument("--api-key", required=True, help="Octopus API key")
-    parser.add_argument("--account", required=True, help="Octopus account ID")
+    parser.add_argument("--api-key", default="", help="Octopus API key")
+    parser.add_argument("--account", default="", help="Octopus account ID")
+    parser.add_argument("--product-code", help="Product code for tariff rate test (e.g. AGILE-FLEX-22-11-25)")
+    parser.add_argument("--tariff-code", help="Tariff code for tariff rate test (e.g. E-1R-AGILE-FLEX-22-11-25-C)")
 
     args = parser.parse_args()
 
-    # Run the test
-    asyncio.run(test_octopus_api(args.api_key, args.account))
+    if args.product_code and args.tariff_code:
+        # Tariff rate fetch test — no API key required (uses public Octopus REST API)
+        asyncio.run(test_fetch_tariffs(args.product_code, args.tariff_code))
+    elif args.api_key and args.account:
+        # Full account API test
+        asyncio.run(test_octopus_api(args.api_key, args.account))
+    else:
+        parser.error("Provide either --product-code and --tariff-code (tariff rate test) or --api-key and --account (full API test)")
 
 
 if __name__ == "__main__":

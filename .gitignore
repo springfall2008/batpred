@@ -60,6 +60,7 @@ htmlcov/
 .mypy_cache/
 .dmypy.json
 dmypy.json
+temp_octopus
 
 # Generated test files
 *_test.html
