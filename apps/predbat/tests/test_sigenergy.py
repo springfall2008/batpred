@@ -451,6 +451,77 @@ def test_sigenergy_get_access_token_failure(my_predbat):
     return failed
 
 
+def test_sigenergy_get_access_token_retry(my_predbat):
+    """Test get_access_token retries on transient errors then succeeds."""
+    failed = False
+    api = MockSigenergyAPI()
+
+    attempt_count = {"n": 0}
+
+    # First two calls raise a timeout; third succeeds
+    success_response = _make_mock_response(status=200, json_data={"code": 0, "data": {"accessToken": "retried_token", "expiresIn": 43200}})
+    success_session = _make_mock_session(success_response)
+
+    call_log = []
+
+    original_class = __import__("sigenergy").aiohttp.ClientSession
+
+    class SequencedSession:
+        """Return failure sessions then success session."""
+        def __init__(self, *args, **kwargs):
+            attempt_count["n"] += 1
+            self._n = attempt_count["n"]
+
+        async def __aenter__(self):
+            call_log.append(self._n)
+            if self._n < 3:
+                raise asyncio.TimeoutError()
+            return await success_session.__aenter__()
+
+        async def __aexit__(self, *args):
+            if self._n >= 3:
+                await success_session.__aexit__(*args)
+
+    with patch("sigenergy.aiohttp.ClientSession", SequencedSession):
+        token = run_async(api.get_access_token())
+
+    assert token == "retried_token", "Token returned after retry: {}".format(token)
+    assert attempt_count["n"] == 3, "Exactly 3 attempts made, got {}".format(attempt_count["n"])
+    assert any("timed out" in m for m in api.log_messages), "Timeout warning logged"
+
+    return failed
+
+
+def test_sigenergy_get_access_token_no_retry_on_api_error(my_predbat):
+    """Test get_access_token does not retry after a permanent API rejection."""
+    failed = False
+    api = MockSigenergyAPI()
+
+    attempt_count = {"n": 0}
+    fake_response = {"code": 11003, "msg": "authentication failed"}
+
+    mock_response = _make_mock_response(status=200, json_data=fake_response)
+
+    class CountingSession:
+        """Count how many times a session is created."""
+        def __init__(self, *args, **kwargs):
+            attempt_count["n"] += 1
+
+        async def __aenter__(self):
+            return await _make_mock_session(mock_response).__aenter__()
+
+        async def __aexit__(self, *args):
+            pass
+
+    with patch("sigenergy.aiohttp.ClientSession", CountingSession):
+        token = run_async(api.get_access_token())
+
+    assert token is None, "None returned on permanent API error"
+    assert attempt_count["n"] == 1, "Only one attempt made for API rejection, got {}".format(attempt_count["n"])
+
+    return failed
+
+
 def test_sigenergy_fetch_system_list(my_predbat):
     """Test fetch_system_list populates self.systems."""
     failed = False
@@ -823,6 +894,8 @@ def run_sigenergy_tests(my_predbat):
         ("apply_service_to_toggle", test_sigenergy_apply_service_to_toggle),
         ("get_access_token_success", test_sigenergy_get_access_token_success),
         ("get_access_token_failure", test_sigenergy_get_access_token_failure),
+        ("get_access_token_retry", test_sigenergy_get_access_token_retry),
+        ("get_access_token_no_retry_on_api_error", test_sigenergy_get_access_token_no_retry_on_api_error),
         ("fetch_system_list", test_sigenergy_fetch_system_list),
         ("fetch_system_list_with_filter", test_sigenergy_fetch_system_list_with_filter),
         ("apply_controls_charge_mode", test_sigenergy_apply_controls_charge_mode),

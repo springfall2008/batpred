@@ -68,7 +68,7 @@ from component_base import ComponentBase
 # Constants
 # ---------------------------------------------------------------------------
 
-SIGENERGY_DEFAULT_BASE_URL = "https://openapi.sigencloud.com"
+SIGENERGY_DEFAULT_BASE_URL = "https://openapi-eu.sigencloud.com"  # cspell:disable-line
 SIGENERGY_TIMEOUT = 20                # seconds per HTTP request
 SIGENERGY_MAX_RETRIES = 3
 SIGENERGY_TOKEN_EXPIRY_BUFFER = 600   # refresh token 10 min before expiry
@@ -139,6 +139,7 @@ class SigenergyAPI(ComponentBase):
                        published entity IDs on first run.
             enable_controls: When True, apply charge/discharge commands.
         """
+
         if not HAS_AIOHTTP:
             raise ImportError("SigenergyAPI requires the 'aiohttp' package: pip install aiohttp")
         if not HAS_AIOMQTT:
@@ -200,6 +201,10 @@ class SigenergyAPI(ComponentBase):
         The token is cached until within SIGENERGY_TOKEN_EXPIRY_BUFFER seconds
         of expiry (default 12 h lifetime).
 
+        Transient network errors (timeout, connection error, bad HTTP status)
+        are retried up to SIGENERGY_MAX_RETRIES times.  API-level rejections
+        (wrong credentials, code != 0) are not retried as they are permanent.
+
         Returns:
             Access token string on success, None on failure.
         """
@@ -213,36 +218,52 @@ class SigenergyAPI(ComponentBase):
         payload = {"key": encoded_key}
 
         self.log("SigenergyAPI: Requesting new access token")
-        try:
-            timeout = aiohttp.ClientTimeout(total=SIGENERGY_TIMEOUT)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(url, json=payload) as response:
-                    if response.status != 200:
-                        self.log("Warn: SigenergyAPI: Auth request returned HTTP {}".format(response.status))
-                        return None
-                    try:
-                        data = await response.json(content_type=None)
-                    except (Exception) as e:
-                        self.log("Warn: SigenergyAPI: Failed to decode auth response: {}".format(e))
-                        return None
 
-            code = data.get("code", -1)
-            if code != 0:
-                self.log("Warn: SigenergyAPI: Auth failed, code={}, msg={}".format(code, data.get("msg", "unknown")))
-                self.access_token = None
-                return None
+        for attempt in range(SIGENERGY_MAX_RETRIES):
+            try:
+                timeout = aiohttp.ClientTimeout(total=SIGENERGY_TIMEOUT)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.post(url, json=payload) as response:
+                        if response.status != 200:
+                            self.log("Warn: SigenergyAPI: Auth request returned HTTP {} (attempt {}/{})".format(response.status, attempt + 1, SIGENERGY_MAX_RETRIES))
+                            if attempt < SIGENERGY_MAX_RETRIES - 1:
+                                await asyncio.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
+                                continue
+                            return None
+                        try:
+                            data = await response.json(content_type=None)
+                        except Exception as e:
+                            self.log("Warn: SigenergyAPI: Failed to decode auth response: {}".format(e))
+                            if attempt < SIGENERGY_MAX_RETRIES - 1:
+                                await asyncio.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
+                                continue
+                            return None
 
-            token_data = data.get("data", {})
-            self.access_token = token_data.get("accessToken")
-            expires_in = _safe_int(token_data.get("expiresIn", 43200), 43200)
-            self.token_expires_at = now + expires_in
-            self.log("SigenergyAPI: Token obtained, expires in {} s".format(expires_in))
-            return self.access_token
+                code = data.get("code", -1)
+                if code != 0:
+                    # Permanent API-level failure (e.g. wrong credentials) — do not retry
+                    self.log("Warn: SigenergyAPI: Auth failed, code={}, msg={}".format(code, data.get("msg", "unknown")))
+                    self.access_token = None
+                    return None
 
-        except (asyncio.TimeoutError, Exception) as e:
-            self.log("Warn: SigenergyAPI: Exception during authentication: {}".format(e))
-            self.access_token = None
-            return None
+                token_data = data.get("data", {})
+                self.access_token = token_data.get("accessToken")
+                expires_in = _safe_int(token_data.get("expiresIn", 43200), 43200)
+                self.token_expires_at = now + expires_in
+                self.log("SigenergyAPI: Token obtained, expires in {} s".format(expires_in))
+                return self.access_token
+
+            except asyncio.TimeoutError:
+                self.log("Warn: SigenergyAPI: Auth request timed out (attempt {}/{})".format(attempt + 1, SIGENERGY_MAX_RETRIES))
+                if attempt < SIGENERGY_MAX_RETRIES - 1:
+                    await asyncio.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
+            except Exception as e:
+                self.log("Warn: SigenergyAPI: Exception during authentication: {}".format(e))
+                if attempt < SIGENERGY_MAX_RETRIES - 1:
+                    await asyncio.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
+
+        self.access_token = None
+        return None
 
     # -----------------------------------------------------------------------
     # HTTP helpers
@@ -1236,6 +1257,10 @@ class SigenergyAPI(ComponentBase):
         """
         if first:
             self.log("SigenergyAPI: First run — discovering systems")
+            token = await self.get_access_token()
+            if not token:
+                self.log("Warn: SigenergyAPI: Authentication failed — cannot proceed")
+                return False
             ok = await self.fetch_system_list()
             if not ok:
                 self.log("Warn: SigenergyAPI: Failed to discover systems, will retry")
