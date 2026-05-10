@@ -1871,7 +1871,7 @@ class MockBase:  # pragma: no cover
         print(f"Set arg {key} = {value} (state={state})")
 
 
-async def test_gecloud_direct(api_key, write_entity=None, write_value=None):  # pragma: no cover
+async def test_gecloud_direct(api_key, write_entity=None, write_value=None, read_id=None, device=None):  # pragma: no cover
     """
     Test the GECloud Direct API
     """
@@ -1890,6 +1890,18 @@ async def test_gecloud_direct(api_key, write_entity=None, write_value=None):  # 
     gecloud_direct = GECloudDirect(mock_base, **arg_dict)
     await gecloud_direct.run(0, True)
     # await gecloud_direct.run(1, False)
+
+    if read_id is not None:
+        target_device = device if device else (gecloud_direct.device_list[0] if gecloud_direct.device_list else None)
+        if target_device is None:
+            print("ERROR: No device found to read from")
+        else:
+            print(f"Reading setting ID {read_id} from device {target_device}")
+            result = await gecloud_direct.async_read_inverter_setting(target_device, read_id)
+            if result is not None:
+                print(f"Read result: {result}")
+            else:
+                print(f"Read failed for setting ID {read_id} on device {target_device}")
 
     if write_entity and write_value is not None:
         mapping = gecloud_direct.register_entity_map.get(write_entity, None)
@@ -1931,11 +1943,13 @@ def main():  # pragma: no cover
     parser.add_argument("--api-key", required=True, help="GECloud Direct API key")
     parser.add_argument("--write-entity", default=None, help="Entity ID to write (e.g. number.predbat_gecloud_SA1234_battery_charge_power)")
     parser.add_argument("--write-value", default=None, help="Value to write to the entity")
+    parser.add_argument("--read-id", default=None, type=int, help="Setting ID number to read from the inverter")
+    parser.add_argument("--device", default=None, help="Device serial to use for read/write (defaults to first discovered device)")
 
     args = parser.parse_args()
 
     # Run the test
-    asyncio.run(test_gecloud_direct(args.api_key, write_entity=args.write_entity, write_value=args.write_value))
+    asyncio.run(test_gecloud_direct(args.api_key, write_entity=args.write_entity, write_value=args.write_value, read_id=args.read_id, device=args.device))
 
 
 if __name__ == "__main__":
