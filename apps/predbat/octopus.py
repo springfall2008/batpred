@@ -1765,8 +1765,8 @@ class OctopusAPI(ComponentBase):
                             "device_id": IntelligentdeviceID,
                         }
                         if dispatch_result:
-                            plannedDispatches = dispatch_result.get("flexPlannedDispatches", [])
-                            completedDispatches = dispatch_result.get("completedDispatches", [])
+                            plannedDispatches = dispatch_result.get("flexPlannedDispatches") or []
+                            completedDispatches = dispatch_result.get("completedDispatches") or []
                             for plannedDispatch in plannedDispatches:
                                 start = plannedDispatch.get("start", None)
                                 end = plannedDispatch.get("end", None)
