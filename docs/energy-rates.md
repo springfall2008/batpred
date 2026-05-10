@@ -276,6 +276,42 @@ The following configuration items in `apps.yaml` are used to configure Predbat t
 
 - **metric_energidataservice_export** - Export rates from the Energidataservice integration. This should point to the sensor that provides hourly export rates (e.g., solar feed-in rates), such as sensor.energi_data_service_export.
 
+## Strømligning Integration
+
+Strømligning is a Danish electricity price comparison service that provides detailed 15-minute interval pricing data.
+Unlike Energi Data Service, where Predbat reads both today's and tomorrow's prices from a single sensor entity per rate type using the `raw_today` and `raw_tomorrow` attributes, Strømligning requires 4 separate sensors:
+two for import prices (today and tomorrow) and optionally two for export prices (today and tomorrow).
+
+Each Strømligning sensor should provide attributes with the following format:
+
+- **prices_today** or **prices_tomorrow** - List of price intervals with:
+    - `price` - Price value
+    - `start` - Start time in ISO format (e.g., '2025-11-08T00:00:00+01:00')
+    - `end` - End time in ISO format (e.g., '2025-11-08T00:15:00+01:00')
+
+### Configuring Predbat to Use the Strømligning Integration
+
+The following configuration items in `apps.yaml` are used to configure Predbat to use Strømligning sensors:
+
+**Import Rates (Required):**
+
+- **metric_stromligning_import_today** - Sensor for today's import prices (must have `prices_today` attribute)
+- **metric_stromligning_import_tomorrow** - Sensor for tomorrow's import prices (must have `prices_tomorrow` attribute)
+
+**Export Rates (Optional):**
+
+- **metric_stromligning_export_today** - Sensor for today's export prices (must have `prices_today` attribute)
+- **metric_stromligning_export_tomorrow** - Sensor for tomorrow's export prices (must have `prices_tomorrow` attribute)
+
+Example configuration in `apps.yaml`:
+
+```yaml
+  metric_stromligning_import_today: 'sensor.stromligning_import_today'
+  metric_stromligning_import_tomorrow: 'sensor.stromligning_import_tomorrow'
+  metric_stromligning_export_today: 'sensor.stromligning_export_today'
+  metric_stromligning_export_tomorrow: 'sensor.stromligning_export_tomorrow'
+```
+
 ## Other Energy Spot Rate sensor integrations
 
 Different spot rate integrations that include forecast prices may be used.

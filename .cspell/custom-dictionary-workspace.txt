@@ -357,7 +357,9 @@ startswith
 startt
 stdlib
 stepline
+Stromligning
 strptime
+Strømligning
 substep
 sunspec
 sunsynk
