@@ -36,7 +36,7 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.38.0"
+THIS_VERSION = "v8.38.1"
 
 from download import predbat_update_move, predbat_update_download, check_install, resolve_predbat_repository, DEFAULT_PREDBAT_REPOSITORY
 from const import MINUTE_WATT
@@ -540,8 +540,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Marginal, Exec
         self.rate_min = 0
         self.rate_min_minute = 0
         self.rate_min_forward = {}
+        self.rate_min_base = 0
         self.rate_max = 0
         self.rate_max_minute = 0
+        self.rate_max_base = 0
         self.rate_export_cost_threshold = 99
         self.rate_import_cost_threshold = 99
         self.rate_best_cost_threshold_charge = None

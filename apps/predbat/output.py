@@ -17,6 +17,7 @@ schedules, rate window sensors, and financial metric summaries.
 """
 
 import math
+import copy
 from datetime import datetime, timedelta
 from config import THIS_VERSION
 from const import TIME_FORMAT, PREDICT_STEP
@@ -1868,6 +1869,23 @@ class Output:
                 day_cost_time_export[stamp] = dp2(day_cost_export)
                 day_carbon_time[stamp] = dp2(carbon_g)
 
+        # Add beyond-cap IOG rate premium for day and hour car cost.
+        # The per-minute loops above charged car energy at house import rate (correct base).
+        # For IOG slots where average > house rate (beyond cap), add the difference.
+        for car_n in range(self.num_cars):
+            for slot in self.car_charging_slots[car_n]:
+                house_rate = self.rate_import.get(slot["start"], 0)
+                premium = max(0, slot.get("average", 0) - house_rate) * slot.get("kwh", 0)
+                if premium > 0:
+                    slot_start = slot["start"]
+                    if 0 <= slot_start < self.minutes_now:
+                        day_cost_car += premium
+                        day_cost += premium
+                        day_cost_nosc += premium
+                    if self.minutes_now - 60 <= slot_start < self.minutes_now:
+                        hour_cost_car += premium
+                        hour_cost += premium
+
         day_pkwh = self.rate_import.get(0, 0)
         day_car_pkwh = self.rate_import.get(0, 0)
         day_import_pkwh = self.rate_import.get(0, 0)
@@ -2704,6 +2722,62 @@ class Output:
         )
         self.dashboard_item("binary_sensor." + self.prefix + "_demand", state="on" if isDemand else "off", attributes={"friendly_name": "Predbat is in demand mode", "icon": "mdi:battery-arrow-up"})
 
+    def yesterday_reconstruct_car_slots(self, end_record, yesterday_load_step):
+        # Normalize to list for multi-car support
+        entity_id_config = self.get_arg("octopus_intelligent_slot", indirect=False)
+        if entity_id_config and not isinstance(entity_id_config, list):
+            entity_id_list = [entity_id_config]
+        elif entity_id_config:
+            entity_id_list = entity_id_config
+        else:
+            entity_id_list = []
+
+        # re-load car charging slots for yesterday (for octopus if enabled).
+        for car_n in range(min(len(entity_id_list), self.num_cars)):
+            self.car_charging_slots[car_n] = self.load_octopus_slots(car_n, self.octopus_slots[car_n], self.octopus_intelligent_consider_full)
+
+        # re-construct car charging slots from non-octopus using the car energy sensor
+        # sum the energy over each 30 minutes and add it to the car plan if missing
+        if self.num_cars > 0:
+            for start_minute in range(0, end_record, self.plan_interval_minutes):
+                car_energy = 0
+                for minute in range(start_minute, start_minute + self.plan_interval_minutes):
+                    minute_previous = self.minutes_now + 24 * 60 - minute  # How far back in time are we looking
+                    car_energy += self.get_from_incrementing(self.car_charging_energy, minute_previous)
+                if car_energy > 0.1:
+                    # Only add the slot if there isn't already one covering this time period
+                    if not any(slot["start"] <= start_minute < slot["end"] for slot in self.car_charging_slots[0]):
+                        self.car_charging_slots[0].append({"start": start_minute, "end": start_minute + self.plan_interval_minutes, "kwh": car_energy, "octopus": False})
+
+        if self.car_energy_reported_load:
+            # Walk through each car slot for each car and subtract it from the load
+            # We assume the load sensor correct, so if the car slot over reports then can the car slot energy based on the possible load
+            for car_n in range(self.num_cars):
+                for slot in self.car_charging_slots[car_n]:
+                    start_minutes = slot["start"]
+                    end_minutes = slot["end"]
+                    kwh = slot["kwh"]
+                    kwh_drain = kwh / self.car_charging_loss
+                    load_reported = 0
+                    for minute in range(start_minutes, end_minutes, PREDICT_STEP):
+                        load_reported += yesterday_load_step.get(minute, 0)
+                    if load_reported < kwh_drain:
+                        # The slot is reporting more energy than the load, so we need to adjust the slot energy down to the real load
+                        # e.g. Octopus can over report energy in the period
+                        if load_reported * 10 < kwh_drain:
+                            # Threshold where we assume no car charging at all
+                            slot["kwh"] = 0
+                        else:
+                            slot["kwh"] = load_reported * self.car_charging_loss
+                    khw = slot["kwh"]
+
+                    # Subtract the energy for the period from the historical load as it will be added back in again during the simulation
+                    total_hours = (end_minutes - start_minutes) / 60.0
+                    subtract_amount = khw / total_hours * PREDICT_STEP / 60.0
+                    for minute in range(start_minutes, end_minutes, PREDICT_STEP):
+                        load_value = yesterday_load_step.get(minute, 0)
+                        yesterday_load_step[minute] = max(load_value - subtract_amount, 0)
+
     def calculate_yesterday(self):
         """
         Calculate the base plan for yesterday
@@ -2854,6 +2928,8 @@ class Output:
         carbon_enable = self.carbon_enable
         rate_import_replicated = self.rate_import_replicated
         rate_export_replicated = self.rate_export_replicated
+        car_charging_slots_backup = copy.deepcopy(self.car_charging_slots)
+        car_charging_soc = list(self.car_charging_soc)
 
         # Fake to yesterday state
         self.minutes_now = 0
@@ -2871,11 +2947,17 @@ class Output:
         self.rate_import = past_rates
         self.rate_export = past_rates_export
         self.iboost_enable = False
-        self.num_cars = 0
         self.plan_debug = False
         self.carbon_enable = False
         self.rate_import_replicated = {}
         self.rate_export_replicated = {}
+        # Reset car SOC to 0 so the prediction can add back the full car energy from IOG slots.
+        # The current car_charging_soc reflects today's state; if the car is already at its limit
+        # the Prediction would compute car_load_scale=0 and omit all car energy from the metric.
+        self.car_charging_soc = [0] * len(self.car_charging_soc)
+
+        # re-construct car charging slots from non-octopus using the sensor
+        self.yesterday_reconstruct_car_slots(end_record, yesterday_load_step)
 
         # Simulate yesterday
         self.prediction = Prediction(self, yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step)
@@ -3180,6 +3262,8 @@ class Output:
         self.carbon_enable = carbon_enable
         self.rate_import_replicated = rate_import_replicated
         self.rate_export_replicated = rate_export_replicated
+        self.car_charging_slots = car_charging_slots_backup
+        self.car_charging_soc = car_charging_soc
 
         # Update timestamp
         self.savings_last_updated = self.now_utc

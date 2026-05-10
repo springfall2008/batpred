@@ -487,7 +487,7 @@ class Prediction:
         iboost_running = self.iboost_running
         iboost_running_solar = self.iboost_running_solar
         iboost_running_full = self.iboost_running_full
-        car_load_energy = 0
+        car_load_energy_bypass = 0
 
         # Remove intersecting windows and optimise the data format of the charge/discharge window
         charge_limit, charge_window = remove_intersecting_windows(charge_limit, charge_window, export_limits, export_window)
@@ -672,10 +672,13 @@ class Prediction:
                 charge_rate_now = battery_rate_max_charge
                 discharge_rate_now = battery_rate_max_discharge
 
+            car_rate_premium = 0  # Extra cost above import_rate for beyond-cap IOG slots
+            car_amount_premium = 0  # Amount of energy in IOG slots that is above import_rate
+            car_load_energy_bypass = 0  # Amount of car energy bypassing the CT clamp
+
             # Simulate car charging
             if car_enable:
-                car_load = in_car_slot(minute_absolute, self.num_cars, self.car_charging_slots)
-                car_load_energy = 0
+                car_load, car_rate_slot = in_car_slot(minute_absolute, self.num_cars, self.car_charging_slots)
 
                 # Car charging?
                 for car_n in range(self.num_cars):
@@ -684,14 +687,19 @@ class Prediction:
                         car_load_scale = car_load_scale * self.car_charging_loss
                         car_load_scale = max(min(car_load_scale, self.car_charging_limit[car_n] - car_soc[car_n]), 0)
                         car_soc[car_n] = car_soc[car_n] + car_load_scale
+
+                        # Work out the premium rate for car charging
+                        car_rate_premium = max(car_rate_premium, max(0, car_rate_slot[car_n] - import_rate))
+
                         if self.car_energy_reported_load:
                             # Only add load if the car is reporting it as load, otherwise its outside the CT Clamp
-                            load_yesterday += car_load_scale / self.car_charging_loss
+                            car_amount_premium += car_load_scale / self.car_charging_loss
+                            load_yesterday += car_amount_premium
                             # Model not allowing the car to charge from the battery
                             if (car_load_scale > 0) and (not self.car_charging_from_battery) and set_charge_window:
                                 discharge_rate_now = battery_rate_min  # 0
                         else:
-                            car_load_energy += car_load_scale
+                            car_load_energy_bypass += car_load_scale / self.car_charging_loss
 
             # Iboost
             iboost_rate_okay = True
@@ -1085,7 +1093,10 @@ class Prediction:
                     # self.log("importing to minute %s amount %s kW total %s kWh total draw %s" % (minute, energy, import_kwh_house, diff))
                     import_kwh_house += diff
 
-                metric += import_rate * diff
+                # Account for premium for car charging in import metric
+                # but it can't be more than we actually imported from the grid.
+                car_amount_premium = min(diff, car_amount_premium)
+                metric += import_rate * diff + car_rate_premium * car_amount_premium
                 grid_state = "<"
             else:
                 # Export
@@ -1094,11 +1105,11 @@ class Prediction:
                 if carbon_enable:
                     carbon_g -= energy * carbon_intensity.get(minute, 0)
 
-                if not car_energy_reported_load and car_load_energy > 0:
+                if not car_energy_reported_load:
                     # If the car is not reporting load, but we export then this export can
                     # end up in the car meaning we don't get the export profit.
-                    # We can't really value the car charging amount so we just assume its 0 value to be conservative.
-                    metric -= export_rate * max(0, energy - car_load_energy)
+                    # We can't really value the car charging amount so we just assume its 0 value
+                    metric -= export_rate * max(0, energy - car_load_energy_bypass)
                 else:
                     metric -= export_rate * energy
 

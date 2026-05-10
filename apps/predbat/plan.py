@@ -132,7 +132,7 @@ class Plan:
                         # If car energy is not reported as load then we should not attempt to adjust the load prediction based on car load.
                         car_load = 0
                     else:
-                        car_load = sum(in_car_slot(minute_absolute, self.num_cars, self.car_charging_slots))
+                        car_load = sum(in_car_slot(minute_absolute, self.num_cars, self.car_charging_slots)[0])
                     load_last_period = self.load_last_period / 60 * PREDICT_STEP
                     load_last_period = max(load_last_period - car_load, 0)
                     if load_last_period > 0:
@@ -4255,6 +4255,7 @@ class Plan:
                 new_slot["kwh"] = dp3(kwh)
                 new_slot["average"] = window["average"]
                 new_slot["cost"] = dp2(new_slot["average"] * kwh)
+                new_slot["octopus"] = False
                 plan.append(new_slot)
 
         # Return sorted back in time order

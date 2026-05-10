@@ -735,11 +735,12 @@ def in_iboost_slot(minute, iboost_plan):
     return load_amount
 
 
-def in_car_slot(minute, num_cars, car_charging_slots):
+def in_car_slot(minute, num_cars, car_charging_slots, slot_cap=None, slot_cap_period=None):
     """
     Is the given minute inside a car slot
     """
     load_amount = [0 for car_n in range(num_cars)]
+    rate_amount = [0 for car_n in range(num_cars)]
 
     for car_n in range(num_cars):
         if car_charging_slots[car_n]:
@@ -747,14 +748,17 @@ def in_car_slot(minute, num_cars, car_charging_slots):
                 start_minutes = slot["start"]
                 end_minutes = slot["end"]
                 kwh = slot["kwh"]
+                octopus = slot.get("octopus", False)
                 slot_minutes = end_minutes - start_minutes
                 slot_hours = slot_minutes / 60.0
 
                 # Return the load in that slot
                 if minute >= start_minutes and minute < end_minutes:
                     load_amount[car_n] = abs(kwh / slot_hours)
+                    # Only return rate for octopus as its used for premium calculations
+                    rate_amount[car_n] = slot.get("average", 0) if octopus else 0
                     break
-    return load_amount
+    return load_amount, rate_amount
 
 
 def time_string_to_stamp(time_string):
