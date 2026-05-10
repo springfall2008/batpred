@@ -44,6 +44,7 @@ from tests.test_single_debug import run_single_debug
 from tests.test_saving_session import test_saving_session, test_saving_session_null_octopoints, test_saving_session_notify_config, test_saving_session_default_rate
 from tests.test_secrets import run_secrets_tests
 from tests.test_ge_cloud import test_ge_cloud
+from tests.test_compare import test_compare
 from tests.test_gateway import run_gateway_tests
 from tests.test_axle import test_axle
 from tests.test_db_manager import test_db_manager
@@ -81,6 +82,7 @@ from tests.test_octopus_read_response import test_octopus_read_response_wrapper
 from tests.test_octopus_read_response_retry import test_octopus_read_response_retry_wrapper
 from tests.test_octopus_rate_limit import test_octopus_rate_limit_wrapper
 from tests.test_octopus_fetch_previous_dispatch import test_octopus_fetch_previous_dispatch_wrapper
+from tests.test_octopus_intelligent_devices import test_octopus_intelligent_devices_wrapper
 from tests.test_fetch_octopus_rates import test_fetch_octopus_rates
 from tests.test_fetch_tariffs import test_fetch_tariffs
 from tests.test_fetch_url_cached import test_fetch_url_cached
@@ -89,6 +91,7 @@ from tests.test_add_now_to_octopus_slot import test_add_now_to_octopus_slot
 from tests.test_dynamic_load import test_dynamic_load_car_slot_cancellation
 from tests.test_fox_api import run_fox_api_tests
 from tests.test_solcast import run_solcast_tests
+from tests.test_open_meteo import run_open_meteo_tests
 from tests.test_rate_add_io_slots import run_rate_add_io_slots_tests
 from tests.test_battery_curve_keys import run_battery_curve_keys_tests
 from tests.test_balance_inverters import run_balance_inverters_tests
@@ -97,7 +100,9 @@ from tests.test_integer_config import test_integer_config_entities, test_expose_
 from tests.test_plan_json_rate_adjust import run_test_plan_json_rate_adjust
 from tests.test_rate_replicate_missing_slots import test_rate_replicate
 from tests.test_find_charge_window import test_find_charge_window
+from tests.test_random_scenarios import generate_scenarios, save_scenarios, run_scenarios_from_file, compare_results, profile_scenario
 from tests.test_carbon import test_carbon
+from tests.test_storage import test_storage
 from tests.test_download import test_download
 from tests.test_ohme import test_ohme
 from tests.test_component_base import test_component_base_all
@@ -114,6 +119,8 @@ from tests.test_clip_charge_slots import run_clip_charge_slots_tests
 from tests.test_discard_unused_charge_slots import run_discard_unused_charge_slots_tests
 from tests.test_discard_unused_export_slots import run_discard_unused_export_slots_tests
 from tests.test_marginal_costs import test_marginal_costs
+from tests.test_savings_stability import test_savings_stability
+from tests.test_calculate_yesterday import test_calculate_yesterday
 
 
 # Mock the components and plugin system
@@ -132,6 +139,8 @@ def run_debug_cases(my_predbat):
     for filename in glob.glob("cases/*.yaml"):
         basename = os.path.basename(filename)
         pathname = os.path.dirname(filename)
+        if basename == "random_scenarios.yaml":
+            continue  # Skip the random scenarios template file
         test_failed = run_single_debug(basename, my_predbat, filename, pathname + "/" + basename + ".expected.json")
         if test_failed:
             print(f"**** Debug case {basename}: FAILED ****")
@@ -196,6 +205,7 @@ def main():
         ("octopus_read_response_retry", test_octopus_read_response_retry_wrapper, "Octopus read response retry with exponential backoff tests", False),
         ("octopus_rate_limit", test_octopus_rate_limit_wrapper, "Octopus API rate limit tests", False),
         ("octopus_fetch_previous_dispatch", test_octopus_fetch_previous_dispatch_wrapper, "Octopus fetch previous dispatch tests", False),
+        ("octopus_intelligent_devices", test_octopus_intelligent_devices_wrapper, "Octopus intelligent devices tests (flexPlannedDispatches, energyAddedKwh)", False),
         ("download_octopus_rates", test_octopus_download_rates_wrapper, "Test download octopus rates", False),
         ("fetch_octopus_rates", test_fetch_octopus_rates, "Fetch Octopus rates tests", False),
         ("fetch_tariffs", test_fetch_tariffs, "Fetch tariffs tests", False),
@@ -231,6 +241,7 @@ def main():
         ("alert_feed", test_alert_feed, "Alert feed tests", False),
         ("fox_api", run_fox_api_tests, "Fox API tests", False),
         ("solcast", run_solcast_tests, "Solcast API tests", False),
+        ("open_meteo", run_open_meteo_tests, "Open-Meteo solar forecast provider tests", False),
         ("solax", run_solax_tests, "SolaX API tests", False),
         ("iboost_smart", run_iboost_smart_tests, "iBoost smart tests", False),
         ("car_charging_smart", run_car_charging_smart_tests, "Car charging smart tests", False),
@@ -264,14 +275,14 @@ def main():
         ("hainterface_websocket", run_hainterface_websocket_tests, "HAInterface websocket tests", False),
         # Carbon Intensity API unit tests
         ("carbon", test_carbon, "Carbon Intensity API comprehensive tests (fetch, cache, publish, config)", False),
+        # Storage component unit tests
+        ("storage", test_storage, "Storage component tests (yaml/json/text round-trip, expiry, cleanup)", False),
         # Ohme EV charger API unit tests
         ("ohme", test_ohme, "Ohme EV charger comprehensive tests (helper functions, client methods, API operations, event handlers)", False),
         # ComponentBase lifecycle tests
         ("component_base", test_component_base_all, "ComponentBase tests (all)", False),
         # Solis Cloud API unit tests
         ("solis", run_solis_tests, "Solis Cloud API tests (V1/V2 time window writes, change detection)", False),
-        # ML Load Forecaster tests
-        ("load_ml", test_load_ml, "ML Load Forecaster tests (MLP, training, persistence, validation)", False),
         # External Temperature API tests
         ("temperature", test_temperature, "External Temperature API tests (initialization, zone.home fallback, timezone conversion, caching)", False),
         ("band_rate_text", test_band_rate_text, "Band rate text tests (flat rate, Cosy, Flux import/export)", False),
@@ -285,9 +296,13 @@ def main():
         ("clip_charge_slots", run_clip_charge_slots_tests, "Clip charge slots tests", False),
         ("discard_unused_charge_slots", run_discard_unused_charge_slots_tests, "Discard unused charge slots tests", False),
         ("discard_unused_export_slots", run_discard_unused_export_slots_tests, "Discard unused export slots tests", False),
-        ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", False),
         ("marginal_costs", test_marginal_costs, "Marginal energy cost matrix tests", False),
+        ("savings_stability", test_savings_stability, "Savings yesterday rate_low stability tests", False),
+        ("calculate_yesterday", test_calculate_yesterday, "Calculate yesterday savings and IOG car-slot subtraction tests", False),
+        ("compare", test_compare, "Compare tariff engine tests (hardware overrides, bleed isolation)", False),
         ("gateway", run_gateway_tests, "GatewayMQTT component tests (protobuf, plan serialization, commands, telemetry)", False),
+        ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", False),
+        ("load_ml", test_load_ml, "ML Load Forecaster tests (MLP, training, persistence, validation)", True),
         ("optimise_windows", run_optimise_all_windows_tests, "Optimise all windows tests", True),
         ("debug_cases", run_debug_cases, "Debug case file tests", True),
     ]
@@ -301,6 +316,22 @@ def main():
     parser.add_argument("--keyword", "-k", action="store", help="Run tests matching keyword pattern (e.g., -k carbon_ runs all carbon tests)")
     parser.add_argument("--list", "-l", action="store_true", help="List all available tests")
     parser.add_argument("--quick", "-q", action="store_true", help="Skip slow tests (optimise_levels, optimise_windows, debug_cases)")
+    parser.add_argument("--random-generate", action="store_true", help="Generate random benchmark scenarios and write to a YAML file")
+    parser.add_argument("--random-count", type=int, default=100, metavar="N", help="Number of random scenarios to generate (default: 100)")
+    parser.add_argument("--random-seed", type=int, default=0, metavar="N", help="Starting random seed (default: 0)")
+    parser.add_argument("--random-output", default="random_scenarios.yaml", metavar="PATH", help="Output YAML file for generated scenarios (default: random_scenarios.yaml)")
+    parser.add_argument("--random-run", action="store_true", help="Run all scenarios from a scenarios YAML file and save results to JSON")
+    parser.add_argument("--random-scenarios", default="random_scenarios.yaml", metavar="PATH", help="Scenarios YAML file to load for --random-run (default: random_scenarios.yaml)")
+    parser.add_argument("--random-scenario", type=int, default=None, metavar="N", help="Run only scenario with this id number (default: run all)")
+    parser.add_argument("--random-template", metavar="PATH", help="Template debug YAML file to use as baseline for --random-run (required)")
+    parser.add_argument("--random-results", default="random_results.json", metavar="PATH", help="Output JSON file for benchmark results (default: random_results.json)")
+    parser.add_argument("--random-compare", nargs=2, metavar=("FILE_A", "FILE_B"), help="Compare two random_results JSON files and print a diff table")
+    parser.add_argument("--random-profile", action="store_true", help="Run cProfile on a single scenario's optimisation")
+    parser.add_argument("--random-profile-lines", type=int, default=30, metavar="N", help="Number of top functions to show in profile output (default: 30)")
+    parser.add_argument("--random-profile-sort", default="cumulative", metavar="KEY", help="pstats sort key: cumulative, tottime, calls (default: cumulative)")
+    parser.add_argument("--random-profile-output", default=None, metavar="PATH", help="Optional .prof file to write raw profile data to")
+    parser.add_argument("--random-profile-callers", default=None, metavar="FUNC", help="Print caller breakdown for a specific function name (e.g. round)")
+    parser.add_argument("--random-profile-line", action="append", metavar="MOD:FUNC", dest="random_profile_line", help="Line-profile a specific function (e.g. prediction:run_prediction). Can be used multiple times. Requires line_profiler.")
     args = parser.parse_args()
 
     # List available tests
@@ -318,10 +349,44 @@ def main():
         print("       python unit_test.py --quick  # Skip slow tests")
         sys.exit(0)
 
+    if args.random_generate:
+        print("**** Generating {} random scenario(s) starting from seed {} ****".format(args.random_count, args.random_seed))
+        scenarios = generate_scenarios(args.random_count, args.random_seed)
+        save_scenarios(scenarios, args.random_output)
+        sys.exit(0)
+
     print("**** Starting Predbat tests ****")
     my_predbat = create_predbat()
     print("**** Testing Predbat ****")
     failed = False
+
+    if args.random_run:
+        if not args.random_template:
+            print("ERROR: --random-template is required with --random-run")
+            sys.exit(1)
+        run_scenarios_from_file(my_predbat, args.random_scenarios, args.random_template, args.random_results, debug=args.full_debug, scenario_id=args.random_scenario)
+        sys.exit(0)
+
+    if args.random_compare:
+        compare_results(args.random_compare[0], args.random_compare[1])
+        sys.exit(0)
+
+    if args.random_profile:
+        if not args.random_template:
+            print("ERROR: --random-template is required with --random-profile")
+            sys.exit(1)
+        profile_scenario(
+            my_predbat,
+            args.random_scenarios,
+            args.random_template,
+            scenario_id=args.random_scenario if args.random_scenario is not None else 0,
+            top_n=args.random_profile_lines,
+            sort_key=args.random_profile_sort,
+            prof_output=args.random_profile_output,
+            callers_of=args.random_profile_callers,
+            line_profile_funcs=args.random_profile_line,
+        )
+        sys.exit(0)
 
     if args.debug_file:
         run_single_debug(args.debug_file, my_predbat, args.debug_file, compare=args.compare, debug=args.full_debug)

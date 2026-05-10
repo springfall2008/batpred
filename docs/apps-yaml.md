@@ -913,6 +913,28 @@ If you have multiple inverters then set the value of each one in a list format.
 
 NB: inverter_limit is ONLY used by Predbat to improve the quality of the plan, any solar clipping is done by the inverter and is not controlled by Predbat.
 
+### **pv_ac_limit**
+
+Optional, applies to **non-hybrid (AC coupled) inverters only**.
+
+Controls the way Predbat models the maximum AC output of your PV system.
+This does not change the way the inverter is controlled.
+
+When set, defines the maximum AC output power in watts for your PV system (e.g. microinverters).
+This is used by Predbat to model clipping that occurs when your PV generation exceeds the AC output limit,
+for example if you have microinverters with a rated maximum AC output.
+
+This setting is ignored for hybrid inverters (`inverter_hybrid: true`) because in a hybrid system the PV
+connects directly to the DC bus and clipping is already modelled via `inverter_limit`.
+
+Example:
+
+```yaml
+  pv_ac_limit: 3600
+```
+
+NB: pv_ac_limit is ONLY used by Predbat to improve the quality of the plan, any solar clipping is done by the inverter and is not controlled by Predbat.
+
 ### **export_limit**
 
 One per inverter (optional).
@@ -944,6 +966,25 @@ When set in Watts, overrides the maximum charge/discharge rate settings used whe
 This can be used if you need Predbat to cap your inverter battery rate (e.g. due to grid import/export limitations or to charge overnight at a slower rate to reduce inverter/battery heating).
 By default Predbat will normally configure all timed charges or discharges to be at the inverter's maximum rate and these options enable you to reduce that maximum rate.
 [Low rate charging](customisation.md#inverter-control-options) could also be used to slow down Predbat's charge rate whilst still meeting the battery plan.
+
+### **inverter_limit_export**
+
+An optional list of values with one entry per inverter.
+
+e.g.
+
+```yaml
+  inverter_limit_export:
+    - 2000
+```
+
+When set in Watts, caps the maximum discharge rate used specifically during forced export windows, without affecting the ECO mode discharge rate.
+
+This is useful when you want to limit how fast the battery discharges to the grid during forced export periods (e.g. to reduce battery wear or meet grid export limits)
+while still allowing the battery to discharge at full rate during ECO mode to cover house load.
+
+If not set, the value defaults to `inverter_limit_discharge` (or the inverter maximum if that is also not set).
+Predbat will also use this rate when modelling the plan so the prediction accurately reflects the capped export rate.
 
 ### **inverter_limit_charge_dc**
 
@@ -1405,6 +1446,57 @@ Optionally you can set an api_key for personal or professional accounts and you 
     - postcode: SW1A 2AB
       api_key: 'xxxxx'
       days: 3
+```
+
+Note you can omit any of these settings for a default value. They do not have to be exact if you use Predbat auto calibration for PV to improve the data quality.
+
+## Open-Meteo Solar Forecast
+
+[Open-Meteo](https://open-meteo.com/) is a free, open-source weather API that provides solar irradiance forecasts with no API key required.
+Predbat fetches the Global Tilted Irradiance (GTI) for each array and converts it to a power estimate using a PVWatts cell-temperature model.
+Ensemble members are used to derive a P10 pessimistic estimate alongside the central P50.
+
+You can define one or more rooftop arrays by providing a list; they will be summed automatically.
+
+The azimuth uses the same convention as all other Predbat solar configs (Solcast/Forecast.solar): 0=North, -90=East, 90=West, -180/180=South. Predbat converts this to the Open-Meteo convention (0=South) internally.
+The declination is the angle of the panels from horizontal (e.g. 35 for a typical pitched UK roof).
+For the UK you can use a postcode instead of latitude/longitude.
+The optional `efficiency` (default 1.0) is the panel efficiency as a fraction where 1.0 = 100% (no losses), e.g. 0.95 for 5% losses from wiring and soiling. This uses the same convention as Forecast.solar.
+The optional `open_meteo_forecast_max_age` sets the number of hours between refreshing the cached API data (default 4.0 hours).
+
+```yaml
+  open_meteo_forecast:
+    - postcode: SW1A 2AB
+      kwp: 3.5
+      declination: 35
+      azimuth: 180
+      efficiency: 0.95
+  open_meteo_forecast_max_age: 4.0
+```
+
+or with latitude/longitude if you are outside the UK:
+
+```yaml
+  open_meteo_forecast:
+    - latitude: 51.5072
+      longitude: -0.1276
+      kwp: 3.5
+      declination: 35
+      azimuth: 180
+```
+
+For a house with two differently oriented roof aspects, add a second entry to the list:
+
+```yaml
+  open_meteo_forecast:
+    - postcode: BS1 4DJ
+      kwp: 1.56
+      declination: 23
+      azimuth: -133
+    - postcode: BS1 4DJ
+      kwp: 2.73
+      declination: 45
+      azimuth: 45
 ```
 
 Note you can omit any of these settings for a default value. They do not have to be exact if you use Predbat auto calibration for PV to improve the data quality.

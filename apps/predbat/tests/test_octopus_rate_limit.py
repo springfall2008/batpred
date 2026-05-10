@@ -231,7 +231,7 @@ async def test_octopus_rate_limit(my_predbat):
         }
 
         dispatch_data = {
-            "plannedDispatches": [],
+            "flexPlannedDispatches": [],
             "completedDispatches": [
                 {
                     "start": "2025-12-22T01:00:00Z",
@@ -559,11 +559,123 @@ async def test_octopus_rate_limit(my_predbat):
         else:
             print("PASS: All auth error codes (KT-CT-1139, KT-CT-1111, KT-CT-1143) trigger auto-refresh")
 
-            # Summary
-            if failed:
-                print("\n**** Octopus API rate limit tests FAILED ****")
-                raise Exception("Octopus API rate limit tests failed")
-            else:
-                print("\n**** All Octopus API rate limit tests PASSED ****")
+        # Test 10: HTTP 401 response triggers token refresh and retry (Octopus Direct intelligent slots)
+        # Regression test for: repeated 401/403 HTTP responses (e.g. when fetching intelligent go slots)
+        # not refreshing the token, requiring an add-on restart to recover.
+        print("\n*** Test 10: HTTP 401 response triggers token refresh and retry ***")
+        for http_status in [401, 403]:
+            api = OctopusAPI(my_predbat, key="test-key", account_id="test-account", automatic=False)
+            api.graphql_token = "stale-token"
+
+            # Mock client
+            mock_client_10 = AsyncMock()
+            api.api.async_create_client_session = AsyncMock(return_value=mock_client_10)
+
+            # First response: bare HTTP 401/403 with no GraphQL body
+            # Second response (after token refresh): HTTP 200 with data
+            call_count_10 = [0]
+
+            def make_mock_http_response(status):
+                """Create a mock aiohttp response with the given status."""
+                r = AsyncMock()
+                r.status = status
+                r.__aenter__ = AsyncMock(return_value=r)
+                r.__aexit__ = AsyncMock(return_value=None)
+                return r
+
+            success_data = {"data": {"intelligentDispatches": []}}
+
+            # async_read_response is only reached on the retry (status 200)
+            api.async_read_response = AsyncMock(return_value=success_data)
+
+            # POST returns 401 on first call, 200 on second
+            def post_side_effect_10(*args, **kwargs):
+                call_count_10[0] += 1
+                if call_count_10[0] == 1:
+                    return make_mock_http_response(http_status)
+                return make_mock_http_response(200)
+
+            mock_client_10.post = MagicMock(side_effect=post_side_effect_10)
+
+            # Token refresh: on retry, return a fresh token
+            refresh_calls_10 = [0]
+
+            async def mock_token_refresh_with_retry():
+                """Mock token refresh returning a new token on the second call."""
+                refresh_calls_10[0] += 1
+                if refresh_calls_10[0] == 1:
+                    # Initial check — stale token still set, acts as "valid enough to try"
+                    return "stale-token"
+                # Second call — forced refresh after 401
+                api.graphql_token = "fresh-token"
+                return "fresh-token"
+
+            api.async_refresh_token = AsyncMock(side_effect=mock_token_refresh_with_retry)
+
+            result = await api.async_graphql_query("query { intelligentDispatches }", f"test-http-{http_status}", returns_data=True, ignore_errors=True)
+
+            if result != success_data["data"]:
+                print(f"ERROR: HTTP {http_status} did not trigger token refresh and retry. Got {result}")
+                failed = True
+                break
+            elif call_count_10[0] != 2:
+                print(f"ERROR: HTTP {http_status} - expected 2 POST calls (original + retry), got {call_count_10[0]}")
+                failed = True
+                break
+            elif refresh_calls_10[0] < 2:
+                print(f"ERROR: HTTP {http_status} - token refresh not called enough times. Got {refresh_calls_10[0]}")
+                failed = True
+                break
+            elif api.graphql_token != "fresh-token":
+                print(f"ERROR: HTTP {http_status} - token not updated after refresh. Got {api.graphql_token}")
+                failed = True
+                break
+        else:
+            print("PASS: HTTP 401 and 403 responses trigger token refresh and retry")
+
+        # Test 10b: HTTP 401 with failed token refresh returns None without infinite loop
+        print("\n*** Test 10b: HTTP 401 with failed token refresh returns None ***")
+        api = OctopusAPI(my_predbat, key="test-key", account_id="test-account", automatic=False)
+        api.graphql_token = "stale-token"
+
+        mock_client_10b = AsyncMock()
+        api.api.async_create_client_session = AsyncMock(return_value=mock_client_10b)
+
+        mock_resp_10b = AsyncMock()
+        mock_resp_10b.status = 401
+        mock_resp_10b.__aenter__ = AsyncMock(return_value=mock_resp_10b)
+        mock_resp_10b.__aexit__ = AsyncMock(return_value=None)
+        mock_client_10b.post = MagicMock(return_value=mock_resp_10b)
+
+        # Token refresh fails
+        refresh_calls_10b = [0]
+
+        async def mock_token_refresh_with_failure():
+            """Mock token refresh that fails on the forced retry."""
+            refresh_calls_10b[0] += 1
+            if refresh_calls_10b[0] == 1:
+                return "stale-token"
+            return None  # Refresh fails
+
+        api.async_refresh_token = AsyncMock(side_effect=mock_token_refresh_with_failure)
+        initial_failures_10b = api.failures_total
+
+        result = await api.async_graphql_query("query { intelligentDispatches }", "test-http-401-no-refresh", returns_data=True, ignore_errors=False)
+
+        if result is not None:
+            print(f"ERROR: Expected None when refresh fails after HTTP 401, got {result}")
+            failed = True
+        elif api.failures_total != initial_failures_10b + 1:
+            print(f"ERROR: failures_total not incremented after failed refresh. Expected {initial_failures_10b + 1}, got {api.failures_total}")
+            failed = True
+        else:
+            print("PASS: HTTP 401 with failed token refresh returns None and increments failures_total")
+
+        # Summary
+        if failed:
+            print("\n**** Octopus API rate limit tests FAILED ****")
+            raise Exception("Octopus API rate limit tests failed")
+        else:
+            print("\n**** All Octopus API rate limit tests PASSED ****")
 
         return failed

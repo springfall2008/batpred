@@ -36,7 +36,7 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.36.2"
+THIS_VERSION = "v8.38.1"
 
 from download import predbat_update_move, predbat_update_download, check_install, resolve_predbat_repository, DEFAULT_PREDBAT_REPOSITORY
 from const import MINUTE_WATT
@@ -530,6 +530,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.battery_loss_discharge = 1.0
         self.inverter_loss = 1.0
         self.inverter_hybrid = True
+        self.pv_ac_limit = 0
         self.inverter_soc_reset = False
         self.inverter_set_charge_before = True
         self.best_soc_min = 0
@@ -540,8 +541,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.rate_min = 0
         self.rate_min_minute = 0
         self.rate_min_forward = {}
+        self.rate_min_base = 0
         self.rate_max = 0
         self.rate_max_minute = 0
+        self.rate_max_base = 0
         self.rate_export_cost_threshold = 99
         self.rate_import_cost_threshold = 99
         self.rate_best_cost_threshold_charge = None
@@ -589,6 +592,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.battery_rate_max_charge = 0
         self.battery_rate_max_charge_dc = 0
         self.battery_rate_max_discharge = 0
+        self.battery_rate_max_export = 0
         self.battery_rate_min = 0
         self.battery_rate_max_scaling = 1.0
         self.battery_rate_max_scaling_discharge = 1.0
@@ -604,7 +608,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.octopus_intelligent_consider_full = False
         self.notify_devices = ["notify"]
         self.octopus_url_cache = {}
-        self.futurerate_url_cache = {}
         self.ge_url_cache = {}
         self.github_url_cache = {}
         self.load_minutes = {}
@@ -708,7 +711,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.alert_active_keep = {}
         self.manual_soc_keep = {}
         self.all_active_keep = {}
-        self.calculate_tweak_plan = False
         self.set_charge_low_power = False
         self.set_export_low_power = False
         self.config_root = "./"

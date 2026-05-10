@@ -5,6 +5,7 @@ adbase
 afci
 AIO
 AIO's
+aiofiles
 aiohttp
 aiomqtt
 Alertfeed
@@ -55,6 +56,7 @@ compareform
 configform
 Consolas
 coro
+cprofile
 creds
 crosscharge
 customisation
@@ -77,6 +79,7 @@ daysymbol
 dedup
 dend
 denorm
+derating
 devcontainer
 devcontainers
 dexport
@@ -124,6 +127,7 @@ Forestfire
 foxess
 freephase
 fronius
+funcs
 futurerate
 gecloud
 gekey
@@ -143,6 +147,7 @@ HACS
 hadashboard
 hahistory
 hainterface
+halfhourly
 hanres
 HAOS
 hass
@@ -160,6 +165,7 @@ hypervolt
 iboost
 idag
 idetails
+idxs
 iflux
 inday
 INTELLI
@@ -213,6 +219,7 @@ meterpoint
 meterpower
 metricb
 metricmid
+microinverters
 minb
 minmax
 minsoc
@@ -236,10 +243,11 @@ nattribute
 ncalls
 nearr
 njpwerner
+nobat
 nocharge
 nodischarge
 nord
-Nordpool
+nordpool
 nosc
 nrgheat
 numpy
@@ -281,7 +289,9 @@ Predheat
 psum
 pvbat
 pvenergytotal
+pvlib
 pvpower
+pvwatts
 pwindow
 pyjwt
 pylint
@@ -306,6 +316,7 @@ rstart
 rtype
 ruamel
 Rvrt
+sapm
 saverestore
 savez
 scalarstring
@@ -375,7 +386,10 @@ timeobj
 timestep
 timestr
 timezone
+tmrw
 tojson
+tottime
+trapz
 Trefor
 treforsiphone
 twinx

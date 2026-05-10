@@ -605,7 +605,7 @@ class Fetch:
 
         return import_today
 
-    def minute_data_load(self, now_utc, entity_name, max_days_previous, load_scaling=1.0, required_unit=None, interpolate=False, pad=True):
+    def minute_data_load(self, now_utc, entity_name, max_days_previous, load_scaling=1.0, required_unit=None, interpolate=False, pad=True, clean_increment=True):
         """
         Download one or more entities for load data
         """
@@ -652,7 +652,7 @@ class Fetch:
                     backwards=True,
                     smoothing=True,
                     scale=load_scaling,
-                    clean_increment=True,
+                    clean_increment=clean_increment,
                     accumulate=load_minutes,
                     required_unit=required_unit,
                     interpolate=interpolate,
@@ -744,9 +744,8 @@ class Fetch:
             self.download_ge_data(self.now_utc)
 
             if ("load_power" in self.args) and self.get_arg("load_power_fill_enable", True):
-                # Use power data to make load data more accurate
                 self.log("Using load_power data to fill gaps in load_today data")
-                load_power_data, _ = self.minute_data_load(self.now_utc, "load_power", self.max_days_previous, required_unit="W", load_scaling=1.0, interpolate=True)
+                load_power_data, _ = self.minute_data_load(self.now_utc, "load_power", self.max_days_previous, required_unit="W", load_scaling=1.0, interpolate=True, clean_increment=False)
                 self.load_minutes = self.fill_load_from_power(self.load_minutes, load_power_data)
         else:
             # Load data
@@ -757,9 +756,12 @@ class Fetch:
                 self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
 
                 if ("load_power" in self.args) and self.get_arg("load_power_fill_enable", True):
-                    # Use power data to make load data more accurate
+                    # Use power data to make load data more accurate.
+                    # clean_increment=False: power sensors report instantaneous W, not cumulative kWh.
+                    # clean_incrementing_reverse would distort fluctuating power readings into an
+                    # ever-growing cumulative series, inflating fill_load_from_power gap-fills.
                     self.log("Using load_power data to fill gaps in load_today data")
-                    load_power_data, _ = self.minute_data_load(self.now_utc, "load_power", self.max_days_previous, required_unit="W", load_scaling=1.0, interpolate=True)
+                    load_power_data, _ = self.minute_data_load(self.now_utc, "load_power", self.max_days_previous, required_unit="W", load_scaling=1.0, interpolate=True, clean_increment=False)
                     self.load_minutes = self.fill_load_from_power(self.load_minutes, load_power_data)
             else:
                 if self.load_forecast:
@@ -935,6 +937,8 @@ class Fetch:
         # Replicate and scan import rates
         if self.rate_import:
             self.rate_scan(self.rate_import, print=False)
+            self.rate_max_base = self.rate_max  # True peak rate before saving sessions / overrides inflate it
+            self.rate_min_base = self.rate_min  # True off-peak rate before free sessions / overrides deflate it
             self.rate_import, self.rate_import_replicated = self.rate_replicate(self.rate_import, self.io_adjusted, is_import=True)
             self.rate_import_no_io = self.rate_import.copy()
             for car_n in range(self.num_cars):
@@ -2171,6 +2175,7 @@ class Fetch:
         self.battery_loss_discharge = 1.0 - self.get_arg("battery_loss_discharge")
         self.inverter_loss = 1.0 - self.get_arg("inverter_loss")
         self.inverter_hybrid = self.get_arg("inverter_hybrid")
+        self.pv_ac_limit = self.get_arg("pv_ac_limit", 0.0) / MINUTE_WATT
         self.base_load = self.get_arg("base_load", 0) / 1000.0
 
         # Charge curve
@@ -2279,7 +2284,6 @@ class Fetch:
         self.calculate_export_on_pv = self.get_arg("calculate_export_on_pv")
         self.calculate_second_pass = self.get_arg("calculate_second_pass")
         self.calculate_inday_adjustment = self.get_arg("calculate_inday_adjustment")
-        self.calculate_tweak_plan = self.get_arg("calculate_tweak_plan")
         self.calculate_regions = True
         self.calculate_import_low_export = self.get_arg("calculate_import_low_export")
         self.calculate_export_high_import = self.get_arg("calculate_export_high_import")

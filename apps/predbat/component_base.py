@@ -148,6 +148,13 @@ class ComponentBase(ABC):
         """Get the configuration root directory"""
         return self.base.config_root
 
+    @property
+    def storage(self):
+        """Get the storage component for save/load operations"""
+        if hasattr(self, "base") and hasattr(self.base, "components") and self.base.components:
+            return self.base.components.get_component("storage")
+        return None
+
     def get_error_count(self):
         """Get the number of errors that have occurred in this component"""
         return self.count_errors

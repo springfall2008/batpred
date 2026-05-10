@@ -248,10 +248,6 @@ This prevents Predbat from planning unnecessary forced exports during sunny peri
 
 **switch.predbat_inverter_set_charge_before** - (_expert_mode_) When turned On (the default), charge slots will be programmed before their start time, when Off they will only be configured when the charging time starts.
 
-**switch.predbat_calculate_tweak_plan** (_expert mode_) When turned On causes Predbat to perform a second pass optimisation across the next 8 charge and export windows in time order. Turned Off by default.
-
-This can help to slightly improve the plan for tariffs like Agile but can make it worse in some fixed rate tariffs which you want to force export late.
-
 **switch.predbat_calculate_second_pass** (_expert mode_) When turned On causes Predbat to perform a second pass optimisation across all the charge and export windows in time order.
 
 Note: This feature is quite slow so may need a higher-performance machine so is turned Off by default.

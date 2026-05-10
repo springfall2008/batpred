@@ -193,15 +193,12 @@ intelligent_dispatches_query = """query {{
       currentState
     }}
   }}
-	plannedDispatches(accountNumber: "{account_id}") {{
-		start
-		end
-    delta
-    meta {{
-			source
-      location
-		}}
-	}}
+  flexPlannedDispatches(deviceId:"{device_id}") {{
+    start
+    end
+    type
+    energyAddedKwh
+  }}
 	completedDispatches(accountNumber: "{account_id}") {{
 		start
 		end
@@ -781,9 +778,9 @@ class OctopusAPI(ComponentBase):
                             already_exists = True
                     if not already_exists and dispatch.get("start", None) and dispatch.get("end", None) and dispatch.get("charge_in_kwh", None):
                         current_completed.append(dispatch)
-            current_completed = sorted(current_completed, key=lambda x: parse_date_time(x["start"]))
+            current_completed = sorted([x for x in current_completed if x.get("start")], key=lambda x: parse_date_time(x.get("start")))
             # Prune completed dispatches for results older than 5 days
-            current_completed = [x for x in current_completed if parse_date_time(x["start"]) > self.now_utc_exact - timedelta(days=5)]
+            current_completed = [x for x in current_completed if x.get("start") and parse_date_time(x.get("start")) > self.now_utc_exact - timedelta(days=5)]
             intelligent_device["completed_dispatches"] = current_completed
 
     def join_saving_session_event(self, event_code):
@@ -1558,6 +1555,21 @@ class OctopusAPI(ComponentBase):
             headers = {"Authorization": f"{auth_prefix}{self.graphql_token}", integration_context_header: request_context}
             self.log("OctopusAPI: Making GraphQL request to {} payload {} headers {}".format(url, payload, headers))
             async with client.post(url, json=payload, headers=headers) as response:
+                # Check for HTTP-level 401/403 (transport-level auth failure) and retry once.
+                # This handles cases where the JWT has been revoked server-side and the server
+                # returns a bare 401/403 status rather than a GraphQL error body — which would
+                # otherwise loop forever without ever refreshing the token.
+                if response.status in [401, 403] and _retry_count == 0:
+                    self.log(f"OctopusAPI: HTTP {response.status} for graphql query {request_context}, forcing token refresh and retry")
+                    record_api_call("octopus", False, "auth_error")
+                    self.graphql_token = None
+                    retry_token = await self.async_refresh_token()
+                    if retry_token is None:
+                        self.failures_total += 1
+                        self.log(f"Warn: OctopusAPI: Failed to refresh token for retry of graphql query {request_context}")
+                        return None
+                    return await self.async_graphql_query(query, request_context, returns_data=returns_data, ignore_errors=ignore_errors, _retry_count=1, use_backend=use_backend)
+
                 # Process response (which reads the text)
                 response_body = await self.async_read_response_retry(response, url, ignore_errors=ignore_errors)
 
@@ -1687,19 +1699,23 @@ class OctopusAPI(ComponentBase):
                             "device_id": IntelligentdeviceID,
                         }
                         if dispatch_result:
-                            plannedDispatches = dispatch_result.get("plannedDispatches", [])
+                            plannedDispatches = dispatch_result.get("flexPlannedDispatches", [])
                             completedDispatches = dispatch_result.get("completedDispatches", [])
                             for plannedDispatch in plannedDispatches:
                                 start = plannedDispatch.get("start", None)
                                 end = plannedDispatch.get("end", None)
-                                delta = plannedDispatch.get("delta", None)
+                                if not (start and end):
+                                    self.log("Warn: OctopusAPI: Planned dispatch missing start or end time, skipping: {}".format(plannedDispatch))
+                                    continue
+                                delta = plannedDispatch.get("energyAddedKwh", plannedDispatch.get("delta", None))
+                                dispatch_type = plannedDispatch.get("type", "")
                                 meta = plannedDispatch.get("meta", {})
                                 try:
                                     delta = dp4(float(delta))
                                 except (ValueError, TypeError):
                                     delta = None
 
-                                dispatch = {"start": start, "end": end, "charge_in_kwh": delta, "source": meta.get("source", None), "location": meta.get("location", None)}
+                                dispatch = {"start": start, "end": end, "charge_in_kwh": delta, "source": meta.get("source", dispatch_type), "location": meta.get("location", None)}
                                 keep = True
                                 if start and end:
                                     start_date_time = parse_date_time(start)
@@ -1738,14 +1754,14 @@ class OctopusAPI(ComponentBase):
                                             "start": completed_start_time.strftime(DATE_TIME_STR_FORMAT),
                                             "end": completed_end_time.strftime(DATE_TIME_STR_FORMAT),
                                             "charge_in_kwh": adjusted_delta,
-                                            "source": meta.get("source", None),
+                                            "source": meta.get("source", dispatch_type),
                                             "location": meta.get("location", None),
                                         }
 
                                         # Check if the dispatch is already in the completed list, if its already there then don't add it again
                                         found = False
                                         for cached in completed:
-                                            if cached["start"] == completed_start_time.strftime(DATE_TIME_STR_FORMAT):
+                                            if cached.get("start") == completed_start_time.strftime(DATE_TIME_STR_FORMAT):
                                                 cached.update(completed_dispatch)
                                                 found = True
                                                 break
@@ -1770,6 +1786,9 @@ class OctopusAPI(ComponentBase):
                             for completedDispatch in completedDispatches:
                                 start = completedDispatch.get("start", None)
                                 end = completedDispatch.get("end", None)
+                                if not (start and end):
+                                    self.log("Warn: OctopusAPI: Completed dispatch missing start or end time, skipping: {}".format(completedDispatch))
+                                    continue
                                 delta = completedDispatch.get("delta", None)
                                 meta = completedDispatch.get("meta", {})
                                 try:
@@ -1781,7 +1800,7 @@ class OctopusAPI(ComponentBase):
                                 # Check if the dispatch is already in the completed list, if its already there then don't add it again
                                 found = False
                                 for cached in completed:
-                                    if cached["start"] == start:
+                                    if cached.get("start") == start:
                                         cached.update(dispatch)
                                         found = True
                                         break
@@ -1789,11 +1808,11 @@ class OctopusAPI(ComponentBase):
                                     completed.append(dispatch)
 
                         # Sort by start time
-                        planned = sorted(planned, key=lambda x: parse_date_time(x["start"]))
-                        completed = sorted(completed, key=lambda x: parse_date_time(x["start"]))
+                        planned = sorted([x for x in planned if x.get("start")], key=lambda x: parse_date_time(x.get("start")))
+                        completed = sorted([x for x in completed if x.get("start")], key=lambda x: parse_date_time(x.get("start")))
 
                         # Prune completed dispatches for results older than 5 days
-                        completed = [x for x in completed if parse_date_time(x["start"]) > self.now_utc_exact - timedelta(days=5)]
+                        completed = [x for x in completed if x.get("start") and parse_date_time(x.get("start")) > self.now_utc_exact - timedelta(days=5)]
                         # Store results
                         result = {**intelligent_device, **device_setting_result, "planned_dispatches": planned, "completed_dispatches": completed}
                         results[IntelligentdeviceID] = result
@@ -2335,6 +2354,8 @@ class Octopus:
             # Car not configured, just return the slots as they are (for export or other non-car use)
             return new_slots
         octopus_slot_low_rate = self.get_arg("octopus_slot_low_rate", True)
+        octopus_slot_max = self.get_arg("octopus_slot_max", 12)  # Default to 12 slots (6 hours) per midday-to-midday period
+        slots_per_day = {}  # Track 30-min blocks used per midday-to-midday period
         car_soc = self.car_charging_soc[car_n]
         limit = self.car_charging_limit[car_n]
         slots_decoded = []
@@ -2365,6 +2386,22 @@ class Octopus:
             start_minutes, end_minutes, kwh, source, location = slot
             kwh_original = kwh
             end_minutes_original = end_minutes
+
+            # Determine rate for this slot, applying the midday-to-midday cap
+            slot_average = self.rate_import.get(start_minutes, self.rate_min_base)
+            if octopus_slot_low_rate and source != "bump-charge" and source != "BOOST" and (not location or location == "AT_HOME"):
+                # Count 30-min blocks for this slot against the midday-to-midday cap
+                slot_block_start = (start_minutes // 30) * 30
+                num_blocks = max(1, (end_minutes - slot_block_start + 29) // 30)
+                day_offset = (start_minutes - 720) // (24 * 60)
+                if day_offset not in slots_per_day:
+                    slots_per_day[day_offset] = 0
+                if slots_per_day[day_offset] + num_blocks <= octopus_slot_max:
+                    slots_per_day[day_offset] += num_blocks
+                    slot_average = self.rate_min_base
+                else:
+                    slot_average = self.rate_max_base
+
             if (end_minutes > start_minutes) and (end_minutes > self.minutes_now) and (not location or location == "AT_HOME"):
                 kwh_expected = kwh * self.car_charging_loss
                 if octopus_intelligent_consider_full:
@@ -2383,11 +2420,10 @@ class Octopus:
                     new_slot["start"] = start_minutes
                     new_slot["end"] = end_minutes
                     new_slot["kwh"] = kwh
-                    new_slot["average"] = self.rate_import.get(start_minutes, self.rate_min)
-                    if octopus_slot_low_rate and source != "bump-charge" and source != "BOOST":
-                        new_slot["average"] = self.rate_min  # Assume price in min
+                    new_slot["average"] = slot_average
                     new_slot["cost"] = dp2(new_slot["average"] * kwh)
                     new_slot["soc"] = dp2(car_soc)
+                    new_slot["octopus"] = True
                     new_slots.append(new_slot)
 
                     if end_minutes_original > end_minutes:
@@ -2395,11 +2431,10 @@ class Octopus:
                         new_slot["start"] = end_minutes
                         new_slot["end"] = end_minutes_original
                         new_slot["kwh"] = 0.0
-                        new_slot["average"] = self.rate_import.get(start_minutes, self.rate_min)
-                        if octopus_slot_low_rate and source != "bump-charge" and source != "BOOST":
-                            new_slot["average"] = self.rate_min  # Assume price in min
+                        new_slot["average"] = slot_average
                         new_slot["cost"] = 0.0
                         new_slot["soc"] = dp2(car_soc)
+                        new_slot["octopus"] = True
                         new_slots.append(new_slot)
 
                 else:
@@ -2408,11 +2443,10 @@ class Octopus:
                     new_slot["start"] = start_minutes
                     new_slot["end"] = end_minutes
                     new_slot["kwh"] = kwh
-                    new_slot["average"] = self.rate_import.get(start_minutes, self.rate_min)
-                    if octopus_slot_low_rate and source != "bump-charge" and source != "BOOST":
-                        new_slot["average"] = self.rate_min  # Assume price in min
+                    new_slot["average"] = slot_average
                     new_slot["cost"] = dp2(new_slot["average"] * kwh)
                     new_slot["soc"] = dp2(car_soc)
+                    new_slot["octopus"] = True
                     new_slots.append(new_slot)
         return new_slots
 
@@ -2422,10 +2456,10 @@ class Octopus:
         # Octopus limits cheap slots to 6 hours (12 x 30-min slots) per 24-hour period
         """
         octopus_slot_low_rate = self.get_arg("octopus_slot_low_rate", True)
-        octopus_slot_max = self.get_arg("octopus_slot_max", 48)  # Default to 48 so no limit
+        octopus_slot_max = self.get_arg("octopus_slot_max", 12)  # Default to 12 hours as per May 2026
 
-        # Track slots per 24-hour period (keyed by day offset from midnight)
-        # Day 0 = today (minutes 0 to 1440), Day -1 = yesterday (minutes -1440 to 0), etc.
+        # Track slots per 24-hour period (keyed by day offset from midday)
+        # Period 0 = noon today to 11:59 tomorrow, Period -1 = noon yesterday to 11:59 today, etc.
         slots_per_day = {}
 
         # Track which 30-min slot starts were actually added (for filling in the rest of the slot)
@@ -2448,12 +2482,12 @@ class Octopus:
                     end_minutes = min(end_minutes, self.forecast_minutes)
 
                     if octopus_slot_low_rate:
-                        assumed_price = self.rate_min
+                        assumed_price = self.rate_min_base
                         for minute in range(start_minutes, end_minutes):
-                            # Calculate which day this minute belongs to (day boundary at midnight)
-                            # Day 0 = minutes 0-1439, Day 1 = 1440-2879, Day -1 = -1440 to -1, etc.
+                            # Calculate which day this minute belongs to (day boundary at midday)
+                            # Period 0 = noon today (720) to 11:59 tomorrow (2159), etc.
                             # Python's floor division handles negative numbers correctly
-                            day_offset = minute // (24 * 60)
+                            day_offset = (minute - 720) // (24 * 60)
 
                             # Initialise counter for this day if needed
                             if day_offset not in slots_per_day:

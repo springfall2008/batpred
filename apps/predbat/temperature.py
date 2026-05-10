@@ -55,6 +55,7 @@ class TemperatureAPI(ComponentBase):
         """
         try:
             if not self.temperature_enable:
+                self.update_success_timestamp()
                 return True
             if first or (seconds % (60 * 60) == 0):
                 # Fetch temperature data every hour

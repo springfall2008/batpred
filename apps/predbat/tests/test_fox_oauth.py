@@ -34,7 +34,6 @@ class MockFoxOAuth(FoxAPI):
         self.device_production_year = {}
         self.device_battery_charging_time = {}
         self.device_scheduler = {}
-        self.device_current_schedule = {}
         self.local_schedule = {}
         self.fdpwr_max = {}
         self.fdsoc_min = {}

@@ -516,6 +516,7 @@ Integrates with Fox ESS inverters for monitoring and controlling Fox ESS battery
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `key` | String | Yes | - | `fox_key` | Your Fox ESS API key |
 | `automatic` | Boolean | No | false | `fox_automatic` | Set to `true` to automatically configured Predbat to use the Fox inverter (no manual apps.yaml updates required) |
+| `automatic_ignore_pv` | Boolean | No | false | `fox_automatic_ignore_pv` | When `automatic` is enabled, set to `true` to prevent Fox Cloud from overwriting `pv_power` and `pv_today` config. Useful for AC-coupled setups where PV is measured independently and Fox Cloud reports zero/absent PV data |
 
 ---
 

@@ -10,15 +10,35 @@
 
 import os
 import json
+import hashlib
 import shutil
 import tempfile
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, MagicMock
 import pytz
 import aiohttp
 
 from solcast import SolarAPI
+from storage import StorageLocalFiles
 from tests.test_infra import run_async, create_aiohttp_mock_response
+
+
+class MockComponents:
+    """Minimal components stub that provides a StorageLocalFiles backend."""
+
+    def __init__(self, storage_backend):
+        """Initialise with a storage backend."""
+        self._storage = storage_backend
+
+    def get_component(self, name):
+        """Return the named component, or None if unknown."""
+        if name == "storage":
+            return self._storage
+        return None
+
+    def __bool__(self):
+        """Always truthy so the storage property guard passes."""
+        return True
 
 
 class MockBase:
@@ -44,6 +64,7 @@ class MockBase:
         self.args = {}
         self.currency_symbols = ["p", "£"]
         self.arg_errors = []
+        self.components = MockComponents(StorageLocalFiles(self.config_root, self.log))
 
     def log(self, message):
         """Mock log - print for debugging"""
@@ -151,6 +172,8 @@ class TestSolarAPI:
             pv_forecast_d3=None,
             pv_forecast_d4=None,
             pv_scaling=1.0,
+            open_meteo_forecast=None,
+            open_meteo_forecast_max_age=1.0,
         )
 
         # Mock HTTP responses storage
@@ -328,36 +351,29 @@ def test_cache_get_url_miss(my_predbat):
 
 def test_cache_get_url_hit(my_predbat):
     """
-    Test cache_get_url when cache file exists and is fresh - should return cached data.
+    Test cache_get_url when storage has a fresh entry - should return cached data.
     """
     print("  - test_cache_get_url_hit")
     failed = False
 
     test_api = create_test_solar_api()
     try:
-        import hashlib
-
-        # Create cache directory and file
-        cache_path = test_api.mock_base.config_root + "/cache"
-        os.makedirs(cache_path, exist_ok=True)
-
         url = "https://api.solcast.com.au/test/cached"
         params = {}
 
-        # Create a predictable cache filename (same logic as SolarAPI)
-        hash_str = url + "_" + hashlib.md5(str(params).encode()).hexdigest()
-        hash_str = hash_str.replace("/", "_").replace(":", "_").replace("?", "a").replace("&", "b").replace("*", "c")
-        cache_filename = cache_path + "/" + hash_str + ".json"
+        # Compute hash key same as cache_get_url
+        hash_key = url + "_" + hashlib.md5(str(params).encode()).hexdigest()
+        hash_key = hash_key.replace("/", "_").replace(":", "_").replace("?", "a").replace("&", "b").replace("*", "c")
 
-        # Write cached data
+        # Pre-populate storage with a non-expired, recently-created entry (age ~0 < max_age)
         cached_data = {"cached": True, "from": "file"}
-        with open(cache_filename, "w") as f:
-            json.dump(cached_data, f)
+        expiry = datetime.now(timezone.utc) + timedelta(days=7)
+        run_async(test_api.solar.storage.save("solar", hash_key, cached_data, format="json", expiry=expiry))
 
         # Set up a mock response that returns different data (should NOT be used)
         test_api.set_mock_response("solcast.com.au/test/cached", {"fresh": "data"}, 200)
 
-        # Call cache_get_url with max_age=60 - should use cache since file is fresh
+        # Call cache_get_url with max_age=60 - should use storage since entry is fresh
         def create_mock_session(*args, **kwargs):
             return test_api.mock_aiohttp_session()
 
@@ -380,42 +396,41 @@ def test_cache_get_url_hit(my_predbat):
     return failed
 
 
+def _backdate_storage_meta(storage_backend, module, filename, hours_ago):
+    """Backdate the created timestamp in a storage meta file to simulate stale data."""
+    meta_path = storage_backend._meta_path(module, filename)
+    with open(meta_path, "r") as f:
+        meta = json.load(f)
+    meta["created"] = (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).isoformat()
+    with open(meta_path, "w") as f:
+        json.dump(meta, f)
+
+
 def test_cache_get_url_stale(my_predbat):
     """
-    Test cache_get_url when cache file exists but is stale - should re-fetch.
+    Test cache_get_url when cached data is older than max_age - should re-fetch and return fresh data.
     """
     print("  - test_cache_get_url_stale")
     failed = False
 
     test_api = create_test_solar_api()
     try:
-        import hashlib
-
-        # Create cache directory and stale file
-        cache_path = test_api.mock_base.config_root + "/cache"
-        os.makedirs(cache_path, exist_ok=True)
-
         url = "https://api.solcast.com.au/test/stale"
         params = {}
 
-        hash_str = url + "_" + hashlib.md5(str(params).encode()).hexdigest()
-        hash_str = hash_str.replace("/", "_").replace(":", "_").replace("?", "a").replace("&", "b").replace("*", "c")
-        cache_filename = cache_path + "/" + hash_str + ".json"
+        hash_key = url + "_" + hashlib.md5(str(params).encode()).hexdigest()
+        hash_key = hash_key.replace("/", "_").replace(":", "_").replace("?", "a").replace("&", "b").replace("*", "c")
 
-        # Write stale cached data
-        stale_data = {"stale": True}
-        with open(cache_filename, "w") as f:
-            json.dump(stale_data, f)
-
-        # Make the file old by setting mtime to 2 hours ago
-        old_time = datetime.now().timestamp() - (2 * 60 * 60)
-        os.utime(cache_filename, (old_time, old_time))
+        # Save data with 7-day expiry so it won't be removed, then backdate creation to 2 hours ago
+        old_data = {"stale": True}
+        run_async(test_api.solar.storage.save("solar", hash_key, old_data, format="json", expiry=datetime.now(timezone.utc) + timedelta(days=7)))
+        _backdate_storage_meta(test_api.solar.storage, "solar", hash_key, hours_ago=2)
 
         # Setup mock response for fresh data
         fresh_data = {"fresh": True, "new": "data"}
         test_api.set_mock_response("solcast.com.au/test/stale", fresh_data, 200)
 
-        # Call with max_age of 60 minutes - cache is 2 hours old so should re-fetch
+        # Call with max_age=60 minutes - cached data is 2 hours old so should re-fetch
         def create_mock_session(*args, **kwargs):
             return test_api.mock_aiohttp_session()
 
@@ -447,27 +462,16 @@ def test_cache_get_url_failure_with_stale_cache(my_predbat):
 
     test_api = create_test_solar_api()
     try:
-        import hashlib
-
-        # Create cache directory and stale file
-        cache_path = test_api.mock_base.config_root + "/cache"
-        os.makedirs(cache_path, exist_ok=True)
-
         url = "https://api.solcast.com.au/test/failure"
         params = {}
 
-        hash_str = url + "_" + hashlib.md5(str(params).encode()).hexdigest()
-        hash_str = hash_str.replace("/", "_").replace(":", "_").replace("?", "a").replace("&", "b").replace("*", "c")
-        cache_filename = cache_path + "/" + hash_str + ".json"
+        hash_key = url + "_" + hashlib.md5(str(params).encode()).hexdigest()
+        hash_key = hash_key.replace("/", "_").replace(":", "_").replace("?", "a").replace("&", "b").replace("*", "c")
 
-        # Write stale cached data
+        # Save data with 7-day expiry then backdate creation to 2 hours ago to make it stale
         stale_data = {"stale": True, "fallback": "data"}
-        with open(cache_filename, "w") as f:
-            json.dump(stale_data, f)
-
-        # Make file stale
-        old_time = datetime.now().timestamp() - (2 * 60 * 60)
-        os.utime(cache_filename, (old_time, old_time))
+        run_async(test_api.solar.storage.save("solar", hash_key, stale_data, format="json", expiry=datetime.now(timezone.utc) + timedelta(days=7)))
+        _backdate_storage_meta(test_api.solar.storage, "solar", hash_key, hours_ago=2)
 
         # Don't set mock response - will cause ConnectionError
         test_api.solar.solcast_requests_total = 0
@@ -809,6 +813,53 @@ def test_download_forecast_solar_data_with_postcode(my_predbat):
     return failed
 
 
+def test_download_forecast_solar_data_with_postcode_lookup_failure(my_predbat):
+    """
+    Test download_forecast_solar_data handles postcode lookup returning no data.
+    """
+    print("  - test_download_forecast_solar_data_with_postcode_lookup_failure")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.forecast_solar = [
+            {
+                "postcode": "SW1A 1AA",
+                "declination": 30,
+                "azimuth": 0,
+                "kwp": 3.0,
+                "efficiency": 1.0,
+            }
+        ]
+
+        # postcode API returns error (cache_get_url returns None)
+        test_api.set_mock_response("postcodes.io", {"error": "rate limit"}, 429)
+        forecast_response = {"result": {"watts": {"2025-06-15T12:00:00+0000": 500}}, "message": {"info": {"time": "2025-06-15T11:30:00+0000"}}}
+        test_api.set_mock_response("forecast.solar", forecast_response, 200)
+
+        def create_mock_session(*args, **kwargs):
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            result, max_kwh = run_async(test_api.solar.download_forecast_solar_data())
+
+        if result is None:
+            print("ERROR: Expected forecast data dict when postcode lookup fails, got None")
+            failed = True
+        elif len(result) == 0:
+            print("ERROR: Expected non-empty forecast data when postcode lookup fails")
+            failed = True
+        expected_max_kwh = 3.0 * 1.0
+        if abs(max_kwh - expected_max_kwh) > 0.01:
+            print(f"ERROR: Expected max_kwh {expected_max_kwh} when postcode lookup fails, got {max_kwh}")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
 def test_download_forecast_solar_data_personal_api(my_predbat):
     """
     Test download_forecast_solar_data uses personal API URL when api_key provided.
@@ -849,6 +900,47 @@ def test_download_forecast_solar_data_personal_api(my_predbat):
             if "personal_key_123" not in url:
                 print(f"ERROR: Expected personal API URL with api_key, got {url}")
                 failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_download_forecast_solar_data_rate_limited_no_cache(my_predbat):
+    """
+    Test download_forecast_solar_data handles forecast.solar 429 with no cache.
+    """
+    print("  - test_download_forecast_solar_data_rate_limited_no_cache")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.forecast_solar = [
+            {
+                "latitude": 51.5,
+                "longitude": -0.1,
+                "declination": 30,
+                "azimuth": 0,
+                "kwp": 3.0,
+                "efficiency": 1.0,
+            }
+        ]
+        test_api.set_mock_response("forecast.solar", {"error": "rate limit"}, 429)
+
+        def create_mock_session(*args, **kwargs):
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            result, max_kwh = run_async(test_api.solar.download_forecast_solar_data())
+
+        if result != []:
+            print(f"ERROR: Expected empty list result for 429/no-cache, got {result}")
+            failed = True
+        expected_max_kwh = 3.0 * 1.0
+        if abs(max_kwh - expected_max_kwh) > 0.01:
+            print(f"ERROR: Expected max_kwh {expected_max_kwh} even when forecast.solar is rate limited, got {max_kwh}")
+            failed = True
 
     finally:
         test_api.cleanup()
@@ -2106,13 +2198,13 @@ def test_pv_calibration_synthetic_values(my_predbat):
       - pv_estimate10 / pv_estimate90 ≈ pv_estimateCL (worst=best=1.0 → no spread)
 
     Sub-case B – variable performance (3 days: actual = 0.5, 1.0, 1.5 kWh each, forecast=1.0):
-      - average_day_scaling ≈ 1.0  ((0.5+1.0+1.5)/3)
+      - average_day_scaling ≈ 0.963  (weighted: (0.5×1.0 + 1.0×0.9 + 1.5×0.8) / 2.7 ≈ 0.963)
       - total_adjustment ≈ 1.0
-      - worst_day_scaling ≈ 0.5  (min/avg = 0.5/1.0, clamped)
-      - best_day_scaling  ≈ 1.5  (max/avg = 1.5/1.0)
-      - point estimate (pv_estimateCL) ≈ unchanged input (average ratio = 1.0)
-      - pv_estimate10 ≈ 0.5 × pv_estimateCL
-      - pv_estimate90 ≈ 1.5 × pv_estimateCL (may be capped to capped_data)
+      - worst_day_scaling ≈ 0.519  (min/weighted_avg = 0.5/0.963, above floor of 0.5)
+      - best_day_scaling  ≈ 1.558  (max/weighted_avg = 1.5/0.963)
+      - point estimate (pv_estimateCL) ≈ unchanged input (aggregate ratio ≈ 1.0)
+      - pv_estimate10 ≈ 0.519 × pv_estimateCL
+      - pv_estimate90 ≈ 1.558 × pv_estimateCL (may be capped to capped_data)
     """
     print("  - test_pv_calibration_synthetic_values")
     failed = False
@@ -2265,25 +2357,25 @@ def test_pv_calibration_synthetic_values(my_predbat):
                     failed = True
                     break
 
-    # --- Sub-case B: 3 days at 0.5x, 1.0x, 1.5x → avg=1.0, worst=0.5, best=1.5 ---
+    # --- Sub-case B: 3 days at 0.5x, 1.0x, 1.5x → weighted avg=0.963, worst=0.519, best=1.558 ---
     r = run_scenario([0.5, 1.0, 1.5])
 
     if abs(r["total_adj"] - 1.0) > TOL:
         print("ERROR [B]: total_adjustment should be ~1.0 (avg ratio), got {}".format(r["total_adj"]))
         failed = True
 
-    if r["avg_scaling"] is not None and abs(r["avg_scaling"] - 1.0) > TOL:
-        print("ERROR [B]: average_day_scaling should be ~1.0, got {}".format(r["avg_scaling"]))
+    if r["avg_scaling"] is not None and abs(r["avg_scaling"] - 0.963) > TOL:
+        print("ERROR [B]: average_day_scaling should be ~0.963 (weighted avg), got {}".format(r["avg_scaling"]))
         failed = True
 
-    # worst = min_ratio / avg = 0.5 / 1.0 = 0.5 (at the clamp floor)
-    if abs(r["worst"] - 0.5) > TOL:
-        print("ERROR [B]: worst_day_scaling should be ~0.5 (relative to avg=1.0), got {}".format(r["worst"]))
+    # worst = min_ratio / weighted_avg = 0.5 / 0.963 ≈ 0.519 (above the clamp floor of 0.5)
+    if abs(r["worst"] - 0.519) > TOL:
+        print("ERROR [B]: worst_day_scaling should be ~0.519 (relative to weighted avg=0.963), got {}".format(r["worst"]))
         failed = True
 
-    # best = max_ratio / avg = 1.5 / 1.0 = 1.5 (below the clamp ceiling of 1.7)
-    if abs(r["best"] - 1.5) > TOL:
-        print("ERROR [B]: best_day_scaling should be ~1.5 (relative to avg=1.0), got {}".format(r["best"]))
+    # best = max_ratio / weighted_avg = 1.5 / 0.963 ≈ 1.558 (below the clamp ceiling of 1.7)
+    if abs(r["best"] - 1.558) > TOL:
+        print("ERROR [B]: best_day_scaling should be ~1.558 (relative to weighted avg=0.963), got {}".format(r["best"]))
         failed = True
 
     # Calibrated gen-slot minute should be approximately total_adj × raw (within 15%).
@@ -2305,22 +2397,279 @@ def test_pv_calibration_synthetic_values(my_predbat):
         e90 = entry.get("pv_estimate90")
         if cl is not None and cl > 0:
             if e10 is not None:
-                expected_e10 = cl * 0.5
+                expected_e10 = cl * 0.519
                 if abs(e10 - expected_e10) > 0.05 * cl:
-                    print("ERROR [B]: pv_estimate10 ({}) should be ~0.5×pv_estimateCL ({}) = {:.5f}".format(e10, cl, expected_e10))
+                    print("ERROR [B]: pv_estimate10 ({}) should be ~0.519×pv_estimateCL ({}) = {:.5f}".format(e10, cl, expected_e10))
                     failed = True
                     break
             if e90 is not None:
-                # best=1.5, so e90 = min(cl×1.5, capped_data) ≥ cl
+                # best=1.558, so e90 = min(cl×1.558, capped_data) ≥ cl
                 if e90 < cl * (1.0 - TOL):
                     print("ERROR [B]: pv_estimate90 ({}) should be ≥ pv_estimateCL ({})".format(e90, cl))
                     failed = True
                     break
-                if e90 > cl * 1.5 * (1.0 + TOL):
-                    print("ERROR [B]: pv_estimate90 ({}) should be ≤ 1.5 × pv_estimateCL ({})".format(e90, cl))
+                if e90 > cl * 1.558 * (1.0 + TOL):
+                    print("ERROR [B]: pv_estimate90 ({}) should be ≤ 1.558 × pv_estimateCL ({})".format(e90, cl))
                     failed = True
                     break
 
+    return failed
+
+
+def test_pv_calibration_60min_period(my_predbat):
+    """
+    Test that pv_calibration correctly annotates pv_forecast_data entries when the
+    forecast period (60 min, as used by Open-Meteo) is coarser than the plan interval
+    (30 min by default).
+
+    Before the fix, each 60-min entry was annotated with only the first 30-min plan
+    slot's calibrated value, producing values that were approximately half the correct
+    amount.  After the fix, both 30-min slots within the 60-min window are summed.
+    """
+    print("  - test_pv_calibration_60min_period")
+    failed = False
+
+    GEN_START = 480  # 8:00 UTC in minutes since midnight
+    GEN_END = 600  # 10:00 UTC (2 hours = 2 × 60-min entries; safely before noon)
+    FORECAST_KW = 2.0  # kW during generation window
+    PLAN_INTERVAL = 30  # minutes
+    FORECAST_PERIOD = 60  # minutes (Open-Meteo resolution)
+    TOL = 0.15  # 15% tolerance (matches other calibration tests; allows for minor slot-boundary effects)
+
+    test_api = create_test_solar_api()
+    solar = test_api.solar
+    base = test_api.mock_base
+    base.plan_interval_minutes = PLAN_INTERVAL
+
+    # Flat historical production matching the forecast → calibration ratio ~1.0
+    # so the calibrated values should be very close to the raw forecast values.
+    hist = {}
+    days = 5
+    minutes_now = base.minutes_now  # 720 (noon)
+    for day_idx in range(days):
+        day = day_idx + 1
+        midnight_ago = day * 1440 + minutes_now
+        for step in range(0, 24 * 60, 5):
+            minute_ago = midnight_ago - step
+            if minute_ago < 0:
+                continue
+            actual_min = step
+            if actual_min < GEN_START:
+                cumulative = 0.0
+            elif actual_min < GEN_END:
+                cumulative = FORECAST_KW * (actual_min - GEN_START) / 60.0
+            else:
+                cumulative = FORECAST_KW * (GEN_END - GEN_START) / 60.0
+            hist[minute_ago] = cumulative
+
+    def mock_minute_import_export(max_days_prev, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True, _hist=hist):
+        """Mock historical PV data."""
+        return dict(_hist) if key == "pv_today" else {}
+
+    base.minute_data_import_export = mock_minute_import_export
+    solar.get_history_wrapper = lambda entity_id, days, required=False: []
+
+    # Build per-minute forecast arrays (as minute_data() would produce)
+    # Each minute in the gen window has FORECAST_KW / 60 kWh/min
+    total_minutes = 4 * 24 * 60
+    pv_m = {}
+    pv_m10 = {}
+    for m in range(total_minutes):
+        val = (FORECAST_KW / 60.0) if GEN_START <= m < GEN_END else 0.0
+        pv_m[m] = val
+        pv_m10[m] = val
+
+    # Build 60-min forecast data entries (like Open-Meteo would produce).
+    # Each entry covers FORECAST_PERIOD minutes and holds FORECAST_KW * (FORECAST_PERIOD/60) kWh.
+    midnight = datetime(2025, 6, 15, 0, 0, 0, tzinfo=pytz.utc)
+    pv_data = []
+    for slot in range(GEN_START, GEN_END, FORECAST_PERIOD):
+        ts = midnight + timedelta(minutes=slot)
+        kwh_per_entry = FORECAST_KW * FORECAST_PERIOD / 60.0
+        pv_data.append({"period_start": ts.strftime("%Y-%m-%dT%H:%M:%S+0000"), "pv_estimate": kwh_per_entry, "pv_estimate10": kwh_per_entry, "pv_estimate90": kwh_per_entry})
+
+    # divide_by passed to pv_calibration = divide_by_full / period = factor.
+    # For kWh entries factor = 1.0.
+    divide_by_factor = 1.0
+
+    # Build historic forecast dict (per-minute power in kW, keyed by minutes-ago)
+    pv_forecast_hist = {}
+    for day_num in range(1, days + 1):
+        for m_of_day in range(GEN_START, GEN_END):
+            minutes_ago = day_num * 1440 + (minutes_now - m_of_day)
+            pv_forecast_hist[minutes_ago] = float(FORECAST_KW)
+
+    with patch("solcast.history_attribute_to_minute_data", return_value=(pv_forecast_hist, days)):
+        adj_m, adj_m10, adj_data = solar.pv_calibration(pv_m, pv_m10, pv_data, create_pv10=True, divide_by=divide_by_factor, max_kwh=10.0, forecast_days=solar.forecast_days, period=FORECAST_PERIOD)
+
+    # Each annotated entry should cover the full FORECAST_PERIOD minutes.
+    # Expected calibrated kWh per entry ≈ FORECAST_KW * FORECAST_PERIOD / 60 = 2.0 kWh.
+    # With the pre-fix bug, only the first 30-min plan slot was summed, giving ~1.0 kWh (half).
+    expected_kwh = FORECAST_KW * FORECAST_PERIOD / 60.0
+    half_expected = expected_kwh / 2.0
+
+    entries_validated = 0
+    for entry in adj_data:
+        cl = entry.get("pv_estimateCL")
+        e10 = entry.get("pv_estimate10")
+        e90 = entry.get("pv_estimate90")
+
+        if cl is None or cl == 0:
+            continue
+
+        entries_validated += 1
+
+        # The calibrated value must be close to the full 60-min kWh (not the buggy half-period value).
+        if abs(cl - expected_kwh) > TOL * expected_kwh:
+            print("ERROR: pv_estimateCL ({:.4f}) should be ~{:.4f} (full 60-min period kWh); half-period bug would give ~{:.4f}".format(cl, expected_kwh, half_expected))
+            failed = True
+            break
+
+        if e10 is not None and e10 > 0:
+            # e10 is worst-day scaling × CL; must be > 0 and plausibly related to CL
+            if e10 > cl * 2.0:
+                print("ERROR: pv_estimate10 ({:.4f}) is unexpectedly much larger than pv_estimateCL ({:.4f})".format(e10, cl))
+                failed = True
+                break
+
+        if e90 is not None and e90 < cl * (1.0 - TOL):
+            print("ERROR: pv_estimate90 ({:.4f}) should be >= pv_estimateCL ({:.4f})".format(e90, cl))
+            failed = True
+            break
+
+    if entries_validated == 0:
+        print("ERROR: pv_calibration() annotated no entries with pv_estimateCL; annotation step may have regressed")
+        failed = True
+
+    test_api.cleanup()
+    return failed
+
+
+def test_pv_calibration_15min_period(my_predbat):
+    """
+    Test that pv_calibration correctly annotates pv_forecast_data entries when the
+    forecast period (15 min) is finer than the plan interval (30 min by default).
+
+    Each 15-min entry covers half a 30-min plan slot, so slots_per_period=1 and only
+    the single plan slot that starts at the entry's timestamp is used.  The annotated
+    pv_estimateCL should therefore be close to FORECAST_KW * 15/60 kWh (not double).
+    """
+    print("  - test_pv_calibration_15min_period")
+    failed = False
+
+    GEN_START = 480  # 8:00 UTC in minutes since midnight
+    GEN_END = 600  # 10:00 UTC (2 hours = 8 × 15-min entries)
+    FORECAST_KW = 2.0  # kW during generation window
+    PLAN_INTERVAL = 30  # minutes (production default)
+    FORECAST_PERIOD = 15  # minutes (forecast.solar / fine-resolution Solcast)
+    TOL = 0.15  # 15% tolerance
+
+    test_api = create_test_solar_api()
+    solar = test_api.solar
+    base = test_api.mock_base
+    base.plan_interval_minutes = PLAN_INTERVAL
+
+    # Flat historical production matching the forecast → calibration ratio ~1.0
+    hist = {}
+    days = 5
+    minutes_now = base.minutes_now  # 720 (noon)
+    for day_idx in range(days):
+        day = day_idx + 1
+        midnight_ago = day * 1440 + minutes_now
+        for step in range(0, 24 * 60, 5):
+            minute_ago = midnight_ago - step
+            if minute_ago < 0:
+                continue
+            actual_min = step
+            if actual_min < GEN_START:
+                cumulative = 0.0
+            elif actual_min < GEN_END:
+                cumulative = FORECAST_KW * (actual_min - GEN_START) / 60.0
+            else:
+                cumulative = FORECAST_KW * (GEN_END - GEN_START) / 60.0
+            hist[minute_ago] = cumulative
+
+    def mock_minute_import_export(max_days_prev, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True, _hist=hist):
+        """Mock historical PV data."""
+        return dict(_hist) if key == "pv_today" else {}
+
+    base.minute_data_import_export = mock_minute_import_export
+    solar.get_history_wrapper = lambda entity_id, days, required=False: []
+
+    # Build per-minute forecast arrays
+    total_minutes = 4 * 24 * 60
+    pv_m = {}
+    pv_m10 = {}
+    for m in range(total_minutes):
+        val = (FORECAST_KW / 60.0) if GEN_START <= m < GEN_END else 0.0
+        pv_m[m] = val
+        pv_m10[m] = val
+
+    # Build 15-min forecast data entries.
+    # Each entry covers FORECAST_PERIOD minutes and holds FORECAST_KW * (FORECAST_PERIOD/60) kWh.
+    midnight = datetime(2025, 6, 15, 0, 0, 0, tzinfo=pytz.utc)
+    pv_data = []
+    for slot in range(GEN_START, GEN_END, FORECAST_PERIOD):
+        ts = midnight + timedelta(minutes=slot)
+        kwh_per_entry = FORECAST_KW * FORECAST_PERIOD / 60.0
+        pv_data.append({"period_start": ts.strftime("%Y-%m-%dT%H:%M:%S+0000"), "pv_estimate": kwh_per_entry, "pv_estimate10": kwh_per_entry, "pv_estimate90": kwh_per_entry})
+
+    divide_by_factor = 1.0
+
+    pv_forecast_hist = {}
+    for day_num in range(1, days + 1):
+        for m_of_day in range(GEN_START, GEN_END):
+            minutes_ago = day_num * 1440 + (minutes_now - m_of_day)
+            pv_forecast_hist[minutes_ago] = float(FORECAST_KW)
+
+    with patch("solcast.history_attribute_to_minute_data", return_value=(pv_forecast_hist, days)):
+        adj_m, adj_m10, adj_data = solar.pv_calibration(pv_m, pv_m10, pv_data, create_pv10=True, divide_by=divide_by_factor, max_kwh=10.0, forecast_days=solar.forecast_days, period=FORECAST_PERIOD)
+
+    # Each 15-min entry should be annotated with the single 30-min plan slot that
+    # starts at the entry timestamp.  slots_per_period=max(1,round(15/30))=1, so
+    # the value should be one plan-slot's worth of calibrated kWh ≈ FORECAST_KW*30/60=1.0.
+    # (The plan slot is 30 min wide; each 15-min entry maps to one such slot.)
+    expected_kwh_per_slot = FORECAST_KW * PLAN_INTERVAL / 60.0  # 1.0 kWh
+
+    entries_validated = 0
+    for entry in adj_data:
+        cl = entry.get("pv_estimateCL")
+        e10 = entry.get("pv_estimate10")
+        e90 = entry.get("pv_estimate90")
+
+        if cl is None or cl == 0:
+            continue
+
+        entries_validated += 1
+
+        # pv_estimateCL must not be doubled (which would happen if slots_per_period were
+        # incorrectly set to 2 for a 15-min forecast with a 30-min plan interval).
+        double_expected = expected_kwh_per_slot * 2.0
+        if cl > double_expected * (1.0 + TOL):
+            print("ERROR: pv_estimateCL ({:.4f}) is larger than double the expected slot kWh ({:.4f}); slots may be over-accumulated".format(cl, expected_kwh_per_slot))
+            failed = True
+            break
+
+        if cl < expected_kwh_per_slot * (1.0 - TOL):
+            print("ERROR: pv_estimateCL ({:.4f}) is less than expected slot kWh ({:.4f})".format(cl, expected_kwh_per_slot))
+            failed = True
+            break
+
+        if e10 is not None and e10 > cl * 2.0:
+            print("ERROR: pv_estimate10 ({:.4f}) is unexpectedly much larger than pv_estimateCL ({:.4f})".format(e10, cl))
+            failed = True
+            break
+
+        if e90 is not None and e90 < cl * (1.0 - TOL):
+            print("ERROR: pv_estimate90 ({:.4f}) should be >= pv_estimateCL ({:.4f})".format(e90, cl))
+            failed = True
+            break
+
+    if entries_validated == 0:
+        print("ERROR: pv_calibration() annotated no entries with pv_estimateCL; annotation step may have regressed")
+        failed = True
+
+    test_api.cleanup()
     return failed
 
 
@@ -2353,7 +2702,9 @@ def run_solcast_tests(my_predbat):
     # Forecast.Solar download tests
     failed |= test_download_forecast_solar_data(my_predbat)
     failed |= test_download_forecast_solar_data_with_postcode(my_predbat)
+    failed |= test_download_forecast_solar_data_with_postcode_lookup_failure(my_predbat)
     failed |= test_download_forecast_solar_data_personal_api(my_predbat)
+    failed |= test_download_forecast_solar_data_rate_limited_no_cache(my_predbat)
 
     # HA sensor tests
     failed |= test_fetch_pv_datapoints_detailed_forecast(my_predbat)
@@ -2389,5 +2740,7 @@ def run_solcast_tests(my_predbat):
     failed |= test_pv_calibration_capped_data_clamp(my_predbat)
     failed |= test_pv_calibration_partial_history(my_predbat)
     failed |= test_pv_calibration_synthetic_values(my_predbat)
+    failed |= test_pv_calibration_60min_period(my_predbat)
+    failed |= test_pv_calibration_15min_period(my_predbat)
 
     return failed

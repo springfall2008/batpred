@@ -157,10 +157,12 @@ class Prediction:
             self.inverter_hybrid = base.inverter_hybrid
             self.inverter_limit = base.inverter_limit
             self.export_limit = base.export_limit
+            self.pv_ac_limit = base.pv_ac_limit
             self.battery_rate_min = base.battery_rate_min
             self.battery_rate_max_charge = base.battery_rate_max_charge
             self.battery_rate_max_charge_dc = base.battery_rate_max_charge_dc
             self.battery_rate_max_discharge = base.battery_rate_max_discharge
+            self.battery_rate_max_export = base.battery_rate_max_export
             self.battery_charge_power_curve = base.battery_charge_power_curve
             self.battery_discharge_power_curve = base.battery_discharge_power_curve
             self.battery_temperature = base.battery_temperature
@@ -485,7 +487,7 @@ class Prediction:
         iboost_running = self.iboost_running
         iboost_running_solar = self.iboost_running_solar
         iboost_running_full = self.iboost_running_full
-        car_load_energy = 0
+        car_load_energy_bypass = 0
 
         # Remove intersecting windows and optimise the data format of the charge/discharge window
         charge_limit, charge_window = remove_intersecting_windows(charge_limit, charge_window, export_limits, export_window)
@@ -511,6 +513,7 @@ class Prediction:
         car_energy_reported_load = self.car_energy_reported_load
         inverter_limit = self.inverter_limit * step
         export_limit = self.export_limit * step
+        pv_ac_limit = self.pv_ac_limit * step
         set_charge_low_power = self.set_charge_window and self.set_charge_low_power and (save in ["best", "best10", "test"])
         carbon_enable = self.carbon_enable
         reserve = self.reserve
@@ -531,6 +534,7 @@ class Prediction:
         battery_rate_max_charge = self.battery_rate_max_charge
         battery_rate_max_charge_dc = self.battery_rate_max_charge_dc
         battery_rate_max_discharge = self.battery_rate_max_discharge
+        battery_rate_max_export = self.battery_rate_max_export
         battery_rate_min = self.battery_rate_min
         carbon_intensity = self.carbon_intensity
         set_discharge_during_charge = self.set_discharge_during_charge
@@ -657,15 +661,24 @@ class Prediction:
             # Count PV kWh
             pv_kwh += pv_now
 
+            # Clip PV for AC-coupled inverters with a PV AC limit (e.g. microinverters).
+            # For non-hybrid systems pv_dc=0 and inverter_loss_ac=1.0, so pv_ac == pv_now; clipping pv_now here is mathematically equivalent to clipping pv_ac in each branch.
+            if not inverter_hybrid and pv_ac_limit > 0 and pv_now > pv_ac_limit:
+                clipped_today += pv_now - pv_ac_limit
+                pv_now = pv_ac_limit
+
             # Modelling reset of charge/discharge rate
             if set_charge_window or set_export_window:
                 charge_rate_now = battery_rate_max_charge
                 discharge_rate_now = battery_rate_max_discharge
 
+            car_rate_premium = 0  # Extra cost above import_rate for beyond-cap IOG slots
+            car_amount_premium = 0  # Amount of energy in IOG slots that is above import_rate
+            car_load_energy_bypass = 0  # Amount of car energy bypassing the CT clamp
+
             # Simulate car charging
             if car_enable:
-                car_load = in_car_slot(minute_absolute, self.num_cars, self.car_charging_slots)
-                car_load_energy = 0
+                car_load, car_rate_slot = in_car_slot(minute_absolute, self.num_cars, self.car_charging_slots)
 
                 # Car charging?
                 for car_n in range(self.num_cars):
@@ -674,14 +687,19 @@ class Prediction:
                         car_load_scale = car_load_scale * self.car_charging_loss
                         car_load_scale = max(min(car_load_scale, self.car_charging_limit[car_n] - car_soc[car_n]), 0)
                         car_soc[car_n] = car_soc[car_n] + car_load_scale
+
+                        # Work out the premium rate for car charging
+                        car_rate_premium = max(car_rate_premium, max(0, car_rate_slot[car_n] - import_rate))
+
                         if self.car_energy_reported_load:
                             # Only add load if the car is reporting it as load, otherwise its outside the CT Clamp
-                            load_yesterday += car_load_scale / self.car_charging_loss
+                            car_amount_premium += car_load_scale / self.car_charging_loss
+                            load_yesterday += car_amount_premium
                             # Model not allowing the car to charge from the battery
                             if (car_load_scale > 0) and (not self.car_charging_from_battery) and set_charge_window:
                                 discharge_rate_now = battery_rate_min  # 0
                         else:
-                            car_load_energy += car_load_scale
+                            car_load_energy_bypass += car_load_scale / self.car_charging_loss
 
             # Iboost
             iboost_rate_okay = True
@@ -775,15 +793,14 @@ class Prediction:
                 discharge_min = max(soc_max * export_limit_now / 100.0, reserve, self.best_soc_min)
 
             if not set_export_freeze_only and export_window_active and export_limit_now < 99.0 and (soc > discharge_min):
-                # Discharge enable
-                discharge_rate_now = battery_rate_max_discharge  # Assume discharge becomes enabled here
+                # Discharge enable, capped at export limit
                 if self.set_export_low_power:
                     export_rate_adjust = 1 - (export_limit_now - int(export_limit_now))
                 else:
                     export_rate_adjust = 1.0
-                discharge_rate_now = battery_rate_max_discharge * export_rate_adjust
+                discharge_rate_now = battery_rate_max_export * export_rate_adjust
                 discharge_rate_now_curve = (
-                    get_discharge_rate_curve_cached(soc, discharge_rate_now, soc_max, battery_rate_max_discharge, battery_discharge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_discharge_curve_tuple)
+                    get_discharge_rate_curve_cached(soc, discharge_rate_now, soc_max, battery_rate_max_export, battery_discharge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_discharge_curve_tuple)
                     * self.battery_rate_max_scaling_discharge
                 )
                 discharge_rate_now_curve_step = discharge_rate_now_curve * step
@@ -912,6 +929,7 @@ class Prediction:
                 # ECO Mode
                 pv_ac = pv_now * inverter_loss_ac
                 pv_dc = 0
+
                 diff = get_diff(0, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp)
 
                 potential_to_charge = pv_ac
@@ -993,8 +1011,11 @@ class Prediction:
                 total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybrid)
                 if total_inverted > inverter_limit:
                     over_limit = total_inverted - inverter_limit
-                    clipped_today += over_limit
+                    pv_ac_before = pv_ac
                     pv_ac = max(pv_ac - over_limit * inverter_loss, 0)
+                    pv_ac_no_loss = max(pv_ac_before - over_limit, 0)
+                    clipped_today += pv_ac_before - pv_ac_no_loss
+                    total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybrid)
             else:
                 total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybrid)
                 if total_inverted > inverter_limit:
@@ -1008,15 +1029,16 @@ class Prediction:
             diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp)
             if diff < 0 and abs(diff) > export_limit:
                 over_limit = abs(diff) - export_limit
-                clipped_today += over_limit
+                # Only solar PV is truly "clipped" (lost energy); excess battery discharge just gets limited
+                pv_ac_before = pv_ac
                 pv_ac = max(pv_ac - over_limit, 0)
+                clipped_today += pv_ac_before - pv_ac
 
             # Adjust battery soc
             if battery_draw > 0:
                 soc = max(soc - battery_draw / battery_loss_discharge, reserve_expected)
             else:
                 soc = min(soc - battery_draw * battery_loss, soc_max)
-            soc = round(soc, 6)
 
             # Iboost finally count
             if self.iboost_enable:
@@ -1071,7 +1093,10 @@ class Prediction:
                     # self.log("importing to minute %s amount %s kW total %s kWh total draw %s" % (minute, energy, import_kwh_house, diff))
                     import_kwh_house += diff
 
-                metric += import_rate * diff
+                # Account for premium for car charging in import metric
+                # but it can't be more than we actually imported from the grid.
+                car_amount_premium = min(diff, car_amount_premium)
+                metric += import_rate * diff + car_rate_premium * car_amount_premium
                 grid_state = "<"
             else:
                 # Export
@@ -1080,11 +1105,11 @@ class Prediction:
                 if carbon_enable:
                     carbon_g -= energy * carbon_intensity.get(minute, 0)
 
-                if not car_energy_reported_load and car_load_energy > 0:
+                if not car_energy_reported_load:
                     # If the car is not reporting load, but we export then this export can
                     # end up in the car meaning we don't get the export profit.
-                    # We can't really value the car charging amount so we just assume its 0 value to be conservative.
-                    metric -= export_rate * max(0, energy - car_load_energy)
+                    # We can't really value the car charging amount so we just assume its 0 value
+                    metric -= export_rate * max(0, energy - car_load_energy_bypass)
                 else:
                     metric -= export_rate * energy
 

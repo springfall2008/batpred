@@ -62,11 +62,9 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.combine_export_slots = False
         # my_predbat.set_export_freeze = False
         # my_predbat.inverter_loss = 0.97
-        # my_predbat.calculate_tweak_plan = False
 
         # my_predbat.inverter_loss = 0.97
         # my_predbat.calculate_second_pass = True
-        # my_predbat.calculate_tweak_plan = True
         # my_predbat.metric_battery_cycle = 2
         # my_predbat.carbon_enable = False
         # my_predbat.metric_battery_value_scaling = 0.50

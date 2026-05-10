@@ -813,6 +813,29 @@ class HAInterface(ComponentBase):
         elif domain in ["select", "input_select"]:
             service_data["service"] = "select_option"
             service_data["service_data"] = {"entity_id": entity_id, "option": new_value}
+        elif domain == "input_datetime":
+            value_str = str(new_value)
+            current_attributes = old_state.get("attributes", {}) if old_state else {}
+            has_date = current_attributes.get("has_date", None)
+            has_time = current_attributes.get("has_time", None)
+            service_data["service"] = "set_datetime"
+            if has_date is True and has_time is False:
+                service_data["service_data"] = {"entity_id": entity_id, "date": value_str}
+            elif has_date is False and has_time is True:
+                service_data["service_data"] = {"entity_id": entity_id, "time": value_str}
+            elif has_date is True and has_time is True:
+                service_data["service_data"] = {"entity_id": entity_id, "datetime": value_str}
+            else:
+                if ("T" in value_str) or (" " in value_str and ":" in value_str):
+                    service_data["service_data"] = {"entity_id": entity_id, "datetime": value_str}
+                elif ":" in value_str:
+                    service_data["service_data"] = {"entity_id": entity_id, "time": value_str}
+                else:
+                    service_data["service_data"] = {"entity_id": entity_id, "date": value_str}
+        elif domain == "input_text":
+            value_str = str(new_value)
+            service_data["service"] = "set_value"
+            service_data["service_data"] = {"entity_id": entity_id, "value": value_str}
         else:
             service_data = None
         if service_data:

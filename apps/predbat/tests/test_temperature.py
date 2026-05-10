@@ -60,6 +60,18 @@ class MockTemperatureAPI(TemperatureAPI):
     def last_updated_time(self):
         return self._last_updated_time
 
+    def get_arg(self, arg, default=None, **kwargs):
+        """Mock get_arg - returns stored config values"""
+        if arg == "temperature_enable":
+            return self.temperature_enable
+        if arg == "temperature_latitude":
+            return self.temperature_latitude
+        if arg == "temperature_longitude":
+            return self.temperature_longitude
+        if arg == "temperature_url":
+            return self.temperature_url
+        return default
+
     def get_state_wrapper(self, entity_id, default=None, attribute=None):
         """Mock get_state_wrapper"""
         if entity_id in self.state_storage:
@@ -742,7 +754,11 @@ def _test_run_disabled(my_predbat=None):
             print("    ERROR: fetch_temperature_data should not be called when disabled")
             return 1
 
-        print("    PASS: run returns True without fetching when disabled")
+        if temp_api._last_updated_time is None:
+            print("    ERROR: update_success_timestamp should be called when disabled to keep component healthy")
+            return 1
+
+        print("    PASS: run returns True without fetching when disabled, and marks component healthy")
         return 0
 
     return run_test()

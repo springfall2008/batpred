@@ -48,6 +48,7 @@ coverage/predbat_standalone_ha/
 coverage/supabase/
 coverage/octopus/
 coverage/venv/
+apps/predbat/tests/.om_live_cache
 .venv/
 venv/
 coverage/temp_octopus/

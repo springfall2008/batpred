@@ -324,22 +324,28 @@ Because integrations format their attribute data differently, a template sensor 
 
 ### Czech Republic example
 
+Czech republic has moved to 15 minute spot pricing.
+
+To make sure Predbat calculates 15-minute pricing correctly, add `plan_interval_minutes: 15` to `apps.yaml`.
 <https://github.com/rnovacek/homeassistant_cz_energy_spot_prices>
 
 ```yaml
 {% set attributes = states.sensor.current_buy_electricity_price.attributes %}
-{% set datetime_dict = zip(attributes.keys() | map('as_datetime', default={}), attributes.values()) | selectattr(0, 'datetime') %}
-{% set ns = namespace(output=[]) %}
-{% for start_time, price in datetime_dict %}
- {% if start_time < today_at() + timedelta(days=1) %}
-   {% set ns.output = ns.output + [{'start': start_time.isoformat(), 'end': (start_time + timedelta(hours=1)).isoformat(), 'value': price | round(5)}] %}
- {% endif %}
-{% endfor %}
-{{ns.output | sort(attribute='start') }}
+            {% set attributes = states.sensor.current_buy_electricity_price_15min.attributes %}
+            {% set datetime_dict = zip(attributes.keys() | map('as_datetime', default={}), attributes.values()) | selectattr(0, 'datetime') %}
+            {% set ns = namespace(output=[]) %}
+            {% for start_time, price in datetime_dict %}
+              {% if start_time < today_at() + timedelta(days=1) %}
+                {% set ns.output = ns.output + [{'start': start_time.isoformat(), 'end': (start_time + timedelta(minutes=15)).isoformat(), 'value': price | round(5)}] %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.output | sort(attribute='start') }}
 ```
 
 Full code for CZ energy spot rate template:
-<https://gist.github.com/ziat007/ae29e26ae257f069520b65f0168c3a6b>
+<https://gist.github.com/ziat007/9c33453d5fa24b037d764dc40786f977>
+
+(flat clamped sell price sensor is used to trick predbat when invertor is set to block export during negative pricing)
 
 ### Frank Energie Export rates with export fee
 

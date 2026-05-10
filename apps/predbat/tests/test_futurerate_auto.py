@@ -21,9 +21,11 @@ futurerate_adjust_import / futurerate_adjust_export flags).
 
 from datetime import datetime, timezone, timedelta
 from unittest.mock import patch
+import tempfile
 
 from futurerate import FutureRate
 from const import TIME_FORMAT
+from storage import StorageLocalFiles
 
 
 # ---------------------------------------------------------------------------
@@ -49,6 +51,7 @@ class MockFutureRateBase:
         self.minutes_now = 0
         self.forecast_plan_hours = 48
         self.futurerate_url_cache = {}
+        self.components = None
         self._state_store = {}
 
     def log(self, message):
@@ -107,6 +110,46 @@ def _make_future_rate(base):
     base.args["futurerate_peak_start"] = "00:00:00"
     base.args["futurerate_peak_end"] = "00:00:00"
     return FutureRate(base)
+
+
+# ---------------------------------------------------------------------------
+# Minimal storage-aware mock infrastructure
+# ---------------------------------------------------------------------------
+
+
+class _MockStorageComponent:
+    """Wraps StorageLocalFiles so it looks like the real StorageComponent."""
+
+    def __init__(self, directory):
+        self._backend = StorageLocalFiles(directory, print)
+
+    async def load(self, module, filename, format="yaml"):
+        """Delegate load to backend."""
+        return await self._backend.load(module, filename)
+
+    async def save(self, module, filename, data, format="yaml", expiry=None):
+        """Delegate save to backend."""
+        return await self._backend.save(module, filename, data, format=format, expiry=expiry)
+
+
+class _MockComponents:
+    """Minimal Components stand-in that holds one 'storage' component."""
+
+    def __init__(self, storage):
+        self._storage = storage
+
+    def get_component(self, name):
+        """Return the storage component when requested by name."""
+        return self._storage if name == "storage" else None
+
+
+class MockFutureRateBaseWithStorage(MockFutureRateBase):
+    """MockFutureRateBase extended with a real StorageLocalFiles backend."""
+
+    def __init__(self, directory):
+        super().__init__()
+        storage = _MockStorageComponent(directory)
+        self.components = _MockComponents(storage)
 
 
 # ---------------------------------------------------------------------------
@@ -497,6 +540,63 @@ def _test_futurerate_adjust_auto_logs_detected_flags(my_predbat):
     return False
 
 
+def _test_storage_cache_loaded_on_init(my_predbat):
+    """FutureRate.__init__ loads a previously saved cache from storage."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Pre-populate storage with a cache entry
+        pre_base = MockFutureRateBaseWithStorage(tmpdir)
+        pre_future = _make_future_rate(pre_base)
+        test_url = "https://example.com/nordpool"
+        test_data = {"multiAreaEntries": [{"key": "value"}]}
+        pre_future.futurerate_url_cache[test_url] = {
+            "stamp": datetime.now(),
+            "data": test_data,
+        }
+        from ha import run_async
+        run_async(pre_base.components.get_component("storage").save("futurerate", "url_cache", pre_future.futurerate_url_cache, format="yaml", expiry=None))
+
+        # Now construct a fresh FutureRate against the same storage directory
+        fresh_base = MockFutureRateBaseWithStorage(tmpdir)
+        fresh_future = _make_future_rate(fresh_base)
+
+        if test_url not in fresh_future.futurerate_url_cache:
+            print("ERROR: Expected cache key '{}' to be loaded from storage, got: {}".format(test_url, list(fresh_future.futurerate_url_cache.keys())))
+            return True
+        if fresh_future.futurerate_url_cache[test_url]["data"] != test_data:
+            print("ERROR: Cache data mismatch: {}".format(fresh_future.futurerate_url_cache[test_url]["data"]))
+            return True
+    return False
+
+
+def _test_storage_cache_saved_on_download(my_predbat):
+    """download_futurerate_data saves the updated cache to storage after a successful fetch."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = MockFutureRateBaseWithStorage(tmpdir)
+        future = _make_future_rate(base)
+
+        test_url = "https://example.com/nordpool2"
+        test_data = {"multiAreaEntries": [{"deliveryStart": "2026-05-10T00:00:00Z"}]}
+
+        # Patch the real HTTP call
+        with patch.object(future, "download_futurerate_data_func", return_value=test_data):
+            future.download_futurerate_data(test_url)
+
+        # Reload from storage in a fresh instance
+        from ha import run_async
+        reloaded = run_async(base.components.get_component("storage").load("futurerate", "url_cache", format="yaml"))
+
+        if not isinstance(reloaded, dict):
+            print("ERROR: Expected dict reloaded from storage, got: {}".format(type(reloaded)))
+            return True
+        if test_url not in reloaded:
+            print("ERROR: Expected saved key '{}' in reloaded cache, got: {}".format(test_url, list(reloaded.keys())))
+            return True
+        if reloaded[test_url]["data"] != test_data:
+            print("ERROR: Reloaded data mismatch: {}".format(reloaded[test_url]["data"]))
+            return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Main test runner
 # ---------------------------------------------------------------------------
@@ -518,6 +618,8 @@ _SUBTESTS = [
     ("futurerate_adjust_auto_export_agile_calibrates_export", _test_futurerate_adjust_auto_export_agile_calibrates_export),
     ("futurerate_adjust_auto_disabled_uses_manual_flags", _test_futurerate_adjust_auto_disabled_uses_manual_flags),
     ("futurerate_adjust_auto_logs_detected_flags", _test_futurerate_adjust_auto_logs_detected_flags),
+    ("storage_cache_loaded_on_init", _test_storage_cache_loaded_on_init),
+    ("storage_cache_saved_on_download", _test_storage_cache_saved_on_download),
 ]
 
 

@@ -17,6 +17,7 @@ initialising, starting, stopping, and restarting components in the correct
 phase order. Routes HA events to components based on entity prefix filtering.
 """
 
+from storage import StorageComponent
 from solcast import SolarAPI
 from gecloud import GECloudDirect, GECloudData
 from ohme import OhmeAPI
@@ -48,6 +49,7 @@ import os
 
 
 COMPONENT_LIST = {
+    "storage": {"class": StorageComponent, "name": "Storage", "args": {}, "can_restart": True, "phase": 0},
     "db": {
         "class": DatabaseManager,
         "name": "Database Manager",
@@ -105,8 +107,10 @@ COMPONENT_LIST = {
             "pv_forecast_d3": {"required": False, "config": "pv_forecast_d3"},
             "pv_forecast_d4": {"required": False, "config": "pv_forecast_d4"},
             "pv_scaling": {"required": False, "config": "pv_scaling", "default": 1.0},
+            "open_meteo_forecast": {"required": False, "config": "open_meteo_forecast", "default": False},
+            "open_meteo_forecast_max_age": {"required": False, "config": "open_meteo_forecast_max_age", "default": 4},
         },
-        "required_or": ["solcast_api_key", "forecast_solar", "pv_forecast_today"],
+        "required_or": ["solcast_api_key", "forecast_solar", "pv_forecast_today", "open_meteo_forecast"],
         "phase": 2,  # Solar component moved to phase 2 so that any Predbat cloud components (such as GEcloud) have been started and initialised pv_today, etc
     },
     "gecloud": {
@@ -208,6 +212,11 @@ COMPONENT_LIST = {
                 "required": False,
                 "default": False,
                 "config": "fox_automatic",
+            },
+            "automatic_ignore_pv": {
+                "required": False,
+                "default": False,
+                "config": "fox_automatic_ignore_pv",
             },
             "inverter_sn": {
                 "required": False,
