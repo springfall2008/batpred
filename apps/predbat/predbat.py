@@ -605,7 +605,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Marginal, Exec
         self.octopus_intelligent_consider_full = False
         self.notify_devices = ["notify"]
         self.octopus_url_cache = {}
-        self.futurerate_url_cache = {}
         self.ge_url_cache = {}
         self.github_url_cache = {}
         self.load_minutes = {}

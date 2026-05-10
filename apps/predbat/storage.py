@@ -20,6 +20,7 @@ Files are stored under config_root/cache/ as:
 
 import json
 import os
+import re
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 
@@ -31,6 +32,34 @@ from component_base import ComponentBase
 
 STORAGE_FORMATS = ("yaml", "json", "text")
 STORAGE_EXTENSIONS = {"yaml": "yaml", "json": "json", "text": "txt"}
+
+
+def _parse_dt_utc(value):
+    """Parse an ISO-format datetime string and return a timezone-aware UTC datetime.
+
+    If the parsed value is naive (no tzinfo), it is assumed to be UTC.
+    Returns None if parsing fails.
+    """
+    try:
+        dt = datetime.fromisoformat(value)
+    except (ValueError, TypeError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+_SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9_\-]")
+
+
+def _safe_name(value):
+    """Sanitise a module or filename identifier for safe use in a file path.
+
+    Replaces any character that is not alphanumeric, underscore, or hyphen with
+    an underscore. This prevents path-traversal attacks via ``..`` or path
+    separators embedded in the identifier.
+    """
+    return _SAFE_NAME_RE.sub("_", value)
 
 
 class StorageBase(ABC):
@@ -105,11 +134,11 @@ class StorageLocalFiles(StorageBase):
     def _data_path(self, module, filename, fmt):
         """Return the full path for a data file."""
         ext = STORAGE_EXTENSIONS.get(fmt, fmt)
-        return os.path.join(self.cache_path, "{}_{}.{}".format(module, filename, ext))
+        return os.path.join(self.cache_path, "{}_{}.{}".format(_safe_name(module), _safe_name(filename), ext))
 
     def _meta_path(self, module, filename):
         """Return the full path for the metadata sidecar."""
-        return os.path.join(self.cache_path, "{}_{}.meta".format(module, filename))
+        return os.path.join(self.cache_path, "{}_{}.meta".format(_safe_name(module), _safe_name(filename)))
 
     async def save(self, module, filename, data, format="yaml", expiry=None):
         """Save data to disk with a JSON metadata sidecar.
@@ -147,6 +176,10 @@ class StorageLocalFiles(StorageBase):
             self.log("Storage: Error: Failed to write {}: {}".format(data_path, e))
             return False
 
+        if expiry is not None and expiry.tzinfo is None:
+            self.log("Storage: Warn: Naive expiry datetime for {}/{} — assuming UTC".format(module, filename))
+            expiry = expiry.replace(tzinfo=timezone.utc)
+
         meta = {
             "format": format,
             "expiry": expiry.isoformat() if expiry is not None else None,
@@ -159,6 +192,11 @@ class StorageLocalFiles(StorageBase):
                 await f.write(json.dumps(meta))
         except IOError as e:
             self.log("Storage: Error: Failed to write metadata {}: {}".format(meta_path, e))
+            # Remove the data file so we don't leave an unreadable orphan
+            try:
+                os.remove(data_path)
+            except OSError:
+                pass
             return False
 
         return True
@@ -188,14 +226,14 @@ class StorageLocalFiles(StorageBase):
 
         expiry_str = meta.get("expiry")
         if expiry_str is not None:
-            try:
-                expiry_dt = datetime.fromisoformat(expiry_str)
-                if datetime.now(timezone.utc) > expiry_dt:
-                    return None
-            except ValueError:
-                pass
+            expiry_dt = _parse_dt_utc(expiry_str)
+            if expiry_dt is not None and datetime.now(timezone.utc) > expiry_dt:
+                return None
 
         fmt = meta.get("format", "yaml")
+        if fmt not in STORAGE_FORMATS:
+            self.log("Storage: Warn: Unknown format '{}' in metadata for {}/{}, defaulting to yaml".format(fmt, module, filename))
+            fmt = "yaml"
         data_path = self._data_path(module, filename, fmt)
 
         if not os.path.exists(data_path):
@@ -246,9 +284,11 @@ class StorageLocalFiles(StorageBase):
             return None
 
         try:
-            created_dt = datetime.fromisoformat(created_str)
+            created_dt = _parse_dt_utc(created_str)
+            if created_dt is None:
+                return None
             return (datetime.now(timezone.utc) - created_dt).total_seconds() / 60.0
-        except ValueError:
+        except (ValueError, TypeError):
             return None
 
     async def cleanup(self):
@@ -274,8 +314,10 @@ class StorageLocalFiles(StorageBase):
                 continue
 
             try:
-                expiry_dt = datetime.fromisoformat(expiry_str)
-            except ValueError:
+                expiry_dt = _parse_dt_utc(expiry_str)
+                if expiry_dt is None:
+                    continue
+            except (ValueError, TypeError):
                 continue
 
             if now <= expiry_dt:
@@ -283,6 +325,8 @@ class StorageLocalFiles(StorageBase):
 
             module = meta.get("module", "")
             fmt = meta.get("format", "yaml")
+            if fmt not in STORAGE_FORMATS:
+                fmt = "yaml"
             stem = entry.name[: -len(".meta")]
             ext = STORAGE_EXTENSIONS.get(fmt, fmt)
             data_path = os.path.join(self.cache_path, "{}.{}".format(stem, ext))

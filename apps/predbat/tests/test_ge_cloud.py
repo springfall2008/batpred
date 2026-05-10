@@ -54,6 +54,7 @@ class MockGECloudDirect(GECloudDirect):
         self.ems_device = None
         self.gateway_device = None
         self._now_utc_exact = datetime.now(timezone.utc)
+        self.settings_from_cache = False
 
         class MockHAInterface:
             def __init__(self):
@@ -92,6 +93,11 @@ class MockGECloudDirect(GECloudDirect):
     def update_success_timestamp(self):
         """Mock update_success_timestamp"""
         pass
+
+    @property
+    def storage(self):
+        """Mock storage property - returns injected mock or None"""
+        return getattr(self, "_mock_storage", None)
 
 
 class MockGECloudData(GECloudData):
@@ -191,6 +197,8 @@ def test_ge_cloud(my_predbat=None):
         ("smart_device", _test_async_get_smart_device, "Get smart device"),
         ("evc_sessions", _test_async_get_evc_sessions, "Get EV charger sessions"),
         ("run_method", _test_run_method, "Run method execution"),
+        ("settings_saved_to_storage", _test_settings_saved_to_storage, "Settings saved to storage after poll"),
+        ("settings_restored_from_cache", _test_settings_restored_from_fresh_cache, "Settings restored from fresh storage cache"),
         ("inverter_status", _test_async_get_inverter_status, "Get inverter status"),
         ("inverter_meter", _test_async_get_inverter_meter, "Get inverter meter"),
         ("device_info", _test_async_get_device_info, "Get device info"),
@@ -1503,6 +1511,193 @@ def _test_async_get_evc_sessions(my_predbat):
                 print("ERROR: BST test: Expected start_time {}, got {}".format(expected_start_utc, captured_kwargs.get("start_time")))
                 return 1
 
+        return 0
+
+    return run_async(test())
+
+
+def _make_async_storage_mock():
+    """Create an in-memory mock storage that tracks save/load calls without filesystem I/O."""
+
+    class _AsyncStorageMock:
+        def __init__(self):
+            self._data = {}
+            self.save_calls = []
+
+        async def load(self, module, filename, format="json"):
+            import copy
+
+            return copy.deepcopy(self._data.get((module, filename)))
+
+        async def save(self, module, filename, data, format="json", expiry=None):
+            import copy
+
+            self._data[(module, filename)] = copy.deepcopy(data)
+            self.save_calls.append({"module": module, "filename": filename, "data": copy.deepcopy(data), "format": format})
+            return True
+
+        async def age(self, module, filename):
+            # Return 0 (fresh) for any stored key, None for missing keys
+            return 0 if (module, filename) in self._data else None
+
+    return _AsyncStorageMock()
+
+
+def _test_settings_saved_to_storage(my_predbat):
+    """Settings are saved to storage after a successful poll."""
+
+    async def test():
+        storage = _make_async_storage_mock()
+        ge_cloud = MockGECloudDirect()
+        ge_cloud._mock_storage = storage
+        ge_cloud.automatic = False
+
+        expected_settings = {"sid-1": {"name": "Battery Reserve", "value": 4, "validation_rules": ["between:0,100"], "validation": ""}}
+
+        async def mock_get_devices():
+            return {"battery": ["inv001"], "ems": None, "gateway": None}
+
+        async def mock_get_evc_devices():
+            return []
+
+        async def mock_get_inverter_status(device, previous):
+            return {}
+
+        async def mock_publish_status(device, status):
+            pass
+
+        async def mock_get_inverter_meter(device, previous):
+            return {}
+
+        async def mock_publish_meter(device, meter):
+            pass
+
+        async def mock_get_device_info(device, previous):
+            return {}
+
+        async def mock_publish_info(device, info):
+            pass
+
+        async def mock_get_inverter_settings(device, first, previous):
+            return expected_settings
+
+        async def mock_publish_registers(device, settings):
+            pass
+
+        async def mock_enable_default_options(device, settings):
+            pass
+
+        ge_cloud.async_get_devices = mock_get_devices
+        ge_cloud.async_get_evc_devices = mock_get_evc_devices
+        ge_cloud.async_get_inverter_status = mock_get_inverter_status
+        ge_cloud.publish_status = mock_publish_status
+        ge_cloud.async_get_inverter_meter = mock_get_inverter_meter
+        ge_cloud.publish_meter = mock_publish_meter
+        ge_cloud.async_get_device_info = mock_get_device_info
+        ge_cloud.publish_info = mock_publish_info
+        ge_cloud.async_get_inverter_settings = mock_get_inverter_settings
+        ge_cloud.publish_registers = mock_publish_registers
+        ge_cloud.enable_default_options = mock_enable_default_options
+
+        result = await ge_cloud.run(seconds=0, first=True)
+        if not result:
+            print("ERROR: run() should return True")
+            return 1
+
+        # Verify storage.save was called with the right arguments
+        if not storage.save_calls:
+            print("ERROR: Expected storage.save to be called, got no calls")
+            return 1
+        saved = storage.save_calls[0]
+        if saved["module"] != "gecloud" or saved["filename"] != "settings":
+            print("ERROR: Expected save for gecloud/settings, got {}/{}".format(saved["module"], saved["filename"]))
+            return 1
+        if saved["data"].get("inv001") != expected_settings:
+            print("ERROR: Saved settings mismatch: {}".format(saved["data"]))
+            return 1
+        return 0
+
+    return run_async(test())
+
+
+def _test_settings_restored_from_fresh_cache(my_predbat):
+    """Settings poll is skipped on first run when storage cache is < 10 minutes old."""
+
+    async def test():
+        storage = _make_async_storage_mock()
+
+        # Pre-populate in-memory storage with settings (age() will return 0 = fresh)
+        cached_settings = {"inv001": {"sid-1": {"name": "Battery Reserve", "value": 4, "validation_rules": ["between:0,100"], "validation": ""}}}
+        await storage.save("gecloud", "settings", cached_settings)
+
+        ge_cloud = MockGECloudDirect()
+        ge_cloud._mock_storage = storage
+        ge_cloud.automatic = False
+
+        poll_calls = []
+
+        async def mock_get_devices():
+            return {"battery": ["inv001"], "ems": None, "gateway": None}
+
+        async def mock_get_evc_devices():
+            return []
+
+        async def mock_get_inverter_status(device, previous):
+            return {}
+
+        async def mock_publish_status(device, status):
+            pass
+
+        async def mock_get_inverter_meter(device, previous):
+            return {}
+
+        async def mock_publish_meter(device, meter):
+            pass
+
+        async def mock_get_device_info(device, previous):
+            return {}
+
+        async def mock_publish_info(device, info):
+            pass
+
+        async def mock_get_inverter_settings(device, first, previous):
+            poll_calls.append(device)
+            return {}
+
+        async def mock_publish_registers(device, settings):
+            pass
+
+        async def mock_enable_default_options(device, settings):
+            pass
+
+        ge_cloud.async_get_devices = mock_get_devices
+        ge_cloud.async_get_evc_devices = mock_get_evc_devices
+        ge_cloud.async_get_inverter_status = mock_get_inverter_status
+        ge_cloud.publish_status = mock_publish_status
+        ge_cloud.async_get_inverter_meter = mock_get_inverter_meter
+        ge_cloud.publish_meter = mock_publish_meter
+        ge_cloud.async_get_device_info = mock_get_device_info
+        ge_cloud.publish_info = mock_publish_info
+        ge_cloud.async_get_inverter_settings = mock_get_inverter_settings
+        ge_cloud.publish_registers = mock_publish_registers
+        ge_cloud.enable_default_options = mock_enable_default_options
+
+        result = await ge_cloud.run(seconds=0, first=True)
+        if not result:
+            print("ERROR: run() should return True")
+            return 1
+
+        if poll_calls:
+            print("ERROR: Expected settings poll to be skipped (fresh cache), but got calls: {}".format(poll_calls))
+            return 1
+
+        if ge_cloud.settings.get("inv001") != cached_settings["inv001"]:
+            print("ERROR: Expected settings to be restored from cache, got: {}".format(ge_cloud.settings))
+            return 1
+
+        if not ge_cloud.settings_from_cache:
+            print("ERROR: Expected settings_from_cache to be True")
+            return 1
         return 0
 
     return run_async(test())

@@ -417,7 +417,7 @@ class SolarAPI(ComponentBase):
         self.forecast_solar_data = {}
         if self.storage:
             cached = await self.storage.load("solcast", "forecast_solar_data")
-            if cached is not None:
+            if isinstance(cached, dict):
                 self.forecast_solar_data = cached
 
         configs = self.forecast_solar
@@ -559,7 +559,7 @@ class SolarAPI(ComponentBase):
         self.solcast_data = {}
         if self.storage:
             cached = await self.storage.load("solcast", "solcast_data")
-            if cached is not None:
+            if isinstance(cached, dict):
                 self.solcast_data = cached
 
         if isinstance(api_keys, str):

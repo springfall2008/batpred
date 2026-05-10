@@ -396,9 +396,9 @@ def test_cache_get_url_hit(my_predbat):
     return failed
 
 
-def _backdate_storage_meta(cache_root, module, filename, hours_ago):
+def _backdate_storage_meta(storage_backend, module, filename, hours_ago):
     """Backdate the created timestamp in a storage meta file to simulate stale data."""
-    meta_path = os.path.join(cache_root, "cache", "{}_{}.meta".format(module, filename))
+    meta_path = storage_backend._meta_path(module, filename)
     with open(meta_path, "r") as f:
         meta = json.load(f)
     meta["created"] = (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).isoformat()
@@ -424,7 +424,7 @@ def test_cache_get_url_stale(my_predbat):
         # Save data with 7-day expiry so it won't be removed, then backdate creation to 2 hours ago
         old_data = {"stale": True}
         run_async(test_api.solar.storage.save("solar", hash_key, old_data, format="json", expiry=datetime.now(timezone.utc) + timedelta(days=7)))
-        _backdate_storage_meta(test_api.mock_base.config_root, "solar", hash_key, hours_ago=2)
+        _backdate_storage_meta(test_api.solar.storage, "solar", hash_key, hours_ago=2)
 
         # Setup mock response for fresh data
         fresh_data = {"fresh": True, "new": "data"}
@@ -471,7 +471,7 @@ def test_cache_get_url_failure_with_stale_cache(my_predbat):
         # Save data with 7-day expiry then backdate creation to 2 hours ago to make it stale
         stale_data = {"stale": True, "fallback": "data"}
         run_async(test_api.solar.storage.save("solar", hash_key, stale_data, format="json", expiry=datetime.now(timezone.utc) + timedelta(days=7)))
-        _backdate_storage_meta(test_api.mock_base.config_root, "solar", hash_key, hours_ago=2)
+        _backdate_storage_meta(test_api.solar.storage, "solar", hash_key, hours_ago=2)
 
         # Don't set mock response - will cause ConnectionError
         test_api.solar.solcast_requests_total = 0

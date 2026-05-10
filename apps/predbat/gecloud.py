@@ -243,6 +243,7 @@ class GECloudDirect(ComponentBase):
         self.gateway_device = None
         self.evc_devices_dict = {}
         self.evc_device_list = []
+        self.settings_from_cache = False
 
         # API request metrics for monitoring
         self.requests_total = 0
@@ -991,6 +992,21 @@ class GECloudDirect(ComponentBase):
                 self.api_fatal = True
                 return False
 
+            # Restore settings from storage to avoid a slow poll on quick restart
+            self.settings_from_cache = False
+            if self.storage:
+                cached_settings = await self.storage.load("gecloud", "settings")
+                if isinstance(cached_settings, dict) and cached_settings:
+                    settings_age = await self.storage.age("gecloud", "settings")
+                    if settings_age is not None and settings_age < 10:
+                        self.settings = cached_settings
+                        self.settings_from_cache = True
+                        self.log("GECloud: Restored settings from storage cache (age {:.1f} minutes), skipping initial poll".format(settings_age))
+                    else:
+                        self.log("GECloud: Storage cache for settings is stale (age {}), will re-poll".format("{:.1f} minutes".format(settings_age) if settings_age is not None else "unknown"))
+                else:
+                    self.log("GECloud: No valid settings found in storage cache, will poll")
+
         if first or (seconds % 120 == 0):
             for device in self.device_list:
                 self.status[device] = await self.async_get_inverter_status(device, self.status.get(device, {}))
@@ -1008,10 +1024,19 @@ class GECloudDirect(ComponentBase):
 
         if first or (seconds % (10 * 60) == 0):
             # Get All registers every now and again in case user changes them
+            settings_updated = False
             for device in self.device_list:
                 if seconds == 0 or self.polling_mode or (device == self.ems_device) or (device == self.gateway_device):
-                    self.settings[device] = await self.async_get_inverter_settings(device, first=False, previous=self.settings.get(device, {}))
-                    await self.publish_registers(device, self.settings[device])
+                    if first and self.settings_from_cache and device in self.settings:
+                        # Fresh cache loaded on startup — skip the slow poll for this device
+                        await self.publish_registers(device, self.settings[device])
+                    else:
+                        self.settings[device] = await self.async_get_inverter_settings(device, first=False, previous=self.settings.get(device, {}))
+                        await self.publish_registers(device, self.settings[device])
+                        settings_updated = True
+
+            if settings_updated and self.storage:
+                await self.storage.save("gecloud", "settings", self.settings, format="json", expiry=None)
 
             # One shot tasks
             if first:
@@ -1702,7 +1727,8 @@ class GECloudData(ComponentBase):
 
         # Load cache if not already loaded
         if self.storage:
-            self.ge_url_cache = await self.storage.load("gecloud_data", "ge_url_cache") or {}
+            cached = await self.storage.load("gecloud_data", "ge_url_cache")
+            self.ge_url_cache = cached if isinstance(cached, dict) else {}
         else:
             self.ge_url_cache = {}
 
