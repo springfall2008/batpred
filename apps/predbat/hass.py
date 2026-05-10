@@ -127,16 +127,24 @@ class Hass:
 
         log_size = self.logfile.tell()
         if log_size > 10000000:
-            # check for existence of previous logfiles and rename each in turn
-            for num_logs in range(max_logs - 1, 0, -1):
-                filename = "predbat." + format(num_logs) + ".log"
-                if os.path.isfile(filename):
-                    newfile = "predbat." + format(num_logs + 1) + ".log"
-                    os.rename(filename, newfile)
+            # Stop threads fighting over this
+            with self.log_lock:
+                # Check again in case another thread has already renamed the files
+                if log_size > 10000000:
+                    # check for existence of previous logfiles and rename each in turn
+                    for num_logs in range(max_logs - 1, 0, -1):
+                        filename = "predbat." + format(num_logs) + ".log"
+                        if os.path.isfile(filename):
+                            newfile = "predbat." + format(num_logs + 1) + ".log"
+                            try:
+                                os.rename(filename, newfile)
+                            except FileNotFoundError:
+                                # Better this than crashing
+                                pass
 
-            self.logfile.close()
-            os.rename("predbat.log", "predbat.1.log")
-            self.logfile = open("predbat.log", "w")
+                    self.logfile.close()
+                    os.rename("predbat.log", "predbat.1.log")
+                    self.logfile = open("predbat.log", "w")
 
     async def run_in_executor(self, callback, *args):
         """
@@ -239,6 +247,7 @@ class Hass:
         self.fatal_error = False
         self.hass_api_version = 2
 
+        self.log_lock = threading.Lock()
         self.logfile = open("predbat.log", "a")
 
         # Load secrets first
