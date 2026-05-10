@@ -17,11 +17,8 @@ personal API tiers.
 """
 
 import hashlib
-import json
 import math
-import os
 import aiohttp
-import traceback
 import pytz
 from datetime import datetime, timedelta, timezone
 
@@ -54,7 +51,7 @@ def pvwatts_cell_temperature(poa_global, temp_air, wind_speed):
 
 
 from const import TIME_FORMAT, TIME_FORMAT_SOLCAST
-from utils import dp1, dp2, dp4, history_attribute_to_minute_data, minute_data, history_attribute, prune_today
+from utils import dp2, dp4, history_attribute_to_minute_data, minute_data, history_attribute, prune_today
 from predbat_metrics import record_api_call, metrics
 from component_base import ComponentBase
 
@@ -152,34 +149,28 @@ class SolarAPI(ComponentBase):
             self.open_meteo_requests_total += 1
 
         # Get data from cache
-        age_minutes = 0
         data = None
-        hash = url + "_" + hashlib.md5(str(params).encode()).hexdigest()
-        hash = hash.replace("/", "_")
-        hash = hash.replace(":", "_")
-        hash = hash.replace("?", "a")
-        hash = hash.replace("&", "b")
-        hash = hash.replace("*", "c")
-        cache_path = self.config_root + "/cache"
-        if not os.path.exists(cache_path):
-            os.makedirs(cache_path)
+        hash_key = url + "_" + hashlib.md5(str(params).encode()).hexdigest()
+        hash_key = hash_key.replace("/", "_")
+        hash_key = hash_key.replace(":", "_")
+        hash_key = hash_key.replace("?", "a")
+        hash_key = hash_key.replace("&", "b")
+        hash_key = hash_key.replace("*", "c")
 
-        cache_filename = cache_path + "/" + hash + ".json"
-        if os.path.exists(cache_filename):
-            timestamp = os.path.getmtime(cache_filename)
-            age = datetime.now() - datetime.fromtimestamp(timestamp)
-            age_minutes = (age.seconds + age.days * 24 * 60) / 60
-
-            # Read cache data
-            with open(cache_filename) as f:
-                data = json.load(f)
-
-                if age_minutes < max_age:
-                    self.log("Return cached data for {} age {} minutes".format(url, dp1(age_minutes)))
+        stale_data = None
+        if self.storage:
+            data = await self.storage.load("solar", hash_key)
+            if data is not None:
+                age_minutes = await self.storage.age("solar", hash_key)
+                if age_minutes is not None and age_minutes < max_age:
+                    self.log("SolarAPI: Return cached data for {}".format(url))
                     return data
+                # Data exists but is older than max_age - keep as stale fallback
+                stale_data = data
+        data = None
 
         # Perform fetch
-        self.log("Fetching {}".format(url))
+        self.log("SolarAPI: Fetching {}".format(url))
         try:
             timeout = aiohttp.ClientTimeout(total=60)
             async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -187,7 +178,7 @@ class SolarAPI(ComponentBase):
                     status_code = response.status
 
                     if status_code not in [200, 201]:
-                        self.log("Warn: Error downloading data from url {}, code {}".format(url, status_code))
+                        self.log("Warn: SolarAPI: Error downloading data from url {}, code {}".format(url, status_code))
                         if is_solcast_api:
                             self.solcast_failures_total += 1
                             record_api_call("solcast", False, "server_error")
@@ -197,7 +188,7 @@ class SolarAPI(ComponentBase):
                         if is_open_meteo_api:
                             self.open_meteo_failures_total += 1
                             record_api_call("open_meteo", False, "server_error")
-                        return data
+                        return stale_data
 
                     try:
                         data = await response.json()
@@ -211,7 +202,7 @@ class SolarAPI(ComponentBase):
                             self.open_meteo_last_success_timestamp = datetime.now(timezone.utc)
                             record_api_call("open_meteo")
                     except (aiohttp.ContentTypeError, Exception) as e:
-                        self.log("Warn: Error downloading data from URL {}, error {} code {}".format(url, e, status_code))
+                        self.log("Warn: SolarAPI: Error downloading data from URL {}, error {} code {}".format(url, e, status_code))
                         if is_solcast_api:
                             self.solcast_failures_total += 1
                             record_api_call("solcast", False, "decode_error")
@@ -221,12 +212,15 @@ class SolarAPI(ComponentBase):
                         if is_open_meteo_api:
                             self.open_meteo_failures_total += 1
                             record_api_call("open_meteo", False, "decode_error")
-                        if data:
-                            self.log("Warn: Error downloading data from URL {}, using cached data age {} minutes".format(url, dp1(age_minutes)))
+                        if stale_data:
+                            self.log("Warn: SolarAPI: Error downloading data from URL {}, using stale cached data".format(url))
+                            return stale_data
                         else:
-                            self.log("Warn: Error downloading data from URL {}, no cached data".format(url))
+                            self.log("Warn: SolarAPI: Error downloading data from URL {}, no cached data".format(url))
+                            return None
+
         except (aiohttp.ClientError, Exception) as e:
-            self.log("Warn: Error downloading data from URL {}, error {}".format(url, e))
+            self.log("Warn: SolarAPI: Error downloading data from URL {}, error {}".format(url, e))
             if is_solcast_api:
                 self.solcast_failures_total += 1
                 record_api_call("solcast", False, "connection_error")
@@ -236,13 +230,12 @@ class SolarAPI(ComponentBase):
             if is_open_meteo_api:
                 self.open_meteo_failures_total += 1
                 record_api_call("open_meteo", False, "connection_error")
-            return data
+            return stale_data
 
-        # Store data in cache
-        if data:
-            self.log("Writing cache data for {} to cache file {}".format(url, cache_filename))
-            with open(cache_filename, "w") as f:
-                json.dump(data, f)
+        # Store data in cache with 7-day expiry
+        if self.storage and data:
+            expiry = datetime.now(timezone.utc) + timedelta(days=7)
+            await self.storage.save("solar", hash_key, data, format="json", expiry=expiry)
         return data
 
     URL_FREE = "https://api.forecast.solar/estimate/{lat}/{lon}/{dec}/{az}/{kwp}?time=utc"
@@ -320,7 +313,7 @@ class SolarAPI(ComponentBase):
             shading_factors = config.get("shading_factors", None)
 
             if shading_factors and len(shading_factors) == 12:
-                self.log("Open-Meteo: Using per-month shading factors for lat {} lon {}".format(lat, lon))
+                self.log("SolarAPI: Open-Meteo: Using per-month shading factors for lat {} lon {}".format(lat, lon))
 
             max_kwh += kwp * (1.0 - system_loss)
 
@@ -331,16 +324,16 @@ class SolarAPI(ComponentBase):
                     if "longitude" in postcode_result and "latitude" in postcode_result:
                         lon = postcode_result.get("longitude", lon)
                         lat = postcode_result.get("latitude", lat)
-                        self.log("Postcode {} resolved to latitude {} longitude {}".format(postcode, lat, lon))
+                        self.log("SolarAPI: Postcode {} resolved to latitude {} longitude {}".format(postcode, lat, lon))
                     else:
-                        self.log("Warn: Postcode {} could not be resolved to latitude and longitude, using default".format(postcode))
+                        self.log("Warn: SolarAPI: Postcode {} could not be resolved to latitude and longitude, using default".format(postcode))
 
             url = "https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=global_tilted_irradiance,temperature_2m,wind_speed_10m&wind_speed_unit=ms&tilt={tilt}&azimuth={az}&forecast_days=4&timezone=UTC".format(
                 lat=lat, lon=lon, tilt=tilt, az=az
             )
             data = await self.cache_get_url(url, params={}, max_age=self.open_meteo_forecast_max_age * 60)
             if not data:
-                self.log("Warn: Open-Meteo data for lat {} lon {} could not be downloaded".format(lat, lon))
+                self.log("Warn: SolarAPI: Open-Meteo data for lat {} lon {} could not be downloaded".format(lat, lon))
                 continue
 
             hourly = data.get("hourly", {})
@@ -350,7 +343,7 @@ class SolarAPI(ComponentBase):
             wind_values = hourly.get("wind_speed_10m", [])
 
             if not times or not gti_values:
-                self.log("Warn: Open-Meteo data for lat {} lon {} has no hourly data".format(lat, lon))
+                self.log("Warn: SolarAPI: Open-Meteo data for lat {} lon {} has no hourly data".format(lat, lon))
                 continue
 
             ensemble_p10 = await self.download_open_meteo_ensemble_data(lat, lon, tilt, az, kwp, system_loss)
@@ -417,28 +410,18 @@ class SolarAPI(ComponentBase):
             for key in sorted(period_data.keys()):
                 sorted_data.append(period_data[key])
 
-        self.log("Open-Meteo returned {} data points".format(len(sorted_data)))
+        self.log("SolarAPI: Open-Meteo returned {} data points".format(len(sorted_data)))
         return sorted_data, max_kwh
 
     async def download_forecast_solar_data(self):
         """
         Download forecast.solar data directly from a URL or return from cache if recent.
         """
-        cache_path = self.config_root + "/cache"
-        if not os.path.exists(cache_path):
-            os.makedirs(cache_path)
-
         self.forecast_solar_data = {}
-        cache_file = cache_path + "/forecast_solar.json"
-
-        if os.path.exists(cache_file):
-            try:
-                with open(cache_file) as f:
-                    self.forecast_solar_data = json.load(f)
-            except Exception as e:
-                self.log("Warn: Error loading forecast.solar cache file {}, error {}".format(cache_file, e))
-                self.log("Warn: " + traceback.format_exc())
-                os.remove(cache_file)
+        if self.storage:
+            cached = await self.storage.load("solcast", "forecast_solar_data")
+            if isinstance(cached, dict):
+                self.forecast_solar_data = cached
 
         configs = self.forecast_solar
         if configs is None:
@@ -465,15 +448,15 @@ class SolarAPI(ComponentBase):
             if postcode:
                 result = await self.cache_get_url("https://api.postcodes.io/postcodes/{}".format(postcode), params={}, max_age=24 * 60 * 30)  # Cache postcode data for 30 days
                 if not result:
-                    self.log("Warn: Postcode {} could not be resolved, no postcode lookup data available".format(postcode))
+                    self.log("Warn: SolarAPI: Postcode {} could not be resolved, no postcode lookup data available".format(postcode))
                     result = {}
                 result = result.get("result", {})
                 if "longitude" not in result or "latitude" not in result:
-                    self.log("Warn: Postcode {} could not be resolved to latitude and longitude, using default".format(postcode))
+                    self.log("Warn: SolarAPI: Postcode {} could not be resolved to latitude and longitude, using default".format(postcode))
                 else:
                     lon = result.get("longitude", lon)
                     lat = result.get("latitude", lat)
-                    self.log("Postcode {} resolved to latitude {} longitude {}".format(postcode, lat, lon))
+                    self.log("SolarAPI: Postcode {} resolved to latitude {} longitude {}".format(postcode, lat, lon))
 
             if api_key:
                 url = self.URL_PERSONAL
@@ -486,12 +469,12 @@ class SolarAPI(ComponentBase):
 
             data = await self.cache_get_url(url, params={}, max_age=self.forecast_solar_max_age * 60)
             if not data:
-                self.log("Warn: Forecast Solar data for lat {} lon {} could not be downloaded, check your Forecast Solar cloud settings".format(lat, lon))
+                self.log("Warn: SolarAPI: Forecast Solar data for lat {} lon {} could not be downloaded, check your Forecast Solar cloud settings".format(lat, lon))
                 continue
             watts = data.get("result", {}).get("watts", {})
             info = data.get("message", {}).get("info", {})
             if not watts or not info:
-                self.log("Warn: Forecast Solar data for lat {} lon {} could not be downloaded, check your Forecast Solar cloud settings, got {}".format(lat, lon, data))
+                self.log("Warn: SolarAPI: Forecast Solar data for lat {} lon {} could not be downloaded, check your Forecast Solar cloud settings, got {}".format(lat, lon, data))
                 continue
 
             # current_time = info.get("time", None)
@@ -541,9 +524,9 @@ class SolarAPI(ComponentBase):
                 new_data[key_txt] = self.forecast_solar_data[key_txt]
         self.forecast_solar_data = new_data
 
-        # Save to cache file
-        with open(cache_file, "w") as f:
-            json.dump(self.forecast_solar_data, f)
+        # Save to cache
+        if self.storage:
+            await self.storage.save("solcast", "forecast_solar_data", self.forecast_solar_data, format="json", expiry=None)
 
         # Fetch the final cached data as timestamps
         period_data = {}
@@ -566,8 +549,6 @@ class SolarAPI(ComponentBase):
         """
         Download solcast data directly from a URL or return from cache if recent.
         """
-        cache_path = self.config_root + "/cache"
-
         host = self.solcast_host
         api_keys = self.solcast_api_key
         if not api_keys or not host:
@@ -579,16 +560,10 @@ class SolarAPI(ComponentBase):
             host = host[0:-1]
 
         self.solcast_data = {}
-        cache_file = cache_path + "/solcast.json"
-
-        if os.path.exists(cache_file):
-            try:
-                with open(cache_file) as f:
-                    self.solcast_data = json.load(f)
-            except Exception as e:
-                self.log("Warn: Error loading Solcast cache file {}, error {}".format(cache_file, e))
-                self.log("Warn: " + traceback.format_exc())
-                os.remove(cache_file)
+        if self.storage:
+            cached = await self.storage.load("solcast", "solcast_data")
+            if isinstance(cached, dict):
+                self.solcast_data = cached
 
         if isinstance(api_keys, str):
             api_keys = [api_keys]
@@ -615,13 +590,13 @@ class SolarAPI(ComponentBase):
             for site in sites:
                 resource_id = site.get("resource_id", None)
                 if resource_id:
-                    self.log("Fetch data for resource id {}".format(resource_id))
+                    self.log("SolarAPI: Fetch data for resource id {}".format(resource_id))
 
                     params = {"format": "json", "api_key": api_key.strip(), "hours": 168}
                     url = f"{host}/rooftop_sites/{resource_id}/forecasts"
                     data = await self.cache_get_url(url, params, max_age=max_age)
                     if not data:
-                        self.log("Warn: Solcast forecast data for site {} could not be downloaded, check your Solcast cloud settings".format(site))
+                        self.log("SolarAPI: Warn: Solcast forecast data for site {} could not be downloaded, check your Solcast cloud settings".format(site))
                         continue
                     forecasts = data.get("forecasts", [])
 
@@ -657,9 +632,9 @@ class SolarAPI(ComponentBase):
                 new_data[key_txt] = self.solcast_data[key_txt]
         self.solcast_data = new_data
 
-        # Save to cache file
-        with open(cache_file, "w") as f:
-            json.dump(self.solcast_data, f)
+        # Save to cache
+        if self.storage:
+            await self.storage.save("solcast", "solcast_data", self.solcast_data, format="json", expiry=None)
 
         # Fetch the final cached data as timestamps
         period_data = {}
@@ -675,7 +650,7 @@ class SolarAPI(ComponentBase):
             for key in period_keys:
                 sorted_data.append(period_data[key])
 
-        self.log("Solcast returned {} data points".format(len(sorted_data)))
+        self.log("SolarAPI: Solcast returned {} data points".format(len(sorted_data)))
         return sorted_data
 
     def fetch_pv_datapoints(self, argname, entity_id):
@@ -814,7 +789,7 @@ class SolarAPI(ComponentBase):
         for day in range(days):
             if day == 0:
                 self.log(
-                    "PV Forecast for today is {} ({} 10%, {} 90%, {} calibrated) kWh, and PV left today is {} ({} 10%, {} 90%, {} calibrated) kWh".format(
+                    "SolarAPI: PV Forecast for today is {} ({} 10%, {} 90%, {} calibrated) kWh, and PV left today is {} ({} 10%, {} 90%, {} calibrated) kWh".format(
                         dp2(total_day[day]),
                         dp2(total_day10[day]),
                         dp2(total_day90[day]),
@@ -869,7 +844,7 @@ class SolarAPI(ComponentBase):
             else:
                 day_name = "tomorrow" if day == 1 else "d{}".format(day)
                 day_name_long = day_name if day == 1 else "day {}".format(day)
-                self.log("PV Forecast for day {} is {} ({} 10%, {} 90%, {} calibrated) kWh".format(day_name, dp2(total_day[day]), dp2(total_day10[day]), dp2(total_day90[day]), dp2(total_dayCL[day])))
+                self.log("SolarAPI: PV Forecast for day {} is {} ({} 10%, {} 90%, {} calibrated) kWh".format(day_name, dp2(total_day[day]), dp2(total_day10[day]), dp2(total_day90[day]), dp2(total_dayCL[day])))
 
                 self.dashboard_item(
                     "sensor." + self.prefix + "_pv_" + day_name,
@@ -903,10 +878,10 @@ class SolarAPI(ComponentBase):
         # for 30-min plan slots with a 30-min forecast (Solcast) this is 1.
         # Use ceiling so partial forecast periods are fully covered rather than rounded down.
         if period % self.plan_interval_minutes != 0:
-            self.log("Warn: PV calibration forecast period {} does not divide evenly into plan interval {} - using ceiling slot coverage".format(period, self.plan_interval_minutes))
+            self.log("Warn: SolarAPI: PV calibration forecast period {} does not divide evenly into plan interval {} - using ceiling slot coverage".format(period, self.plan_interval_minutes))
         slots_per_period = max(1, int(math.ceil(period / self.plan_interval_minutes)))
 
-        self.log("PV Calibration: Fetching PV data for calibration")
+        self.log("SolarAPI: PV Calibration: Fetching PV data for calibration")
 
         days = 7
         pv_today_hist = self.base.minute_data_import_export(days + 1, self.now_utc, "pv_today", required_unit="kWh", pad=False)
@@ -931,7 +906,7 @@ class SolarAPI(ComponentBase):
         enabled_calibration = True
         if hist_days < 3:
             enabled_calibration = False
-            self.log("PV Calibration: Not enough historical data for calibration, only {} days of history".format(hist_days))
+            self.log("SolarAPI: PV Calibration: Not enough historical data for calibration, only {} days of history".format(hist_days))
 
         pv_power_hist_by_slot = {}
         pv_power_hist_by_slot_count = {}
@@ -993,7 +968,7 @@ class SolarAPI(ComponentBase):
             weight = max(1.0 - 0.1 * (day - 1), 0.3)
             average_day_scaling += scaling_factor * weight
             total_weight += weight
-            self.log("PV Calibration: Past day {} had {} kWh of forecast PV, and actual {} kWh PV generation (weight {})".format(day, dp2(past_day_forecast[day]), dp2(past_day_actual[day]), dp2(weight)))
+            self.log("SolarAPI: PV Calibration: Past day {} had {} kWh of forecast PV, and actual {} kWh PV generation (weight {})".format(day, dp2(past_day_forecast[day]), dp2(past_day_actual[day]), dp2(weight)))
         average_day_scaling = dp4(average_day_scaling / total_weight) if past_day_forecast else 1.0
         average_day_scaling = min(max(average_day_scaling, 0.1), 2.0)
 
@@ -1008,7 +983,7 @@ class SolarAPI(ComponentBase):
             worst_day_scaling = 0.7
             best_day_scaling = 1.3
         self.log(
-            "PV Calibration: Worst day scaling factor {}, best day scaling factor {} average day scaling factor {} max historical power {} max future predicted power {}".format(
+            "SolarAPI: PV Calibration: Worst day scaling factor {}, best day scaling factor {} average day scaling factor {} max historical power {} max future predicted power {}".format(
                 dp2(worst_day_scaling), dp2(best_day_scaling), dp2(average_day_scaling), dp2(max_pv_power_hist), dp2(max_pv_power_forecast)
             )
         )
@@ -1047,7 +1022,7 @@ class SolarAPI(ComponentBase):
         m.pv_scaling_total.set(total_adjustment)
 
         self.log(
-            "PV Calibration: PV production: {} kWh, Total forecast: {} kWh, adjustment {}x max_hist {}kW max_forecast {}kW slot adjustments {}, max_kwh {}, divide_by {}".format(
+            "SolarAPI: PV Calibration: PV production: {} kWh, Total forecast: {} kWh, adjustment {}x max_hist {}kW max_forecast {}kW slot adjustments {}, max_kwh {}, divide_by {}".format(
                 dp2(total_production), dp2(total_forecast), total_adjustment, dp2(max_pv_power_hist), dp2(max_pv_power_forecast), slot_adjustment, max_kwh, divide_by
             )
         )
@@ -1071,7 +1046,7 @@ class SolarAPI(ComponentBase):
             scaling_applied = dp4(total_day_scaled_slot / total_day if total_day > 0.01 else 1.0)
             days_use_scaling[day] = dp4(total_adjustment / scaling_applied if scaling_applied > 0.01 else 1.0)
 
-        self.log("PV Calibration: Days forecast total {}, days forecast total scaled by slot adjustments {}, days use scaling {}".format(days_forecast_total, days_forecast_total_scaled_slot, days_use_scaling))
+        self.log("SolarAPI: PV Calibration: Days forecast total {}, days forecast total scaled by slot adjustments {}, days use scaling {}".format(days_forecast_total, days_forecast_total_scaled_slot, days_use_scaling))
 
         pv_forecast_minute_adjusted = {}
         for minute in range(0, max(pv_forecast_minute.keys()) + 1):
@@ -1141,11 +1116,11 @@ class SolarAPI(ComponentBase):
                 pv_value = pv_forecast_minute_adjusted.get(minute, 0)
                 # Use the worst day scaling factor to create pv_estimate10
                 pv_forecast_minute10[minute] = dp4(pv_value * worst_day_scaling)
-            self.log("PV Calibration: Created pv_estimate10/pv_estimate90 data using worst day scaling factor {}".format(dp2(worst_day_scaling)))
+            self.log("SolarAPI: PV Calibration: Created pv_estimate10/pv_estimate90 data using worst day scaling factor {}".format(dp2(worst_day_scaling)))
 
         # Do we use calibrated or raw data?
         if self.get_arg("metric_pv_calibration_enable", default=True):
-            self.log("PV Calibration: Using calibrated PV data")
+            self.log("SolarAPI: PV Calibration: Using calibrated PV data")
             return pv_forecast_minute_adjusted, pv_forecast_minute10, pv_forecast_data
         else:
             return pv_forecast_minute, pv_forecast_minute10, pv_forecast_data
@@ -1199,21 +1174,21 @@ class SolarAPI(ComponentBase):
         max_kwh = 9999
 
         if self.forecast_solar:
-            self.log("Obtaining solar forecast from Forecast Solar API")
+            self.log("SolarAPI: Obtaining solar forecast from Forecast Solar API")
             pv_forecast_data, max_kwh = await self.download_forecast_solar_data()
             divide_by = 30.0
             create_pv10 = True
         elif self.open_meteo_forecast:
-            self.log("Obtaining solar forecast from Open-Meteo API")
+            self.log("SolarAPI: Obtaining solar forecast from Open-Meteo API")
             pv_forecast_data, max_kwh = await self.download_open_meteo_data()
             divide_by = 30.0
             create_pv10 = True
         elif self.solcast_host and self.solcast_api_key:
-            self.log("Obtaining solar forecast from Solcast API")
+            self.log("SolarAPI: Obtaining solar forecast from Solcast API")
             pv_forecast_data = await self.download_solcast_data()
             divide_by = 30.0
         else:
-            self.log("Using Solcast integration from inside HA for solar forecast")
+            self.log("SolarAPI: Using Solcast integration from inside HA for solar forecast")
 
             # Fetch data from each sensor
             for argname in ["pv_forecast_today", "pv_forecast_tomorrow", "pv_forecast_d3", "pv_forecast_d4"]:
@@ -1222,7 +1197,7 @@ class SolarAPI(ComponentBase):
 
                 data, total_data, total_sensor = self.fetch_pv_datapoints(argname, entity_id)
                 if data:
-                    self.log("PV Data for {} total {} kWh".format(argname, total_sensor))
+                    self.log("SolarAPI: PV Data for {} total {} kWh".format(argname, total_sensor))
                     pv_forecast_data += data
 
                     if argname == "pv_forecast_today":
@@ -1238,9 +1213,9 @@ class SolarAPI(ComponentBase):
 
             # Valid factor values: 1.0 = kWh per slot (any interval), 2.0 = kW per 30-min slot, 4.0 = kW per 15-min slot
             if factor not in [1.0, 2.0, 4.0]:
-                self.log("Warn: PV Forecast today adds up to {} kWh, but total sensors add up to {} kWh, this is unexpected and hence data maybe misleading (factor {})".format(pv_forecast_total_data, pv_forecast_total_sensor, factor))
+                self.log("Warn: SolarAPI: PV Forecast today adds up to {} kWh, but total sensors add up to {} kWh, this is unexpected and hence data maybe misleading (factor {})".format(pv_forecast_total_data, pv_forecast_total_sensor, factor))
             else:
-                self.log("PV Forecast today adds up to {} kWh, and total sensors add up to {} kWh, factor is {}".format(pv_forecast_total_data, pv_forecast_total_sensor, factor))
+                self.log("SolarAPI: PV Forecast today adds up to {} kWh, and total sensors add up to {} kWh, factor is {}".format(pv_forecast_total_data, pv_forecast_total_sensor, factor))
 
         if pv_forecast_data:
             # Detect the actual period of the forecast data (e.g. 15 or 30 minutes)
@@ -1268,7 +1243,7 @@ class SolarAPI(ComponentBase):
                 divide_by = dp2(period * factor)
 
             if period != 30:
-                self.log("PV Forecast data has {} minute resolution, adjusting calculations".format(period))
+                self.log("SolarAPI: PV Forecast data has {} minute resolution, adjusting calculations".format(period))
 
             pv_forecast_minute, _ = minute_data(
                 pv_forecast_data,
@@ -1300,5 +1275,5 @@ class SolarAPI(ComponentBase):
             self.update_success_timestamp()
             self.last_fetched_timestamp = self.now_utc_exact
         else:
-            self.log("Warn: No solar data has been configured.")
+            self.log("Warn: SolarAPI: No solar data has been configured.")
             self.last_fetched_timestamp = self.now_utc_exact

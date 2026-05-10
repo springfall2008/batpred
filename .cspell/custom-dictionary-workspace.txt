@@ -5,6 +5,7 @@ adbase
 afci
 AIO
 AIO's
+aiofiles
 aiohttp
 aiomqtt
 Alertfeed

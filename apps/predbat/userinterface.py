@@ -49,7 +49,6 @@ DEBUG_EXCLUDE_LIST = [
     "comparison",
     "plugin_system",
     "ge_url_cache",
-    "futurerate_url_cache",
     "github_url_cache",
     "octopus_url_cache",
     "secrets",
