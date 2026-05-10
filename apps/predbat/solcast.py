@@ -214,8 +214,11 @@ class SolarAPI(ComponentBase):
                             record_api_call("open_meteo", False, "decode_error")
                         if stale_data:
                             self.log("Warn: SolarAPI: Error downloading data from URL {}, using stale cached data".format(url))
+                            return stale_data
                         else:
                             self.log("Warn: SolarAPI: Error downloading data from URL {}, no cached data".format(url))
+                            return None
+
         except (aiohttp.ClientError, Exception) as e:
             self.log("Warn: SolarAPI: Error downloading data from URL {}, error {}".format(url, e))
             if is_solcast_api:
