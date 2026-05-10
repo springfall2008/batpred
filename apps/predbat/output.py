@@ -2748,14 +2748,35 @@ class Output:
                     # Only add the slot if there isn't already one covering this time period
                     if not any(slot["start"] <= start_minute < slot["end"] for slot in self.car_charging_slots[0]):
                         self.car_charging_slots[0].append({"start": start_minute, "end": start_minute + self.plan_interval_minutes, "kwh": car_energy, "octopus": False})
+        
+        if self.car_energy_reported_load:
+            # Walk through each car slot for each car and subtract it from the load
+            # We assume the load sensor correct, so if the car slot over reports then can the car slot energy based on the possible load
+            for car_n in range(self.num_cars):
+                for slot in self.car_charging_slots[car_n]:
+                    start_minutes = slot["start"]
+                    end_minutes = slot["end"]
+                    kwh = slot["kwh"]
+                    kwh_drain = kwh / self.car_charging_loss
+                    load_reported = 0
+                    for minute in range(start_minutes, end_minutes, PREDICT_STEP):
+                        load_reported += yesterday_load_step.get(minute, 0)
+                    if load_reported < kwh_drain:
+                        # The slot is reporting more energy than the load, so we need to adjust the slot energy down to the real load
+                        # e.g. Octopus can over report energy in the period
+                        if load_reported * 10 < kwh_drain:
+                            # Threshold where we assume no car charging at all
+                            slot["kwh"] = 0
+                        else:
+                            slot["kwh"] = load_reported * self.car_charging_loss
+                    khw = slot["kwh"]
 
-        # Walk through the car charging slots during the period
-        # Subtract the energy for the period from the historical load as it will be added back in again during the simulation
-        # car_load is in kW; convert to kWh per PREDICT_STEP before subtracting from the kWh/step load array
-        for minute in range(0, end_record, PREDICT_STEP):
-            car_load, car_rate_slot = in_car_slot(minute, self.num_cars, self.car_charging_slots)
-            load_value = yesterday_load_step.get(minute, 0)
-            yesterday_load_step[minute] = max(load_value - sum(car_load) * PREDICT_STEP / 60.0, 0)
+                    # Subtract the energy for the period from the historical load as it will be added back in again during the simulation
+                    total_hours = (end_minutes - start_minutes) / 60.0
+                    subtract_amount = khw / total_hours * PREDICT_STEP / 60.0
+                    for minute in range(start_minutes, end_minutes, PREDICT_STEP):
+                        load_value = yesterday_load_step.get(minute, 0)
+                        yesterday_load_step[minute] = max(load_value - subtract_amount, 0)
 
     def calculate_yesterday(self):
         """

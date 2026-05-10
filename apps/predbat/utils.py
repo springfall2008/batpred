@@ -735,7 +735,7 @@ def in_iboost_slot(minute, iboost_plan):
     return load_amount
 
 
-def in_car_slot(minute, num_cars, car_charging_slots):
+def in_car_slot(minute, num_cars, car_charging_slots, slot_cap=None, slot_cap_period=None):
     """
     Is the given minute inside a car slot
     """

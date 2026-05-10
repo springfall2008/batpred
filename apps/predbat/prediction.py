@@ -1108,9 +1108,8 @@ class Prediction:
                 if not car_energy_reported_load:
                     # If the car is not reporting load, but we export then this export can
                     # end up in the car meaning we don't get the export profit.
-                    # We can't really value the car charging amount so we just assume its 0 value to be conservative.
+                    # We can't really value the car charging amount so we just assume its 0 value
                     metric -= export_rate * max(0, energy - car_load_energy_bypass)
-                    car_load_energy_bypass = max(car_load_energy_bypass - energy, 0)
                 else:
                     metric -= export_rate * energy
 
@@ -1119,10 +1118,6 @@ class Prediction:
                     grid_state = ">"
                 else:
                     grid_state = "~"
-
-            # Car other side of CT lamp
-            if not car_energy_reported_load and car_load_energy_bypass > 0:
-                metric += import_rate * (car_load_energy_bypass + car_rate_premium)
 
             # Record final soc & metric
             if record:
