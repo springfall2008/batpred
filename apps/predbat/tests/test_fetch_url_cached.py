@@ -56,7 +56,7 @@ async def test_fetch_url_cached_async(my_predbat):
     ]
 
     # Mock function to replace async_download_octopus_url
-    async def mock_download(url):
+    async def mock_download(url, **kwargs):
         """Mock download function that returns test data based on URL"""
         if "VAR-22-11-01" in url:
             return mock_rate_data_var
