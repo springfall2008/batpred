@@ -38,8 +38,8 @@ DATE_TIME_STR_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 # Keys: "eco7" (Economy 7), "go" (Octopus GO / generic day-night), "iog" (Intelligent GO TOU).
 OCTOPUS_NIGHT_RATE_WINDOWS = {
     "eco7": {"start": (0, 30), "end": (7, 30), "cross_midnight": False},
-    "go":   {"start": (0, 30), "end": (5, 30), "cross_midnight": False},
-    "iog":  {"start": (23, 30), "end": (5, 30), "cross_midnight": True},
+    "go": {"start": (0, 30), "end": (5, 30), "cross_midnight": False},
+    "iog": {"start": (23, 30), "end": (5, 30), "cross_midnight": True},
 }
 
 OCTOPUS_MAX_RETRIES = 5
