@@ -21,7 +21,7 @@ import copy
 from datetime import datetime, timedelta
 from config import THIS_VERSION
 from const import TIME_FORMAT, PREDICT_STEP
-from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, in_car_slot
+from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state
 from prediction import Prediction
 
 
@@ -2748,7 +2748,7 @@ class Output:
                     # Only add the slot if there isn't already one covering this time period
                     if not any(slot["start"] <= start_minute < slot["end"] for slot in self.car_charging_slots[0]):
                         self.car_charging_slots[0].append({"start": start_minute, "end": start_minute + self.plan_interval_minutes, "kwh": car_energy, "octopus": False})
-        
+
         if self.car_energy_reported_load:
             # Walk through each car slot for each car and subtract it from the load
             # We assume the load sensor correct, so if the car slot over reports then can the car slot energy based on the possible load
