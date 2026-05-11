@@ -894,10 +894,12 @@ class HAInterface(ComponentBase):
         """
         Delete a state from Home Assistant.
         """
-        self.db_mirror_list.pop(entity_id, None)
-        self.state_data.pop(entity_id.lower(), None)
+        entity_id_lower = entity_id.lower()
+        self.db_mirror_list.pop(entity_id_lower, None)
+        self.state_data.pop(entity_id_lower, None)
         if self.ha_key:
             self.api_call("/api/states/{}".format(entity_id), delete=True)
+        return True
 
     def api_call(self, endpoint, data_in=None, post=False, delete=False, core=True, silent=False):
         """

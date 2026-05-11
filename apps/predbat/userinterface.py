@@ -891,9 +891,7 @@ class UserInterface:
             entity_id = entity_id[0] if entity_id else None
         name = service_data.get("name", None)
         if not name and entity_id:
-            marker = "_load_forecast_delta_"
-            if marker in entity_id:
-                name = entity_id.split(marker, 1)[1]
+            name = self.additional_load_name_from_entity(entity_id)
         if not name:
             self.log("Warn: update_load_forecast_delta called without name or target entity_id")
             self.record_status("Warn: update_load_forecast_delta called without name or target entity_id", had_errors=True)
