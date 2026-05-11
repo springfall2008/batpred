@@ -2549,9 +2549,6 @@ class Octopus:
         # Track which 30-min slot starts were actually added (for filling in the rest of the slot)
         slots_added_set = set()
         plan_interval_minutes = self.plan_interval_minutes
-
-        self.log("Calling rate_add_io_slots for car {} slots {}".format(car_n, octopus_slots))
-
         saved_slots = set()  # For logging purposes, track which slots we actually applied as low rate
 
         if octopus_slots:
@@ -2605,7 +2602,7 @@ class Octopus:
                             if slot_start in slots_added_set:
                                 rates[minute] = assumed_price
 
-                        if minute % 30 == 0:
+                        if minute % 30 == 0 and start_minutes > -24*60:
                             self.log(
                                 "Octopus: Intelligent slot at {}-{}, assumed price {}, amount {}, kWh location {}, source {}, octopus_slot_low_rate {}".format(
                                     self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), dp2(assumed_price), dp2(kwh), location, source, octopus_slot_low_rate
