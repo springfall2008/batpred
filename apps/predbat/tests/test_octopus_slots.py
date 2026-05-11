@@ -79,6 +79,7 @@ def run_load_octopus_slots_tests(my_predbat):
     my_predbat.rate_min_base = 4
     my_predbat.rate_max_base = 10
     my_predbat.car_charging_rate = [5.0]
+    my_predbat.args["octopus_slot_max"] = 12
 
     # Created 8 slots in total in the next 16 hours
     soc = 2.0

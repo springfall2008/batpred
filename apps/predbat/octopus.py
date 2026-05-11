@@ -43,6 +43,7 @@ OCTOPUS_NIGHT_RATE_WINDOWS = {
 }
 
 OCTOPUS_MAX_RETRIES = 5
+OCTOPUS_SLOT_MAX_DEFAULT = 48  # 24 hours with 30-minute slots
 
 BASE_TIME = datetime.strptime("00:00", "%H:%M")
 OPTIONS_TIME = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M")) for minute in range(4 * 60, 11 * 60, 30)]
@@ -2438,7 +2439,7 @@ class Octopus:
             # Car not configured, just return the slots as they are (for export or other non-car use)
             return new_slots
         octopus_slot_low_rate = self.get_arg("octopus_slot_low_rate", True)
-        octopus_slot_max = self.get_arg("octopus_slot_max", 12)  # Default to 12 slots (6 hours) per midday-to-midday period
+        octopus_slot_max = self.get_arg("octopus_slot_max", OCTOPUS_SLOT_MAX_DEFAULT)  # Default to 12 slots (6 hours) per midday-to-midday period
         slots_per_day = {}  # Track 30-min blocks used per midday-to-midday period
         car_soc = self.car_charging_soc[car_n]
         limit = self.car_charging_limit[car_n]
@@ -2540,7 +2541,7 @@ class Octopus:
         # Octopus limits cheap slots to 6 hours (12 x 30-min slots) per 24-hour period
         """
         octopus_slot_low_rate = self.get_arg("octopus_slot_low_rate", True)
-        octopus_slot_max = self.get_arg("octopus_slot_max", 12)  # Default to 12 hours as per May 2026
+        octopus_slot_max = self.get_arg("octopus_slot_max", OCTOPUS_SLOT_MAX_DEFAULT)
 
         # Track slots per 24-hour period (keyed by day offset from midday)
         # Period 0 = noon today to 11:59 tomorrow, Period -1 = noon yesterday to 11:59 today, etc.

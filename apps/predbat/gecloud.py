@@ -977,6 +977,8 @@ class GECloudDirect(ComponentBase):
                 self.gateway_device = self.devices_dict["gateway"]
                 self.log("GECloud: Found Gateway device {} and multiple batteries, using only the gateway device".format(self.gateway_device))
                 self.device_list = [self.gateway_device]
+            elif not self.ems_device and self.devices_dict["gateway"] and len(self.device_list) == 1:
+                self.log("GECloud: Found Gateway device {} but only one battery, using the battery device for polling".format(self.devices_dict["gateway"]))
 
             self.evc_device_list = []
             for device in self.evc_devices_dict:
@@ -1448,7 +1450,7 @@ class GECloudDirect(ComponentBase):
                 serial = serial.lower()
                 if "plant ems" in model:
                     result["ems"] = serial
-                elif "gateway" in model:
+                elif "gateway" in model or "gw2" in model:
                     result["gateway"] = serial
                 elif batteries or info.get("battery"):
                     result["battery"].append(serial)
