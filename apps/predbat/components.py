@@ -444,7 +444,11 @@ class Components:
                 default = arg_info.get("default", None)
                 indirect = arg_info.get("indirect", False)
                 config_late_resolve = arg_info.get("config_late_resolve", False)
-                if config_late_resolve:
+                if "value" in arg_info:
+                    # Pre-computed provider object injected directly — no config lookup needed.
+                    arg_dict[arg] = arg_info["value"]
+                    continue
+                elif config_late_resolve:
                     # Defer resolution of config value until later
                     arg_dict[arg] = arg_info["config"]
                     continue
