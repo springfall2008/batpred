@@ -895,6 +895,7 @@ class HAInterface(ComponentBase):
         Delete a state from Home Assistant.
         """
         entity_id_lower = entity_id.lower()
+        self.db_mirror_list.pop(entity_id, None)
         self.db_mirror_list.pop(entity_id_lower, None)
         self.state_data.pop(entity_id_lower, None)
         if self.ha_key:
