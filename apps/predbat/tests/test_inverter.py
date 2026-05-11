@@ -1675,6 +1675,64 @@ def test_disable_discharge_clears_slot_values_time_entities(test_name, ha, inv):
     return failed
 
 
+def test_enable_discharge_restores_current_for_clear_slot_inverters(test_name, ha, inv):
+    """
+    Ensure force export enable restores timed_discharge_current for inverters
+    that clear slot values on disable (e.g. GS_fb00).
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    inv.rest_data = None
+    inv.inv_charge_time_format = "H M"
+    inv.inv_has_discharge_enable_time = True
+    inv.inv_has_charge_enable_time = True
+    inv.inv_has_ge_inverter_mode = False
+    inv.inv_output_charge_control = "current"
+    inv.inv_charge_control_immediate = True
+    inv.inv_clear_slot_on_disable = True
+    inv.inv_time_button_press = False
+
+    start = "12:00:00"
+    end = "12:30:00"
+
+    ha.dummy_items["switch.scheduled_discharge_enable"] = "off"
+    ha.dummy_items["select.discharge_start_time"] = "00:00:00"
+    ha.dummy_items["select.discharge_end_time"] = "00:00:00"
+    ha.dummy_items["number.discharge_start_hour"] = 0
+    ha.dummy_items["number.discharge_start_minute"] = 0
+    ha.dummy_items["number.discharge_end_hour"] = 0
+    ha.dummy_items["number.discharge_end_minute"] = 0
+    ha.dummy_items["number.timed_discharge_current"] = 0
+    ha.dummy_items["number.discharge_rate"] = 2600
+    ha.dummy_items["select.inverter_mode"] = "Eco"
+
+    inv.base.args["scheduled_discharge_enable"] = "switch.scheduled_discharge_enable"
+    inv.base.args["discharge_start_time"] = "select.discharge_start_time"
+    inv.base.args["discharge_end_time"] = "select.discharge_end_time"
+    inv.base.args["discharge_start_hour"] = "number.discharge_start_hour"
+    inv.base.args["discharge_start_minute"] = "number.discharge_start_minute"
+    inv.base.args["discharge_end_hour"] = "number.discharge_end_hour"
+    inv.base.args["discharge_end_minute"] = "number.discharge_end_minute"
+    inv.base.args["timed_discharge_current"] = "number.timed_discharge_current"
+    inv.base.args["discharge_rate"] = "number.discharge_rate"
+    inv.base.args["inverter_mode"] = "select.inverter_mode"
+
+    inv.adjust_force_export(True, datetime.strptime(start, "%H:%M:%S"), datetime.strptime(end, "%H:%M:%S"))
+
+    expected_current = round(float(ha.get_state("number.discharge_rate")) / inv.battery_voltage, inv.inv_current_dp)
+    actual_current = ha.get_state("number.timed_discharge_current")
+
+    if ha.get_state("switch.scheduled_discharge_enable") != "on":
+        print("ERROR: scheduled_discharge_enable should be on got {}".format(ha.get_state("switch.scheduled_discharge_enable")))
+        failed = True
+    if actual_current != expected_current:
+        print("ERROR: timed_discharge_current should be {} got {}".format(expected_current, actual_current))
+        failed = True
+
+    return failed
+
+
 def run_inverter_tests(my_predbat_dummy):
     """
     Test the inverter functions
@@ -2393,6 +2451,10 @@ charge_start_service:
         return failed
 
     failed |= test_disable_discharge_clears_slot_values_time_entities("disable_discharge_clear_values_time_entities", ha, inv)
+    if failed:
+        return failed
+
+    failed |= test_enable_discharge_restores_current_for_clear_slot_inverters("enable_discharge_restores_current", ha, inv)
     if failed:
         return failed
 

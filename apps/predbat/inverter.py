@@ -2391,7 +2391,7 @@ class Inverter:
         # Force export, turn it on after we change the window
         if force_export:
             self.adjust_inverter_mode(force_export, changed_start_end=changed_start_end)
-            if not self.inv_has_charge_enable_time and (self.inv_output_charge_control == "current"):
+            if (not self.inv_has_charge_enable_time or self.inv_clear_slot_on_disable) and (self.inv_output_charge_control == "current"):
                 if self.inv_charge_control_immediate:
                     self.enable_charge_discharge_with_time_current("discharge", True)
 
@@ -2873,7 +2873,7 @@ class Inverter:
                 self.rest_enableChargeSchedule(True)
             elif "scheduled_charge_enable" in self.base.args:
                 self.write_and_poll_switch("scheduled_charge_enable", self.base.get_arg("scheduled_charge_enable", indirect=False, index=self.id), True)
-                if not self.inv_has_charge_enable_time and (self.inv_output_charge_control == "current"):
+                if (not self.inv_has_charge_enable_time or self.inv_clear_slot_on_disable) and (self.inv_output_charge_control == "current"):
                     if self.inv_charge_control_immediate:
                         self.enable_charge_discharge_with_time_current("charge", True)
             else:
