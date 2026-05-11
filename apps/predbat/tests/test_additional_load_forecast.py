@@ -210,8 +210,8 @@ def test_additional_load_partial_duration_keeps_total_energy(my_predbat):
     return failed
 
 
-def test_additional_load_multiple_and_service_override(my_predbat):
-    """Test multiple loads add together and service override updates one named load."""
+def test_additional_load_multiple_and_api_override(my_predbat):
+    """Test multiple loads add together and API override updates one named load."""
     failed = 0
     configure_additional_load_test(my_predbat)
     my_predbat.args["house_load_additional_forecast"] = [
@@ -224,41 +224,12 @@ def test_additional_load_multiple_and_service_override(my_predbat):
     failed |= check_slot(load_adjust, 20 * 60 + 30, 0.75, "multiple loads overlap")
     failed |= check_slot(load_adjust, 21 * 60, 0.75, "multiple loads overlap")
 
-    service_data = {
-        "domain": "predbat",
-        "service": "update_load_forecast_delta",
-        "service_data": {"entity_id": "binary_sensor.predbat_load_forecast_delta_dishwasher", "start_time": "18:00", "duration": 1.0, "energy": 0.8},
-    }
-    run_async(my_predbat.trigger_callback(service_data))
+    my_predbat.api_select("load_forecast_delta_api", "dishwasher?start_time=18:00&duration=1.0&energy=0.8")
     load_adjust, _ = my_predbat.fetch_additional_load_forecast()
-    failed |= check_slot(load_adjust, 18 * 60, 0.4, "service override dishwasher")
-    failed |= check_slot(load_adjust, 18 * 60 + 30, 0.4, "service override dishwasher")
-    failed |= check_slot(load_adjust, 20 * 60, 0.0, "service override removed old dishwasher")
-    failed |= check_slot(load_adjust, 20 * 60 + 30, 0.25, "service override kept heating")
-    return failed
-
-
-def test_additional_load_sanitized_entity_name_updates_original(my_predbat):
-    """Test sanitized HA entity names resolve back to the original forecast name."""
-    failed = 0
-    configure_additional_load_test(my_predbat)
-    my_predbat.args["house_load_additional_forecast"] = [
-        {"name": "Dishwasher Eco", "start_time": "20:00", "duration": 2.0, "energy": 1.2},
-    ]
-    my_predbat.refresh_additional_load_forecast_api()
-
-    service_data = {
-        "domain": "predbat",
-        "service": "update_load_forecast_delta",
-        "service_data": {"entity_id": "binary_sensor.predbat_load_forecast_delta_dishwasher_eco", "start_time": "18:00", "duration": 1.0, "energy": 0.8},
-    }
-    run_async(my_predbat.trigger_callback(service_data))
-    failed |= check_slot(my_predbat.house_load_additional_forecast_adjust, 18 * 60, 0.4, "sanitized service updated original")
-    failed |= check_slot(my_predbat.house_load_additional_forecast_adjust, 20 * 60, 0.0, "sanitized service removed original slot")
-    if "Dishwasher Eco" not in my_predbat.house_load_additional_forecasts:
-        print("ERROR: Sanitized service should keep original forecast name, got {}".format(my_predbat.house_load_additional_forecasts))
-        failed = 1
-
+    failed |= check_slot(load_adjust, 18 * 60, 0.4, "api override dishwasher")
+    failed |= check_slot(load_adjust, 18 * 60 + 30, 0.4, "api override dishwasher")
+    failed |= check_slot(load_adjust, 20 * 60, 0.0, "api override removed old dishwasher")
+    failed |= check_slot(load_adjust, 20 * 60 + 30, 0.25, "api override kept heating")
     my_predbat.api_select("load_forecast_delta_api", "off")
     my_predbat.house_load_additional_forecast_overrides = {}
     return failed
@@ -969,8 +940,7 @@ def run_additional_load_forecast_tests(my_predbat):
     failed |= test_additional_load_dishwasher_total_energy(my_predbat)
     failed |= test_additional_load_dishwasher_total_energy_weighting(my_predbat)
     failed |= test_additional_load_partial_duration_keeps_total_energy(my_predbat)
-    failed |= test_additional_load_multiple_and_service_override(my_predbat)
-    failed |= test_additional_load_sanitized_entity_name_updates_original(my_predbat)
+    failed |= test_additional_load_multiple_and_api_override(my_predbat)
     failed |= test_additional_load_select_api_override(my_predbat)
     failed |= test_additional_load_select_api_weighting(my_predbat)
     failed |= test_additional_load_select_event_updates_adjustment(my_predbat)
