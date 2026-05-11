@@ -4180,8 +4180,19 @@ class Plan:
 
         ready_minutes = ready_time.hour * 60 + ready_time.minute
 
-        # Ready minutes wrap?
-        if ready_minutes < self.minutes_now:
+        # Optional ready-by date (multi-day plan window). When the user has selected
+        # a future date in select.predbat_car_charging_plan_date, anchor the deadline
+        # to that absolute date plus the time-of-day above. "Default", an empty
+        # value, or a date <= today fall through to the existing 24-hour wrap.
+        plan_date_str = self.car_charging_plan_date[car_n] if car_n < len(self.car_charging_plan_date) else "Default"
+        plan_date = self.parse_car_plan_date(plan_date_str)
+        today = self.midnight_utc.date()
+
+        if plan_date and plan_date > today:
+            days_offset = (plan_date - today).days
+            ready_minutes += days_offset * 24 * 60
+        elif ready_minutes < self.minutes_now:
+            # Ready minutes wrap?
             ready_minutes += 24 * 60
 
         # Car charging now override

@@ -69,10 +69,10 @@ def test_fetch_config_options(my_predbat):
     def mock_update_save_restore_list():
         pass
 
-    # Mock expose_config
+    # Mock expose_config (accept any kwargs the real implementation uses, e.g. force=True)
     exposed_config_calls = []
 
-    def mock_expose_config(key, value):
+    def mock_expose_config(key, value, *args, **kwargs):
         exposed_config_calls.append((key, value))
 
     # Apply mocks

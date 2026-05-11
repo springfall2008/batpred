@@ -1478,6 +1478,67 @@ class UserInterface:
                 time_txt.append(self.time_abs_str(minute))
         return time_overrides
 
+    CAR_PLAN_DATE_DEFAULT = "Default"
+    CAR_PLAN_DATE_FORMAT = "%a %d %b %Y"
+
+    def car_plan_date_options(self):
+        """
+        Refresh the car_charging_plan_date dropdown.
+
+        Builds the option list for ``select.predbat_car_charging_plan_date`` from
+        today out to the planning horizon (capped at the 96-hour engine ceiling),
+        mutates ``item["options"]`` and pushes the result to Home Assistant via
+        ``expose_config``. Mirrors the ``manual_times`` pattern.
+        """
+        item = self.config_index.get("car_charging_plan_date")
+        if item is None:
+            return
+
+        # Engine horizon ceiling: forecast_plan_hours is itself clamped to forecast_hours
+        # (see fetch.py self.forecast_plan_hours = max(min(get_arg("forecast_plan_hours"), forecast_hours), 8)),
+        # so we just read it back and cap at the 96-hour hard ceiling.
+        plan_hours = self.forecast_plan_hours if hasattr(self, "forecast_plan_hours") else 24
+        max_days_visible = max(1, min(int(plan_hours), 96) // 24)
+
+        today = self.midnight_utc.date()
+        options = [self.CAR_PLAN_DATE_DEFAULT]
+        for day_offset in range(max_days_visible + 1):
+            d = today + timedelta(days=day_offset)
+            options.append(d.strftime(self.CAR_PLAN_DATE_FORMAT))
+
+        # Auto-decay: if the saved selection is a date that has already passed,
+        # reset to "Default" so the dropdown reflects the user-facing promise that
+        # "when the selected date passes the entity reverts to Default" rather
+        # than carrying the stale option forward forever.
+        current = item.get("value", self.CAR_PLAN_DATE_DEFAULT)
+        parsed = self.parse_car_plan_date(current)
+        if parsed and parsed <= today:
+            current = self.CAR_PLAN_DATE_DEFAULT
+        elif current and current not in options:
+            # Future date held over from a previously-larger forecast horizon —
+            # keep it visible until the user changes it or the date itself decays.
+            options.append(current)
+
+        item["options"] = options
+        self.expose_config("car_charging_plan_date", current, force=True)
+
+    def parse_car_plan_date(self, value):
+        """
+        Parse a car_charging_plan_date option string into a ``datetime.date``.
+
+        Returns ``None`` for the "Default" sentinel, an empty string, or any
+        value that fails to parse. The plan engine treats ``None`` as "fall
+        through to the existing wrap-around behaviour".
+        """
+        if not value or value == self.CAR_PLAN_DATE_DEFAULT:
+            return None
+        try:
+            from datetime import datetime as _dt
+
+            return _dt.strptime(value, self.CAR_PLAN_DATE_FORMAT).date()
+        except (ValueError, TypeError):
+            return None
+
     async def update_event(self, event, data, kwargs):
         """
         Update event.
