@@ -765,10 +765,16 @@ class OctopusAPI(ComponentBase):
             return
 
         index_suffix = self.device_id_to_index_suffix(device_id)
+
+        # Get current completed dispatches from the device data
+        current_completed = intelligent_device.get("completed_dispatches", [])
+        if not current_completed or not isinstance(current_completed, list):
+            current_completed = []
+
+        # Merge old dispatches with current completed dispatches, avoiding duplicates based on start time
         entity_id = self.get_entity_name("binary_sensor", "intelligent_dispatch", index=index_suffix)
         old_dispatches = self.get_state_wrapper(entity_id, attribute="completed_dispatches", default=[])
         if old_dispatches and isinstance(old_dispatches, list):
-            current_completed = intelligent_device.get("completed_dispatches", [])
             for dispatch in old_dispatches:
                 if isinstance(dispatch, dict):
                     already_exists = False
@@ -780,19 +786,21 @@ class OctopusAPI(ComponentBase):
                     if not already_exists and dispatch.get("start", None) and dispatch.get("end", None) and dispatch.get("charge_in_kwh", None):
                         current_completed.append(dispatch)
 
-            # Remove any duplicates, give priority to those with a location set
-            unique_dispatches = {}
-            for dispatch in current_completed:
-                start = dispatch.get("start", None)
-                if start:
-                    key = start
-                    if key not in unique_dispatches or (dispatch.get("meta", {}).get("location") and not unique_dispatches[key].get("meta", {}).get("location")):
-                        unique_dispatches[key] = dispatch
-            current_completed = list(unique_dispatches.values())
-            current_completed = sorted([x for x in current_completed if x.get("start")], key=lambda x: parse_date_time(x.get("start")))
-            # Prune completed dispatches for results older than 5 days
-            current_completed = [x for x in current_completed if x.get("start") and parse_date_time(x.get("start")) > self.now_utc_exact - timedelta(days=5)]
-            intelligent_device["completed_dispatches"] = current_completed
+        # Remove any duplicates, give priority to those with a location set
+        unique_dispatches = {}
+        for dispatch in current_completed:
+            start = dispatch.get("start", None)
+            if start:
+                key = start
+                dispatch_location = dispatch.get("location") or dispatch.get("meta", {}).get("location")
+                existing_location = unique_dispatches[key].get("location") or unique_dispatches[key].get("meta", {}).get("location") if key in unique_dispatches else None
+                if key not in unique_dispatches or (dispatch_location and not existing_location):
+                    unique_dispatches[key] = dispatch
+        current_completed = list(unique_dispatches.values())
+        current_completed = sorted([x for x in current_completed if x.get("start")], key=lambda x: parse_date_time(x.get("start")))
+        # Prune completed dispatches for results older than 5 days
+        current_completed = [x for x in current_completed if x.get("start") and parse_date_time(x.get("start")) > self.now_utc_exact - timedelta(days=5)]
+        intelligent_device["completed_dispatches"] = current_completed
 
     def join_saving_session_event(self, event_code):
         """

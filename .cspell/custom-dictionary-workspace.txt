@@ -200,6 +200,7 @@ loadml
 loadmlpower
 loadspower
 localfolder
+locationless
 lockstep
 logdata
 loglines
