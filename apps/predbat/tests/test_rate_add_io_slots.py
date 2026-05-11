@@ -291,6 +291,45 @@ def run_rate_add_io_slots_tests(my_predbat):
 
     failed |= run_rate_add_io_slots_test("test15_midday_to_midday_boundary", my_predbat, slots, True, 12, expected_rates)
 
+    # Test 16: Duplicate slot detection — completed (location=AT_HOME) and planned (no location)
+    # for the same time range.  The planned slot arrives second in the list; because the
+    # completed slot already claimed every minute via saved_slots, the planned slot should
+    # be a no-op: rates unchanged, cap counter not incremented a second time.
+    print("\n**** Test 16: Completed slot overrides duplicate planned slot ****")
+    slot_start_16 = midnight_utc + timedelta(hours=14, minutes=30)  # 14:30
+    slot_end_16 = slot_start_16 + timedelta(minutes=30)  # 15:00
+    slots = [
+        # Completed dispatch (location set) — arrives first, is the authoritative record
+        {"start": slot_start_16.strftime(TIME_FORMAT), "end": slot_end_16.strftime(TIME_FORMAT), "charge_in_kwh": 2.49, "source": "unknown", "location": "AT_HOME"},
+        # Planned dispatch (no location) for the same block — should be fully suppressed
+        {"start": slot_start_16.strftime(TIME_FORMAT), "end": slot_end_16.strftime(TIME_FORMAT), "charge_in_kwh": 3.72, "source": "SMART", "location": ""},
+    ]
+    expected_rates_16 = {}
+    for minute in range(870, 900):  # 14:30–15:00 should be cheap
+        expected_rates_16[minute] = 4.0
+    failed |= run_rate_add_io_slots_test("test16_completed_overrides_planned", my_predbat, slots, True, 12, expected_rates_16)
+
+    # Test 17: Duplicate slot does not consume a second slot from the cap budget.
+    # Cap is set to 2.  First slot (14:30–15:00) comes as completed+planned duplicate.
+    # Second distinct slot (15:00–15:30) is purely planned.
+    # Without dedup, the duplicate would spend 2 of the 2 cap slots and the second
+    # distinct slot would be priced at rate_max.  With dedup, only 1 cap slot is used
+    # for 14:30–15:00, leaving room for 15:00–15:30 to also be cheap.
+    print("\n**** Test 17: Duplicate slot does not consume extra cap budget ****")
+    slot_start_17a = midnight_utc + timedelta(hours=14, minutes=30)
+    slot_end_17a = slot_start_17a + timedelta(minutes=30)
+    slot_start_17b = slot_end_17a
+    slot_end_17b = slot_start_17b + timedelta(minutes=30)
+    slots_17 = [
+        {"start": slot_start_17a.strftime(TIME_FORMAT), "end": slot_end_17a.strftime(TIME_FORMAT), "charge_in_kwh": 2.49, "source": "unknown", "location": "AT_HOME"},
+        {"start": slot_start_17a.strftime(TIME_FORMAT), "end": slot_end_17a.strftime(TIME_FORMAT), "charge_in_kwh": 3.72, "source": "SMART", "location": ""},
+        {"start": slot_start_17b.strftime(TIME_FORMAT), "end": slot_end_17b.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "SMART", "location": ""},
+    ]
+    expected_rates_17 = {}
+    for minute in range(870, 930):  # Both 14:30–15:00 and 15:00–15:30 should be cheap
+        expected_rates_17[minute] = 4.0
+    failed |= run_rate_add_io_slots_test("test17_dup_does_not_waste_cap", my_predbat, slots_17, True, 2, expected_rates_17)
+
     # Restore original forecast_minutes
     my_predbat.forecast_minutes = original_forecast_minutes
 

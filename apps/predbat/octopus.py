@@ -765,10 +765,16 @@ class OctopusAPI(ComponentBase):
             return
 
         index_suffix = self.device_id_to_index_suffix(device_id)
+
+        # Get current completed dispatches from the device data
+        current_completed = intelligent_device.get("completed_dispatches", [])
+        if not current_completed or not isinstance(current_completed, list):
+            current_completed = []
+
+        # Merge old dispatches with current completed dispatches, avoiding duplicates based on start time
         entity_id = self.get_entity_name("binary_sensor", "intelligent_dispatch", index=index_suffix)
         old_dispatches = self.get_state_wrapper(entity_id, attribute="completed_dispatches", default=[])
         if old_dispatches and isinstance(old_dispatches, list):
-            current_completed = intelligent_device.get("completed_dispatches", [])
             for dispatch in old_dispatches:
                 if isinstance(dispatch, dict):
                     already_exists = False
@@ -779,10 +785,22 @@ class OctopusAPI(ComponentBase):
                             already_exists = True
                     if not already_exists and dispatch.get("start", None) and dispatch.get("end", None) and dispatch.get("charge_in_kwh", None):
                         current_completed.append(dispatch)
-            current_completed = sorted([x for x in current_completed if x.get("start")], key=lambda x: parse_date_time(x.get("start")))
-            # Prune completed dispatches for results older than 5 days
-            current_completed = [x for x in current_completed if x.get("start") and parse_date_time(x.get("start")) > self.now_utc_exact - timedelta(days=5)]
-            intelligent_device["completed_dispatches"] = current_completed
+
+        # Remove any duplicates, give priority to those with a location set
+        unique_dispatches = {}
+        for dispatch in current_completed:
+            start = dispatch.get("start", None)
+            if start:
+                key = start
+                dispatch_location = dispatch.get("location") or dispatch.get("meta", {}).get("location")
+                existing_location = unique_dispatches[key].get("location") or unique_dispatches[key].get("meta", {}).get("location") if key in unique_dispatches else None
+                if key not in unique_dispatches or (dispatch_location and not existing_location):
+                    unique_dispatches[key] = dispatch
+        current_completed = list(unique_dispatches.values())
+        current_completed = sorted([x for x in current_completed if x.get("start")], key=lambda x: parse_date_time(x.get("start")))
+        # Prune completed dispatches for results older than 5 days
+        current_completed = [x for x in current_completed if x.get("start") and parse_date_time(x.get("start")) > self.now_utc_exact - timedelta(days=5)]
+        intelligent_device["completed_dispatches"] = current_completed
 
     def join_saving_session_event(self, event_code):
         """
@@ -2531,6 +2549,7 @@ class Octopus:
         # Track which 30-min slot starts were actually added (for filling in the rest of the slot)
         slots_added_set = set()
         plan_interval_minutes = self.plan_interval_minutes
+        saved_slots = set()  # For logging purposes, track which slots we actually applied as low rate
 
         if octopus_slots:
             # Add in IO slots
@@ -2547,40 +2566,48 @@ class Octopus:
                     start_minutes = max(start_minutes, -96 * 60)  # Allow for previous 2 days
                     end_minutes = min(end_minutes, self.forecast_minutes)
 
-                    if octopus_slot_low_rate:
-                        assumed_price = self.rate_min_base
-                        for minute in range(start_minutes, end_minutes):
-                            # Calculate which day this minute belongs to (day boundary at midday)
-                            # Period 0 = noon today (720) to 11:59 tomorrow (2159), etc.
-                            # Python's floor division handles negative numbers correctly
-                            day_offset = (minute - 720) // (24 * 60)
+                    for minute in range(start_minutes, end_minutes):
+                        if octopus_slot_low_rate:
+                            assumed_price = self.rate_min_base
+                        else:
+                            assumed_price = self.rate_import.get(start_minutes, self.rate_min)
 
-                            # Initialise counter for this day if needed
-                            if day_offset not in slots_per_day:
-                                slots_per_day[day_offset] = 0
+                        if minute in saved_slots:
+                            continue  # Already applied a low rate slot to this minute, skip
+                        else:
+                            saved_slots.add(minute)
 
-                            # Calculate the 30-min slot start for this minute
-                            slot_start = (minute // 30) * 30
+                        # Calculate which day this minute belongs to (day boundary at midday)
+                        # Period 0 = noon today (720) to 11:59 tomorrow (2159), etc.
+                        # Python's floor division handles negative numbers correctly
+                        day_offset = (minute - 720) // (24 * 60)
 
-                            # At the start of each 30-min slot, decide if we can add it
-                            if minute % 30 == 0:
-                                if slots_per_day[day_offset] < octopus_slot_max:
-                                    slots_per_day[day_offset] += 1
-                                    slots_added_set.add(slot_start)
-                                    rates[minute] = assumed_price
+                        # Initialise counter for this day if needed
+                        if day_offset not in slots_per_day:
+                            slots_per_day[day_offset] = 0
 
+                        # Calculate the 30-min slot start for this minute
+                        slot_start = (minute // 30) * 30
+
+                        # At the start of each 30-min slot, decide if we can add it
+                        if minute % 30 == 0:
+                            if slots_per_day[day_offset] < octopus_slot_max:
+                                slots_per_day[day_offset] += 1
+                                slots_added_set.add(slot_start)
+                                rates[minute] = assumed_price
                             else:
-                                # For minutes within a 30-min slot, only apply if the slot was added
-                                if slot_start in slots_added_set:
-                                    rates[minute] = assumed_price
-                    else:
-                        assumed_price = self.rate_import.get(start_minutes, self.rate_min)
+                                assumed_price = self.rate_max_base
+                        else:
+                            # For minutes within a 30-min slot, only apply if the slot was added
+                            if slot_start in slots_added_set:
+                                rates[minute] = assumed_price
 
-                    self.log(
-                        "Octopus: Intelligent slot at {}-{}, assumed price {}, amount {}, kWh location {}, source {}, octopus_slot_low_rate {}".format(
-                            self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), dp2(assumed_price), dp2(kwh), location, source, octopus_slot_low_rate
-                        )
-                    )
+                        if minute % 30 == 0 and start_minutes > -24 * 60:
+                            self.log(
+                                "Octopus: Intelligent slot at {}-{}, assumed price {}, amount {}, kWh location {}, source {}, octopus_slot_low_rate {}".format(
+                                    self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), dp2(assumed_price), dp2(kwh), location, source, octopus_slot_low_rate
+                                )
+                            )
 
         # Log daily slot counts for debugging
         for day_offset in sorted(slots_per_day.keys()):
