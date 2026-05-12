@@ -421,7 +421,7 @@ class WebInterface(ComponentBase):
             """.format(
                 dp0(pv_power)
             )
-        if battery_charging:
+        if battery_discharging:
             # Calculate animation speed based on power flow - faster for higher power
             battery_speed = max(0.5, min(3.0, 2.0 - (abs(battery_power) / 3000)))
 
