@@ -83,6 +83,9 @@ derating
 devcontainer
 devcontainers
 dexport
+Deye
+deye
+DEYE
 digestmod
 dimport
 dischargeenergytotal
@@ -96,6 +99,7 @@ dstart
 dwindow
 Eddi
 elif
+EMEA
 emszzzz
 enctype
 endfor
