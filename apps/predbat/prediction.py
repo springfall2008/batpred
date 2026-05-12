@@ -92,7 +92,7 @@ class Prediction:
     Class to hold prediction input and output data and the run function
     """
 
-    def __init__(self, base=None, pv_forecast_minute_step=None, pv_forecast_minute10_step=None, load_minutes_step=None, load_minutes_step10=None):
+    def __init__(self, base=None, pv_forecast_minute_step=None, pv_forecast_minute10_step=None, load_minutes_step=None, load_minutes_step10=None, soc_kw=None, soc_max=None):
         global PRED_GLOBAL
         if base:
             self.minutes_now = base.minutes_now
@@ -100,8 +100,8 @@ class Prediction:
             self.time_abs_str = base.time_abs_str
             self.forecast_minutes = base.forecast_minutes
             self.midnight_utc = base.midnight_utc
-            self.soc_kw = base.soc_kw
-            self.soc_max = base.soc_max
+            self.soc_kw = soc_kw if soc_kw is not None else base.soc_kw
+            self.soc_max = soc_max if soc_max is not None else base.soc_max
             self.export_today_now = base.export_today_now
             self.import_today_now = base.import_today_now
             self.load_minutes_now = base.load_minutes_now

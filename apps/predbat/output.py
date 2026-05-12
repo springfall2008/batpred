@@ -2940,7 +2940,6 @@ class Output:
         self.midnight_utc = self.midnight_utc - timedelta(days=1)
         self.forecast_minutes = end_record
         self.pv_today_now = 0
-        self.soc_kw = soc_yesterday
         self.car_charging_hold = False
         self.iboost_energy_subtract = False
         self.load_minutes_now = 0
@@ -2960,7 +2959,7 @@ class Output:
         self.yesterday_reconstruct_car_slots(end_record, yesterday_load_step)
 
         # Simulate yesterday
-        self.prediction = Prediction(self, yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step)
+        self.prediction = Prediction(self, yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, soc_kw=soc_yesterday)
         (
             metric_baseline,
             import_kwh_battery,
@@ -3170,10 +3169,7 @@ class Output:
         )
 
         # Simulate no PV or battery
-        self.soc_kw = 0
-        self.soc_max = 0
-
-        self.prediction = Prediction(self, yesterday_pv_step_zero, yesterday_pv_step_zero, yesterday_load_step, yesterday_load_step)
+        self.prediction = Prediction(self, yesterday_pv_step_zero, yesterday_pv_step_zero, yesterday_load_step, yesterday_load_step, soc_kw=0, soc_max=0)
         metric_no_pvbat, import_kwh_battery, import_kwh_house, export_kwh, soc_min, final_soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction([], [], [], [], False, end_record=end_record, save="yesterday")
 
         # Add back in battery value
