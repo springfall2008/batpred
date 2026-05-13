@@ -4139,7 +4139,7 @@ class Plan:
                         # Scale down the number of minutes if the value exceeds the max
                         if kwh > iboost_left:
                             percent = iboost_left / kwh
-                            length = min(round(((length * percent) / 5) + 0.5, 0) * 5, end - start)
+                            length = int(min(round(((length * percent) / 5) + 0.5, 0) * 5, end - start))
                             end = start + length
                             hours = length / 60
                             kwh = min(iboost_power * hours, iboost_left)
@@ -4239,7 +4239,7 @@ class Plan:
             # Clamp length to required amount (shorten the window)
             if kwh_add > kwh_left:
                 percent = kwh_left / kwh_add
-                length = min(round(((length * percent) / 5) + 0.5, 0) * 5, end - start)
+                length = int(min(round(((length * percent) / 5) + 0.5, 0) * 5, end - start))
                 end = start + length
                 hours = length / 60
                 kwh = self.car_charging_rate[car_n] * hours
