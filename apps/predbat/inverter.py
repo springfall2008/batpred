@@ -561,39 +561,38 @@ class Inverter:
             self.log("Note: Battery size was not set for inverter {}, enabling battery_scaling_auto".format(self.id))
             self.base.battery_scaling_auto = True
 
-        if self.base.battery_scaling_auto:
-            # Run find_battery_size at most once per calendar day, always update the history sensor
-            existing_history = self.base.get_state_wrapper(soc_max_sensor_name, attribute="history", default={})
-            if not isinstance(existing_history, dict):
-                existing_history = {}
-            today_key = str(self.base.now_utc.date())
+        # Run find_battery_size at most once per calendar day, always update the history sensor
+        existing_history = self.base.get_state_wrapper(soc_max_sensor_name, attribute="history", default={})
+        if not isinstance(existing_history, dict):
+            existing_history = {}
+        today_key = str(self.base.now_utc.date())
 
-            # Already calculated today - use stored mean from sensor state
-            trimmed_mean_state = self.base.get_state_wrapper(soc_max_sensor_name)
-            try:
-                trimmed_mean = float(trimmed_mean_state) if trimmed_mean_state is not None else None
-            except (ValueError, TypeError):
-                trimmed_mean = None
+        # Already calculated today - use stored mean from sensor state
+        trimmed_mean_state = self.base.get_state_wrapper(soc_max_sensor_name)
+        try:
+            trimmed_mean = float(trimmed_mean_state) if trimmed_mean_state is not None else None
+        except (ValueError, TypeError):
+            trimmed_mean = None
 
-            if today_key not in existing_history:
-                # Only calculate once per day to save compute resources
-                found_size = self.find_battery_size()
-                if found_size and found_size > 0:
-                    trimmed_mean = self.update_soc_max_calculated_sensor(found_size, self.nominal_capacity)
+        if today_key not in existing_history:
+            # Only calculate once per day to save compute resources
+            found_size = self.find_battery_size()
+            if found_size and found_size > 0:
+                trimmed_mean = self.update_soc_max_calculated_sensor(found_size, self.nominal_capacity)
 
-            if trimmed_mean and trimmed_mean > 0:
-                if self.nominal_capacity > 0:
-                    # Clamp scaling to [0.8, 1.0] relative to nominal
-                    new_scaling = max(0.8, min(1.0, trimmed_mean / self.nominal_capacity))
-                    self.soc_max = dp3(self.nominal_capacity * new_scaling)
-                    self.log("Info: inverter {} battery_scaling_auto set scaling {:.3f} (mean {:.2f} kWh, nominal {:.2f} kWh) for ".format(self.id, new_scaling, trimmed_mean, self.nominal_capacity))
-                else:
-                    # No nominal configured - use trimmed mean directly without clamping
-                    self.soc_max = dp3(trimmed_mean)
-                    self.nominal_capacity = self.soc_max
-                    self.base.set_arg("soc_max", self.soc_max, index=self.id)
-                    self.base.set_arg("soc_max_nominal", 0, index=self.id)
-                    self.log("Info: Inverter {} battery_scaling_auto using measured mean {:.2f} kWh (no nominal configured)".format(self.id, trimmed_mean))
+        if self.base.battery_scaling_auto and trimmed_mean and trimmed_mean > 0:
+            if self.nominal_capacity > 0:
+                # Clamp scaling to [0.8, 1.0] relative to nominal
+                new_scaling = max(0.8, min(1.0, trimmed_mean / self.nominal_capacity))
+                self.soc_max = dp3(self.nominal_capacity * new_scaling)
+                self.log("Info: inverter {} battery_scaling_auto set scaling {:.3f} (mean {:.2f} kWh, nominal {:.2f} kWh) for ".format(self.id, new_scaling, trimmed_mean, self.nominal_capacity))
+            else:
+                # No nominal configured - use trimmed mean directly without clamping
+                self.soc_max = dp3(trimmed_mean)
+                self.nominal_capacity = self.soc_max
+                self.base.set_arg("soc_max", self.soc_max, index=self.id)
+                self.base.set_arg("soc_max_nominal", 0, index=self.id)
+                self.log("Info: Inverter {} battery_scaling_auto using measured mean {:.2f} kWh (no nominal configured)".format(self.id, trimmed_mean))
 
         # Final fallback if soc_max is still not determined
         if not self.soc_max or self.soc_max <= 0:
