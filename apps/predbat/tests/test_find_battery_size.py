@@ -94,6 +94,54 @@ def create_test_history_data(my_predbat, num_days=2, battery_size_kwh=10.0):
     my_predbat.ha_interface.get_history = mock_get_history
 
 
+def create_test_history_data_soc_kw(my_predbat, num_days=2, battery_size_kwh=10.0):
+    """
+    Like create_test_history_data but exposes soc_kw (kWh absolute) instead of soc_percent.
+    The find_battery_size code must detect the maximum kWh value in the history and derive
+    percentages from it.
+    """
+    ha = my_predbat.ha_interface
+    base_time = my_predbat.midnight_utc - timedelta(days=num_days)
+
+    history_dict = {"sensor.soc_kw": [], "sensor.battery_power": []}
+    ha.dummy_items["sensor.soc_kw"] = battery_size_kwh
+    ha.dummy_items["sensor.battery_power"] = -2600
+
+    total_minutes = num_days * 24 * 60
+    max_power_w = 2600
+    charge_power_w = max_power_w * 0.94  # above 90% threshold
+
+    current_soc_kwh = battery_size_kwh * 0.20  # Start at 20%
+
+    for minutes in range(0, total_minutes, 5):
+        timestamp = base_time + timedelta(minutes=minutes)
+        timestamp_str = timestamp.strftime("%Y-%m-%dT%H:%M:%S%z")
+        hour = timestamp.hour
+
+        if 2 <= hour < 4:
+            battery_power = -charge_power_w
+            energy_added_kwh = charge_power_w * 5 / 60.0 / 1000.0
+            current_soc_kwh = min(battery_size_kwh, current_soc_kwh + energy_added_kwh)
+        elif 18 <= hour < 20:
+            battery_power = -charge_power_w
+            energy_added_kwh = charge_power_w * 5 / 60.0 / 1000.0
+            current_soc_kwh = min(battery_size_kwh, current_soc_kwh + energy_added_kwh)
+        else:
+            battery_power = 0
+            if hour == 1 or hour == 17:
+                current_soc_kwh = battery_size_kwh * 0.20
+
+        history_dict["sensor.soc_kw"].append({"state": str(round(current_soc_kwh, 3)), "last_updated": timestamp_str, "attributes": {"unit_of_measurement": "kWh"}})
+        history_dict["sensor.battery_power"].append({"state": round(battery_power, 1), "last_updated": timestamp_str, "attributes": {"unit_of_measurement": "W"}})
+
+    def mock_get_history(entity_id, now=None, days=30):
+        if entity_id in history_dict:
+            return [history_dict[entity_id]]
+        return None
+
+    my_predbat.ha_interface.get_history = mock_get_history
+
+
 def remove_test_history_data(my_predbat):
     def mock_get_history(entity_id, now=None, days=30):
         return None
@@ -150,6 +198,60 @@ def test_find_battery_size_basic(my_predbat):
         traceback.print_exc()
         failed = True
 
+    return failed
+
+
+def test_find_battery_size_soc_kw(my_predbat):
+    """
+    Test find_battery_size when soc_kw (absolute kWh) is provided instead of soc_percent.
+
+    The code must determine soc_max from the maximum kWh value in the history and convert
+    to percentages internally.  The resulting estimate should still be within tolerance of
+    the true battery size.
+    """
+    print("*** Running test: find_battery_size_soc_kw ***")
+    failed = False
+
+    expected_battery_size = 10.0  # kWh
+    inv = Inverter(my_predbat, 0)
+    inv.battery_rate_max_charge = 2600 / 60000
+    inv.battery_rate_max_discharge = 2600 / 60000
+    inv.soc_max = expected_battery_size
+    inv.battery_scaling = 1.0
+
+    # Configure soc_kw instead of soc_percent
+    my_predbat.args["soc_kw"] = ["sensor.soc_kw"]
+    my_predbat.args.pop("soc_percent", None)
+    my_predbat.args["battery_power"] = ["sensor.battery_power"]
+    my_predbat.args["battery_power_invert"] = [False]
+    my_predbat.debug_enable = True
+
+    create_test_history_data_soc_kw(my_predbat, num_days=2, battery_size_kwh=expected_battery_size)
+
+    try:
+        estimated_size = inv.find_battery_size()
+        if estimated_size:
+            print("Estimated battery size (soc_kw path): {} kWh (expected: {} kWh)".format(estimated_size, expected_battery_size))
+            tolerance = 0.30
+            lower_bound = expected_battery_size * (1 - tolerance)
+            upper_bound = expected_battery_size * (1 + tolerance)
+            if not (lower_bound <= estimated_size <= upper_bound):
+                print("ERROR: Estimated battery size {} kWh is outside acceptable range [{}, {}] kWh".format(estimated_size, lower_bound, upper_bound))
+                failed = True
+            else:
+                print("SUCCESS: soc_kw path estimated battery size within 30% tolerance")
+        else:
+            print("ERROR: No battery size estimate returned from soc_kw path")
+            failed = True
+    except Exception as e:
+        print("ERROR: find_battery_size raised exception: {}".format(e))
+        import traceback
+
+        traceback.print_exc()
+        failed = True
+
+    # Restore soc_percent for subsequent tests
+    setup_predbat(my_predbat)
     return failed
 
 
@@ -350,7 +452,7 @@ def test_battery_scaling_auto_basic(my_predbat):
     my_predbat.ha_interface.dummy_items[sensor_name] = {"state": "9.5", "history": existing_history}
 
     # Mock find_battery_size to return a known value for today
-    inv.find_battery_size = lambda: 9.4
+    inv.find_battery_size = lambda _nc=0: 9.4
 
     try:
         inv.battery_size_tracking()
@@ -424,7 +526,7 @@ def test_battery_scaling_auto_clamping(my_predbat):
     # Test lower clamp: find_battery_size returns 7.0, ratio 0.7 → clamped to 0.8 → soc_max=8.0
     inv = _make_inv_for_scaling(my_predbat, nominal)
     my_predbat.ha_interface.dummy_items.pop(sensor_name, None)
-    inv.find_battery_size = lambda: 7.0
+    inv.find_battery_size = lambda _nc=0: 7.0
     inv.battery_size_tracking()
     expected_lower = round(nominal * 0.8, 3)
     if abs(inv.soc_max - expected_lower) > 0.001:
@@ -436,7 +538,7 @@ def test_battery_scaling_auto_clamping(my_predbat):
     # Test upper clamp: find_battery_size returns 11.0, ratio 1.1 → clamped to 1.0 → soc_max=10.0
     inv2 = _make_inv_for_scaling(my_predbat, nominal)
     my_predbat.ha_interface.dummy_items.pop(sensor_name, None)
-    inv2.find_battery_size = lambda: 11.0
+    inv2.find_battery_size = lambda _nc=0: 11.0
     inv2.battery_size_tracking()
     expected_upper = round(nominal * 1.0, 3)
     if abs(inv2.soc_max - expected_upper) > 0.001:
@@ -514,7 +616,7 @@ def test_battery_scaling_auto_no_result(my_predbat):
     my_predbat.ha_interface.dummy_items.pop(sensor_name, None)
 
     # Mock find_battery_size to return None
-    inv.find_battery_size = lambda: None
+    inv.find_battery_size = lambda _nc=0: None
     original_soc_max = inv.soc_max
 
     try:
@@ -597,7 +699,7 @@ def test_battery_size_tracking_auto_enable(my_predbat):
     my_predbat.ha_interface.dummy_items.pop(sensor_name, None)
 
     # No data so find_battery_size returns None
-    inv.find_battery_size = lambda: None
+    inv.find_battery_size = lambda _nc=0: None
 
     try:
         inv.battery_size_tracking()
@@ -636,7 +738,7 @@ def test_battery_size_tracking_no_nominal(my_predbat):
     sensor_name = "sensor.{}_soc_max_calculated".format(my_predbat.prefix)
     my_predbat.ha_interface.dummy_items.pop(sensor_name, None)
 
-    inv.find_battery_size = lambda: 9.2
+    inv.find_battery_size = lambda _nc=0: 9.2
 
     try:
         inv.battery_size_tracking()
@@ -680,6 +782,10 @@ def run_find_battery_size_tests(my_predbat):
     print("**** Running find_battery_size tests ****")
 
     failed |= test_find_battery_size_basic(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_find_battery_size_soc_kw(my_predbat)
     if failed:
         return failed
 
