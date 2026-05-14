@@ -868,6 +868,102 @@ def _test_reconstruct_car_slots(my_predbat, failed):
     return failed
 
 
+def _test_soc_not_mutated_and_override_passed(my_predbat, failed):
+    """Test: base soc_kw/soc_max are never mutated during calculate_yesterday,
+    and Prediction instances receive the correct overridden SOC values.
+
+    Verifies the race-condition fix (PR #3909):
+    - self.soc_kw stays at its original value throughout the call.
+    - The baseline Prediction receives soc_kw=soc_yesterday (from history).
+    - The no-battery/PV Prediction receives soc_kw=0, soc_max=0.
+    """
+    print("calculate_yesterday: Test – soc_kw not mutated, Prediction override values verified")
+    now_utc = _setup_base(my_predbat)
+
+    # Record the values that must NOT change during calculate_yesterday
+    original_soc_kw = my_predbat.soc_kw  # 5.0
+    original_soc_max = my_predbat.soc_max  # 10.0
+
+    # soc_yesterday is read from the HA entity prefix+".savings_total_soc".
+    # No entity is registered in the test dummy store, so get_state_wrapper
+    # returns the default 0.0 → soc_yesterday == 0.0.
+    expected_soc_yesterday = 0.0
+
+    # Capture (base_soc_kw, prediction_soc_kw, prediction_soc_max) for each
+    # run_prediction call so we can verify both properties simultaneously.
+    captured_soc = []  # list of (base_soc_kw, base_soc_max, pred_soc_kw, pred_soc_max)
+
+    def _mock_run_prediction(self_pb, charge_limit, charge_window, export_window, export_limits, pv10, end_record, save=None, step=5):
+        """Capture base and Prediction SOC values at the time of each call."""
+        pred = getattr(self_pb, "prediction", None)
+        captured_soc.append(
+            (
+                self_pb.soc_kw,
+                self_pb.soc_max,
+                pred.soc_kw if pred else None,
+                pred.soc_max if pred else None,
+            )
+        )
+        self_pb.predict_soc = {}
+        self_pb.predict_soc_best = {}
+        self_pb.predict_metric_best = {}
+        return (500, 1.0, 5.0, 0.5, 3.0, 5.0, 120, 2.0, 0, 0.0, 0)
+
+    captured_load, original_run_pred = _apply_mocks(my_predbat, now_utc)
+    # Override the run_prediction mock with one that also captures SOC state.
+    my_predbat.run_prediction = lambda *a, **kw: _mock_run_prediction(my_predbat, *a, **kw)
+
+    my_predbat.calculate_yesterday()
+
+    # --- Base object SOC must never have changed ---
+    if my_predbat.soc_kw != original_soc_kw:
+        print("ERROR: soc_kw was mutated (final value {}, expected {})".format(my_predbat.soc_kw, original_soc_kw))
+        failed = True
+    if my_predbat.soc_max != original_soc_max:
+        print("ERROR: soc_max was mutated (final value {}, expected {})".format(my_predbat.soc_max, original_soc_max))
+        failed = True
+
+    if len(captured_soc) < 2:
+        print("ERROR: run_prediction should have been called at least twice, got {} captures".format(len(captured_soc)))
+        failed = True
+    else:
+        # Every call: base soc_kw/soc_max must equal the original values.
+        for idx, (base_soc, base_max, pred_soc, pred_max) in enumerate(captured_soc):
+            if base_soc != original_soc_kw:
+                print("ERROR: call {}: base soc_kw was mutated to {} (expected {})".format(idx, base_soc, original_soc_kw))
+                failed = True
+            if base_max != original_soc_max:
+                print("ERROR: call {}: base soc_max was mutated to {} (expected {})".format(idx, base_max, original_soc_max))
+                failed = True
+
+        # First run_prediction call: baseline simulation uses soc_yesterday.
+        _, _, pred_soc_0, pred_max_0 = captured_soc[0]
+        if pred_soc_0 != expected_soc_yesterday:
+            print("ERROR: first Prediction soc_kw should be {} (soc_yesterday), got {}".format(expected_soc_yesterday, pred_soc_0))
+            failed = True
+        if pred_max_0 != original_soc_max:
+            print("ERROR: first Prediction soc_max should be {} (unchanged), got {}".format(original_soc_max, pred_max_0))
+            failed = True
+
+        # Find the no-battery/PV run: it is the call where the Prediction was
+        # constructed with soc_kw=0, soc_max=0.  It is the last distinct call
+        # (after the baseline runs).  Scan from the end backwards.
+        no_bat_call = None
+        for idx in range(len(captured_soc) - 1, -1, -1):
+            _, _, pred_soc, pred_max = captured_soc[idx]
+            if pred_soc == 0 and pred_max == 0:
+                no_bat_call = idx
+                break
+
+        if no_bat_call is None:
+            print("ERROR: no run_prediction call found where Prediction had soc_kw=0, soc_max=0 (no-battery sim)")
+            failed = True
+
+    _restore_methods(my_predbat, original_run_pred)
+    my_predbat.savings_last_updated = None
+    return failed
+
+
 # ---------------------------------------------------------------------------
 # Entry point registered in TEST_REGISTRY
 # ---------------------------------------------------------------------------
@@ -887,5 +983,6 @@ def test_calculate_yesterday(my_predbat):
     failed = _test_car_slot_from_energy_sensor(my_predbat, failed)
     failed = _test_early_exit_respects_day_rollover(my_predbat, failed)
     failed = _test_reconstruct_car_slots(my_predbat, failed)
+    failed = _test_soc_not_mutated_and_override_passed(my_predbat, failed)
 
     return failed

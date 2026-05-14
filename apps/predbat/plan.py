@@ -2351,7 +2351,7 @@ class Plan:
         self.log("Tweak optimisation finished metric {} cost {} metric_keep {} cycle {} carbon {} import {}".format(dp2(best_metric), dp2(best_cost), dp2(best_keep), dp2(best_cycle), dp0(best_carbon), dp2(best_import)))
         return best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import
 
-    def plan_write_debug(self, debug_mode, name, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, end_record, test=False):
+    def plan_write_debug(self, debug_mode, name, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, end_record, test=False, prediction=None):
         """
         Write debug plan to file
         """
@@ -2384,7 +2384,7 @@ class Plan:
             self.update_target_values()
 
             if name:
-                html_data, json_data = self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, end_record, publish=False)
+                html_data, json_data = self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, end_record, publish=False, prediction=prediction)
                 open(name + "_10.html", "w").write(html_data)
 
             best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export = self.run_prediction_metric(
@@ -2392,7 +2392,7 @@ class Plan:
             )
 
             self.update_target_values()
-            html_data, json_data = self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, end_record, publish=False)
+            html_data, json_data = self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, end_record, publish=False, prediction=prediction)
 
             if name:
                 open(name, "w").write(html_data)

@@ -944,7 +944,7 @@ class Output:
 
         return sentence
 
-    def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record, publish=True):
+    def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record, publish=True, prediction=None):
         """
         Publish the current plan in HTML format
         """
@@ -986,8 +986,8 @@ class Output:
         raw_plan["import_cost_threshold"] = import_cost_threshold
         raw_plan["export_cost_threshold"] = export_cost_threshold
         raw_plan["currency_symbols"] = self.currency_symbols
-        raw_plan["soc"] = self.soc_kw
-        raw_plan["soc_max"] = self.soc_max
+        raw_plan["soc"] = prediction.soc_kw if prediction is not None else self.soc_kw
+        raw_plan["soc_max"] = prediction.soc_max if prediction is not None else self.soc_max
         raw_plan["reserve"] = self.reserve
         raw_plan["time"] = self.midnight_utc.strftime(TIME_FORMAT)
         raw_plan["mode"] = mode
@@ -2940,7 +2940,6 @@ class Output:
         self.midnight_utc = self.midnight_utc - timedelta(days=1)
         self.forecast_minutes = end_record
         self.pv_today_now = 0
-        self.soc_kw = soc_yesterday
         self.car_charging_hold = False
         self.iboost_energy_subtract = False
         self.load_minutes_now = 0
@@ -2960,7 +2959,7 @@ class Output:
         self.yesterday_reconstruct_car_slots(end_record, yesterday_load_step)
 
         # Simulate yesterday
-        self.prediction = Prediction(self, yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step)
+        self.prediction = Prediction(self, yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, soc_kw=soc_yesterday)
         (
             metric_baseline,
             import_kwh_battery,
@@ -2990,7 +2989,7 @@ class Output:
         self.charge_window_best = charge_window_best
         self.export_limits_best = []
         self.export_window_best = []
-        plan_html_baseline, plan_json_baseline = self.plan_write_debug(True, None, yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record)
+        plan_html_baseline, plan_json_baseline = self.plan_write_debug(True, None, yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record, prediction=self.prediction)
 
         # Now try to show what really happened yesterday
         self.charge_limit_best = []
@@ -3069,7 +3068,7 @@ class Output:
 
         # Simulate yesterday with actual charge/export windows
         self.forecast_minutes = end_record + minutes_now
-        plan_html_yesterday, plan_json_yesterday = self.publish_html_plan(yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record + minutes_now, publish=False)
+        plan_html_yesterday, plan_json_yesterday = self.publish_html_plan(yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record + minutes_now, publish=False, prediction=self.prediction)
         self.forecast_minutes = end_record
 
         # Restore state
@@ -3170,10 +3169,7 @@ class Output:
         )
 
         # Simulate no PV or battery
-        self.soc_kw = 0
-        self.soc_max = 0
-
-        self.prediction = Prediction(self, yesterday_pv_step_zero, yesterday_pv_step_zero, yesterday_load_step, yesterday_load_step)
+        self.prediction = Prediction(self, yesterday_pv_step_zero, yesterday_pv_step_zero, yesterday_load_step, yesterday_load_step, soc_kw=0, soc_max=0)
         metric_no_pvbat, import_kwh_battery, import_kwh_house, export_kwh, soc_min, final_soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction([], [], [], [], False, end_record=end_record, save="yesterday")
 
         # Add back in battery value
