@@ -944,7 +944,7 @@ class Output:
 
         return sentence
 
-    def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record, publish=True):
+    def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record, publish=True, prediction=None):
         """
         Publish the current plan in HTML format
         """
@@ -986,8 +986,8 @@ class Output:
         raw_plan["import_cost_threshold"] = import_cost_threshold
         raw_plan["export_cost_threshold"] = export_cost_threshold
         raw_plan["currency_symbols"] = self.currency_symbols
-        raw_plan["soc"] = self.soc_kw
-        raw_plan["soc_max"] = self.soc_max
+        raw_plan["soc"] = prediction.soc_kw if prediction is not None else self.soc_kw
+        raw_plan["soc_max"] = prediction.soc_max if prediction is not None else self.soc_max
         raw_plan["reserve"] = self.reserve
         raw_plan["time"] = self.midnight_utc.strftime(TIME_FORMAT)
         raw_plan["mode"] = mode
@@ -2989,7 +2989,7 @@ class Output:
         self.charge_window_best = charge_window_best
         self.export_limits_best = []
         self.export_window_best = []
-        plan_html_baseline, plan_json_baseline = self.plan_write_debug(True, None, yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record)
+        plan_html_baseline, plan_json_baseline = self.plan_write_debug(True, None, yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record, prediction=self.prediction)
 
         # Now try to show what really happened yesterday
         self.charge_limit_best = []
@@ -3068,7 +3068,7 @@ class Output:
 
         # Simulate yesterday with actual charge/export windows
         self.forecast_minutes = end_record + minutes_now
-        plan_html_yesterday, plan_json_yesterday = self.publish_html_plan(yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record + minutes_now, publish=False)
+        plan_html_yesterday, plan_json_yesterday = self.publish_html_plan(yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record + minutes_now, publish=False, prediction=self.prediction)
         self.forecast_minutes = end_record
 
         # Restore state
