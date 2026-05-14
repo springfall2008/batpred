@@ -312,6 +312,352 @@ def test_find_battery_size_different_size(my_predbat):
     return failed
 
 
+def _make_inv_for_scaling(my_predbat, nominal_kwh=10.0):
+    """
+    Create an Inverter instance ready for battery_scaling_auto tests.
+    """
+    inv = Inverter(my_predbat, 0)
+    inv.battery_rate_max_charge = 2600 / 60000
+    inv.battery_rate_max_discharge = 2600 / 60000
+    inv.soc_max = nominal_kwh
+    inv.nominal_capacity = nominal_kwh
+    inv.battery_scaling = 1.0
+    # Store soc_max_nominal in args so battery_size_tracking reads the correct nominal
+    my_predbat.set_arg("soc_max_nominal", nominal_kwh, index=0)
+    setup_predbat(my_predbat)
+    return inv
+
+
+def test_battery_scaling_auto_basic(my_predbat):
+    """
+    Test that battery_size_tracking with battery_scaling_auto enabled computes a trimmed mean and sets soc_max.
+    """
+    print("*** Running test: battery_scaling_auto_basic ***")
+    failed = False
+    nominal = 10.0
+    inv = _make_inv_for_scaling(my_predbat, nominal)
+    my_predbat.battery_scaling_auto = True
+
+    # Pre-populate 3 days of history so the sensor has existing data (not today)
+    from datetime import date, timedelta as td
+
+    sensor_name = "sensor.{}_soc_max_calculated".format(my_predbat.prefix)
+    day0 = str(date.today() - td(days=3))
+    day1 = str(date.today() - td(days=2))
+    day2 = str(date.today() - td(days=1))
+    # Values: 9.0, 9.5, 10.0; today adds 9.4 → trimmed mean of [9.0,9.4,9.5,10.0] drops extremes → (9.4+9.5)/2 = 9.45
+    existing_history = {day0: 9.0, day1: 9.5, day2: 10.0}
+    my_predbat.ha_interface.dummy_items[sensor_name] = {"state": "9.5", "history": existing_history}
+
+    # Mock find_battery_size to return a known value for today
+    inv.find_battery_size = lambda: 9.4
+
+    try:
+        inv.battery_size_tracking()
+        expected_mean = (9.4 + 9.5) / 2  # trimmed: drop 9.0 and 10.0
+        # scaling = max(0.8, min(1.0, 9.45/10.0)) = 0.945; soc_max = dp3(10.0 * 0.945) = 9.45
+        expected_soc_max = round(nominal * max(0.8, min(1.0, expected_mean / nominal)), 3)
+        if abs(inv.soc_max - expected_soc_max) > 0.01:
+            print("ERROR: soc_max {} does not match expected {:.3f}".format(inv.soc_max, expected_soc_max))
+            failed = True
+        # Check today's key was added to the sensor history
+        sensor_state = my_predbat.ha_interface.dummy_items.get(sensor_name, {})
+        history_attr = sensor_state.get("history", {}) if isinstance(sensor_state, dict) else {}
+        if str(date.today()) not in history_attr:
+            print("ERROR: today's date not in history attribute")
+            failed = True
+        if not failed:
+            print("SUCCESS: trimmed mean {:.2f} kWh stored correctly".format(expected_mean))
+    except Exception as e:
+        print("ERROR: test_battery_scaling_auto_basic raised exception: {}".format(e))
+        import traceback
+
+        traceback.print_exc()
+        failed = True
+
+    my_predbat.battery_scaling_auto = False
+    return failed
+
+
+def test_battery_scaling_auto_single_sample(my_predbat):
+    """
+    Test that with only 1 sample the plain average (equal to the single value) is used.
+    """
+    print("*** Running test: battery_scaling_auto_single_sample ***")
+    failed = False
+    nominal = 10.0
+    inv = _make_inv_for_scaling(my_predbat, nominal)
+    my_predbat.battery_scaling_auto = True
+
+    sensor_name = "sensor.{}_soc_max_calculated".format(my_predbat.prefix)
+    # Clear any prior state
+    my_predbat.ha_interface.dummy_items.pop(sensor_name, None)
+
+    try:
+        trimmed_mean = inv.update_soc_max_calculated_sensor(8.5)
+        if abs(trimmed_mean - 8.5) > 0.01:
+            print("ERROR: single-sample mean should be 8.5, got {:.3f}".format(trimmed_mean))
+            failed = True
+        else:
+            print("SUCCESS: single-sample mean {:.3f} kWh correct".format(trimmed_mean))
+    except Exception as e:
+        print("ERROR: test_battery_scaling_auto_single_sample raised exception: {}".format(e))
+        import traceback
+
+        traceback.print_exc()
+        failed = True
+
+    my_predbat.battery_scaling_auto = False
+    return failed
+
+
+def test_battery_scaling_auto_clamping(my_predbat):
+    """
+    Test that battery_size_tracking clamps soc_max to [0.8, 1.0]*nominal when nominal is set in sensor.
+    """
+    print("*** Running test: battery_scaling_auto_clamping ***")
+    failed = False
+    nominal = 10.0
+    my_predbat.battery_scaling_auto = True
+    sensor_name = "sensor.{}_soc_max_calculated".format(my_predbat.prefix)
+
+    # Test lower clamp: find_battery_size returns 7.0, ratio 0.7 → clamped to 0.8 → soc_max=8.0
+    inv = _make_inv_for_scaling(my_predbat, nominal)
+    my_predbat.ha_interface.dummy_items.pop(sensor_name, None)
+    inv.find_battery_size = lambda: 7.0
+    inv.battery_size_tracking()
+    expected_lower = round(nominal * 0.8, 3)
+    if abs(inv.soc_max - expected_lower) > 0.001:
+        print("ERROR: lower clamp failed, expected {:.3f} got {:.3f}".format(expected_lower, inv.soc_max))
+        failed = True
+    else:
+        print("SUCCESS: lower clamp to 0.8 correct")
+
+    # Test upper clamp: find_battery_size returns 11.0, ratio 1.1 → clamped to 1.0 → soc_max=10.0
+    inv2 = _make_inv_for_scaling(my_predbat, nominal)
+    my_predbat.ha_interface.dummy_items.pop(sensor_name, None)
+    inv2.find_battery_size = lambda: 11.0
+    inv2.battery_size_tracking()
+    expected_upper = round(nominal * 1.0, 3)
+    if abs(inv2.soc_max - expected_upper) > 0.001:
+        print("ERROR: upper clamp failed, expected {:.3f} got {:.3f}".format(expected_upper, inv2.soc_max))
+        failed = True
+    else:
+        print("SUCCESS: upper clamp to 1.0 correct")
+
+    my_predbat.battery_scaling_auto = False
+    return failed
+
+
+def test_battery_scaling_auto_skip_today(my_predbat):
+    """
+    Test that battery_size_tracking does not call find_battery_size when today is already in the sensor history.
+    """
+    print("*** Running test: battery_scaling_auto_skip_today ***")
+    failed = False
+    nominal = 10.0
+    inv = _make_inv_for_scaling(my_predbat, nominal)
+    my_predbat.battery_scaling_auto = True
+
+    from datetime import date
+
+    sensor_name = "sensor.{}_soc_max_calculated".format(my_predbat.prefix)
+    today_key = str(date.today())
+
+    # Pre-populate with today already present, stored mean=9.0, nominal stored in sensor
+    my_predbat.ha_interface.dummy_items[sensor_name] = {"state": "9.0", "history": {today_key: 9.0}, "nominal_capacity": nominal}
+
+    # Track whether find_battery_size was called - it must NOT be
+    calls = [0]
+
+    def mock_find_should_not_be_called():
+        calls[0] += 1
+        return 999.0
+
+    inv.find_battery_size = mock_find_should_not_be_called
+
+    try:
+        inv.battery_size_tracking()
+        if calls[0] > 0:
+            print("ERROR: find_battery_size was called {} time(s) but should have been skipped".format(calls[0]))
+            failed = True
+        # stored mean=9.0, nominal=10.0 → scaling=0.9 → soc_max=9.0
+        expected_soc_max = round(nominal * max(0.8, min(1.0, 9.0 / nominal)), 3)
+        if abs(inv.soc_max - expected_soc_max) > 0.001:
+            print("ERROR: soc_max {} does not match expected {:.3f}".format(inv.soc_max, expected_soc_max))
+            failed = True
+        if not failed:
+            print("SUCCESS: find_battery_size correctly skipped for today, used stored mean 9.00")
+    except Exception as e:
+        print("ERROR: test_battery_scaling_auto_skip_today raised exception: {}".format(e))
+        import traceback
+
+        traceback.print_exc()
+        failed = True
+
+    my_predbat.battery_scaling_auto = False
+    return failed
+
+
+def test_battery_scaling_auto_no_result(my_predbat):
+    """
+    Test that when find_battery_size returns None and there is no prior sensor state, soc_max is unchanged.
+    """
+    print("*** Running test: battery_scaling_auto_no_result ***")
+    failed = False
+    nominal = 10.0
+    inv = _make_inv_for_scaling(my_predbat, nominal)
+    inv.battery_scaling = 1.0
+    my_predbat.battery_scaling_auto = True
+
+    sensor_name = "sensor.{}_soc_max_calculated".format(my_predbat.prefix)
+    my_predbat.ha_interface.dummy_items.pop(sensor_name, None)
+
+    # Mock find_battery_size to return None
+    inv.find_battery_size = lambda: None
+    original_soc_max = inv.soc_max
+
+    try:
+        inv.battery_size_tracking()
+        if inv.soc_max != original_soc_max:
+            print("ERROR: soc_max changed from {} to {} when it should not have".format(original_soc_max, inv.soc_max))
+            failed = True
+        else:
+            print("SUCCESS: battery_scaling unchanged when no data available")
+    except Exception as e:
+        print("ERROR: test_battery_scaling_auto_no_result raised exception: {}".format(e))
+        import traceback
+
+        traceback.print_exc()
+        failed = True
+
+    my_predbat.battery_scaling_auto = False
+    return failed
+
+
+def test_battery_scaling_auto_history_pruning(my_predbat):
+    """
+    Test that history entries older than 7 days are pruned.
+    """
+    print("*** Running test: battery_scaling_auto_history_pruning ***")
+    failed = False
+    nominal = 10.0
+    inv = _make_inv_for_scaling(my_predbat, nominal)
+    my_predbat.battery_scaling_auto = True
+
+    from datetime import date, timedelta as td
+
+    sensor_name = "sensor.{}_soc_max_calculated".format(my_predbat.prefix)
+    my_predbat.ha_interface.dummy_items.pop(sensor_name, None)
+
+    # Add 8 days of existing history (oldest should be pruned)
+    for days_ago in range(8, 0, -1):
+        day_key = str(date.today() - td(days=days_ago))
+        inv.update_soc_max_calculated_sensor.__func__  # just reference to avoid lint
+        # Call update to accumulate - feed 9.5 for each day
+        # Directly call update_soc_max_calculated_sensor but spoof the date by manipulating history
+        existing = my_predbat.ha_interface.dummy_items.get(sensor_name, {})
+        history = existing.get("attributes", {}).get("history", {}) if isinstance(existing, dict) else {}
+        history[day_key] = 9.5
+        sorted_keys = sorted(history.keys(), reverse=True)[:7]
+        history = {k: history[k] for k in sorted_keys}
+        my_predbat.ha_interface.dummy_items[sensor_name] = {"state": "9.5", "history": history}
+
+    # Now call update with today's value which should add today and still keep only 7
+    inv.update_soc_max_calculated_sensor(9.5)
+
+    final_state = my_predbat.ha_interface.dummy_items.get(sensor_name, {})
+    if isinstance(final_state, dict):
+        final_history = final_state.get("history", {})
+    else:
+        final_history = {}
+
+    if len(final_history) > 7:
+        print("ERROR: history has {} entries, expected <= 7".format(len(final_history)))
+        failed = True
+    else:
+        print("SUCCESS: history pruned to {} entries (<= 7)".format(len(final_history)))
+
+    my_predbat.battery_scaling_auto = False
+    return failed
+
+
+def test_battery_size_tracking_auto_enable(my_predbat):
+    """
+    Test that battery_size_tracking auto-enables battery_scaling_auto when nominal_capacity is unset (0).
+    With no history data available, soc_max should fall back to the 8 kWh default.
+    """
+    print("*** Running test: battery_size_tracking_auto_enable ***")
+    failed = False
+    # Use nominal_kwh=0 to simulate a user who never configured soc_max
+    inv = _make_inv_for_scaling(my_predbat, nominal_kwh=0.0)
+    my_predbat.battery_scaling_auto = False  # Starts disabled
+
+    sensor_name = "sensor.{}_soc_max_calculated".format(my_predbat.prefix)
+    my_predbat.ha_interface.dummy_items.pop(sensor_name, None)
+
+    # No data so find_battery_size returns None
+    inv.find_battery_size = lambda: None
+
+    try:
+        inv.battery_size_tracking()
+        if not my_predbat.battery_scaling_auto:
+            print("ERROR: battery_scaling_auto was not enabled when soc_max=0")
+            failed = True
+        if abs(inv.soc_max - 8.0) > 0.001:
+            print("ERROR: soc_max fallback expected 8.0, got {:.3f}".format(inv.soc_max))
+            failed = True
+        if not failed:
+            print("SUCCESS: battery_scaling_auto auto-enabled, fallback soc_max={:.1f} kWh".format(inv.soc_max))
+    except Exception as e:
+        print("ERROR: test_battery_size_tracking_auto_enable raised exception: {}".format(e))
+        import traceback
+
+        traceback.print_exc()
+        failed = True
+
+    my_predbat.battery_scaling_auto = False
+    return failed
+
+
+def test_battery_size_tracking_no_nominal(my_predbat):
+    """
+    Test that when nominal_capacity is 0 (not configured), battery_size_tracking uses the trimmed mean
+    directly as soc_max without clamping.
+    """
+    print("*** Running test: battery_size_tracking_no_nominal ***")
+    failed = False
+
+    # nominal_kwh=0 so nominal_capacity=0; give inv a real soc_max so auto-enable doesn't trigger
+    inv = _make_inv_for_scaling(my_predbat, nominal_kwh=0.0)
+    inv.soc_max = 10.0
+    my_predbat.battery_scaling_auto = True
+
+    sensor_name = "sensor.{}_soc_max_calculated".format(my_predbat.prefix)
+    my_predbat.ha_interface.dummy_items.pop(sensor_name, None)
+
+    inv.find_battery_size = lambda: 9.2
+
+    try:
+        inv.battery_size_tracking()
+        # nominal_in_sensor=0 \u2192 use trimmed_mean directly without clamping
+        expected_soc_max = round(9.2, 3)
+        if abs(inv.soc_max - expected_soc_max) > 0.001:
+            print("ERROR: soc_max {} does not match expected {:.3f} (no-nominal path)".format(inv.soc_max, expected_soc_max))
+            failed = True
+        else:
+            print("SUCCESS: no nominal, soc_max set to trimmed_mean {:.3f} kWh directly".format(inv.soc_max))
+    except Exception as e:
+        print("ERROR: test_battery_size_tracking_no_nominal raised exception: {}".format(e))
+        import traceback
+
+        traceback.print_exc()
+        failed = True
+
+    my_predbat.battery_scaling_auto = False
+    return failed
+
+
 def run_find_battery_size_tests(my_predbat):
     """
     Run all find_battery_size tests
@@ -350,6 +696,38 @@ def run_find_battery_size_tests(my_predbat):
         return failed
 
     failed |= test_find_battery_size_different_size(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_battery_scaling_auto_basic(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_battery_scaling_auto_single_sample(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_battery_scaling_auto_clamping(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_battery_scaling_auto_skip_today(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_battery_scaling_auto_no_result(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_battery_scaling_auto_history_pruning(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_battery_size_tracking_auto_enable(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_battery_size_tracking_no_nominal(my_predbat)
     if failed:
         return failed
 

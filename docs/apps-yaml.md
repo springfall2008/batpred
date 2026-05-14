@@ -1732,6 +1732,26 @@ it will incorrectly report the 13.5kWh usable capacity of each AIO as 15.9kWh, s
 If you are going to chart your battery SoC in Home Assistant then you may want to use **predbat.soc_kw_h0** as your current SoC (as this will be scaled)
 rather than the usual *givtcp_SERIAL_NUMBER_soc* GivTCP entity so everything lines up.
 
+```yaml
+  battery_scaling_auto: true|false
+```
+
+Default false. When set to true Predbat will automatically calculate `battery_scaling` based on historical charge data rather than using the static value above.
+
+The calculation uses `find_battery_size()` to estimate the actual usable battery capacity from your charge/discharge history and
+compares it to the nominal capacity (`soc_max`). A 7-day rolling history of daily estimates is stored in a new sensor
+`sensor.predbat_soc_max_calculated` (or `sensor.predbat_soc_max_calculated_N` for inverter N > 0).
+The sensor state is the trimmed mean of the history (the highest and lowest samples are discarded when 3 or more data points exist,
+giving a stable average that is robust to occasional outliers).
+
+The calculation is performed at most once per calendar day to avoid wasting compute resources.
+On subsequent Predbat cycles in the same day the stored sensor state is used instead.
+
+The resulting `battery_scaling` is clamped to the range [0.8, 1.0] if `soc_max` is configured.
+
+This is useful for batteries that degrade over time — the scaling will gradually reduce as the measured capacity drifts
+below the nominal figure, without needing any manual adjustment.
+
 ### Import export scaling
 
 ```yaml

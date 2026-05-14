@@ -617,6 +617,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.load_last_status = "baseline"
         self.load_last_car_slot = False
         self.battery_capacity_nominal = False
+        self.battery_scaling_auto = False
         self.releases = {}
         self.balance_inverters_enable = False
         self.balance_inverters_charge = True
