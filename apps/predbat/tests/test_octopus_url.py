@@ -324,22 +324,24 @@ async def test_async_get_day_night_rates(my_predbat):
     # Patch now_utc_exact to return a fixed time
     test5_time = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
 
-    # Test with rates in past, present, and FUTURE relative to test5_time (2024-06-15 12:00)
-    # Should select the latest rate that is <= now, and ignore any future rates
+    # Test with rates in past, present, and FUTURE relative to test5_time (2024-06-15 12:00).
+    # The schedule starts 2 days back (2024-06-13 00:30), so the latest "current" rate must
+    # have valid_from <= 2024-06-13 to be selected for every slot — hence 2024-06-12 here.
+    # Should select the latest rate that is <= now for every slot, and ignore any future rates.
     async def mock_fetch_url_cached_multiple(url):
         if "day-unit-rates" in url:
             return [
-                {"valid_from": "2024-06-10T00:00:00+00:00", "value_inc_vat": 20.0},  # Old rate (past)
-                {"valid_from": "2024-06-12T00:00:00+00:00", "value_inc_vat": 22.0},  # Older rate (past)
-                {"valid_from": "2024-06-14T00:00:00+00:00", "value_inc_vat": 25.0},  # Latest rate before now (should be selected)
+                {"valid_from": "2024-06-08T00:00:00+00:00", "value_inc_vat": 20.0},  # Old rate (past)
+                {"valid_from": "2024-06-10T00:00:00+00:00", "value_inc_vat": 22.0},  # Older rate (past)
+                {"valid_from": "2024-06-12T00:00:00+00:00", "value_inc_vat": 25.0},  # Latest rate before now; valid_from < schedule start so selected for all slots
                 {"valid_from": "2024-06-16T00:00:00+00:00", "value_inc_vat": 30.0},  # Future rate (should be ignored)
                 {"valid_from": "2024-06-17T00:00:00+00:00", "value_inc_vat": 32.0},  # Future rate (should be ignored)
             ]
         elif "night-unit-rates" in url:
             return [
-                {"valid_from": "2024-06-10T00:00:00+00:00", "value_inc_vat": 10.0},  # Old rate (past)
-                {"valid_from": "2024-06-12T00:00:00+00:00", "value_inc_vat": 11.0},  # Older rate (past)
-                {"valid_from": "2024-06-14T00:00:00+00:00", "value_inc_vat": 12.0},  # Latest rate before now (should be selected)
+                {"valid_from": "2024-06-08T00:00:00+00:00", "value_inc_vat": 10.0},  # Old rate (past)
+                {"valid_from": "2024-06-10T00:00:00+00:00", "value_inc_vat": 11.0},  # Older rate (past)
+                {"valid_from": "2024-06-12T00:00:00+00:00", "value_inc_vat": 12.0},  # Latest rate before now; valid_from < schedule start so selected for all slots
                 {"valid_from": "2024-06-16T00:00:00+00:00", "value_inc_vat": 15.0},  # Future rate (should be ignored)
                 {"valid_from": "2024-06-17T00:00:00+00:00", "value_inc_vat": 16.0},  # Future rate (should be ignored)
             ]
