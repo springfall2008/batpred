@@ -1221,6 +1221,40 @@ class OctopusAPI(ComponentBase):
         self.log("Warn: OctopusAPI: Tariff code {} not found in product info for {}".format(tariff_code, product_code))
         return None
 
+    def _get_rate_for_time(self, rates_list, timestamp, now=None):
+        """
+        Find the rate from rates_list that is valid at the given timestamp.
+        A rate is considered valid if valid_from <= timestamp < valid_to.
+        Missing/null valid_from is treated as the epoch (always started).
+        Missing/null valid_to is treated as far future (never expires).
+        Among all matching entries the one with the most recent valid_from wins.
+        If now is provided, entries whose valid_from is after now are ignored
+        (they represent future rate announcements not yet in effect).
+        Returns value_inc_vat or None if no entry covers the timestamp.
+        """
+        _EPOCH = timestamp - timedelta(days=365 * 50)  # 50 years ago, effectively the epoch for our purposes
+        _FAR_FUTURE = timestamp + timedelta(days=365 * 50)  # 50 years in the future, effectively never expires for our purposes
+        best_rate = None
+        best_valid_from = None
+        for rate in rates_list:
+            valid_from_str = rate.get("valid_from") or ""
+            valid_to_str = rate.get("valid_to") or ""
+            try:
+                valid_from_stamp = datetime.strptime(valid_from_str, DATE_TIME_STR_FORMAT) if valid_from_str else _EPOCH
+            except ValueError:
+                valid_from_stamp = _EPOCH
+            try:
+                valid_to_stamp = datetime.strptime(valid_to_str, DATE_TIME_STR_FORMAT) if valid_to_str else _FAR_FUTURE
+            except ValueError:
+                valid_to_stamp = _FAR_FUTURE
+            if now is not None and valid_from_stamp > now:
+                continue  # Ignore rates that haven't become active yet as of now
+            if valid_from_stamp <= timestamp < valid_to_stamp:
+                if best_valid_from is None or valid_from_stamp > best_valid_from:
+                    best_valid_from = valid_from_stamp
+                    best_rate = rate.get("value_inc_vat", None)
+        return best_rate
+
     async def async_get_day_night_rates(self, url, product_code="", tariff_code=""):
         """
         Get day and night rates from Octopus.
@@ -1236,23 +1270,8 @@ class OctopusAPI(ComponentBase):
         url_night = url.replace("standard-unit-rates", "night-unit-rates")
         result_day = await self.fetch_url_cached(url_day)
         result_night = await self.fetch_url_cached(url_night)
-        # Find the current day rate by scanning all the values looking at valid from date and picking the latest that is before now
-        current_day_rate = None
-        current_night_rate = None
-        if result_day:
-            for rate in result_day:
-                valid_from_stamp = rate.get("valid_from", "")
-                valid_from_stamp = datetime.strptime(valid_from_stamp, DATE_TIME_STR_FORMAT)
-                if valid_from_stamp <= self.now_utc_exact:
-                    current_day_rate = rate.get("value_inc_vat", None)
-        if result_night:
-            for rate in result_night:
-                valid_from_stamp = rate.get("valid_from", "")
-                valid_from_stamp = datetime.strptime(valid_from_stamp, DATE_TIME_STR_FORMAT)
-                if valid_from_stamp <= self.now_utc_exact:
-                    current_night_rate = rate.get("value_inc_vat", None)
-        self.log("Info: OctopusAPI: Current day rate {} night rate {}".format(current_day_rate, current_night_rate))
-        if current_day_rate is not None and current_night_rate is not None:
+        self.log("Info: OctopusAPI: Day rate entries: {} night rate entries: {}".format(len(result_day) if result_day else 0, len(result_night) if result_night else 0))
+        if result_day and result_night:
             # Select night window based on tariff type
             if ("INTELLI" in tariff_code) or ("IOG-" in tariff_code):
                 window = OCTOPUS_NIGHT_RATE_WINDOWS["iog"]
@@ -1270,6 +1289,7 @@ class OctopusAPI(ComponentBase):
             cross_midnight = window["cross_midnight"]
 
             # Build synthetic 8-day schedule starting 2 days back
+            # Look up the correct rate for each individual day to handle mid-window rate changes
             night_start_time = self.now_utc_exact.replace(hour=night_start_hour, minute=night_start_minute, second=0, microsecond=0) - timedelta(days=2)
             if cross_midnight:
                 night_end_time = (night_start_time + timedelta(days=1)).replace(hour=night_end_hour, minute=night_end_minute)
@@ -1277,11 +1297,14 @@ class OctopusAPI(ComponentBase):
                 night_end_time = night_start_time.replace(hour=night_end_hour, minute=night_end_minute)
             day_start_time = night_end_time
             day_end_time = night_start_time + timedelta(days=1)
+            current_time = self.now_utc_exact
             for day in range(8):
-                # Night rate
-                mdata.append({"valid_from": night_start_time.strftime(DATE_TIME_STR_FORMAT), "valid_to": night_end_time.strftime(DATE_TIME_STR_FORMAT), "value_inc_vat": current_night_rate})
-                # Day rate
-                mdata.append({"valid_from": day_start_time.strftime(DATE_TIME_STR_FORMAT), "valid_to": day_end_time.strftime(DATE_TIME_STR_FORMAT), "value_inc_vat": current_day_rate})
+                night_rate = self._get_rate_for_time(result_night, night_start_time, now=current_time)
+                day_rate = self._get_rate_for_time(result_day, day_start_time, now=current_time)
+                if night_rate is not None:
+                    mdata.append({"valid_from": night_start_time.strftime(DATE_TIME_STR_FORMAT), "valid_to": night_end_time.strftime(DATE_TIME_STR_FORMAT), "value_inc_vat": night_rate})
+                if day_rate is not None:
+                    mdata.append({"valid_from": day_start_time.strftime(DATE_TIME_STR_FORMAT), "valid_to": day_end_time.strftime(DATE_TIME_STR_FORMAT), "value_inc_vat": day_rate})
                 night_start_time += timedelta(days=1)
                 night_end_time += timedelta(days=1)
                 day_start_time += timedelta(days=1)
