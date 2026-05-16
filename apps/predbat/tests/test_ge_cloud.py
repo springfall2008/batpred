@@ -11,6 +11,7 @@
 
 from gecloud import GECloudDirect, GECloudData, regname_to_ha
 from gecloud import GE_API_DEVICES, GE_API_EVC_SEND_COMMAND
+from utils import dp4
 import asyncio
 import json
 from unittest.mock import MagicMock, patch, AsyncMock
@@ -2467,7 +2468,7 @@ def _test_publish_info(my_predbat):
     if soh_entity not in ge_cloud.dashboard_items:
         print("ERROR: Expected battery_soh to be published")
         return 1
-    expected_soh = 184.82 / 186
+    expected_soh = dp4(184.82 / 186)
     actual_soh = ge_cloud.dashboard_items[soh_entity]["state"]
     if abs(actual_soh - expected_soh) > 1e-9:
         print("ERROR: Expected battery_soh={}, got {}".format(expected_soh, actual_soh))
@@ -2478,7 +2479,7 @@ def _test_publish_info(my_predbat):
     if dod_soh_entity not in ge_cloud.dashboard_items:
         print("ERROR: Expected battery_dod_soh to be published")
         return 1
-    expected_dod_soh = 0.9 * expected_soh
+    expected_dod_soh = dp4(0.9 * expected_soh)
     actual_dod_soh = ge_cloud.dashboard_items[dod_soh_entity]["state"]
     if abs(actual_dod_soh - expected_dod_soh) > 1e-9:
         print("ERROR: Expected battery_dod_soh={}, got {}".format(expected_dod_soh, actual_dod_soh))
@@ -3663,13 +3664,13 @@ def _test_publish_info_soh(my_predbat):
     }
     run_async(ge_cloud.publish_info("dev1", info_data))
 
-    expected_soh = 180.0 / 200.0  # 0.9
+    expected_soh = dp4(180.0 / 200.0)  # 0.9
     actual_soh = ge_cloud.dashboard_items.get("sensor.predbat_gecloud_dev1_battery_soh", {}).get("state")
     if actual_soh is None or abs(actual_soh - expected_soh) > 1e-9:
         print("ERROR case1: expected soh={}, got {}".format(expected_soh, actual_soh))
         return 1
 
-    expected_dod_soh = 0.9 * expected_soh  # 0.81
+    expected_dod_soh = dp4(0.9 * expected_soh)  # 0.81
     actual_dod_soh = ge_cloud.dashboard_items.get("sensor.predbat_gecloud_dev1_battery_dod_soh", {}).get("state")
     if actual_dod_soh is None or abs(actual_dod_soh - expected_dod_soh) > 1e-9:
         print("ERROR case1: expected dod_soh={}, got {}".format(expected_dod_soh, actual_dod_soh))

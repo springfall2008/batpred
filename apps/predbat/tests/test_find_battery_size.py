@@ -441,12 +441,13 @@ def test_battery_scaling_auto_basic(my_predbat):
     my_predbat.battery_scaling_auto = True
 
     # Pre-populate 3 days of history so the sensor has existing data (not today)
-    from datetime import date, timedelta as td
+    from datetime import timedelta as td
 
     sensor_name = "sensor.{}_soc_max_calculated".format(my_predbat.prefix)
-    day0 = str(date.today() - td(days=3))
-    day1 = str(date.today() - td(days=2))
-    day2 = str(date.today() - td(days=1))
+    today = my_predbat.now_utc.date()
+    day0 = str(today - td(days=3))
+    day1 = str(today - td(days=2))
+    day2 = str(today - td(days=1))
     # Values: 9.0, 9.5, 10.0; today adds 9.4 → trimmed mean of [9.0,9.4,9.5,10.0] drops extremes → (9.4+9.5)/2 = 9.45
     existing_history = {day0: 9.0, day1: 9.5, day2: 10.0}
     my_predbat.ha_interface.dummy_items[sensor_name] = {"state": "9.5", "history": existing_history}
@@ -465,7 +466,7 @@ def test_battery_scaling_auto_basic(my_predbat):
         # Check today's key was added to the sensor history
         sensor_state = my_predbat.ha_interface.dummy_items.get(sensor_name, {})
         history_attr = sensor_state.get("history", {}) if isinstance(sensor_state, dict) else {}
-        if str(date.today()) not in history_attr:
+        if str(my_predbat.now_utc.date()) not in history_attr:
             print("ERROR: today's date not in history attribute")
             failed = True
         if not failed:
@@ -561,10 +562,8 @@ def test_battery_scaling_auto_skip_today(my_predbat):
     inv = _make_inv_for_scaling(my_predbat, nominal)
     my_predbat.battery_scaling_auto = True
 
-    from datetime import date
-
     sensor_name = "sensor.{}_soc_max_calculated".format(my_predbat.prefix)
-    today_key = str(date.today())
+    today_key = str(my_predbat.now_utc.date())
 
     # Pre-populate with today already present, stored mean=9.0, nominal stored in sensor
     my_predbat.ha_interface.dummy_items[sensor_name] = {"state": "9.0", "history": {today_key: 9.0}, "nominal_capacity": nominal}
@@ -647,14 +646,15 @@ def test_battery_scaling_auto_history_pruning(my_predbat):
     inv = _make_inv_for_scaling(my_predbat, nominal)
     my_predbat.battery_scaling_auto = True
 
-    from datetime import date, timedelta as td
+    from datetime import timedelta as td
 
     sensor_name = "sensor.{}_soc_max_calculated".format(my_predbat.prefix)
     my_predbat.ha_interface.dummy_items.pop(sensor_name, None)
 
     # Add 8 days of existing history (oldest should be pruned)
+    today = my_predbat.now_utc.date()
     for days_ago in range(8, 0, -1):
-        day_key = str(date.today() - td(days=days_ago))
+        day_key = str(today - td(days=days_ago))
         inv.update_soc_max_calculated_sensor.__func__  # just reference to avoid lint
         # Call update to accumulate - feed 9.5 for each day
         # Directly call update_soc_max_calculated_sensor but spoof the date by manipulating history
@@ -771,8 +771,6 @@ def test_battery_size_tracking_none_stored_on_failure(my_predbat):
     inv = _make_inv_for_scaling(my_predbat, nominal)
     my_predbat.battery_scaling_auto = False
 
-    from datetime import date
-
     sensor_name = "sensor.{}_soc_max_calculated".format(my_predbat.prefix)
     my_predbat.ha_interface.dummy_items.pop(sensor_name, None)
 
@@ -785,7 +783,7 @@ def test_battery_size_tracking_none_stored_on_failure(my_predbat):
         # today's key must be present in history (as None) so the guard won't re-run
         sensor_state = my_predbat.ha_interface.dummy_items.get(sensor_name, {})
         history = sensor_state.get("history", {}) if isinstance(sensor_state, dict) else {}
-        today_key = str(date.today())
+        today_key = str(my_predbat.now_utc.date())
         if today_key not in history:
             print("ERROR: today_key '{}' not written to history after None result".format(today_key))
             failed = True
@@ -815,10 +813,8 @@ def test_battery_size_tracking_skip_after_none(my_predbat):
     inv = _make_inv_for_scaling(my_predbat, nominal)
     my_predbat.battery_scaling_auto = False
 
-    from datetime import date
-
     sensor_name = "sensor.{}_soc_max_calculated".format(my_predbat.prefix)
-    today_key = str(date.today())
+    today_key = str(my_predbat.now_utc.date())
 
     # Pre-populate history with today's key already set to None (simulating a previous failed run)
     my_predbat.ha_interface.dummy_items[sensor_name] = {"state": "unknown", "history": {today_key: None}}
@@ -861,9 +857,10 @@ def test_update_soc_max_calculated_sensor_all_none(my_predbat):
     sensor_name = "sensor.{}_soc_max_calculated".format(my_predbat.prefix)
 
     # Pre-populate history with only None values from previous failed days
-    from datetime import date, timedelta as td
+    from datetime import timedelta as td
 
-    existing_history = {str(date.today() - td(days=1)): None, str(date.today() - td(days=2)): None}
+    today = my_predbat.now_utc.date()
+    existing_history = {str(today - td(days=1)): None, str(today - td(days=2)): None}
     my_predbat.ha_interface.dummy_items[sensor_name] = {"state": "unknown", "history": existing_history}
 
     try:
@@ -921,14 +918,15 @@ def test_update_soc_max_calculated_sensor_mixed_none(my_predbat):
 
     sensor_name = "sensor.{}_soc_max_calculated".format(my_predbat.prefix)
 
-    from datetime import date, timedelta as td
+    from datetime import timedelta as td
 
     # 2 valid days + 1 None day; calling with a new valid value → 3 real values total
     # values: 9.0, 9.5, 9.2 → sorted [9.0, 9.2, 9.5] → trimmed mean = 9.2
+    today = my_predbat.now_utc.date()
     existing_history = {
-        str(date.today() - td(days=3)): 9.0,
-        str(date.today() - td(days=2)): None,  # failed day
-        str(date.today() - td(days=1)): 9.5,
+        str(today - td(days=3)): 9.0,
+        str(today - td(days=2)): None,  # failed day
+        str(today - td(days=1)): 9.5,
     }
     my_predbat.ha_interface.dummy_items[sensor_name] = {"state": "9.25", "history": existing_history}
 
