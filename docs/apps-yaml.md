@@ -1738,7 +1738,7 @@ rather than the usual *givtcp_SERIAL_NUMBER_soc* GivTCP entity so everything lin
 
 Default false. When set to true Predbat will automatically calculate `battery_scaling` based on historical charge data rather than using the static value above.
 
-The calculation uses `find_battery_size()` to estimate the actual usable battery capacity from your charge/discharge history and
+The calculation uses `find_battery_size()` to estimate the actual usable battery capacity from historical charging periods and
 compares it to the nominal capacity (`soc_max`). A 7-day rolling history of daily estimates is stored in a new sensor
 `sensor.predbat_soc_max_calculated` (or `sensor.predbat_soc_max_calculated_N` for inverter N > 0).
 The sensor state is the trimmed mean of the history (the highest and lowest samples are discarded when 3 or more data points exist,
