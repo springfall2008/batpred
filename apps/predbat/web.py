@@ -3149,6 +3149,14 @@ chart.render();
                 }
             ]
             text += self.render_chart(series_data, "kWh", "Battery Degradation", now_str, daily_chart=False, extra_yaxis=secondary_axis)
+            if self.base.battery_scaling_auto:
+                text += "<p style='color:#15eb8b;font-weight:bold;'>&#10003; battery_scaling_auto is enabled &mdash; Predbat is automatically adjusting the usable battery capacity to account for degradation.</p>\n"
+            else:
+                text += (
+                    "<p style='color:#f5a442;font-weight:bold;'>&#9888; battery_scaling_auto is disabled. "
+                    "Enable it in apps.yaml (<code>battery_scaling_auto: true</code>) so Predbat can automatically "
+                    "scale the usable battery capacity to reflect real-world degradation shown in this chart.</p>\n"
+                )
         elif chart == "MarginalCosts":
             sensor_attrs = self.base.dashboard_values.get("sensor." + self.prefix + "_marginal_energy_costs", {}).get("attributes", {})
             matrix = sensor_attrs.get("matrix", {})
