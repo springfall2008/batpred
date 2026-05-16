@@ -1577,16 +1577,14 @@ class Fetch:
                 if end_str.count(":") < 2:
                     end_str += ":00"
 
-                try:
-                    start = time_string_to_stamp(start_str)
-                except (ValueError, TypeError):
+                start = time_string_to_stamp(start_str)
+                if start is None:
                     self.log("Warn: Bad start time {} provided in energy rates".format(start_str))
                     self.record_status("Warn: Bad start time {} provided in energy rates".format(start_str), had_errors=True)
                     continue
 
-                try:
-                    end = time_string_to_stamp(end_str)
-                except (ValueError, TypeError):
+                end = time_string_to_stamp(end_str)
+                if end is None:
                     self.log("Warn: Bad end time {} provided in energy rates".format(end_str))
                     self.record_status("Warn: Bad end time {} provided in energy rates".format(end_str), had_errors=True)
                     continue
