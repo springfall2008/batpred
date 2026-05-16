@@ -554,7 +554,7 @@ class Inverter:
         # Only read the persisted arg when nominal_capacity was not already set from REST or config (i.e. still 0).
         # This prevents a stale arg value from overwriting a real REST/config-provided nominal.
         if not self.nominal_capacity or self.nominal_capacity <= 0:
-            self.nominal_capacity = self.base.get_arg("soc_max_nominal", index=self.id, default=0)
+            self.nominal_capacity = self.base.get_arg("soc_max_nominal", index=self.id, default=0.0)
         self.base.set_arg("soc_max_nominal", self.nominal_capacity, index=self.id)
 
         if not self.nominal_capacity or self.nominal_capacity <= 0:
