@@ -239,7 +239,7 @@ async def test_octopus_day_night_rates(my_predbat):
     day_rates6 = set(entry["value_inc_vat"] for entry in mdata6 if abs(entry["value_inc_vat"] - 28.61292) < 0.001 or abs(entry["value_inc_vat"] - 32.11992) < 0.001)
     night_rates6 = set(entry["value_inc_vat"] for entry in mdata6 if abs(entry["value_inc_vat"] - 13.65) < 0.001 or abs(entry["value_inc_vat"] - 11.55) < 0.001)
 
-    if abs(28.61292 - 28.61292) < 0.001 and 28.61292 not in day_rates6:
+    if 28.61292 not in day_rates6:
         print("ERROR: Expected newer day rate 28.61292 to be used but it was not found in the schedule")
         failed = True
     elif 32.11992 in day_rates6:
