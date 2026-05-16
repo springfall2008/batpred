@@ -634,12 +634,16 @@ class Inverter:
         else:
             trimmed_mean = sum(values) / len(values)
 
-        self.base.set_state_wrapper(
+        degradation = (self.nominal_capacity - trimmed_mean) / self.nominal_capacity if self.nominal_capacity > 0 else 0
+        self.log("Inverter {} battery size tracking: found_size {:.2f} kWh, history {}, trimmed_mean {:.2f} kWh, degradation {:.2%}".format(self.id, found_size, history, trimmed_mean, degradation))
+
+        self.base.dashboard_item(
             sensor_name,
             state=dp2(trimmed_mean),
             attributes={
                 "history": history,
                 "nominal_capacity": round(nominal_capacity, 3),
+                "degradation_percent": round(degradation * 100, 2),
                 "unit_of_measurement": "kWh",
                 "device_class": "energy",
                 "state_class": "measurement",
