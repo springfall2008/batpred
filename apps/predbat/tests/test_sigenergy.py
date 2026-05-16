@@ -872,6 +872,108 @@ def test_sigenergy_send_battery_command_no_token(my_predbat):
     return failed
 
 
+def test_sigenergy_fetch_inverter_realtime(my_predbat):
+    """Test fetch_inverter_realtime maps realtimeInfo fields to energy_flow correctly."""
+    failed = False
+    api = MockSigenergyAPI()
+    api.access_token = "fake_token"
+    api.token_expires_at = 9_999_999_999
+    api._last_request_time = 0
+
+    # Populate a minimal device list with one Inverter
+    api.devices["SYS1"] = [
+        {"deviceType": "Inverter", "serialNumber": "INV001"},
+        {"deviceType": "Battery", "serialNumber": "BAT001"},
+    ]
+
+    # realtimeInfo response: batPower positive=discharging (3.0 kW discharging)
+    # activePower positive=export (1.5 kW export)
+    # pvPower 5.0 kW
+    # batSoc 72.0 %
+    # pvEnergyDaily 12.5 kWh
+    fake_response = {
+        "code": 0,
+        "data": {
+            "systemId": "SYS1",
+            "serialNumber": "INV001",
+            "deviceType": "Inverter",
+            "realTimeInfo": {
+                "batSoc": 72.0,
+                "batPower": 3.0,   # discharging → batteryPower should be -3.0
+                "pvPower": 5.0,
+                "activePower": 1.5,  # export → gridPower = 1.5
+                "pvEnergyDaily": 12.5,
+            },
+        },
+    }
+
+    mock_response = _make_mock_response(status=200, json_data=fake_response)
+    mock_session = _make_mock_session(mock_response)
+
+    with patch("sigenergy.aiohttp.ClientSession", return_value=mock_session):
+        ok = run_async(api.fetch_inverter_realtime("SYS1"))
+
+    assert ok is True, "fetch_inverter_realtime should return True"
+    flow = api.energy_flow.get("SYS1", {})
+
+    assert flow.get("batterySoc") == 72.0, "batterySoc = 72.0"
+    # batPower was 3.0 (discharging) → batteryPower should be -3.0 (discharging in energyFlow convention)
+    assert flow.get("batteryPower") == -3.0, "batteryPower = -3.0 (discharging, sign negated)"
+    assert flow.get("pvPower") == 5.0, "pvPower = 5.0"
+    assert flow.get("gridPower") == 1.5, "gridPower = 1.5 (export)"
+    # loadPower = pv + battery_discharge - grid_export = 5.0 + 3.0 - 1.5 = 6.5
+    assert flow.get("loadPower") == 6.5, "loadPower = 6.5 (derived)"
+    assert flow.get("evPower") == 0.0, "evPower = 0.0 (not available)"
+
+    # pvEnergyDaily should update daily_summary
+    daily = api.daily_summary.get("SYS1", {})
+    assert daily.get("dailyPowerGeneration") == 12.5, "daily PV yield updated from pvEnergyDaily"
+
+    return failed
+
+
+def test_sigenergy_fetch_inverter_realtime_no_inverter(my_predbat):
+    """Test fetch_inverter_realtime returns False when no inverter device is found."""
+    failed = False
+    api = MockSigenergyAPI()
+    api.devices["SYS1"] = [
+        {"deviceType": "Battery", "serialNumber": "BAT001"},
+    ]
+
+    ok = run_async(api.fetch_inverter_realtime("SYS1"))
+    assert ok is False, "Should return False when no inverter in device list"
+    assert any("No inverter" in m for m in api.log_messages), "Warning logged about missing inverter"
+
+    return failed
+
+
+def test_sigenergy_get_inverter_serial(my_predbat):
+    """Test _get_inverter_serial finds Inverter and AIO device types."""
+    failed = False
+    api = MockSigenergyAPI()
+
+    # No devices → None
+    api.devices["SYS1"] = []
+    assert api._get_inverter_serial("SYS1") is None, "Empty device list returns None"
+
+    # Only battery → None
+    api.devices["SYS1"] = [{"deviceType": "Battery", "serialNumber": "BAT001"}]
+    assert api._get_inverter_serial("SYS1") is None, "Battery-only list returns None"
+
+    # Inverter type → found
+    api.devices["SYS1"] = [
+        {"deviceType": "Battery", "serialNumber": "BAT001"},
+        {"deviceType": "Inverter", "serialNumber": "INV001"},
+    ]
+    assert api._get_inverter_serial("SYS1") == "INV001", "Inverter serial returned"
+
+    # AIO type → found
+    api.devices["SYS2"] = [{"deviceType": "AIO", "serialNumber": "AIO001"}]
+    assert api._get_inverter_serial("SYS2") == "AIO001", "AIO serial returned"
+
+    return failed
+
+
 # ---------------------------------------------------------------------------
 # Test registration entry point
 # ---------------------------------------------------------------------------
@@ -909,6 +1011,9 @@ def run_sigenergy_tests(my_predbat):
         ("publish_mqtt_failure", test_sigenergy_publish_mqtt_failure),
         ("send_battery_command_mqtt", test_sigenergy_send_battery_command_mqtt),
         ("send_battery_command_no_token", test_sigenergy_send_battery_command_no_token),
+        ("fetch_inverter_realtime", test_sigenergy_fetch_inverter_realtime),
+        ("fetch_inverter_realtime_no_inverter", test_sigenergy_fetch_inverter_realtime_no_inverter),
+        ("get_inverter_serial", test_sigenergy_get_inverter_serial),
     ]
 
     for name, fn in tests:
