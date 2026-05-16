@@ -2030,8 +2030,6 @@ class SolaxAPI(ComponentBase):
         """
         # Per-plant accumulators for the load-power calculation (second pass below)
         plant_save = {}  # plant_id -> {"grid": W, "pv": W, "battery": W, "inverter_sn": sn, "friendly_name": name}
-        save_soh = 0
-        save_soh_count = 0
 
         # Publish per-device realtime data
         for device_sn, realtime in self.realtime_device_data.items():
@@ -2080,7 +2078,7 @@ class SolaxAPI(ComponentBase):
                 # only set once (first inverter processed) so it never gets overwritten.
                 if plant_id not in plant_save:
                     stable_sn = self.plant_inverters.get(plant_id, [device_sn])[0]
-                    plant_save[plant_id] = {"grid": 0, "pv": 0, "battery": 0, "inverter_sn": stable_sn, "friendly_name": friendly_name}
+                    plant_save[plant_id] = {"grid": 0, "pv": 0, "battery": 0, "inverter_sn": stable_sn, "friendly_name": friendly_name, "total_soh": 0, "count_soh": 0}
                 plant_save[plant_id]["pv"] = (plant_save[plant_id]["pv"] or 0) + (pvPower or 0)
                 plant_save[plant_id]["grid"] = (plant_save[plant_id]["grid"] or 0) + (gridPower or 0)
 
@@ -2176,7 +2174,8 @@ class SolaxAPI(ComponentBase):
 
                 # Store per-plant battery value for load-power calculation (second pass)
                 if plant_id not in plant_save:
-                    plant_save[plant_id] = {"grid": 0, "pv": 0, "battery": 0, "inverter_sn": device_sn, "friendly_name": friendly_name}
+                    plant_save[plant_id] = {"grid": 0, "pv": 0, "battery": 0, "inverter_sn": device_sn, "friendly_name": friendly_name, "total_soh": 0, "count_soh": 0}
+
                 plant_save[plant_id]["battery"] += charge_discharge_power if charge_discharge_power is not None else 0
 
                 self.dashboard_item(
@@ -2210,8 +2209,8 @@ class SolaxAPI(ComponentBase):
                 if battery_soh == 0:
                     battery_soh = 1.0
 
-                save_soh += battery_soh
-                save_soh_count += 1
+                plant_save[plant_id]["total_soh"] += battery_soh
+                plant_save[plant_id]["count_soh"] += 1
 
                 self.dashboard_item(
                     f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_battery_soh",
@@ -2293,7 +2292,7 @@ class SolaxAPI(ComponentBase):
             )
             self.dashboard_item(
                 f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_battery_soh",
-                state=save_soh / save_soh_count if save_soh_count > 0 else 1.0,
+                state=plant_save[plant_id]["total_soh"] / plant_save[plant_id]["count_soh"] if plant_save[plant_id]["count_soh"] > 0 else 1.0,
                 attributes={
                     "friendly_name": f"{friendly_name} Battery State of Health",
                     "unit_of_measurement": "*",
