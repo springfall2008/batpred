@@ -406,8 +406,8 @@ class GECloudDirect(ComponentBase):
 
         entity_name = f"sensor.{self.prefix}_gecloud_{device}"
         entity_name = entity_name.lower()
-    
-        # Calculate battery state of health (SOH) from the battery capacity information in the connections section of the device info, if available. 
+
+        # Calculate battery state of health (SOH) from the battery capacity information in the connections section of the device info, if available.
         # SOH is calculated as the ratio of full capacity to design capacity, expressed as a percentage. If this information is not available, SOH defaults to 1.0 (100%).
         batteries = device_info.get("connections", {}).get("batteries", [])
         soh = 1.0
@@ -419,7 +419,7 @@ class GECloudDirect(ComponentBase):
         if full_capacity > 0 and design_capacity > 0:
             soh = full_capacity / design_capacity
         self.dashboard_item(entity_name + "_battery_soh", dp4(soh), attributes=attribute_table.get("battery_soh", {}), app="gecloud")
-        
+
         # Device device info
         info = device_info.get("info", {})
         if info:
