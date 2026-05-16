@@ -591,7 +591,7 @@ class Inverter:
                 self.soc_max = dp3(trimmed_mean)
                 self.nominal_capacity = self.soc_max
                 self.base.set_arg("soc_max", self.soc_max, index=self.id)
-                self.base.set_arg("soc_max_nominal", 0, index=self.id)
+                self.base.set_arg("soc_max_nominal", 0.0, index=self.id)
                 self.log("Info: Inverter {} battery_scaling_auto using measured mean {:.2f} kWh (no nominal configured)".format(self.id, trimmed_mean))
 
         # Final fallback if soc_max is still not determined
@@ -599,7 +599,7 @@ class Inverter:
             self.log("Warn: Unable to determine battery size for inverter {}, setting to 8 kWh default, you must set soc_max in apps.yaml or wait until enough data is collected to estimate battery size".format(self.id))
             self.soc_max = 8.0
             self.base.set_arg("soc_max", self.soc_max, index=self.id)
-            self.base.set_arg("soc_max_nominal", 0, index=self.id)
+            self.base.set_arg("soc_max_nominal", 0.0, index=self.id)
             self.nominal_capacity = self.soc_max
 
     def update_soc_max_calculated_sensor(self, found_size, nominal_capacity=0):

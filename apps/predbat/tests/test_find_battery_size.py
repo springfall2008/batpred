@@ -659,7 +659,7 @@ def test_battery_scaling_auto_history_pruning(my_predbat):
         # Call update to accumulate - feed 9.5 for each day
         # Directly call update_soc_max_calculated_sensor but spoof the date by manipulating history
         existing = my_predbat.ha_interface.dummy_items.get(sensor_name, {})
-        history = existing.get("attributes", {}).get("history", {}) if isinstance(existing, dict) else {}
+        history = existing.get("history", {}) if isinstance(existing, dict) else {}
         history[day_key] = 9.5
         sorted_keys = sorted(history.keys(), reverse=True)[:7]
         history = {k: history[k] for k in sorted_keys}
