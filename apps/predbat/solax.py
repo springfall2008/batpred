@@ -406,6 +406,7 @@ class SolaxAPI(ComponentBase):
         self.set_arg("grid_power", [f"sensor.{self.prefix}_solax_{plant}_{inv}_grid_power" for plant, inv in zip(plants, inverter_list)])
         self.set_arg("pv_power", [f"sensor.{self.prefix}_solax_{plant}_{inv}_pv_power" for plant, inv in zip(plants, inverter_list)])
         self.set_arg("load_power", [f"sensor.{self.prefix}_solax_{plant}_{inv}_load_power" for plant, inv in zip(plants, inverter_list)])
+        self.set_arg("battery_scaling", [f"sensor.{self.prefix}_solax_{plant}_{inv}_battery_soh" for plant, inv in zip(plants, inverter_list)])
 
         # Sensors
         self.set_arg("battery_temperature", [f"sensor.{self.prefix}_solax_{plant}_battery_temperature" for plant in plants])
@@ -2029,6 +2030,8 @@ class SolaxAPI(ComponentBase):
         """
         # Per-plant accumulators for the load-power calculation (second pass below)
         plant_save = {}  # plant_id -> {"grid": W, "pv": W, "battery": W, "inverter_sn": sn, "friendly_name": name}
+        save_soh = 0
+        save_soh_count = 0
 
         # Publish per-device realtime data
         for device_sn, realtime in self.realtime_device_data.items():
@@ -2163,6 +2166,7 @@ class SolaxAPI(ComponentBase):
                 )
             elif device_type == 2:  # Battery
                 battery_soc = realtime.get("batterySOC", 0)
+                battery_soh = realtime.get("batterySOH", 100.0)
                 battery_voltage = realtime.get("batteryVoltage", 0)
                 charge_discharge_power = realtime.get("chargeDischargePower", 0)
                 battery_current = realtime.get("batteryCurrent", 0)
@@ -2192,6 +2196,29 @@ class SolaxAPI(ComponentBase):
                     attributes={
                         "friendly_name": f"{friendly_name} Battery SOC",
                         "unit_of_measurement": "%",
+                        "device_class": "battery",
+                        "state_class": "measurement",
+                    },
+                    app="solax",
+                )
+
+                # Convert to float range 0-1
+                try:
+                    battery_soh = float(battery_soh) / 100.0
+                except (ValueError, TypeError):
+                    battery_soh = 1.0
+                if battery_soh == 0:
+                    battery_soh = 1.0
+
+                save_soh += battery_soh
+                save_soh_count += 1
+
+                self.dashboard_item(
+                    f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_battery_soh",
+                    state=battery_soh,
+                    attributes={
+                        "friendly_name": f"{friendly_name} Battery State of Health",
+                        "unit_of_measurement": "*",
                         "device_class": "battery",
                         "state_class": "measurement",
                     },
@@ -2260,6 +2287,17 @@ class SolaxAPI(ComponentBase):
                     "friendly_name": f"{friendly_name} Load Power",
                     "unit_of_measurement": "W",
                     "device_class": "power",
+                    "state_class": "measurement",
+                },
+                app="solax",
+            )
+            self.dashboard_item(
+                f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_battery_soh",
+                state=save_soh / save_soh_count if save_soh_count > 0 else 1.0,
+                attributes={
+                    "friendly_name": f"{friendly_name} Battery State of Health",
+                    "unit_of_measurement": "*",
+                    "device_class": "battery",
                     "state_class": "measurement",
                 },
                 app="solax",
