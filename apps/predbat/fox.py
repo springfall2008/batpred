@@ -1283,7 +1283,12 @@ class FoxAPI(ComponentBase, OAuthMixin):
                 soh_fraction = round(float(soh_raw) / 100.0, 4)
             except (ValueError, TypeError):
                 soh_fraction = None
-            self.dashboard_item(entity_name_sensor + "_" + sn.lower() + "_battery_soh", state=soh_fraction, attributes={"friendly_name": f"Fox {sn} Battery State of Health", "unit_of_measurement": "*", "device_class": "battery", "state_class": "measurement", "icon": "mdi:battery-heart"}, app="fox")
+            self.dashboard_item(
+                entity_name_sensor + "_" + sn.lower() + "_battery_soh",
+                state=soh_fraction,
+                attributes={"friendly_name": f"Fox {sn} Battery State of Health", "unit_of_measurement": "*", "device_class": "battery", "state_class": "measurement", "icon": "mdi:battery-heart"},
+                app="fox",
+            )
 
         # If we have soc_x sensors then sum them for total soc and store as _soc so that Predbat gets a single SOC value
         for sn in self.device_values:
