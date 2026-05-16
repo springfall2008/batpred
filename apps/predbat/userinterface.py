@@ -308,8 +308,9 @@ class UserInterface:
         if isinstance(entities, str):
             entities = [entities]
 
-        for entity_id in entities:
-            await self.components.select_event(entity_id, value)
+        if self.components:
+            for entity_id in entities:
+                await self.components.select_event(entity_id, value)
 
         for item in self.CONFIG_ITEMS:
             if ("entity" in item) and (item["entity"] in entities):
@@ -330,6 +331,8 @@ class UserInterface:
                     await self.async_manual_select(item["name"], value)
                 elif item.get("api"):
                     await self.async_api_select(item["name"], value)
+                    if item["name"] == "load_forecast_delta_api":
+                        await self.run_in_executor(self.refresh_additional_load_forecast_api)
                 else:
                     if item.get("value", None) != value:
                         await self.async_expose_config(item["name"], value, event=True)
@@ -405,8 +408,9 @@ class UserInterface:
         if isinstance(entities, str):
             entities = [entities]
 
-        for entity_id in entities:
-            await self.components.switch_event(entity_id, service)
+        if self.components:
+            for entity_id in entities:
+                await self.components.switch_event(entity_id, service)
 
         for item in self.CONFIG_ITEMS:
             if ("entity" in item) and (item["entity"] in entities):
@@ -426,6 +430,24 @@ class UserInterface:
                     await self.async_expose_config(item["name"], value, event=True)
                     self.update_pending = True
                     self.plan_valid = False
+
+    async def button_event(self, event, data, kwargs):
+        """
+        Catch HA button press events.
+        """
+        service_data = data.get("service_data", {})
+        entities = service_data.get("entity_id", [])
+
+        if isinstance(entities, str):
+            entities = [entities]
+
+        for entity_id in entities:
+            if entity_id.startswith("button.{}_load_forecast_delta_".format(self.prefix)) and entity_id.endswith("_delete"):
+                name = self.additional_load_name_from_entity(entity_id)
+                if name:
+                    if self.delete_additional_load_forecast(name):
+                        self.update_pending = True
+                        self.plan_valid = False
 
     def get_ha_config(self, name, default):
         """
@@ -865,6 +887,7 @@ class UserInterface:
             {"domain": "switch", "service": "turn_on"},
             {"domain": "switch", "service": "turn_off"},
             {"domain": "switch", "service": "toggle"},
+            {"domain": "button", "service": "press"},
             {"domain": "select", "service": "select_option"},
             {"domain": "select", "service": "select_first"},
             {"domain": "select", "service": "select_last"},
@@ -875,6 +898,7 @@ class UserInterface:
             {"domain": "switch", "service": "turn_on", "callback": self.switch_event},
             {"domain": "switch", "service": "turn_off", "callback": self.switch_event},
             {"domain": "switch", "service": "toggle", "callback": self.switch_event},
+            {"domain": "button", "service": "press", "callback": self.button_event},
             {"domain": "input_number", "service": "set_value", "callback": self.number_event},
             {"domain": "input_number", "service": "increment", "callback": self.number_event},
             {"domain": "input_number", "service": "decrement", "callback": self.number_event},
@@ -1164,6 +1188,12 @@ class UserInterface:
         if value.startswith("+"):
             # Ignore selections which are just the current value
             return
+        if config_item == "load_forecast_delta_api" and value != "off":
+            name = value.split("?", 1)[0].split("=", 1)[0].replace("[", "").replace("]", "")
+            if "[" not in value and self.has_additional_load_api_command(name):
+                value = self.preserve_additional_load_api_metadata(value)
+            else:
+                self.house_load_additional_forecast_overrides.pop(name, None)
         values = item.get("value", "")
         if not values:
             values = ""
@@ -1246,6 +1276,12 @@ class UserInterface:
         if value.startswith("+"):
             # Ignore selections which are just the current value
             return
+        if config_item == "load_forecast_delta_api" and value != "off" and "[" not in value:
+            name = value.split("?", 1)[0].split("=", 1)[0]
+            if self.has_additional_load_api_command(name):
+                value = self.preserve_additional_load_api_metadata(value)
+            else:
+                self.house_load_additional_forecast_overrides.pop(name, None)
         values = item.get("value", "")
         if not values:
             values = ""

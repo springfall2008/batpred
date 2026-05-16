@@ -26,6 +26,7 @@ from futurerate import FutureRate
 from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
 
 import copy
+import re
 
 
 class Fetch:
@@ -60,6 +61,817 @@ class Fetch:
             return pv_factor
         else:
             return None
+
+    def parse_additional_load_weighting(self, weighting, periods):
+        """
+        Parse additional load forecast weighting into per-slot multipliers.
+        """
+        if periods <= 0:
+            return []
+        if weighting is None:
+            return [1.0 for _ in range(periods)]
+        if isinstance(weighting, (int, float)):
+            return [float(weighting) for _ in range(periods)]
+
+        weighting = str(weighting).strip()
+        if not weighting:
+            return [1.0 for _ in range(periods)]
+
+        weights = []
+        weight_separator = ","
+        if "|" in weighting:
+            weight_separator = "|"
+        for weight in weighting.split(weight_separator):
+            weight = weight.strip()
+            if weight == "*":
+                weights.append(1.0)
+            else:
+                try:
+                    weights.append(float(weight))
+                except (ValueError, TypeError):
+                    self.log("Warn: Bad weighting {} provided in house_load_additional_forecast, using 1.0".format(weight))
+                    weights.append(1.0)
+
+        if not weights:
+            weights = [1.0]
+        while len(weights) < periods:
+            weights.append(weights[-1])
+        return weights[:periods]
+
+    def get_additional_load_time_minutes(self, load_item, key, default=None):
+        """
+        Resolve a time field on an additional load forecast item to minutes from midnight.
+        """
+        value = load_item.get(key, default)
+        if value is None:
+            return None
+        value = self.resolve_arg(key, value, default)
+        if value is None:
+            return None
+        value = str(value)
+        if value.count(":") < 2:
+            value += ":00"
+        try:
+            stamp = time_string_to_stamp(value)
+        except (ValueError, TypeError):
+            self.log("Warn: Bad {} {} provided in house_load_additional_forecast".format(key, value))
+            self.record_status("Warn: Bad {} {} provided in house_load_additional_forecast".format(key, value), had_errors=True)
+            return None
+        return minutes_to_time(stamp, time_string_to_stamp("00:00:00"))
+
+    def get_additional_load_float(self, load_item, key, default=0.0):
+        """
+        Resolve a numeric field on an additional load forecast item.
+        """
+        value = load_item.get(key, default)
+        if isinstance(value, str):
+            try:
+                return float(value)
+            except (ValueError, TypeError):
+                pass
+        value = self.resolve_arg(key, value, default)
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            self.log("Warn: Bad {} {} provided in house_load_additional_forecast".format(key, value))
+            self.record_status("Warn: Bad {} {} provided in house_load_additional_forecast".format(key, value), had_errors=True)
+            return float(default)
+
+    def get_additional_load_bool(self, load_item, key, default=True):
+        """
+        Resolve a boolean field on an additional load forecast item.
+        """
+        value = load_item.get(key, default)
+        value = self.resolve_arg(key, value, default)
+        if isinstance(value, str):
+            return value.lower() in ["on", "true", "yes", "enable", "enabled", "1"]
+        return bool(value)
+
+    def additional_load_entity_name(self, name):
+        """
+        Make the binary sensor entity name for a named additional load forecast.
+        """
+        safe_name = self.additional_load_safe_name(name)
+        return "binary_sensor.{}_load_forecast_delta_{}".format(self.prefix, safe_name)
+
+    def additional_load_safe_name(self, name):
+        """
+        Return the Home Assistant-safe suffix for a named additional load forecast.
+        """
+        safe_name = re.sub(r"[^a-z0-9_]+", "_", str(name).lower()).strip("_")
+        if not safe_name:
+            safe_name = "unknown"
+        return safe_name
+
+    def additional_load_delete_entity_name(self, name):
+        """
+        Make the delete button entity name for a named additional load forecast.
+        """
+        return self.additional_load_entity_name(name).replace("binary_sensor.", "button.", 1) + "_delete"
+
+    def additional_load_name_from_entity(self, entity_id):
+        """
+        Return additional load forecast name from a binary sensor or button entity id.
+        """
+        marker = "_load_forecast_delta_"
+        if entity_id and marker in entity_id:
+            safe_name = entity_id.split(marker, 1)[1].replace("_delete", "")
+            for name in list(getattr(self, "house_load_additional_forecasts", {}).keys()) + list(getattr(self, "house_load_additional_forecast_overrides", {}).keys()):
+                if self.additional_load_safe_name(name) == safe_name:
+                    return str(name)
+            return self.resolve_additional_load_name(safe_name)
+        return None
+
+    def additional_load_command_name(self, value):
+        """
+        Return the forecast name from a load_forecast_delta_api command.
+        """
+        return value.split("?", 1)[0].split("=", 1)[0].replace("[", "").replace("]", "")
+
+    def additional_load_command_args(self, value):
+        """
+        Return a load_forecast_delta_api command name and query arguments.
+        """
+        value = value.replace("[", "").replace("]", "")
+        if "?" not in value:
+            return self.additional_load_command_name(value), {}
+        name, command_args = value.split("?", 1)
+        args = {}
+        for arg in command_args.split("&"):
+            arg_split = arg.split("=", 1)
+            if len(arg_split) > 1:
+                args[arg_split[0]] = arg_split[1]
+            else:
+                args[arg_split[0]] = True
+        return name, args
+
+    def additional_load_build_api_command(self, name, args):
+        """
+        Build a load_forecast_delta_api command from a name and arguments.
+        """
+        return "{}?{}".format(name, "&".join("{}={}".format(key, value) if value is not True else key for key, value in args.items()))
+
+    def additional_load_minutes_to_stamp(self, minutes):
+        """
+        Convert forecast minutes from midnight into a durable timestamp string.
+        """
+        return str(int((self.midnight_utc + timedelta(minutes=int(minutes))).timestamp()))
+
+    def additional_load_stamp_to_minutes(self, stamp):
+        """
+        Convert a durable timestamp string into forecast minutes from the current midnight.
+        """
+        try:
+            stamp_datetime = datetime.fromtimestamp(int(stamp), tz=self.midnight_utc.tzinfo) if str(stamp).isdigit() else datetime.fromisoformat(str(stamp))
+        except (ValueError, TypeError):
+            return None
+        return int((stamp_datetime - self.midnight_utc).total_seconds() / 60)
+
+    def additional_load_minutes_to_iso(self, minutes):
+        """
+        Convert forecast minutes from midnight into an ISO timestamp.
+        """
+        return (self.midnight_utc + timedelta(minutes=minutes)).isoformat() if minutes is not None else None
+
+    def additional_load_forecast_record(
+        self,
+        entity_id,
+        enabled,
+        mode,
+        energy_total,
+        slot_energy,
+        duration,
+        weighting,
+        load_mode,
+        plan_interval,
+        requested_start_minutes,
+        requested_end_minutes,
+        periods,
+        weights,
+        weight_total,
+        source,
+        auto_expire,
+        expires_minutes,
+        target_times=None,
+        total_energy=0.0,
+        suggested_start_minutes=None,
+        suggested_end_minutes=None,
+        selection_reason=None,
+        candidate_count=0,
+        selected_metric=None,
+        baseline_metric=None,
+        selection_locked=False,
+        state=None,
+    ):
+        """
+        Build the published and internal metadata for one additional load forecast.
+        """
+        if target_times is None:
+            target_times = []
+        if state is None:
+            state = "on" if target_times else "off"
+        return {
+            "entity_id": entity_id,
+            "state": state,
+            "target_times": target_times,
+            "enabled": enabled,
+            "mode": mode,
+            "energy": energy_total,
+            "slot_energy": slot_energy,
+            "duration": duration,
+            "weighting": weighting,
+            "load_mode": load_mode,
+            "plan_interval_minutes": plan_interval,
+            "slots": len(target_times),
+            "total_energy": dp4(total_energy),
+            "requested_start": self.additional_load_minutes_to_iso(requested_start_minutes),
+            "requested_end": self.additional_load_minutes_to_iso(requested_end_minutes),
+            "suggested_start": self.additional_load_minutes_to_iso(suggested_start_minutes),
+            "suggested_end": self.additional_load_minutes_to_iso(suggested_end_minutes),
+            "selection_reason": selection_reason,
+            "candidate_count": candidate_count,
+            "selected_metric": selected_metric,
+            "baseline_metric": baseline_metric,
+            "selection_locked": selection_locked,
+            "source": source,
+            "auto_expire": auto_expire,
+            "expires_at": self.additional_load_minutes_to_iso(expires_minutes),
+            "_requested_start_minutes": requested_start_minutes,
+            "_requested_end_minutes": requested_end_minutes,
+            "_periods": periods,
+            "_weights": weights,
+            "_weight_total": weight_total,
+        }
+
+    def additional_load_api_metadata(self, name):
+        """
+        Return persisted hidden metadata for a stored load_forecast_delta_api command.
+        """
+        item = self.config_index.get("load_forecast_delta_api") if "load_forecast_delta_api" in self.config_index else None
+        if not item:
+            return {}
+        values = (item.get("value", "") or "").replace("+", "")
+        for value in values.split(",") if values else []:
+            command_name, args = self.additional_load_command_args(value)
+            if command_name == name or self.additional_load_safe_name(command_name) == self.additional_load_safe_name(name):
+                return {key: value for key, value in args.items() if str(key).startswith("_")}
+        return {}
+
+    def preserve_additional_load_api_metadata(self, value):
+        """
+        Preserve hidden one-shot metadata when an active API command is sent again.
+        """
+        name, args = self.additional_load_command_args(value)
+        metadata = self.additional_load_api_metadata(name)
+        if not metadata:
+            return value
+        for key, metadata_value in metadata.items():
+            args.setdefault(key, metadata_value)
+        return self.additional_load_build_api_command(name, args)
+
+    def update_additional_load_api_command_metadata(self, name, metadata):
+        """
+        Persist one-shot runtime metadata into the stored API selector command.
+        """
+        item = self.config_index.get("load_forecast_delta_api") if "load_forecast_delta_api" in self.config_index else None
+        if not item:
+            return
+        values = (item.get("value", "") or "").replace("+", "")
+        if not values:
+            return
+        changed = False
+        new_values = []
+        for value in values.split(","):
+            if value == "off":
+                continue
+            command_name, args = self.additional_load_command_args(value)
+            if command_name == name or self.additional_load_safe_name(command_name) == self.additional_load_safe_name(name):
+                for key, metadata_value in metadata.items():
+                    if metadata_value is not None and args.get(key) != str(metadata_value):
+                        args[key] = str(metadata_value)
+                        changed = True
+                value = self.additional_load_build_api_command(command_name, args)
+            new_values.append(value)
+        if changed:
+            self.api_select_update("load_forecast_delta_api", new_value="+" + ",".join(new_values) if new_values else "off")
+
+    def resolve_additional_load_name(self, name):
+        """
+        Resolve a forecast name or safe entity suffix to the active configured name.
+        """
+        name = str(name)
+        safe_name = self.additional_load_safe_name(name)
+        candidates = list(getattr(self, "house_load_additional_forecasts", {}).keys()) + list(getattr(self, "house_load_additional_forecast_overrides", {}).keys())
+        item = self.config_index.get("load_forecast_delta_api") if "load_forecast_delta_api" in self.config_index else None
+        if item:
+            values = (item.get("value", "") or "").replace("+", "")
+            candidates += [self.additional_load_command_name(value) for value in values.split(",") if value and value != "off"]
+        for candidate in candidates:
+            if str(candidate) == name or self.additional_load_safe_name(candidate) == safe_name:
+                return str(candidate)
+        return name
+
+    def delete_additional_load_forecast(self, name):
+        """
+        Delete a named one-shot additional load forecast.
+        """
+        name = self.resolve_additional_load_name(name)
+        if not self.has_additional_load_api_command(name) and name not in self.house_load_additional_forecast_overrides:
+            self.log("Warn: Ignoring delete for inactive additional load forecast {}".format(name))
+            self.unpublish_additional_load_name(name)
+            return False
+        self.house_load_additional_forecast_overrides.pop(name, None)
+        self.remove_additional_load_api_command(name)
+        self.refresh_additional_load_forecast_api()
+        return True
+
+    def unpublish_additional_load_name(self, name):
+        """
+        Remove stale additional load forecast entities for a named forecast without replanning.
+        """
+        for entity_id in [self.additional_load_entity_name(name), self.additional_load_delete_entity_name(name)]:
+            self.unpublish_additional_load_entity(entity_id)
+            if hasattr(self, "house_load_additional_forecast_entities"):
+                self.house_load_additional_forecast_entities.discard(entity_id)
+
+    def has_additional_load_api_command(self, name):
+        """
+        Return True if a named forecast command is active in the load_forecast_delta_api selector.
+        """
+        item = self.config_index.get("load_forecast_delta_api") if "load_forecast_delta_api" in self.config_index else None
+        if not item:
+            return False
+        values = item.get("value", "") or ""
+        values = values.replace("+", "")
+        values_list = values.split(",") if values else []
+        for value in values_list:
+            if value == "off":
+                continue
+            command_name = self.additional_load_command_name(value)
+            if command_name == name or self.additional_load_safe_name(command_name) == self.additional_load_safe_name(name):
+                return True
+        return False
+
+    def remove_additional_load_api_command(self, name):
+        """
+        Remove a named forecast command from the load_forecast_delta_api selector.
+        """
+        item = self.config_index.get("load_forecast_delta_api") if "load_forecast_delta_api" in self.config_index else None
+        if not item:
+            return
+        values = item.get("value", "") or ""
+        values = values.replace("+", "")
+        values_list = values.split(",") if values else []
+        new_values_list = []
+        for value in values_list:
+            if value == "off":
+                continue
+            command_name = self.additional_load_command_name(value)
+            if command_name != name and self.additional_load_safe_name(command_name) != self.additional_load_safe_name(name):
+                new_values_list.append(value)
+        new_value = "+" + ",".join(new_values_list) if new_values_list else "off"
+        self.api_select_update("load_forecast_delta_api", new_value=new_value)
+
+    def additional_load_slot_energies(self, energy_total, slot_energy, weights, weight_total, period, slot_minutes, plan_interval):
+        """
+        Return the published slot energy and adjustment rate for one forecast slot.
+        """
+        if energy_total is not None:
+            target_energy = dp4(energy_total * weights[period] / weight_total) if weight_total else 0.0
+        else:
+            target_energy = dp4(slot_energy * weights[period])
+        adjustment_energy = dp4(target_energy * plan_interval / float(slot_minutes)) if slot_minutes else 0.0
+        return target_energy, adjustment_energy
+
+    def get_additional_load_window(self, load_item, mode, duration, plan_interval, minutes_now_slot):
+        """
+        Return start/end minutes for fixed or flexible additional load scheduling.
+        """
+        start_minutes = self.get_additional_load_time_minutes(load_item, "start_time") if "start_time" in load_item else load_item.get("_requested_start_minutes", None)
+        end_minutes = self.get_additional_load_time_minutes(load_item, "end_time") if "end_time" in load_item else None
+        duration_minutes = int(duration * 60)
+
+        if mode == "flexible":
+            if start_minutes is None and end_minutes is None:
+                return minutes_now_slot, minutes_now_slot + self.forecast_minutes
+            if start_minutes is None:
+                start_minutes = minutes_now_slot
+            if end_minutes is None:
+                end_minutes = start_minutes + self.forecast_minutes
+
+            windows = []
+            for day_offset in [0, 24 * 60]:
+                window_start = start_minutes + day_offset
+                window_end = end_minutes + day_offset
+                if window_end <= window_start:
+                    window_end += 24 * 60
+                windows.append((window_start, window_end))
+                if end_minutes <= start_minutes:
+                    windows.append((window_start - 24 * 60, window_end - 24 * 60))
+
+            for window_start, window_end in sorted(windows):
+                usable_start = max(window_start, minutes_now_slot)
+                if usable_start + duration_minutes <= window_end and usable_start < minutes_now_slot + self.forecast_minutes:
+                    return usable_start, min(window_end, minutes_now_slot + self.forecast_minutes)
+            return None, None
+
+        if start_minutes is None:
+            return None, end_minutes
+        if end_minutes is None:
+            end_minutes = start_minutes + int(duration * 60)
+        elif end_minutes <= start_minutes:
+            end_minutes += 24 * 60
+
+        if end_minutes <= minutes_now_slot:
+            start_minutes += 24 * 60
+            end_minutes += 24 * 60
+        return start_minutes, end_minutes
+
+    def parse_additional_load_api_command(self, api_command):
+        """
+        Parse one load_forecast_delta_api command into a forecast override.
+        """
+        if "?" not in api_command:
+            self.log("Warn: Bad load_forecast_delta_api command {}, expected name?start_time=...&duration=...".format(api_command))
+            return None
+
+        name, command_args = self.additional_load_command_args(api_command)
+        if not name:
+            self.log("Warn: Bad load_forecast_delta_api command {}, missing name".format(api_command))
+            return None
+
+        override = {"name": name, "_source": "api", "_auto_expire": True}
+        override.update(command_args)
+        requested_start_minutes = self.additional_load_stamp_to_minutes(override.get("_requested_start", None)) if "_requested_start" in override else None
+        selected_start_minutes = self.additional_load_stamp_to_minutes(override.get("_selected_start", None)) if "_selected_start" in override else None
+        expires_minutes = self.additional_load_stamp_to_minutes(override.get("_expires_at", None)) if "_expires_at" in override else None
+        if requested_start_minutes is not None:
+            override["_requested_start_minutes"] = requested_start_minutes
+        if selected_start_minutes is not None:
+            override["_selected_start_minutes"] = selected_start_minutes
+        if expires_minutes is not None:
+            override["_expires_minutes"] = expires_minutes
+        for key in ["_candidate_count"]:
+            if key in override:
+                try:
+                    override[key] = int(override[key])
+                except (ValueError, TypeError):
+                    override.pop(key, None)
+        for key in ["_selected_metric", "_baseline_metric"]:
+            if key in override:
+                try:
+                    override[key] = float(override[key])
+                except (ValueError, TypeError):
+                    override.pop(key, None)
+        if "start_time" not in override:
+            existing_override = self.house_load_additional_forecast_overrides.get(str(name), {})
+            requested_start_minutes = override.get("_requested_start_minutes", existing_override.get("_requested_start_minutes", None))
+            if requested_start_minutes is None:
+                plan_interval = self.get_arg("plan_interval_minutes", 30)
+                requested_start_minutes = int(self.minutes_now / plan_interval) * plan_interval
+            override["_requested_start_minutes"] = requested_start_minutes
+            self.house_load_additional_forecast_overrides.setdefault(str(name), {"name": str(name)})["_requested_start_minutes"] = requested_start_minutes
+            self.update_additional_load_api_command_metadata(str(name), {"_requested_start": self.additional_load_minutes_to_stamp(requested_start_minutes)})
+        return override
+
+    def expire_additional_load_api_commands(self):
+        """
+        Remove expired one-shot additional load forecast API commands.
+        """
+        expired_names = []
+        minutes_now_slot = int(self.minutes_now / self.get_arg("plan_interval_minutes", 30)) * self.get_arg("plan_interval_minutes", 30)
+        item = self.config_index.get("load_forecast_delta_api") if "load_forecast_delta_api" in self.config_index else None
+        values = (item.get("value", "") or "").replace("+", "") if item else ""
+        for value in values.split(",") if values else []:
+            name, args = self.additional_load_command_args(value)
+            expires_minutes = self.additional_load_stamp_to_minutes(args.get("_expires_at", None)) if "_expires_at" in args else None
+            if expires_minutes is not None and expires_minutes <= minutes_now_slot:
+                expired_names.append(name)
+        for name, override in list(self.house_load_additional_forecast_overrides.items()):
+            expires_minutes = override.get("_expires_minutes", None)
+            if expires_minutes is not None and expires_minutes <= minutes_now_slot:
+                expired_names.append(name)
+        for name in set(expired_names):
+            self.log("Expired additional load forecast {}".format(name))
+            self.house_load_additional_forecast_overrides.pop(name, None)
+            self.remove_additional_load_api_command(name)
+
+    def get_additional_load_api_overrides(self):
+        """
+        Return load_forecast_delta_api overrides by name.
+        """
+        api_forecast_overrides = {}
+        api_overrides = self.api_select_update("load_forecast_delta_api") if "load_forecast_delta_api" in self.config_index else []
+        for api_command in api_overrides:
+            override = self.parse_additional_load_api_command(api_command)
+            if override:
+                api_forecast_overrides[str(override["name"])] = override
+        return api_forecast_overrides
+
+    def refresh_additional_load_forecast_api(self):
+        """
+        Rebuild additional load forecast data after the HA select API changes.
+        """
+        self.load_forecast_delta_api = self.api_select_update("load_forecast_delta_api") if "load_forecast_delta_api" in self.config_index else []
+        self.house_load_additional_forecast_adjust, self.house_load_additional_forecasts = self.fetch_additional_load_forecast()
+        self.publish_additional_load_forecasts()
+
+    def get_additional_load_forecast_config(self):
+        """
+        Return additional load forecast config with runtime API overrides applied by name.
+        """
+        config = self.get_arg("house_load_additional_forecast", [], indirect=False)
+        if not config:
+            config = []
+        if isinstance(config, dict):
+            config = [config]
+        if isinstance(config, str):
+            self.log("Warn: house_load_additional_forecast should be a list of dictionaries")
+            return []
+
+        forecast_items = []
+        for load_item in config:
+            if not isinstance(load_item, dict):
+                self.log("Warn: Bad house_load_additional_forecast item {}, expected dictionary".format(load_item))
+                continue
+            load_item = load_item.copy()
+            load_item["_source"] = "yaml"
+            load_item["_auto_expire"] = False
+            forecast_items.append(load_item)
+
+        self.expire_additional_load_api_commands()
+        runtime_overrides = self.get_additional_load_api_overrides()
+        for name, override in self.house_load_additional_forecast_overrides.items():
+            runtime_overrides.setdefault(name, {}).update(override)
+        for name, override in runtime_overrides.items():
+            found = False
+            for index, load_item in enumerate(forecast_items):
+                if str(load_item.get("name", "")) == name:
+                    forecast_items[index].update(override)
+                    found = True
+                    break
+            if not found:
+                forecast_items.append(override.copy())
+        return forecast_items
+
+    def fetch_additional_load_forecast(self, selected_flexible=None):
+        """
+        Build per-minute additional load adjustments from named forecast config.
+        """
+        if selected_flexible is None:
+            selected_flexible = {}
+        load_adjust = {}
+        forecasts = {}
+        plan_interval = self.get_arg("plan_interval_minutes", 30)
+        minutes_now_slot = int(self.minutes_now / plan_interval) * plan_interval
+
+        for load_item in self.get_additional_load_forecast_config():
+            name = load_item.get("name")
+            if not name:
+                self.log("Warn: house_load_additional_forecast item missing name")
+                continue
+            name = str(name)
+            entity_id = self.additional_load_entity_name(name)
+            mode = str(self.resolve_arg("mode", load_item.get("mode", "fixed"), "fixed")).lower()
+            if mode not in ["fixed", "flexible"]:
+                self.log("Warn: Bad mode {} provided in house_load_additional_forecast {}, using fixed".format(mode, name))
+                mode = "fixed"
+            if mode == "flexible" and name in selected_flexible:
+                load_item.update(selected_flexible[name])
+            enabled = self.get_additional_load_bool(load_item, "enabled", True)
+            duration_configured = "duration" in load_item
+            duration = self.get_additional_load_float(load_item, "duration", 0.0)
+            slot_energy = self.get_additional_load_float(load_item, "slot_energy", 0.0)
+            energy_total = self.get_additional_load_float(load_item, "energy", 0.0) if "energy" in load_item else None
+            weighting = self.resolve_arg("weighting", load_item.get("weighting", None), None)
+            source = load_item.get("_source", "yaml")
+            auto_expire = load_item.get("_auto_expire", False)
+            expires_minutes = load_item.get("_expires_minutes", None)
+            target_times = []
+            load_mode = "total_energy" if energy_total is not None else "slot_energy"
+            total_energy = 0.0
+            start_minutes, end_minutes = self.get_additional_load_window(load_item, mode, duration, plan_interval, minutes_now_slot)
+            requested_start_minutes = load_item.get("_requested_start_minutes", start_minutes) if "start_time" not in load_item else start_minutes
+            requested_end_minutes = end_minutes
+            if mode == "fixed" and duration <= 0 and not duration_configured and start_minutes is not None and end_minutes is not None:
+                duration = (end_minutes - start_minutes) / 60.0
+            periods = int((int(duration * 60) + plan_interval - 1) / plan_interval) if duration > 0 else 0
+            weights = self.parse_additional_load_weighting(weighting, periods)
+            weight_total = sum(weights)
+
+            selected_start_minutes = load_item.get("_selected_start_minutes", None)
+            selection_locked = False
+            if selected_start_minutes is not None:
+                start_minutes = int(selected_start_minutes)
+                if requested_start_minutes is not None and start_minutes < requested_start_minutes:
+                    start_minutes = requested_start_minutes
+                end_minutes = start_minutes + int(duration * 60)
+                selection_locked = mode == "flexible" and minutes_now_slot >= start_minutes and minutes_now_slot < end_minutes
+                if auto_expire:
+                    expires_minutes = end_minutes
+                if selection_locked and source != "yaml":
+                    self.house_load_additional_forecast_overrides.setdefault(name, {"name": name})["_selection_locked"] = True
+            if auto_expire and expires_minutes is None and end_minutes is not None:
+                expires_minutes = end_minutes
+            if auto_expire and source != "yaml" and expires_minutes is not None:
+                self.house_load_additional_forecast_overrides.setdefault(name, {"name": name})["_expires_minutes"] = expires_minutes
+
+            if source == "yaml" and energy_total is None and slot_energy == 0 and duration == 0 and not duration_configured:
+                continue
+
+            if not enabled or start_minutes is None or (energy_total is None and slot_energy == 0) or (energy_total == 0) or duration == 0 or end_minutes is None:
+                forecasts[name] = self.additional_load_forecast_record(
+                    entity_id,
+                    enabled,
+                    mode,
+                    energy_total,
+                    slot_energy,
+                    duration,
+                    weighting,
+                    load_mode,
+                    plan_interval,
+                    requested_start_minutes,
+                    requested_end_minutes,
+                    periods,
+                    weights,
+                    weight_total,
+                    source,
+                    auto_expire,
+                    expires_minutes,
+                    selection_locked=load_item.get("_selection_locked", False) or selection_locked,
+                    state="off",
+                )
+                continue
+
+            if mode == "flexible" and selected_start_minutes is None:
+                forecasts[name] = self.additional_load_forecast_record(
+                    entity_id,
+                    enabled,
+                    mode,
+                    energy_total,
+                    slot_energy,
+                    duration,
+                    weighting,
+                    load_mode,
+                    plan_interval,
+                    requested_start_minutes,
+                    requested_end_minutes,
+                    periods,
+                    weights,
+                    weight_total,
+                    source,
+                    auto_expire,
+                    expires_minutes,
+                    selection_reason="pending_prediction_metric",
+                    selection_locked=load_item.get("_selection_locked", False) or selection_locked,
+                    state="off",
+                )
+                continue
+
+            if mode == "flexible" and selected_start_minutes is not None and not selection_locked:
+                forecasts[name] = self.additional_load_forecast_record(
+                    entity_id,
+                    enabled,
+                    mode,
+                    energy_total,
+                    slot_energy,
+                    duration,
+                    weighting,
+                    load_mode,
+                    plan_interval,
+                    requested_start_minutes,
+                    requested_end_minutes,
+                    periods,
+                    weights,
+                    weight_total,
+                    source,
+                    auto_expire,
+                    expires_minutes,
+                    suggested_start_minutes=start_minutes,
+                    suggested_end_minutes=end_minutes,
+                    selection_reason=load_item.get("_selection_reason", "prediction_metric"),
+                    candidate_count=load_item.get("_candidate_count", 0),
+                    selected_metric=load_item.get("_selected_metric", None),
+                    baseline_metric=load_item.get("_baseline_metric", None),
+                    state="off",
+                )
+                continue
+
+            for period in range(periods):
+                slot_start = start_minutes + period * plan_interval
+                slot_end = min(slot_start + plan_interval, end_minutes)
+                slot_minutes = slot_end - slot_start
+                if slot_end <= minutes_now_slot:
+                    continue
+                if (slot_start - minutes_now_slot) >= self.forecast_minutes:
+                    continue
+                energy, adjustment_energy = self.additional_load_slot_energies(energy_total, slot_energy, weights, weight_total, period, slot_minutes, plan_interval)
+                total_energy += energy
+                for minute in range(slot_start, slot_end):
+                    load_adjust[minute] = dp4(load_adjust.get(minute, 0.0) + adjustment_energy)
+                target_times.append(
+                    {
+                        "start": self.additional_load_minutes_to_iso(slot_start),
+                        "end": self.additional_load_minutes_to_iso(slot_end),
+                        "energy": energy,
+                    }
+                )
+
+            forecasts[name] = self.additional_load_forecast_record(
+                entity_id,
+                enabled,
+                mode,
+                energy_total,
+                slot_energy,
+                duration,
+                weighting,
+                load_mode,
+                plan_interval,
+                requested_start_minutes,
+                requested_end_minutes,
+                periods,
+                weights,
+                weight_total,
+                source,
+                auto_expire,
+                expires_minutes,
+                target_times=target_times,
+                total_energy=total_energy,
+                suggested_start_minutes=start_minutes if mode == "flexible" and target_times else None,
+                suggested_end_minutes=end_minutes if mode == "flexible" and target_times else None,
+                selection_reason=load_item.get("_selection_reason", "prediction_metric" if mode == "flexible" and target_times else None),
+                candidate_count=load_item.get("_candidate_count", 0),
+                selected_metric=load_item.get("_selected_metric", None),
+                baseline_metric=load_item.get("_baseline_metric", None),
+                selection_locked=load_item.get("_selection_locked", False) or selection_locked,
+            )
+
+        return load_adjust, forecasts
+
+    def publish_additional_load_forecasts(self):
+        """
+        Publish named additional load forecast binary sensors for visibility and automation targeting.
+        """
+        if not hasattr(self, "house_load_additional_forecast_entities"):
+            self.house_load_additional_forecast_entities = set()
+        published_entities = set()
+        for name, forecast in self.house_load_additional_forecasts.items():
+            attributes = {
+                "friendly_name": "Predbat load forecast delta {}".format(name),
+                "icon": "mdi:dishwasher",
+                "name": name,
+                "enabled": forecast.get("enabled", False),
+                "mode": forecast.get("mode", "fixed"),
+                "energy": forecast.get("energy", None),
+                "slot_energy": forecast.get("slot_energy", 0.0),
+                "duration": forecast.get("duration", 0.0),
+                "weighting": forecast.get("weighting", None),
+                "load_mode": forecast.get("load_mode", "total_energy"),
+                "plan_interval_minutes": forecast.get("plan_interval_minutes", self.plan_interval_minutes),
+                "slots": forecast.get("slots", 0),
+                "total_energy": forecast.get("total_energy", 0.0),
+                "requested_start": forecast.get("requested_start", None),
+                "requested_end": forecast.get("requested_end", None),
+                "suggested_start": forecast.get("suggested_start", None),
+                "suggested_end": forecast.get("suggested_end", None),
+                "selection_reason": forecast.get("selection_reason", None),
+                "candidate_count": forecast.get("candidate_count", 0),
+                "selected_metric": forecast.get("selected_metric", None),
+                "baseline_metric": forecast.get("baseline_metric", None),
+                "selection_locked": forecast.get("selection_locked", False),
+                "source": forecast.get("source", "yaml"),
+                "auto_expire": forecast.get("auto_expire", False),
+                "expires_at": forecast.get("expires_at", None),
+                "target_times": forecast.get("target_times", []),
+            }
+            self.dashboard_item(forecast["entity_id"], state=forecast.get("state", "off"), attributes=attributes)
+            published_entities.add(forecast["entity_id"])
+            if forecast.get("source", "yaml") != "yaml":
+                delete_entity = self.additional_load_delete_entity_name(name)
+                self.dashboard_item(
+                    delete_entity,
+                    state="idle",
+                    attributes={
+                        "friendly_name": "Delete Predbat load forecast delta {}".format(name),
+                        "icon": "mdi:delete",
+                        "name": name,
+                        "source": forecast.get("source", "api"),
+                    },
+                )
+                published_entities.add(delete_entity)
+        for entity_id in self.house_load_additional_forecast_entities - published_entities:
+            self.unpublish_additional_load_entity(entity_id)
+        self.house_load_additional_forecast_entities = published_entities
+
+    def unpublish_additional_load_entity(self, entity_id):
+        """
+        Remove a stale additional load forecast entity from HA and the local dashboard cache.
+        """
+        if hasattr(self, "delete_state_wrapper"):
+            self.delete_state_wrapper(entity_id)
+        self.dashboard_values.pop(entity_id, None)
+        if entity_id in self.dashboard_index:
+            self.dashboard_index.remove(entity_id)
 
     def filtered_today(self, time_data, resetmidnight=False, stamp=None):
         """
@@ -700,6 +1512,8 @@ class Fetch:
         self.load_minutes_age = 0
         self.load_forecast = {}
         self.load_forecast_array = []
+        self.house_load_additional_forecast_adjust = {}
+        self.house_load_additional_forecasts = {}
         self.pv_forecast_minute = {}
         self.pv_forecast_minute10 = {}
         self.load_scaling_dynamic = {}
@@ -738,6 +1552,10 @@ class Fetch:
 
         # Fetch extra load forecast
         self.load_forecast, self.load_forecast_array = self.fetch_extra_load_forecast(self.now_utc, load_ml_forecast)
+
+        # Fetch named additional load forecast deltas
+        self.house_load_additional_forecast_adjust, self.house_load_additional_forecasts = self.fetch_additional_load_forecast()
+        self.publish_additional_load_forecasts()
 
         # Load previous load data
         if self.get_arg("ge_cloud_data", False):
@@ -2355,6 +3173,7 @@ class Fetch:
         self.manual_demand_times = self.manual_times("manual_demand")
         self.manual_all_times = self.manual_charge_times + self.manual_export_times + self.manual_demand_times + self.manual_freeze_charge_times + self.manual_freeze_export_times
         self.manual_api = self.api_select_update("manual_api")
+        self.load_forecast_delta_api = self.api_select_update("load_forecast_delta_api")
         self.manual_import_rates = self.manual_rates("manual_import_rates", default_rate=self.get_arg("manual_import_value"))
         self.manual_export_rates = self.manual_rates("manual_export_rates", default_rate=self.get_arg("manual_export_value"))
         self.manual_load_adjust = self.manual_rates("manual_load_adjust", default_rate=self.get_arg("manual_load_value"))

@@ -334,6 +334,18 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         state = self.unit_conversion(entity_id, state, None, required_unit, going_to=True)
         return self.ha_interface.set_state(entity_id, state, attributes=attributes)
 
+    def delete_state_wrapper(self, entity_id):
+        """
+        Wrapper function to delete state from HA.
+        """
+        if not self.ha_interface:
+            self.log("Error: delete_state_wrapper - No HA interface available")
+            return False
+        if not hasattr(self.ha_interface, "delete_state"):
+            return False
+
+        return self.ha_interface.delete_state(entity_id)
+
     def fire_event_wrapper(self, domain, service):
         """
         Wrapper function to fire a HA event
@@ -463,9 +475,13 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.manual_demand_times = []
         self.manual_all_times = []
         self.manual_api = []
+        self.load_forecast_delta_api = []
         self.manual_import_rates = {}
         self.manual_export_rates = {}
         self.manual_load_adjust = {}
+        self.house_load_additional_forecast_adjust = {}
+        self.house_load_additional_forecasts = {}
+        self.house_load_additional_forecast_overrides = {}
         self.config_index = {}
         self.dashboard_index = []
         self.dashboard_index_app = {}

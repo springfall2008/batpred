@@ -67,6 +67,134 @@ class Plan:
     runs to minimise the overall cost metric.
     """
 
+    def additional_load_candidate_profile(self, forecast, start_minutes):
+        """
+        Build absolute-minute adjustment and target metadata for one flexible load candidate.
+        """
+        plan_interval = forecast.get("plan_interval_minutes", self.plan_interval_minutes)
+        duration_minutes = int(forecast.get("duration", 0.0) * 60)
+        end_minutes = start_minutes + duration_minutes
+        periods = forecast.get("_periods", 0)
+        weights = forecast.get("_weights", [])
+        weight_total = forecast.get("_weight_total", sum(weights))
+        energy_total = forecast.get("energy", None)
+        slot_energy = forecast.get("slot_energy", 0.0)
+        load_adjust = {}
+        target_times = []
+        total_energy = 0.0
+
+        for period in range(periods):
+            slot_start = start_minutes + period * plan_interval
+            slot_end = min(slot_start + plan_interval, end_minutes)
+            slot_minutes = slot_end - slot_start
+            if slot_end <= self.minutes_now:
+                continue
+            if (slot_start - self.minutes_now) >= self.forecast_minutes:
+                continue
+            energy, adjustment_energy = self.additional_load_slot_energies(energy_total, slot_energy, weights, weight_total, period, slot_minutes, plan_interval)
+            total_energy += energy
+            for minute in range(slot_start, slot_end):
+                load_adjust[minute] = dp4(load_adjust.get(minute, 0.0) + adjustment_energy)
+            target_times.append({"start": (self.midnight_utc + timedelta(minutes=slot_start)).isoformat(), "end": (self.midnight_utc + timedelta(minutes=slot_end)).isoformat(), "energy": energy})
+
+        return load_adjust, target_times, dp4(total_energy)
+
+    def add_additional_load_to_step_data(self, load_minutes_step, load_adjust):
+        """
+        Add absolute-minute additional load adjustment into prediction step data.
+        """
+        modified_load = copy.deepcopy(load_minutes_step)
+        for minute_absolute, energy in load_adjust.items():
+            minute_relative = minute_absolute - self.minutes_now
+            if minute_relative < 0 or minute_relative >= self.forecast_minutes:
+                continue
+            step_minute = int(minute_relative / PREDICT_STEP) * PREDICT_STEP
+            modified_load[step_minute] = dp4(modified_load.get(step_minute, 0.0) + energy * PREDICT_STEP / float(self.plan_interval_minutes))
+        return modified_load
+
+    def select_flexible_additional_loads(self, load_minutes_step, load_minutes_step10, pv_forecast_minute_step, pv_forecast_minute10_step):
+        """
+        Select flexible additional load start times using full prediction metric impact.
+        """
+        flexible_forecasts = {name: forecast for name, forecast in self.house_load_additional_forecasts.items() if forecast.get("enabled") and forecast.get("mode") == "flexible" and not forecast.get("selection_locked", False)}
+        if not flexible_forecasts:
+            return False, load_minutes_step, load_minutes_step10
+
+        selected_flexible = {}
+        working_load_step = load_minutes_step
+        working_load_step10 = load_minutes_step10
+
+        for name, forecast in flexible_forecasts.items():
+            start_minutes = forecast.get("_requested_start_minutes", None)
+            end_minutes = forecast.get("_requested_end_minutes", None)
+            duration_minutes = int(forecast.get("duration", 0.0) * 60)
+            plan_interval = forecast.get("plan_interval_minutes", self.plan_interval_minutes)
+            if start_minutes is None or end_minutes is None or duration_minutes <= 0:
+                continue
+
+            candidate = max(start_minutes, self.minutes_now)
+            candidate = int((candidate + plan_interval - 1) / plan_interval) * plan_interval
+            latest_start = min(end_minutes - duration_minutes, self.minutes_now + self.forecast_minutes - duration_minutes)
+            if latest_start < candidate:
+                continue
+
+            baseline_prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, working_load_step, working_load_step10)
+            baseline_metric = baseline_prediction.run_prediction(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, False, self.end_record)[0]
+            best_start = None
+            best_metric = None
+            candidate_count = 0
+
+            while candidate <= latest_start:
+                candidate_adjust, _, _ = self.additional_load_candidate_profile(forecast, candidate)
+                candidate_load_step = self.add_additional_load_to_step_data(working_load_step, candidate_adjust)
+                candidate_load_step10 = self.add_additional_load_to_step_data(working_load_step10, candidate_adjust)
+                candidate_prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, candidate_load_step, candidate_load_step10)
+                candidate_metric = candidate_prediction.run_prediction(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, False, self.end_record)[0]
+                candidate_count += 1
+                if best_metric is None or candidate_metric < best_metric:
+                    best_metric = candidate_metric
+                    best_start = candidate
+                candidate += plan_interval
+
+            if best_start is not None:
+                best_adjust, _, _ = self.additional_load_candidate_profile(forecast, best_start)
+                working_load_step = self.add_additional_load_to_step_data(working_load_step, best_adjust)
+                working_load_step10 = self.add_additional_load_to_step_data(working_load_step10, best_adjust)
+                selected_flexible[name] = {
+                    "_requested_start_minutes": start_minutes,
+                    "_requested_end_minutes": end_minutes,
+                    "_selected_start_minutes": best_start,
+                    "_selection_reason": "prediction_metric",
+                    "_candidate_count": candidate_count,
+                    "_selected_metric": dp2(best_metric) if best_metric is not None else None,
+                    "_baseline_metric": dp2(baseline_metric),
+                    "_expires_minutes": best_start + duration_minutes if forecast.get("auto_expire", False) else None,
+                }
+                if forecast.get("auto_expire", False):
+                    self.house_load_additional_forecast_overrides[name] = {"name": name, **selected_flexible[name]}
+                    self.update_additional_load_api_command_metadata(
+                        name,
+                        {
+                            "_requested_start": self.additional_load_minutes_to_stamp(start_minutes),
+                            "_requested_end": self.additional_load_minutes_to_stamp(end_minutes),
+                            "_selected_start": self.additional_load_minutes_to_stamp(best_start),
+                            "_selected_end": self.additional_load_minutes_to_stamp(best_start + duration_minutes),
+                            "_expires_at": self.additional_load_minutes_to_stamp(best_start + duration_minutes),
+                            "_selection_reason": "prediction_metric",
+                            "_candidate_count": candidate_count,
+                            "_selected_metric": dp2(best_metric) if best_metric is not None else None,
+                            "_baseline_metric": dp2(baseline_metric),
+                        },
+                    )
+                self.log("Flexible additional load {} selected {}-{} using prediction metric {} from {} candidates".format(name, self.time_abs_str(best_start), self.time_abs_str(best_start + duration_minutes), dp2(best_metric), candidate_count))
+
+        if not selected_flexible:
+            return False, load_minutes_step, load_minutes_step10
+
+        self.house_load_additional_forecast_adjust, self.house_load_additional_forecasts = self.fetch_additional_load_forecast(selected_flexible=selected_flexible)
+        self.publish_additional_load_forecasts()
+        return True, working_load_step, working_load_step10
+
     def dynamic_load(self):
         """
         Adjust load prediction based on current load
@@ -930,6 +1058,9 @@ class Plan:
         # Created optimised step data
         self.metric_cloud_coverage = self.get_cloud_factor(self.minutes_now, self.pv_forecast_minute, self.pv_forecast_minute10)
         self.metric_load_divergence = self.get_load_divergence(self.minutes_now, self.load_minutes)
+        load_adjust = self.manual_load_adjust.copy()
+        for minute, adjustment in self.house_load_additional_forecast_adjust.items():
+            load_adjust[minute] = load_adjust.get(minute, 0.0) + adjustment
         load_minutes_step = self.step_data_history(
             self.load_minutes,
             self.minutes_now,
@@ -940,7 +1071,7 @@ class Plan:
             load_forecast=self.load_forecast,
             load_scaling_dynamic=self.load_scaling_dynamic,
             cloud_factor=self.metric_load_divergence,
-            load_adjust=self.manual_load_adjust,
+            load_adjust=load_adjust,
             load_baseline=self.dynamic_load_baseline,
         )
         load_minutes_step10 = self.step_data_history(
@@ -953,7 +1084,7 @@ class Plan:
             load_forecast=self.load_forecast,
             load_scaling_dynamic=self.load_scaling_dynamic,
             cloud_factor=min(self.metric_load_divergence + 0.5, 1.0) if self.metric_load_divergence else None,
-            load_adjust=self.manual_load_adjust,
+            load_adjust=load_adjust,
             load_baseline=self.dynamic_load_baseline,
         )
         pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
@@ -971,6 +1102,12 @@ class Plan:
 
         # Creation prediction object
         self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10)
+
+        flexible_selected, load_minutes_step, load_minutes_step10 = self.select_flexible_additional_loads(load_minutes_step, load_minutes_step10, pv_forecast_minute_step, pv_forecast_minute10_step)
+        if flexible_selected:
+            self.load_minutes_step = load_minutes_step
+            self.load_minutes_step10 = load_minutes_step10
+            self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10)
 
         # Check if LoadML is active and disable thread pools as it causes lockup due to race conditions with NumPy
         load_ml_comp = self.components.get_component("load_ml") if self.components else None

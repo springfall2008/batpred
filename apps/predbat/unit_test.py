@@ -120,6 +120,7 @@ from tests.test_clip_charge_slots import run_clip_charge_slots_tests
 from tests.test_discard_unused_charge_slots import run_discard_unused_charge_slots_tests
 from tests.test_discard_unused_export_slots import run_discard_unused_export_slots_tests
 from tests.test_marginal_costs import test_marginal_costs
+from tests.test_additional_load_forecast import run_additional_load_forecast_tests
 from tests.test_savings_stability import test_savings_stability
 from tests.test_calculate_yesterday import test_calculate_yesterday
 
@@ -219,6 +220,7 @@ def main():
         ("dynamic_load_car", test_dynamic_load_car_slot_cancellation, "Dynamic load car slot cancellation tests", False),
         ("units", run_test_units, "Unit tests", False),
         ("manual_api", run_test_manual_api, "Manual API tests", False),
+        ("additional_load_forecast", run_additional_load_forecast_tests, "Additional load forecast tests", False),
         ("manual_soc", run_test_manual_soc, "Manual SOC target tests", False),
         ("manual_times", run_test_manual_times, "Manual times tests", False),
         ("manual_select", run_test_manual_select, "Manual select tests", False),
