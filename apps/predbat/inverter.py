@@ -579,6 +579,9 @@ class Inverter:
             found_size = self.find_battery_size(self.nominal_capacity)
             if found_size and found_size > 0:
                 trimmed_mean = self.update_soc_max_calculated_sensor(found_size, self.nominal_capacity)
+            else:
+                # Store None to prevent recalculation every cycle when data is unavailable
+                self.update_soc_max_calculated_sensor(None, self.nominal_capacity)
 
         if self.base.battery_scaling_auto and trimmed_mean and trimmed_mean > 0:
             if self.nominal_capacity > 0:
@@ -621,21 +624,41 @@ class Inverter:
             history = {}
 
         today_key = str(self.base.now_utc.date())
-        history[today_key] = round(found_size, 3)
+        history[today_key] = round(found_size, 3) if found_size is not None else None
 
         # Prune to 7 most-recent days
         sorted_keys = sorted(history.keys(), reverse=True)[:7]
         history = {k: history[k] for k in sorted_keys}
 
-        values = list(history.values())
+        # Filter out None entries (days where calculation failed) before computing the mean
+        values = [v for v in history.values() if v is not None]
+        if not values:
+            self.log("Inverter {} battery size tracking: found_size None, history {}, no valid data for mean calculation".format(self.id, history))
+            self.base.dashboard_item(
+                sensor_name,
+                state=nominal_capacity if nominal_capacity > 0 else "unknown",
+                attributes={
+                    "history": history,
+                    "nominal_capacity": round(nominal_capacity, 3),
+                    "degradation_percent": None,
+                    "unit_of_measurement": "kWh",
+                    "device_class": "energy",
+                    "state_class": "measurement",
+                    "friendly_name": "Predbat calculated battery capacity{}".format(" inverter {}".format(self.id) if self.id > 0 else ""),
+                    "icon": "mdi:battery-charging",
+                },
+            )
+            return None
+
         if len(values) >= 3:
             trimmed = sorted(values)[1:-1]
             trimmed_mean = sum(trimmed) / len(trimmed)
         else:
             trimmed_mean = sum(values) / len(values)
 
+        found_size_str = "{:.2f} kWh".format(found_size) if found_size is not None else "None"
         degradation = (self.nominal_capacity - trimmed_mean) / self.nominal_capacity if self.nominal_capacity > 0 else 0
-        self.log("Inverter {} battery size tracking: found_size {:.2f} kWh, history {}, trimmed_mean {:.2f} kWh, degradation {:.2%}".format(self.id, found_size, history, trimmed_mean, degradation))
+        self.log("Inverter {} battery size tracking: found_size {}, history {}, trimmed_mean {:.2f} kWh, degradation {:.2%}".format(self.id, found_size_str, history, trimmed_mean, degradation))
 
         self.base.dashboard_item(
             sensor_name,

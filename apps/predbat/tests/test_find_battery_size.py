@@ -760,6 +760,201 @@ def test_battery_size_tracking_no_nominal(my_predbat):
     return failed
 
 
+def test_battery_size_tracking_none_stored_on_failure(my_predbat):
+    """
+    Test that when find_battery_size returns None, battery_size_tracking stores None in the
+    sensor history under today's key so that subsequent cycles skip recalculation.
+    """
+    print("*** Running test: battery_size_tracking_none_stored_on_failure ***")
+    failed = False
+    nominal = 10.0
+    inv = _make_inv_for_scaling(my_predbat, nominal)
+    my_predbat.battery_scaling_auto = False
+
+    from datetime import date
+
+    sensor_name = "sensor.{}_soc_max_calculated".format(my_predbat.prefix)
+    my_predbat.ha_interface.dummy_items.pop(sensor_name, None)
+
+    # Mock find_battery_size to always fail
+    inv.find_battery_size = lambda _nc=0: None
+
+    try:
+        inv.battery_size_tracking()
+
+        # today's key must be present in history (as None) so the guard won't re-run
+        sensor_state = my_predbat.ha_interface.dummy_items.get(sensor_name, {})
+        history = sensor_state.get("history", {}) if isinstance(sensor_state, dict) else {}
+        today_key = str(date.today())
+        if today_key not in history:
+            print("ERROR: today_key '{}' not written to history after None result".format(today_key))
+            failed = True
+        elif history[today_key] is not None:
+            print("ERROR: today_key value should be None, got {}".format(history[today_key]))
+            failed = True
+        else:
+            print("SUCCESS: None correctly stored in history to prevent re-calculation")
+    except Exception as e:
+        print("ERROR: test raised exception: {}".format(e))
+        import traceback
+
+        traceback.print_exc()
+        failed = True
+
+    return failed
+
+
+def test_battery_size_tracking_skip_after_none(my_predbat):
+    """
+    Test that a second call to battery_size_tracking on the same day does not call find_battery_size
+    again, even when the first call produced a None result (today_key stored as None in history).
+    """
+    print("*** Running test: battery_size_tracking_skip_after_none ***")
+    failed = False
+    nominal = 10.0
+    inv = _make_inv_for_scaling(my_predbat, nominal)
+    my_predbat.battery_scaling_auto = False
+
+    from datetime import date
+
+    sensor_name = "sensor.{}_soc_max_calculated".format(my_predbat.prefix)
+    today_key = str(date.today())
+
+    # Pre-populate history with today's key already set to None (simulating a previous failed run)
+    my_predbat.ha_interface.dummy_items[sensor_name] = {"state": "unknown", "history": {today_key: None}}
+
+    calls = [0]
+
+    def mock_find_should_not_be_called(_nc=0):
+        calls[0] += 1
+        return 9.5
+
+    inv.find_battery_size = mock_find_should_not_be_called
+
+    try:
+        inv.battery_size_tracking()
+        if calls[0] > 0:
+            print("ERROR: find_battery_size called {} time(s) but today_key was already in history".format(calls[0]))
+            failed = True
+        else:
+            print("SUCCESS: find_battery_size correctly skipped when today already has None in history")
+    except Exception as e:
+        print("ERROR: test raised exception: {}".format(e))
+        import traceback
+
+        traceback.print_exc()
+        failed = True
+
+    return failed
+
+
+def test_update_soc_max_calculated_sensor_all_none(my_predbat):
+    """
+    Test that update_soc_max_calculated_sensor returns None and sets sensor state to 'unknown'
+    when all history entries are None (no successful measurements ever).
+    """
+    print("*** Running test: update_soc_max_calculated_sensor_all_none ***")
+    failed = False
+    nominal = 10.0
+    inv = _make_inv_for_scaling(my_predbat, nominal)
+
+    sensor_name = "sensor.{}_soc_max_calculated".format(my_predbat.prefix)
+
+    # Pre-populate history with only None values from previous failed days
+    from datetime import date, timedelta as td
+
+    existing_history = {str(date.today() - td(days=1)): None, str(date.today() - td(days=2)): None}
+    my_predbat.ha_interface.dummy_items[sensor_name] = {"state": "unknown", "history": existing_history}
+
+    try:
+        result = inv.update_soc_max_calculated_sensor(None, nominal)
+        if result is not None:
+            print("ERROR: expected None when all history is None, got {}".format(result))
+            failed = True
+        else:
+            # When all history is None and nominal_capacity > 0, sensor state is set to nominal_capacity
+            # (so the HA entity shows a sensible value rather than 'unknown')
+            sensor_state = my_predbat.ha_interface.dummy_items.get(sensor_name, {})
+            state_value = sensor_state.get("state") if isinstance(sensor_state, dict) else sensor_state
+            expected_state = nominal  # nominal_capacity > 0 → state = nominal_capacity
+            if state_value != expected_state:
+                print("ERROR: expected sensor state {}, got '{}'".format(expected_state, state_value))
+                failed = True
+            else:
+                print("SUCCESS: all-None history returns None and sets state to nominal capacity {}".format(nominal))
+
+        # Also verify: when nominal_capacity=0, state falls back to "unknown"
+        inv_no_nominal = _make_inv_for_scaling(my_predbat, nominal_kwh=0.0)
+        inv_no_nominal.soc_max = 10.0  # prevent fallback to 8kWh default
+        my_predbat.ha_interface.dummy_items.pop(sensor_name, None)
+        result2 = inv_no_nominal.update_soc_max_calculated_sensor(None, 0)
+        if result2 is not None:
+            print("ERROR: expected None when nominal_capacity=0 and all history is None, got {}".format(result2))
+            failed = True
+        else:
+            sensor_state2 = my_predbat.ha_interface.dummy_items.get(sensor_name, {})
+            state_value2 = sensor_state2.get("state") if isinstance(sensor_state2, dict) else sensor_state2
+            if state_value2 != "unknown":
+                print("ERROR: expected sensor state 'unknown' when nominal=0, got '{}'".format(state_value2))
+                failed = True
+            else:
+                print("SUCCESS: no-nominal all-None history correctly sets state to 'unknown'")
+    except Exception as e:
+        print("ERROR: test raised exception: {}".format(e))
+        import traceback
+
+        traceback.print_exc()
+        failed = True
+
+    return failed
+
+
+def test_update_soc_max_calculated_sensor_mixed_none(my_predbat):
+    """
+    Test that update_soc_max_calculated_sensor ignores None entries when computing the trimmed mean,
+    so that failed days do not corrupt the average.
+    """
+    print("*** Running test: update_soc_max_calculated_sensor_mixed_none ***")
+    failed = False
+    nominal = 10.0
+    inv = _make_inv_for_scaling(my_predbat, nominal)
+
+    sensor_name = "sensor.{}_soc_max_calculated".format(my_predbat.prefix)
+
+    from datetime import date, timedelta as td
+
+    # 2 valid days + 1 None day; calling with a new valid value → 3 real values total
+    # values: 9.0, 9.5, 9.2 → sorted [9.0, 9.2, 9.5] → trimmed mean = 9.2
+    existing_history = {
+        str(date.today() - td(days=3)): 9.0,
+        str(date.today() - td(days=2)): None,  # failed day
+        str(date.today() - td(days=1)): 9.5,
+    }
+    my_predbat.ha_interface.dummy_items[sensor_name] = {"state": "9.25", "history": existing_history}
+
+    try:
+        result = inv.update_soc_max_calculated_sensor(9.2, nominal)
+        if result is None:
+            print("ERROR: expected a valid mean when real values exist alongside None entries")
+            failed = True
+        else:
+            # Sorted real values: [9.0, 9.2, 9.5] → trimmed drops 9.0 and 9.5 → mean=9.2
+            expected_mean = 9.2
+            if abs(result - expected_mean) > 0.05:
+                print("ERROR: expected trimmed mean ~{:.2f}, got {:.3f}".format(expected_mean, result))
+                failed = True
+            else:
+                print("SUCCESS: None entries ignored in mean calculation, result {:.3f}".format(result))
+    except Exception as e:
+        print("ERROR: test raised exception: {}".format(e))
+        import traceback
+
+        traceback.print_exc()
+        failed = True
+
+    return failed
+
+
 def run_find_battery_size_tests(my_predbat):
     """
     Run all find_battery_size tests
@@ -834,6 +1029,22 @@ def run_find_battery_size_tests(my_predbat):
         return failed
 
     failed |= test_battery_size_tracking_no_nominal(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_battery_size_tracking_none_stored_on_failure(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_battery_size_tracking_skip_after_none(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_update_soc_max_calculated_sensor_all_none(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_update_soc_max_calculated_sensor_mixed_none(my_predbat)
     if failed:
         return failed
 
