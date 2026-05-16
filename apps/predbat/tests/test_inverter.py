@@ -1352,6 +1352,85 @@ def test_discharge_window_none_illegal_time(test_name, my_predbat, dummy_items):
     return failed
 
 
+def test_charge_window_invalid_format_time(test_name, my_predbat, dummy_items):
+    """
+    Test charge window handling when time has an invalid format (e.g., '14:70:00')
+    This should result in None after time_string_to_stamp and trigger safe defaults, not a crash
+    """
+    failed = False
+    print(f"**** Running Test: {test_name} ****")
+
+    inv = Inverter(my_predbat, 0)
+    inv.sleep = dummy_sleep
+    inv.inv_has_charge_enable_time = True
+
+    # Set invalid time value that will cause time_string_to_stamp to return None (minutes out of range)
+    dummy_items["select.charge_start_time"] = "14:70:00"
+    dummy_items["select.charge_end_time"] = "14:70:00"
+    dummy_items["switch.scheduled_charge_enable"] = "on"
+
+    inv.update_status(my_predbat.minutes_now)
+
+    # Should set safe defaults
+    if inv.charge_enable_time != False:
+        print(f"ERROR: {test_name} - charge_enable_time should be False, got {inv.charge_enable_time}")
+        failed = True
+    if inv.charge_start_time_minutes != my_predbat.forecast_minutes:
+        print(f"ERROR: {test_name} - charge_start_time_minutes should be {my_predbat.forecast_minutes}, got {inv.charge_start_time_minutes}")
+        failed = True
+    if inv.charge_end_time_minutes != my_predbat.forecast_minutes:
+        print(f"ERROR: {test_name} - charge_end_time_minutes should be {my_predbat.forecast_minutes}, got {inv.charge_end_time_minutes}")
+        failed = True
+    if inv.track_charge_start != "00:00:00":
+        print(f"ERROR: {test_name} - track_charge_start should be '00:00:00', got {inv.track_charge_start}")
+        failed = True
+    if inv.track_charge_end != "00:00:00":
+        print(f"ERROR: {test_name} - track_charge_end should be '00:00:00', got {inv.track_charge_end}")
+        failed = True
+
+    return failed
+
+
+def test_discharge_window_invalid_format_time(test_name, my_predbat, dummy_items):
+    """
+    Test discharge window handling when time has an invalid format (e.g., '14:70:00')
+    This should result in None after time_string_to_stamp and trigger safe defaults, not a crash
+    """
+    failed = False
+    print(f"**** Running Test: {test_name} ****")
+
+    inv = Inverter(my_predbat, 0)
+    inv.sleep = dummy_sleep
+    inv.inv_has_discharge_enable_time = True
+    inv.inv_has_ge_inverter_mode = False
+
+    # Set invalid time value that will cause time_string_to_stamp to return None (minutes out of range)
+    dummy_items["select.discharge_start_time"] = "14:70:00"
+    dummy_items["select.discharge_end_time"] = "14:70:00"
+    dummy_items["switch.scheduled_discharge_enable"] = "on"
+
+    inv.update_status(my_predbat.minutes_now)
+
+    # Should set safe defaults
+    if inv.discharge_enable_time != False:
+        print(f"ERROR: {test_name} - discharge_enable_time should be False, got {inv.discharge_enable_time}")
+        failed = True
+    if inv.discharge_start_time_minutes != 0:
+        print(f"ERROR: {test_name} - discharge_start_time_minutes should be 0, got {inv.discharge_start_time_minutes}")
+        failed = True
+    if inv.discharge_end_time_minutes != 0:
+        print(f"ERROR: {test_name} - discharge_end_time_minutes should be 0, got {inv.discharge_end_time_minutes}")
+        failed = True
+    if inv.track_discharge_start != "00:00:00":
+        print(f"ERROR: {test_name} - track_discharge_start should be '00:00:00', got {inv.track_discharge_start}")
+        failed = True
+    if inv.track_discharge_end != "00:00:00":
+        print(f"ERROR: {test_name} - track_discharge_end should be '00:00:00', got {inv.track_discharge_end}")
+        failed = True
+
+    return failed
+
+
 def test_discharge_window_none_value(test_name, my_predbat, dummy_items):
     """
     Test discharge window handling when value is None from get_arg returning None
@@ -2159,12 +2238,20 @@ charge_start_service:
     if failed:
         return failed
 
+    failed |= test_charge_window_invalid_format_time("charge_window_invalid_format_time", my_predbat, dummy_items)
+    if failed:
+        return failed
+
     failed |= test_charge_window_none_value("charge_window_none_value", my_predbat, dummy_items)
     if failed:
         return failed
 
     # Test discharge window None handling
     failed |= test_discharge_window_none_illegal_time("discharge_window_illegal_time", my_predbat, dummy_items)
+    if failed:
+        return failed
+
+    failed |= test_discharge_window_invalid_format_time("discharge_window_invalid_format_time", my_predbat, dummy_items)
     if failed:
         return failed
 

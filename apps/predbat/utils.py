@@ -777,7 +777,11 @@ def time_string_to_stamp(time_string):
     if isinstance(time_string, str) and time_string.startswith("24:"):
         time_string = "00:" + time_string[3:]
 
-    return datetime.strptime(time_string, "%H:%M:%S")
+    try:
+        return datetime.strptime(time_string, "%H:%M:%S")
+    except ValueError:
+        print("WARN: time_string_to_stamp: invalid time string '{}', returning None".format(time_string))
+        return None
 
 
 def compute_window_minutes(start_time, end_time, minutes_now):
