@@ -1332,9 +1332,16 @@ Called when a charge/discharge is cancelled and the inverter goes back to home d
 topic: **topic**/set/auto
 payload: true
 
-## Solcast Solar Forecast
+## Solar Forecast
 
-As described in the [Predbat installation instructions](install.md#solcast-install), Predbat needs a solar forecast
+As described in the [Predbat installation instructions](install.md#solar-forecast-install), Predbat needs a solar forecast
+in order to predict solar generation and battery charging.
+
+The Solar forecast configuration in `apps.yaml` should be configured for either for the [Solcast integration](#solcast-solar-forecast), [Forecast.solar](#forecastsolar-solar-forecast) or [Open-Meteo](#open-meteo-solar-forecast).
+
+### Solcast Solar Forecast
+
+As described in the [Predbat installation instructions](install.md#solar-forecast-install, Predbat needs a solar forecast
 in order to predict solar generation and battery charging which can be provided by the Solcast integration.
 
 By default, the template `apps.yaml` is pre-configured to use the [Solcast forecast integration](install.md#solcast-home-assistant-integration-method) for Home Assistant.
@@ -1408,7 +1415,7 @@ This can have an impact on planning, especially for things like freeze charging 
 
 See also [PV configuration options in Home Assistant](customisation.md#solar-pv-adjustment-options).
 
-## Forecast.solar Solar Forecast
+### Forecast.solar Solar Forecast
 
 The Forecast.solar service can also be used in Predbat, the free version offer access without an API Key but is limited to hourly data and does not provide any 10% or 90% data.
 Predbat Solar calibration can use past data to improve this information and provide the 10% data.
@@ -1450,11 +1457,11 @@ Optionally you can set an api_key for personal or professional accounts and you 
 
 Note you can omit any of these settings for a default value. They do not have to be exact if you use Predbat auto calibration for PV to improve the data quality.
 
-## Open-Meteo Solar Forecast
+### Open-Meteo Solar Forecast
 
 [Open-Meteo](https://open-meteo.com/) is a free, open-source weather API that provides solar irradiance forecasts with no API key required.
 Predbat fetches the Global Tilted Irradiance (GTI) for each array and converts it to a power estimate using a PVWatts cell-temperature model.
-Ensemble members are used to derive a P10 pessimistic estimate alongside the central P50.
+Ensemble members are used to derive a PV10 pessimistic estimate alongside the central PV50.
 
 You can define one or more rooftop arrays by providing a list; they will be summed automatically.
 
@@ -1524,7 +1531,7 @@ These are described in detail in [Energy Rates](energy-rates.md) and are listed 
 - **rates_export_override** - Over-ride export rate for specific date and time range
 - **futurerate_url** - URL of future energy market prices for Agile users
 - **futurerate_adjust_import** and **futurerate_adjust_export** - Whether tomorrow's predicted import or export prices should be adjusted based on market prices or not
-- **futurerate_adjust_auto** - Auto-detect which of import/export are Agile and calibrate only those rates; overrides `futurerate_adjust_import` / `futurerate_adjust_export`; requires the Octopus Energy integration or Predbat's Octopus Component
+- **futurerate_adjust_auto** - Auto-detect which of the import/export rates are Agile and calibrate only those rates; overrides `futurerate_adjust_import` / `futurerate_adjust_export`; requires the Octopus Energy integration or Predbat's Octopus Component
 - **futurerate_peak_start** and **futurerate_peak_end** - start/end times for peak-rate adjustment
 - **carbon_postcode** - Postcode to retrieve Carbon intensity grid information for
 - **carbon_automatic** - Retrieve Carbon intensity information automatically based upon postcode

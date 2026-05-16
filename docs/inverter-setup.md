@@ -99,7 +99,7 @@ Click on the 'GivTCP' app, then click 'INSTALL'
   For example, if you have a gateway and two AIOs you could use the prefixes 'GW', 'AIO-1' and 'AIO-2'.
   The prefixes should be set before you start using GivTCP in anger
   as changing the prefixes later on will result in both the old and new sensor names appearing in Home Assistant with the 'old' sensors being "unavailable".<BR>
-  Note that if you do change the givtcp prefixes then you will also have to edit the apps.yaml configuration file to match,
+  Note that if you do change the givtcp prefixes then you will also have to edit the `apps.yaml` configuration file to match,
   and change the sensor names that Predbat is looking for (by default prefixed 'givtcp_xxx') to your new sensor naming structure
 
 - Click Next and Next to get to the Selfrun page, and turn on Self Run so that GivTCP automatically retrieves data from your inverter. The Self Run Loop Timer is how often GivTCP will retrieve data - it's
@@ -1790,7 +1790,7 @@ sensor:
 
 If you have multiple batteries connected to your SolarEdge inverter and are using the SolarEdge Modbus Multi integration, this enumerates the multiple batteries as b1, b2, b3, etc with separate entities per battery.
 
-You will need to make a number of changes to the solaredge apps.yaml, replacing the following entries:
+You will need to make a number of changes to the solaredge `apps.yaml`, replacing the following entries:
 
 ```yaml
   battery_rate_max:

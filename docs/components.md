@@ -180,7 +180,7 @@ Example usage in VSCode
 - Browse all entities
 - Retrieve battery plan data
 - Override plan for specific time periods
-- Access apps.yaml configuration
+- Access `apps.yaml` configuration
 
 ---
 
@@ -210,7 +210,7 @@ Connects directly to the GivEnergy Cloud to control your GivEnergy inverter and 
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `ge_cloud_direct` | Boolean | Yes | - | `ge_cloud_direct` | Set to `true` to enable GivEnergy Cloud control |
 | `api_key` | String | Yes | - | `ge_cloud_key` | Your GivEnergy Cloud API key |
-| `automatic` | Boolean | No | false | `ge_cloud_automatic` | Set to `true` to automatically configured Predbat to use GivEnergy Cloud direct (no additional apps.yaml changes required) |
+| `automatic` | Boolean | No | false | `ge_cloud_automatic` | Set to `true` to automatically configured Predbat to use GivEnergy Cloud direct (no additional `apps.yaml` changes required) |
 
 #### How to get your API key (gecloud)
 
@@ -272,7 +272,7 @@ Connects to your Octopus Energy account to automatically download your tariff ra
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `key` | String | Yes | - | `octopus_api_key` | Your Octopus Energy API key |
 | `account_id` | String | Yes | - | `octopus_api_account` | Your Octopus Energy account number (starts with A-) |
-| `automatic` | Boolean | No | true | `octopus_automatic` | Set to `true` to automatically configure Predbat to use this Component (no need to update apps.yaml) |
+| `automatic` | Boolean | No | true | `octopus_automatic` | Set to `true` to automatically configure Predbat to use this Component (no need to update `apps.yaml`) |
 
 #### How to get your API credentials (octopus)
 
@@ -331,7 +331,7 @@ Select control my battery for 'Events Only'.
 1. Log in to your Axle Energy VPP portal at <https://vpp.axle.energy>
 2. Navigate to the Home Assistant integration section
 3. Copy your API key
-4. Paste it into `axle_api_key` in apps.yaml
+4. Paste it into **axle_api_key** in `apps.yaml`
 
 #### Sensor Attributes (axle)
 
@@ -515,7 +515,7 @@ Integrates with Fox ESS inverters for monitoring and controlling Fox ESS battery
 | Option | Type | Required | Default | Config Key | Description |
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `key` | String | Yes | - | `fox_key` | Your Fox ESS API key |
-| `automatic` | Boolean | No | false | `fox_automatic` | Set to `true` to automatically configured Predbat to use the Fox inverter (no manual apps.yaml updates required) |
+| `automatic` | Boolean | No | false | `fox_automatic` | Set to `true` to automatically configured Predbat to use the Fox inverter (no manual `apps.yaml` updates required) |
 | `automatic_ignore_pv` | Boolean | No | false | `fox_automatic_ignore_pv` | When `automatic` is enabled, set to `true` to prevent Fox Cloud from overwriting `pv_power` and `pv_today` config. Useful for AC-coupled setups where PV is measured independently and Fox Cloud reports zero/absent PV data |
 
 ---
@@ -551,7 +551,7 @@ Integrates with Solis inverters for monitoring and controlling Solis battery sys
 | `api_key` | String | Yes | - | `solis_api_key` | Your Solis Cloud API Key (KeyId) |
 | `api_secret` | String | Yes | - | `solis_api_secret` | Your Solis Cloud API Secret (KeySecret) |
 | `inverter_sn` | String/List | No | - | `solis_inverter_sn` | Inverter serial number(s) - Leave unset to see all. Single string or list of strings for multiple inverters |
-| `automatic` | Boolean | No | false | `solis_automatic` | Set to `true` to automatically configure Predbat to use the Solis inverter (no manual apps.yaml sensor updates required) |
+| `automatic` | Boolean | No | false | `solis_automatic` | Set to `true` to automatically configure Predbat to use the Solis inverter (no manual `apps.yaml` sensor updates required) |
 | `base_url` | String | No | Auto-detected | `solis_base_url` | Solis Cloud API base URL (automatically selects correct region) |
 | `control_enable` | Boolean | No | true | `solis_control_enable` | Enable/disable control commands (set to false for monitoring only) |
 
@@ -814,7 +814,7 @@ For a detailed explanation of how the neural network works and comprehensive con
 | `load_ml_max_days_history` | Integer | No | 28 | `load_ml_max_days_history` | Maximum days of load history to fetch from HA on each poll (bounded by HA recorder retention) |
 | `load_ml_database_days` | Integer | No | 90 | `load_ml_database_days` | Days of history to accumulate in the on-disk database (`predbat_ml_history.npz`); set to 0 to disable the database |
 
-Note: `load_today`, `pv_today` and `car_charging_energy` apps.yaml configuration items are also used, but these should already be set in Predbat.
+Note: **load_today**, **pv_today** and **car_charging_energy** `apps.yaml` configuration items are also used, but these should already be set in Predbat.
 
 #### Configuration example (load_ml)
 

@@ -19,7 +19,7 @@ When changing tariffs, you should use your judgment, the Predbat Compare data is
 
 ## Configuring the tariff's to compare
 
-First, you need to tell Predbat in apps.yaml which tariffs you want to compare, you should list all the tariffs you realistically might want to switch between, including your current tariff to act as a baseline.
+First, you need to tell Predbat in `apps.yaml` which tariffs you want to compare, you should list all the tariffs you realistically might want to switch between, including your current tariff to act as a baseline.
 
 Below is a suggestion of various Octopus tariff combinations (valid October 2025) against region A.
 You will need to change **dno_region** to match your region code if you decide to use this template - see list of [Electricity region codes](https://energy-stats.uk/dno-region-codes-explained/).
@@ -138,7 +138,7 @@ The predicted cost is also shown, but keep in mind ending the day with an empty 
 
 ## Comparison sensors
 
-For each tariff a new sensor is created in Home Assistant called **predbat.compare_tariff_id** where **id** is the ID name you entered above in apps.yaml. This sensor will track the cost as its main value and many details about the prediction in its attributes.
+For each tariff a new sensor is created in Home Assistant called **predbat.compare_tariff_id** where **id** is the ID name you entered above in `apps.yaml`. This sensor will track the cost as its main value and many details about the prediction in its attributes.
 
 You can create charts from these sensors to show how the different tariffs compare on a daily basis.
 
@@ -146,8 +146,8 @@ You can create charts from these sensors to show how the different tariffs compa
 
 ## Overriding Predbat configuration per tariff
 
-You can override any standard Predbat configuration setting for a specific tariff comparison using the `config:` block.
-This is applied before the scenario is run and is used to model that comparison scenario.
+You can override any standard Predbat configuration setting for a specific tariff comparison using the `config:` block in `apps.yaml`.
+This configuration override is applied before the comparison scenario is run and is used to model that scenario.
 
 For example, to model a tariff combined with a higher minimum SoC target:
 
@@ -167,7 +167,7 @@ These are applied after live inverter data is fetched, so they fully replace the
 All four keys are optional and can be combined freely:
 
 | Key | Description | Unit |
-|-----|-------------|------|
+| ----- | ------------- | ------ |
 | `override_soc_max_kwh` | Battery usable capacity | kWh |
 | `override_battery_rate_max_charge_kw` | Maximum battery charge rate | kW |
 | `override_battery_rate_max_discharge_kw` | Maximum battery discharge rate | kW |
