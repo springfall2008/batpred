@@ -76,6 +76,7 @@ SIGENERGY_COMMAND_RETRY_DELAY = 2.0
 # Sigenergy API response codes
 SIGENERGY_CODE_SUCCESS = 0
 SIGENERGY_CODE_PARAM_ILLEGAL = 1000
+SIGENERGY_CODE_RPC_FAIL = 1001
 SIGENERGY_CODE_WRONG_SERIAL = 1101
 SIGENERGY_CODE_REGISTRATION_INCOMPLETE = 1102
 SIGENERGY_CODE_IN_OTHER_VPP = 1103
@@ -88,6 +89,7 @@ SIGENERGY_CODE_RPC_FAIL = 1109
 SIGENERGY_CODE_INTERFACE_CURRENT_LIMITED = 1110
 SIGENERGY_CODE_STATION_NOT_PERMITTED = 1111
 SIGENERGY_CODE_IN_OTHER_VPP_EVERGEN = 1112
+SIGENERGY_CODE_SYSTEM_PENDING_REVIEW = 1116 # Guess, seems to give this until user approves onboarding
 SIGENERGY_CODE_ACCESS_RESTRICTION = 1201
 SIGENERGY_CODE_CLIENT_NOT_FOUND = 1301
 SIGENERGY_CODE_STATION_STATUS_ANOMALY = 1302
@@ -126,6 +128,7 @@ SIGENERGY_ACTIVE_MODE_SELF_GRID = "selfConsumption-grid"
 
 # Device type strings returned by the device-list endpoint
 SIGENERGY_DEVICE_INVERTER = "Inverter"
+SIGENERGY_DEVICE_AIO = "AIO"
 SIGENERGY_DEVICE_BATTERY = "Battery"
 SIGENERGY_DEVICE_GATEWAY = "Gateway"
 SIGENERGY_DEVICE_METER = "Meter"
@@ -340,6 +343,8 @@ class SigenergyAPI(ComponentBase):
             "Content-Type": "application/json",
         }
 
+        self.log("Requesting {} {} with params={} json={}".format(method, path, params, json_data))
+
         for attempt in range(retries):
             await self._enforce_rate_limit()
             try:
@@ -496,6 +501,95 @@ class SigenergyAPI(ComponentBase):
                 except Exception:
                     pass
         self.log("SigenergyAPI: System {} has {} device(s)".format(system_id, len(devices)))
+        return True
+
+    def _get_inverter_serial(self, system_id):
+        """Return the serial number of the first Inverter (or AIO) device for a system.
+
+        Args:
+            system_id: Sigenergy system unique identifier.
+
+        Returns:
+            Serial number string, or None if not found.
+        """
+        for device in self.devices.get(system_id, []):
+            dt = device.get("deviceType", "")
+            if dt in (SIGENERGY_DEVICE_INVERTER, SIGENERGY_DEVICE_AIO):
+                return device.get("serialNumber")
+        return None
+
+    async def fetch_inverter_realtime(self, system_id):
+        """Fetch realtime data from the inverter realtimeInfo endpoint.
+
+        Endpoint: GET /openapi/systems/{systemId}/devices/{serialNumber}/realtimeInfo
+
+        Maps device-level fields to the same dict format as fetch_energy_flow so
+        that all downstream code (publish_system_entities, apply_controls) works
+        unchanged.  Also updates daily_summary with pvEnergyDaily if present.
+
+        Field sign conventions (realtimeInfo vs energyFlow):
+          batPower:   realtimeInfo positive=discharging  → energyFlow positive=charging (negated)
+          activePower: positive=generation/export        → gridPower positive=export (same)
+          loadPower is derived as: pv + battery_discharge - grid_export
+
+        Note: The API enforces a 5-minute access restriction per device, so this
+        should only be called at SIGENERGY_POLL_INTERVAL intervals (default 5 min).
+
+        Args:
+            system_id: Sigenergy system unique identifier.
+
+        Returns:
+            True on success, False on failure.
+        """
+        serial = self._get_inverter_serial(system_id)
+        if not serial:
+            self.log("Warn: SigenergyAPI: No inverter device found for system {}".format(system_id))
+            return False
+
+        data = await self._request("GET", "/openapi/systems/{}/devices/{}/realtimeInfo".format(system_id, serial))
+        if data is None:
+            self.log("Warn: SigenergyAPI: Failed to fetch inverter realtime info for {}".format(system_id))
+            return False
+
+        # data has systemId, serialNumber, deviceType, realTimeInfo
+        rt = data.get("realTimeInfo", data)
+        if isinstance(rt, str):
+            try:
+                rt = json.loads(rt)
+            except Exception:
+                pass
+
+        bat_soc = _safe_float(rt.get("batSoc", 0))
+        # batPower: appears to be negative for discharge, positive for charge — invert to match energyFlow convention
+        bat_power_kw = _safe_float(rt.get("batPower", 0))
+        pv_power_kw = _safe_float(rt.get("pvPower", 0))
+        # activePower: Active power of the inverter itself, positive is generation, negative is consumption. Generation includes discharging the battery.
+        active_power_kw = _safe_float(rt.get("activePower", 0))
+        grid_power_kw = 0 # Unknown...
+        # Derive load: pv + battery_discharge - grid_export
+        # battery_discharge = -bat_power_kw when bat_power_kw < 0
+        battery_discharge_kw = max(0.0, -bat_power_kw)
+        load_power_kw = max(0.0, pv_power_kw + battery_discharge_kw - grid_power_kw)
+
+        flow = {
+            "batterySoc": bat_soc,
+            "batteryPower": bat_power_kw,
+            "pvPower": pv_power_kw,
+            "gridPower": grid_power_kw,
+            "loadPower": load_power_kw,
+            "evPower": 0.0,
+        }
+        self.energy_flow[system_id] = flow
+
+        # Update daily summary from pvEnergyDaily if present
+        pv_daily = rt.get("pvEnergyDaily")
+        if pv_daily is not None:
+            if system_id not in self.daily_summary:
+                self.daily_summary[system_id] = {}
+            self.daily_summary[system_id]["dailyPowerGeneration"] = _safe_float(pv_daily)
+
+        self.log("SigenergyAPI: System {} realtimeInfo — SOC {:.0f}% battery {:.2f}kW pv {:.2f}kW grid {:.2f}kW load {:.2f}kW".format(
+            system_id, bat_soc, bat_power_kw, pv_power_kw, grid_power_kw, load_power_kw))
         return True
 
     async def fetch_energy_flow(self, system_id):
@@ -1407,20 +1501,21 @@ class SigenergyAPI(ComponentBase):
                 await self.fetch_controls(sid)
             await self.publish_controls()
 
-        # Automatic configuration
-        if first and self.automatic:
-            await self.automatic_config()
-
         # Realtime data refresh
         if first or seconds % SIGENERGY_POLL_INTERVAL == 0:
             for sid in list(self.systems.keys()):
-                await self.fetch_energy_flow(sid)
+                if not await self.fetch_inverter_realtime(sid):
+                    await self.fetch_energy_flow(sid)
                 await self.fetch_daily_summary(sid)
 
         # Publish entities
         if first or seconds % SIGENERGY_POLL_INTERVAL == 0:
             for sid in list(self.systems.keys()):
                 await self.publish_system_entities(sid)
+
+        # Automatic configuration
+        if first and self.automatic:
+            await self.automatic_config()
 
         # Apply controls
         is_readonly = self.get_state_wrapper("switch.{}_set_read_only".format(self.prefix), default="off") == "on"
@@ -1475,10 +1570,7 @@ class MockBase:  # pragma: no cover
 
     def set_arg(self, key, value):
         """Print auto-config arg assignment."""
-        if isinstance(value, list):
-            state = "[list of {} items]".format(len(value))
-        else:
-            state = str(value)
+        state = str(value)
         print("Set arg {} = {}".format(key, state))
 
     def update_success_timestamp(self):
@@ -1627,6 +1719,112 @@ async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode
     return 0
 
 
+async def test_mqtt_connection(app_key, app_secret, base_url, system_id=None, topic_filter="#"):  # pragma: no cover
+    """Connect to the Sigenergy MQTT broker, request push data, and print all incoming messages.
+
+    Authenticates using app_key/app_secret, then:
+      1. Subscribes at MQTT protocol level to *topic_filter* to receive all broker messages.
+      2. Publishes to ``openapi/subscription/period`` with the Sigenergy subscription
+         request payload (accessToken + systemIdList) so the broker starts pushing
+         periodic telemetry data.
+      3. Prints every received message to stdout until the user presses Ctrl+C.
+
+    The subscription payload follows the spec at
+    https://developer.sigencloud.com/user/api/document/45:
+      { "accessToken": "<token>", "systemIdList": ["<id>", ...] }
+
+    Args:
+        app_key: Sigenergy Application Key.
+        app_secret: Sigenergy Application Secret.
+        base_url: REST API base URL (MQTT host is derived from this).
+        system_id: Optional system ID (or comma-separated list) to subscribe to.
+                   When None, a full system scan is performed first to discover
+                   all authorised system IDs.
+        topic_filter: MQTT protocol-level topic filter (default '#' = all topics).
+
+    Returns:
+        0 on clean exit, 1 on error.
+    """
+    if not HAS_AIOMQTT:
+        print("x aiomqtt is not installed.  Run: pip install aiomqtt")
+        return 1
+
+    print("\n{}".format("=" * 60))
+    print("Sigenergy MQTT test mode")
+    print("Base URL : {}".format(base_url))
+    print("App Key  : {}...".format(app_key[:10] if len(app_key) >= 10 else app_key))
+    print("Topic    : {}".format(topic_filter))
+    print("{}\n".format("=" * 60))
+
+    mock_base = MockBase()
+    sig = SigenergyAPI(
+        mock_base,
+        app_key=app_key,
+        app_secret=app_secret,
+        base_url=base_url,
+        system_id=system_id,
+    )
+
+    token = await sig.get_access_token()
+    if not token:
+        print("x Authentication failed")
+        return 1
+    print("+ Authentication successful")
+
+    # Resolve system ID list for the subscription request
+    if system_id:
+        system_id_list = [s.strip() for s in system_id.split(",") if s.strip()]
+    else:
+        print("+ No --system-id provided; scanning for authorised systems ...")
+        await sig.fetch_system_list()
+        system_id_list = list(sig.systems.keys())
+        if not system_id_list:
+            print("x No systems found; cannot build subscription request")
+            return 1
+        print("+ Found systems: {}".format(system_id_list))
+
+    mqtt_host = sig.mqtt_host
+    print("+ Connecting to MQTT broker {}:{} (TLS) ...".format(mqtt_host, SIGENERGY_MQTT_PORT))
+
+    tls_context = ssl.create_default_context()
+    try:
+        async with aiomqtt.Client(
+            hostname=mqtt_host,
+            port=SIGENERGY_MQTT_PORT,
+            username=app_key,
+            password=token,
+            tls_context=tls_context,
+            keepalive=60,
+        ) as client:
+            # MQTT protocol-level subscribe so we receive everything the broker sends us
+            await client.subscribe(topic_filter)
+            print("+ MQTT subscribe to '{}' OK".format(topic_filter))
+
+            # Sigenergy application-level subscription: publish to openapi/subscription/period
+            # so the broker starts pushing periodic telemetry (spec doc 45)
+            sub_payload = {"accessToken": token, "systemIdList": system_id_list}
+            await client.publish("openapi/subscription/period", payload=json.dumps(sub_payload), qos=1)
+            print("+ Published subscription request for systems: {}".format(system_id_list))
+            print("  Waiting for messages (Ctrl+C to stop) ...\n")
+
+            async for message in client.messages:
+                payload_bytes = message.payload if isinstance(message.payload, (bytes, bytearray)) else str(message.payload).encode()
+                payload_str = payload_bytes.decode("utf-8", errors="replace")
+                try:
+                    payload_display = json.dumps(json.loads(payload_str), indent=2)
+                except (json.JSONDecodeError, ValueError):
+                    payload_display = payload_str
+                print("[{}] Topic: {}".format(datetime.now().strftime("%H:%M:%S.%f")[:-3], message.topic))
+                print("    QoS: {}  Retain: {}".format(message.qos, message.retain))
+                print("    Payload: {}".format(payload_display))
+                print()
+    except KeyboardInterrupt:
+        pass
+
+    print("\n+ MQTT test session ended")
+    return 0
+
+
 def main():  # pragma: no cover
     """Main entry point for standalone testing."""
     parser = argparse.ArgumentParser(
@@ -1643,6 +1841,7 @@ def main():  # pragma: no cover
         choices=["eco", "charge", "freeze_charge", "export", "freeze_export"],
         help="Control mode to test",
     )
+    parser.add_argument("--mqtt-topic", default="#", help="MQTT topic filter used with --mqtt-test (default: '#' = all topics)")
 
     action_group = parser.add_mutually_exclusive_group()
     action_group.add_argument(
@@ -1655,10 +1854,18 @@ def main():  # pragma: no cover
         action="store_true",
         help="Offboard (remove) the system specified by --system-id",
     )
+    action_group.add_argument(
+        "--mqtt-test",
+        action="store_true",
+        help="Connect to the MQTT broker and print all received messages until Ctrl+C",
+    )
 
     args = parser.parse_args()
-    action = "onboard" if args.onboard else ("offboard" if args.offboard else None)
-    result = asyncio.run(test_sigenergy_api(args.app_key, args.app_secret, args.base_url, args.system_id, args.test_mode, action))
+    if args.mqtt_test:
+        result = asyncio.run(test_mqtt_connection(args.app_key, args.app_secret, args.base_url, args.system_id, args.mqtt_topic))
+    else:
+        action = "onboard" if args.onboard else ("offboard" if args.offboard else None)
+        result = asyncio.run(test_sigenergy_api(args.app_key, args.app_secret, args.base_url, args.system_id, args.test_mode, action))
     raise SystemExit(result or 0)
 
 
