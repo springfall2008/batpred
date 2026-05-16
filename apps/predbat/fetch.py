@@ -2169,6 +2169,7 @@ class Fetch:
 
         # Battery charging options
         self.battery_capacity_nominal = self.get_arg("battery_capacity_nominal")
+        self.battery_scaling_auto = self.get_arg("battery_scaling_auto", default=False)
         self.battery_loss = 1.0 - self.get_arg("battery_loss")
         self.battery_loss_discharge = 1.0 - self.get_arg("battery_loss_discharge")
         self.inverter_loss = 1.0 - self.get_arg("inverter_loss")
