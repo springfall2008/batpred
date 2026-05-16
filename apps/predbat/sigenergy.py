@@ -70,12 +70,46 @@ from component_base import ComponentBase
 
 SIGENERGY_DEFAULT_BASE_URL = "https://openapi-eu.sigencloud.com"  # cspell:disable-line
 SIGENERGY_TIMEOUT = 20                # seconds per HTTP request
-SIGENERGY_MAX_RETRIES = 3
+SIGENERGY_MAX_RETRIES = 5  # must be >= len(SIGENERGY_RATE_LIMIT_BACKOFF) for full backoff coverage
+SIGENERGY_COMMAND_RETRY_DELAY = 2.0
+
+# Sigenergy API response codes
+SIGENERGY_CODE_SUCCESS = 0
+SIGENERGY_CODE_PARAM_ILLEGAL = 1000
+SIGENERGY_CODE_WRONG_SERIAL = 1101
+SIGENERGY_CODE_REGISTRATION_INCOMPLETE = 1102
+SIGENERGY_CODE_IN_OTHER_VPP = 1103
+SIGENERGY_CODE_DEVICE_OFFLINE = 1104
+SIGENERGY_CODE_SOFTWARE_NO_VPP = 1105
+SIGENERGY_CODE_STATION_NOT_FOUND = 1106
+SIGENERGY_CODE_AIO_INVERTER_ONLY = 1107
+SIGENERGY_CODE_STATION_INFO_NOT_FOUND = 1108
+SIGENERGY_CODE_RPC_FAIL = 1109
+SIGENERGY_CODE_INTERFACE_CURRENT_LIMITED = 1110
+SIGENERGY_CODE_STATION_NOT_PERMITTED = 1111
+SIGENERGY_CODE_IN_OTHER_VPP_EVERGEN = 1112
+SIGENERGY_CODE_ACCESS_RESTRICTION = 1201
+SIGENERGY_CODE_CLIENT_NOT_FOUND = 1301
+SIGENERGY_CODE_STATION_STATUS_ANOMALY = 1302
+SIGENERGY_CODE_CLIENT_EXISTS = 1303
+SIGENERGY_CODE_FIRMWARE_MISMATCH = 1304
+SIGENERGY_CODE_NO_PERMISSION_STATION = 1401
+SIGENERGY_CODE_NO_PERMISSION = 1402
+SIGENERGY_CODE_COMMAND_FAILED = 1501
+SIGENERGY_CODE_INTERNAL_ERROR = 1502
+SIGENERGY_CODE_ANTI_BACKFLOW_ENABLED = 1503
+SIGENERGY_CODE_PEAK_SHAVING_ENABLED = 1504
+SIGENERGY_CODE_INVITATION_INVALID = 1600
+SIGENERGY_CODE_ACCOUNT_SYSTEM_ERROR = 1601
+SIGENERGY_CODE_ACCOUNT_ALREADY_REGISTERED = 1602
+SIGENERGY_CODE_ACCOUNT_UNREVIEWED = 1603
+SIGENERGY_CODE_DEVELOPER_NOT_APPROVED = 1604
 SIGENERGY_TOKEN_EXPIRY_BUFFER = 600   # refresh token 10 min before expiry
 SIGENERGY_MIN_REQUEST_INTERVAL = 6.0  # enforce ≥10 req/min API limit
 SIGENERGY_POLL_INTERVAL = 300         # realtime data poll every 5 minutes
 SIGENERGY_DEVICE_POLL_INTERVAL = 1800  # device list refresh every 30 minutes
-SIGENERGY_COMMAND_RETRY_DELAY = 2.0
+SIGENERGY_RATE_LIMIT_BACKOFF = [15, 30, 60, 120, 480]  # seconds to wait after code 1201
+SIGENERGY_BATTERY_NOMINAL_VOLTAGE_V = 28.8  # 8S LiFePO4 pack: 8 × 3.6V; used to convert ratedEnergy (Ah) → kWh
 SIGENERGY_MQTT_PORT = 8883             # TLS MQTT port on the Sigenergy broker
 
 # Operating mode enums (REST mode switch endpoint — MSC and FFG only; NBI is not used)
@@ -247,6 +281,12 @@ class SigenergyAPI(ComponentBase):
                     return None
 
                 token_data = data.get("data", {})
+                if isinstance(token_data, str):
+                    try:
+                        token_data = json.loads(token_data)
+                    except Exception as e:
+                        self.log("Warn: SigenergyAPI: Failed to parse token data JSON: {}".format(e))
+                        return None
                 self.access_token = token_data.get("accessToken")
                 expires_in = _safe_int(token_data.get("expiresIn", 43200), 43200)
                 self.token_expires_at = now + expires_in
@@ -338,12 +378,39 @@ class SigenergyAPI(ComponentBase):
                             self.log("Warn: SigenergyAPI: Failed to decode response from {}: {}".format(path, e))
                             return None
 
+                        self.log("SigenergyAPI: Response from {} {}: {}".format(method, path, body))
+
                         code = body.get("code", -1)
                         if code != 0:
                             self.log("Warn: SigenergyAPI: API error code={} msg={} for {}".format(code, body.get("msg", ""), path))
+                            if code == SIGENERGY_CODE_ACCESS_RESTRICTION:
+                                # Rate-limited — exponential backoff then retry
+                                wait = SIGENERGY_RATE_LIMIT_BACKOFF[min(attempt, len(SIGENERGY_RATE_LIMIT_BACKOFF) - 1)]
+                                self.log("Warn: SigenergyAPI: Rate limited (1201) — waiting {}s before retry (attempt {}/{})" .format(wait, attempt + 1, retries))
+                                if attempt < retries - 1:
+                                    await asyncio.sleep(wait)
+                                    continue
                             return None
 
-                        return body.get("data")
+                        data = body.get("data")
+                        # Some Sigenergy endpoints double-encode the data field as a JSON string
+                        if isinstance(data, str):
+                            try:
+                                data = json.loads(data)
+                            except Exception:
+                                pass  # Leave as string if it's not valid JSON
+                        # Some endpoints return a list whose items are also JSON strings
+                        if isinstance(data, list):
+                            decoded = []
+                            for item in data:
+                                if isinstance(item, str):
+                                    try:
+                                        item = json.loads(item)
+                                    except Exception:
+                                        pass
+                                decoded.append(item)
+                            data = decoded
+                        return data
 
             except asyncio.TimeoutError:
                 self.log("Warn: SigenergyAPI: Timeout on {} {} (attempt {}/{})".format(method, path, attempt + 1, retries))
@@ -370,6 +437,16 @@ class SigenergyAPI(ComponentBase):
         if data is None:
             self.log("Warn: SigenergyAPI: Failed to fetch system list")
             return False
+
+        self.log("SigenergyAPI: System list raw data type={} value={}".format(type(data).__name__, repr(data)[:200]))
+
+        # data may be a JSON string (some Sigenergy endpoints double-encode), a list, or a dict
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except Exception as e:
+                self.log("Warn: SigenergyAPI: Failed to parse system list JSON string: {}".format(e))
+                return False
 
         # data may be a list directly or wrapped in a dict
         systems = data if isinstance(data, list) else data.get("list", data.get("records", []))
@@ -412,6 +489,12 @@ class SigenergyAPI(ComponentBase):
             return False
 
         self.devices[system_id] = devices
+        for device in devices:
+            if isinstance(device, dict) and isinstance(device.get("attrMap"), str):
+                try:
+                    device["attrMap"] = json.loads(device["attrMap"])
+                except Exception:
+                    pass
         self.log("SigenergyAPI: System {} has {} device(s)".format(system_id, len(devices)))
         return True
 
@@ -505,6 +588,50 @@ class SigenergyAPI(ComponentBase):
         self.log("SigenergyAPI: Operating mode set to {} for system {}".format(mode_int, system_id))
         return True
 
+    async def onboard_systems(self, system_ids):
+        """Onboard one or more systems into the Sigenergy platform.
+
+        Calls POST /openapi/board/onboard with a batch of system IDs.
+
+        Args:
+            system_ids: A single system ID string or a list of system ID strings.
+
+        Returns:
+            List of per-system result dicts on success (may be empty), or None on failure.
+        """
+        if isinstance(system_ids, str):
+            system_ids = [system_ids]
+        #payload = {"systemIds": system_ids}
+        self.log("SigenergyAPI: Onboarding systems: {}".format(system_ids))
+        result = await self._request("POST", "/openapi/board/onboard", json_data=system_ids)
+        if result is None:
+            self.log("Warn: SigenergyAPI: Onboard request failed for systems {}".format(system_ids))
+            return None
+        self.log("SigenergyAPI: Onboard completed for {}: {}".format(system_ids, result))
+        return result
+
+    async def offboard_systems(self, system_ids):
+        """Offboard (remove) one or more systems from the Sigenergy platform.
+
+        Calls POST /openapi/board/offboard with a batch of system IDs.
+
+        Args:
+            system_ids: A single system ID string or a list of system ID strings.
+
+        Returns:
+            List of per-system result dicts on success (may be empty), or None on failure.
+        """
+        if isinstance(system_ids, str):
+            system_ids = [system_ids]
+        payload = {"systemIds": system_ids}
+        self.log("SigenergyAPI: Offboarding systems: {}".format(system_ids))
+        result = await self._request("POST", "/openapi/board/offboard", json_data=payload)
+        if result is None:
+            self.log("Warn: SigenergyAPI: Offboard request failed for systems {}".format(system_ids))
+            return None
+        self.log("SigenergyAPI: Offboard completed for {}: {}".format(system_ids, result))
+        return result
+
     async def _publish_mqtt(self, topic, payload_dict):
         """Publish a JSON payload to the Sigenergy MQTT broker.
 
@@ -589,19 +716,22 @@ class SigenergyAPI(ComponentBase):
     def _get_battery_capacity_kwh(self, system_id):
         """Return the rated battery capacity in kWh for a system.
 
-        Prefers the batteryCapacity field from the system-list response.
+        Prefers the batteryCapacity field from the system-list response (already in kWh).
         Falls back to summing ratedEnergy from individual Battery devices.
+        The device-level ratedEnergy field is in Ah; multiply by the nominal pack voltage
+        (SIGENERGY_BATTERY_NOMINAL_VOLTAGE_V = 28.8 V for an 8S LiFePO4 pack) to convert to kWh.
         """
         system_info = self.systems.get(system_id, {})
         capacity = _safe_float(system_info.get("batteryCapacity", 0))
         if capacity > 0:
             return capacity
 
-        # Fallback: sum device-level ratedEnergy
+        # Fallback: sum device-level ratedEnergy (Ah) converted to kWh
         for device in self.devices.get(system_id, []):
             if device.get("deviceType") == SIGENERGY_DEVICE_BATTERY:
                 attr = device.get("attrMap", {})
-                capacity += _safe_float(attr.get("ratedEnergy", 0))
+                rated_ah = _safe_float(attr.get("ratedEnergy", 0))
+                capacity += rated_ah * SIGENERGY_BATTERY_NOMINAL_VOLTAGE_V / 1000.0
         return capacity
 
     def _get_battery_max_power_kw(self, system_id):
@@ -1355,15 +1485,16 @@ class MockBase:  # pragma: no cover
         """No-op success timestamp update."""
 
 
-async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode):  # pragma: no cover
-    """Run one cycle of the Sigenergy API and optionally test a control mode.
+async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode, action=None):  # pragma: no cover
+    """Run one cycle of the Sigenergy API and optionally test a control mode or boarding action.
 
     Args:
         app_key: Sigenergy Application Key.
         app_secret: Sigenergy Application Secret.
         base_url: API base URL.
-        system_id: Optional system ID filter string.
+        system_id: Optional system ID filter string (required for onboard/offboard).
         test_mode: One of 'eco', 'charge', 'freeze_charge', 'export', 'freeze_export', or None.
+        action: One of 'onboard', 'offboard', or None.
     """
     print("\n{}".format("=" * 60))
     print("Testing Sigenergy Cloud API")
@@ -1373,6 +1504,8 @@ async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode
         print("System ID filter: {}".format(system_id))
     if test_mode:
         print("Test mode: {}".format(test_mode))
+    if action:
+        print("Action: {}".format(action))
     print("{}\n".format("=" * 60))
 
     mock_base = MockBase()
@@ -1386,6 +1519,27 @@ async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode
         automatic=True,
         enable_controls=(test_mode is not None),
     )
+
+    # For boarding actions we only need the token, not a full system scan
+    if action in ("onboard", "offboard"):
+        if not system_id:
+            print("x --system-id is required for --{}\n".format(action))
+            return 1
+        token = await sig.get_access_token()
+        if not token:
+            print("x Authentication failed")
+            return 1
+        print("+ Authentication successful")
+        if action == "onboard":
+            board_result = await sig.onboard_systems(system_id)
+        else:
+            board_result = await sig.offboard_systems(system_id)
+        if board_result is None:
+            print("x {} failed for system {}".format(action.capitalize(), system_id))
+            return 1
+        print("+ {} successful for system {}".format(action.capitalize(), system_id))
+        print("  Results: {}".format(board_result))
+        return 0
 
     result = await sig.run(first=True, seconds=0)
     if not result:
@@ -1490,8 +1644,21 @@ def main():  # pragma: no cover
         help="Control mode to test",
     )
 
+    action_group = parser.add_mutually_exclusive_group()
+    action_group.add_argument(
+        "--onboard",
+        action="store_true",
+        help="Onboard the system specified by --system-id",
+    )
+    action_group.add_argument(
+        "--offboard",
+        action="store_true",
+        help="Offboard (remove) the system specified by --system-id",
+    )
+
     args = parser.parse_args()
-    result = asyncio.run(test_sigenergy_api(args.app_key, args.app_secret, args.base_url, args.system_id, args.test_mode))
+    action = "onboard" if args.onboard else ("offboard" if args.offboard else None)
+    result = asyncio.run(test_sigenergy_api(args.app_key, args.app_secret, args.base_url, args.system_id, args.test_mode, action))
     raise SystemExit(result or 0)
 
 

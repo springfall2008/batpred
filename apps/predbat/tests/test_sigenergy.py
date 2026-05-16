@@ -236,14 +236,17 @@ def test_sigenergy_battery_capacity(my_predbat):
     api.systems["sys1"] = {"batteryCapacity": 12.5}
     assert api._get_battery_capacity_kwh("sys1") == 12.5, "Capacity from system info"
 
-    # Fallback to device attrMap
+    # Fallback to device attrMap — ratedEnergy is in Ah, converted via nominal voltage 28.8V
+    # e.g. 314 Ah × 28.8V / 1000 = 9.0432 kWh per battery
     api.systems["sys2"] = {}
     api.devices["sys2"] = [
-        {"deviceType": "Battery", "attrMap": {"ratedEnergy": 6.5}},
-        {"deviceType": "Battery", "attrMap": {"ratedEnergy": 6.5}},
+        {"deviceType": "Battery", "attrMap": {"ratedEnergy": 314}},
+        {"deviceType": "Battery", "attrMap": {"ratedEnergy": 314}},
         {"deviceType": "Inverter", "attrMap": {"ratedActivePower": 5.0}},
     ]
-    assert api._get_battery_capacity_kwh("sys2") == 13.0, "Capacity summed from Battery devices"
+    expected_kwh = 2 * 314 * 28.8 / 1000  # = 18.0864
+    actual_kwh = api._get_battery_capacity_kwh("sys2")
+    assert abs(actual_kwh - expected_kwh) < 0.001, "Capacity summed from Battery devices, expected {:.4f} got {:.4f}".format(expected_kwh, actual_kwh)
 
     return failed
 
