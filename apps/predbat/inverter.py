@@ -585,7 +585,7 @@ class Inverter:
                 # Clamp scaling to [0.8, 1.0] relative to nominal
                 new_scaling = max(0.8, min(1.0, trimmed_mean / self.nominal_capacity))
                 self.soc_max = dp3(self.nominal_capacity * new_scaling)
-                self.log("Info: inverter {} battery_scaling_auto set scaling {:.3f} (mean {:.2f} kWh, nominal {:.2f} kWh) for ".format(self.id, new_scaling, trimmed_mean, self.nominal_capacity))
+                self.log("Info: inverter {} battery_scaling_auto set scaling {:.3f} (mean {:.2f} kWh, nominal {:.2f} kWh) resulting in soc_max {:.3f} kWh".format(self.id, new_scaling, trimmed_mean, self.nominal_capacity, self.soc_max))
             else:
                 # No nominal configured - use trimmed mean directly without clamping
                 self.soc_max = dp3(trimmed_mean)
