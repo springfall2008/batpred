@@ -779,7 +779,7 @@ def time_string_to_stamp(time_string):
 
     try:
         return datetime.strptime(time_string, "%H:%M:%S")
-    except ValueError:
+    except (ValueError, TypeError):
         print("WARN: time_string_to_stamp: invalid time string '{}', returning None".format(time_string))
         return None
 
