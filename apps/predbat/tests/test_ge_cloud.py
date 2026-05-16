@@ -214,6 +214,7 @@ def test_ge_cloud(my_predbat=None):
         ("publish_status", _test_publish_status, "Publish status"),
         ("publish_meter", _test_publish_meter, "Publish meter"),
         ("publish_info", _test_publish_info, "Publish info"),
+        ("publish_info_soh", _test_publish_info_soh, "Publish info SOH calculation"),
         ("publish_registers", _test_publish_registers, "Publish registers"),
         ("publish_evc_data", _test_publish_evc_data, "Publish EVC data"),
         ("automatic_config", _test_async_automatic_config, "Automatic config"),
@@ -2444,7 +2445,10 @@ def _test_publish_info(my_predbat):
     ge_cloud = MockGECloudDirect()
     ge_cloud.config_args["prefix"] = "predbat"
 
-    info_data = {"info": {"battery": {"nominal_capacity": 186, "nominal_voltage": 51.2, "depth_of_discharge": 0.9}, "model": "GIV-HY3.6", "max_charge_rate": 6000}}
+    info_data = {
+        "info": {"battery": {"nominal_capacity": 186, "nominal_voltage": 51.2, "depth_of_discharge": 0.9}, "model": "GIV-HY3.6", "max_charge_rate": 6000},
+        "connections": {"batteries": [{"capacity": {"full": 184.82, "design": 186}}]},
+    }
 
     ge_cloud.info["test123"] = info_data
     run_async(ge_cloud.publish_info("test123", info_data))
@@ -2456,6 +2460,28 @@ def _test_publish_info(my_predbat):
         return 1
     if ge_cloud.dashboard_items["sensor.predbat_gecloud_test123_battery_size"]["state"] != 9.52:
         print("ERROR: Expected battery size=9.52, got {}".format(ge_cloud.dashboard_items["sensor.predbat_gecloud_test123_battery_size"]["state"]))
+        return 1
+
+    # Check battery_soh entity is published (184.82 / 186 ≈ 0.9936)
+    soh_entity = "sensor.predbat_gecloud_test123_battery_soh"
+    if soh_entity not in ge_cloud.dashboard_items:
+        print("ERROR: Expected battery_soh to be published")
+        return 1
+    expected_soh = 184.82 / 186
+    actual_soh = ge_cloud.dashboard_items[soh_entity]["state"]
+    if abs(actual_soh - expected_soh) > 1e-9:
+        print("ERROR: Expected battery_soh={}, got {}".format(expected_soh, actual_soh))
+        return 1
+
+    # Check battery_dod_soh entity is published (dod * soh = 0.9 * (184.82/186))
+    dod_soh_entity = "sensor.predbat_gecloud_test123_battery_dod_soh"
+    if dod_soh_entity not in ge_cloud.dashboard_items:
+        print("ERROR: Expected battery_dod_soh to be published")
+        return 1
+    expected_dod_soh = 0.9 * expected_soh
+    actual_dod_soh = ge_cloud.dashboard_items[dod_soh_entity]["state"]
+    if abs(actual_dod_soh - expected_dod_soh) > 1e-9:
+        print("ERROR: Expected battery_dod_soh={}, got {}".format(expected_dod_soh, actual_dod_soh))
         return 1
 
     # Check model entity is published with the model name and device_info as details attribute
@@ -3622,6 +3648,106 @@ def _test_filter_data(my_predbat):
     if result[-1]["last_updated"] != "T3":
         print("ERROR test7: Expected last item T3, got {}".format(result[-1]["last_updated"]))
         return 1
+
+    return 0
+
+
+def _test_publish_info_soh(my_predbat):
+    """Test SOH calculation in publish_info with various connection/battery configurations"""
+    ge_cloud = MockGECloudDirect()
+
+    # --- Case 1: single battery, SOH < 1 ---
+    info_data = {
+        "info": {"battery": {"nominal_capacity": 186, "nominal_voltage": 51.2, "depth_of_discharge": 0.9}, "model": "GIV-HY3.6", "max_charge_rate": 6000},
+        "connections": {"batteries": [{"capacity": {"full": 180.0, "design": 200.0}}]},
+    }
+    run_async(ge_cloud.publish_info("dev1", info_data))
+
+    expected_soh = 180.0 / 200.0  # 0.9
+    actual_soh = ge_cloud.dashboard_items.get("sensor.predbat_gecloud_dev1_battery_soh", {}).get("state")
+    if actual_soh is None or abs(actual_soh - expected_soh) > 1e-9:
+        print("ERROR case1: expected soh={}, got {}".format(expected_soh, actual_soh))
+        return 1
+
+    expected_dod_soh = 0.9 * expected_soh  # 0.81
+    actual_dod_soh = ge_cloud.dashboard_items.get("sensor.predbat_gecloud_dev1_battery_dod_soh", {}).get("state")
+    if actual_dod_soh is None or abs(actual_dod_soh - expected_dod_soh) > 1e-9:
+        print("ERROR case1: expected dod_soh={}, got {}".format(expected_dod_soh, actual_dod_soh))
+        return 1
+    print("OK case1: single battery SOH={}, dod_soh={}".format(actual_soh, actual_dod_soh))
+
+    # --- Case 2: multiple batteries, SOH is summed full / summed design ---
+    ge_cloud.dashboard_items.clear()
+    info_multi = {
+        "info": {"battery": {"nominal_capacity": 186, "nominal_voltage": 51.2, "depth_of_discharge": 1.0}, "model": "GIV-HY3.6", "max_charge_rate": 6000},
+        "connections": {
+            "batteries": [
+                {"capacity": {"full": 90.0, "design": 100.0}},
+                {"capacity": {"full": 85.0, "design": 100.0}},
+            ]
+        },
+    }
+    run_async(ge_cloud.publish_info("dev2", info_multi))
+
+    expected_soh_multi = (90.0 + 85.0) / (100.0 + 100.0)  # 0.875
+    actual_soh_multi = ge_cloud.dashboard_items.get("sensor.predbat_gecloud_dev2_battery_soh", {}).get("state")
+    if actual_soh_multi is None or abs(actual_soh_multi - expected_soh_multi) > 1e-9:
+        print("ERROR case2: expected soh={}, got {}".format(expected_soh_multi, actual_soh_multi))
+        return 1
+    expected_dod_soh_multi = 1.0 * expected_soh_multi
+    actual_dod_soh_multi = ge_cloud.dashboard_items.get("sensor.predbat_gecloud_dev2_battery_dod_soh", {}).get("state")
+    if actual_dod_soh_multi is None or abs(actual_dod_soh_multi - expected_dod_soh_multi) > 1e-9:
+        print("ERROR case2: expected dod_soh={}, got {}".format(expected_dod_soh_multi, actual_dod_soh_multi))
+        return 1
+    print("OK case2: multiple batteries SOH={}, dod_soh={}".format(actual_soh_multi, actual_dod_soh_multi))
+
+    # --- Case 3: no connections section — SOH should default to 1.0 ---
+    ge_cloud.dashboard_items.clear()
+    info_no_conn = {
+        "info": {"battery": {"nominal_capacity": 186, "nominal_voltage": 51.2, "depth_of_discharge": 0.8}, "model": "GIV-HY3.6", "max_charge_rate": 6000},
+    }
+    run_async(ge_cloud.publish_info("dev3", info_no_conn))
+
+    actual_soh_no_conn = ge_cloud.dashboard_items.get("sensor.predbat_gecloud_dev3_battery_soh", {}).get("state")
+    if actual_soh_no_conn != 1.0:
+        print("ERROR case3: expected soh=1.0 (no connections), got {}".format(actual_soh_no_conn))
+        return 1
+    expected_dod_soh_no_conn = 0.8 * 1.0
+    actual_dod_soh_no_conn = ge_cloud.dashboard_items.get("sensor.predbat_gecloud_dev3_battery_dod_soh", {}).get("state")
+    if actual_dod_soh_no_conn is None or abs(actual_dod_soh_no_conn - expected_dod_soh_no_conn) > 1e-9:
+        print("ERROR case3: expected dod_soh={}, got {}".format(expected_dod_soh_no_conn, actual_dod_soh_no_conn))
+        return 1
+    print("OK case3: no connections SOH=1.0, dod_soh={}".format(actual_dod_soh_no_conn))
+
+    # --- Case 4: connections present but batteries list is empty — SOH should default to 1.0 ---
+    ge_cloud.dashboard_items.clear()
+    info_empty_batt = {
+        "info": {"battery": {"nominal_capacity": 186, "nominal_voltage": 51.2, "depth_of_discharge": 0.9}, "model": "GIV-HY3.6", "max_charge_rate": 6000},
+        "connections": {"batteries": []},
+    }
+    run_async(ge_cloud.publish_info("dev4", info_empty_batt))
+
+    actual_soh_empty = ge_cloud.dashboard_items.get("sensor.predbat_gecloud_dev4_battery_soh", {}).get("state")
+    if actual_soh_empty != 1.0:
+        print("ERROR case4: expected soh=1.0 (empty battery list), got {}".format(actual_soh_empty))
+        return 1
+    print("OK case4: empty battery list SOH=1.0")
+
+    # --- Case 5: battery_scaling config uses battery_dod_soh entity after async_automatic_config ---
+    ge_cloud.dashboard_items.clear()
+    ge_cloud.config_args = {}
+    ge_cloud.settings = {"battery001": {}}
+    devices = {"ems": None, "gateway": None, "battery": ["battery001"]}
+
+    async def _check_battery_scaling():
+        await ge_cloud.async_automatic_config(devices)
+
+    run_async(_check_battery_scaling())
+    battery_scaling = ge_cloud.config_args.get("battery_scaling", [])
+    if not battery_scaling or "battery_dod_soh" not in battery_scaling[0]:
+        print("ERROR case5: expected battery_scaling to use battery_dod_soh entity, got {}".format(battery_scaling))
+        return 1
+    print("OK case5: battery_scaling uses battery_dod_soh entity: {}".format(battery_scaling))
 
     return 0
 

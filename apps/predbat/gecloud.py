@@ -15,7 +15,7 @@ management via the GivEnergy Cloud REST API.
 import re
 import aiohttp
 from datetime import timedelta, datetime, timezone
-from utils import str2time, dp1, dp2
+from utils import str2time, dp1, dp2, dp4
 from predbat_metrics import record_api_call
 import asyncio
 import json
@@ -200,6 +200,8 @@ attribute_table = {
     "max_inverter_rate": {"friendly_name": "Max Inverter Rate", "icon": "mdi:flash", "unit_of_measurement": "W", "device_class": "power"},
     "battery_size": {"friendly_name": "Battery Size", "icon": "mdi:battery", "unit_of_measurement": "kWh", "device_class": "energy"},
     "battery_dod": {"friendly_name": "Battery Depth of Discharge", "icon": "mdi:battery", "unit_of_measurement": "*", "device_class": "battery"},
+    "battery_soh": {"friendly_name": "Battery State of Health", "icon": "mdi:battery", "unit_of_measurement": "*", "device_class": "battery"},
+    "battery_dod_soh": {"friendly_name": "Battery Depth of Discharge Adjusted for State of Health", "icon": "mdi:battery", "unit_of_measurement": "*", "device_class": "battery"},
     "model": {"friendly_name": "Model", "icon": "mdi:information", "unit_of_measurement": None},
 }
 
@@ -402,37 +404,51 @@ class GECloudDirect(ComponentBase):
          'flags': ['full-power-discharge-in-eco-mode']}
         """
 
-        for key in device_info:
-            entity_name = f"sensor.{self.prefix}_gecloud_{device}"
-            entity_name = entity_name.lower()
-            # attributes = {}
-            if key == "info":
-                info = device_info[key]
-                last_updated = device_info.get("last_updated", None)
-                cap = info.get("battery", {}).get("nominal_capacity", None)
-                volt = info.get("battery", {}).get("nominal_voltage", None)
-                dod = info.get("battery", {}).get("depth_of_discharge", None)
-                model = info.get("model", "Unknown")
-                max_charge_rate = info.get("max_charge_rate", 3600)
-                max_inverter_rate = self.get_max_inverter_rate_from_model(model, max_charge_rate)
+        entity_name = f"sensor.{self.prefix}_gecloud_{device}"
+        entity_name = entity_name.lower()
+    
+        # Calculate battery state of health (SOH) from the battery capacity information in the connections section of the device info, if available. 
+        # SOH is calculated as the ratio of full capacity to design capacity, expressed as a percentage. If this information is not available, SOH defaults to 1.0 (100%).
+        batteries = device_info.get("connections", {}).get("batteries", [])
+        soh = 1.0
+        full_capacity = 0
+        design_capacity = 0
+        for battery in batteries:
+            full_capacity += battery.get("capacity", {}).get("full", 0)
+            design_capacity += battery.get("capacity", {}).get("design", 0)
+        if full_capacity > 0 and design_capacity > 0:
+            soh = full_capacity / design_capacity
+        self.dashboard_item(entity_name + "_battery_soh", dp4(soh), attributes=attribute_table.get("battery_soh", {}), app="gecloud")
+        
+        # Device device info
+        info = device_info.get("info", {})
+        if info:
+            last_updated = device_info.get("last_updated", None)
+            cap = info.get("battery", {}).get("nominal_capacity", None)
+            volt = info.get("battery", {}).get("nominal_voltage", None)
+            dod = info.get("battery", {}).get("depth_of_discharge", 1.0)
+            model = info.get("model", "Unknown")
+            max_charge_rate = info.get("max_charge_rate", 3600)
+            max_inverter_rate = self.get_max_inverter_rate_from_model(model, max_charge_rate)
 
-                capacity = None
-                if cap and volt:
-                    try:
-                        capacity = dp2(cap * volt / 1000.0)
-                    except (ValueError, TypeError):
-                        pass
+            capacity = None
+            if cap and volt:
+                try:
+                    capacity = dp2(cap * volt / 1000.0)
+                except (ValueError, TypeError):
+                    pass
 
-                self.log("GECloud: Updated data for device {}: battery capacity {}kWh, max charge rate {}W, max inverter rate {}W".format(device, capacity, max_charge_rate, max_inverter_rate))
+            self.log("GECloud: Updated data for device {}: battery capacity {}kWh, max charge rate {}W, max inverter rate {}W".format(device, capacity, max_charge_rate, max_inverter_rate))
 
-                self.dashboard_item(entity_name + "_battery_size", capacity, attributes=attribute_table.get("battery_size", {}), app="gecloud")
-                self.dashboard_item(entity_name + "_max_charge_rate", max_charge_rate, attributes=attribute_table.get("max_charge_rate", {}), app="gecloud")
-                self.dashboard_item(entity_name + "_battery_dod", dod, attributes=attribute_table.get("battery_dod", {}), app="gecloud")
-                model_attr = attribute_table.get("model", {}).copy()
-                model_attr["details"] = device_info
-                self.dashboard_item(entity_name + "_model", model, attributes=model_attr, app="gecloud")
-                self.dashboard_item(entity_name + "_max_inverter_rate", max_inverter_rate, attributes=attribute_table.get("max_inverter_rate", {}), app="gecloud")
-                self.dashboard_item(entity_name + "_last_updated", last_updated, attributes=attribute_table.get("time", {}), app="gecloud")
+            self.dashboard_item(entity_name + "_battery_size", capacity, attributes=attribute_table.get("battery_size", {}), app="gecloud")
+            self.dashboard_item(entity_name + "_max_charge_rate", max_charge_rate, attributes=attribute_table.get("max_charge_rate", {}), app="gecloud")
+            self.dashboard_item(entity_name + "_battery_dod", dp4(dod), attributes=attribute_table.get("battery_dod", {}), app="gecloud")
+            self.dashboard_item(entity_name + "_battery_dod_soh", dp4(dod * soh), attributes=attribute_table.get("battery_dod_soh", {}), app="gecloud")
+            model_attr = attribute_table.get("model", {}).copy()
+            model_attr["details"] = device_info
+            self.dashboard_item(entity_name + "_model", model, attributes=model_attr, app="gecloud")
+            self.dashboard_item(entity_name + "_max_inverter_rate", max_inverter_rate, attributes=attribute_table.get("max_inverter_rate", {}), app="gecloud")
+            self.dashboard_item(entity_name + "_last_updated", last_updated, attributes=attribute_table.get("time", {}), app="gecloud")
 
     async def publish_evc_data(self, serial, evc_data):
         """
@@ -849,7 +865,7 @@ class GECloudDirect(ComponentBase):
         self.set_arg("scheduled_charge_enable", build_entities("switch", ["ac_charge_enable", "enable_ac_charge"]))
         self.set_arg("scheduled_discharge_enable", build_entities("switch", ["enable_dc_discharge", "enable_force_discharge"]))
         self.set_arg("battery_temperature", [f"sensor.{self.prefix}_gecloud_{device}_battery_temperature" for device in batteries])
-        self.set_arg("battery_scaling", [f"sensor.{self.prefix}_gecloud_{device}_battery_dod" for device in batteries])
+        self.set_arg("battery_scaling", [f"sensor.{self.prefix}_gecloud_{device}_battery_dod_soh" for device in batteries])
         self.set_arg("inverter_limit", [f"sensor.{self.prefix}_gecloud_{device}_max_inverter_rate" for device in batteries])
 
         if len(batteries):
