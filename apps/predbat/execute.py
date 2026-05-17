@@ -4,6 +4,7 @@ Handles the translation of PredBat's optimised plan into concrete inverter
 control actions. Manages charge window programming, discharge/export scheduling,
 reserve level adjustments, and multi-inverter balancing.
 """
+
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
 # Copyright Trefor Southwell 2026 - All Rights Reserved
@@ -752,6 +753,9 @@ class Execute:
                         self.battery_charge_power_curve = self.battery_charge_power_curve_default
                         self.computed_charge_curve = True
                         self.log("Using default battery charge power curve")
+                    elif not self.battery_charge_power_curve_auto:
+                        # Stop retrying every cycle when not in auto mode and no curve found
+                        self.computed_charge_curve = True
 
             if id == 0 and (not self.computed_discharge_curve or self.battery_discharge_power_curve_auto) and not self.battery_discharge_power_curve:
                 curve = inverter.find_charge_curve(discharge=True)
@@ -764,6 +768,9 @@ class Execute:
                         self.battery_discharge_power_curve = self.battery_discharge_power_curve_default
                         self.computed_discharge_curve = True
                         self.log("Using default battery discharge power curve")
+                    elif not self.battery_discharge_power_curve_auto:
+                        # Stop retrying every cycle when not in auto mode and no curve found
+                        self.computed_discharge_curve = True
 
             # As the inverters will run in lockstep, we will initially look at the programming of the first enabled one for the current window setting
             if not found_first:
