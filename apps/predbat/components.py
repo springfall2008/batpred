@@ -31,6 +31,7 @@ from alertfeed import AlertFeed
 from web import WebInterface
 from ha import HAInterface, HAHistory
 from db_manager import DatabaseManager
+from deye import DeyeAPI
 from fox import FoxAPI
 from kraken import KrakenAPI
 from web_mcp import PredbatMCPServer
@@ -234,6 +235,35 @@ COMPONENT_LIST = {
             "token_hash": {
                 "required": False,
                 "config": "fox_token_hash",
+            },
+        },
+        "phase": 1,
+    },
+    "deye": {
+        "class": DeyeAPI,
+        "name": "DEYE Cloud",
+        "event_filter": "predbat_deye_",
+        "args": {
+            "key": {
+                "required": True,
+                "config": "deye_key",
+            },
+            "device_sn": {
+                "required": False,
+                "config": "deye_device_sn",
+            },
+            "automatic": {
+                "required": False,
+                "default": False,
+                "config": "deye_automatic",
+            },
+            "token_expires_at": {
+                "required": False,
+                "config": "deye_token_expires_at",
+            },
+            "token_hash": {
+                "required": False,
+                "config": "deye_token_hash",
             },
         },
         "phase": 1,
@@ -444,7 +474,11 @@ class Components:
                 default = arg_info.get("default", None)
                 indirect = arg_info.get("indirect", False)
                 config_late_resolve = arg_info.get("config_late_resolve", False)
-                if config_late_resolve:
+                if "value" in arg_info:
+                    # Pre-computed provider object injected directly — no config lookup needed.
+                    arg_dict[arg] = arg_info["value"]
+                    continue
+                elif config_late_resolve:
                     # Defer resolution of config value until later
                     arg_dict[arg] = arg_info["config"]
                     continue
