@@ -600,6 +600,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.charge_rate_now = 0
         self.discharge_rate_now = 0
         self.car_charging_hold = False
+        self.car_charging_solar_surplus_active = []
+        self._car_surplus_prev = []
         self.car_charging_manual_soc = []
         self.car_charging_threshold = 99
         self.car_charging_energy = {}

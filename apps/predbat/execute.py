@@ -53,6 +53,12 @@ class Execute:
 
         isCharging = False
         isExporting = False
+
+        # Solar surplus car charging runs once up-front since it only reads global state
+        in_force_export_window = bool(self.set_export_window and self.export_window_best and self.minutes_now >= self.export_window_best[0]["start"] and self.minutes_now < self.export_window_best[0]["end"] and self.export_limits_best[0] < 100.0)
+        self.detect_car_solar_surplus(in_force_export_window)
+        surplus_any = any(self.car_charging_solar_surplus_active)
+
         for inverter in self.inverters:
             if inverter.id not in self.count_inverter_writes:
                 self.count_inverter_writes[inverter.id] = 0
@@ -427,38 +433,47 @@ class Execute:
 
                 status_freeze_export = " [Freeze exporting]"
 
-            # Car charging from battery disable?
+            # Car charging from battery disable? (runs per-inverter for discharge hold)
+            # car_energy_reported_load is normally required (so Predbat can account for
+            # car load in history); for solar surplus we don't need that sensor since
+            # we already have grid_power and battery_power directly.
             carHolding = False
-            if self.set_charge_window and not self.car_charging_from_battery and self.car_energy_reported_load:
+            if self.set_charge_window and not self.car_charging_from_battery and (self.car_energy_reported_load or surplus_any):
                 for car_n in range(self.num_cars):
+                    surplus_active = car_n < len(self.car_charging_solar_surplus_active) and self.car_charging_solar_surplus_active[car_n]
+                    in_planned_slot = False
                     if self.car_charging_slots[car_n]:
                         window = self.car_charging_slots[car_n][0]
                         if self.car_charging_soc[car_n] >= self.car_charging_limit[car_n]:
                             self.log("Car {} is already charged, ignoring additional charging slot from {} - {}".format(car_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"])))
                         elif self.minutes_now >= window["start"] and self.minutes_now < window["end"] and window.get("kwh", 0) > 0:
-                            self.log("Car charging from battery is off, next slot for car {} is {} - {}".format(car_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"])))
-                            # Don't disable discharge during force charge/discharge slots but otherwise turn it off to prevent
-                            # from draining the battery
-                            if not isExporting:
-                                if inverter.inv_has_timed_pause:
-                                    if resetPause:
-                                        inverter.adjust_pause_mode(pause_discharge=True)
-                                        resetPause = False
+                            in_planned_slot = True
+                    if surplus_active or in_planned_slot:
+                        slot_type = "solar surplus" if surplus_active and not in_planned_slot else "planned slot"
+                        self.log("Car charging from battery is off, car {} active via {} ".format(car_n, slot_type))
+                        # Don't disable discharge during force charge/discharge slots but otherwise turn it off to prevent
+                        # from draining the battery
+                        if not isExporting:
+                            if inverter.inv_has_timed_pause:
+                                if resetPause:
+                                    inverter.adjust_pause_mode(pause_discharge=True)
+                                    resetPause = False
+                            else:
+                                if resetDischarge:
+                                    inverter.adjust_discharge_rate(0)
+                                    resetDischarge = False
+                                if self.set_reserve_enable:
+                                    inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
+                                    resetReserve = False
+                            carHolding = True
+                            self.log("Disabling battery discharge whilst car {} is charging".format(car_n))
+                            hold_label = "Hold for car (solar)" if surplus_active and not in_planned_slot else "Hold for car"
+                            if ("Hold for car" not in status) and (status_hold_car == ""):
+                                if status == "Demand":
+                                    status = hold_label
                                 else:
-                                    if resetDischarge:
-                                        inverter.adjust_discharge_rate(0)
-                                        resetDischarge = False
-                                    if self.set_reserve_enable:
-                                        inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
-                                        resetReserve = False
-                                carHolding = True
-                                self.log("Disabling battery discharge whilst car {} is charging".format(car_n))
-                                if ("Hold for car" not in status) and (status_hold_car == ""):
-                                    if status == "Demand":
-                                        status = "Hold for car"
-                                    else:
-                                        status_hold_car = ", Hold for car"
-                            break
+                                    status_hold_car = ", " + hold_label
+                        break
 
             # iBoost running?
             boostHolding = False
@@ -610,6 +625,68 @@ class Execute:
             self.count_inverter_writes[inverter.id] += inverter.count_register_writes
             inverter.count_register_writes = 0
 
+        # Publish solar surplus car charging binary sensor overrides.
+        # We track which cars are surplus-eligible AND not already covered by a
+        # planned slot — those are the ones we display as "active" on the
+        # observability sensor. The underlying car_charging_solar_surplus_active
+        # array stays as detect_car_solar_surplus computed it so that
+        # _car_surplus_prev keeps accurate hysteresis memory across cycles.
+        displayed_surplus = []
+        for car_n in range(self.num_cars):
+            if not self.car_charging_solar_surplus_active[car_n]:
+                continue
+            # Check if a planned slot is already active (no need to override)
+            in_planned_slot = False
+            if self.car_charging_slots[car_n]:
+                window = self.car_charging_slots[car_n][0]
+                if self.minutes_now >= window["start"] and self.minutes_now < window["end"] and window.get("kwh", 0) > 0:
+                    in_planned_slot = True
+            if not in_planned_slot:
+                displayed_surplus.append(car_n)
+                # Preserve the planned slot list and totals that publish_car_plan published, just flip state on
+                plan = []
+                total_cost = 0.0
+                total_kwh = 0.0
+                for window in self.car_charging_slots[car_n]:
+                    kwh = dp2(window["kwh"])
+                    cost = dp2(window["cost"])
+                    plan.append(
+                        {
+                            "start": self.time_abs_str(window["start"]),
+                            "end": self.time_abs_str(window["end"]),
+                            "kwh": kwh,
+                            "average": dp2(window["average"]),
+                            "cost": cost,
+                        }
+                    )
+                    total_kwh += kwh
+                    total_cost += cost
+                postfix = "" if car_n == 0 else "_" + str(car_n)
+                self.dashboard_item(
+                    "binary_sensor." + self.prefix + "_car_charging_slot" + postfix,
+                    state="on",
+                    attributes={
+                        "planned": plan,
+                        "cost": dp2(total_cost) if plan else None,
+                        "kwh": dp2(total_kwh) if plan else None,
+                        "friendly_name": "Predbat car charging slot" + postfix,
+                        "icon": "mdi:home-lightning-bolt-outline",
+                        "solar_surplus": True,
+                    },
+                )
+
+        # Publish solar surplus observability sensor — reflects "is surplus
+        # actually driving this car right now", not pure eligibility.
+        self.dashboard_item(
+            "binary_sensor." + self.prefix + "_car_charging_solar_surplus",
+            state="on" if displayed_surplus else "off",
+            attributes={
+                "friendly_name": "Predbat car charging on solar surplus",
+                "icon": "mdi:solar-power",
+                "cars_active": displayed_surplus,
+            },
+        )
+
         # Set the charge/discharge status information
         self.set_charge_export_status(isCharging, isExporting, not (isCharging or isExporting))
         self.isCharging = isCharging
@@ -624,6 +701,63 @@ class Execute:
             status += " [Manual SoC]"
 
         return status, status_extra
+
+    def detect_car_solar_surplus(self, in_force_export_window):
+        """
+        Detect excess solar export and mark cars as eligible to charge from surplus.
+
+        Populates ``self.car_charging_solar_surplus_active`` (per car) and updates
+        ``self._car_surplus_prev`` for the next cycle's hysteresis check. Uses only
+        global state (grid/battery power, car config), so runs once per execute_plan
+        rather than per inverter.
+        """
+        self.car_charging_solar_surplus_active = [False] * self.num_cars
+        # Skip in read-only mode: we cannot enforce battery-discharge protection,
+        # so don't trigger HA automations that would charge the car unprotected.
+        if not self.car_charging_solar_surplus or self.num_cars <= 0 or in_force_export_window or self.set_read_only:
+            self._car_surplus_prev = list(self.car_charging_solar_surplus_active)
+            return
+
+        surplus_hysteresis = 200  # W deadband to prevent flapping
+        # Tolerance for transient battery discharge while surplus is asserted.
+        # Distinct from car_charging_solar_surplus_threshold (the user-facing
+        # shortfall allowance for solar export); not configurable by intent.
+        stay_on_battery_discharge_limit_w = 500
+        if len(self._car_surplus_prev) != self.num_cars:
+            self._car_surplus_prev = [False] * self.num_cars
+
+        for car_n in range(self.num_cars):
+            if not self.car_charging_planned[car_n]:
+                continue
+            # car_charging_soc is kWh; surplus_limit is a % — convert to kWh using the car's battery size
+            battery_size_kwh = self.car_charging_battery_size[car_n] if car_n < len(self.car_charging_battery_size) else 0
+            if battery_size_kwh > 0 and self.car_charging_soc[car_n] >= battery_size_kwh * self.car_charging_solar_surplus_limit / 100.0:
+                continue
+
+            car_rate_w = self.car_charging_rate[car_n] * 1000
+            threshold = self.car_charging_solar_surplus_threshold
+
+            # When car was surplus-charging last cycle, add back its load to get true available export
+            effective_export = self.grid_power
+            previously_active = self._car_surplus_prev[car_n]
+            if previously_active:
+                effective_export += car_rate_w
+
+            if previously_active:
+                # Currently on: lower bar to stay on, but require battery isn't being drained
+                # to feed the car (otherwise effective_export masks the real PV deficit).
+                if effective_export >= car_rate_w - threshold - surplus_hysteresis and self.battery_power <= stay_on_battery_discharge_limit_w:
+                    self.car_charging_solar_surplus_active[car_n] = True
+            else:
+                # Currently off: higher bar to turn on, require battery not discharging
+                if effective_export >= car_rate_w - threshold + surplus_hysteresis and self.battery_power <= surplus_hysteresis:
+                    self.car_charging_solar_surplus_active[car_n] = True
+
+            if self.car_charging_solar_surplus_active[car_n]:
+                self.log("Solar surplus car charging active for car {}: export {}W (effective {}W), rate {}W, threshold {}W".format(car_n, int(self.grid_power), int(effective_export), int(car_rate_w), int(threshold)))
+                break  # One car at a time from surplus
+
+        self._car_surplus_prev = list(self.car_charging_solar_surplus_active)
 
     def adjust_battery_target_multi(self, inverter, soc, is_charging, is_exporting, isFreezeCharge=False, check=False):
         """
