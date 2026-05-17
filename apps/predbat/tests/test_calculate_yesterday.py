@@ -964,6 +964,97 @@ def _test_soc_not_mutated_and_override_passed(my_predbat, failed):
     return failed
 
 
+def _test_soc_kw_h0_fallback(my_predbat, failed):
+    """Test: calculate_yesterday does NOT return early when soc_kw_h0 HA history is
+    unavailable; it falls back to soc_kwh_history (in-memory) if populated, and to
+    soc_yesterday (from savings_total_soc) when both sources are absent.
+
+    Covers the regression introduced in v8.39.4 where missing soc_kw_h0 HA history
+    (possible in cost-optimised operation or after a fresh install) caused the entire
+    calculate_yesterday run to be skipped every cycle, leaving savings_* entities
+    stuck in 'unavailable'.
+    """
+    print("calculate_yesterday: Test – soc_kw_h0 fallback when HA history unavailable")
+    now_utc = _setup_base(my_predbat)
+    prefix = my_predbat.prefix
+
+    # --- sub-case A: soc_kwh_history empty, soc_kw_h0 HA history missing ---
+    # Ensure soc_kwh_history is empty (the default after reset)
+    my_predbat.soc_kwh_history = {}
+
+    # History mock that provides cost_today but NOT soc_kw_h0
+    def _history_no_soc(entity_id, days=30, required=True, tracked=True):
+        if entity_id == prefix + ".cost_today":
+            return _make_constant_history(100.0, now_utc)
+        return None  # soc_kw_h0 returns None
+
+    my_predbat.get_history_wrapper = _history_no_soc
+    my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.publish_html_plan = lambda *a, **kw: ("", "{}")
+    original_run_pred = my_predbat.run_prediction
+
+    ran_count = [0]
+
+    def _counting_run_pred(self_pb, *args, **kwargs):
+        ran_count[0] += 1
+        self_pb.predict_soc = {}
+        self_pb.predict_soc_best = {}
+        self_pb.predict_metric_best = {}
+        return (500, 1.0, 5.0, 0.5, 3.0, 5.0, 120, 2.0, 0, 0.0, 0)
+
+    my_predbat.run_prediction = lambda *a, **kw: _counting_run_pred(my_predbat, *a, **kw)
+
+    my_predbat.calculate_yesterday()
+
+    if ran_count[0] == 0:
+        print("ERROR: calculate_yesterday returned early (ran_count=0); should continue with fallback soc values")
+        failed = True
+    else:
+        print("Sub-case A passed: calculate_yesterday ran {} prediction(s) despite missing soc_kw_h0 HA history".format(ran_count[0]))
+
+    _restore_methods(my_predbat, original_run_pred)
+    my_predbat.savings_last_updated = None
+
+    # --- sub-case B: soc_kwh_history populated, soc_kw_h0 HA history missing ---
+    # Populate soc_kwh_history directly (as fetch.py would have done)
+    soc_value_in_history = 7.5
+    minutes_back = my_predbat.minutes_now + 1
+    my_predbat.soc_kwh_history = {minutes_back: soc_value_in_history}
+
+    my_predbat.get_history_wrapper = _history_no_soc  # still returns None for soc_kw_h0
+    my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.publish_html_plan = lambda *a, **kw: ("", "{}")
+    original_run_pred = my_predbat.run_prediction
+    ran_count_b = [0]
+
+    def _counting_run_pred_b(self_pb, *args, **kwargs):
+        ran_count_b[0] += 1
+        self_pb.predict_soc = {}
+        self_pb.predict_soc_best = {}
+        self_pb.predict_metric_best = {}
+        return (500, 1.0, 5.0, 0.5, 3.0, 5.0, 120, 2.0, 0, 0.0, 0)
+
+    my_predbat.run_prediction = lambda *a, **kw: _counting_run_pred_b(my_predbat, *a, **kw)
+
+    my_predbat.calculate_yesterday()
+
+    if ran_count_b[0] == 0:
+        print("ERROR: calculate_yesterday returned early in sub-case B (ran_count=0)")
+        failed = True
+    elif not my_predbat.savings_last_updated:
+        print("ERROR: sub-case B: savings_last_updated was not set after calculate_yesterday")
+        failed = True
+    else:
+        print("Sub-case B passed: calculate_yesterday ran {} prediction(s) using in-memory soc_kwh_history".format(ran_count_b[0]))
+
+    _restore_methods(my_predbat, original_run_pred)
+    my_predbat.savings_last_updated = None
+    my_predbat.soc_kwh_history = {}
+    return failed
+
+
 # ---------------------------------------------------------------------------
 # Entry point registered in TEST_REGISTRY
 # ---------------------------------------------------------------------------
@@ -984,5 +1075,6 @@ def test_calculate_yesterday(my_predbat):
     failed = _test_early_exit_respects_day_rollover(my_predbat, failed)
     failed = _test_reconstruct_car_slots(my_predbat, failed)
     failed = _test_soc_not_mutated_and_override_passed(my_predbat, failed)
+    failed = _test_soc_kw_h0_fallback(my_predbat, failed)
 
     return failed

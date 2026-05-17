@@ -2872,16 +2872,19 @@ class Output:
                 cost_value += cost_yesterday
             cost_yesterday_array[minute] = cost_value
 
-        # Get battery level yesterday
-        battery_today_data = self.get_history_wrapper(entity_id=self.prefix + ".soc_kw_h0", days=2, required=False)
-        if not battery_today_data:
-            self.log("Warn: Calculate yesterday: No soc_kw_h0 data for yesterday")
-            return
-        battery_data, _ = minute_data(battery_today_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
-        battery_soc_yesterday = battery_data.get(minutes_back, 0.0)
+        # Get battery level yesterday - prefer the already-fetched in-memory history, fall back to HA query
+        battery_data = self.soc_kwh_history if self.soc_kwh_history else None
+        if not battery_data:
+            battery_today_data = self.get_history_wrapper(entity_id=self.prefix + ".soc_kw_h0", days=2, required=False)
+            if battery_today_data:
+                battery_data, _ = minute_data(battery_today_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
+            else:
+                self.log("Info: Calculate yesterday: No soc_kw_h0 history available, using saved soc value as fallback")
+                battery_data = {}
+        battery_soc_yesterday = battery_data.get(minutes_back, soc_yesterday)
         battery_soc_yesterday_array = {}
         for minute in range(0, end_record + self.minutes_now):
-            battery_soc_yesterday_array[minute] = battery_data.get(minutes_back + 24 * 60 - minute - 5, 0.0)  # -5 gives 4 minutes into new data to allow for reset
+            battery_soc_yesterday_array[minute] = battery_data.get(minutes_back + 24 * 60 - minute - 5, soc_yesterday)  # -5 gives 4 minutes into new data to allow for reset
 
         # Get status history
         predbat_status_data = self.get_history_wrapper(entity_id=self.prefix + ".status", days=2, required=False)
