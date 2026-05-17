@@ -2873,7 +2873,7 @@ class Output:
             cost_yesterday_array[minute] = cost_value
 
         # Get battery level yesterday - prefer the already-fetched in-memory history, fall back to HA query
-        battery_data = self.soc_kwh_history if self.soc_kwh_history else None
+        battery_data = self.soc_kwh_history
         if not battery_data:
             battery_today_data = self.get_history_wrapper(entity_id=self.prefix + ".soc_kw_h0", days=2, required=False)
             if battery_today_data:

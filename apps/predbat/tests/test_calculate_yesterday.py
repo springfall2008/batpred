@@ -964,6 +964,20 @@ def _test_soc_not_mutated_and_override_passed(my_predbat, failed):
     return failed
 
 
+def _make_counting_run_pred(counter_list):
+    """Factory: create a run_prediction mock that increments counter_list[0] on each call."""
+
+    def _mock(self_pb, *args, **kwargs):
+        """Mock run_prediction that counts invocations and clears soc arrays."""
+        counter_list[0] += 1
+        self_pb.predict_soc = {}
+        self_pb.predict_soc_best = {}
+        self_pb.predict_metric_best = {}
+        return (500, 1.0, 5.0, 0.5, 3.0, 5.0, 120, 2.0, 0, 0.0, 0)
+
+    return _mock
+
+
 def _test_soc_kw_h0_fallback(my_predbat, failed):
     """Test: calculate_yesterday does NOT return early when soc_kw_h0 HA history is
     unavailable; it falls back to soc_kwh_history (in-memory) if populated, and to
@@ -978,15 +992,15 @@ def _test_soc_kw_h0_fallback(my_predbat, failed):
     now_utc = _setup_base(my_predbat)
     prefix = my_predbat.prefix
 
-    # --- sub-case A: soc_kwh_history empty, soc_kw_h0 HA history missing ---
-    # Ensure soc_kwh_history is empty (the default after reset)
-    my_predbat.soc_kwh_history = {}
-
     # History mock that provides cost_today but NOT soc_kw_h0
     def _history_no_soc(entity_id, days=30, required=True, tracked=True):
         if entity_id == prefix + ".cost_today":
             return _make_constant_history(100.0, now_utc)
         return None  # soc_kw_h0 returns None
+
+    # --- sub-case A: soc_kwh_history empty, soc_kw_h0 HA history missing ---
+    # Ensure soc_kwh_history is empty (the default after reset)
+    my_predbat.soc_kwh_history = {}
 
     my_predbat.get_history_wrapper = _history_no_soc
     my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
@@ -995,15 +1009,7 @@ def _test_soc_kw_h0_fallback(my_predbat, failed):
     original_run_pred = my_predbat.run_prediction
 
     ran_count = [0]
-
-    def _counting_run_pred(self_pb, *args, **kwargs):
-        ran_count[0] += 1
-        self_pb.predict_soc = {}
-        self_pb.predict_soc_best = {}
-        self_pb.predict_metric_best = {}
-        return (500, 1.0, 5.0, 0.5, 3.0, 5.0, 120, 2.0, 0, 0.0, 0)
-
-    my_predbat.run_prediction = lambda *a, **kw: _counting_run_pred(my_predbat, *a, **kw)
+    my_predbat.run_prediction = lambda *a, **kw: _make_counting_run_pred(ran_count)(my_predbat, *a, **kw)
 
     my_predbat.calculate_yesterday()
 
@@ -1018,9 +1024,8 @@ def _test_soc_kw_h0_fallback(my_predbat, failed):
 
     # --- sub-case B: soc_kwh_history populated, soc_kw_h0 HA history missing ---
     # Populate soc_kwh_history directly (as fetch.py would have done)
-    soc_value_in_history = 7.5
     minutes_back = my_predbat.minutes_now + 1
-    my_predbat.soc_kwh_history = {minutes_back: soc_value_in_history}
+    my_predbat.soc_kwh_history = {minutes_back: 7.5}
 
     my_predbat.get_history_wrapper = _history_no_soc  # still returns None for soc_kw_h0
     my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
@@ -1028,15 +1033,7 @@ def _test_soc_kw_h0_fallback(my_predbat, failed):
     my_predbat.publish_html_plan = lambda *a, **kw: ("", "{}")
     original_run_pred = my_predbat.run_prediction
     ran_count_b = [0]
-
-    def _counting_run_pred_b(self_pb, *args, **kwargs):
-        ran_count_b[0] += 1
-        self_pb.predict_soc = {}
-        self_pb.predict_soc_best = {}
-        self_pb.predict_metric_best = {}
-        return (500, 1.0, 5.0, 0.5, 3.0, 5.0, 120, 2.0, 0, 0.0, 0)
-
-    my_predbat.run_prediction = lambda *a, **kw: _counting_run_pred_b(my_predbat, *a, **kw)
+    my_predbat.run_prediction = lambda *a, **kw: _make_counting_run_pred(ran_count_b)(my_predbat, *a, **kw)
 
     my_predbat.calculate_yesterday()
 
