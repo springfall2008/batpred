@@ -1174,7 +1174,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         if files:
             # Notify before killing threads so the WebSocket is still healthy
             if self.get_arg("set_system_notify"):
-                self.call_notify("Predbat: update to: {}".format(version))
+                self.call_notify("{}: update to: {}".format(self.prefix, version))
 
             # Kill the current threads
             self.log("Kill current threads before update")
