@@ -891,6 +891,8 @@ To disable, set it to 1440.
 - **iboost_energy_today** - Set to a sensor which tracks the amount of energy sent to your solar diverter, which can also be used to subtract from your historical load
 for more accurate predictions.
 
+The iboost energy sensor should reset to zero each day so if your source sensor doesn't, then its recommended to wrap it in a utility meter and configure Predbat to use the utility meter.
+
 ## Inverter control configurations
 
 ### **inverter_limit**
