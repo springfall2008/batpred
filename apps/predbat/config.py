@@ -2154,6 +2154,7 @@ APPS_SCHEMA = {
     "forecast_hours": {"type": "integer"},
     "notify_devices": {"type": "string_list"},
     "battery_scaling": {"type": "sensor_list", "sensor_type": "float", "entries": "num_inverters", "modify": False},
+    "battery_scaling_auto": {"type": "boolean"},
     "import_export_scaling": {"type": "float"},
     "export_triggers": {"type": "dict_list"},
     "iboost_energy_today": {"type": "sensor", "sensor_type": "float"},

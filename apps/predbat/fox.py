@@ -1278,6 +1278,18 @@ class FoxAPI(ComponentBase, OAuthMixin):
             reserve_min = int(self.fdsoc_min.get(sn, 10))
             self.dashboard_item(entity_name_sensor + "_" + sn.lower() + "_battery_reserve_min", state=reserve_min, attributes={"friendly_name": f"Fox {sn} Battery Reserve Min", "unit_of_measurement": "%"}, app="fox")
 
+            soh_raw = self.device_values.get(sn, {}).get("SOH", {}).get("value", 100.0)
+            try:
+                soh_fraction = round(float(soh_raw) / 100.0, 4)
+            except (ValueError, TypeError):
+                soh_fraction = None
+            self.dashboard_item(
+                entity_name_sensor + "_" + sn.lower() + "_battery_soh",
+                state=soh_fraction,
+                attributes={"friendly_name": f"Fox {sn} Battery State of Health", "unit_of_measurement": "*", "device_class": "battery", "state_class": "measurement", "icon": "mdi:battery-heart"},
+                app="fox",
+            )
+
         # If we have soc_x sensors then sum them for total soc and store as _soc so that Predbat gets a single SOC value
         for sn in self.device_values:
             soc_total = 0
@@ -1711,6 +1723,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
         self.set_arg("discharge_rate", [f"number.{self.prefix}_fox_{device}_battery_schedule_discharge_power" for device in batteries])
         self.set_arg("battery_temperature", [f"sensor.{self.prefix}_fox_{device}_battemperature" for device in batteries])
         self.set_arg("inverter_limit", [f"sensor.{self.prefix}_fox_{device}_inverter_capacity" for device in batteries])
+        self.set_arg("battery_scaling", [f"sensor.{self.prefix}_fox_{device}_battery_soh" for device in batteries])
         self.set_arg("schedule_write_button", [f"switch.{self.prefix}_fox_{device}_battery_schedule_charge_write" for device in batteries])
         self.set_arg("export_limit", [f"number.{self.prefix}_fox_{device}_setting_exportlimit" if hasExportLimit.get(device, False) else 99999 for device in batteries])
 

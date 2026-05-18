@@ -4491,6 +4491,52 @@ def test_publish_data_device_info(my_predbat):
     return False
 
 
+def test_publish_data_battery_soh(my_predbat):
+    """
+    Test publish_data creates battery_soh sensor with correct value and attributes
+    """
+    print("  - test_publish_data_battery_soh")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    fox.device_list = [{"deviceSN": deviceSN}]
+    fox.device_detail[deviceSN] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {"scheduler": True}, "deviceType": "KH8", "stationName": "Test Home", "batteryList": [{"capacity": 10360}]}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.device_values[deviceSN] = {"SOH": {"value": 95.0, "name": "SOH", "unit": "%"}}
+    fox.device_settings[deviceSN] = {}
+    fox.local_schedule[deviceSN] = {}
+
+    run_async(fox.publish_data())
+
+    soh_entity = f"sensor.predbat_fox_{deviceSN.lower()}_battery_soh"
+    assert soh_entity in fox.dashboard_items, f"battery_soh entity not found in {list(fox.dashboard_items.keys())}"
+    assert fox.dashboard_items[soh_entity]["state"] == 0.95, f"Expected 0.95, got {fox.dashboard_items[soh_entity]['state']}"
+    assert fox.dashboard_items[soh_entity]["attributes"]["unit_of_measurement"] == "*"
+    assert fox.dashboard_items[soh_entity]["attributes"]["device_class"] == "battery"
+    assert fox.dashboard_items[soh_entity]["attributes"]["state_class"] == "measurement"
+    assert fox.dashboard_items[soh_entity]["attributes"]["icon"] == "mdi:battery-heart"
+
+    # Test with SOH not yet available (no real-time data fetched)
+    fox2 = MockFoxAPIWithRequests()
+    fox2.device_list = [{"deviceSN": deviceSN}]
+    fox2.device_detail[deviceSN] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {}, "deviceType": "KH8", "stationName": "Test Home", "batteryList": []}
+    fox2.fdpwr_max[deviceSN] = 8000
+    fox2.fdsoc_min[deviceSN] = 10
+    fox2.device_values[deviceSN] = {}  # No SOH data yet
+    fox2.device_settings[deviceSN] = {}
+    fox2.local_schedule[deviceSN] = {}
+
+    run_async(fox2.publish_data())
+
+    soh_entity2 = f"sensor.predbat_fox_{deviceSN.lower()}_battery_soh"
+    assert soh_entity2 in fox2.dashboard_items
+    assert fox2.dashboard_items[soh_entity2]["state"] == 1.0
+
+    return False
+
+
 def test_publish_data_device_values(my_predbat):
     """
     Test publish_data creates value entities correctly
@@ -4845,6 +4891,7 @@ def test_automatic_config_single_battery(my_predbat):
     assert fox.args_set.get("soc_percent") == [f"sensor.predbat_fox_{sn_lower}_soc"]
     assert fox.args_set.get("battery_power") == [f"sensor.predbat_fox_{sn_lower}_invbatpower"]
     assert fox.args_set.get("charge_start_time") == [f"select.predbat_fox_{sn_lower}_battery_schedule_charge_start_time"]
+    assert fox.args_set.get("battery_scaling") == [f"sensor.predbat_fox_{sn_lower}_battery_soh"]
 
     return False
 
@@ -5635,6 +5682,7 @@ def run_fox_api_tests(my_predbat):
 
         # publish_data tests
         failed |= test_publish_data_device_info(my_predbat)
+        failed |= test_publish_data_battery_soh(my_predbat)
         failed |= test_publish_data_device_values(my_predbat)
         failed |= test_publish_data_device_values_dual_soc(my_predbat)
         failed |= test_publish_data_device_settings(my_predbat)

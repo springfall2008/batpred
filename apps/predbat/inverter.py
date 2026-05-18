@@ -146,6 +146,7 @@ class Inverter:
         self.soc_kw = 0
         self.soc_percent = 0
         self.soc_max = None
+        self.nominal_capacity = None
         self.rest_data = None
         self.inverter_limit = 7500.0 / MINUTE_WATT
         self.export_limit = 99999.0 / MINUTE_WATT
@@ -383,18 +384,8 @@ class Inverter:
 
             ivtime = self.base.get_arg("inverter_time", index=self.id, default=None)
 
-        # Battery cannot be zero size
-        if not self.soc_max or self.soc_max <= 0:
-            self.log("Note: Battery size was not set for inverter {}, attempting to find it..".format(self.id))
-            found_size = self.find_battery_size()
-            if not found_size or found_size <= 0:
-                self.log("Warn: Unable to determine battery size for inverter {}, setting to 8 kWh default, you must set soc_max in apps.yaml or wait until enough data is collected to estimate battery size".format(self.id))
-                self.soc_max = 8.0
-            else:
-                # Store found battery size so we don't keep having to fetch it
-                self.soc_max = found_size * self.battery_scaling
-                self.base.set_arg("soc_max", found_size, index=self.id)
-            self.nominal_capacity = self.soc_max
+        # Track and update battery size (if automatic)
+        self.battery_size_tracking()
 
         # Battery rate max charge, discharge (all converted to kW/min)
         inverter_limit_charge = self.base.get_arg("inverter_limit_charge", self.battery_rate_max_raw, index=self.id, required_unit="W")
@@ -551,17 +542,172 @@ class Inverter:
             self.base.args["idle_start_time"][id] = self.create_entity("idle_start_time", "00:00:00")
             self.base.args["idle_end_time"][id] = self.create_entity("idle_end_time", "00:00:00")
 
-    def find_battery_size(self):
+    def battery_size_tracking(self):
+        # Battery size determination: fused auto-scaling + find_battery_size logic
+        # If soc_max is unset, automatically enable battery_scaling_auto
+        if self.id > 0:
+            soc_max_sensor_name = "sensor.{}_soc_max_calculated_{}".format(self.base.prefix, self.id)
+        else:
+            soc_max_sensor_name = "sensor.{}_soc_max_calculated".format(self.base.prefix)
+
+        # Store nominal capacity.
+        # Only read the persisted arg when nominal_capacity was not already set from REST or config (i.e. still 0).
+        # This prevents a stale arg value from overwriting a real REST/config-provided nominal.
+        if not self.nominal_capacity or self.nominal_capacity <= 0:
+            self.nominal_capacity = self.base.get_arg("soc_max_nominal", index=self.id, default=0.0)
+        self.base.set_arg("soc_max_nominal", self.nominal_capacity, index=self.id)
+
+        if not self.nominal_capacity or self.nominal_capacity <= 0:
+            self.log("Note: Battery size was not set for inverter {}, enabling battery_scaling_auto".format(self.id))
+            self.base.battery_scaling_auto = True
+
+        # Run find_battery_size at most once per calendar day, always update the history sensor
+        existing_history = self.base.get_state_wrapper(soc_max_sensor_name, attribute="history", default={})
+        if not isinstance(existing_history, dict):
+            existing_history = {}
+        today_key = str(self.base.now_utc.date())
+
+        # Already calculated today - use stored mean from sensor state
+        trimmed_mean_state = self.base.get_state_wrapper(soc_max_sensor_name)
+        try:
+            trimmed_mean = float(trimmed_mean_state) if trimmed_mean_state is not None else None
+        except (ValueError, TypeError):
+            trimmed_mean = None
+
+        if today_key not in existing_history:
+            # Only calculate once per day to save compute resources
+            found_size = self.find_battery_size(self.nominal_capacity)
+            if found_size and found_size > 0:
+                trimmed_mean = self.update_soc_max_calculated_sensor(found_size, self.nominal_capacity)
+            else:
+                # Store None to prevent recalculation every cycle when data is unavailable
+                self.update_soc_max_calculated_sensor(None, self.nominal_capacity)
+
+        if self.base.battery_scaling_auto and trimmed_mean and trimmed_mean > 0:
+            if self.nominal_capacity > 0:
+                # Clamp scaling to [0.8, 1.0] relative to nominal
+                new_scaling = max(0.8, min(1.0, trimmed_mean / self.nominal_capacity))
+                self.soc_max = dp3(self.nominal_capacity * new_scaling)
+                self.log("Info: inverter {} battery_scaling_auto set scaling {:.3f} (mean {:.2f} kWh, nominal {:.2f} kWh) resulting in soc_max {:.3f} kWh".format(self.id, new_scaling, trimmed_mean, self.nominal_capacity, self.soc_max))
+            else:
+                # No nominal configured - use trimmed mean directly without clamping
+                self.soc_max = dp3(trimmed_mean)
+                self.nominal_capacity = self.soc_max
+                self.base.set_arg("soc_max", self.soc_max, index=self.id)
+                self.base.set_arg("soc_max_nominal", 0.0, index=self.id)
+                self.log("Info: Inverter {} battery_scaling_auto using measured mean {:.2f} kWh (no nominal configured)".format(self.id, trimmed_mean))
+
+        # Final fallback if soc_max is still not determined
+        if not self.soc_max or self.soc_max <= 0:
+            self.log("Warn: Unable to determine battery size for inverter {}, setting to 8 kWh default, you must set soc_max in apps.yaml or wait until enough data is collected to estimate battery size".format(self.id))
+            self.soc_max = 8.0
+            self.base.set_arg("soc_max", self.soc_max, index=self.id)
+            self.base.set_arg("soc_max_nominal", 0.0, index=self.id)
+            self.nominal_capacity = self.soc_max
+
+    def update_soc_max_calculated_sensor(self, found_size, nominal_capacity=0):
+        """
+        Update the soc_max_calculated sensor with a new data point and return the trimmed mean.
+
+        Stores one data point per calendar day (keyed by date string) and keeps the 7 most-recent days.
+        The sensor state is the trimmed mean (min and max dropped when >= 3 samples, plain average otherwise).
+        nominal_capacity is stored as a sensor attribute (0 if not configured).
+        Returns the trimmed mean or None if no data.
+        """
+        if self.id > 0:
+            sensor_name = "sensor.{}_soc_max_calculated_{}".format(self.base.prefix, self.id)
+        else:
+            sensor_name = "sensor.{}_soc_max_calculated".format(self.base.prefix)
+
+        history = self.base.get_state_wrapper(sensor_name, attribute="history", default={})
+        if not isinstance(history, dict):
+            history = {}
+
+        today_key = str(self.base.now_utc.date())
+        history[today_key] = round(found_size, 3) if found_size is not None else None
+
+        # Prune to 7 most-recent days
+        sorted_keys = sorted(history.keys(), reverse=True)[:7]
+        history = {k: history[k] for k in sorted_keys}
+
+        # Filter out None entries (days where calculation failed) before computing the mean
+        values = [v for v in history.values() if v is not None]
+        if not values:
+            self.log("Inverter {} battery size tracking: found_size None, history {}, no valid data for mean calculation".format(self.id, history))
+            self.base.dashboard_item(
+                sensor_name,
+                state=nominal_capacity if nominal_capacity > 0 else "unknown",
+                attributes={
+                    "history": history,
+                    "nominal_capacity": round(nominal_capacity, 3),
+                    "degradation_percent": None,
+                    "unit_of_measurement": "kWh",
+                    "device_class": "energy",
+                    "state_class": "measurement",
+                    "friendly_name": "Predbat calculated battery capacity{}".format(" inverter {}".format(self.id) if self.id > 0 else ""),
+                    "icon": "mdi:battery-charging",
+                },
+            )
+            return None
+
+        if len(values) >= 3:
+            trimmed = sorted(values)[1:-1]
+            trimmed_mean = sum(trimmed) / len(trimmed)
+        else:
+            trimmed_mean = sum(values) / len(values)
+
+        found_size_str = "{:.2f} kWh".format(found_size) if found_size is not None else "None"
+        degradation = (self.nominal_capacity - trimmed_mean) / self.nominal_capacity if self.nominal_capacity > 0 else 0
+        self.log("Inverter {} battery size tracking: found_size {}, history {}, trimmed_mean {:.2f} kWh, degradation {:.2%}".format(self.id, found_size_str, history, trimmed_mean, degradation))
+
+        self.base.dashboard_item(
+            sensor_name,
+            state=dp2(trimmed_mean),
+            attributes={
+                "history": history,
+                "nominal_capacity": round(nominal_capacity, 3),
+                "degradation_percent": round(degradation * 100, 2),
+                "unit_of_measurement": "kWh",
+                "device_class": "energy",
+                "state_class": "measurement",
+                "friendly_name": "Predbat calculated battery capacity{}".format(" inverter {}".format(self.id) if self.id > 0 else ""),
+                "icon": "mdi:battery-charging",
+            },
+        )
+        return trimmed_mean
+
+    def find_battery_size(self, nominal_capacity=0):
         """
         Given SOC Percent and battery power figure out the approximate battery size in kWh
         """
         soc_percent_sensor = self.base.get_arg("soc_percent", indirect=False, index=self.id)
+        soc_kw_sensor = self.base.get_arg("soc_kw", indirect=False, index=self.id)
         battery_power_sensor = self.base.get_arg("battery_power", indirect=False, index=self.id)
         battery_power_invert = self.base.get_arg("battery_power_invert", False, index=self.id)
         max_power = int(self.battery_rate_max_charge * MINUTE_WATT)
 
-        if soc_percent_sensor and battery_power_sensor:
-            soc_percent_data = self.base.get_history_wrapper(entity_id=soc_percent_sensor, days=self.base.max_days_previous, required=False)
+        if (soc_percent_sensor or soc_kw_sensor) and battery_power_sensor:
+            if soc_percent_sensor:
+                soc_percent_data = self.base.get_history_wrapper(entity_id=soc_percent_sensor, days=self.base.max_days_previous, required=False)
+            else:
+                soc_kw_data = self.base.get_history_wrapper(entity_id=soc_kw_sensor, days=self.base.max_days_previous, required=False)
+                # Compute soc_percent_data from soc_kw, we use find the maximum value in the history to assume that's soc_max
+                if nominal_capacity and nominal_capacity > 0:
+                    soc_max = nominal_capacity
+                else:
+                    soc_max = max(float(dp0(float(state["state"]))) for state in soc_kw_data[0]) if soc_kw_data and len(soc_kw_data) > 0 else None
+                if soc_max and soc_max > 0:
+                    built_list = []
+                    for state in soc_kw_data[0]:
+                        try:
+                            kw = float(state["state"])
+                            percent = (kw / soc_max) * 100.0
+                            built_list.append({"state": dp2(percent), "last_updated": state["last_updated"], "attributes": {"unit_of_measurement": "%"}})
+                        except (ValueError, TypeError, KeyError):
+                            continue
+                    soc_percent_data = [built_list]  # wrap to match get_history_wrapper format
+                else:
+                    soc_percent_data = None
             battery_power_data = self.base.get_history_wrapper(entity_id=battery_power_sensor, days=self.base.max_days_previous, required=False)
 
             if not soc_percent_data or not battery_power_data:
