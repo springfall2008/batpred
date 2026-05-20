@@ -234,6 +234,7 @@ class Inverter:
         self.inv_has_ge_inverter_mode = INVERTER_DEF[self.inverter_type]["has_ge_inverter_mode"]
         self.inv_has_ge_eco_toggle = INVERTER_DEF[self.inverter_type].get("has_ge_eco_toggle", False)
         self.inv_num_load_entities = INVERTER_DEF[self.inverter_type]["num_load_entities"]
+        self.inv_clear_slot_on_disable = INVERTER_DEF[self.inverter_type].get("clear_slot_on_disable", False)
         self.inv_write_and_poll_sleep = INVERTER_DEF[self.inverter_type]["write_and_poll_sleep"]
         self.inv_has_idle_time = INVERTER_DEF[self.inverter_type]["has_idle_time"]
         self.inv_can_span_midnight = INVERTER_DEF[self.inverter_type]["can_span_midnight"]
@@ -2275,6 +2276,7 @@ class Inverter:
         # Turn off scheduled discharge
         if not force_export and old_discharge_enable:
             self.write_and_poll_switch("scheduled_discharge_enable", self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id), False)
+            self.clear_timed_slot_values("discharge")
             self.log("Inverter {} Turning off scheduled export".format(self.id))
 
         self.base.log("Inverter {} Adjust force export to {}, change times from {} - {} to {} - {}".format(self.id, force_export, old_start, old_end, new_start, new_end))
@@ -2382,6 +2384,11 @@ class Inverter:
             self.write_and_poll_switch("scheduled_discharge_enable", self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id), True)
             self.log("Inverter {} Turning on scheduled export".format(self.id))
 
+        # Set discharge current before the button press so the inverter registers it when the schedule is committed
+        if force_export and (not self.inv_has_charge_enable_time or self.inv_clear_slot_on_disable) and (self.inv_output_charge_control == "current"):
+            if self.inv_charge_control_immediate:
+                self.enable_charge_discharge_with_time_current("discharge", True)
+
         if (new_end != old_end) or (new_start != old_start) or (force_export != old_discharge_enable):
             if self.inv_time_button_press:
                 self.press_and_poll_button()
@@ -2389,9 +2396,6 @@ class Inverter:
         # Force export, turn it on after we change the window
         if force_export:
             self.adjust_inverter_mode(force_export, changed_start_end=changed_start_end)
-            if not self.inv_has_charge_enable_time and (self.inv_output_charge_control == "current"):
-                if self.inv_charge_control_immediate:
-                    self.enable_charge_discharge_with_time_current("discharge", True)
 
         # Notify
         if changed_start_end:
@@ -2438,6 +2442,8 @@ class Inverter:
                 self.rest_enableChargeSchedule(False)
             else:
                 self.write_and_poll_switch("scheduled_charge_enable", self.base.get_arg("scheduled_charge_enable", indirect=False, index=self.id), False)
+                if self.inv_has_charge_enable_time:
+                    self.clear_timed_slot_values("charge")
                 # If there's no charge enable switch then we can enable using start and end time
                 if not self.inv_has_charge_enable_time and (self.inv_output_charge_control == "current"):
                     if self.inv_charge_control_immediate:
@@ -2543,6 +2549,59 @@ class Inverter:
                 self.write_and_poll_value(name, self.base.get_arg(name, indirect=False, index=self.id), "00:00-00:00")
             else:
                 self.set_current_from_power(direction, 0)
+
+    def clear_timed_slot_values(self, direction):
+        """
+        Clear timed slot values for a direction after disabling a schedule.
+
+        This avoids stale overlapping times on integrations that validate overlap
+        even when a slot is disabled. Does nothing if inv_clear_slot_on_disable is False.
+        """
+        if not self.inv_clear_slot_on_disable:
+            self.log(f"Inverter {self.id} clear_timed_slot_values: skipped (clear_slot_on_disable not set for this inverter type)")
+            return
+
+        if direction not in ["charge", "discharge"]:
+            self.log(f"Warn: Inverter {self.id} clear_timed_slot_values: invalid direction '{direction}' (must be 'charge' or 'discharge')")
+            return
+
+        self.log(f"Inverter {self.id} Clearing {direction} slot values to prevent overlap validation errors")
+
+        failed_writes = []
+
+        if self.inv_charge_time_format == "H M":
+            self.log(f"Inverter {self.id} Detected time format: H M (separate hour/minute entities)")
+            for edge in ["start", "end"]:
+                for field in ["hour", "minute"]:
+                    name = f"{direction}_{edge}_{field}"
+                    entity_id = self.base.get_arg(name, indirect=False, index=self.id)
+                    if not entity_id:
+                        continue
+
+                    if isinstance(entity_id, str) and entity_id.startswith("time."):
+                        if not self.write_and_poll_option(name, entity_id, "00:00:00"):
+                            failed_writes.append(f"{name} ({entity_id})")
+                    else:
+                        if not self.write_and_poll_value(name, entity_id, 0):
+                            failed_writes.append(f"{name} ({entity_id})")
+        elif self.inv_charge_time_format == "H:M-H:M":
+            self.log(f"Inverter {self.id} Detected time format: H:M-H:M (range entity)")
+            name = f"{direction}_time"
+            entity_id = self.base.get_arg(name, indirect=False, index=self.id)
+            if entity_id:
+                if not self.write_and_poll_value(name, entity_id, "00:00-00:00"):
+                    failed_writes.append(f"{name} ({entity_id})")
+        else:
+            self.log(f"Inverter {self.id} Detected time format: {self.inv_charge_time_format} (no slot clearing for this format)")
+
+        current_name = f"timed_{direction}_current"
+        current_entity_id = self.base.get_arg(current_name, indirect=False, index=self.id)
+        if current_entity_id:
+            if not self.write_and_poll_value(current_name, current_entity_id, 0, fuzzy=1):
+                failed_writes.append(f"{current_name} ({current_entity_id})")
+
+        if failed_writes:
+            self.base.record_status(f"Warn: Inverter {self.id} failed to clear {len(failed_writes)} slot values: {', '.join(failed_writes)}", had_errors=True)
 
     def set_current_from_power(self, direction, power):
         """
@@ -2816,7 +2875,7 @@ class Inverter:
                 self.rest_enableChargeSchedule(True)
             elif "scheduled_charge_enable" in self.base.args:
                 self.write_and_poll_switch("scheduled_charge_enable", self.base.get_arg("scheduled_charge_enable", indirect=False, index=self.id), True)
-                if not self.inv_has_charge_enable_time and (self.inv_output_charge_control == "current"):
+                if (not self.inv_has_charge_enable_time or self.inv_clear_slot_on_disable) and (self.inv_output_charge_control == "current"):
                     if self.inv_charge_control_immediate:
                         self.enable_charge_discharge_with_time_current("charge", True)
             else:

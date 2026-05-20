@@ -3110,4 +3110,12 @@ Defines the units of the SoC setting (currently not used), it defaults to "%".
 
 Sets the number of seconds between polls of inverter settings.
 
+### clear_slot_on_disable
+
+When True, Predbat will clear the charge/discharge slot time and current values back to zero whenever a timed charge or discharge window is disabled on the inverter.
+This prevents inverters that validate for overlapping time slots from rejecting writes when Predbat switches between charge and discharge modes.
+
+This setting has currently only been tested with **GS_fb00** (Ginlong Solis FB00 firmware) inverters using the Solax Modbus integration in Home Assistant.
+It defaults to False for all other inverter types.
+
 <!-- markdownlint-enable MD046 -->
