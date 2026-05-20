@@ -2384,6 +2384,11 @@ class Inverter:
             self.write_and_poll_switch("scheduled_discharge_enable", self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id), True)
             self.log("Inverter {} Turning on scheduled export".format(self.id))
 
+        # Set discharge current before the button press so the inverter registers it when the schedule is committed
+        if force_export and (not self.inv_has_charge_enable_time or self.inv_clear_slot_on_disable) and (self.inv_output_charge_control == "current"):
+            if self.inv_charge_control_immediate:
+                self.enable_charge_discharge_with_time_current("discharge", True)
+
         if (new_end != old_end) or (new_start != old_start) or (force_export != old_discharge_enable):
             if self.inv_time_button_press:
                 self.press_and_poll_button()
@@ -2391,9 +2396,6 @@ class Inverter:
         # Force export, turn it on after we change the window
         if force_export:
             self.adjust_inverter_mode(force_export, changed_start_end=changed_start_end)
-            if (not self.inv_has_charge_enable_time or self.inv_clear_slot_on_disable) and (self.inv_output_charge_control == "current"):
-                if self.inv_charge_control_immediate:
-                    self.enable_charge_discharge_with_time_current("discharge", True)
 
         # Notify
         if changed_start_end:
