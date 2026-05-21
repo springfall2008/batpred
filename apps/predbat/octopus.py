@@ -2824,7 +2824,8 @@ class Octopus:
                                 result = self.call_service_wrapper("octopus_energy/join_octoplus_saving_session_event", event_code=code, entity_id=entity_id)
                             if result:
                                 if self.get_arg("set_event_notify"):
-                                    self.call_notify("{}: Joined Octopus saving event {}-{}, {} p/kWh".format(self.prefix, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
+                                    msg = "Joined Octopus saving event " + start_time.strftime("%a %d/%m %H:%M") + "-" + end_time.strftime("%H:%M") ", " + saving_rate + " p/kWh"
+                                    self.call_notify(f"{self.prefix.capitalize()}: {msg}")
                             else:
                                 self.log("Warn: Unable to join Octoplus saving event with command {}, result was {}".format(cmd, result))
                             self.octopus_last_joined_try = self.now_utc
