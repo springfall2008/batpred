@@ -589,7 +589,7 @@ Max value: (Inverter Battery max charge in watt)
 input_number.predbat_discharge_rate     # this is used to set battery discharge to zero
 Min value: 0
 Max value: (Inverter Battery max discharge in watt)
-```text
+```
 
 - To control the Kostal inverter you need to use a modbus/tcp connection, this is not a part of the Kostal integration. Add the following modbus configuration to your `configuration.yaml`:
 
@@ -1348,8 +1348,7 @@ triggers:
       entity_id: automation.luxpower_freeze_charge_watchdog
 
   mode: single
-
-  ```
+```
 
 **Enable Freeze Charging**
 
@@ -1367,7 +1366,7 @@ If you have a LuxPower inverter with the **Charge Last** feature, enable the Pre
 **Note**
 Freeze Exporting requires fewer supporting automations than Freeze Charging, as it relies primarily on inverter-side behaviour. No additional watchdog or guard logic is required.
 
- In your `apps.yaml` file:
+In your `apps.yaml` file:
 
 - Look for `support_discharge_freeze` in the inverter section and change `False` to `True`
     - Uncomment the last two lines of the `discharge_stop_service` section so Predbat turns `switch.lux_charge_last` off when Freeze exporting stops.
@@ -1390,7 +1389,7 @@ After Predbat recomputes, you may see some dark grey **FrzExp** slots in the sta
 ```yaml
 name: Predbat Ready
 entity_id: input_boolean.predbat_ready
-```text
+```
 
 The `predbat_ready` helper prevents automation actions until LuxPower entities are fully available after startup. Ensure it is On after it has been created.
 
@@ -1663,20 +1662,20 @@ Add the following automations to `automations.yaml` (or configure via the UI):
                 entity_id: number.sigen_plant_grid_import_limitation
                 value: 100
 
-  - id: automation_sigen_ess_max_charging_limit_input_number_action
-    alias: Predbat max charging limit action
-    description: Mapper from input_number.charge_rate to number sigen_plant_ess_max_charging_limit
-    triggers:
-    - trigger: state
-      entity_id: input_number.charge_rate
-    actions:
-    - action: number.set_value
-      target:
-        entity_id: number.sigen_plant_ess_max_charging_limit
-      data:
-        value: '{{ [(states(''input_number.charge_rate'') | float / 1000) | round(2),
-          states(''sensor.sigen_inverter_ess_rated_charging_power'') | float] | min}}'
-    mode: single
+- id: automation_sigen_ess_max_charging_limit_input_number_action
+  alias: Predbat max charging limit action
+  description: Mapper from input_number.charge_rate to number sigen_plant_ess_max_charging_limit
+  triggers:
+  - trigger: state
+    entity_id: input_number.charge_rate
+  actions:
+  - action: number.set_value
+    target:
+      entity_id: number.sigen_plant_ess_max_charging_limit
+    data:
+      value: '{{ [(states(''input_number.charge_rate'') | float / 1000) | round(2),
+        states(''sensor.sigen_inverter_ess_rated_charging_power'') | float] | min}}'
+  mode: single
 
 - id: automation_sigen_ess_max_discharging_limit_input_number_action
   alias: Predbat max discharging limit action
