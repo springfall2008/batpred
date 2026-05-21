@@ -695,7 +695,14 @@ class Inverter:
                 if nominal_capacity and nominal_capacity > 0:
                     soc_max = nominal_capacity
                 else:
-                    soc_max = max(float(dp0(float(state["state"]))) for state in soc_kw_data[0]) if soc_kw_data and len(soc_kw_data) > 0 else None
+                    soc_values = []
+                    if soc_kw_data and len(soc_kw_data) > 0:
+                        for state in soc_kw_data[0]:
+                            try:
+                                soc_values.append(float(dp0(float(state["state"]))))
+                            except (ValueError, TypeError):
+                                pass
+                    soc_max = max(soc_values) if soc_values else None
                 if soc_max and soc_max > 0:
                     built_list = []
                     for state in soc_kw_data[0]:
