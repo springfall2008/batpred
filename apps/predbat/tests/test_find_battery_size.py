@@ -986,7 +986,9 @@ def test_find_battery_size_soc_kw_unavailable(my_predbat):
     def patched_get_history(entity_id, now=None, days=30):
         result = original_get_history(entity_id, now=now, days=days)
         if entity_id == "sensor.soc_kw" and result:
-            # Scatter unavailable / unknown entries throughout the history
+            # Replace every 10th entry with 'unavailable' and the entry 5 slots later
+            # with 'unknown', simulating a Gateway with no directly connected batteries
+            # (e.g. GivEnergy dual AIO).  Using a stride of 10 keeps ~80% valid data.
             for i in range(0, len(result[0]), 10):
                 result[0][i] = {"state": "unavailable", "last_updated": result[0][i]["last_updated"], "attributes": {}}
             for i in range(5, len(result[0]), 10):
@@ -999,6 +1001,9 @@ def test_find_battery_size_soc_kw_unavailable(my_predbat):
         estimated_size = inv.find_battery_size()
         if estimated_size:
             print("Estimated battery size (soc_kw with unavailable): {} kWh (expected: {} kWh)".format(estimated_size, expected_battery_size))
+            # 30% tolerance matches test_find_battery_size_soc_kw; the soc_kw path
+            # derives percentages from the observed max so inherits more estimation
+            # error than the direct soc_percent path (which uses 20% tolerance).
             tolerance = 0.30
             lower_bound = expected_battery_size * (1 - tolerance)
             upper_bound = expected_battery_size * (1 + tolerance)
