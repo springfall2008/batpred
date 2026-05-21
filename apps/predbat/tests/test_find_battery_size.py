@@ -953,6 +953,68 @@ def test_update_soc_max_calculated_sensor_mixed_none(my_predbat):
     return failed
 
 
+def test_find_battery_size_with_scaling(my_predbat):
+    """
+    Test find_battery_size with battery_scaling < 1.0 (80% depth-of-discharge).
+
+    A 10 kWh nominal battery with battery_scaling=0.8 has a usable capacity of 8 kWh.
+    The SoC sensor reports 0-100% of that 8 kWh usable range.
+    find_battery_size must return ~8 kWh, not ~10 kWh.
+
+    This regression test catches the bug where battery_scaling was applied to the SoC
+    percentage values inside find_battery_size, causing the nominal capacity to be
+    returned instead of the usable (scaled) capacity.
+    """
+    print("*** Running test: find_battery_size_with_scaling ***")
+    failed = False
+
+    nominal_kwh = 10.0
+    battery_scaling = 0.8
+    usable_kwh = nominal_kwh * battery_scaling  # 8 kWh
+
+    inv = Inverter(my_predbat, 0)
+    inv.battery_rate_max_charge = 2600 / 60000
+    inv.battery_rate_max_discharge = 2600 / 60000
+    inv.soc_max = usable_kwh
+    inv.nominal_capacity = nominal_kwh
+    inv.battery_scaling = battery_scaling
+
+    setup_predbat(my_predbat)
+
+    # History data reflects 0-100% SoC of the usable 8 kWh range
+    create_test_history_data(my_predbat, num_days=2, battery_size_kwh=usable_kwh)
+
+    try:
+        estimated_size = inv.find_battery_size(nominal_kwh)
+        if estimated_size is None:
+            print("ERROR: find_battery_size returned None; expected ~{} kWh".format(usable_kwh))
+            failed = True
+        else:
+            print("Estimated battery size: {:.2f} kWh (expected: {:.2f} kWh usable, nominal {:.2f} kWh)".format(estimated_size, usable_kwh, nominal_kwh))
+            tolerance = 0.20
+            lower_bound = usable_kwh * (1 - tolerance)
+            upper_bound = usable_kwh * (1 + tolerance)
+            if not (lower_bound <= estimated_size <= upper_bound):
+                print(
+                    "ERROR: Estimated size {:.2f} kWh is outside usable range [{:.2f}, {:.2f}] kWh. "
+                    "If this is ~{:.2f} kWh the battery_scaling bug is present (SoC percent was scaled "
+                    "inside find_battery_size, returning nominal instead of usable capacity).".format(
+                        estimated_size, lower_bound, upper_bound, nominal_kwh
+                    )
+                )
+                failed = True
+            else:
+                print("SUCCESS: find_battery_size returned usable capacity {:.2f} kWh (within 20% of {:.2f} kWh)".format(estimated_size, usable_kwh))
+    except Exception as e:
+        print("ERROR: find_battery_size raised exception: {}".format(e))
+        import traceback
+
+        traceback.print_exc()
+        failed = True
+
+    return failed
+
+
 def run_find_battery_size_tests(my_predbat):
     """
     Run all find_battery_size tests
@@ -1029,7 +1091,7 @@ def run_find_battery_size_tests(my_predbat):
     failed |= test_battery_size_tracking_no_nominal(my_predbat)
     if failed:
         return failed
-
+    
     failed |= test_battery_size_tracking_none_stored_on_failure(my_predbat)
     if failed:
         return failed
@@ -1043,6 +1105,10 @@ def run_find_battery_size_tests(my_predbat):
         return failed
 
     failed |= test_update_soc_max_calculated_sensor_mixed_none(my_predbat)
+    if failed:
+        return failed    
+    
+    failed |= test_find_battery_size_with_scaling(my_predbat)
     if failed:
         return failed
 

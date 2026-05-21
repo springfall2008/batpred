@@ -372,8 +372,8 @@ class Inverter:
                 ivtime = idetails["Invertor_Time"]
         else:
             self.battery_temperature = self.base.get_arg("battery_temperature", default=20, index=self.id, required_unit="°C")
-            self.soc_max = self.base.get_arg("soc_max", default=0.0, index=self.id) * self.battery_scaling
-            self.nominal_capacity = self.soc_max
+            self.nominal_capacity = self.base.get_arg("soc_max", default=0.0, index=self.id)
+            self.soc_max = self.nominal_capacity * self.battery_scaling
 
             if self.inverter_type in ["GE", "GEC", "GEE"]:
                 self.battery_rate_max_raw = self.base.get_arg("charge_rate", attribute="max", index=self.id, default=2600.0, required_unit="W")
@@ -724,7 +724,7 @@ class Inverter:
                 clean_increment=False,
                 smoothing=False,
                 divide_by=1.0,
-                scale=self.battery_scaling,
+                scale=1.0,
                 required_unit="%",
             )
             battery_power, _ = minute_data(
