@@ -1021,6 +1021,8 @@ def test_find_battery_size_soc_kw_unavailable(my_predbat):
 
         traceback.print_exc()
         failed = True
+    finally:
+        my_predbat.ha_interface.get_history = original_get_history
 
     # Restore soc_percent for subsequent tests
     setup_predbat(my_predbat)
