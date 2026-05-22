@@ -97,8 +97,9 @@ def create_test_history_data(my_predbat, num_days=2, battery_size_kwh=10.0):
 def create_test_history_data_soc_kw(my_predbat, num_days=2, battery_size_kwh=10.0):
     """
     Like create_test_history_data but exposes soc_kw (kWh absolute) instead of soc_percent.
-    The find_battery_size code must detect the maximum kWh value in the history and derive
-    percentages from it.
+    The find_battery_size code infers soc_max from the observed maximum kWh value, so the
+    charging cycles must reach 100% (battery_size_kwh) at least once so that soc_max is
+    accurately calibrated and percentage-based estimates are correct.
     """
     ha = my_predbat.ha_interface
     base_time = my_predbat.midnight_utc - timedelta(days=num_days)
@@ -111,25 +112,31 @@ def create_test_history_data_soc_kw(my_predbat, num_days=2, battery_size_kwh=10.
     max_power_w = 2600
     charge_power_w = max_power_w * 0.94  # above 90% threshold
 
-    current_soc_kwh = battery_size_kwh * 0.20  # Start at 20%
+    # Start near-empty so the 5-hour charge window reaches 100%, giving an accurate
+    # observed soc_max for percentage derivation.
+    current_soc_kwh = battery_size_kwh * 0.05  # Start at 5%
 
     for minutes in range(0, total_minutes, 5):
         timestamp = base_time + timedelta(minutes=minutes)
         timestamp_str = timestamp.strftime("%Y-%m-%dT%H:%M:%S%z")
         hour = timestamp.hour
 
-        if 2 <= hour < 4:
+        # Morning charge: 00:00–05:00 (5 hours). At 2444 W that adds ~12.2 kWh,
+        # which is more than enough to top up a 10 kWh battery from 5%.
+        if 0 <= hour < 5:
             battery_power = -charge_power_w
             energy_added_kwh = charge_power_w * 5 / 60.0 / 1000.0
             current_soc_kwh = min(battery_size_kwh, current_soc_kwh + energy_added_kwh)
-        elif 18 <= hour < 20:
+        # Evening charge: 18:00–23:00 (same logic)
+        elif 18 <= hour < 23:
             battery_power = -charge_power_w
             energy_added_kwh = charge_power_w * 5 / 60.0 / 1000.0
             current_soc_kwh = min(battery_size_kwh, current_soc_kwh + energy_added_kwh)
         else:
             battery_power = 0
-            if hour == 1 or hour == 17:
-                current_soc_kwh = battery_size_kwh * 0.20
+            # Reset to near-empty before each charge session
+            if hour == 17:
+                current_soc_kwh = battery_size_kwh * 0.05
 
         history_dict["sensor.soc_kw"].append({"state": str(round(current_soc_kwh, 3)), "last_updated": timestamp_str, "attributes": {"unit_of_measurement": "kWh"}})
         history_dict["sensor.battery_power"].append({"state": round(battery_power, 1), "last_updated": timestamp_str, "attributes": {"unit_of_measurement": "W"}})
