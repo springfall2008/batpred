@@ -641,6 +641,7 @@ class Inverter:
                     "history": history,
                     "nominal_capacity": round(nominal_capacity, 3),
                     "degradation_percent": None,
+                    "configured_degradation": round(self.battery_scaling * 100, 2),
                     "unit_of_measurement": "kWh",
                     "device_class": "energy",
                     "state_class": "measurement",
@@ -658,7 +659,7 @@ class Inverter:
 
         found_size_str = "{:.2f} kWh".format(found_size) if found_size is not None else "None"
         degradation = (self.nominal_capacity - trimmed_mean) / self.nominal_capacity if self.nominal_capacity > 0 else 0
-        self.log("Inverter {} battery size tracking: found_size {}, history {}, trimmed_mean {:.2f} kWh, degradation {:.2%}".format(self.id, found_size_str, history, trimmed_mean, degradation))
+        self.log("Inverter {} battery size tracking: found_size {}, history {}, trimmed_mean {:.2f} kWh, degradation {:.2%} configured degradation {:.2f}".format(self.id, found_size_str, history, trimmed_mean, degradation, self.battery_scaling))
 
         self.base.dashboard_item(
             sensor_name,
@@ -667,6 +668,7 @@ class Inverter:
                 "history": history,
                 "nominal_capacity": round(nominal_capacity, 3),
                 "degradation_percent": round(degradation * 100, 2),
+                "configured_degradation": round(self.battery_scaling * 100, 2),
                 "unit_of_measurement": "kWh",
                 "device_class": "energy",
                 "state_class": "measurement",

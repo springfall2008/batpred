@@ -776,6 +776,7 @@ def test_battery_size_tracking_none_stored_on_failure(my_predbat):
 
     # Mock find_battery_size to always fail
     inv.find_battery_size = lambda _nc=0: None
+    original_soc_max = inv.soc_max  # 10.0
 
     try:
         inv.battery_size_tracking()
@@ -792,6 +793,13 @@ def test_battery_size_tracking_none_stored_on_failure(my_predbat):
             failed = True
         else:
             print("SUCCESS: None correctly stored in history to prevent re-calculation")
+
+        # soc_max must remain unchanged when find_battery_size fails and battery_scaling_auto is off
+        if inv.soc_max != original_soc_max:
+            print("ERROR: soc_max changed from {:.3f} to {:.3f} when it should remain unchanged after a failed find_battery_size".format(original_soc_max, inv.soc_max))
+            failed = True
+        else:
+            print("SUCCESS: soc_max remains {:.3f} kWh after failed find_battery_size".format(inv.soc_max))
     except Exception as e:
         print("ERROR: test raised exception: {}".format(e))
         import traceback
@@ -991,7 +999,7 @@ def test_find_battery_size_with_scaling(my_predbat):
             failed = True
         else:
             print("Estimated battery size: {:.2f} kWh (expected: {:.2f} kWh usable, nominal {:.2f} kWh)".format(estimated_size, usable_kwh, nominal_kwh))
-            tolerance = 0.20
+            tolerance = 0.05  # 5% tolerance since scaling should be applied correctly
             lower_bound = usable_kwh * (1 - tolerance)
             upper_bound = usable_kwh * (1 + tolerance)
             if not (lower_bound <= estimated_size <= upper_bound):
@@ -1004,7 +1012,7 @@ def test_find_battery_size_with_scaling(my_predbat):
                 )
                 failed = True
             else:
-                print("SUCCESS: find_battery_size returned usable capacity {:.2f} kWh (within 20% of {:.2f} kWh)".format(estimated_size, usable_kwh))
+                print("SUCCESS: find_battery_size returned usable capacity {:.2f} kWh (within 5% of {:.2f} kWh)".format(estimated_size, usable_kwh))
     except Exception as e:
         print("ERROR: find_battery_size raised exception: {}".format(e))
         import traceback
