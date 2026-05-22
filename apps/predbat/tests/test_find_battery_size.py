@@ -1021,6 +1021,83 @@ def test_find_battery_size_with_scaling(my_predbat):
     return failed
 
 
+def test_find_battery_size_soc_kw_unavailable(my_predbat):
+    """
+    Test find_battery_size when soc_kw history contains 'unavailable' entries.
+
+    This simulates a GivEnergy dual AIO setup with a Gateway that has no batteries
+    directly connected, causing some history states to be 'unavailable'.
+    The function should skip those entries and still compute soc_max correctly.
+    """
+    print("*** Running test: find_battery_size_soc_kw_unavailable ***")
+    failed = False
+
+    expected_battery_size = 10.0  # kWh
+    inv = Inverter(my_predbat, 0)
+    inv.battery_rate_max_charge = 2600 / 60000
+    inv.battery_rate_max_discharge = 2600 / 60000
+    inv.soc_max = expected_battery_size
+    inv.battery_scaling = 1.0
+
+    my_predbat.args["soc_kw"] = ["sensor.soc_kw"]
+    my_predbat.args.pop("soc_percent", None)
+    my_predbat.args["battery_power"] = ["sensor.battery_power"]
+    my_predbat.args["battery_power_invert"] = [False]
+    my_predbat.debug_enable = True
+
+    # Build history with a mix of valid values and 'unavailable' / 'unknown' states
+    create_test_history_data_soc_kw(my_predbat, num_days=2, battery_size_kwh=expected_battery_size)
+
+    # Inject some 'unavailable' and 'unknown' entries into the soc_kw history
+    original_get_history = my_predbat.ha_interface.get_history
+
+    def patched_get_history(entity_id, now=None, days=30):
+        result = original_get_history(entity_id, now=now, days=days)
+        if entity_id == "sensor.soc_kw" and result:
+            # Replace every 10th entry with 'unavailable' and the entry 5 slots later
+            # with 'unknown', simulating a Gateway with no directly connected batteries
+            # (e.g. GivEnergy dual AIO).  Using a stride of 10 keeps ~80% valid data.
+            for i in range(0, len(result[0]), 10):
+                result[0][i] = {"state": "unavailable", "last_updated": result[0][i]["last_updated"], "attributes": {}}
+            for i in range(5, len(result[0]), 10):
+                result[0][i] = {"state": "unknown", "last_updated": result[0][i]["last_updated"], "attributes": {}}
+        return result
+
+    my_predbat.ha_interface.get_history = patched_get_history
+
+    try:
+        estimated_size = inv.find_battery_size()
+        if estimated_size:
+            print("Estimated battery size (soc_kw with unavailable): {} kWh (expected: {} kWh)".format(estimated_size, expected_battery_size))
+            # 30% tolerance matches test_find_battery_size_soc_kw; the soc_kw path
+            # derives percentages from the observed max so inherits more estimation
+            # error than the direct soc_percent path (which uses 20% tolerance).
+            tolerance = 0.30
+            lower_bound = expected_battery_size * (1 - tolerance)
+            upper_bound = expected_battery_size * (1 + tolerance)
+            if not (lower_bound <= estimated_size <= upper_bound):
+                print("ERROR: Estimated battery size {} kWh is outside acceptable range [{}, {}] kWh".format(estimated_size, lower_bound, upper_bound))
+                failed = True
+            else:
+                print("SUCCESS: soc_kw path with unavailable states estimated battery size within 30% tolerance")
+        else:
+            print("ERROR: No battery size estimate returned from soc_kw path with unavailable states")
+            failed = True
+    except Exception as e:
+        print("ERROR: find_battery_size raised exception with unavailable states: {}".format(e))
+        import traceback
+
+        traceback.print_exc()
+        failed = True
+    finally:
+        my_predbat.ha_interface.get_history = original_get_history
+
+    # Restore soc_percent for subsequent tests
+    setup_predbat(my_predbat)
+
+    return failed
+
+
 def run_find_battery_size_tests(my_predbat):
     """
     Run all find_battery_size tests
@@ -1047,6 +1124,10 @@ def run_find_battery_size_tests(my_predbat):
         return failed
 
     failed |= test_find_battery_size_soc_kw(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_find_battery_size_soc_kw_unavailable(my_predbat)
     if failed:
         return failed
 
