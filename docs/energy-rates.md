@@ -550,6 +550,28 @@ Or, if you prefer to set import/export calibration manually rather than auto-det
   futurerate_peak_end: "19:00:00"
 ```
 
+## Rate history fallback
+
+When Predbat builds its plan, it needs energy rates for the full plan horizon (typically 48 hours). The `rate_replicate` mechanism fills unknown future slots by copying rates from 24 hours earlier. However, some rate sensors only publish a short forward window — for example, Amber Australia publishes approximately 16 hours of future rates, leaving the remaining 32 hours of the plan horizon with no live rate data.
+
+When `rate_history_days_average` is enabled, Predbat queries the Home Assistant recorder history for the configured rate entity and builds a per-half-hour-of-day mean profile. Any future slot that cannot be filled from a 24-hour-back copy is instead filled from this historical profile, restoring the diurnal price shape rather than falling back to a constant last-known rate.
+
+The builder samples one value per half-hour slot per day (using step-function lookup: the rate in effect at each slot start), making it resistant to transient price spikes that could otherwise skew the mean.
+
+```yaml
+  rate_history_days_average: 7
+  rate_history_source_import: 'sensor.amber_general_price'
+  rate_history_scaling_import: 100.0
+```
+
+The configuration options are:
+
+- **rate_history_days_average** - Number of days of HA recorder history to use for the half-hour-of-day mean profile. When set to `0` (the default) the feature is disabled. Recommended range `3`–`14`.
+- **rate_history_source_import** and **rate_history_source_export** - Home Assistant entity to query for historical rate data (e.g. `sensor.amber_general_price`). If not set, falls back to the entity configured in `metric_octopus_import` / `metric_octopus_export`.
+- **rate_history_scaling_import** and **rate_history_scaling_export** - Multiplier applied to each historical rate value to convert it to Predbat's internal rate units. For example, if your rate sensor publishes in $/kWh and you use c/kWh elsewhere, set this to `100.0`. Defaults to `1.0`.
+
+Note that these items are only available in *expert mode* in Home Assistant.
+
 ## Axle VPP
 
 [Axle in the UK](https://vpp.axle.energy/landing) provide a Virtual Power Plant (VPP) service to the National Grid. In times of strain in the energy grid, Axle will command inverters to export, and in return you get paid £1/kWh.
