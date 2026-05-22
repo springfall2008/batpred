@@ -851,6 +851,8 @@ def dp1(value):
     """
     Round to 1 decimal place
     """
+    if value is None:
+        return None
     return round(value, 1)
 
 
@@ -858,6 +860,8 @@ def dp2(value):
     """
     Round to 2 decimal places
     """
+    if value is None:
+        return None
     return round(value, 2)
 
 
@@ -865,6 +869,8 @@ def dp3(value):
     """
     Round to 3 decimal places
     """
+    if value is None:
+        return None
     return round(value, 3)
 
 
@@ -872,6 +878,8 @@ def dp4(value):
     """
     Round to 4 decimal places
     """
+    if value is None:
+        return None
     return round(value, 4)
 
 
