@@ -691,51 +691,53 @@ class Inverter:
         if (soc_percent_sensor or soc_kw_sensor) and battery_power_sensor:
             if soc_percent_sensor:
                 soc_percent_data = self.base.get_history_wrapper(entity_id=soc_percent_sensor, days=self.base.max_days_previous, required=False)
+                if soc_percent_data:
+                    soc_percent, _ = minute_data(
+                        soc_percent_data[0],
+                        self.base.max_days_previous,
+                        self.base.now_utc,
+                        "state",
+                        "last_updated",
+                        backwards=True,
+                        clean_increment=False,
+                        smoothing=False,
+                        divide_by=1.0,
+                        scale=self.battery_scaling,
+                        required_unit="%",
+                    )
+                else:
+                    soc_percent = {}
             else:
                 soc_kw_data = self.base.get_history_wrapper(entity_id=soc_kw_sensor, days=self.base.max_days_previous, required=False)
-                # Compute soc_percent_data from soc_kw, we use find the maximum value in the history to assume that's soc_max
-                if nominal_capacity and nominal_capacity > 0:
-                    soc_max = nominal_capacity
-                else:
-                    soc_values = []
-                    if soc_kw_data and len(soc_kw_data) > 0:
-                        for state in soc_kw_data[0]:
-                            try:
-                                soc_values.append(float(dp0(float(state["state"]))))
-                            except (ValueError, TypeError):
-                                pass
-                    soc_max = max(soc_values) if soc_values else None
-                if soc_max and soc_max > 0:
-                    built_list = []
-                    for state in soc_kw_data[0]:
-                        try:
-                            kw = float(state["state"])
-                            percent = (kw / soc_max) * 100.0
-                            built_list.append({"state": dp2(percent), "last_updated": state["last_updated"], "attributes": {"unit_of_measurement": "%"}})
-                        except (ValueError, TypeError, KeyError):
-                            continue
-                    soc_percent_data = [built_list]  # wrap to match get_history_wrapper format
-                else:
-                    soc_percent_data = None
+                soc_percent = {}
+                if soc_kw_data:
+                    # Parse kWh history into a clean minute dict then convert to percent
+                    soc_kw_minute, _ = minute_data(
+                        soc_kw_data[0],
+                        self.base.max_days_previous,
+                        self.base.now_utc,
+                        "state",
+                        "last_updated",
+                        backwards=True,
+                        clean_increment=False,
+                        smoothing=False,
+                        divide_by=1.0,
+                        scale=1.0,
+                        required_unit="kWh",
+                    )
+                    # Determine soc_max from nominal_capacity or the observed maximum
+                    if nominal_capacity and nominal_capacity > 0:
+                        soc_max = nominal_capacity
+                    else:
+                        soc_max = max(soc_kw_minute.values()) if soc_kw_minute else 0
+                    if soc_max > 0:
+                        soc_percent = {minute: (kw / soc_max) * 100.0 for minute, kw in soc_kw_minute.items()}
             battery_power_data = self.base.get_history_wrapper(entity_id=battery_power_sensor, days=self.base.max_days_previous, required=False)
 
-            if not soc_percent_data or not battery_power_data:
+            if not soc_percent or not battery_power_data:
                 self.log("Warn: Unable to estimate battery size - no history data available")
                 return None
 
-            soc_percent, _ = minute_data(
-                soc_percent_data[0],
-                self.base.max_days_previous,
-                self.base.now_utc,
-                "state",
-                "last_updated",
-                backwards=True,
-                clean_increment=False,
-                smoothing=False,
-                divide_by=1.0,
-                scale=1.0,
-                required_unit="%",
-            )
             battery_power, _ = minute_data(
                 battery_power_data[0],
                 self.base.max_days_previous,
