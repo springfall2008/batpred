@@ -702,7 +702,7 @@ class Inverter:
                         clean_increment=False,
                         smoothing=False,
                         divide_by=1.0,
-                        scale=self.battery_scaling,
+                        scale=1.0,
                         required_unit="%",
                     )
                 else:
