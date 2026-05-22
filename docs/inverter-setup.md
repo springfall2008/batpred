@@ -1587,7 +1587,6 @@ Add the following automations to `automations.yaml` (or configure via the UI):
           {% elif is_state('input_select.predbat_requested_mode', "Discharging") %}Command Discharging (PV First)
           {% elif is_state('input_select.predbat_requested_mode', "Freeze Discharging") %}Maximum Self Consumption
           {% endif %}
-
     - choose:
         # Freeze Charging
         # Docs:
@@ -1601,19 +1600,21 @@ Add the following automations to `automations.yaml` (or configure via the UI):
               entity_id: input_select.predbat_requested_mode
               state: "Freeze Charging"
           sequence:
-            - service: number.set_value
-              data_template:
+            - action: number.set_value
+              target:
                 entity_id: number.sigen_plant_ess_charge_cut_off_state_of_charge
+              data:
                 value: 100
-            - service: number.set_value
-              data_template:
+            - action: number.set_value
+              target:
                 entity_id: number.sigen_plant_ess_discharge_cut_off_state_of_charge
+              data:
                 value: 100
-            - service: number.set_value
-              data_template:
+            - action: number.set_value
+              target:
                 entity_id: number.sigen_plant_grid_import_limitation
+              data:
                 value: 0
-
         # Freeze Discharging
         # Docs:
         #  Freeze exporting (mapped to Freeze Discharging in sigenergy_sigenstor.yaml) - The battery is in demand mode,
@@ -1626,19 +1627,21 @@ Add the following automations to `automations.yaml` (or configure via the UI):
               entity_id: input_select.predbat_requested_mode
               state: "Freeze Discharging"
           sequence:
-            - service: number.set_value
-              data_template:
+            - action: number.set_value
+              target:
                 entity_id: number.sigen_plant_ess_charge_cut_off_state_of_charge
+              data:
                 value: 0
-            - service: number.set_value
-              data_template:
+            - action: number.set_value
+              target:
                 entity_id: number.sigen_plant_ess_discharge_cut_off_state_of_charge
+              data:
                 value: 0
-            - service: number.set_value
-              data_template:
+            - action: number.set_value
+              target:
                 entity_id: number.sigen_plant_grid_import_limitation
+              data:
                 value: 0
-
         # If neither of the above conditions are met, set the limits to the input numbers
         - conditions:
           - condition: not
@@ -1650,17 +1653,20 @@ Add the following automations to `automations.yaml` (or configure via the UI):
                 entity_id: input_select.predbat_requested_mode
                 state: "Freeze Discharging"
           sequence:
-            - service: number.set_value
-              data_template:
+            - action: number.set_value
+              target:
                 entity_id: number.sigen_plant_ess_charge_cut_off_state_of_charge
+              data:
                 value: 100
-            - service: number.set_value
-              data_template:
+            - action: number.set_value
+              target:
                 entity_id: number.sigen_plant_ess_discharge_cut_off_state_of_charge
+              data:
                 value: 0
-            - service: number.set_value
-              data_template:
+            - action: number.set_value
+              target:
                 entity_id: number.sigen_plant_grid_import_limitation
+              data:
                 value: 100
 
   - id: automation_sigen_ess_max_charging_limit_input_number_action
