@@ -104,6 +104,7 @@ GATEWAY_ATTRIBUTE_TABLE = {
     # Operating mode selector
     "mode_select": {"friendly_name": "Operating Mode", "icon": "mdi:cog", "options": GATEWAY_OPERATING_MODE_OPTIONS},
     # Control numbers
+    "export_limit_w": {"friendly_name": "Export Limit", "icon": "mdi:transmission-tower", "unit_of_measurement": "W", "device_class": "power"},
     "charge_rate": {"friendly_name": "Charge Rate", "icon": "mdi:battery-plus", "unit_of_measurement": "W", "min": 0, "max": 10000, "step": 10},
     "discharge_rate": {"friendly_name": "Discharge Rate", "icon": "mdi:battery-minus", "unit_of_measurement": "W", "min": 0, "max": 10000, "step": 10},
     "reserve_soc": {"friendly_name": "Reserve SOC", "icon": "mdi:battery-lock", "unit_of_measurement": "%", "min": 0, "max": 100, "step": 1},
@@ -547,6 +548,7 @@ class GatewayMQTT(ComponentBase):
         control = inv.control
         self.dashboard_item(f"switch.{pfx}_charge_enabled", "on" if control.charge_enabled else "off", attributes=GATEWAY_ATTRIBUTE_TABLE.get("charge_enabled", {}), app="gateway")
         self.dashboard_item(f"switch.{pfx}_discharge_enabled", "on" if control.discharge_enabled else "off", attributes=GATEWAY_ATTRIBUTE_TABLE.get("discharge_enabled", {}), app="gateway")
+        self.dashboard_item(f"sensor.{pfx}_export_limit_w", control.export_limit_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("export_limit_w", {}), app="gateway")
         self.dashboard_item(f"number.{pfx}_charge_rate", control.charge_rate_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("charge_rate", {}), app="gateway")
         self.dashboard_item(f"number.{pfx}_discharge_rate", control.discharge_rate_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("discharge_rate", {}), app="gateway")
         self.dashboard_item(f"number.{pfx}_reserve_soc", control.reserve_soc, attributes=GATEWAY_ATTRIBUTE_TABLE.get("reserve_soc", {}), app="gateway")
@@ -652,6 +654,7 @@ class GatewayMQTT(ComponentBase):
         discharge_end_entities = []
         charge_enable_entities = []
         discharge_enable_entities = []
+        export_limit_entities = []
 
         for inv in inverters:
             suffix = inv.serial[-6:].lower()
@@ -674,6 +677,7 @@ class GatewayMQTT(ComponentBase):
             discharge_end_entities.append(f"select.{base}_discharge_slot1_end")
             charge_enable_entities.append(f"switch.{base}_charge_enabled")
             discharge_enable_entities.append(f"switch.{base}_discharge_enabled")
+            export_limit_entities.append(f"sensor.{base}_export_limit_w")
 
             # soc_max: from battery capacity entity
             if inv.battery.capacity_wh > 0:
@@ -700,6 +704,7 @@ class GatewayMQTT(ComponentBase):
         self.set_arg("discharge_end_time", discharge_end_entities)
         self.set_arg("scheduled_charge_enable", charge_enable_entities)
         self.set_arg("scheduled_discharge_enable", discharge_enable_entities)
+        self.set_arg("export_limit", export_limit_entities)
 
         # Energy counters (first inverter)
         suffix0 = inverters[0].serial[-6:].lower()
