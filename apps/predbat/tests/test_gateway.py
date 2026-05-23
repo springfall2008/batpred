@@ -498,9 +498,21 @@ class TestInjectEntities:
         assert state == 3600
         assert attrs == GATEWAY_ATTRIBUTE_TABLE.get("export_limit_w", {})
 
-    def test_export_limit_w_zero_still_published(self):
-        """export_limit_w = 0 (proto3 default / not configured) is still published."""
+    def test_export_limit_w_zero_undefined_publishes_99999(self):
+        """export_limit_w = 0 (undefined sentinel) is published as 99999 (unlimited)."""
         status = self._make_status()  # control.export_limit_w defaults to 0
+        gw = self._make_gateway()
+        gw._inject_entities(status)
+
+        entity = "sensor.predbat_gateway_456789_export_limit_w"
+        assert entity in gw._dashboard_calls
+        state, _ = gw._dashboard_calls[entity]
+        assert state == 99999
+
+    def test_export_limit_w_one_zero_limit_publishes_zero(self):
+        """export_limit_w = 1 (zero-limit sentinel) is published as 0 W."""
+        status = self._make_status()
+        status.inverters[0].control.export_limit_w = 1
         gw = self._make_gateway()
         gw._inject_entities(status)
 
