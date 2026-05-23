@@ -66,6 +66,7 @@ message ControlStatus {
   uint32 target_soc         = 7;  // charge target SOC %
   uint32 force_power_w      = 8;
   uint32 command_expires    = 9;  // unix timestamp
+  uint32 export_limit_w     = 10; // export limit in watts, 0=undefined (publish as 99999/unlimited), 1=zero limit (publish as 0), otherwise value in watts
 }
 
 message ScheduleStatus {

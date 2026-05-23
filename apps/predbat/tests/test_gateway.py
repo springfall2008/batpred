@@ -483,6 +483,44 @@ class TestInjectEntities:
         state, _ = gw._dashboard_calls["sensor.predbat_gateway_456789_battery_dod"]
         assert approx_equal(state, 0.95)
 
+    def test_export_limit_w_sensor_published(self):
+        """export_limit_w from ControlStatus is published as a sensor in watts."""
+        from gateway import GATEWAY_ATTRIBUTE_TABLE
+
+        status = self._make_status()
+        status.inverters[0].control.export_limit_w = 3600
+        gw = self._make_gateway()
+        gw._inject_entities(status)
+
+        entity = "sensor.predbat_gateway_456789_export_limit_w"
+        assert entity in gw._dashboard_calls
+        state, attrs = gw._dashboard_calls[entity]
+        assert state == 3600
+        assert attrs == GATEWAY_ATTRIBUTE_TABLE.get("export_limit_w", {})
+
+    def test_export_limit_w_zero_undefined_publishes_99999(self):
+        """export_limit_w = 0 (undefined sentinel) is published as 99999 (unlimited)."""
+        status = self._make_status()  # control.export_limit_w defaults to 0
+        gw = self._make_gateway()
+        gw._inject_entities(status)
+
+        entity = "sensor.predbat_gateway_456789_export_limit_w"
+        assert entity in gw._dashboard_calls
+        state, _ = gw._dashboard_calls[entity]
+        assert state == 99999
+
+    def test_export_limit_w_one_zero_limit_publishes_zero(self):
+        """export_limit_w = 1 (zero-limit sentinel) is published as 0 W."""
+        status = self._make_status()
+        status.inverters[0].control.export_limit_w = 1
+        gw = self._make_gateway()
+        gw._inject_entities(status)
+
+        entity = "sensor.predbat_gateway_456789_export_limit_w"
+        assert entity in gw._dashboard_calls
+        state, _ = gw._dashboard_calls[entity]
+        assert state == 0
+
     def test_ems_aggregate_entities(self):
         """EMS aggregate and sub-inverter entities are published with table attributes."""
         from gateway import GATEWAY_ATTRIBUTE_TABLE
@@ -993,6 +1031,51 @@ class TestAutomaticConfig:
 
         assert "ems_total_soc" not in gw._args
         assert "idle_start_time" not in gw._args
+
+    def test_export_limit_nonzero_maps_to_sensor_entity(self):
+        """export_limit_w is always mapped to the sensor entity regardless of value."""
+        gw = self._make_gateway()
+        status = self._basic_status(serial="CE123456789")
+        status.inverters[0].control.export_limit_w = 5000
+        gw._last_status = status
+        gw.automatic_config()
+
+        assert gw._args["export_limit"] == ["sensor.predbat_gateway_456789_export_limit_w"]
+
+    def test_export_limit_zero_maps_to_sensor_entity(self):
+        """export_limit_w = 0 (block all export) maps to the sensor entity."""
+        gw = self._make_gateway()
+        status = self._basic_status(serial="CE123456789")
+        status.inverters[0].control.export_limit_w = 0
+        gw._last_status = status
+        gw.automatic_config()
+
+        assert gw._args["export_limit"] == ["sensor.predbat_gateway_456789_export_limit_w"]
+
+    def test_export_limit_99999_maps_to_sensor_entity(self):
+        """export_limit_w = 99999 (firmware not-configured sentinel) also maps to the sensor entity."""
+        gw = self._make_gateway()
+        status = self._basic_status(serial="CE123456789")
+        status.inverters[0].control.export_limit_w = 99999
+        gw._last_status = status
+        gw.automatic_config()
+
+        assert gw._args["export_limit"] == ["sensor.predbat_gateway_456789_export_limit_w"]
+
+    def test_export_limit_multi_inverter(self):
+        """Each inverter in a multi-inverter setup gets its own export_limit sensor entity."""
+        gw = self._make_gateway()
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_multi"
+        status.firmware = "1.0.0"
+        status.schema_version = 1
+        self._make_inverter(status, serial="CE000000AA1", primary=True)
+        self._make_inverter(status, serial="CE000000BB2", primary=True)
+        gw._last_status = status
+        gw.automatic_config()
+
+        assert gw._args["export_limit"][0] == "sensor.predbat_gateway_000aa1_export_limit_w"
+        assert gw._args["export_limit"][1] == "sensor.predbat_gateway_000bb2_export_limit_w"
 
 
 class TestSelectEvent:
