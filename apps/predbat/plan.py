@@ -895,7 +895,7 @@ class Plan:
         if clipping_kwh > 0:
             self.log(
                 "Clipping Buffer: Calculated buffer of {:.2f}kWh based on {}, starts at {}, ends at {}".format(
-                    clipping_kwh, forecast_type, minutes_to_time(clipping_start), minutes_to_time(clipping_end)
+                    clipping_kwh, forecast_type, self.time_abs_str(clipping_start), self.time_abs_str(clipping_end)
                 )
             )
 
