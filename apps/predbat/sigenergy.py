@@ -870,10 +870,12 @@ class SigenergyAPI(ComponentBase):
 
         payload = {
             "accessToken": token,
-            "systemId": system_id,
-            "activeMode": active_mode,
-            "startTime": now_ts,
-            "duration": int(duration_minutes),
+            "commands": [{
+                "systemId": system_id,
+                "activeMode": active_mode,
+                "startTime": now_ts,
+                "duration": int(duration_minutes)
+            }]
         }
         if charging_power_kw is not None:
             payload["chargingPower"] = round(charging_power_kw, 2)
@@ -1101,10 +1103,10 @@ class SigenergyAPI(ComponentBase):
             self.systems[system_id]["batteryCapacity"] = capacity_wh / 1000.0
 
         for mqtt_field, sys_key in (
-            ("batteryRatedChargePowerW", "ratedChargePowerKw"),
-            ("batteryRatedDischargePowerW", "ratedDischargePowerKw"),
-            ("inverterMaxActivePowerW", "inverterMaxActivePowerKw"),
-            ("gridMaxBackfeedPowerW", "gridMaxBackfeedPowerKw"),
+            ("batteryRatedChargePowerW", "ratedChargePower"),
+            ("batteryRatedDischargePowerW", "ratedDischargePower"),
+            ("inverterMaxActivePowerW", "ratedActivePower"),
+            ("gridMaxBackfeedPowerW", "gridMaxBackfeedPower"),
         ):
             val = _safe_float(value_dict.get(mqtt_field, None))
             if val:
@@ -2046,7 +2048,7 @@ async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode
     if test_mode:
         await sig.fetch_system_list()
         sid = list(sig.systems.keys())[0]
-        await sig.fetch_current_mode(sid)
+        #await sig.fetch_current_mode(sid)
         flow = sig.energy_flow.get(sid, {})
         battery_soc_pct = _safe_float(flow.get("batterySoc", 50))
         now = datetime.now(sig.local_tz)
