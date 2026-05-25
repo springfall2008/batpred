@@ -372,8 +372,8 @@ class Inverter:
                 ivtime = idetails["Invertor_Time"]
         else:
             self.battery_temperature = self.base.get_arg("battery_temperature", default=20, index=self.id, required_unit="°C")
-            self.soc_max = self.base.get_arg("soc_max", default=0.0, index=self.id) * self.battery_scaling
-            self.nominal_capacity = self.soc_max
+            self.nominal_capacity = self.base.get_arg("soc_max", default=0.0, index=self.id)
+            self.soc_max = self.nominal_capacity * self.battery_scaling
 
             if self.inverter_type in ["GE", "GEC", "GEE"]:
                 self.battery_rate_max_raw = self.base.get_arg("charge_rate", attribute="max", index=self.id, default=2600.0, required_unit="W")
@@ -641,6 +641,7 @@ class Inverter:
                     "history": history,
                     "nominal_capacity": round(nominal_capacity, 3),
                     "degradation_percent": None,
+                    "configured_degradation": round((1 - self.battery_scaling) * 100, 2),
                     "unit_of_measurement": "kWh",
                     "device_class": "energy",
                     "state_class": "measurement",
@@ -658,7 +659,11 @@ class Inverter:
 
         found_size_str = "{:.2f} kWh".format(found_size) if found_size is not None else "None"
         degradation = (self.nominal_capacity - trimmed_mean) / self.nominal_capacity if self.nominal_capacity > 0 else 0
-        self.log("Inverter {} battery size tracking: found_size {}, history {}, trimmed_mean {:.2f} kWh, degradation {:.2%}".format(self.id, found_size_str, history, trimmed_mean, degradation))
+        self.log(
+            "Inverter {} battery size tracking: found_size {}, history {}, trimmed_mean {:.2f} kWh, degradation {:.2%}, configured battery_scaling {:.0f}% (configured degradation {:.0f}%)".format(
+                self.id, found_size_str, history, trimmed_mean, degradation, self.battery_scaling * 100, (1 - self.battery_scaling) * 100
+            )
+        )
 
         self.base.dashboard_item(
             sensor_name,
@@ -667,6 +672,7 @@ class Inverter:
                 "history": history,
                 "nominal_capacity": round(nominal_capacity, 3),
                 "degradation_percent": round(degradation * 100, 2),
+                "configured_degradation": round((1 - self.battery_scaling) * 100, 2),
                 "unit_of_measurement": "kWh",
                 "device_class": "energy",
                 "state_class": "measurement",
@@ -700,7 +706,7 @@ class Inverter:
                         clean_increment=False,
                         smoothing=False,
                         divide_by=1.0,
-                        scale=self.battery_scaling,
+                        scale=1.0,
                         required_unit="%",
                     )
                 else:
