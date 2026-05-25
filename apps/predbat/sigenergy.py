@@ -37,6 +37,18 @@ The component maps onto the existing 'SIG' inverter type already defined in
 config.py so no changes are needed there.
 
 Registered in components.py under key 'sigenergy'.
+
+
+Example apps.yaml config:
+
+  sigenergy_system_id: 'XRTKQ1773829273'
+  sigenergy_app_key: !secret sigenergy_app_key
+  sigenergy_app_secret: !secret sigenergy_app_secret
+  sigenergy_client_pem: !secret sigenergy_client_pem
+  sigenergy_client_key: !secret sigenergy_client_key
+  sigenergy_ca_pem: !secret sigenergy_ca_pem
+  sigenergy_automatic: True
+
 """
 
 import argparse
@@ -44,8 +56,10 @@ import asyncio
 import base64
 import json
 import ssl
+import tempfile
 import time
 import traceback
+import os
 
 try:
     import aiohttp
@@ -179,9 +193,9 @@ class SigenergyAPI(ComponentBase):
             base_url: Override the API base URL (default: SIGENERGY_DEFAULT_BASE_URL).
             mqtt_host: Override the MQTT broker hostname (default: derived from SIGENERGY_DEFAULT_MQTT_HOST
                        by replacing the regional prefix to match *base_url*).
-            ca_cert: Path to CA certificate PEM file for verifying the broker's TLS certificate.
-            client_cert: Path to client certificate PEM file for mutual TLS authentication.
-            client_key: Path to client private key file for mutual TLS authentication.
+            ca_cert: PEM text of the CA certificate for verifying the broker's TLS certificate.
+            client_cert: PEM text of the client certificate for mutual TLS authentication.
+            client_key: PEM text of the client private key for mutual TLS authentication.
             system_id: Optional system ID filter.  When None all authorised
                        systems are used.  When a string or list, only matching
                        systems are used.
@@ -238,6 +252,9 @@ class SigenergyAPI(ComponentBase):
         # Battery command de-duplication — keyed by systemId → (command_hash, startTime)
         self._last_battery_command = {}
 
+        # Last non-zero API response code — set by _request for callers to inspect
+        self._last_api_code = 0
+
         # Rate-limit tracking
         self._last_request_time = 0.0
 
@@ -246,7 +263,8 @@ class SigenergyAPI(ComponentBase):
 
         # Background MQTT listener task
         self._mqtt_task = None
-        self.last_mqtt_update = 0.0  # UNIX timestamp of last MQTT message received
+        self.last_mqtt_update = {}  # UNIX timestamp of last MQTT message received, keyed by system_id
+        self._tls_context = None  # cached SSLContext built once on first use
 
         self.log("SigenergyAPI: Initialised, base_url={}".format(self.base_url))
 
@@ -412,6 +430,7 @@ class SigenergyAPI(ComponentBase):
 
                         code = body.get("code", -1)
                         if code != 0:
+                            self._last_api_code = code
                             self.log("Warn: SigenergyAPI: API error code={} msg={} for {}".format(code, body.get("msg", ""), path))
                             if code == SIGENERGY_CODE_ACCESS_RESTRICTION:
                                 # Rate-limited — exponential backoff then retry
@@ -757,15 +776,20 @@ class SigenergyAPI(ComponentBase):
     def _build_tls_context(self):
         """Build an SSL context for the MQTT connection.
 
-        Uses ca_cert if provided (for custom/self-signed CA), otherwise the
-        system default trust store.  Loads client_cert + client_key when both
-        are provided (mutual TLS).
+        Uses ca_cert if provided (PEM text, for custom/self-signed CA), otherwise the
+        system default trust store.  Loads client_cert + client_key PEM text when both
+        are provided (mutual TLS), writing them to temporary files once and caching the
+        resulting SSLContext for all subsequent calls.
 
         Returns:
             ssl.SSLContext ready for use with aiomqtt.
         """
+        if self._tls_context is not None:
+            return self._tls_context
+
         if self.ca_cert:
-            tls_context = ssl.create_default_context(cafile=self.ca_cert)
+            tls_context = ssl.create_default_context()
+            tls_context.load_verify_locations(cadata=self.ca_cert)
             # Relax strict RFC 5280 key-usage enforcement; Sigenergy's CA cert
             # may not include the keyUsage/basicConstraints extensions that
             # Python 3.14+ enforces by default.
@@ -773,7 +797,18 @@ class SigenergyAPI(ComponentBase):
         else:
             tls_context = ssl.create_default_context()
         if self.client_cert and self.client_key:
-            tls_context.load_cert_chain(certfile=self.client_cert, keyfile=self.client_key)
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".pem", delete=False) as f_cert:
+                f_cert.write(self.client_cert)
+                cert_path = f_cert.name
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".pem", delete=False) as f_key:
+                f_key.write(self.client_key)
+                key_path = f_key.name
+            try:
+                tls_context.load_cert_chain(certfile=cert_path, keyfile=key_path)
+            finally:
+                os.unlink(cert_path)
+                os.unlink(key_path)
+        self._tls_context = tls_context
         return tls_context
 
     async def _publish_mqtt(self, topic, payload_dict):
@@ -1192,7 +1227,6 @@ class SigenergyAPI(ComponentBase):
                     async for message in client.messages:
                         if self.api_stop:
                             break
-                        self.last_mqtt_update = time.time()
 
                         # Parse topic: openapi/{type}/{app_key}/{system_id}
                         topic_str = str(message.topic)
@@ -1215,6 +1249,7 @@ class SigenergyAPI(ComponentBase):
                         entries = payload if isinstance(payload, list) else [payload]
                         for entry in entries:
                             entry_sid = entry.get("systemId", msg_sid)
+                            self.last_mqtt_update[entry_sid] = time.time()
                             value_dict = entry.get("value", {})
                             self.log("SigenergyAPI: MQTT message on {} for system {}: type={} value={}".format(topic_str, entry_sid, msg_type, value_dict))
                             if msg_type == "period":
@@ -1421,6 +1456,24 @@ class SigenergyAPI(ComponentBase):
             app="sigenergy",
         )
 
+        # --- Last MQTT update time ---
+        last_mqtt_ts = self.last_mqtt_update.get(system_id, 0)
+        if last_mqtt_ts > 0:
+            from datetime import timezone
+            last_update_str = datetime.fromtimestamp(last_mqtt_ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+        else:
+            last_update_str = "unknown"
+        self.dashboard_item(
+            "sensor.{}_sigenergy_{}_time".format(self.prefix, slug),
+            state=last_update_str,
+            attributes={
+                "friendly_name": "Sigenergy {} Last Update".format(system_name),
+                "icon": "mdi:clock",
+                "state_class": "timestamp",
+            },
+            app="sigenergy",
+        )
+
         # --- System status ---
         system_status = system_info.get("status", "Unknown")
         self.dashboard_item(
@@ -1461,7 +1514,7 @@ class SigenergyAPI(ComponentBase):
         slugs = [self._system_slug(sid) for sid in system_ids]
 
         self.set_arg("num_inverters", num)
-        self.set_arg("inverter_type", ["SIG" for _ in range(num)])
+        self.set_arg("inverter_type", ["SIGCLOUD" for _ in range(num)])
 
         self.set_arg("soc_kw", ["sensor.{}_sigenergy_{}_battery_soc".format(self.prefix, s) for s in slugs])
         self.set_arg("soc_max", ["sensor.{}_sigenergy_{}_battery_capacity".format(self.prefix, s) for s in slugs])
@@ -1472,6 +1525,7 @@ class SigenergyAPI(ComponentBase):
         self.set_arg("grid_power", ["sensor.{}_sigenergy_{}_grid_power".format(self.prefix, s) for s in slugs])
         self.set_arg("load_power", ["sensor.{}_sigenergy_{}_load_power".format(self.prefix, s) for s in slugs])
         self.set_arg("pv_today", ["sensor.{}_sigenergy_{}_pv_today".format(self.prefix, s) for s in slugs])
+        self.set_arg("inverter_time", ["sensor.{}_sigenergy_{}_time".format(self.prefix, s) for s in slugs])
 
         # Control entities
         self.set_arg("charge_start_time", ["select.{}_sigenergy_{}_charge_start_time".format(self.prefix, s) for s in slugs])
@@ -1855,13 +1909,31 @@ class SigenergyAPI(ComponentBase):
         """
         if first:
             self.log("SigenergyAPI: First run — discovering systems")
+            if not self.system_id_filter:
+                self.log("Warn: SigenergyAPI: No system_id configured — will use all authorised systems")
             token = await self.get_access_token()
             if not token:
                 self.log("Warn: SigenergyAPI: Authentication failed — cannot proceed")
                 return False
-            ok = await self.fetch_system_list()
-            if not ok:
-                self.log("Warn: SigenergyAPI: Failed to discover systems, will retry")
+            await self.fetch_system_list()
+
+            # For each expected system ID not yet visible, attempt onboarding
+            missing_ids = self.system_id_filter - set(self.systems.keys()) if self.system_id_filter else set()
+            for sid in missing_ids:
+                self.log("SigenergyAPI: System {} not found in authorised list — attempting onboard".format(sid))
+                self._last_api_code = 0
+                result = await self.onboard_systems([sid])
+                if result is None:
+                    if self._last_api_code == SIGENERGY_CODE_SYSTEM_PENDING_REVIEW:
+                        self.log("Warn: SigenergyAPI: System {} is pending review approval — cannot proceed yet".format(sid))
+                    else:
+                        self.log("Warn: SigenergyAPI: Failed to onboard system {} (code={}) — cannot proceed".format(sid, self._last_api_code))
+                    return False
+                self.log("SigenergyAPI: Onboard accepted for system {} — re-fetching system list".format(sid))
+                await self.fetch_system_list()
+
+            if not self.systems:
+                self.log("Warn: SigenergyAPI: No systems available after discovery, will retry")
                 return False
 
         # Start (or restart) the background MQTT listener task after systems are known
@@ -1887,9 +1959,11 @@ class SigenergyAPI(ComponentBase):
 
         # Realtime data refresh — skip live power/SOC fetch when MQTT is providing fresh data
         if first or seconds % SIGENERGY_POLL_INTERVAL == 0:
-            mqtt_age = time.time() - self.last_mqtt_update
-            mqtt_fresh = self.last_mqtt_update > 0 and mqtt_age < SIGENERGY_POLL_INTERVAL
+            now_ts = time.time()
             for sid in list(self.systems.keys()):
+                last_update = self.last_mqtt_update.get(sid, 0)
+                mqtt_age = now_ts - last_update
+                mqtt_fresh = last_update > 0 and mqtt_age < SIGENERGY_POLL_INTERVAL
                 if mqtt_fresh:
                     self.log("SigenergyAPI: Skipping REST energy poll for {} (MQTT data {:.0f}s old)".format(sid, mqtt_age))
                 else:
@@ -2142,9 +2216,9 @@ async def test_mqtt_connection(app_key, app_secret, base_url, system_id=None, to
         system_id: Optional system ID (or comma-separated list) to subscribe to.
         topic_filter: Unused in this implementation; wildcard topics are built
                       automatically from the app_key.
-        ca_cert: Path to CA certificate PEM file for TLS verification.
-        client_cert: Path to client certificate PEM file for mutual TLS.
-        client_key: Path to client private key PEM file for mutual TLS.
+        ca_cert: PEM text of the CA certificate for TLS verification.
+        client_cert: PEM text of the client certificate for mutual TLS.
+        client_key: PEM text of the client private key for mutual TLS.
 
     Returns:
         0 on clean exit, 1 on error.
@@ -2251,11 +2325,27 @@ def main():  # pragma: no cover
 
     args = parser.parse_args()
 
-    # Resolve TLS certificate paths — individual flags override cert-dir
+    # Resolve TLS certificate file paths — individual flags override cert-dir — then read contents
     import os
-    ca_cert = args.ca_cert or (os.path.join(args.cert_dir, "ca.pem") if args.cert_dir else None)
-    client_cert = args.client_cert or (os.path.join(args.cert_dir, "client.pem") if args.cert_dir else None)
-    client_key = args.client_key or (os.path.join(args.cert_dir, "client.key") if args.cert_dir else None)
+
+    def _read_cert(path):
+        """Read a certificate or key file and return its text content, or None."""
+        if not path:
+            return None
+        try:
+            with open(path) as f:
+                return f.read()
+        except OSError as e:
+            print("Error: Cannot read TLS file {}: {}".format(path, e))
+            raise SystemExit(1)
+
+    ca_cert_path = args.ca_cert or (os.path.join(args.cert_dir, "ca.pem") if args.cert_dir else None)
+    client_cert_path = args.client_cert or (os.path.join(args.cert_dir, "client.pem") if args.cert_dir else None)
+    client_key_path = args.client_key or (os.path.join(args.cert_dir, "client.key") if args.cert_dir else None)
+
+    ca_cert = _read_cert(ca_cert_path)
+    client_cert = _read_cert(client_cert_path)
+    client_key = _read_cert(client_key_path)
 
     if args.mqtt_test:
         result = asyncio.run(test_mqtt_connection(args.app_key, args.app_secret, args.base_url, args.system_id, args.mqtt_topic, ca_cert=ca_cert, client_cert=client_cert, client_key=client_key))

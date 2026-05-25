@@ -351,6 +351,7 @@ COMPONENT_LIST = {
         "name": "Sigenergy Cloud API",
         "event_filter": "predbat_sigenergy_",
         "args": {
+            "system_id": {"required": True, "config": "sigenergy_system_id"},
             "app_key": {"required": True, "config": "sigenergy_app_key"},
             "app_secret": {"required": True, "config": "sigenergy_app_secret"},
             "base_url": {"required": False, "config": "sigenergy_base_url", "default": "https://openapi-eu.sigencloud.com"},
@@ -358,7 +359,6 @@ COMPONENT_LIST = {
             "ca_cert": {"required": False, "config": "sigenergy_ca_pem"},
             "client_cert": {"required": False, "config": "sigenergy_client_pem"},
             "client_key": {"required": False, "config": "sigenergy_client_key"},
-            "system_id": {"required": False, "config": "sigenergy_system_id"},
             "automatic": {"required": False, "config": "sigenergy_automatic", "default": False},
             "enable_controls": {"required": False, "config": "sigenergy_enable_controls", "default": True},
         },

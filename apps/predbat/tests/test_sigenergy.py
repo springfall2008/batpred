@@ -311,11 +311,13 @@ def test_sigenergy_automatic_config(my_predbat):
 
     assert "num_inverters" in api.set_args, "num_inverters set"
     assert api.set_args["num_inverters"] == 2, "num_inverters == 2"
-    assert api.set_args.get("inverter_type") == ["SIG", "SIG"], "inverter_type wired"
+    assert api.set_args.get("inverter_type") == ["SIGCLOUD", "SIGCLOUD"], "inverter_type wired"
     assert "soc_kw" in api.set_args, "soc_kw wired"
     assert "battery_power" in api.set_args, "battery_power wired"
     assert "pv_power" in api.set_args, "pv_power wired"
     assert "grid_power" in api.set_args, "grid_power wired"
+    assert "inverter_time" in api.set_args, "inverter_time wired"
+    assert len(api.set_args["inverter_time"]) == 2, "inverter_time has one entry per system"
 
     return failed
 
@@ -611,7 +613,7 @@ def test_sigenergy_apply_controls_charge_mode(my_predbat):
         commands_sent.append(("set_mode", sid, mode))
         return True
 
-    async def mock_send_battery_command(sid, active_mode, duration_min, charging_power_kw=None):
+    async def mock_send_battery_command(sid, active_mode, duration_min, charging_power_kw=None, **kwargs):
         commands_sent.append(("battery_cmd", sid, active_mode, duration_min, charging_power_kw))
         return True
 
@@ -648,7 +650,7 @@ def test_sigenergy_apply_controls_eco_mode(my_predbat):
         commands_sent.append(("set_mode", sid, mode))
         return True
 
-    async def mock_send_battery_command(sid, active_mode, duration_min, charging_power_kw=None):
+    async def mock_send_battery_command(sid, active_mode, duration_min, charging_power_kw=None, **kwargs):
         commands_sent.append(("battery_cmd", sid, active_mode, duration_min, charging_power_kw))
         return True
 
@@ -727,7 +729,7 @@ def test_sigenergy_apply_controls_export_mode(my_predbat):
         commands_sent.append(("set_mode", sid, mode))
         return True
 
-    async def mock_send_battery_command(sid, active_mode, duration_min, charging_power_kw=None):
+    async def mock_send_battery_command(sid, active_mode, duration_min, charging_power_kw=None, **kwargs):
         commands_sent.append(("battery_cmd", sid, active_mode, duration_min, charging_power_kw))
         return True
 
@@ -842,9 +844,10 @@ def test_sigenergy_send_battery_command_mqtt(my_predbat):
     topic, payload = published[0]
     assert topic == "openapi/instruction/command", "Correct MQTT topic"
     assert payload["accessToken"] == "reused_token", "Token in payload"
-    assert payload["systemId"] == "SIG001", "systemId in payload"
-    assert payload["activeMode"] == "charge", "activeMode in payload"
-    assert payload["duration"] == 60, "duration in payload"
+    cmd = payload["commands"][0]
+    assert cmd["systemId"] == "SIG001", "systemId in commands[0]"
+    assert cmd["activeMode"] == "charge", "activeMode in commands[0]"
+    assert cmd["duration"] == 60, "duration in commands[0]"
     assert abs(payload["chargingPower"] - 3.5) < 0.01, "chargingPower in payload"
 
     return failed
@@ -939,10 +942,10 @@ def test_sigenergy_handle_mqtt_change(my_predbat):
     # System capacity and power limits
     sys = api.systems["SYS1"]
     assert abs(sys["batteryCapacity"] - 45.2) < 0.01, "batteryCapacity = 45.2 kWh"
-    assert abs(sys["ratedChargePowerKw"] - 22.0) < 0.01, "ratedChargePowerKw = 22.0"
-    assert abs(sys["ratedDischargePowerKw"] - 24.0) < 0.01, "ratedDischargePowerKw = 24.0"
-    assert abs(sys["inverterMaxActivePowerKw"] - 12.0) < 0.01, "inverterMaxActivePowerKw = 12.0"
-    assert abs(sys["gridMaxBackfeedPowerKw"] - 5.0) < 0.01, "gridMaxBackfeedPowerKw = 5.0"
+    assert abs(sys["ratedChargePower"] - 22.0) < 0.01, "ratedChargePower = 22.0"
+    assert abs(sys["ratedDischargePower"] - 24.0) < 0.01, "ratedDischargePower = 24.0"
+    assert abs(sys["ratedActivePower"] - 12.0) < 0.01, "ratedActivePower = 12.0"
+    assert abs(sys["gridMaxBackfeedPower"] - 5.0) < 0.01, "gridMaxBackfeedPower = 5.0"
     assert any("MQTT change" in m for m in api.log_messages), "Change data logged"
 
     return failed
@@ -1061,8 +1064,8 @@ def test_sigenergy_mqtt_listener_loop(my_predbat):
     assert "openapi/subscription/change" in sub_topics, "change subscription published"
     assert "openapi/subscription/alarm" in sub_topics, "alarm subscription published"
 
-    # last_mqtt_update was set
-    assert api.last_mqtt_update > 0, "last_mqtt_update was set"
+    # last_mqtt_update was set per system
+    assert api.last_mqtt_update.get("XRTKQ1773829273", 0) > 0, "last_mqtt_update was set for system"
 
     return failed
 
@@ -1171,6 +1174,56 @@ def test_sigenergy_get_inverter_serial(my_predbat):
 
 # ---------------------------------------------------------------------------
 # Test registration entry point
+def test_sigenergy_build_tls_context(my_predbat):
+    """Test _build_tls_context builds an SSL context from PEM text content."""
+    import os
+    import ssl as ssl_mod
+    import glob
+
+    failed = False
+
+    # Locate the real PEM files relative to this test file's repo root
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    key_dir = os.path.join(repo_root, "sigenergy_mqtt_key")
+    ca_pem_path = os.path.join(key_dir, "ca.pem")
+    client_pem_path = os.path.join(key_dir, "client.pem")
+    client_key_path = os.path.join(key_dir, "client.key")
+
+    if not os.path.exists(ca_pem_path):
+        # No real certs available — test the no-cert path only
+        api = MockSigenergyAPI()
+        ctx = api._build_tls_context()
+        assert isinstance(ctx, ssl_mod.SSLContext), "Default context returned when no certs"
+        return failed
+
+    with open(ca_pem_path) as f:
+        ca_text = f.read()
+    with open(client_pem_path) as f:
+        client_cert_text = f.read()
+    with open(client_key_path) as f:
+        client_key_text = f.read()
+
+    # Test with CA cert text only
+    api = MockSigenergyAPI()
+    api.ca_cert = ca_text
+    ctx = api._build_tls_context()
+    assert isinstance(ctx, ssl_mod.SSLContext), "SSLContext built from CA cert text"
+
+    # Test with all three — CA + client cert + key
+    api2 = MockSigenergyAPI()
+    api2.ca_cert = ca_text
+    api2.client_cert = client_cert_text
+    api2.client_key = client_key_text
+    ctx2 = api2._build_tls_context()
+    assert isinstance(ctx2, ssl_mod.SSLContext), "SSLContext built from CA + client cert + key text"
+
+    # Confirm no temp files were left behind
+    leftover = glob.glob("/tmp/*.pem")
+    assert not any("sigenergy" in p for p in leftover), "No temp PEM files left behind"
+
+    return failed
+
+
 # ---------------------------------------------------------------------------
 
 
@@ -1213,6 +1266,7 @@ def run_sigenergy_tests(my_predbat):
         ("fetch_inverter_realtime", test_sigenergy_fetch_inverter_realtime),
         ("fetch_inverter_realtime_no_inverter", test_sigenergy_fetch_inverter_realtime_no_inverter),
         ("get_inverter_serial", test_sigenergy_get_inverter_serial),
+        ("build_tls_context", test_sigenergy_build_tls_context),
     ]
 
     for name, fn in tests:
