@@ -895,7 +895,10 @@ class Plan:
         if clipping_kwh > 0:
             self.log(
                 "Clipping Buffer: Calculated buffer of {:.2f}kWh based on {}, starts at {}, ends at {}".format(
-                    clipping_kwh, forecast_type, self.time_abs_str(clipping_start), self.time_abs_str(clipping_end)
+                    clipping_kwh, 
+                    forecast_type, 
+                    self.time_abs_str(clipping_start) if clipping_start is not None else "N/A", 
+                    self.time_abs_str(clipping_end) if clipping_end is not None else "N/A"
                 )
             )
 
@@ -3872,6 +3875,36 @@ class Plan:
                         "icon": "mdi:currency-usd",
                     },
                 )
+                
+                # Add Clipping Summary
+                self.dashboard_item(
+                    self.prefix + ".clipping_buffer_kwh",
+                    state=dp2(self.clipping_buffer_kwh),
+                    attributes={
+                        "friendly_name": "Clipping Buffer kWh",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "icon": "mdi:solar-power",
+                    },
+                )
+                
+                clipping_status_text = "No clipping forecast."
+                if self.clipping_buffer_kwh > 0:
+                    start_str = self.time_abs_str(self.clipping_buffer_start) if self.clipping_buffer_start is not None else "N/A"
+                    end_str = self.time_abs_str(self.clipping_buffer_end) if self.clipping_buffer_end is not None else "N/A"
+                    clipping_status_text = "{} kWh clipping forecast between {} and {}. Setting charge target to mitigate.".format(
+                        dp2(self.clipping_buffer_kwh), start_str, end_str
+                    )
+
+                self.dashboard_item(
+                    self.prefix + ".clipping_status",
+                    state=clipping_status_text,
+                    attributes={
+                        "friendly_name": "Clipping Buffer Status",
+                        "icon": "mdi:information-outline",
+                    },
+                )
+                
                 self.dashboard_item(self.prefix + ".record", state=0.0, attributes={"results": self.filtered_times(record_time), "friendly_name": "Prediction window", "state_class": "measurement"})
                 self.dashboard_item(
                     self.prefix + ".iboost_best",

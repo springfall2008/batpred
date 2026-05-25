@@ -1562,7 +1562,7 @@ class WebInterface(ComponentBase):
         text += "  }\n"
         return text
 
-    def render_chart(self, series_data, yaxis_name, chart_name, now_str, tagname="chart", daily_chart=True, extra_yaxis=None):
+    def render_chart(self, series_data, yaxis_name, chart_name, now_str, tagname="chart", daily_chart=True, extra_yaxis=None, yaxis_annotations=None):
         """
         Render a chart
         """
@@ -1741,6 +1741,18 @@ var options = {
         text += "    }\n"
         text += "  },\n"
         text += "  annotations: {\n"
+        if yaxis_annotations:
+            text += "   yaxis: [\n"
+            for ann in yaxis_annotations:
+                text += "    {\n"
+                text += "       y: {},\n".format(ann.get("y", 0))
+                text += "       borderColor: '{}',\n".format(ann.get("color", "#FF0000"))
+                text += "       label: {\n"
+                text += "          text: '{}',\n".format(ann.get("text", ""))
+                text += "          style: { background: '{}', color: '#fff' }\n".format(ann.get("color", "#FF0000"))
+                text += "       }\n"
+                text += "    },\n"
+            text += "   ],\n"
         text += "   xaxis: [\n"
         text += "    {\n"
         text += "       x: new Date('{}').getTime(),\n".format(now_str)
@@ -2975,14 +2987,20 @@ chart.render();
             clipping_forecast.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_tomorrow", subitem), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
             
             # Limits
-            inverter_limit = self.get_arg("pv_ac_limit", 0.0) / 60.0 # Convert W to kW (if W) or it's already kW?
-            # Actually pv_ac_limit in predbat.py is usually in kW or W/60. Let's check predbat.py
+            inverter_limit = self.base.pv_ac_limit
+            annotations = []
+            if inverter_limit > 0:
+                annotations.append({
+                    "y": inverter_limit,
+                    "text": "Inverter Limit ({} kW)".format(round(inverter_limit, 2)),
+                    "color": "#FF0000"
+                })
             
             series_data = [
                 {"name": "PV Power", "data": pv_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#f5c43d"},
                 {"name": "Clipping Forecast (" + clipping_forecast_type + ")", "data": clipping_forecast, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#a8a8a7"},
             ]
-            text += self.render_chart(series_data, "kW", "Clipping Analysis", now_str)
+            text += self.render_chart(series_data, "kW", "Clipping Analysis", now_str, yaxis_annotations=annotations)
         elif chart == "PVAccuracy":
             # Get pv_today history once and extract total and remaining attributes per timestamp
             pv_today_hist = self.get_history_wrapper("sensor." + self.prefix + "_pv_today", 7, required=False)
