@@ -912,6 +912,13 @@ class Output:
             else:
                 sentence += "- You will reach a minimum of {}% battery in {}.\n".format(soc_min_percent, self.duration_string(soc_min_minute - self.minutes_now))
 
+        if getattr(self, "clipping_buffer_kwh", 0) > 0:
+            start_str = self.time_abs_str(self.clipping_buffer_start) if self.clipping_buffer_start is not None else "N/A"
+            end_str = self.time_abs_str(self.clipping_buffer_end) if self.clipping_buffer_end is not None else "N/A"
+            sentence += "- {} kWh clipping forecast between {} and {}. Setting charge target to mitigate.\n".format(
+                dp2(self.clipping_buffer_kwh), start_str, end_str
+            )
+
         car_charging_kwh = self.car_charge_slot_kwh(self.minutes_now, self.minutes_now + 5)
         if car_charging_kwh > 0:
             sentence += "- Your car is currently charging.\n"
