@@ -666,7 +666,7 @@ def test_sigenergy_apply_controls_eco_mode(my_predbat):
 
 
 def test_sigenergy_apply_controls_deduplication(my_predbat):
-    """Test that apply_controls skips redundant commands within 15 minutes."""
+    """Test that send_battery_command skips redundant commands within 5 minutes."""
     failed = False
     api = MockSigenergyAPI()
     system_id = "SIG001"
@@ -678,29 +678,27 @@ def test_sigenergy_apply_controls_deduplication(my_predbat):
         "export": {"enable": False, "start_time": "00:00", "end_time": "00:00", "target_soc": 0, "rate": 3000},
         "reserve": 10,
     }
+    # Provide a valid token so send_battery_command doesn't bail early
+    api.access_token = "fake_token"
+    api.token_expires_at = 9_999_999_999
 
-    call_count = {"count": 0}
+    publish_count = {"count": 0}
 
-    async def mock_set_operating_mode(sid, mode):
-        call_count["count"] += 1
+    async def mock_publish_mqtt(topic, payload_dict):
+        publish_count["count"] += 1
         return True
 
-    async def mock_send_battery_command(sid, active_mode, duration_min, charging_power_kw=None):
-        call_count["count"] += 1
-        return True
+    api._publish_mqtt = mock_publish_mqtt
 
-    api.set_operating_mode = mock_set_operating_mode
-    api.send_battery_command = mock_send_battery_command
-
-    # First call
+    # First call — should publish
     run_async(api.apply_controls(system_id))
-    first_count = call_count["count"]
-    assert first_count >= 1, "Commands sent on first call"
+    first_count = publish_count["count"]
+    assert first_count >= 1, "Command published on first call"
 
-    # Second call immediately after — mode unchanged, should skip
+    # Second call immediately after — same command, should be de-duplicated
     run_async(api.apply_controls(system_id))
-    second_count = call_count["count"]
-    assert second_count == first_count, "No additional commands sent within 15-min dedup window (first={}, second={})".format(first_count, second_count)
+    second_count = publish_count["count"]
+    assert second_count == first_count, "No additional publish within 5-min dedup window (first={}, second={})".format(first_count, second_count)
 
     return failed
 

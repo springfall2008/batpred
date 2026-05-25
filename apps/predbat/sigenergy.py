@@ -124,6 +124,7 @@ SIGENERGY_MQTT_TOPIC_COMMAND = "openapi/instruction/command"            # batter
 # Operating mode enums (REST mode switch endpoint — MSC and FFG only; NBI is not used)
 SIGENERGY_MODE_MSC = 0   # Maximum Self-Consumption (eco)
 SIGENERGY_MODE_FFG = 5   # Fully Feed-in to Grid
+SIGENERGY_MODE_VPP = 6   # VPP mode
 SIGENERGY_MODE_NBI = 8   # NorthBound (defined for completeness; not switched to by this component)
 
 # Battery command activeMode strings
@@ -234,9 +235,8 @@ class SigenergyAPI(ComponentBase):
         # Control state keyed by systemId
         self.controls = {}        # systemId → {charge: {…}, export: {…}, reserve: …}
 
-        # Mode-change deduplication
-        self.current_mode_hash = {}           # systemId → hash of last applied command
-        self.current_mode_hash_timestamp = {}  # systemId → datetime of last applied command
+        # Battery command de-duplication — keyed by systemId → (command_hash, startTime)
+        self._last_battery_command = {}
 
         # Rate-limit tracking
         self._last_request_time = 0.0
@@ -679,6 +679,7 @@ class SigenergyAPI(ComponentBase):
 
         mode_int = _safe_int(data.get("energyStorageOperationMode", SIGENERGY_MODE_MSC))
         self.current_mode[system_id] = mode_int
+        self.log("SigenergyAPI: System {} current operating mode: {}".format(system_id, mode_int))
         return True
 
     # -----------------------------------------------------------------------
@@ -802,13 +803,24 @@ class SigenergyAPI(ComponentBase):
                 keepalive=30,
             ) as client:
                 await client.publish(topic, payload=json.dumps(payload_dict), qos=1)
-            self.log("SigenergyAPI: MQTT published to {}".format(topic))
+            self.log("SigenergyAPI: MQTT published to {} - {}".format(topic, payload_dict))
             return True
         except Exception as e:
             self.log("Warn: SigenergyAPI: MQTT publish to {} failed: {}".format(topic, e))
             return False
 
-    async def send_battery_command(self, system_id, active_mode, duration_minutes, charging_power_kw=None):
+    async def send_battery_command(
+        self,
+        system_id,
+        active_mode,
+        duration_minutes,
+        charging_power_kw=None,
+        pv_power_kw=None,
+        max_sell_power_kw=None,
+        max_purchase_power_kw=None,
+        charge_priority_type=None,
+        discharge_priority_type=None,
+    ):
         """Send a battery command via MQTT to the Sigenergy broker.
 
         Publishes to the MQTT topic ``openapi/instruction/command``.  A fresh
@@ -818,27 +830,39 @@ class SigenergyAPI(ComponentBase):
             system_id: Sigenergy system unique identifier.
             active_mode: One of the SIGENERGY_ACTIVE_MODE_* string constants.
             duration_minutes: Command duration in minutes (max ~720).
-            charging_power_kw: Charging/discharging power in kW.  Required for
-                               charge and discharge modes; optional otherwise.
+            charging_power_kw: Max energy storage charging/discharging power (kW).
+            pv_power_kw: Max photovoltaic charging power (kW).
+            max_sell_power_kw: Max export power to the grid (kW).
+            max_purchase_power_kw: Max purchase power from the grid (kW).
+            charge_priority_type: Charging priority enum string ('PV' or 'GRID').
+            discharge_priority_type: Discharging priority enum string ('PV' or 'BATTERY').
 
         Returns:
             True on success, False on failure.
 
-        Payload fields: 
-            Name                    Type	Required	Description
-            accessToken	            String	Yes	    Authorization token obtained from Chapter 2
-            systemId	            String	Yes	    Unique code of the power station
-            activeMode	            String	Yes	    System active mode
-            startTime	            Long	Yes	    Command start time, in seconds
-            duration	            Integer	Yes	    Command duration, in minutes
-            chargingPower	        Double	No	    Max energy storage charging/discharging power (KW)
-            pvPower	                Double	No	    Max photovoltaic charging power (KW)
-            maxSellPower	        Double	No	    Max export power to the grid (KW)
-            maxPurchasePower	    Double	No	    Max purchase power from the grid (KW)
-            chargePriorityType	    Enum	No	    Charging priority (PV/GRID)
-            dischargePriorityType	Enum	No	    Discharging priority (PV/BATTERY)
+        Payload fields:
+            Name                    Type    Required    Description
+            accessToken             String  Yes         Authorization token obtained from Chapter 2
+            systemId                String  Yes         Unique code of the power station
+            activeMode              String  Yes         System active mode
+            startTime               Long    Yes         Command start time, in seconds
+            duration                Integer Yes         Command duration, in minutes
+            chargingPower           Double  No          Max energy storage charging/discharging power (KW)
+            pvPower                 Double  No          Max photovoltaic charging power (KW)
+            maxSellPower            Double  No          Max export power to the grid (KW)
+            maxPurchasePower        Double  No          Max purchase power from the grid (KW)
+            chargePriorityType      Enum    No          Charging priority (PV/GRID)
+            dischargePriorityType   Enum    No          Discharging priority (PV/BATTERY)
 
         """
+        # De-duplication: skip if identical command sent within the last 5 minutes
+        command_hash = hash((active_mode, charging_power_kw, pv_power_kw, max_sell_power_kw, max_purchase_power_kw, charge_priority_type, discharge_priority_type))
+        last_hash, last_start_time = self._last_battery_command.get(system_id, (None, 0))
+        now_ts = int(time.time())
+        if last_hash == command_hash and (now_ts - last_start_time) < 300:
+            self.log("SigenergyAPI: Skipping duplicate battery command {} for system {} ({:.1f} min ago)".format(active_mode, system_id, (now_ts - last_start_time) / 60))
+            return True
+
         token = await self.get_access_token()
         if not token:
             self.log("Warn: SigenergyAPI: No access token for MQTT battery command")
@@ -848,16 +872,29 @@ class SigenergyAPI(ComponentBase):
             "accessToken": token,
             "systemId": system_id,
             "activeMode": active_mode,
-            "startTime": int(time.time()),
+            "startTime": now_ts,
             "duration": int(duration_minutes),
         }
         if charging_power_kw is not None:
             payload["chargingPower"] = round(charging_power_kw, 2)
+        if pv_power_kw is not None:
+            payload["pvPower"] = round(pv_power_kw, 2)
+        if max_sell_power_kw is not None:
+            payload["maxSellPower"] = round(max_sell_power_kw, 2)
+        if max_purchase_power_kw is not None:
+            payload["maxPurchasePower"] = round(max_purchase_power_kw, 2)
+        if charge_priority_type is not None:
+            payload["chargePriorityType"] = charge_priority_type
+        if discharge_priority_type is not None:
+            payload["dischargePriorityType"] = discharge_priority_type
 
         self.log("SigenergyAPI: Sending MQTT battery command {} ({} min, {:.2f}kW) to system {}".format(
             active_mode, duration_minutes, charging_power_kw or 0.0, system_id))
 
-        return await self._publish_mqtt(SIGENERGY_MQTT_TOPIC_COMMAND, payload)
+        ok = await self._publish_mqtt(SIGENERGY_MQTT_TOPIC_COMMAND, payload)
+        if ok:
+            self._last_battery_command[system_id] = (command_hash, now_ts)
+        return ok
 
     # -----------------------------------------------------------------------
     # HA entity publishing
@@ -1725,6 +1762,9 @@ class SigenergyAPI(ComponentBase):
         export_target_soc = _safe_int(self.controls[system_id].get("export", {}).get("target_soc", 0), 0)
         export_rate_w = _safe_int(self.controls[system_id].get("export", {}).get("rate", round(battery_max_kw * 1000)), round(battery_max_kw * 1000))
         reserve_soc = _safe_int(self.controls[system_id].get("reserve", 10), 10)
+        charge_power_kw = None
+        charge_priority_type=None
+        discharge_priority_type=None
 
         def parse_window(start_str, end_str):
             """Return (start_dt, end_dt) adjusted for midnight-spanning windows."""
@@ -1759,12 +1799,11 @@ class SigenergyAPI(ComponentBase):
             if effective_target >= battery_soc_pct:
                 # Already at or below target — freeze (idle)
                 new_mode = "freeze_export"
-                active_mode = SIGENERGY_ACTIVE_MODE_IDLE
-                power_kw = 0.0
+                active_mode = SIGENERGY_ACTIVE_MODE_SELF_GRID
             else:
                 new_mode = "export"
                 active_mode = SIGENERGY_ACTIVE_MODE_DISCHARGE
-                power_kw = export_rate_w / 1000.0
+                discharge_priority_type = "PV"
         elif charge_window and charge_start_dt and charge_end_dt:
             duration_min = max(1, int((charge_end_dt - now).total_seconds() / 60))
             effective_target = max(charge_target_soc, reserve_soc)
@@ -1772,45 +1811,27 @@ class SigenergyAPI(ComponentBase):
                 # Freeze charge — stay at current SOC
                 new_mode = "freeze_charge"
                 active_mode = SIGENERGY_ACTIVE_MODE_SELF
-                power_kw = 0.0
+                charge_power_kw = 0
             elif effective_target < battery_soc_pct:
                 # Target below current — go to eco
                 new_mode = "eco"
                 active_mode = SIGENERGY_ACTIVE_MODE_SELF
-                power_kw = 0.0
             else:
                 new_mode = "charge"
                 active_mode = SIGENERGY_ACTIVE_MODE_CHARGE
-                power_kw = charge_rate_w / 1000.0
+                charge_power_kw = charge_rate_w / 1000.0
+                charge_priority_type = "PV"
         else:
-            duration_min = 60
+            duration_min = 720
             new_mode = "eco"
             active_mode = SIGENERGY_ACTIVE_MODE_SELF
-            power_kw = 0.0
 
         duration_min = min(duration_min, 720)
 
-        # Deduplication — skip if mode unchanged in last 15 minutes
-        new_hash = hash((new_mode, round(power_kw, 2), duration_min))
-        old_hash = self.current_mode_hash.get(system_id)
-        old_ts = self.current_mode_hash_timestamp.get(system_id)
-        if old_hash is not None and old_hash == new_hash and old_ts is not None:
-            age = (now - old_ts).total_seconds()
-            if age < 15 * 60:
-                self.log("SigenergyAPI: Mode unchanged for system {} ({} — {:.1f} min ago), skipping".format(system_id, new_mode, age / 60))
-                return True
+        self.log("SigenergyAPI: Applying mode={} charge_power_kw={}kW duration={}min charge_priority_type={} discharge_priority_type={} to system {}".format(new_mode, "{:.2f}".format(charge_power_kw) if charge_power_kw is not None else "None", duration_min, charge_priority_type, discharge_priority_type, system_id))
 
-        self.log("SigenergyAPI: Applying mode={} power={:.2f}kW duration={}min to system {}".format(new_mode, power_kw, duration_min, system_id))
-
-        # Send battery command via MQTT — no mode pre-switch required
-        ok = await self.send_battery_command(system_id, active_mode, duration_min, charging_power_kw=power_kw if power_kw > 0 else None)
-        success = ok
-
-        if success:
-            self.current_mode_hash[system_id] = new_hash
-            self.current_mode_hash_timestamp[system_id] = now
-
-        return success
+        # Send battery command via MQTT — de-duplication handled inside send_battery_command
+        return await self.send_battery_command(system_id, active_mode, duration_min, charging_power_kw=charge_power_kw, charge_priority_type=charge_priority_type, discharge_priority_type=discharge_priority_type)
 
     # -----------------------------------------------------------------------
     # Main run loop
@@ -2015,14 +2036,17 @@ async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode
         print("  Results: {}".format(board_result))
         return 0
 
-    result = await sig.run(first=True, seconds=0)
-    if not result:
-        print("x Initialisation failed")
-        return 1
-    print("+ Initialisation successful")
+    if not test_mode:
+        result = await sig.run(first=True, seconds=0)
+        if not result:
+            print("x Initialisation failed")
+            return 1
+        print("+ Initialisation successful")
 
-    if test_mode and sig.systems:
+    if test_mode:
+        await sig.fetch_system_list()
         sid = list(sig.systems.keys())[0]
+        await sig.fetch_current_mode(sid)
         flow = sig.energy_flow.get(sid, {})
         battery_soc_pct = _safe_float(flow.get("batterySoc", 50))
         now = datetime.now(sig.local_tz)
