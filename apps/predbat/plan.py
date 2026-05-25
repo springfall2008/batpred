@@ -3898,7 +3898,7 @@ class Plan:
                             dp2(self.clipping_buffer_kwh), start_str, end_str
                         )
                     else:
-                        clipping_status_text = "{} kWh clipping buffer active as a safety precaution (no immediate clipping forecast).".format(
+                        clipping_status_text = "{} kWh clipping buffer active based on your settings (no immediate clipping forecast).".format(
                             dp2(self.clipping_buffer_kwh)
                         )
 
