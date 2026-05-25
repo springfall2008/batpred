@@ -82,6 +82,8 @@ except ImportError:
 
 from datetime import datetime, timedelta
 from component_base import ComponentBase
+from predbat_metrics import record_api_call
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -411,6 +413,7 @@ class SigenergyAPI(ComponentBase):
                     async with ctx as response:
                         if response.status == 401:
                             self.log("Warn: SigenergyAPI: 401 Unauthorised — refreshing token")
+                            record_api_call("sigenergy", False, "auth_error")
                             self.access_token = None
                             token = await self.get_access_token()
                             if not token:
@@ -420,6 +423,7 @@ class SigenergyAPI(ComponentBase):
 
                         if response.status not in (200, 201):
                             self.log("Warn: SigenergyAPI: HTTP {} for {} {}".format(response.status, method, path))
+                            record_api_call("sigenergy", False, "server_error")
                             if attempt < retries - 1:
                                 await asyncio.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
                                 continue
@@ -437,6 +441,7 @@ class SigenergyAPI(ComponentBase):
                         if code != 0:
                             self._last_api_code = code
                             self.log("Warn: SigenergyAPI: API error code={} msg={} for {}".format(code, body.get("msg", ""), path))
+                            record_api_call("sigenergy", False, "server_error")
                             if code == SIGENERGY_CODE_ACCESS_RESTRICTION:
                                 # Rate-limited — exponential backoff then retry
                                 wait = SIGENERGY_RATE_LIMIT_BACKOFF[min(attempt, len(SIGENERGY_RATE_LIMIT_BACKOFF) - 1)]
@@ -464,14 +469,17 @@ class SigenergyAPI(ComponentBase):
                                         pass
                                 decoded.append(item)
                             data = decoded
+                        record_api_call("sigenergy")
                         return data
 
             except asyncio.TimeoutError:
                 self.log("Warn: SigenergyAPI: Timeout on {} {} (attempt {}/{})".format(method, path, attempt + 1, retries))
+                record_api_call("sigenergy", False, "connection_error")
                 if attempt < retries - 1:
                     await asyncio.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
             except Exception as e:
                 self.log("Warn: SigenergyAPI: Exception on {} {}: {}\n{}".format(method, path, e, traceback.format_exc()))
+                record_api_call("sigenergy", False, "connection_error")
                 if attempt < retries - 1:
                     await asyncio.sleep(SIGENERGY_COMMAND_RETRY_DELAY)
 
