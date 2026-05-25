@@ -228,6 +228,48 @@ def test_sigenergy_system_slug(my_predbat):
     return failed
 
 
+def test_sigenergy_battery_max_power(my_predbat):
+    """Test _get_battery_max_power_kw with capping at inverter power."""
+    failed = False
+    api = MockSigenergyAPI()
+
+    # Case 1: battery power below inverter limit — uncapped
+    api.devices["sys1"] = [
+        {"deviceType": "Battery", "attrMap": {"ratedChargePower": 6.0}},
+        {"deviceType": "Inverter", "attrMap": {"ratedActivePower": 10.0}},
+    ]
+    assert api._get_battery_max_power_kw("sys1") == 6.0, "Battery power below inverter limit: not capped"
+
+    # Case 2: battery power exceeds inverter limit — capped at inverter power
+    api.devices["sys2"] = [
+        {"deviceType": "Battery", "attrMap": {"ratedChargePower": 15.0}},
+        {"deviceType": "Inverter", "attrMap": {"ratedActivePower": 10.0}},
+    ]
+    assert api._get_battery_max_power_kw("sys2") == 10.0, "Battery power capped at inverter limit"
+
+    # Case 3: no battery device, falls back to inverter power
+    api.devices["sys3"] = [
+        {"deviceType": "Inverter", "attrMap": {"ratedActivePower": 8.0}},
+    ]
+    assert api._get_battery_max_power_kw("sys3") == 8.0, "Fallback to inverter power when no battery device"
+
+    # Case 4: no inverter device — battery power returned uncapped
+    api.devices["sys4"] = [
+        {"deviceType": "Battery", "attrMap": {"ratedChargePower": 7.0}},
+    ]
+    assert api._get_battery_max_power_kw("sys4") == 7.0, "No inverter: battery power returned uncapped"
+
+    # Case 5: multiple batteries — sum capped at inverter
+    api.devices["sys5"] = [
+        {"deviceType": "Battery", "attrMap": {"ratedChargePower": 6.0}},
+        {"deviceType": "Battery", "attrMap": {"ratedChargePower": 6.0}},
+        {"deviceType": "Inverter", "attrMap": {"ratedActivePower": 10.0}},
+    ]
+    assert api._get_battery_max_power_kw("sys5") == 10.0, "Sum of two batteries (12kW) capped at inverter (10kW)"
+
+    return failed
+
+
 def test_sigenergy_battery_capacity(my_predbat):
     """Test _get_battery_capacity_kwh falls back to device data."""
     failed = False
@@ -895,6 +937,7 @@ def test_sigenergy_handle_mqtt_period(my_predbat):
 
     api._handle_mqtt_period("SYS1", value_dict)
 
+    # Realtime power fields land in energy_flow
     flow = api.energy_flow.get("SYS1", {})
     assert abs(flow["batterySoc"] - 79.7) < 0.01, "batterySoc = 79.7%"
     # storageChargeDischargePowerW -2927 W = -2.927 kW (discharging, negative = energyFlow convention)
@@ -904,12 +947,16 @@ def test_sigenergy_handle_mqtt_period(my_predbat):
     # loadPower = pv - bat - grid = 0 - (-2.927) - 0.003 = 2.924
     assert abs(flow["loadPower"] - 2.924) < 0.01, "loadPower derived = 2.924 kW"
     assert abs(flow["inverterPower"] - 2.681) < 0.001, "inverterPower = 2.681 kW"
-    assert abs(flow["chargeCapacityKwh"] - 9.52) < 0.01, "chargeCapacityKwh = 9.52"
-    assert abs(flow["dischargeCapacityKwh"] - 37.41) < 0.01, "dischargeCapacityKwh = 37.41"
-    assert abs(flow["batteryMaxChargePowerKw"] - 22.032) < 0.01, "batteryMaxChargePowerKw = 22.032"
-    assert abs(flow["batteryMaxDischargePowerKw"] - 36.051) < 0.01, "batteryMaxDischargePowerKw = 36.051"
-    assert flow["operationalMode"] == 6.0, "operationalMode = 6.0"
-    assert flow["systemStatus"] == 1.0, "systemStatus = 1.0"
+    assert "chargeCapacityKwh" not in flow, "capacity/status fields must not be in energy_flow"
+
+    # Capacity, power and mode fields land in system_status (not energy_flow)
+    status = api.system_status.get("SYS1", {})
+    assert abs(status["chargeCapacity"] - 9.52) < 0.01, "chargeCapacity = 9.52 kWh"
+    assert abs(status["dischargeCapacity"] - 37.41) < 0.01, "dischargeCapacity = 37.41 kWh"
+    assert abs(status["ratedChargePower"] - 22.032) < 0.01, "ratedChargePower = 22.032 kW"
+    assert abs(status["ratedDischargePower"] - 36.051) < 0.01, "ratedDischargePower = 36.051 kW"
+    assert status["operationalMode"] == 6.0, "operationalMode = 6.0"
+    assert status["systemStatus"] == 1.0, "systemStatus = 1.0"
     assert any("MQTT period" in m and "80" in m for m in api.log_messages), "Period data logged"
 
     return failed
@@ -1267,6 +1314,7 @@ def run_sigenergy_tests(my_predbat):
         ("fetch_inverter_realtime_no_inverter", test_sigenergy_fetch_inverter_realtime_no_inverter),
         ("get_inverter_serial", test_sigenergy_get_inverter_serial),
         ("build_tls_context", test_sigenergy_build_tls_context),
+        ("battery_max_power", test_sigenergy_battery_max_power),
     ]
 
     for name, fn in tests:

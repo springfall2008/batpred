@@ -148,6 +148,22 @@ SIGENERGY_MODE_FFG = 5   # Fully Feed-in to Grid
 SIGENERGY_MODE_VPP = 6   # VPP mode
 SIGENERGY_MODE_NBI = 8   # NorthBound (defined for completeness; not switched to by this component)
 
+# Human-readable names for operationalMode integer values
+SIGENERGY_MODE_NAMES = {
+    0: "Maximum Self-Consumption",
+    5: "Fully Feed-in to Grid",
+    6: "VPP",
+    8: "Northbound Integration",
+}
+
+# Human-readable names for systemStatus integer values
+SIGENERGY_SYSTEM_STATUS_NAMES = {
+    0: "Off",
+    1: "Online",
+    2: "Standby",
+    3: "Fault",
+}
+
 # Battery command activeMode strings
 SIGENERGY_ACTIVE_MODE_CHARGE = "charge"
 SIGENERGY_ACTIVE_MODE_DISCHARGE = "discharge"
@@ -250,6 +266,7 @@ class SigenergyAPI(ComponentBase):
         self.systems = {}         # systemId → system info dict
         self.devices = {}         # systemId → list of device dicts
         self.energy_flow = {}     # systemId → latest energyFlow dict
+        self.system_status = {}   # systemId → latest systemStatus dict
         self.daily_summary = {}   # systemId → latest summary dict
         self.current_mode = {}    # systemId → energyStorageOperationMode int
 
@@ -665,6 +682,21 @@ class SigenergyAPI(ComponentBase):
 
         Returns:
             True on success, False on failure.
+
+        Example data:
+        {
+            "code": 0,
+            "msg": "success",
+            "data": {
+                "pvPower": 10.1,
+                "gridPower": 10.1,
+                "evPower": 0,
+                "loadPower": 0,
+                "heatPumpPower": 0,
+                "batteryPower": 0,
+                "batterySoc": 100
+            }
+        }
         """
         data = await self._request("GET", "/openapi/systems/{}/energyFlow".format(system_id))
         if data is None:
@@ -983,19 +1015,18 @@ class SigenergyAPI(ComponentBase):
         """Return the combined rated charge/discharge power in kW for a system."""
         # Prefer device-level ratedChargePower
         power = 0.0
+        inverter_power = self._get_inverter_max_power_kw(system_id)
         for device in self.devices.get(system_id, []):
             if device.get("deviceType") == SIGENERGY_DEVICE_BATTERY:
                 attr = device.get("attrMap", {})
                 power += _safe_float(attr.get("ratedChargePower", 0))
-        if power > 0:
-            return power
 
         # Fallback: inverter rated power
-        for device in self.devices.get(system_id, []):
-            if device.get("deviceType") == SIGENERGY_DEVICE_INVERTER:
-                attr = device.get("attrMap", {})
-                power += _safe_float(attr.get("ratedActivePower", 0))
-        return power
+        # Also cap battery power at inverter power
+        if power > 0:
+            return min(power, inverter_power) if inverter_power > 0 else power
+        else:
+            return inverter_power
 
     def _get_inverter_max_power_kw(self, system_id):
         """Return the combined inverter rated active power in kW."""
@@ -1072,14 +1103,17 @@ class SigenergyAPI(ComponentBase):
             "loadPower": max(0.0, load_power_kw),
             "evPower": 0.0,
             "inverterPower": _safe_float(value_dict.get("inverterActivePowerW", 0)) / 1000.0,
-            "chargeCapacityKwh": _safe_float(value_dict.get("storageChargeCapacityWh", 0)) / 1000.0,
-            "dischargeCapacityKwh": _safe_float(value_dict.get("storageDischargeCapacityWh", 0)) / 1000.0,
-            "batteryMaxChargePowerKw": _safe_float(value_dict.get("batteryMaxChargePowerW", 0)) / 1000.0,
-            "batteryMaxDischargePowerKw": _safe_float(value_dict.get("batteryMaxDischargePowerW", 0)) / 1000.0,
+        }
+        flow_status = {
+            "chargeCapacity": _safe_float(value_dict.get("storageChargeCapacityWh", 0)) / 1000.0,
+            "dischargeCapacity": _safe_float(value_dict.get("storageDischargeCapacityWh", 0)) / 1000.0,
+            "ratedChargePower": _safe_float(value_dict.get("batteryMaxChargePowerW", 0)) / 1000.0,
+            "ratedDischargePower": _safe_float(value_dict.get("batteryMaxDischargePowerW", 0)) / 1000.0,
             "operationalMode": _safe_float(value_dict.get("operationalMode", 0)),
             "systemStatus": _safe_float(value_dict.get("systemStatus", 0)),
         }
         self.energy_flow[system_id] = flow
+        self.system_status[system_id] = flow_status
         self.log(
             "SigenergyAPI: MQTT period {}: SOC {:.0f}% bat {:.2f}kW pv {:.2f}kW grid {:.2f}kW load {:.2f}kW".format(
                 system_id, flow["batterySoc"], bat_power_kw, pv_power_kw, grid_power_kw, flow["loadPower"]
@@ -1306,6 +1340,7 @@ class SigenergyAPI(ComponentBase):
         system_info = self.systems.get(system_id, {})
         system_name = system_info.get("systemName", system_id)
         flow = self.energy_flow.get(system_id, {})
+        flow_status = self.system_status.get(system_id, {})
         summary = self.daily_summary.get(system_id, {})
 
         battery_soc_pct = _safe_float(flow.get("batterySoc", 0))
@@ -1465,6 +1500,27 @@ class SigenergyAPI(ComponentBase):
                 "friendly_name": "Sigenergy {} Inverter Limit".format(system_name),
                 "unit_of_measurement": "W",
                 "device_class": "power",
+            },
+            app="sigenergy",
+        )
+
+        # --- Operational mode (string) ---
+        op_mode_int = int(_safe_float(flow_status.get("operationalMode", -1)))
+        op_mode_str = SIGENERGY_MODE_NAMES.get(op_mode_int, "Unknown ({})".format(op_mode_int) if op_mode_int >= 0 else "Unknown")
+        sys_status_int = int(_safe_float(flow_status.get("systemStatus", -1)))
+        sys_status_str = SIGENERGY_SYSTEM_STATUS_NAMES.get(sys_status_int, "Unknown ({})".format(sys_status_int) if sys_status_int >= 0 else "Unknown")
+        self.dashboard_item(
+            "sensor.{}_sigenergy_{}_operational_mode".format(self.prefix, slug),
+            state=op_mode_str,
+            attributes={
+                "friendly_name": "Sigenergy {} Operational Mode".format(system_name),
+                "mode_id": op_mode_int if op_mode_int >= 0 else None,
+                "system_status": sys_status_str,
+                "system_status_id": sys_status_int if sys_status_int >= 0 else None,
+                "charge_capacity_kwh": flow_status.get("chargeCapacity", 0),
+                "discharge_capacity_kwh": flow_status.get("dischargeCapacity", 0),
+                "rated_charge_power_kw": flow_status.get("ratedChargePower", 0),
+                "rated_discharge_power_kw": flow_status.get("ratedDischargePower", 0),
             },
             app="sigenergy",
         )
