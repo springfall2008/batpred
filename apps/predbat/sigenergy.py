@@ -49,6 +49,11 @@ Example apps.yaml config:
   sigenergy_ca_pem: !secret sigenergy_ca_pem
   sigenergy_automatic: True
 
+
+TODO: 
+- Need a way for the user to toggle onboard vs offboard as when onboard they can't control in the app.
+- Need to check why test system reports as 24kw max battery rate but 12kw inverter limit, is this real?
+
 """
 
 import argparse
