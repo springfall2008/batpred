@@ -1920,7 +1920,7 @@ async def test_mqtt_connection(app_key, app_secret, base_url, system_id=None, to
 
     except KeyboardInterrupt:
         print("\n[{}] Ctrl+C received".format(datetime.now().strftime("%H:%M:%S")))
-
+        
     print("\n+ MQTT test session ended")
     return 0
 
