@@ -844,6 +844,63 @@ class Plan:
             window_n += 1
         return -1
 
+    def calculate_clipping_buffer(self):
+        """
+        Calculate the required clipping buffer (kWh) and times based on the selected forecast.
+        """
+        if not self.clipping_buffer_enable:
+            return 0, 0, 0
+
+        forecast_type = self.clipping_buffer_forecast
+        if forecast_type == "pv_estimate":
+            pv_data = self.pv_forecast_minute
+        elif forecast_type == "pv_estimate10":
+            pv_data = self.pv_forecast_minute10
+        elif forecast_type == "pv_estimate90":
+            pv_data = self.pv_forecast_minute90
+        elif forecast_type == "pv_estimateCL":
+            pv_data = self.pv_forecast_minute  # Fallback to minute forecast if CL not directly available
+        elif forecast_type == "clearsky":
+            pv_data = self.pv_forecast_minuteCS
+        elif forecast_type == "historical":
+            pv_data = self.pv_forecast_minuteMAX
+        else:
+            pv_data = self.pv_forecast_minute90
+
+        if not pv_data:
+            return 0, 0, 0
+
+        clipping_kwh = 0
+        clipping_start = None
+        clipping_end = None
+
+        # Calculate clipping for today (first 24 hours)
+        for minute in range(0, 24 * 60):
+            pv_now = pv_data.get(minute, 0)
+            if pv_now > self.pv_ac_limit:
+                excess = (pv_now - self.pv_ac_limit) / 60.0
+                clipping_kwh += excess
+                if clipping_start is None:
+                    clipping_start = minute
+                clipping_end = minute
+
+        # Apply max cap
+        if self.clipping_buffer_max_kwh > 0:
+            clipping_kwh = min(clipping_kwh, self.clipping_buffer_max_kwh)
+
+        # Apply min cap
+        if self.clipping_buffer_min_kwh > 0:
+            clipping_kwh = max(clipping_kwh, self.clipping_buffer_min_kwh)
+
+        if clipping_kwh > 0:
+            self.log(
+                "Clipping Buffer: Calculated buffer of {:.2f}kWh based on {}, starts at {}, ends at {}".format(
+                    clipping_kwh, forecast_type, minutes_to_time(clipping_start), minutes_to_time(clipping_end)
+                )
+            )
+
+        return clipping_kwh, clipping_start, clipping_end
+
     def calculate_plan(self, recompute=True, debug_mode=False, publish=True):
         """
         Calculate the new plan (best)
@@ -857,6 +914,9 @@ class Plan:
         curr = self.currency_symbols[1]
 
         plan_start_time = time.time()
+
+        # Calculate clipping buffer
+        self.clipping_buffer_kwh, self.clipping_buffer_start, self.clipping_buffer_end = self.calculate_clipping_buffer()
 
         # Re-compute plan due to time wrap
         if self.plan_last_updated_minutes > self.minutes_now:

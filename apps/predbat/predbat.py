@@ -644,6 +644,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.isCharging_Target = 0
         self.isExporting = False
         self.isExporting_Target = 0
+        self.clipping_buffer_kwh = 0
+        self.clipping_buffer_min_kwh = 0
+        self.clipping_buffer_start = 0
+        self.clipping_buffer_end = 0
         self.savings_today_predbat = 0.0
         self.savings_today_predbat_soc = 0.0
         self.savings_today_pvbat = 0.0
@@ -670,6 +674,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.load_forecast_array = []
         self.pv_forecast_minute = {}
         self.pv_forecast_minute10 = {}
+        self.pv_forecast_minute90 = {}
+        self.pv_forecast_minuteCS = {}
+        self.pv_forecast_minuteMAX = {}
         self.load_scaling_dynamic = {}
         self.carbon_intensity = {}
         self.carbon_history = {}

@@ -1892,6 +1892,24 @@ def run_model_tests(my_predbat):
     # pv_ac_limit must NOT apply to hybrid inverters (PV is DC-coupled, clipping handled by inverter_limit)
     failed |= simple_scenario("pv_ac_limit_hybrid_ignored", my_predbat, 0, 2.0, assert_final_metric=-export_rate * 24, assert_final_soc=24, with_battery=True, hybrid=True, pv_ac_limit=1.5, assert_clipped=0)
 
+    # Clipping Buffer test: Verify that grid charge is capped to leave room for solar clipping
+    # Buffer is 2.0kWh, battery size 10kWh. Max grid charge should be 8.0kWh (80%)
+    my_predbat.clipping_buffer_kwh = 2.0
+    my_predbat.clipping_buffer_end = my_predbat.minutes_now + 24 * 60
+    failed |= simple_scenario(
+        "clipping_buffer_grid_charge",
+        my_predbat,
+        0,
+        0,
+        assert_final_metric=import_rate * 8.0,
+        assert_final_soc=8.0,
+        with_battery=True,
+        battery_size=10.0,
+        battery_soc=0.0,
+        charge=10.0,  # Try to charge to 100%
+    )
+    my_predbat.clipping_buffer_kwh = 0
+
     if failed:
         print("**** ERROR: Some Model tests failed ****")
     return failed

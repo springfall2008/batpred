@@ -118,6 +118,10 @@ class Prediction:
             self.car_charging_loss = base.car_charging_loss
             self.car_energy_reported_load = base.car_energy_reported_load
             self.reserve = base.reserve
+            self.clipping_buffer_kwh = getattr(base, "clipping_buffer_kwh", 0)
+            self.clipping_buffer_min_kwh = getattr(base, "clipping_buffer_min_kwh", 0)
+            self.clipping_buffer_start = getattr(base, "clipping_buffer_start", 0)
+            self.clipping_buffer_end = getattr(base, "clipping_buffer_end", 0)
             self.metric_standing_charge = base.metric_standing_charge
             self.set_charge_freeze = base.set_charge_freeze
             self.set_reserve_enable = base.set_reserve_enable
@@ -386,6 +390,14 @@ class Prediction:
         """
         Run a prediction scenario given a charge limit, return the results
         """
+
+        # Enforce clipping buffer on grid charging
+        if self.clipping_buffer_kwh > 0:
+            charge_limit = list(charge_limit)
+            for n, window in enumerate(charge_window):
+                if window["end"] <= self.clipping_buffer_end:
+                    charge_limit[n] = min(charge_limit[n], self.soc_max - self.clipping_buffer_kwh)
+
         window_hash = 0
         for window in charge_window:
             window_hash ^= hash(window["start"]) ^ hash(window["end"])

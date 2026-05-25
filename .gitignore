@@ -103,3 +103,6 @@ it
 
 # Runtime-generated manifest
 apps/predbat/manifest.yaml
+
+# Local UI settings
+predbat_config.json

@@ -2958,6 +2958,31 @@ chart.render();
                 {"name": "Forecast CL", "data": pv_today_forecastCL, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#e90a0a"},
             ]
             text += self.render_chart(series_data, "kW", "Solar Forecast", now_str)
+        elif chart == "Clipping":
+            pv_power_hist = history_attribute(self.get_history_wrapper(self.prefix + ".pv_power", 7, required=False))
+            pv_power = prune_today(pv_power_hist, self.now_utc, self.midnight_utc, prune=False)
+            
+            # Selected forecast for clipping
+            clipping_forecast_type = self.get_arg("clipping_buffer_forecast", "pv_estimate90")
+            if clipping_forecast_type == "clearsky":
+                subitem = "pv_clearsky"
+            elif clipping_forecast_type == "historical":
+                subitem = "pv_estimateMAX"
+            else:
+                subitem = clipping_forecast_type
+                
+            clipping_forecast = prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_today", subitem), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
+            clipping_forecast.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_tomorrow", subitem), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
+            
+            # Limits
+            inverter_limit = self.get_arg("pv_ac_limit", 0.0) / 60.0 # Convert W to kW (if W) or it's already kW?
+            # Actually pv_ac_limit in predbat.py is usually in kW or W/60. Let's check predbat.py
+            
+            series_data = [
+                {"name": "PV Power", "data": pv_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#f5c43d"},
+                {"name": "Clipping Forecast (" + clipping_forecast_type + ")", "data": clipping_forecast, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#a8a8a7"},
+            ]
+            text += self.render_chart(series_data, "kW", "Clipping Analysis", now_str)
         elif chart == "PVAccuracy":
             # Get pv_today history once and extract total and remaining attributes per timestamp
             pv_today_hist = self.get_history_wrapper("sensor." + self.prefix + "_pv_today", 7, required=False)
@@ -3278,6 +3303,7 @@ chart.render();
         text += f'<a href="./charts?chart=PV" class="{"active" if chart == "PV" else ""}">PV</a>'
         text += f'<a href="./charts?chart=PV7" class="{"active" if chart == "PV7" else ""}">PV7</a>'
         text += f'<a href="./charts?chart=PVAccuracy" class="{"active" if chart == "PVAccuracy" else ""}">PVAccuracy</a>'
+        text += f'<a href="./charts?chart=Clipping" class="{"active" if chart == "Clipping" else ""}">Clipping</a>'
         text += f'<a href="./charts?chart=Savings" class="{"active" if chart == "Savings" else ""}">Savings</a>'
         text += f'<a href="./charts?chart=BatteryDegradation" class="{"active" if chart == "BatteryDegradation" else ""}">BatteryDegradation</a>'
         text += f'<a href="./charts?chart=MarginalCosts" class="{"active" if chart == "MarginalCosts" else ""}">MarginalCosts</a>'
