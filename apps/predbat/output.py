@@ -2635,9 +2635,9 @@ class Output:
                 state=dp3(load_total_pred),
                 attributes={
                     "results": self.filtered_times(load_predict_stamp),
-                    "today": dp2(load_today) if load_today is not None else 0,
-                    "today_so_far": dp2(load_so_far) if load_so_far is not None else 0,
-                    "today_remaining": dp2(load_today_remaining) if load_today_remaining is not None else 0,
+                    "today": dp2(load_today) if load_today is not None else 0.0,
+                    "today_so_far": dp2(load_so_far) if load_so_far is not None else 0.0,
+                    "today_remaining": dp2(load_today_remaining) if load_today_remaining is not None else 0.0,
                     "friendly_name": "Load energy predicted (filtered)",
                     "state_class": "measurement",
                     "unit_of_measurement": "kWh",
