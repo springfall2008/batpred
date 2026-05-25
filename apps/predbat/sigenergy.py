@@ -244,6 +244,10 @@ class SigenergyAPI(ComponentBase):
         # Delay between mode-switch and battery command (seconds); set to 0 in tests
         self._command_delay = 1.0
 
+        # Background MQTT listener task
+        self._mqtt_task = None
+        self.last_mqtt_update = 0.0  # UNIX timestamp of last MQTT message received
+
         self.log("SigenergyAPI: Initialised, base_url={}".format(self.base_url))
 
     # -----------------------------------------------------------------------
@@ -581,14 +585,16 @@ class SigenergyAPI(ComponentBase):
                 pass
 
         bat_soc = _safe_float(rt.get("batSoc", 0))
-        # batPower: appears to be negative for discharge, positive for charge — invert to match energyFlow convention
-        bat_power_kw = _safe_float(rt.get("batPower", 0))
+        # batPower: realtimeInfo convention is positive=discharging, negative=charging.
+        # energyFlow convention (used everywhere else) is positive=charging, negative=discharging.
+        # Negate to match the energyFlow convention.
+        bat_power_kw = -_safe_float(rt.get("batPower", 0))
         pv_power_kw = _safe_float(rt.get("pvPower", 0))
-        # activePower: Active power of the inverter itself, positive is generation, negative is consumption. Generation includes discharging the battery.
-        active_power_kw = _safe_float(rt.get("activePower", 0))
-        grid_power_kw = 0 # Unknown...
+        # activePower: positive=export (net generation to grid), negative=import.
+        # Maps directly to gridPower in the energyFlow convention (positive=export).
+        grid_power_kw = _safe_float(rt.get("activePower", 0))
         # Derive load: pv + battery_discharge - grid_export
-        # battery_discharge = -bat_power_kw when bat_power_kw < 0
+        # battery_discharge = -bat_power_kw when bat_power_kw < 0 (bat_power_kw is now in charging-positive convention)
         battery_discharge_kw = max(0.0, -bat_power_kw)
         load_power_kw = max(0.0, pv_power_kw + battery_discharge_kw - grid_power_kw)
 
@@ -817,6 +823,21 @@ class SigenergyAPI(ComponentBase):
 
         Returns:
             True on success, False on failure.
+
+        Payload fields: 
+            Name                    Type	Required	Description
+            accessToken	            String	Yes	    Authorization token obtained from Chapter 2
+            systemId	            String	Yes	    Unique code of the power station
+            activeMode	            String	Yes	    System active mode
+            startTime	            Long	Yes	    Command start time, in seconds
+            duration	            Integer	Yes	    Command duration, in minutes
+            chargingPower	        Double	No	    Max energy storage charging/discharging power (KW)
+            pvPower	                Double	No	    Max photovoltaic charging power (KW)
+            maxSellPower	        Double	No	    Max export power to the grid (KW)
+            maxPurchasePower	    Double	No	    Max purchase power from the grid (KW)
+            chargePriorityType	    Enum	No	    Charging priority (PV/GRID)
+            dischargePriorityType	Enum	No	    Discharging priority (PV/BATTERY)
+
         """
         token = await self.get_access_token()
         if not token:
@@ -897,6 +918,293 @@ class SigenergyAPI(ComponentBase):
                 attr = device.get("attrMap", {})
                 power += _safe_float(attr.get("ratedActivePower", 0))
         return power
+
+    # -----------------------------------------------------------------------
+    # MQTT message handlers
+    # -----------------------------------------------------------------------
+
+    def _handle_mqtt_period(self, system_id, value_dict):
+        """Handle a Sigenergy ``openapi/period`` MQTT message.
+
+        Overwrites ``self.energy_flow[system_id]`` with fresh real-time data.
+        The ``period`` message is broadcast every ~5 s by the broker and carries
+        inverter and storage power/SOC values.
+
+        Field sign convention matches the REST energyFlow convention used
+        throughout the rest of the code:
+          batteryPower — positive = charging, negative = discharging
+          gridPower    — positive = export, negative = import
+          pvPower      — always positive
+          loadPower    — derived as ``pvPower − batteryPower − gridPower``
+
+        Example message:
+        {
+            "PV power": "0.0",
+            "gridPhaseCReactivePowerVar": "0.0",
+            "inverterReactivePowerVar": "9.0",
+            "inverterActivePowerW": "2681.0",
+            "inverterPhaseBReactivePowerVar": "0.0",
+            "inverterMaxAbsorptionActivePowerW": "12000.0",
+            "onOffGridStatus": "0.0",
+            "inverterPhaseAActivePowerW": "1345.0",
+            "inverterPhaseBActivePowerW": "0.0",
+            "gridActivePowerW": "3.0",
+            "inverterMaxFeedInActivePowerW": "12000.0",
+            "inverterPhaseAReactivePowerVar": "22.0",
+            "inverterMaxFeedInReactivePowerVar": "7200.0",
+            "storageChargeCapacityWh": "9520.0",
+            "storageDischargeCapacityWh": "37410.0",
+            "gridPhaseBReactivePowerVar": "0.0",
+            "gridPhaseAActivePowerW": "3.0",
+            "storageChargeDischargePowerW": "-2927.0",
+            "operationalMode": "6.0",
+            "storageSOC%": "79.7",
+            "systemStatus": "1.0",
+            "gridReactivePowerVar": "-238.0",
+            "inverterMaxAbsorptionReactivePowerVar": "7200.0",
+            "gridPhaseAReactivePowerVar": "-257.0",
+            "batteryMaxDischargePowerW": "36051.0",
+            "batteryMaxChargePowerW": "22032.0"
+        }
+        Args:
+            system_id: Sigenergy system identifier extracted from the MQTT topic.
+            value_dict: ``value`` sub-dict from the parsed MQTT payload (string→string).
+        """
+        # Note: storageChargeDischargePowerW is negative when discharging — same
+        # sign convention as the REST batteryPower field (positive=charging).
+        bat_power_kw = _safe_float(value_dict.get("storageChargeDischargePowerW", 0)) / 1000.0
+        pv_power_kw = _safe_float(value_dict.get("PV power", 0)) / 1000.0
+        grid_power_kw = _safe_float(value_dict.get("gridActivePowerW", 0)) / 1000.0
+        load_power_kw = pv_power_kw - bat_power_kw - grid_power_kw
+
+        flow = {
+            "batterySoc": _safe_float(value_dict.get("storageSOC%", 0)),
+            "batteryPower": bat_power_kw,
+            "pvPower": pv_power_kw,
+            "gridPower": grid_power_kw,
+            "loadPower": max(0.0, load_power_kw),
+            "evPower": 0.0,
+            "inverterPower": _safe_float(value_dict.get("inverterActivePowerW", 0)) / 1000.0,
+            "chargeCapacityKwh": _safe_float(value_dict.get("storageChargeCapacityWh", 0)) / 1000.0,
+            "dischargeCapacityKwh": _safe_float(value_dict.get("storageDischargeCapacityWh", 0)) / 1000.0,
+            "batteryMaxChargePowerKw": _safe_float(value_dict.get("batteryMaxChargePowerW", 0)) / 1000.0,
+            "batteryMaxDischargePowerKw": _safe_float(value_dict.get("batteryMaxDischargePowerW", 0)) / 1000.0,
+            "operationalMode": _safe_float(value_dict.get("operationalMode", 0)),
+            "systemStatus": _safe_float(value_dict.get("systemStatus", 0)),
+        }
+        self.energy_flow[system_id] = flow
+        self.log(
+            "SigenergyAPI: MQTT period {}: SOC {:.0f}% bat {:.2f}kW pv {:.2f}kW grid {:.2f}kW load {:.2f}kW".format(
+                system_id, flow["batterySoc"], bat_power_kw, pv_power_kw, grid_power_kw, flow["loadPower"]
+            )
+        )
+
+    def _handle_mqtt_change(self, system_id, value_dict):
+        """Handle a Sigenergy ``openapi/change`` MQTT message.
+
+        Updates ``self.controls[system_id]`` with the SOC limit values and
+        updates capacity/power fields in ``self.systems[system_id]``.
+
+        The ``change`` topic fires whenever the inverter's configuration
+        changes (e.g. via the Sigenergy app or a remote API command).
+
+        Per the user's clarification:
+          backupCutOffSOC%   → reserve (backup/emergency minimum)
+          chargeCutOffSOC%   → charge target_soc
+          dischargeCutOffSOC% → export target_soc (minimum discharge floor)
+
+
+        example message:
+        {
+            "batteryRatedChargePowerW": "22000.0",
+            "batteryRatedCapabilityWh": "45200.0",
+            "backupCutOffSOC%": "15.0",
+            "inverterMaxAbsorptionPowerW": "12000.0",
+            "peakShavingStatus": "off",
+            "stormWatchStatus": "off",
+            "batteryRatedDischargePowerW": "24000.0",
+            "inverterMaxActivePowerW": "12000.0",
+            "dischargeCutOffSOC%": "5.0",
+            "chargeCutOffSOC%": "100.0",
+            "peakShavingCutOffSOC%": "0.0",
+            "inverterMaxApprentPowerVar": "12000.0",
+            "gridMaxBackfeedPowerW": "5000.0"
+        }
+
+        Args:
+            system_id: Sigenergy system identifier.
+            value_dict: ``value`` sub-dict from the parsed MQTT payload.
+        """
+        # Update controls
+        if system_id not in self.controls:
+            self.controls[system_id] = {}
+
+        reserve = _safe_float(value_dict.get("backupCutOffSOC%", None), None)
+        if reserve is not None:
+            self.controls[system_id]["reserve"] = reserve
+
+        charge_target = _safe_float(value_dict.get("chargeCutOffSOC%", None), None)
+        if charge_target is not None:
+            if "charge" not in self.controls[system_id]:
+                self.controls[system_id]["charge"] = {}
+            self.controls[system_id]["charge"]["target_soc"] = charge_target
+
+        export_target = _safe_float(value_dict.get("dischargeCutOffSOC%", None), None)
+        if export_target is not None:
+            if "export" not in self.controls[system_id]:
+                self.controls[system_id]["export"] = {}
+            self.controls[system_id]["export"]["target_soc"] = export_target
+
+        # Update system capacity / power limits
+        if system_id not in self.systems:
+            self.systems[system_id] = {}
+
+        capacity_wh = _safe_float(value_dict.get("batteryRatedCapabilityWh", None))
+        if capacity_wh:
+            self.systems[system_id]["batteryCapacity"] = capacity_wh / 1000.0
+
+        for mqtt_field, sys_key in (
+            ("batteryRatedChargePowerW", "ratedChargePowerKw"),
+            ("batteryRatedDischargePowerW", "ratedDischargePowerKw"),
+            ("inverterMaxActivePowerW", "inverterMaxActivePowerKw"),
+            ("gridMaxBackfeedPowerW", "gridMaxBackfeedPowerKw"),
+        ):
+            val = _safe_float(value_dict.get(mqtt_field, None))
+            if val:
+                self.systems[system_id][sys_key] = val / 1000.0
+
+        self.log(
+            "SigenergyAPI: MQTT change {}: reserve={}% charge_target={}% export_target={}%".format(
+                system_id, reserve, charge_target, export_target
+            )
+        )
+
+    def _handle_mqtt_alarm(self, system_id, payload_list):
+        """Handle a Sigenergy ``openapi/alarm`` MQTT message.
+
+        Args:
+            system_id: Sigenergy system identifier.
+            payload_list: Parsed payload list from the MQTT message.
+        """
+        self.log("Warn: SigenergyAPI: MQTT alarm for system {}: {}".format(system_id, payload_list))
+
+    async def _mqtt_listener_loop(self):
+        """Persistent MQTT listener coroutine.
+
+        Runs for the lifetime of the component (until ``self.api_stop`` is set).
+        On each (re)connect cycle:
+          1. Refreshes the access token.
+          2. Opens a TLS MQTT connection to the Sigenergy broker.
+          3. Subscribes to wildcard topics for change, period and alarm data.
+          4. Publishes Sigenergy application-level subscription requests.
+          5. Dispatches incoming messages to the appropriate handler.
+          6. Publishes updated HA entities when data changes.
+          7. Reconnects automatically on any error or clean broker disconnect.
+
+        This coroutine is started as an ``asyncio.Task`` from ``run()`` after
+        first successful authentication, and cancelled in ``final()``.
+        """
+        if not HAS_AIOMQTT:
+            self.log("Error: SigenergyAPI: aiomqtt is not installed — MQTT listener cannot start")
+            return
+
+        reconnect_delay = 5
+        attempt = 0
+        system_id_list = list(self.systems.keys()) if self.systems else []
+        # Build per-app-key wildcard topics
+        topics = [
+            SIGENERGY_MQTT_TOPIC_CHANGE.format(app_key=self.app_key, system_id="#"),
+            SIGENERGY_MQTT_TOPIC_PERIOD.format(app_key=self.app_key, system_id="#"),
+            SIGENERGY_MQTT_TOPIC_ALARM.format(app_key=self.app_key, system_id="#"),
+        ]
+
+        while not self.api_stop:
+            attempt += 1
+            self.log("SigenergyAPI: MQTT listener connecting (attempt #{}) ...".format(attempt))
+            try:
+                token = await self.get_access_token()
+                if not token:
+                    self.log("Warn: SigenergyAPI: MQTT token refresh failed; retrying in {}s".format(reconnect_delay))
+                    await asyncio.sleep(reconnect_delay)
+                    continue
+
+                # Refresh system list for subscription if not yet known
+                if not system_id_list:
+                    system_id_list = list(self.systems.keys())
+
+                tls_context = self._build_tls_context()
+                async with aiomqtt.Client(
+                    hostname=self.mqtt_host,
+                    port=SIGENERGY_MQTT_PORT,
+                    username=self.app_key,
+                    password=token,
+                    tls_context=tls_context,
+                    keepalive=60,
+                ) as client:
+                    self.log("SigenergyAPI: MQTT connected to {}:{}".format(self.mqtt_host, SIGENERGY_MQTT_PORT))
+                    for topic in topics:
+                        await client.subscribe(topic)
+
+                    sub_payload = json.dumps({"accessToken": token, "systemIdList": system_id_list})
+                    for sub_topic in ("openapi/subscription/period", "openapi/subscription/change", "openapi/subscription/alarm"):
+                        await client.publish(sub_topic, payload=sub_payload, qos=1)
+                    self.log("SigenergyAPI: MQTT subscriptions published for {} system(s)".format(len(system_id_list)))
+
+                    async for message in client.messages:
+                        if self.api_stop:
+                            break
+                        self.last_mqtt_update = time.time()
+
+                        # Parse topic: openapi/{type}/{app_key}/{system_id}
+                        topic_str = str(message.topic)
+                        parts = topic_str.split("/")
+                        # Expected: ['openapi', type, app_key, system_id]
+                        if len(parts) < 4:
+                            continue
+                        msg_type = parts[1]   # change / period / alarm
+                        msg_sid = parts[3]    # system ID
+
+                        # Decode payload
+                        raw = message.payload if isinstance(message.payload, (bytes, bytearray)) else str(message.payload).encode()
+                        try:
+                            payload = json.loads(raw.decode("utf-8", errors="replace"))
+                        except (json.JSONDecodeError, ValueError):
+                            self.log("Warn: SigenergyAPI: MQTT non-JSON payload on {}: {}".format(topic_str, raw[:120]))
+                            continue
+
+                        # Each message is a list of device-level entries; process each
+                        entries = payload if isinstance(payload, list) else [payload]
+                        for entry in entries:
+                            entry_sid = entry.get("systemId", msg_sid)
+                            value_dict = entry.get("value", {})
+                            self.log("SigenergyAPI: MQTT message on {} for system {}: type={} value={}".format(topic_str, entry_sid, msg_type, value_dict))
+                            if msg_type == "period":
+                                self._handle_mqtt_period(entry_sid, value_dict)
+                                if self.api_started:
+                                    await self.publish_system_entities(entry_sid)
+                            elif msg_type == "change":
+                                self._handle_mqtt_change(entry_sid, value_dict)
+                                if self.api_started:
+                                    await self.publish_controls(entry_sid)
+                                    await self.publish_system_entities(entry_sid)
+                            elif msg_type == "alarm":
+                                self._handle_mqtt_alarm(entry_sid, entries)
+
+                # Broker closed connection cleanly
+                self.log("Warn: SigenergyAPI: MQTT connection closed by broker — reconnecting in {}s".format(reconnect_delay))
+                await asyncio.sleep(reconnect_delay)
+
+            except aiomqtt.MqttError as e:
+                self.log("Warn: SigenergyAPI: MQTT error: {} — reconnecting in {}s".format(e, reconnect_delay))
+                await asyncio.sleep(reconnect_delay)
+            except asyncio.CancelledError:
+                self.log("SigenergyAPI: MQTT listener cancelled")
+                return
+            except Exception as e:
+                self.log("Warn: SigenergyAPI: MQTT unexpected error ({}): {} — reconnecting in {}s".format(type(e).__name__, e, reconnect_delay))
+                await asyncio.sleep(reconnect_delay)
+
+        self.log("SigenergyAPI: MQTT listener stopped")
 
     async def publish_system_entities(self, system_id):
         """Publish Home Assistant entities for a system.
@@ -1533,6 +1841,16 @@ class SigenergyAPI(ComponentBase):
                 self.log("Warn: SigenergyAPI: Failed to discover systems, will retry")
                 return False
 
+        # Start (or restart) the background MQTT listener task after systems are known
+        if self.systems and (self._mqtt_task is None or self._mqtt_task.done()):
+            if self._mqtt_task is not None and self._mqtt_task.done():
+                exc = self._mqtt_task.exception() if not self._mqtt_task.cancelled() else None
+                if exc:
+                    self.log("Warn: SigenergyAPI: MQTT listener task exited with error: {} — restarting".format(exc))
+                else:
+                    self.log("SigenergyAPI: MQTT listener task ended — restarting")
+            self._mqtt_task = asyncio.ensure_future(self._mqtt_listener_loop())
+
         # Refresh device inventory periodically
         if first or seconds % SIGENERGY_DEVICE_POLL_INTERVAL == 0:
             for sid in list(self.systems.keys()):
@@ -1544,11 +1862,17 @@ class SigenergyAPI(ComponentBase):
                 await self.fetch_controls(sid)
             await self.publish_controls()
 
-        # Realtime data refresh
+        # Realtime data refresh — skip live power/SOC fetch when MQTT is providing fresh data
         if first or seconds % SIGENERGY_POLL_INTERVAL == 0:
+            mqtt_age = time.time() - self.last_mqtt_update
+            mqtt_fresh = self.last_mqtt_update > 0 and mqtt_age < SIGENERGY_POLL_INTERVAL
             for sid in list(self.systems.keys()):
-                if not await self.fetch_inverter_realtime(sid):
-                    await self.fetch_energy_flow(sid)
+                if mqtt_fresh:
+                    self.log("SigenergyAPI: Skipping REST energy poll for {} (MQTT data {:.0f}s old)".format(sid, mqtt_age))
+                else:
+                    if not await self.fetch_inverter_realtime(sid):
+                        await self.fetch_energy_flow(sid)
+                # Always poll daily summary — not provided by MQTT
                 await self.fetch_daily_summary(sid)
 
         # Publish entities
@@ -1572,6 +1896,17 @@ class SigenergyAPI(ComponentBase):
 
         self.update_success_timestamp()
         return True
+
+    async def final(self):
+        """Cancel the background MQTT listener task on component shutdown."""
+        if self._mqtt_task is not None and not self._mqtt_task.done():
+            self.log("SigenergyAPI: Cancelling MQTT listener task")
+            self._mqtt_task.cancel()
+            try:
+                await self._mqtt_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self.log("SigenergyAPI: final() complete")
 
 
 class MockBase:  # pragma: no cover
@@ -1769,27 +2104,21 @@ async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode
 async def test_mqtt_connection(app_key, app_secret, base_url, system_id=None, topic_filter=None, ca_cert=None, client_cert=None, client_key=None):  # pragma: no cover
     """Connect to the Sigenergy MQTT broker, request push data, and print all incoming messages.
 
-    Authenticates using app_key/app_secret, then:
-      1. Subscribes at MQTT protocol level to *topic_filter* to receive all broker messages.
-      2. Publishes to ``openapi/subscription/period`` with the Sigenergy subscription
-         request payload (accessToken + systemIdList) so the broker starts pushing
-         periodic telemetry data.
-      3. Prints every received message to stdout until the user presses Ctrl+C.
-
-    The subscription payload follows the spec at
-    https://developer.sigencloud.com/user/api/document/45:
-      { "accessToken": "<token>", "systemIdList": ["<id>", ...] }
+    Delegates to ``SigenergyAPI._mqtt_listener_loop()`` which is the single
+    implementation of the reconnect/subscribe/dispatch logic used by both the
+    test CLI and the live component.  Received messages are printed to stdout
+    via ``SigenergyAPI.log()`` (which maps to ``print()`` in the mock base).
 
     Args:
         app_key: Sigenergy Application Key.
         app_secret: Sigenergy Application Secret.
         base_url: REST API base URL (MQTT host is derived from this).
         system_id: Optional system ID (or comma-separated list) to subscribe to.
-                   When None, a full system scan is performed first to discover
-                   all authorised system IDs.
-        topic_filter: MQTT protocol-level topic filter.  When None the function
-                      builds per-app-key wildcard topics for change, period and
-                      alarm data.  Pass '#' to receive every broker message.
+        topic_filter: Unused in this implementation; wildcard topics are built
+                      automatically from the app_key.
+        ca_cert: Path to CA certificate PEM file for TLS verification.
+        client_cert: Path to client certificate PEM file for mutual TLS.
+        client_key: Path to client private key PEM file for mutual TLS.
 
     Returns:
         0 on clean exit, 1 on error.
@@ -1802,13 +2131,6 @@ async def test_mqtt_connection(app_key, app_secret, base_url, system_id=None, to
     print("Sigenergy MQTT test mode")
     print("Base URL : {}".format(base_url))
     print("App Key  : {}...".format(app_key[:10] if len(app_key) >= 10 else app_key))
-    default_topics = [
-        SIGENERGY_MQTT_TOPIC_CHANGE.format(app_key=app_key, system_id="#"),
-        SIGENERGY_MQTT_TOPIC_PERIOD.format(app_key=app_key, system_id="#"),
-        SIGENERGY_MQTT_TOPIC_ALARM.format(app_key=app_key, system_id="#"),
-    ]
-    topics_to_subscribe = [topic_filter] if topic_filter else default_topics
-    print("Topics   : {}".format(", ".join(topics_to_subscribe)))
     print("{}\n".format("=" * 60))
 
     mock_base = MockBase()
@@ -1823,6 +2145,7 @@ async def test_mqtt_connection(app_key, app_secret, base_url, system_id=None, to
         system_id=system_id,
     )
 
+    # Authenticate and discover systems so the listener knows what to subscribe to
     token = await sig.get_access_token()
     if not token:
         print("x Authentication failed")
@@ -1834,95 +2157,30 @@ async def test_mqtt_connection(app_key, app_secret, base_url, system_id=None, to
     if sig.client_cert:
         print("+ Client cert: {}".format(sig.client_cert))
 
-    # Resolve system ID list for the subscription request
     if system_id:
-        system_id_list = [s.strip() for s in system_id.split(",") if s.strip()]
+        # Populate systems dict from the provided IDs so the listener uses them
+        for sid in [s.strip() for s in system_id.split(",") if s.strip()]:
+            if sid not in sig.systems:
+                sig.systems[sid] = {}
     else:
         print("+ No --system-id provided; scanning for authorised systems ...")
         await sig.fetch_system_list()
-        system_id_list = list(sig.systems.keys())
-        if not system_id_list:
+        if not sig.systems:
             print("x No systems found; cannot build subscription request")
             return 1
-        print("+ Found systems: {}".format(system_id_list))
+        print("+ Found systems: {}".format(list(sig.systems.keys())))
 
-    mqtt_host = sig.mqtt_host
-    print("+ Connecting to MQTT broker {}:{} (TLS) ...".format(mqtt_host, SIGENERGY_MQTT_PORT))
+    print("+ Topics: change, period, alarm for app_key wildcard")
+    print("+ Waiting for messages (Ctrl+C to stop) ...\n")
 
-    tls_context = sig._build_tls_context()
-    reconnect_delay = 5
-    attempt = 0
+    # Run the shared listener loop — it handles reconnect, subscribe, dispatch
+    # and prints via self.log() → MockBase.log() → print()
+    sig.api_stop = False
     try:
-        while True:
-            attempt += 1
-            ts = datetime.now().strftime("%H:%M:%S")
-            print("[{}] Connection attempt #{} ...".format(ts, attempt))
-            try:
-                # Refresh token on each (re)connect in case it expired
-                print("[{}] Refreshing access token ...".format(datetime.now().strftime("%H:%M:%S")))
-                token = await sig.get_access_token()
-                if not token:
-                    print("[{}] x Token refresh failed; retrying in {}s ...".format(datetime.now().strftime("%H:%M:%S"), reconnect_delay))
-                    await asyncio.sleep(reconnect_delay)
-                    continue
-                print("[{}] Token OK".format(datetime.now().strftime("%H:%M:%S")))
-
-                print("[{}] Opening MQTT connection ...".format(datetime.now().strftime("%H:%M:%S")))
-                async with aiomqtt.Client(
-                    hostname=sig.mqtt_host,
-                    port=SIGENERGY_MQTT_PORT,
-                    username=app_key,
-                    password=token,
-                    tls_context=tls_context,
-                    keepalive=60,
-                ) as client:
-                    print("[{}] MQTT connected".format(datetime.now().strftime("%H:%M:%S")))
-                    # MQTT protocol-level subscribe to the relevant topics
-                    for topic in topics_to_subscribe:
-                        await client.subscribe(topic)
-                        print("[{}] + Subscribed to '{}'".format(datetime.now().strftime("%H:%M:%S"), topic))
-
-                    # Sigenergy application-level subscriptions: publish to each subscription topic
-                    # so the broker starts pushing the respective data types.
-                    sub_payload = {"accessToken": token, "systemIdList": system_id_list}
-                    sub_json = json.dumps(sub_payload)
-                    for sub_topic in ("openapi/subscription/period", "openapi/subscription/change", "openapi/subscription/alarm"):
-                        await client.publish(sub_topic, payload=sub_json, qos=1)
-                        print("[{}] + Published subscription: {}".format(datetime.now().strftime("%H:%M:%S"), sub_topic))
-                    print("[{}] Waiting for messages (Ctrl+C to stop) ...\n".format(datetime.now().strftime("%H:%M:%S")))
-
-                    async for message in client.messages:
-                        payload_bytes = message.payload if isinstance(message.payload, (bytes, bytearray)) else str(message.payload).encode()
-                        payload_str = payload_bytes.decode("utf-8", errors="replace")
-                        try:
-                            payload_display = json.dumps(json.loads(payload_str), indent=2)
-                        except (json.JSONDecodeError, ValueError):
-                            payload_display = payload_str
-                        print("[{}] Topic: {}".format(datetime.now().strftime("%H:%M:%S.%f")[:-3], message.topic))
-                        print("    QoS: {}  Retain: {}".format(message.qos, message.retain))
-                        print("    Payload: {}".format(payload_display))
-                        print()
-
-                    # If we reach here the broker closed the connection cleanly (no exception)
-                    print("[{}] ! MQTT message loop ended (broker closed connection) — reconnecting in {}s ...".format(datetime.now().strftime("%H:%M:%S"), reconnect_delay))
-                    await asyncio.sleep(reconnect_delay)
-
-            except aiomqtt.MqttError as e:
-                import traceback
-                print("[{}] ! MqttError: {} — reconnecting in {}s ...".format(datetime.now().strftime("%H:%M:%S"), e, reconnect_delay))
-                print(traceback.format_exc())
-                await asyncio.sleep(reconnect_delay)
-            except Exception as e:
-                import traceback
-                print("[{}] ! Unexpected error ({}): {} — reconnecting in {}s ...".format(datetime.now().strftime("%H:%M:%S"), type(e).__name__, e, reconnect_delay))
-                print(traceback.format_exc())
-                await asyncio.sleep(reconnect_delay)
-
+        await sig._mqtt_listener_loop()
     except KeyboardInterrupt:
+        sig.api_stop = True
         print("\n[{}] Ctrl+C received".format(datetime.now().strftime("%H:%M:%S")))
-        
-    print("\n+ MQTT test session ended")
-    return 0
 
 
 def main():  # pragma: no cover
