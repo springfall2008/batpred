@@ -69,6 +69,7 @@ from component_base import ComponentBase
 # ---------------------------------------------------------------------------
 
 SIGENERGY_DEFAULT_BASE_URL = "https://openapi-eu.sigencloud.com"  # cspell:disable-line
+SIGENERGY_DEFAULT_MQTT_HOST = "mqtt-eu.sigencloud.com"  # cspell:disable-line
 SIGENERGY_TIMEOUT = 20                # seconds per HTTP request
 SIGENERGY_MAX_RETRIES = 5  # must be >= len(SIGENERGY_RATE_LIMIT_BACKOFF) for full backoff coverage
 SIGENERGY_COMMAND_RETRY_DELAY = 2.0
@@ -113,6 +114,12 @@ SIGENERGY_DEVICE_POLL_INTERVAL = 1800  # device list refresh every 30 minutes
 SIGENERGY_RATE_LIMIT_BACKOFF = [15, 30, 60, 120, 480]  # seconds to wait after code 1201
 SIGENERGY_BATTERY_NOMINAL_VOLTAGE_V = 28.8  # 8S LiFePO4 pack: 8 × 3.6V; used to convert ratedEnergy (Ah) → kWh
 SIGENERGY_MQTT_PORT = 8883             # TLS MQTT port on the Sigenergy broker
+
+# MQTT topic patterns — format with app_key and system_id
+SIGENERGY_MQTT_TOPIC_CHANGE = "openapi/change/{app_key}/{system_id}"    # system data (device state)
+SIGENERGY_MQTT_TOPIC_PERIOD = "openapi/period/{app_key}/{system_id}"    # telemetry data
+SIGENERGY_MQTT_TOPIC_ALARM = "openapi/alarm/{app_key}/{system_id}"      # alarm data
+SIGENERGY_MQTT_TOPIC_COMMAND = "openapi/instruction/command"            # battery command publish
 
 # Operating mode enums (REST mode switch endpoint — MSC and FFG only; NBI is not used)
 SIGENERGY_MODE_MSC = 0   # Maximum Self-Consumption (eco)
@@ -162,13 +169,18 @@ class SigenergyAPI(ComponentBase):
     control commands on behalf of Predbat's planner.
     """
 
-    def initialize(self, app_key, app_secret, base_url=None, system_id=None, automatic=False, enable_controls=True, **kwargs):
+    def initialize(self, app_key, app_secret, base_url=None, mqtt_host=None, ca_cert=None, client_cert=None, client_key=None, system_id=None, automatic=False, enable_controls=True, **kwargs):
         """Initialise the Sigenergy API component.
 
         Args:
             app_key: Sigenergy Application Key (from Control Center → Settings).
             app_secret: Sigenergy Application Secret.
             base_url: Override the API base URL (default: SIGENERGY_DEFAULT_BASE_URL).
+            mqtt_host: Override the MQTT broker hostname (default: derived from SIGENERGY_DEFAULT_MQTT_HOST
+                       by replacing the regional prefix to match *base_url*).
+            ca_cert: Path to CA certificate PEM file for verifying the broker's TLS certificate.
+            client_cert: Path to client certificate PEM file for mutual TLS authentication.
+            client_key: Path to client private key file for mutual TLS authentication.
             system_id: Optional system ID filter.  When None all authorised
                        systems are used.  When a string or list, only matching
                        systems are used.
@@ -185,9 +197,18 @@ class SigenergyAPI(ComponentBase):
         self.app_key = app_key
         self.app_secret = app_secret
         self.base_url = (base_url or SIGENERGY_DEFAULT_BASE_URL).rstrip("/")
-        # Derive MQTT hostname from REST base URL (strip scheme, no port suffix needed)
-        self.mqtt_host = self.base_url.replace("https://", "").replace("http://", "").rstrip("/")
+        # MQTT broker is on a dedicated host separate from the REST endpoint.
+        # Derive it from the REST hostname by replacing the 'openapi-' prefix with 'mqtt-'
+        # (e.g. openapi-eu.sigencloud.com → mqtt-eu.sigencloud.com) unless overridden.
+        if mqtt_host:
+            self.mqtt_host = mqtt_host
+        else:
+            rest_host = self.base_url.replace("https://", "").replace("http://", "").rstrip("/")
+            self.mqtt_host = rest_host.replace("openapi-", "mqtt-", 1) if rest_host.startswith("openapi-") else SIGENERGY_DEFAULT_MQTT_HOST
         self.mqtt_port = SIGENERGY_MQTT_PORT
+        self.ca_cert = ca_cert or self.get_arg("sigenergy_ca_pem", None)
+        self.client_cert = client_cert or self.get_arg("sigenergy_client_pem", None)
+        self.client_key = client_key or self.get_arg("sigenergy_client_key", None)
         self.automatic = automatic
         self.enable_controls = enable_controls
 
@@ -717,7 +738,7 @@ class SigenergyAPI(ComponentBase):
         """
         if isinstance(system_ids, str):
             system_ids = [system_ids]
-        payload = {"systemIds": system_ids}
+        payload = system_ids
         self.log("SigenergyAPI: Offboarding systems: {}".format(system_ids))
         result = await self._request("POST", "/openapi/board/offboard", json_data=payload)
         if result is None:
@@ -725,6 +746,28 @@ class SigenergyAPI(ComponentBase):
             return None
         self.log("SigenergyAPI: Offboard completed for {}: {}".format(system_ids, result))
         return result
+
+    def _build_tls_context(self):
+        """Build an SSL context for the MQTT connection.
+
+        Uses ca_cert if provided (for custom/self-signed CA), otherwise the
+        system default trust store.  Loads client_cert + client_key when both
+        are provided (mutual TLS).
+
+        Returns:
+            ssl.SSLContext ready for use with aiomqtt.
+        """
+        if self.ca_cert:
+            tls_context = ssl.create_default_context(cafile=self.ca_cert)
+            # Relax strict RFC 5280 key-usage enforcement; Sigenergy's CA cert
+            # may not include the keyUsage/basicConstraints extensions that
+            # Python 3.14+ enforces by default.
+            tls_context.verify_flags = ssl.VERIFY_DEFAULT
+        else:
+            tls_context = ssl.create_default_context()
+        if self.client_cert and self.client_key:
+            tls_context.load_cert_chain(certfile=self.client_cert, keyfile=self.client_key)
+        return tls_context
 
     async def _publish_mqtt(self, topic, payload_dict):
         """Publish a JSON payload to the Sigenergy MQTT broker.
@@ -743,7 +786,7 @@ class SigenergyAPI(ComponentBase):
             True on success, False on failure.
         """
         try:
-            tls_context = ssl.create_default_context()
+            tls_context = self._build_tls_context()
             async with aiomqtt.Client(
                 hostname=self.mqtt_host,
                 port=self.mqtt_port,
@@ -793,7 +836,7 @@ class SigenergyAPI(ComponentBase):
         self.log("SigenergyAPI: Sending MQTT battery command {} ({} min, {:.2f}kW) to system {}".format(
             active_mode, duration_minutes, charging_power_kw or 0.0, system_id))
 
-        return await self._publish_mqtt("openapi/instruction/command", payload)
+        return await self._publish_mqtt(SIGENERGY_MQTT_TOPIC_COMMAND, payload)
 
     # -----------------------------------------------------------------------
     # HA entity publishing
@@ -1564,7 +1607,7 @@ class MockBase:  # pragma: no cover
             print("  Attributes: {}".format(json.dumps(display, indent=2, default=str)))
         self.set_state_wrapper(entity_id, state, attributes)
 
-    def get_arg(self, key, default=None):
+    def get_arg(self, arg, default=None, indirect=False, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
         """Return arg default (mock always returns default)."""
         return default
 
@@ -1577,7 +1620,7 @@ class MockBase:  # pragma: no cover
         """No-op success timestamp update."""
 
 
-async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode, action=None):  # pragma: no cover
+async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode, action=None, mqtt_host=None, ca_cert=None, client_cert=None, client_key=None):  # pragma: no cover
     """Run one cycle of the Sigenergy API and optionally test a control mode or boarding action.
 
     Args:
@@ -1607,6 +1650,10 @@ async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode
         app_key=app_key,
         app_secret=app_secret,
         base_url=base_url,
+        mqtt_host=mqtt_host,
+        ca_cert=ca_cert,
+        client_cert=client_cert,
+        client_key=client_key,
         system_id=system_id,
         automatic=True,
         enable_controls=(test_mode is not None),
@@ -1719,7 +1766,7 @@ async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode
     return 0
 
 
-async def test_mqtt_connection(app_key, app_secret, base_url, system_id=None, topic_filter="#"):  # pragma: no cover
+async def test_mqtt_connection(app_key, app_secret, base_url, system_id=None, topic_filter=None, ca_cert=None, client_cert=None, client_key=None):  # pragma: no cover
     """Connect to the Sigenergy MQTT broker, request push data, and print all incoming messages.
 
     Authenticates using app_key/app_secret, then:
@@ -1740,7 +1787,9 @@ async def test_mqtt_connection(app_key, app_secret, base_url, system_id=None, to
         system_id: Optional system ID (or comma-separated list) to subscribe to.
                    When None, a full system scan is performed first to discover
                    all authorised system IDs.
-        topic_filter: MQTT protocol-level topic filter (default '#' = all topics).
+        topic_filter: MQTT protocol-level topic filter.  When None the function
+                      builds per-app-key wildcard topics for change, period and
+                      alarm data.  Pass '#' to receive every broker message.
 
     Returns:
         0 on clean exit, 1 on error.
@@ -1753,7 +1802,13 @@ async def test_mqtt_connection(app_key, app_secret, base_url, system_id=None, to
     print("Sigenergy MQTT test mode")
     print("Base URL : {}".format(base_url))
     print("App Key  : {}...".format(app_key[:10] if len(app_key) >= 10 else app_key))
-    print("Topic    : {}".format(topic_filter))
+    default_topics = [
+        SIGENERGY_MQTT_TOPIC_CHANGE.format(app_key=app_key, system_id="#"),
+        SIGENERGY_MQTT_TOPIC_PERIOD.format(app_key=app_key, system_id="#"),
+        SIGENERGY_MQTT_TOPIC_ALARM.format(app_key=app_key, system_id="#"),
+    ]
+    topics_to_subscribe = [topic_filter] if topic_filter else default_topics
+    print("Topics   : {}".format(", ".join(topics_to_subscribe)))
     print("{}\n".format("=" * 60))
 
     mock_base = MockBase()
@@ -1762,6 +1817,9 @@ async def test_mqtt_connection(app_key, app_secret, base_url, system_id=None, to
         app_key=app_key,
         app_secret=app_secret,
         base_url=base_url,
+        ca_cert=ca_cert,
+        client_cert=client_cert,
+        client_key=client_key,
         system_id=system_id,
     )
 
@@ -1770,6 +1828,11 @@ async def test_mqtt_connection(app_key, app_secret, base_url, system_id=None, to
         print("x Authentication failed")
         return 1
     print("+ Authentication successful")
+    print("+ MQTT broker: {}:{}".format(sig.mqtt_host, SIGENERGY_MQTT_PORT))
+    if sig.ca_cert:
+        print("+ CA cert    : {}".format(sig.ca_cert))
+    if sig.client_cert:
+        print("+ Client cert: {}".format(sig.client_cert))
 
     # Resolve system ID list for the subscription request
     if system_id:
@@ -1786,40 +1849,77 @@ async def test_mqtt_connection(app_key, app_secret, base_url, system_id=None, to
     mqtt_host = sig.mqtt_host
     print("+ Connecting to MQTT broker {}:{} (TLS) ...".format(mqtt_host, SIGENERGY_MQTT_PORT))
 
-    tls_context = ssl.create_default_context()
+    tls_context = sig._build_tls_context()
+    reconnect_delay = 5
+    attempt = 0
     try:
-        async with aiomqtt.Client(
-            hostname=mqtt_host,
-            port=SIGENERGY_MQTT_PORT,
-            username=app_key,
-            password=token,
-            tls_context=tls_context,
-            keepalive=60,
-        ) as client:
-            # MQTT protocol-level subscribe so we receive everything the broker sends us
-            await client.subscribe(topic_filter)
-            print("+ MQTT subscribe to '{}' OK".format(topic_filter))
+        while True:
+            attempt += 1
+            ts = datetime.now().strftime("%H:%M:%S")
+            print("[{}] Connection attempt #{} ...".format(ts, attempt))
+            try:
+                # Refresh token on each (re)connect in case it expired
+                print("[{}] Refreshing access token ...".format(datetime.now().strftime("%H:%M:%S")))
+                token = await sig.get_access_token()
+                if not token:
+                    print("[{}] x Token refresh failed; retrying in {}s ...".format(datetime.now().strftime("%H:%M:%S"), reconnect_delay))
+                    await asyncio.sleep(reconnect_delay)
+                    continue
+                print("[{}] Token OK".format(datetime.now().strftime("%H:%M:%S")))
 
-            # Sigenergy application-level subscription: publish to openapi/subscription/period
-            # so the broker starts pushing periodic telemetry (spec doc 45)
-            sub_payload = {"accessToken": token, "systemIdList": system_id_list}
-            await client.publish("openapi/subscription/period", payload=json.dumps(sub_payload), qos=1)
-            print("+ Published subscription request for systems: {}".format(system_id_list))
-            print("  Waiting for messages (Ctrl+C to stop) ...\n")
+                print("[{}] Opening MQTT connection ...".format(datetime.now().strftime("%H:%M:%S")))
+                async with aiomqtt.Client(
+                    hostname=sig.mqtt_host,
+                    port=SIGENERGY_MQTT_PORT,
+                    username=app_key,
+                    password=token,
+                    tls_context=tls_context,
+                    keepalive=60,
+                ) as client:
+                    print("[{}] MQTT connected".format(datetime.now().strftime("%H:%M:%S")))
+                    # MQTT protocol-level subscribe to the relevant topics
+                    for topic in topics_to_subscribe:
+                        await client.subscribe(topic)
+                        print("[{}] + Subscribed to '{}'".format(datetime.now().strftime("%H:%M:%S"), topic))
 
-            async for message in client.messages:
-                payload_bytes = message.payload if isinstance(message.payload, (bytes, bytearray)) else str(message.payload).encode()
-                payload_str = payload_bytes.decode("utf-8", errors="replace")
-                try:
-                    payload_display = json.dumps(json.loads(payload_str), indent=2)
-                except (json.JSONDecodeError, ValueError):
-                    payload_display = payload_str
-                print("[{}] Topic: {}".format(datetime.now().strftime("%H:%M:%S.%f")[:-3], message.topic))
-                print("    QoS: {}  Retain: {}".format(message.qos, message.retain))
-                print("    Payload: {}".format(payload_display))
-                print()
+                    # Sigenergy application-level subscriptions: publish to each subscription topic
+                    # so the broker starts pushing the respective data types.
+                    sub_payload = {"accessToken": token, "systemIdList": system_id_list}
+                    sub_json = json.dumps(sub_payload)
+                    for sub_topic in ("openapi/subscription/period", "openapi/subscription/change", "openapi/subscription/alarm"):
+                        await client.publish(sub_topic, payload=sub_json, qos=1)
+                        print("[{}] + Published subscription: {}".format(datetime.now().strftime("%H:%M:%S"), sub_topic))
+                    print("[{}] Waiting for messages (Ctrl+C to stop) ...\n".format(datetime.now().strftime("%H:%M:%S")))
+
+                    async for message in client.messages:
+                        payload_bytes = message.payload if isinstance(message.payload, (bytes, bytearray)) else str(message.payload).encode()
+                        payload_str = payload_bytes.decode("utf-8", errors="replace")
+                        try:
+                            payload_display = json.dumps(json.loads(payload_str), indent=2)
+                        except (json.JSONDecodeError, ValueError):
+                            payload_display = payload_str
+                        print("[{}] Topic: {}".format(datetime.now().strftime("%H:%M:%S.%f")[:-3], message.topic))
+                        print("    QoS: {}  Retain: {}".format(message.qos, message.retain))
+                        print("    Payload: {}".format(payload_display))
+                        print()
+
+                    # If we reach here the broker closed the connection cleanly (no exception)
+                    print("[{}] ! MQTT message loop ended (broker closed connection) — reconnecting in {}s ...".format(datetime.now().strftime("%H:%M:%S"), reconnect_delay))
+                    await asyncio.sleep(reconnect_delay)
+
+            except aiomqtt.MqttError as e:
+                import traceback
+                print("[{}] ! MqttError: {} — reconnecting in {}s ...".format(datetime.now().strftime("%H:%M:%S"), e, reconnect_delay))
+                print(traceback.format_exc())
+                await asyncio.sleep(reconnect_delay)
+            except Exception as e:
+                import traceback
+                print("[{}] ! Unexpected error ({}): {} — reconnecting in {}s ...".format(datetime.now().strftime("%H:%M:%S"), type(e).__name__, e, reconnect_delay))
+                print(traceback.format_exc())
+                await asyncio.sleep(reconnect_delay)
+
     except KeyboardInterrupt:
-        pass
+        print("\n[{}] Ctrl+C received".format(datetime.now().strftime("%H:%M:%S")))
 
     print("\n+ MQTT test session ended")
     return 0
@@ -1841,7 +1941,12 @@ def main():  # pragma: no cover
         choices=["eco", "charge", "freeze_charge", "export", "freeze_export"],
         help="Control mode to test",
     )
-    parser.add_argument("--mqtt-topic", default="#", help="MQTT topic filter used with --mqtt-test (default: '#' = all topics)")
+    parser.add_argument("--mqtt-host", default=None, help="Override MQTT broker hostname (default: derived from --base-url)")
+    parser.add_argument("--mqtt-topic", default=None, help="MQTT topic filter for --mqtt-test; omit to use per-app-key topic patterns")
+    parser.add_argument("--cert-dir", default=None, help="Directory containing ca.pem, client.pem and client.key TLS certificate files")
+    parser.add_argument("--ca-cert", default=None, help="Path to CA certificate PEM file (overrides --cert-dir/ca.pem)")
+    parser.add_argument("--client-cert", default=None, help="Path to client certificate PEM file (overrides --cert-dir/client.pem)")
+    parser.add_argument("--client-key", default=None, help="Path to client private key file (overrides --cert-dir/client.key)")
 
     action_group = parser.add_mutually_exclusive_group()
     action_group.add_argument(
@@ -1861,11 +1966,18 @@ def main():  # pragma: no cover
     )
 
     args = parser.parse_args()
+
+    # Resolve TLS certificate paths — individual flags override cert-dir
+    import os
+    ca_cert = args.ca_cert or (os.path.join(args.cert_dir, "ca.pem") if args.cert_dir else None)
+    client_cert = args.client_cert or (os.path.join(args.cert_dir, "client.pem") if args.cert_dir else None)
+    client_key = args.client_key or (os.path.join(args.cert_dir, "client.key") if args.cert_dir else None)
+
     if args.mqtt_test:
-        result = asyncio.run(test_mqtt_connection(args.app_key, args.app_secret, args.base_url, args.system_id, args.mqtt_topic))
+        result = asyncio.run(test_mqtt_connection(args.app_key, args.app_secret, args.base_url, args.system_id, args.mqtt_topic, ca_cert=ca_cert, client_cert=client_cert, client_key=client_key))
     else:
         action = "onboard" if args.onboard else ("offboard" if args.offboard else None)
-        result = asyncio.run(test_sigenergy_api(args.app_key, args.app_secret, args.base_url, args.system_id, args.test_mode, action))
+        result = asyncio.run(test_sigenergy_api(args.app_key, args.app_secret, args.base_url, args.system_id, args.test_mode, action, mqtt_host=args.mqtt_host, ca_cert=ca_cert, client_cert=client_cert, client_key=client_key))
     raise SystemExit(result or 0)
 
 
