@@ -392,7 +392,7 @@ class Prediction:
         """
 
         # Enforce clipping buffer on grid charging
-        if self.clipping_buffer_kwh > 0:
+        if self.clipping_buffer_kwh > 0 and self.clipping_buffer_end is not None:
             charge_limit = list(charge_limit)
             for n, window in enumerate(charge_window):
                 if window["end"] <= self.clipping_buffer_end:
