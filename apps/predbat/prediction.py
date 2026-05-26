@@ -683,16 +683,36 @@ class Prediction:
             # Use hierarchical clipping limit
             # Scale limit by step to match pv_now (which is total over the step)
             sim_clipping_limit = self.clipping_limit * step
+            this_minute_clipped = 0
             if sim_clipping_limit > 0 and pv_now > sim_clipping_limit:
-                excess_clipped = pv_now - sim_clipping_limit
-                clipped_today += excess_clipped
+                this_minute_clipped = pv_now - sim_clipping_limit
+                clipped_today += this_minute_clipped
                 pv_now = sim_clipping_limit
                 
                 # Penalize clipping if cost optimal mode is active
                 if self.clipping_buffer_can_discharge == "Cost Optimal":
                     # Value clipped solar at the current export rate
                     current_export_rate = rate_export.get(minute_absolute, 0)
-                    metric += excess_clipped * current_export_rate
+                    metric += this_minute_clipped * current_export_rate
+
+            # Active Mitigation: Create a 'Hole' in the battery
+            soc_max_effective = soc_max
+            is_before_clipping = self.clipping_buffer_start is not None and minute_absolute < self.clipping_buffer_start
+            is_during_clipping = self.clipping_buffer_start is not None and self.clipping_buffer_end is not None and minute_absolute >= self.clipping_buffer_start and minute_absolute <= self.clipping_buffer_end
+
+            if self.clipping_buffer_kwh > 0 and (is_before_clipping or is_during_clipping):
+                # Hard reservation: Normal charging (solar/grid) stops at target
+                target_soc = max(0, soc_max - self.clipping_buffer_kwh)
+                soc_max_effective = target_soc
+                
+                # Always mode: Force discharge if above target
+                if self.clipping_buffer_can_discharge == "Always":
+                    if soc > target_soc:
+                        can_discharge_kwh = (soc - target_soc) * battery_loss_discharge
+                        max_discharge_step = battery_rate_max_discharge * step
+                        if battery_draw < max_discharge_step:
+                            battery_draw = min(max_discharge_step, battery_draw + can_discharge_kwh)
+                            battery_state = "purge"
 
             # Modelling reset of charge/discharge rate
             if set_charge_window or set_export_window:
@@ -1065,7 +1085,23 @@ class Prediction:
             if battery_draw > 0:
                 soc = max(soc - battery_draw / battery_loss_discharge, reserve_expected)
             else:
-                soc = min(soc - battery_draw * battery_loss, soc_max)
+                # Normal charging is capped at effective ceiling (target SOC)
+                soc = min(soc - battery_draw * battery_loss, soc_max_effective)
+                
+                # Allow clipping energy to soak into the buffer up to physical max
+                # Only if the clipping buffer feature is enabled
+                if self.clipping_buffer_kwh > 0 and this_minute_clipped > 0:
+                    space_in_buffer = max(0, soc_max - soc)
+                    soak_up = min(this_minute_clipped * battery_loss, space_in_buffer)
+                    soc += soak_up
+                    # Reduce reported loss by what we captured
+                    truly_lost = this_minute_clipped - (soak_up / battery_loss)
+                    clipped_today -= soak_up / battery_loss
+                    
+                    # Penalize only the part that was TRULY lost (if cost optimal)
+                    if truly_lost > 0 and self.clipping_buffer_can_discharge == "Cost Optimal":
+                        current_export_rate = rate_export.get(minute_absolute, 0)
+                        metric += truly_lost * current_export_rate
 
             # Iboost finally count
             if self.iboost_enable:

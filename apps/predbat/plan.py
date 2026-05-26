@@ -952,12 +952,6 @@ class Plan:
         self.clipping_remaining_today = clipping_remaining_today
         self.clipping_tomorrow = clipping_tomorrow
 
-        # Use manual overrides if provided, else use auto detection
-        if clipping_start is None:
-            clipping_start = auto_start
-        if clipping_end is None:
-            clipping_end = auto_end
-
         # Apply max cap
         if self.clipping_buffer_max_kwh > 0:
             clipping_kwh = min(clipping_kwh, self.clipping_buffer_max_kwh)
@@ -966,18 +960,41 @@ class Plan:
         if self.clipping_buffer_min_kwh > 0:
             clipping_kwh = max(clipping_kwh, self.clipping_buffer_min_kwh)
 
+        # Determine the active clipping window
+        # Use manual overrides if provided, else use auto detection from forecast
+        final_start = manual_start_minute
+        if final_start is None:
+            final_start = auto_start
+
+        final_end = manual_end_minute
+        if final_end is None:
+            final_end = auto_end
+
+        # If we have a buffer (min floor or forecast) but no window was found,
+        # use a default window to ensure the reservation is enforced in the simulator.
+        if clipping_kwh > 0 and final_start is None:
+            final_start = 8 * 60 # 08:00
+            if final_end is None:
+                final_end = 16 * 60 # 16:00
+
+        # Ensure end is after start
+        if final_start is not None and final_end is not None and final_end < final_start:
+            final_end = final_start + 60
+
+        clipping_start = final_start
+        clipping_end = final_end
+
         if clipping_kwh > 0:
             self.log(
                 "Clipping Buffer: Calculated buffer of {:.2f}kWh based on {}, starts at {}, ends at {}".format(
-                    clipping_kwh, 
-                    forecast_type, 
-                    self.time_abs_str(clipping_start) if clipping_start is not None else "N/A", 
+                    clipping_kwh,
+                    forecast_type,
+                    self.time_abs_str(clipping_start) if clipping_start is not None else "N/A",
                     self.time_abs_str(clipping_end) if clipping_end is not None else "N/A"
                 )
             )
 
         return clipping_kwh, clipping_start, clipping_end
-
     def calculate_plan(self, recompute=True, debug_mode=False, publish=True):
         """
         Calculate the new plan (best)
