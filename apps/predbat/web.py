@@ -3067,9 +3067,6 @@ chart.render();
                     "show": False,
                 }
             ]
-                    "labels_formatter": "return val.toFixed(1) + ' kWh';",
-                }
-            ]
             
             text += self.render_chart(series_data, "kW", "Clipping Analysis", now_str, yaxis_annotations=annotations, xaxis_annotations=xaxis_annotations, extra_yaxis=secondary_axis)
         elif chart == "PVAccuracy":
