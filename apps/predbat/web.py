@@ -1749,7 +1749,7 @@ var options = {
                 text += "       borderColor: '{}',\n".format(ann.get("color", "#FF0000"))
                 text += "       label: {\n"
                 text += "          text: '{}',\n".format(ann.get("text", ""))
-                text += "          style: { background: '{}', color: '#fff' }\n".format(ann.get("color", "#FF0000"))
+                text += "          style: {{ background: '{}', color: '#fff' }}\n".format(ann.get("color", "#FF0000"))
                 text += "       }\n"
                 text += "    },\n"
             text += "   ],\n"
@@ -2987,12 +2987,17 @@ chart.render();
             clipping_forecast.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_tomorrow", subitem), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
             
             # Limits
-            inverter_limit = self.base.pv_ac_limit
+            # Get total inverter limit (kW)
+            inverter_limit_kw = 0.0
+            if self.base.inverters:
+                for inverter in self.base.inverters:
+                    inverter_limit_kw += inverter.inverter_limit * 60.0 # Convert kW/min back to kW
+            
             annotations = []
-            if inverter_limit > 0:
+            if inverter_limit_kw > 0:
                 annotations.append({
-                    "y": inverter_limit,
-                    "text": "Inverter Limit ({} kW)".format(round(inverter_limit, 2)),
+                    "y": inverter_limit_kw,
+                    "text": "Inverter Limit ({} kW)".format(round(inverter_limit_kw, 2)),
                     "color": "#FF0000"
                 })
             
