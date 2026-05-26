@@ -13,6 +13,7 @@ from prediction import wrapped_run_prediction_single, Prediction
 from matplotlib import pyplot as plt
 import asyncio
 import numpy as np
+import os
 from unittest.mock import MagicMock
 
 
@@ -529,9 +530,12 @@ def plot(name, prediction):
     ax.plot(minutes, metric, label="metric")
     ax.set_xticks(range(0, prediction.forecast_minutes, 240))
     ax.set(xlabel="time (minutes)", ylabel="Value", title=name)
-    ax.legend()
+    plt.legend()
     plt.savefig("{}.png".format(name))
-    plt.show()
+    if os.environ.get("PREDBAT_PLOT", False):
+        plt.show()
+    plt.close()
+
 
 
 def simple_scenario(
