@@ -3971,13 +3971,19 @@ class Plan:
                     if self.clipping_buffer_end is not None:
                         clipping_end_iso = (self.midnight_utc + timedelta(minutes=self.clipping_buffer_end)).isoformat()
 
+                    discharge_note = ""
+                    if self.clipping_buffer_can_discharge == "Always":
+                        discharge_note = " (Active discharge enabled)"
+                    elif self.clipping_buffer_can_discharge == "Cost Optimal":
+                        discharge_note = " (Cost-optimal discharge enabled)"
+
                     if start_str and end_str:
-                        clipping_status_text = "{} kWh clipping forecast between {} and {}. Setting charge target to mitigate.".format(
-                            dp2(self.clipping_buffer_kwh), start_str, end_str
+                        clipping_status_text = "{} kWh clipping forecast between {} and {}. Setting charge target to mitigate{}.".format(
+                            dp2(self.clipping_buffer_kwh), start_str, end_str, discharge_note
                         )
                     else:
-                        clipping_status_text = "{} kWh clipping buffer active based on your settings (no immediate clipping forecast).".format(
-                            dp2(self.clipping_buffer_kwh)
+                        clipping_status_text = "{} kWh clipping buffer active based on your settings (no immediate clipping forecast){}.".format(
+                            dp2(self.clipping_buffer_kwh), discharge_note
                         )
 
                 self.dashboard_item(
@@ -3989,6 +3995,9 @@ class Plan:
                         "clipping_start": clipping_start_iso,
                         "clipping_end": clipping_end_iso,
                         "clipping_mode": self.clipping_mode,
+                        "clipping_remaining_today": dp2(self.clipping_remaining_today),
+                        "clipping_tomorrow": dp2(self.clipping_tomorrow),
+                        "clipping_can_discharge": self.clipping_buffer_can_discharge,
                     },
                 )
                 

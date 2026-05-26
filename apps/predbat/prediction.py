@@ -120,8 +120,11 @@ class Prediction:
             self.reserve = base.reserve
             self.clipping_buffer_kwh = getattr(base, "clipping_buffer_kwh", 0)
             self.clipping_buffer_min_kwh = getattr(base, "clipping_buffer_min_kwh", 0)
-            self.clipping_buffer_start = getattr(base, "clipping_buffer_start", 0)
-            self.clipping_buffer_end = getattr(base, "clipping_buffer_end", 0)
+            self.clipping_buffer_start = getattr(base, "clipping_buffer_start", None)
+            self.clipping_buffer_end = getattr(base, "clipping_buffer_end", None)
+            self.clipping_limit = getattr(base, "clipping_limit", 0)
+            self.clipping_mode = getattr(base, "clipping_mode", "")
+            self.clipping_buffer_can_discharge = getattr(base, "clipping_buffer_can_discharge", "None")
             self.metric_standing_charge = base.metric_standing_charge
             self.set_charge_freeze = base.set_charge_freeze
             self.set_reserve_enable = base.set_reserve_enable

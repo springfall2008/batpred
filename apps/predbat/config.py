@@ -1042,6 +1042,15 @@ CONFIG_ITEMS = [
         "enable": "clipping_buffer_enable",
     },
     {
+        "name": "clipping_buffer_can_discharge",
+        "friendly_name": "Clipping Buffer Discharge",
+        "type": "select",
+        "options": ["None", "Cost Optimal", "Always"],
+        "icon": "mdi:battery-arrow-down",
+        "default": "None",
+        "enable": "clipping_buffer_enable",
+    },
+    {
         "name": "clipping_buffer_start_time",
         "friendly_name": "Clipping Buffer Start Time",
         "type": "select",
