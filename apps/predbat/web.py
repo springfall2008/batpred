@@ -3013,12 +3013,16 @@ chart.render();
             soc_kw_h0[now_str] = self.base.soc_kw
 
             # Limits
-            # Get effective limit from logic
-            clipping_limit_watts = getattr(self.base, "clipping_limit", 0.0) * 60.0 * 1000.0 # Convert kW/min to Watts
+            # Get physical inverter limit (kW)
+            inverter_ac_limit_watts = 0.0
+            if self.base.inverters:
+                for inverter in self.base.inverters:
+                    inverter_ac_limit_watts += inverter.inverter_limit * 60.0 * 1000.0
+            inverter_ac_limit_kw = inverter_ac_limit_watts / 1000.0
+
+            # Get effective limit from logic (DNO, Manual, etc)
+            clipping_limit_kw = getattr(self.base, "clipping_limit", 0.0) * 60.0 # internal rate is kW/min
             clipping_mode = getattr(self.base, "clipping_mode", "Inverter Limit")
-            
-            # Convert to kW for kW chart
-            clipping_limit_kw = clipping_limit_watts / 1000.0
             
             annotations = []
             if clipping_limit_kw > 0:
@@ -3028,13 +3032,22 @@ chart.render();
                     "color": "#FF0000"
                 })
             
+            # If the physical inverter limit is different from the effective limit (e.g. DNO limit is lower), show it too
+            if inverter_ac_limit_kw > 0 and abs(inverter_ac_limit_kw - clipping_limit_kw) > 0.1:
+                annotations.append({
+                    "y": inverter_ac_limit_kw,
+                    "text": "Inverter Capacity ({} kW)".format(round(inverter_ac_limit_kw, 2)),
+                    "color": "#999999"
+                })
+            
             # New X-Axis annotations for clipping window
             xaxis_annotations = []
             clipping_start = getattr(self.base, "clipping_buffer_start", None)
             clipping_end = getattr(self.base, "clipping_buffer_end", None)
             if clipping_start is not None and clipping_end is not None:
-                start_dt = self.midnight_utc + timedelta(minutes=clipping_start)
-                end_dt = self.midnight_utc + timedelta(minutes=clipping_end)
+                # Use self.midnight (local) to match the chart's time axis
+                start_dt = self.midnight + timedelta(minutes=clipping_start)
+                end_dt = self.midnight + timedelta(minutes=clipping_end)
                 xaxis_annotations.append({
                     "x": start_dt.strftime(TIME_FORMAT),
                     "text": "Clipping Start",
@@ -3056,15 +3069,10 @@ chart.render();
             secondary_axis = [
                 {
                     "title": "kWh",
-                    "series_name": "Target SOC",
+                    "series_names": ["Target SOC", "Actual SOC"],
                     "decimals": 1,
                     "opposite": True,
                     "labels_formatter": "return val.toFixed(1) + ' kWh';",
-                },
-                {
-                    "title": "kWh",
-                    "series_name": "Actual SOC",
-                    "show": False,
                 }
             ]
             

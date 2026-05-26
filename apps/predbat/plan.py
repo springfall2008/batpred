@@ -902,7 +902,7 @@ class Plan:
         if self.export_limits:
             for limit in self.export_limits:
                 if limit and limit > 0:
-                    grid_export_limit += limit / 1000.0 / 60.0 # W to kW/min
+                    grid_export_limit += limit # Already in kW/min
         
         if grid_export_limit > 0 and grid_export_limit < effective_limit:
             effective_limit = grid_export_limit
@@ -3978,12 +3978,12 @@ class Plan:
                         discharge_note = " (Cost-optimal discharge enabled)"
 
                     if start_str and end_str:
-                        clipping_status_text = "{} kWh clipping forecast between {} and {}. Setting charge target to mitigate{}.".format(
-                            dp2(self.clipping_buffer_kwh), start_str, end_str, discharge_note
+                        clipping_status_text = "{} kWh clipping forecast ({}) between {} and {}. Setting charge target to mitigate{}.".format(
+                            dp2(self.clipping_buffer_kwh), self.clipping_mode, start_str, end_str, discharge_note
                         )
                     else:
-                        clipping_status_text = "{} kWh clipping buffer active based on your settings (no immediate clipping forecast){}.".format(
-                            dp2(self.clipping_buffer_kwh), discharge_note
+                        clipping_status_text = "{} kWh clipping buffer active based on your settings (restricted by {}). No immediate clipping window forecast{}.".format(
+                            dp2(self.clipping_buffer_kwh), self.clipping_mode, discharge_note
                         )
 
                 self.dashboard_item(

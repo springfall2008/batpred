@@ -676,11 +676,17 @@ class Prediction:
             # Count PV kWh
             pv_kwh += pv_now
 
-            # Clip PV for AC-coupled inverters with a PV AC limit (e.g. microinverters).
-            # For non-hybrid systems pv_dc=0 and inverter_loss_ac=1.0, so pv_ac == pv_now; clipping pv_now here is mathematically equivalent to clipping pv_ac in each branch.
-            if not inverter_hybrid and pv_ac_limit > 0 and pv_now > pv_ac_limit:
-                clipped_today += pv_now - pv_ac_limit
-                pv_now = pv_ac_limit
+            # Use hierarchical clipping limit
+            if self.clipping_limit > 0 and pv_now > self.clipping_limit:
+                excess_clipped = pv_now - self.clipping_limit
+                clipped_today += excess_clipped
+                pv_now = self.clipping_limit
+                
+                # Penalize clipping if cost optimal mode is active
+                if self.clipping_buffer_can_discharge == "Cost Optimal":
+                    # Value clipped solar at the current export rate
+                    current_export_rate = rate_export.get(minute_absolute, 0)
+                    metric += excess_clipped * current_export_rate
 
             # Modelling reset of charge/discharge rate
             if set_charge_window or set_export_window:
