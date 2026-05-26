@@ -3001,6 +3001,17 @@ chart.render();
             clipping_forecast = prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_today", subitem), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
             clipping_forecast.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_tomorrow", subitem), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
             
+            soc_kw_best = self.get_entity_results(self.prefix + ".soc_kw_best")
+            
+            soc_kw_h0 = {}
+            if self.base.soc_kwh_history:
+                hist = self.base.soc_kwh_history
+                for minute in range(0, self.minutes_now, self.plan_interval_minutes):
+                    minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
+                    stamp = minute_timestamp.strftime(TIME_FORMAT)
+                    soc_kw_h0[stamp] = hist.get(self.minutes_now - minute, 0)
+            soc_kw_h0[now_str] = self.base.soc_kw
+
             # Limits
             # Get effective limit from logic
             clipping_limit_watts = getattr(self.base, "clipping_limit", 0.0) * 60.0 * 1000.0 # Convert kW/min to Watts
@@ -3036,10 +3047,31 @@ chart.render();
                 })
 
             series_data = [
-                {"name": "PV Power", "data": pv_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#f5c43d"},
-                {"name": "Clipping Forecast (" + clipping_forecast_type + ")", "data": clipping_forecast, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#a8a8a7"},
+                {"name": "PV Power", "data": pv_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#f5c43d", "unit": "kW"},
+                {"name": "Clipping Forecast (" + clipping_forecast_type + ")", "data": clipping_forecast, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#a8a8a7", "unit": "kW"},
+                {"name": "Target SOC", "data": soc_kw_best, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#eb2323", "unit": "kWh"},
+                {"name": "Actual SOC", "data": soc_kw_h0, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": "#9b23eb", "unit": "kWh"},
             ]
-            text += self.render_chart(series_data, "kW", "Clipping Analysis", now_str, yaxis_annotations=annotations, xaxis_annotations=xaxis_annotations)
+            
+            secondary_axis = [
+                {
+                    "title": "kWh",
+                    "series_name": "Target SOC",
+                    "decimals": 1,
+                    "opposite": True,
+                    "labels_formatter": "return val.toFixed(1) + ' kWh';",
+                },
+                {
+                    "title": "kWh",
+                    "series_name": "Actual SOC",
+                    "show": False,
+                }
+            ]
+                    "labels_formatter": "return val.toFixed(1) + ' kWh';",
+                }
+            ]
+            
+            text += self.render_chart(series_data, "kW", "Clipping Analysis", now_str, yaxis_annotations=annotations, xaxis_annotations=xaxis_annotations, extra_yaxis=secondary_axis)
         elif chart == "PVAccuracy":
             # Get pv_today history once and extract total and remaining attributes per timestamp
             pv_today_hist = self.get_history_wrapper("sensor." + self.prefix + "_pv_today", 7, required=False)

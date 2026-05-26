@@ -921,6 +921,9 @@ class Plan:
         self.clipping_mode = clipping_mode
         self.clipping_limit = effective_limit
 
+        clipping_remaining_today = 0
+        clipping_tomorrow = 0
+
         # Calculate clipping for today (first 24 hours)
         auto_start = None
         auto_end = None
@@ -929,10 +932,22 @@ class Plan:
             if pv_now > effective_limit:
                 excess = (pv_now - effective_limit) # kW/min
                 clipping_kwh += excess # kWh (sum of kW per minute)
+                if minute >= self.minutes_now:
+                    clipping_remaining_today += excess
                 if auto_start is None:
                     auto_start = minute
                 auto_end = minute
         
+        # Calculate clipping for tomorrow (next 24 hours)
+        for minute in range(24 * 60, 48 * 60):
+            pv_now = pv_data.get(minute, 0)
+            if pv_now > effective_limit:
+                excess = (pv_now - effective_limit)
+                clipping_tomorrow += excess
+                
+        self.clipping_remaining_today = clipping_remaining_today
+        self.clipping_tomorrow = clipping_tomorrow
+
         # Use manual overrides if provided, else use auto detection
         if clipping_start is None:
             clipping_start = auto_start
