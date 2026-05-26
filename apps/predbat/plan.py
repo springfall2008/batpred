@@ -888,22 +888,46 @@ class Plan:
             if end_stamp:
                 clipping_end = minutes_to_time(end_stamp, self.midnight_utc)
 
-        # Determine effective clipping limit (AC throughput limit)
-        # Sum of inverter limits (kW/min)
-        clipping_limit = 0.0
+        # Determine effective clipping limit (Hierarchy of constraints)
+        # 1. Start with Physical Inverter AC Capacity
+        inverter_ac_limit = 0.0
         for inverter in self.inverters:
-            clipping_limit += inverter.inverter_limit
+            inverter_ac_limit += inverter.inverter_limit # kW/min
         
-        # pv_now in pv_forecast_minute is also in kW/min (rate)
-        # So we can compare them directly.
+        effective_limit = inverter_ac_limit
+        clipping_mode = "Inverter AC Capacity"
+
+        # 2. Check DNO Grid Export Limits
+        grid_export_limit = 0.0
+        if self.export_limits:
+            for limit in self.export_limits:
+                if limit and limit > 0:
+                    grid_export_limit += limit / 1000.0 / 60.0 # W to kW/min
+        
+        if grid_export_limit > 0 and grid_export_limit < effective_limit:
+            effective_limit = grid_export_limit
+            clipping_mode = "DNO Export Limit"
+
+        # 3. Check PV AC Limit (Microinverters / AC-coupled)
+        if not self.inverter_hybrid and self.pv_ac_limit > 0 and self.pv_ac_limit < effective_limit:
+            effective_limit = self.pv_ac_limit
+            clipping_mode = "PV AC Capacity"
+
+        # 4. Apply Manual Override if set
+        if self.clipping_buffer_limit_override > 0:
+            effective_limit = self.clipping_buffer_limit_override
+            clipping_mode = "Manual Override"
+
+        self.clipping_mode = clipping_mode
+        self.clipping_limit = effective_limit
 
         # Calculate clipping for today (first 24 hours)
         auto_start = None
         auto_end = None
         for minute in range(0, 24 * 60):
             pv_now = pv_data.get(minute, 0)
-            if pv_now > clipping_limit:
-                excess = (pv_now - clipping_limit) # kW/min
+            if pv_now > effective_limit:
+                excess = (pv_now - effective_limit) # kW/min
                 clipping_kwh += excess # kWh (sum of kW per minute)
                 if auto_start is None:
                     auto_start = minute
@@ -3949,6 +3973,7 @@ class Plan:
                         "icon": "mdi:information-outline",
                         "clipping_start": clipping_start_iso,
                         "clipping_end": clipping_end_iso,
+                        "clipping_mode": self.clipping_mode,
                     },
                 )
                 

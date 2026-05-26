@@ -34,7 +34,7 @@ The core of the implementation is inside the simulation engine. Predbat enforces
 ### 4. Dynamic Release
 As the day progresses and the peak solar period passes, the calculated buffer size naturally reduces to zero. This ensures that the battery is allowed to reach 100% (via solar) by the end of the day, and normal grid-charging behavior can resume for the evening if rates drop.
 
-## Configuration Settings
+### Advanced Configuration
 
 | Setting | Description |
 | ------- | ----------- |
@@ -44,6 +44,17 @@ As the day progresses and the peak solar period passes, the calculated buffer si
 | `clipping_buffer_max_kwh` | A hard cap on the buffer size to prevent leaving the battery too empty on over-optimistic forecasts. |
 | `clipping_buffer_start_time` | **Optional.** Manually override the start of the clipping window (e.g., `11:00:00`). |
 | `clipping_buffer_end_time` | **Optional.** Manually override the end of the clipping window (e.g., `15:00:00`). |
+| `clipping_buffer_limit_override` | **Optional.** Manually set the power threshold (in Watts) above which clipping is considered active. |
+
+### How the Clipping Limit is Determined
+Predbat automatically calculates the **Effective Clipping Limit** by choosing the *most restrictive* constraint on your system:
+1.  **Manual Override:** If `clipping_buffer_limit_override` is set, this is used exclusively.
+2.  **DNO Export Limit:** If your `export_limit` is configured and is lower than your hardware capacity, Predbat will reserve space to prevent export throttling.
+3.  **Physical Inverter AC Capacity:** The maximum AC power your inverters can convert from DC solar.
+4.  **PV AC Capacity:** For non-hybrid systems, the rated limit of your separate PV inverters (e.g., microinverters).
+
+You can check the active constraint in Home Assistant via the `clipping_mode` attribute on the `sensor.predbat_clipping_status` entity.
+
 
 ## Visualization
 You can monitor the buffer in two ways:

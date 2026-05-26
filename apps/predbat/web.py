@@ -3002,17 +3002,18 @@ chart.render();
             clipping_forecast.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_tomorrow", subitem), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
             
             # Limits
-            # Get total inverter limit (kW)
-            inverter_limit_kw = 0.0
-            if self.base.inverters:
-                for inverter in self.base.inverters:
-                    inverter_limit_kw += inverter.inverter_limit * 60.0 # Convert kW/min back to kW
+            # Get effective limit from logic
+            clipping_limit_watts = getattr(self.base, "clipping_limit", 0.0) * 60.0 * 1000.0 # Convert kW/min to Watts
+            clipping_mode = getattr(self.base, "clipping_mode", "Inverter Limit")
+            
+            # Convert to kW for kW chart
+            clipping_limit_kw = clipping_limit_watts / 1000.0
             
             annotations = []
-            if inverter_limit_kw > 0:
+            if clipping_limit_kw > 0:
                 annotations.append({
-                    "y": inverter_limit_kw,
-                    "text": "Inverter Limit ({} kW)".format(round(inverter_limit_kw, 2)),
+                    "y": clipping_limit_kw,
+                    "text": "{} ({} kW)".format(clipping_mode, round(clipping_limit_kw, 2)),
                     "color": "#FF0000"
                 })
             
