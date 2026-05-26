@@ -1910,6 +1910,29 @@ def run_model_tests(my_predbat):
     )
     my_predbat.clipping_buffer_kwh = 0
 
+    # Clipping Buffer test: Verify manual time overrides
+    # Buffer is 3.0kWh, battery size 10kWh. Max grid charge should be 7.0kWh (70%)
+    # Manual window is 10:00 to 14:00
+    my_predbat.clipping_buffer_start_time = "10:00:00"
+    my_predbat.clipping_buffer_end_time = "14:00:00"
+    my_predbat.clipping_buffer_kwh = 3.0
+    # Simulate a single charge window that ends at 11:00 (inside the manual window)
+    failed |= simple_scenario(
+        "clipping_buffer_manual_time",
+        my_predbat,
+        0,
+        0,
+        assert_final_metric=import_rate * 7.0,
+        assert_final_soc=7.0,
+        with_battery=True,
+        battery_size=10.0,
+        battery_soc=0.0,
+        charge=10.0,
+    )
+    my_predbat.clipping_buffer_kwh = 0
+    my_predbat.clipping_buffer_start_time = "None"
+    my_predbat.clipping_buffer_end_time = "None"
+
     if failed:
         print("**** ERROR: Some Model tests failed ****")
     return failed

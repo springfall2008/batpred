@@ -874,15 +874,46 @@ class Plan:
         clipping_start = None
         clipping_end = None
 
+        # Manual time overrides
+        manual_start = self.clipping_buffer_start_time
+        manual_end = self.clipping_buffer_end_time
+        
+        if manual_start and manual_start != "None":
+            start_stamp = time_string_to_stamp(manual_start)
+            if start_stamp:
+                clipping_start = minutes_to_time(start_stamp, self.midnight_utc)
+        
+        if manual_end and manual_end != "None":
+            end_stamp = time_string_to_stamp(manual_end)
+            if end_stamp:
+                clipping_end = minutes_to_time(end_stamp, self.midnight_utc)
+
+        # Determine effective clipping limit (AC throughput limit)
+        # Sum of inverter limits (kW/min)
+        clipping_limit = 0.0
+        for inverter in self.inverters:
+            clipping_limit += inverter.inverter_limit
+        
+        # pv_now in pv_forecast_minute is also in kW/min (rate)
+        # So we can compare them directly.
+
         # Calculate clipping for today (first 24 hours)
+        auto_start = None
+        auto_end = None
         for minute in range(0, 24 * 60):
             pv_now = pv_data.get(minute, 0)
-            if pv_now > self.pv_ac_limit:
-                excess = (pv_now - self.pv_ac_limit) / 60.0
-                clipping_kwh += excess
-                if clipping_start is None:
-                    clipping_start = minute
-                clipping_end = minute
+            if pv_now > clipping_limit:
+                excess = (pv_now - clipping_limit) # kW/min
+                clipping_kwh += excess # kWh (sum of kW per minute)
+                if auto_start is None:
+                    auto_start = minute
+                auto_end = minute
+        
+        # Use manual overrides if provided, else use auto detection
+        if clipping_start is None:
+            clipping_start = auto_start
+        if clipping_end is None:
+            clipping_end = auto_end
 
         # Apply max cap
         if self.clipping_buffer_max_kwh > 0:
