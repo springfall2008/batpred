@@ -1047,7 +1047,7 @@ CONFIG_ITEMS = [
         "type": "select",
         "options": ["None", "Cost Optimal", "Always"],
         "icon": "mdi:battery-arrow-down",
-        "default": "None",
+        "default": "Cost Optimal",
         "enable": "clipping_buffer_enable",
     },
     {
