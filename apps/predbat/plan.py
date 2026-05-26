@@ -916,12 +916,14 @@ class Plan:
         if manual_start and manual_start != "None":
             start_stamp = time_string_to_stamp(manual_start)
             if start_stamp:
-                clipping_start = minutes_to_time(start_stamp, self.midnight_utc)
+                midnight_stamp = time_string_to_stamp("00:00:00")
+                clipping_start = int((start_stamp - midnight_stamp).seconds / 60)
         
         if manual_end and manual_end != "None":
             end_stamp = time_string_to_stamp(manual_end)
             if end_stamp:
-                clipping_end = minutes_to_time(end_stamp, self.midnight_utc)
+                midnight_stamp = time_string_to_stamp("00:00:00")
+                clipping_end = int((end_stamp - midnight_stamp).seconds / 60)
 
         clipping_remaining_today = 0
         clipping_tomorrow = 0
