@@ -785,8 +785,10 @@ class Plan:
             battery_cycle10,
             metric_keep10,
             final_iboost10,
-            final_carbon_g10,
-        ) = self.run_prediction(
+            final_carbon_g,
+            clipping_mitigated,
+            ) = self.run_prediction(
+
             charge_limit_best,
             charge_window_best,
             export_window_best,
@@ -807,6 +809,7 @@ class Plan:
             metric_keep,
             final_iboost,
             final_carbon_g,
+            clipping_mitigated,
         ) = self.run_prediction(
             charge_limit_best,
             charge_window_best,
@@ -1186,7 +1189,7 @@ class Plan:
                     self.log("Not using threading as threads is set to 0 in apps.yaml")
 
         # Simulate current settings to get initial data
-        metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
+        metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g, clipping_mitigated = self.run_prediction(
             self.charge_limit, self.charge_window, self.export_window, self.export_limits, False, end_record=self.end_record
         )
 
@@ -1228,7 +1231,9 @@ class Plan:
                         metric_keep,
                         final_iboost,
                         final_carbon_g,
-                    ) = self.run_prediction(
+                        clipping_mitigated,
+                        ) = self.run_prediction(
+
                         self.charge_limit_best,
                         self.charge_window_best,
                         self.export_window_best,
@@ -1262,7 +1267,9 @@ class Plan:
                     metric_keep,
                     final_iboost,
                     final_carbon_g,
-                ) = self.run_prediction(
+                    clipping_mitigated,
+                    ) = self.run_prediction(
+
                     self.charge_limit_best,
                     self.charge_window_best,
                     self.export_window_best,
@@ -1322,7 +1329,7 @@ class Plan:
             self.plan_last_updated_minutes = self.minutes_now
 
         # Final simulation of base
-        metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
+        metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g, clipping_mitigated = self.run_prediction(
             self.charge_limit, self.charge_window, self.export_window, self.export_limits, False, save="base" if publish else None, end_record=self.end_record
         )
         # And base 10
@@ -1337,8 +1344,10 @@ class Plan:
             battery_cycle10,
             metric_keep10,
             final_iboost10,
-            final_carbon_g10,
-        ) = self.run_prediction(
+            final_carbon_g,
+            clipping_mitigated,
+            ) = self.run_prediction(
+
             self.charge_limit,
             self.charge_window,
             self.export_window,
@@ -1361,8 +1370,10 @@ class Plan:
                 battery_cycle10,
                 metric_keep10,
                 final_iboost10,
-                final_carbon_g10,
-            ) = self.run_prediction(
+                final_carbon_g,
+                clipping_mitigated,
+                ) = self.run_prediction(
+
                 self.charge_limit_best,
                 self.charge_window_best,
                 self.export_window_best,
@@ -1383,7 +1394,9 @@ class Plan:
                 metric_keep,
                 final_iboost,
                 final_carbon_g,
-            ) = self.run_prediction(
+                clipping_mitigated,
+                ) = self.run_prediction(
+
                 self.charge_limit_best,
                 self.charge_window_best,
                 self.export_window_best,
@@ -1537,6 +1550,7 @@ class Plan:
                     metric_keep,
                     final_iboost,
                     final_carbon_g,
+                    clipping_mitigated,
                     min_soc,
                     max_soc,
                 ) = han.get()
@@ -2557,8 +2571,10 @@ class Plan:
                 battery_cycle10,
                 metric_keep10,
                 final_iboost10,
-                final_carbon_g10,
-            ) = self.run_prediction(
+                final_carbon_g,
+                clipping_mitigated,
+                ) = self.run_prediction(
+
                 self.charge_limit_best,
                 self.charge_window_best,
                 self.export_window_best,
@@ -3511,6 +3527,7 @@ class Plan:
             iboost_running,
             iboost_running_solar,
             iboost_running_full,
+            mitigated_today,
         ) = pred.run_prediction(charge_limit, charge_window, export_window, export_limits, pv10, end_record, save, step)
         self.predict_soc = predict_soc
         self.car_charging_soc_next = car_charging_soc_next
@@ -3518,6 +3535,7 @@ class Plan:
         self.iboost_running = iboost_running
         self.iboost_running_solar = iboost_running_solar
         self.iboost_running_full = iboost_running_full
+        self.clipping_mitigated_today = mitigated_today
         if save or pred.debug_enable:
             predict_soc_time = pred.predict_soc_time
             first_charge = pred.first_charge
@@ -4011,6 +4029,39 @@ class Plan:
                     },
                 )
                 
+                # Expose specific clipping sensors for easier dashboarding
+                self.dashboard_item(
+                    self.prefix + ".clipping_remaining_today",
+                    state=dp2(self.clipping_remaining_today),
+                    attributes={
+                        "friendly_name": "Clipping Remaining Today",
+                        "unit_of_measurement": "kWh",
+                        "device_class": "energy",
+                        "icon": "mdi:solar-power-variant",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".clipping_tomorrow",
+                    state=dp2(self.clipping_tomorrow),
+                    attributes={
+                        "friendly_name": "Clipping Forecast Tomorrow",
+                        "unit_of_measurement": "kWh",
+                        "device_class": "energy",
+                        "icon": "mdi:solar-power-variant-outline",
+                    },
+                )
+                # Note: mitigated_today comes from the simulation results
+                self.dashboard_item(
+                    self.prefix + ".clipping_mitigated_today",
+                    state=dp2(getattr(self, "clipping_mitigated_today", 0.0)),
+                    attributes={
+                        "friendly_name": "Clipping Mitigated Today",
+                        "unit_of_measurement": "kWh",
+                        "device_class": "energy",
+                        "icon": "mdi:battery-check",
+                    },
+                )
+
                 clipping_status_text = "No clipping forecast."
                 clipping_start_iso = None
                 clipping_end_iso = None
@@ -4047,6 +4098,7 @@ class Plan:
                         clipping_status_text = "{} kWh clipping buffer active based on your settings (restricted by {}). No immediate clipping window forecast{}.".format(
                             dp2(self.clipping_buffer_kwh), self.clipping_mode, discharge_note
                         )
+
                 self.dashboard_item(
                     self.prefix + ".clipping_status",
                     state=clipping_status_text,
@@ -4294,6 +4346,7 @@ class Plan:
             final_metric_keep,
             final_iboost_kwh,
             final_carbon_g,
+            clipping_mitigated,
         )
 
     def plan_iboost_smart(self):

@@ -2280,7 +2280,9 @@ class Fetch:
         self.clipping_buffer_min_kwh = self.get_arg("clipping_buffer_min_kwh")
         self.clipping_buffer_max_kwh = self.get_arg("clipping_buffer_max_kwh")
         self.clipping_buffer_limit_override = self.get_arg("clipping_buffer_limit_override", 0.0) / 60.0 / 1000.0 # Convert W to kW/min
-        self.clipping_buffer_can_discharge = self.get_arg("clipping_buffer_can_discharge", "None")
+        self.clipping_buffer_window_offset = self.get_arg("clipping_buffer_window_offset", 15)
+        self.clipping_buffer_fallback_window = self.get_arg("clipping_buffer_fallback_window", 2.0)
+        self.clipping_buffer_can_discharge = self.get_arg("clipping_buffer_can_discharge", "Cost Optimal")
         self.clipping_buffer_start_time = self.get_arg("clipping_buffer_start_time")
         self.clipping_buffer_end_time = self.get_arg("clipping_buffer_end_time")
 

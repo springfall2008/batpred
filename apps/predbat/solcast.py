@@ -1177,19 +1177,26 @@ class SolarAPI(ComponentBase):
         pv_forecast_pack90 = {}
         pv_forecast_packCS = {}
         pv_forecast_packMAX = {}
-
         prev_value = -1
         prev_value10 = -1
         prev_value90 = -1
         prev_valueCS = -1
         prev_valueMAX = -1
 
+        # Pre-fill dictionaries to ensure interpolation for packing
+        def get_interp_val(data, m):
+            if not data: return 0
+            if m in data: return data[m]
+            # Use plan_interval fallback
+            last_tick = (m // self.plan_interval_minutes) * self.plan_interval_minutes
+            return data.get(last_tick, 0)
+
         for minute in range(0, self.forecast_days * 24 * 60):
             current_value = dp4(pv_forecast_minute.get(minute, 0))
             current_value10 = dp4(pv_forecast_minute10.get(minute, 0))
-            current_value90 = dp4(pv_forecast_minute90.get(minute, 0)) if pv_forecast_minute90 else 0
-            current_valueCS = dp4(pv_clearsky_minute.get(minute, 0)) if pv_clearsky_minute else 0
-            current_valueMAX = dp4(pv_max_minute.get(minute, 0)) if pv_max_minute else 0
+            current_value90 = dp4(get_interp_val(pv_forecast_minute90, minute))
+            current_valueCS = dp4(get_interp_val(pv_clearsky_minute, minute))
+            current_valueMAX = dp4(get_interp_val(pv_max_minute, minute))
 
             if current_value != prev_value:
                 pv_forecast_pack[minute] = current_value
@@ -1206,6 +1213,7 @@ class SolarAPI(ComponentBase):
             if current_valueMAX != prev_valueMAX:
                 pv_forecast_packMAX[minute] = current_valueMAX
                 prev_valueMAX = current_valueMAX
+
 
         current_pv_power = dp4(pv_forecast_minute.get(self.minutes_now, 0))
 

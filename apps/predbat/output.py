@@ -2991,7 +2991,9 @@ class Output:
             metric_keep,
             final_iboost,
             final_carbon_g,
-        ) = self.run_prediction(charge_limit_best, charge_window_best, [], [], False, end_record=end_record, save="yesterday")
+            clipping_mitigated,
+            ) = self.run_prediction(
+charge_limit_best, charge_window_best, [], [], False, end_record=end_record, save="yesterday")
 
         # Add back in battery value
         overall_metric, battery_value_baseline = self.compute_metric(
@@ -3189,7 +3191,8 @@ class Output:
 
         # Simulate no PV or battery
         self.prediction = Prediction(self, yesterday_pv_step_zero, yesterday_pv_step_zero, yesterday_load_step, yesterday_load_step, soc_kw=0, soc_max=0)
-        metric_no_pvbat, import_kwh_battery, import_kwh_house, export_kwh, soc_min, final_soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction([], [], [], [], False, end_record=end_record, save="yesterday")
+        metric_no_pvbat, import_kwh_battery, import_kwh_house, export_kwh, soc_min, final_soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g, *_ = self.run_prediction(
+[], [], [], [], False, end_record=end_record, save="yesterday")
 
         # Add back in battery value
         overall_metric, battery_value_no_pvbat = self.compute_metric(

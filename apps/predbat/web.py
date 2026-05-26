@@ -3020,10 +3020,15 @@ chart.render();
                     inverter_ac_limit_watts += inverter.inverter_limit * 60.0 * 1000.0
             inverter_ac_limit_kw = inverter_ac_limit_watts / 1000.0
 
-            # Get effective limit from logic (DNO, Manual, etc)
-            clipping_limit_kw = getattr(self.base, "clipping_limit", 0.0) * 60.0 # internal rate is kW/min
-            clipping_mode = getattr(self.base, "clipping_mode", "Inverter Limit")
-            
+            # Ceiling for both axes (kWh and kW) to ensure ticks line up
+            # Max of (SOC Max, Inverter Limit, Max expected Solar)
+            axis_max = 12.0
+            if self.base.soc_max > 12.0 or inverter_ac_limit_kw > 12.0:
+                axis_max = max(self.base.soc_max, inverter_ac_limit_kw, 12.0)
+
+            # Use 6 ticks for even division (e.g. 0, 2, 4, 6, 8, 10, 12)
+            axis_ticks = 6
+
             annotations = []
             if clipping_limit_kw > 0:
                 annotations.append({
@@ -3031,7 +3036,7 @@ chart.render();
                     "text": "{} ({} kW)".format(clipping_mode, round(clipping_limit_kw, 2)),
                     "color": "#FF0000"
                 })
-            
+
             # If the physical inverter limit is different from the effective limit (e.g. DNO limit is lower), show it too
             if inverter_ac_limit_kw > 0 and abs(inverter_ac_limit_kw - clipping_limit_kw) > 0.1:
                 annotations.append({
@@ -3039,15 +3044,16 @@ chart.render();
                     "text": "Inverter Capacity ({} kW)".format(round(inverter_ac_limit_kw, 2)),
                     "color": "#999999"
                 })
-            
+
             # New X-Axis annotations for clipping window
             xaxis_annotations = []
             clipping_start = getattr(self.base, "clipping_buffer_start", None)
             clipping_end = getattr(self.base, "clipping_buffer_end", None)
             if clipping_start is not None and clipping_end is not None:
-                # Use self.midnight (local) to match the chart's time axis
+                # Use local midnight for chart axis alignment
                 start_dt = self.midnight + timedelta(minutes=clipping_start)
                 end_dt = self.midnight + timedelta(minutes=clipping_end)
+                # Use TIME_FORMAT string which render_chart knows how to parse into new Date()
                 xaxis_annotations.append({
                     "x": start_dt.strftime(TIME_FORMAT),
                     "text": "Clipping Start",
@@ -3072,15 +3078,27 @@ chart.render();
                     "series_name": "PV Power",
                     "decimals": 1,
                     "opposite": True,
+                    "min": 0,
+                    "max": axis_max,
+                    "tickAmount": axis_ticks,
                 },
                 {
                     "title": "kW",
                     "series_name": "Clipping Forecast (" + clipping_forecast_type + ")",
                     "show": False,
+                    "min": 0,
+                    "max": axis_max,
+                    "tickAmount": axis_ticks,
                 }
             ]
 
-            text += self.render_chart(series_data, "kWh", "Clipping Analysis", now_str, yaxis_annotations=annotations, xaxis_annotations=xaxis_annotations, extra_yaxis=secondary_axis)        elif chart == "PVAccuracy":
+            # Append dynamic stats to chart title
+            clipping_remaining = getattr(self.base, "clipping_remaining_today", 0.0)
+            chart_title = "Clipping Analysis (Remaining Today: {} kWh)".format(round(clipping_remaining, 2))
+            
+            text += self.render_chart(series_data, "kWh", chart_title, now_str, yaxis_annotations=annotations, xaxis_annotations=xaxis_annotations, extra_yaxis=secondary_axis, yaxis_min=0, yaxis_max=axis_max, yaxis_tick_amount=axis_ticks)
+
+        elif chart == "PVAccuracy":
             # Get pv_today history once and extract total and remaining attributes per timestamp
             pv_today_hist = self.get_history_wrapper("sensor." + self.prefix + "_pv_today", 7, required=False)
             pv_total_raw = history_attribute(pv_today_hist, attributes=True, state_key="totalCL")

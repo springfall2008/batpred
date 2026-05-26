@@ -43,6 +43,8 @@ As the day progresses and the peak solar period passes, the calculated buffer si
 | `clipping_buffer_min_kwh` | The minimum floor for the buffer. Setting this equal to `max_kwh` creates a **fixed manual hole**. |
 | `clipping_buffer_max_kwh` | A hard cap on the buffer size to prevent leaving the battery too empty on over-optimistic forecasts. |
 | `clipping_buffer_can_discharge` | **Optional (Default: `Cost Optimal`).** Controls how aggressively Predbat creates the 'hole'.<br>• `None`: Only stops grid charging.<br>• `Cost Optimal`: **(Recommended)** Automatically chooses to discharge early if the financial value of the saved solar (valued at the current export rate) outweighs the costs of discharging now.<br>• `Always`: Forces a discharge to ensure the buffer is physically available before clipping begins. |
+| `clipping_buffer_fallback_window` | **Optional (Default: `2.0`).** The duration (in hours) of the clipping window centered around solar noon for days when the sun does not naturally exceed your hardware limits (e.g. winter). Set to `0` to disable the buffer entirely on those days. |
+| `clipping_buffer_window_offset` | **Optional (Default: `15`).** The safety padding (in minutes) added to the start and end of the auto-detected clipping window. |
 | `clipping_buffer_start_time` | **Optional.** Manually override the start of the clipping window (e.g., `11:00:00`). |
 | `clipping_buffer_end_time` | **Optional.** Manually override the end of the clipping window (e.g., `15:00:00`). |
 | `clipping_buffer_limit_override` | **Optional.** Manually set the power threshold (in Watts) above which clipping is considered active. |

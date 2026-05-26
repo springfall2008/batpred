@@ -771,6 +771,7 @@ def simple_scenario(
             metric_keep,
             final_iboost,
             final_carbon_g,
+            clipping_mitigated,
         ) = wrapped_run_prediction_single(charge_limit_best, charge_window_best, export_window_best, export_limit_best, pv10, end_record=(my_predbat.end_record), step=5)
     else:
         (
@@ -791,6 +792,7 @@ def simple_scenario(
             iboost_running,
             iboost_running_solar,
             iboost_running_full,
+            mitigated_today,
         ) = prediction.run_prediction(charge_limit_best, charge_window_best, export_window_best, export_limit_best, pv10, end_record=(my_predbat.end_record), save=save)
         prediction.predict_soc = predict_soc
         prediction.car_charging_soc_next = car_charging_soc_next
@@ -862,6 +864,7 @@ def simple_scenario(
             iboost_running,
             iboost_running_solar,
             iboost_running_full,
+            mitigated_today,
         ) = prediction.run_prediction(charge_limit_best, charge_window_best, export_window_best, export_limit_best, pv10, end_record=(my_predbat.end_record), save=save)
         prediction.predict_soc = predict_soc
         prediction.car_charging_soc_next = car_charging_soc_next

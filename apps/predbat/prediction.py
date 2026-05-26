@@ -233,8 +233,23 @@ class Prediction:
             iboost_running,
             iboost_running_solar,
             iboost_running_full,
-        ) = self.run_prediction(charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record, step=step, cache=self.prediction_cache_enable)
-        return (cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g)
+            mitigated_today,
+            ) = self.run_prediction(
+charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record, step=step, cache=self.prediction_cache_enable)
+        return (
+            cost,
+            import_kwh_battery,
+            import_kwh_house,
+            export_kwh,
+            soc_min,
+            soc,
+            soc_min_minute,
+            battery_cycle,
+            metric_keep,
+            final_iboost,
+            final_carbon_g,
+            mitigated_today,
+        )
 
     def thread_run_prediction_charge(self, try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record):
         """
@@ -266,7 +281,9 @@ class Prediction:
             iboost_running,
             iboost_running_solar,
             iboost_running_full,
-        ) = self.run_prediction(try_charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record, cache=self.prediction_cache_enable)
+            mitigated_today,
+            ) = self.run_prediction(
+try_charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record, cache=self.prediction_cache_enable)
         return (
             cost,
             import_kwh_battery,
@@ -279,6 +296,7 @@ class Prediction:
             metric_keep,
             final_iboost,
             final_carbon_g,
+            mitigated_today,
         )
 
     def thread_run_prediction_charge_min_max(self, try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record):
@@ -311,7 +329,9 @@ class Prediction:
             iboost_running,
             iboost_running_solar,
             iboost_running_full,
-        ) = self.run_prediction(try_charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record, cache=False)
+            mitigated_today,
+            ) = self.run_prediction(
+try_charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record, cache=False)
         min_soc = self.soc_max
         max_soc = 0
         if not all_n:
@@ -376,8 +396,10 @@ class Prediction:
             iboost_running,
             iboost_running_solar,
             iboost_running_full,
-        ) = self.run_prediction(charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record, cache=self.prediction_cache_enable)
-        return metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g
+            mitigated_today,
+            ) = self.run_prediction(
+charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record, cache=self.prediction_cache_enable)
+        return metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g, mitigated_today
 
     def find_charge_window_optimised(self, charge_windows, charge_limit, is_export=False):
         """
@@ -500,6 +522,7 @@ class Prediction:
         first_charge = end_record
         export_to_first_charge = 0
         clipped_today = 0
+        mitigated_today = 0
         predict_soc = {}
         car_charging_soc_next = self.car_charging_soc_next[:]
         iboost_next = self.iboost_next
@@ -688,15 +711,10 @@ class Prediction:
                 this_minute_clipped = pv_now - sim_clipping_limit
                 clipped_today += this_minute_clipped
                 pv_now = sim_clipping_limit
-                
-                # Penalize clipping if cost optimal mode is active
-                if self.clipping_buffer_can_discharge == "Cost Optimal":
-                    # Value clipped solar at the current export rate
-                    current_export_rate = rate_export.get(minute_absolute, 0)
-                    metric += this_minute_clipped * current_export_rate
 
             # Active Mitigation: Create a 'Hole' in the battery
             soc_max_effective = soc_max
+            purge_target_soc = None
             is_before_clipping = self.clipping_buffer_start is not None and minute_absolute < self.clipping_buffer_start
             is_during_clipping = self.clipping_buffer_start is not None and self.clipping_buffer_end is not None and minute_absolute >= self.clipping_buffer_start and minute_absolute <= self.clipping_buffer_end
 
@@ -708,11 +726,9 @@ class Prediction:
                 # Always mode: Force discharge if above target
                 if self.clipping_buffer_can_discharge == "Always":
                     if soc > target_soc:
-                        can_discharge_kwh = (soc - target_soc) * battery_loss_discharge
-                        max_discharge_step = battery_rate_max_discharge * step
-                        if battery_draw < max_discharge_step:
-                            battery_draw = min(max_discharge_step, battery_draw + can_discharge_kwh)
-                            battery_state = "purge"
+                        export_window_active = True
+                        export_limit_now = min(export_limit_now, 0.0) # Force export to 0% (but clamped by purge_target_soc later)
+                        purge_target_soc = target_soc
 
             # Modelling reset of charge/discharge rate
             if set_charge_window or set_export_window:
@@ -833,11 +849,17 @@ class Prediction:
             discharge_rate_now_curve_step = discharge_rate_now_curve * step
 
             battery_to_min = max(soc - reserve_expected, 0) * battery_loss_discharge
-            battery_to_max = max(soc_max - soc, 0) * battery_loss
+            battery_to_max = max(soc_max_effective - soc, 0) * battery_loss
 
             discharge_min = reserve
             if export_window_active:
                 discharge_min = max(soc_max * export_limit_now / 100.0, reserve, self.best_soc_min)
+
+            if purge_target_soc is not None:
+                discharge_min = max(discharge_min, purge_target_soc)
+                
+            if minute_absolute >= 780 and minute_absolute <= 840:
+                print(f"DEBUG: min={minute_absolute} ew={export_window_active} elim={export_limit_now} soc={soc} dmin={discharge_min} braw={battery_draw} diff={diff if 'diff' in locals() else 'None'}")
 
             if not set_export_freeze_only and export_window_active and export_limit_now < 99.0 and (soc > discharge_min):
                 # Discharge enable, capped at export limit
@@ -1094,6 +1116,8 @@ class Prediction:
                     space_in_buffer = max(0, soc_max - soc)
                     soak_up = min(this_minute_clipped * battery_loss, space_in_buffer)
                     soc += soak_up
+                    # Record energy successfully mitigated (stored in buffer)
+                    mitigated_today += soak_up / battery_loss
                     # Reduce reported loss by what we captured
                     truly_lost = this_minute_clipped - (soak_up / battery_loss)
                     clipped_today -= soak_up / battery_loss
@@ -1301,6 +1325,7 @@ class Prediction:
                 iboost_running,
                 iboost_running_solar,
                 iboost_running_full,
+                round(mitigated_today, 4),
             )
 
         return (
@@ -1321,4 +1346,5 @@ class Prediction:
             iboost_running,
             iboost_running_solar,
             iboost_running_full,
+            round(mitigated_today, 4),
         )
