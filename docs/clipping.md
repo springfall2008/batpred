@@ -42,6 +42,8 @@ As the day progresses and the peak solar period passes, the calculated buffer si
 | `clipping_buffer_forecast` | Which solar curve to use for calculating the buffer. **Recommended: `clearsky`** for maximum safety. |
 | `clipping_buffer_min_kwh` | The minimum floor for the buffer. Setting this equal to `max_kwh` creates a **fixed manual hole**. |
 | `clipping_buffer_max_kwh` | A hard cap on the buffer size to prevent leaving the battery too empty on over-optimistic forecasts. |
+| `clipping_buffer_start_time` | **Optional.** Manually override the start of the clipping window (e.g., `11:00:00`). |
+| `clipping_buffer_end_time` | **Optional.** Manually override the end of the clipping window (e.g., `15:00:00`). |
 
 ## Visualization
 You can monitor the buffer in two ways:
