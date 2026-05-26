@@ -915,16 +915,22 @@ class Output:
         if getattr(self, "clipping_buffer_kwh", 0) > 0:
             start_str = self.time_abs_str(self.clipping_buffer_start) if self.clipping_buffer_start is not None else None
             end_str = self.time_abs_str(self.clipping_buffer_end) if self.clipping_buffer_end is not None else None
-            
+            clipping_mode = getattr(self, "clipping_mode", "Inverter Limit")
+            discharge_note = ""
+            clipping_can_discharge = getattr(self, "clipping_buffer_can_discharge", "None")
+            if clipping_can_discharge == "Always":
+                discharge_note = " (Active mitigation enabled)"
+            elif clipping_can_discharge == "Cost Optimal":
+                discharge_note = " (Cost-optimal mitigation enabled)"
+
             if start_str and end_str:
-                sentence += "- {} kWh clipping forecast between {} and {}. Setting charge target to mitigate.\n".format(
-                    dp2(self.clipping_buffer_kwh), start_str, end_str
+                sentence += "- {} kWh clipping forecast ({}) between {} and {}. Setting charge target to mitigate{}.\n".format(
+                    dp2(self.clipping_buffer_kwh), clipping_mode, start_str, end_str, discharge_note
                 )
             else:
-                sentence += "- {} kWh clipping buffer active based on your settings (no immediate clipping forecast).\n".format(
-                    dp2(self.clipping_buffer_kwh)
+                sentence += "- {} kWh clipping buffer active based on your settings (restricted by {}). No immediate clipping forecast{}.\n".format(
+                    dp2(self.clipping_buffer_kwh), clipping_mode, discharge_note
                 )
-
         car_charging_kwh = self.car_charge_slot_kwh(self.minutes_now, self.minutes_now + 5)
         if car_charging_kwh > 0:
             sentence += "- Your car is currently charging.\n"
