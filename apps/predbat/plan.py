@@ -22,7 +22,7 @@ import traceback
 from datetime import datetime, timedelta
 from multiprocessing import Pool, cpu_count
 from const import PREDICT_STEP, TIME_FORMAT, MINUTE_WATT
-from utils import calc_percent_limit, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, calc_percent_limit, in_car_slot
+from utils import calc_percent_limit, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, in_car_slot, time_string_to_stamp, minutes_to_time
 from prediction import Prediction, wrapped_run_prediction_single, wrapped_run_prediction_charge, wrapped_run_prediction_charge_min_max, wrapped_run_prediction_export, wrapped_run_prediction_charge_min_max
 from predbat_metrics import metrics
 import time
@@ -848,6 +848,41 @@ class Plan:
         """
         Calculate the required clipping buffer (kWh) and times based on the selected forecast.
         """
+        # Determine effective clipping limit (Hierarchy of constraints)
+        # 1. Start with Physical Inverter AC Capacity (summed)
+        inverter_ac_limit = 0.0
+        if self.inverters:
+            for inverter in self.inverters:
+                inverter_ac_limit += inverter.inverter_limit # kW/min
+        
+        # If no inverter limit is found, start with a very high limit so others can restrict it
+        effective_limit = inverter_ac_limit if inverter_ac_limit > 0 else 99999.0 / 60.0
+        clipping_mode = "Inverter AC Capacity"
+
+        # 2. Check DNO Grid Export Limits
+        grid_export_limit = 0.0
+        if self.export_limits:
+            for limit in self.export_limits:
+                if limit and limit > 0:
+                    grid_export_limit += limit # Already in kW/min
+        
+        if grid_export_limit > 0 and grid_export_limit < effective_limit:
+            effective_limit = grid_export_limit
+            clipping_mode = "DNO Export Limit"
+
+        # 3. Check PV AC Limit (Microinverters / AC-coupled)
+        if not self.inverter_hybrid and self.pv_ac_limit > 0 and self.pv_ac_limit < effective_limit:
+            effective_limit = self.pv_ac_limit
+            clipping_mode = "PV AC Capacity"
+
+        # 4. Apply Manual Override if set
+        if self.clipping_buffer_limit_override > 0:
+            effective_limit = self.clipping_buffer_limit_override
+            clipping_mode = "Manual Override"
+
+        self.clipping_mode = clipping_mode
+        self.clipping_limit = effective_limit
+
         if not self.clipping_buffer_enable:
             return 0, 0, 0
 
@@ -887,39 +922,6 @@ class Plan:
             end_stamp = time_string_to_stamp(manual_end)
             if end_stamp:
                 clipping_end = minutes_to_time(end_stamp, self.midnight_utc)
-
-        # Determine effective clipping limit (Hierarchy of constraints)
-        # 1. Start with Physical Inverter AC Capacity
-        inverter_ac_limit = 0.0
-        for inverter in self.inverters:
-            inverter_ac_limit += inverter.inverter_limit # kW/min
-        
-        effective_limit = inverter_ac_limit
-        clipping_mode = "Inverter AC Capacity"
-
-        # 2. Check DNO Grid Export Limits
-        grid_export_limit = 0.0
-        if self.export_limits:
-            for limit in self.export_limits:
-                if limit and limit > 0:
-                    grid_export_limit += limit # Already in kW/min
-        
-        if grid_export_limit > 0 and grid_export_limit < effective_limit:
-            effective_limit = grid_export_limit
-            clipping_mode = "DNO Export Limit"
-
-        # 3. Check PV AC Limit (Microinverters / AC-coupled)
-        if not self.inverter_hybrid and self.pv_ac_limit > 0 and self.pv_ac_limit < effective_limit:
-            effective_limit = self.pv_ac_limit
-            clipping_mode = "PV AC Capacity"
-
-        # 4. Apply Manual Override if set
-        if self.clipping_buffer_limit_override > 0:
-            effective_limit = self.clipping_buffer_limit_override
-            clipping_mode = "Manual Override"
-
-        self.clipping_mode = clipping_mode
-        self.clipping_limit = effective_limit
 
         clipping_remaining_today = 0
         clipping_tomorrow = 0

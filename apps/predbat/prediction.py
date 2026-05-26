@@ -123,6 +123,10 @@ class Prediction:
             self.clipping_buffer_start = getattr(base, "clipping_buffer_start", None)
             self.clipping_buffer_end = getattr(base, "clipping_buffer_end", None)
             self.clipping_limit = getattr(base, "clipping_limit", 0)
+            # Fallback to legacy pv_ac_limit for unit tests and older configs if clipping_limit isn't set yet
+            if self.clipping_limit <= 0 and not base.inverter_hybrid and getattr(base, "pv_ac_limit", 0) > 0:
+                self.clipping_limit = base.pv_ac_limit
+
             self.clipping_mode = getattr(base, "clipping_mode", "")
             self.clipping_buffer_can_discharge = getattr(base, "clipping_buffer_can_discharge", "None")
             self.metric_standing_charge = base.metric_standing_charge
@@ -677,10 +681,12 @@ class Prediction:
             pv_kwh += pv_now
 
             # Use hierarchical clipping limit
-            if self.clipping_limit > 0 and pv_now > self.clipping_limit:
-                excess_clipped = pv_now - self.clipping_limit
+            # Scale limit by step to match pv_now (which is total over the step)
+            sim_clipping_limit = self.clipping_limit * step
+            if sim_clipping_limit > 0 and pv_now > sim_clipping_limit:
+                excess_clipped = pv_now - sim_clipping_limit
                 clipped_today += excess_clipped
-                pv_now = self.clipping_limit
+                pv_now = sim_clipping_limit
                 
                 # Penalize clipping if cost optimal mode is active
                 if self.clipping_buffer_can_discharge == "Cost Optimal":
