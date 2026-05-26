@@ -21,7 +21,7 @@ Standard solar forecasts are often "smoothed" or averaged, meaning they might mi
 - **Historical Max (`historical`)**: Calculated based on your site's absolute peak production in the last 7 days. Best for adapting to local environmental factors (like shade or seasonal variations).
 
 ### 2. The "Hole" Calculation
-Predbat calculates the `clipping_buffer_kwh` by integrating the area of your chosen safety forecast that exceeds your `pv_ac_limit`. 
+Predbat calculates the `clipping_buffer_kwh` by integrating the area of your chosen safety forecast that exceeds your **Effective Clipping Limit** (the most restrictive of your Inverter, Grid, or Manual limits). 
 *   **Dynamic Sizing**: If the forecast shows 2 hours of 1kW clipping, Predbat reserves a 2kWh hole.
 *   **Time Window**: It identifies the specific start and end times of the expected clipping (e.g., 11:00 to 14:00).
 
