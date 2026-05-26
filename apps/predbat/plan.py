@@ -910,89 +910,121 @@ class Plan:
         clipping_end = None
 
         # Manual time overrides
-        manual_start = self.clipping_buffer_start_time
-        manual_end = self.clipping_buffer_end_time
-        
-        if manual_start and manual_start != "None":
-            start_stamp = time_string_to_stamp(manual_start)
+        manual_start_minute = None
+        manual_end_minute = None
+
+        if self.clipping_buffer_start_time and self.clipping_buffer_start_time != "None":
+            start_stamp = time_string_to_stamp(self.clipping_buffer_start_time)
             if start_stamp:
                 midnight_stamp = time_string_to_stamp("00:00:00")
-                clipping_start = int((start_stamp - midnight_stamp).seconds / 60)
-        
-        if manual_end and manual_end != "None":
-            end_stamp = time_string_to_stamp(manual_end)
+                manual_start_minute = int((start_stamp - midnight_stamp).seconds / 60)
+
+        if self.clipping_buffer_end_time and self.clipping_buffer_end_time != "None":
+            end_stamp = time_string_to_stamp(self.clipping_buffer_end_time)
             if end_stamp:
                 midnight_stamp = time_string_to_stamp("00:00:00")
-                clipping_end = int((end_stamp - midnight_stamp).seconds / 60)
+                manual_end_minute = int((end_stamp - midnight_stamp).seconds / 60)
 
-        clipping_remaining_today = 0
-        clipping_tomorrow = 0
-
-        # Calculate clipping for today (first 24 hours)
+        # 1. Determine Clipping Window (Deterministic/Seasonal)
+        # We ALWAYS use Clear Sky for the window because it represents the physical peak.
+        # This handles the 'window shrinkage' from summer to winter perfectly.
         auto_start = None
         auto_end = None
+        window_source = self.pv_forecast_minuteCS if self.pv_forecast_minuteCS else pv_data
+
+        # We use a sensitive 95% threshold on Clear Sky to find the peak window
+        window_limit = effective_limit * 0.95
+
+        # Also track solar day (first/last light) and solar peak (noon) for fallback
+        solar_start = None
+        solar_end = None
+        max_pv = 0
+        solar_noon = 12 * 60
+
+        for minute in range(0, 24 * 60):
+            pv_cs = window_source.get(minute, 0)
+            if pv_cs > (0.5 / 60.0): # 500W
+                if solar_start is None: solar_start = minute
+                solar_end = minute
+            if pv_cs > max_pv:
+                max_pv = pv_cs
+                solar_noon = minute
+            if pv_cs > window_limit:
+                if auto_start is None: auto_start = minute
+                auto_end = minute
+
+        # 2. Calculate Clipping Volume (kWh)
+        # Use the user's chosen forecast type for the actual sizing
+        clipping_kwh = 0
+        clipping_remaining_today = 0
         for minute in range(0, 24 * 60):
             pv_now = pv_data.get(minute, 0)
             if pv_now > effective_limit:
-                excess = (pv_now - effective_limit) # kW/min
-                clipping_kwh += excess # kWh (sum of kW per minute)
+                excess = (pv_now - effective_limit)
+                clipping_kwh += excess
                 if minute >= self.minutes_now:
                     clipping_remaining_today += excess
-                if auto_start is None:
-                    auto_start = minute
-                auto_end = minute
-        
-        # Calculate clipping for tomorrow (next 24 hours)
+
+        # Calculate tomorrow's volume
+        clipping_tomorrow = 0
         for minute in range(24 * 60, 48 * 60):
             pv_now = pv_data.get(minute, 0)
             if pv_now > effective_limit:
-                excess = (pv_now - effective_limit)
-                clipping_tomorrow += excess
-                
+                clipping_tomorrow += (pv_now - effective_limit)
+
         self.clipping_remaining_today = clipping_remaining_today
         self.clipping_tomorrow = clipping_tomorrow
 
-        # Apply max cap
+        # Apply min/max caps to volume
         if self.clipping_buffer_max_kwh > 0:
             clipping_kwh = min(clipping_kwh, self.clipping_buffer_max_kwh)
-
-        # Apply min cap
         if self.clipping_buffer_min_kwh > 0:
             clipping_kwh = max(clipping_kwh, self.clipping_buffer_min_kwh)
 
-        # Determine the active clipping window
-        # Use manual overrides if provided, else use auto detection from forecast
-        final_start = manual_start_minute
-        if final_start is None:
-            final_start = auto_start
+        # 3. Finalize Window with Priority
+        # Priority: Manual > ClearSky Auto > Configurable Fallback (for floors)
+        final_start = manual_start_minute if manual_start_minute is not None else auto_start
+        final_end = manual_end_minute if manual_end_minute is not None else auto_end
 
-        final_end = manual_end_minute
-        if final_end is None:
-            final_end = auto_end
+        # Fallback for floor-only buffers (e.g. winter days where CS < Limit)
+        # Center a configurable duration window around solar noon
+        fallback_duration = getattr(self, "clipping_buffer_fallback_window", 2.0)
+        if clipping_kwh > 0 and final_start is None and fallback_duration > 0:
+            half_window = (fallback_duration * 60.0) / 2.0
+            final_start = max(solar_start if solar_start else 0, int(solar_noon - half_window))
+            final_end = min(solar_end if solar_end else 1440, int(solar_noon + half_window))
 
-        # If we have a buffer (min floor or forecast) but no window was found,
-        # use a default window to ensure the reservation is enforced in the simulator.
-        if clipping_kwh > 0 and final_start is None:
-            final_start = 8 * 60 # 08:00
-            if final_end is None:
-                final_end = 16 * 60 # 16:00
+        # 4. Apply Window Padding (Offset)
+        # Buffer window safety offset (defaults to 15 mins)
+        offset = getattr(self, "clipping_buffer_window_offset", 15)
+        if final_start is not None and manual_start_minute is None:
+            final_start = max(0, final_start - offset)
+        if final_end is not None and manual_end_minute is None:
+            final_end = min(1440, final_end + offset)
 
         # Ensure end is after start
-        if final_start is not None and final_end is not None and final_end < final_start:
+        if final_start is not None and final_end is not None and final_end <= final_start:
             final_end = final_start + 60
 
         clipping_start = final_start
         clipping_end = final_end
 
         if clipping_kwh > 0:
+            window_msg = "starts at {}, ends at {}".format(
+                self.time_abs_str(clipping_start) if clipping_start is not None else "N/A",
+                self.time_abs_str(clipping_end) if clipping_end is not None else "N/A"
+            )
+            if auto_start is None and manual_start_minute is None:
+                window_msg += " (Fallback centered on Solar Noon)"
+
             self.log(
-                "Clipping Buffer: Calculated buffer of {:.2f}kWh based on {}, starts at {}, ends at {}".format(
+                "Clipping Buffer: Calculated buffer of {:.2f}kWh based on {}, {}".format(
                     clipping_kwh,
                     forecast_type,
-                    self.time_abs_str(clipping_start) if clipping_start is not None else "N/A",
-                    self.time_abs_str(clipping_end) if clipping_end is not None else "N/A"
+                    window_msg
                 )
             )
+
 
         return clipping_kwh, clipping_start, clipping_end
     def calculate_plan(self, recompute=True, debug_mode=False, publish=True):
@@ -3984,9 +4016,18 @@ class Plan:
                 clipping_end_iso = None
 
                 if self.clipping_buffer_kwh > 0:
-                    start_str = self.time_abs_str(self.clipping_buffer_start) if self.clipping_buffer_start is not None else None
-                    end_str = self.time_abs_str(self.clipping_buffer_end) if self.clipping_buffer_end is not None else None
-                    
+                    def format_time_human(minute):
+                        if minute is None:
+                            return "N/A"
+                        target_dt = self.midnight + timedelta(minutes=minute)
+                        if target_dt.date() == self.midnight.date():
+                            return target_dt.strftime("%H:%M")
+                        else:
+                            return target_dt.strftime("Tomorrow %H:%M")
+
+                    start_str = format_time_human(self.clipping_buffer_start)
+                    end_str = format_time_human(self.clipping_buffer_end)
+
                     if self.clipping_buffer_start is not None:
                         clipping_start_iso = (self.midnight_utc + timedelta(minutes=self.clipping_buffer_start)).isoformat()
                     if self.clipping_buffer_end is not None:
@@ -3998,7 +4039,7 @@ class Plan:
                     elif self.clipping_buffer_can_discharge == "Cost Optimal":
                         discharge_note = " (Cost-optimal discharge enabled)"
 
-                    if start_str and end_str:
+                    if self.clipping_buffer_start is not None and self.clipping_buffer_end is not None:
                         clipping_status_text = "{} kWh clipping forecast ({}) between {} and {}. Setting charge target to mitigate{}.".format(
                             dp2(self.clipping_buffer_kwh), self.clipping_mode, start_str, end_str, discharge_note
                         )
@@ -4006,7 +4047,6 @@ class Plan:
                         clipping_status_text = "{} kWh clipping buffer active based on your settings (restricted by {}). No immediate clipping window forecast{}.".format(
                             dp2(self.clipping_buffer_kwh), self.clipping_mode, discharge_note
                         )
-
                 self.dashboard_item(
                     self.prefix + ".clipping_status",
                     state=clipping_status_text,

@@ -3060,24 +3060,27 @@ chart.render();
                 })
 
             series_data = [
-                {"name": "PV Power", "data": pv_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#f5c43d", "unit": "kW"},
-                {"name": "Clipping Forecast (" + clipping_forecast_type + ")", "data": clipping_forecast, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#a8a8a7", "unit": "kW"},
                 {"name": "Target SOC", "data": soc_kw_best, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#eb2323", "unit": "kWh"},
                 {"name": "Actual SOC", "data": soc_kw_h0, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": "#9b23eb", "unit": "kWh"},
+                {"name": "PV Power", "data": pv_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#f5c43d", "unit": "kW"},
+                {"name": "Clipping Forecast (" + clipping_forecast_type + ")", "data": clipping_forecast, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#a8a8a7", "unit": "kW"},
             ]
-            
+
             secondary_axis = [
                 {
-                    "title": "kWh",
-                    "series_names": ["Target SOC", "Actual SOC"],
+                    "title": "kW",
+                    "series_name": "PV Power",
                     "decimals": 1,
                     "opposite": True,
-                    "labels_formatter": "return val.toFixed(1) + ' kWh';",
+                },
+                {
+                    "title": "kW",
+                    "series_name": "Clipping Forecast (" + clipping_forecast_type + ")",
+                    "show": False,
                 }
             ]
-            
-            text += self.render_chart(series_data, "kW", "Clipping Analysis", now_str, yaxis_annotations=annotations, xaxis_annotations=xaxis_annotations, extra_yaxis=secondary_axis)
-        elif chart == "PVAccuracy":
+
+            text += self.render_chart(series_data, "kWh", "Clipping Analysis", now_str, yaxis_annotations=annotations, xaxis_annotations=xaxis_annotations, extra_yaxis=secondary_axis)        elif chart == "PVAccuracy":
             # Get pv_today history once and extract total and remaining attributes per timestamp
             pv_today_hist = self.get_history_wrapper("sensor." + self.prefix + "_pv_today", 7, required=False)
             pv_total_raw = history_attribute(pv_today_hist, attributes=True, state_key="totalCL")
