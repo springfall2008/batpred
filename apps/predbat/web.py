@@ -1562,7 +1562,7 @@ class WebInterface(ComponentBase):
         text += "  }\n"
         return text
 
-    def render_chart(self, series_data, yaxis_name, chart_name, now_str, tagname="chart", daily_chart=True, extra_yaxis=None, yaxis_annotations=None):
+    def render_chart(self, series_data, yaxis_name, chart_name, now_str, tagname="chart", daily_chart=True, extra_yaxis=None, yaxis_annotations=None, xaxis_annotations=None):
         """
         Render a chart
         """
@@ -1754,6 +1754,7 @@ var options = {
                 text += "    },\n"
             text += "   ],\n"
         text += "   xaxis: [\n"
+        # Always add 'now'
         text += "    {\n"
         text += "       x: new Date('{}').getTime(),\n".format(now_str)
         text += "       borderColor: '#775DD0',\n"
@@ -1762,6 +1763,20 @@ var options = {
         text += "          text: 'now'\n"
         text += "       }\n"
         text += "    },\n"
+        
+        # Add custom X-axis annotations
+        if xaxis_annotations:
+            for ann in xaxis_annotations:
+                text += "    {\n"
+                text += "       x: new Date('{}').getTime(),\n".format(ann.get("x", ""))
+                text += "       borderColor: '{}',\n".format(ann.get("color", "#00E396"))
+                text += "       textAnchor: 'middle',\n"
+                text += "       label: {\n"
+                text += "          text: '{}',\n".format(ann.get("text", ""))
+                text += "       }\n"
+                text += "    },\n"
+
+        # Always add 'midnight'
         text += "    {\n"
         text += "       x: new Date('{}').getTime(),\n".format(midnight_str)
         text += "       borderColor: '#000000',\n"
@@ -3001,11 +3016,29 @@ chart.render();
                     "color": "#FF0000"
                 })
             
+            # New X-Axis annotations for clipping window
+            xaxis_annotations = []
+            clipping_start = getattr(self.base, "clipping_buffer_start", None)
+            clipping_end = getattr(self.base, "clipping_buffer_end", None)
+            if clipping_start is not None and clipping_end is not None:
+                start_dt = self.midnight_utc + timedelta(minutes=clipping_start)
+                end_dt = self.midnight_utc + timedelta(minutes=clipping_end)
+                xaxis_annotations.append({
+                    "x": start_dt.strftime(TIME_FORMAT),
+                    "text": "Clipping Start",
+                    "color": "#FF9800"
+                })
+                xaxis_annotations.append({
+                    "x": end_dt.strftime(TIME_FORMAT),
+                    "text": "Clipping End",
+                    "color": "#FF9800"
+                })
+
             series_data = [
                 {"name": "PV Power", "data": pv_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#f5c43d"},
                 {"name": "Clipping Forecast (" + clipping_forecast_type + ")", "data": clipping_forecast, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#a8a8a7"},
             ]
-            text += self.render_chart(series_data, "kW", "Clipping Analysis", now_str, yaxis_annotations=annotations)
+            text += self.render_chart(series_data, "kW", "Clipping Analysis", now_str, yaxis_annotations=annotations, xaxis_annotations=xaxis_annotations)
         elif chart == "PVAccuracy":
             # Get pv_today history once and extract total and remaining attributes per timestamp
             pv_today_hist = self.get_history_wrapper("sensor." + self.prefix + "_pv_today", 7, required=False)

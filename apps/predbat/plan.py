@@ -3920,10 +3920,18 @@ class Plan:
                 )
                 
                 clipping_status_text = "No clipping forecast."
+                clipping_start_iso = None
+                clipping_end_iso = None
+
                 if self.clipping_buffer_kwh > 0:
                     start_str = self.time_abs_str(self.clipping_buffer_start) if self.clipping_buffer_start is not None else None
                     end_str = self.time_abs_str(self.clipping_buffer_end) if self.clipping_buffer_end is not None else None
                     
+                    if self.clipping_buffer_start is not None:
+                        clipping_start_iso = (self.midnight_utc + timedelta(minutes=self.clipping_buffer_start)).isoformat()
+                    if self.clipping_buffer_end is not None:
+                        clipping_end_iso = (self.midnight_utc + timedelta(minutes=self.clipping_buffer_end)).isoformat()
+
                     if start_str and end_str:
                         clipping_status_text = "{} kWh clipping forecast between {} and {}. Setting charge target to mitigate.".format(
                             dp2(self.clipping_buffer_kwh), start_str, end_str
@@ -3939,6 +3947,8 @@ class Plan:
                     attributes={
                         "friendly_name": "Clipping Buffer Status",
                         "icon": "mdi:information-outline",
+                        "clipping_start": clipping_start_iso,
+                        "clipping_end": clipping_end_iso,
                     },
                 )
                 
