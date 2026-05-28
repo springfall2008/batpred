@@ -2427,6 +2427,11 @@ input_text:
     max: 255
     mode: password
 
+  tesla_access_token_part5:
+    name: "Tesla Access Token - Part 5"
+    max: 255
+    mode: password
+
   tesla_energy_site_id:
     name: "Tesla Energy Site ID"
     unit_of_measurement: ""
@@ -2469,7 +2474,12 @@ automation:
       target:
         entity_id: input_text.tesla_access_token_part4
       data:
-        value: "{{ tesla_response.content.access_token[750:] }}"
+        value: "{{ tesla_response.content.access_token[750:1000] }}"
+    - service: input_text.set_value
+      target:
+        entity_id: input_text.tesla_access_token_part5
+      data:
+        value: "{{ tesla_response.content.access_token[1000:] }}"
     - service: input_text.set_value
       target:
         entity_id: input_text.tesla_refresh_token_part1
@@ -2555,7 +2565,8 @@ rest_command:
         Bearer {{ (states('input_text.tesla_access_token_part1') or '') +
           (states('input_text.tesla_access_token_part2') or '') +
           (states('input_text.tesla_access_token_part3') or '') +
-          (states('input_text.tesla_access_token_part4') or '') }}
+          (states('input_text.tesla_access_token_part4') or '') +
+          (states('input_text.tesla_access_token_part5') or '') }}
 
   tesla_api_get_current_tariff:
     url: "https://owner-api.teslamotors.com/api/1/energy_sites/{{ states('input_text.tesla_energy_site_id') }}/tariff_rate"
@@ -2565,7 +2576,8 @@ rest_command:
         Bearer {{ (states('input_text.tesla_access_token_part1') or '') +
           (states('input_text.tesla_access_token_part2') or '') +
           (states('input_text.tesla_access_token_part3') or '') +
-          (states('input_text.tesla_access_token_part4') or '') }}
+          (states('input_text.tesla_access_token_part4') or '') +
+          (states('input_text.tesla_access_token_part5') or '') }}
 
   tesla_api_set_export_now_tariff:
     url: "https://owner-api.teslamotors.com/api/1/energy_sites/{{ states('input_text.tesla_energy_site_id') }}/time_of_use_settings"
@@ -2575,7 +2587,8 @@ rest_command:
         Bearer {{ (states('input_text.tesla_access_token_part1') or '') +
           (states('input_text.tesla_access_token_part2') or '') +
           (states('input_text.tesla_access_token_part3') or '') +
-          (states('input_text.tesla_access_token_part4') or '') }}
+          (states('input_text.tesla_access_token_part4') or '') +
+          (states('input_text.tesla_access_token_part5') or '') }}
       Content-Type: application/json
     payload: >
       {% set now = now() %}
@@ -2689,7 +2702,8 @@ rest_command:
         Bearer {{ (states('input_text.tesla_access_token_part1') or '') +
           (states('input_text.tesla_access_token_part2') or '') +
           (states('input_text.tesla_access_token_part3') or '') +
-          (states('input_text.tesla_access_token_part4') or '') }}
+          (states('input_text.tesla_access_token_part4') or '') +
+          (states('input_text.tesla_access_token_part5') or '') }}
       Content-Type: application/json
     payload: >
       {
