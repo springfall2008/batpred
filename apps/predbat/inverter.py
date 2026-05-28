@@ -154,6 +154,7 @@ class Inverter:
         self.reserve_percent = self.base.get_arg("battery_min_soc", default=4.0, index=self.id, required_unit="%")
         self.reserve_percent_current = self.base.get_arg("battery_min_soc", default=4.0, index=self.id, required_unit="%")
         self.battery_scaling = self.base.get_arg("battery_scaling", default=1.0, index=self.id)
+        self.battery_scaling_config = self.battery_scaling
 
         self.reserve_max = 100
         self.battery_rate_max_raw = 2600.0
@@ -585,14 +586,19 @@ class Inverter:
 
         if self.base.battery_scaling_auto and trimmed_mean and trimmed_mean > 0:
             if self.nominal_capacity > 0:
-                # Clamp scaling to [0.8, 1.0] relative to nominal
-                new_scaling = max(0.8, min(1.0, trimmed_mean / self.nominal_capacity))
+                # Clamp scaling to [80%, 100%] of the configured usable scaling.
+                # This preserves manual DoD/SOH correction (e.g. 0.8) while allowing measured degradation below it.
+                scaling_upper = self.battery_scaling_config
+                scaling_lower = self.battery_scaling_config * 0.8
+                new_scaling = max(scaling_lower, min(scaling_upper, trimmed_mean / self.nominal_capacity))
+                self.battery_scaling = new_scaling
                 self.soc_max = dp3(self.nominal_capacity * new_scaling)
                 self.log("Info: inverter {} battery_scaling_auto set scaling {:.3f} (mean {:.2f} kWh, nominal {:.2f} kWh) resulting in soc_max {:.3f} kWh".format(self.id, new_scaling, trimmed_mean, self.nominal_capacity, self.soc_max))
             else:
                 # No nominal configured - use trimmed mean directly without clamping
                 self.soc_max = dp3(trimmed_mean)
                 self.nominal_capacity = self.soc_max
+                self.battery_scaling = 1.0
                 self.base.set_arg("soc_max", self.soc_max, index=self.id)
                 self.base.set_arg("soc_max_nominal", 0.0, index=self.id)
                 self.log("Info: Inverter {} battery_scaling_auto using measured mean {:.2f} kWh (no nominal configured)".format(self.id, trimmed_mean))
