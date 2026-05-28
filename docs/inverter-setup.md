@@ -2438,7 +2438,9 @@ input_text:
     icon: mdi:lightning-bolt-outline
 ```
 
-- Use the [Access Token Generator for Tesla](https://chromewebstore.google.com/detail/access-token-generator-fo/djpjpanpjaimfjalnpkppkjiedmgpjpe?hl=en) to create a token
+- Consult either the [Tesla Fleet API Documentation](https://developer.tesla.com/docs/fleet-api/authentication/third-party-tokens) or use the [Easy Tesla API Token Generator](https://www.myteslamate.com/tesla-token) to generate an access token.
+
+<!-- [Not currently working due to https://github.com/DoctorMcKay/chromium-tesla-token-generator/issues/4] - Note: You may also use the [Access Token Generator for Tesla](https://chromewebstore.google.com/detail/access-token-generator-fo/djpjpanpjaimfjalnpkppkjiedmgpjpe?hl=en) to create a token -->
 
 - This token needs to be copied, and then split into 4 parts (up to 255 characters long), so each part can be copied into the "refresh" input helpers
 
