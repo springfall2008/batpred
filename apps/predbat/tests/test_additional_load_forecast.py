@@ -762,6 +762,41 @@ def test_additional_load_flexible_done_by_window(my_predbat):
     return failed
 
 
+def test_additional_load_flexible_done_by_next_reachable_deadline(my_predbat):
+    """Test flexible end_time rolls to the next reachable deadline when today's deadline cannot fit."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.forecast_minutes = 30 * 60
+    my_predbat.minutes_now = 6 * 60
+    my_predbat.args["house_load_additional_forecast"] = [
+        {"name": "dishwasher", "mode": "flexible", "end_time": "07:00", "duration": 5.0, "energy": 0.7},
+    ]
+
+    _, forecasts = my_predbat.fetch_additional_load_forecast()
+    forecast = forecasts.get("dishwasher", {})
+    if "T06:00:00" not in forecast.get("requested_start", "") or "T07:00:00" not in forecast.get("requested_end", ""):
+        print("ERROR: Flexible done-by window should run from 06:00 to the next reachable 07:00, got {}".format(forecast))
+        failed = 1
+    if forecast.get("_requested_end_minutes") != 31 * 60:
+        print("ERROR: Flexible done-by deadline should roll to tomorrow 07:00, got {}".format(forecast))
+        failed = 1
+
+    my_predbat.minutes_now = 30
+    _, forecasts = my_predbat.fetch_additional_load_forecast()
+    forecast = forecasts.get("dishwasher", {})
+    if forecast.get("_requested_end_minutes") != 7 * 60:
+        print("ERROR: Flexible done-by deadline should use today's 07:00 when the load fits, got {}".format(forecast))
+        failed = 1
+
+    my_predbat.minutes_now = 3 * 60
+    _, forecasts = my_predbat.fetch_additional_load_forecast()
+    forecast = forecasts.get("dishwasher", {})
+    if forecast.get("_requested_end_minutes") != 31 * 60:
+        print("ERROR: Flexible done-by deadline should roll when 5h cannot fit by today's 07:00, got {}".format(forecast))
+        failed = 1
+    return failed
+
+
 def test_additional_load_flexible_api_omitted_start_is_frozen(my_predbat):
     """Test API flexible forecasts without start_time keep their initial requested start."""
     failed = 0
@@ -958,6 +993,7 @@ def run_additional_load_forecast_tests(my_predbat):
     failed |= test_additional_load_flexible_api_repeat_preserves_metadata(my_predbat)
     failed |= test_additional_load_flexible_pending_until_plan(my_predbat)
     failed |= test_additional_load_flexible_done_by_window(my_predbat)
+    failed |= test_additional_load_flexible_done_by_next_reachable_deadline(my_predbat)
     failed |= test_additional_load_flexible_api_omitted_start_is_frozen(my_predbat)
     failed |= test_additional_load_flexible_yaml_omitted_start_rolls(my_predbat)
     failed |= test_additional_load_flexible_prediction_metric_selection(my_predbat)
