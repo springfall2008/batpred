@@ -2602,7 +2602,7 @@ automation:
     - tesla_api_set_export_now_tariff - sets a custom export rate tariff to force the Powerwall to export,
     - tesla_api_set_iog_custom_tariff - returns the Powerwall to the Octopus IOG tariff. Check the rates in the payload match your current tariff rates, or if you are on a different tariff, you will need to customise the REST payload to your tariff details
 
-  In `configuration.yaml` add the following lines:F
+  In `configuration.yaml` add the following lines:
 
 ```yaml
 rest_command:
