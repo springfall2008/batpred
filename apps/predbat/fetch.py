@@ -471,8 +471,10 @@ class Fetch:
 
             for window_start, window_end in sorted(windows):
                 usable_start = max(window_start, minutes_now_slot)
+                if usable_start + duration_minutes > window_end:
+                    window_end += 24 * 60
                 if usable_start + duration_minutes <= window_end and usable_start < minutes_now_slot + self.forecast_minutes:
-                    return usable_start, min(window_end, minutes_now_slot + self.forecast_minutes)
+                    return usable_start, window_end
             return None, None
 
         if start_minutes is None:
