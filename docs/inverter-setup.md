@@ -2438,9 +2438,65 @@ input_text:
     icon: mdi:lightning-bolt-outline
 ```
 
-- Consult either the [Tesla Fleet API Documentation](https://developer.tesla.com/docs/fleet-api/authentication/third-party-tokens) or use the [Easy Tesla API Token Generator](https://www.myteslamate.com/tesla-token) to generate an access + refresh token.
+You then need to obtain an access token for the API. There are two ways - either use the existing Fleet Integration if you have that setup, or manually obtain them.
 
-<!-- [Not currently working due to https://github.com/DoctorMcKay/chromium-tesla-token-generator/issues/4] - Note: You may also use the [Access Token Generator for Tesla](https://chromewebstore.google.com/detail/access-token-generator-fo/djpjpanpjaimfjalnpkppkjiedmgpjpe?hl=en) to create a token -->
+### Option 1: Tesla Fleet Integration (recommended)
+
+The Tesla Fleet integration already handles token exchanges for you. You can simply use this token for the REST API calls.
+
+Create a shell command to access the Tesla Fleet token:
+
+```yaml
+shell_command:
+  get_tesla_fleet_token: >-
+    jq -r 'first(.data.entries[] | select(.domain == "tesla_fleet")) | .data.token.access_token' /config/.storage/core.config_entries
+```
+
+Now create an automation to populate the access token:
+
+```yaml
+- id: refresh_tesla_access_token
+  alias: Refresh Tesla Access Token
+  description: Sync Tesla Fleet token from HA integration every hour
+  triggers:
+    - hours: /1
+      trigger: time_pattern
+    - event: start
+      trigger: homeassistant
+  actions:
+    - action: shell_command.get_tesla_fleet_token
+      response_variable: token_response
+    - action: input_text.set_value
+      target:
+        entity_id: input_text.tesla_access_token_part1
+      data:
+        value: "{{ token_response.stdout[0:220] }}"
+    - action: input_text.set_value
+      target:
+        entity_id: input_text.tesla_access_token_part2
+      data:
+        value: "{{ token_response.stdout[220:440] }}"
+    - action: input_text.set_value
+      target:
+        entity_id: input_text.tesla_access_token_part3
+      data:
+        value: "{{ token_response.stdout[440:660] }}"
+    - action: input_text.set_value
+      target:
+        entity_id: input_text.tesla_access_token_part4
+      data:
+        value: "{{ token_response.stdout[660:880] }}"
+    - action: input_text.set_value
+      target:
+        entity_id: input_text.tesla_access_token_part5
+      data:
+        value: "{{ token_response.stdout[880:] }}"
+  mode: single
+  ```
+
+### Option 2: Another integration
+
+- Consult either the [Tesla Fleet API Documentation](https://developer.tesla.com/docs/fleet-api/authentication/third-party-tokens) or use the [Easy Tesla API Token Generator](https://www.myteslamate.com/tesla-token) to generate an access + refresh token.
 
 - This token needs to be copied, and then split into 4-5 parts (up to 255 characters long), so each part can be copied into the input helpers
 
@@ -2514,8 +2570,11 @@ automation:
       notification_id: "tesla_token_update"
 ```
 
-- An automation executes every time HA starts and every midnight to populate the Tesla site id input_helper.
-  Create the following automation using the HA UI or by adding to `configuration.yaml`:
+### Automations
+
+Whether using Fleet or another method, you will need to create a site ID automation.
+
+Create the following automation using the HA UI or by adding to `configuration.yaml`:
 
 ```yaml
 automation:
@@ -2543,7 +2602,7 @@ automation:
     - tesla_api_set_export_now_tariff - sets a custom export rate tariff to force the Powerwall to export,
     - tesla_api_set_iog_custom_tariff - returns the Powerwall to the Octopus IOG tariff. Check the rates in the payload match your current tariff rates, or if you are on a different tariff, you will need to customise the REST payload to your tariff details
 
-  In `configuration.yaml` add the following lines:
+  In `configuration.yaml` add the following lines:F
 
 ```yaml
 rest_command:
@@ -2560,7 +2619,7 @@ rest_command:
         (states('input_text.tesla_refresh_token_part5') or '') }}&scope=openid%20email%20offline_access"
 
   tesla_api_get_products:
-    url: "https://owner-api.teslamotors.com/api/1/products"
+    url: "https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/products"
     method: GET
     headers:
       Authorization: >-
@@ -2571,7 +2630,7 @@ rest_command:
           (states('input_text.tesla_access_token_part5') or '') }}
 
   tesla_api_get_current_tariff:
-    url: "https://owner-api.teslamotors.com/api/1/energy_sites/{{ states('input_text.tesla_energy_site_id') }}/tariff_rate"
+    url: "https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/energy_sites/{{ states('input_text.tesla_energy_site_id') }}/tariff_rate"
     method: GET
     headers:
       Authorization: >-
@@ -2582,7 +2641,7 @@ rest_command:
           (states('input_text.tesla_access_token_part5') or '') }}
 
   tesla_api_set_export_now_tariff:
-    url: "https://owner-api.teslamotors.com/api/1/energy_sites/{{ states('input_text.tesla_energy_site_id') }}/time_of_use_settings"
+    url: "https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/energy_sites/{{ states('input_text.tesla_energy_site_id') }}/time_of_use_settings"
     method: POST
     headers:
       Authorization: >-
@@ -2697,7 +2756,7 @@ rest_command:
       }
 
   tesla_api_set_iog_custom_tariff:
-    url: "https://owner-api.teslamotors.com/api/1/energy_sites/{{ states('input_text.tesla_energy_site_id') }}/time_of_use_settings"
+    url: "https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/energy_sites/{{ states('input_text.tesla_energy_site_id') }}/time_of_use_settings"
     method: POST
     headers:
       Authorization: >-
