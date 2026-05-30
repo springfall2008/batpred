@@ -794,7 +794,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
         GET_DEVICE_PRODUCTION = "/op/v0/device/report/query"
         year = datetime.now(self.local_tz).year
         month = datetime.now(self.local_tz).month
-        variables = ["generation", "feedin", "gridConsumption", "chargeEnergyToTal", "dischargeEnergyToTal", "PVEnergyTotal"]
+        variables = ["generation", "feedin", "feedin2", "gridConsumption", "chargeEnergyToTal", "dischargeEnergyToTal", "PVEnergyTotal"]
         result = await self.request_get(GET_DEVICE_PRODUCTION, datain={"sn": deviceSN, "year": year, "month": month, "dimension": "month", "variables": variables}, post=True)
         if result is not None:
             self.device_production_month[deviceSN] = result
@@ -1429,7 +1429,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
                 }
                 if units in ["kWh", "Wh"]:
                     attributes["device_class"] = "energy"
-                if variable.lower() in ["generation", "feedin", "gridconsumption", "chargeenergytotal", "dischargeenergytotal", "pvenergytotal"]:
+                if variable.lower() in ["generation", "feedin", "feedin2", "gridconsumption", "chargeenergytotal", "dischargeenergytotal", "pvenergytotal"]:
                     attributes["state_class"] = "total"
 
                 self.dashboard_item(entity_id, state=state, attributes=attributes, app="fox")
@@ -1657,12 +1657,14 @@ class FoxAPI(ComponentBase, OAuthMixin):
 
         batteries = []
         pvs = []
+        third_party = []
         hasExportLimit = {}
         for device in self.device_list:
             sn = device.get("deviceSN", None)
             detail = self.device_detail.get(sn, {})
             hasPV = detail.get("hasPV", False)
             hasBattery = detail.get("hasBattery", False)
+            thirdPartyGen = detail.get("thirdPartyGen", False)
             capacity = detail.get("capacity", 0) * 1000.0
             hasScheduler = detail.get("function", {}).get("scheduler", False)
 
@@ -1671,6 +1673,8 @@ class FoxAPI(ComponentBase, OAuthMixin):
                 # Check if this battery inverter also has PV
                 if hasPV:
                     pvs.append(sn.lower())
+                if thirdPartyGen:
+                    third_party.append(sn.lower())
 
         for sn in self.device_settings:
             for setting in self.device_settings[sn]:
@@ -1699,13 +1703,19 @@ class FoxAPI(ComponentBase, OAuthMixin):
         self.set_arg("import_today", [f"sensor.{self.prefix}_fox_{device}_gridconsumption" for device in batteries])
         self.set_arg("export_today", [f"sensor.{self.prefix}_fox_{device}_feedin" for device in batteries])
         if not self.automatic_ignore_pv:
-            self.set_arg("pv_today", [f"sensor.{self.prefix}_fox_{device}_pvenergytotal_today" for device in pvs])
+            if not pvs and not third_party:
+                self.set_arg("pv_today", [0])
+            else:
+                self.set_arg("pv_today", [f"sensor.{self.prefix}_fox_{device}_pvenergytotal_today" for device in pvs] + [f"sensor.{self.prefix}_fox_{device}_feedin2" for device in third_party])
         self.set_arg("battery_rate_max", [f"sensor.{self.prefix}_fox_{device}_battery_rate_max" for device in batteries])
         self.set_arg("battery_power", [f"sensor.{self.prefix}_fox_{device}_invbatpower" for device in batteries])
         self.set_arg("grid_power", [f"sensor.{self.prefix}_fox_{device}_meterpower" for device in batteries])
         self.set_arg("grid_power_invert", [True for device in batteries])
         if not self.automatic_ignore_pv:
-            self.set_arg("pv_power", [f"sensor.{self.prefix}_fox_{device}_pvpower" for device in pvs])
+            if not pvs and not third_party:
+                self.set_arg("pv_power", [0])
+            else:
+                self.set_arg("pv_power", [f"sensor.{self.prefix}_fox_{device}_pvpower" for device in pvs] + [f"sensor.{self.prefix}_fox_{device}_meterpower2" for device in third_party])
         self.set_arg("load_power", [f"sensor.{self.prefix}_fox_{device}_loadspower" for device in batteries])
         self.set_arg("soc_percent", [f"sensor.{self.prefix}_fox_{device}_soc" for device in batteries])
         self.set_arg("soc_max", [f"sensor.{self.prefix}_fox_{device}_battery_capacity" for device in batteries])
