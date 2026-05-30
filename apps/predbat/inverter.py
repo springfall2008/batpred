@@ -815,7 +815,7 @@ class Inverter:
                         clipped_start_minute = charge_start_minute
                         clipped_end_minute = charge_end_minute
 
-                        # Find first stable minute ≥20% (where SoC didn't just change)
+                        # Find first stable minute ≥10% (where SoC didn't just change)
                         # Search forward in real time (decreasing minute index)
                         found_start = False
                         for m in range(charge_start_minute, charge_end_minute - 1, -1):
@@ -837,7 +837,7 @@ class Inverter:
                             curr_soc = int(soc_percent.get(m, 0))
                             next_soc = int(soc_percent.get(m + 1, 0))  # m+1 is older
                             # Check if this is a stable minute (no upcoming transition) and within range
-                            if curr_soc >= 20 and curr_soc <= 90 and curr_soc != next_soc:
+                            if curr_soc >= 10 and curr_soc <= 90 and curr_soc != next_soc:
                                 clipped_end_minute = m
                                 found_end = True
                                 break
