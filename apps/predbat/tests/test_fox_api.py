@@ -5164,6 +5164,109 @@ def test_automatic_config_pv_ignore_disabled(my_predbat):
     return False
 
 
+def test_automatic_config_third_party_gen(my_predbat):
+    """
+    Test automatic_config with thirdPartyGen=True and hasPV=False uses meterpower2/feedin2.
+    This covers the case of a Fox AC-coupled battery inverter with a separate Solis PV inverter
+    whose output is measured via CT2 (meterPower2/feedin2).
+    """
+    print("  - test_automatic_config_third_party_gen")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "60WC50205AYA038"
+    sn_lower = deviceSN.lower()
+
+    fox.device_list = [{"deviceSN": deviceSN}]
+    fox.device_detail[deviceSN] = {
+        "hasPV": False,
+        "thirdPartyGen": True,
+        "hasBattery": True,
+        "capacity": 5,
+        "function": {"scheduler": True},
+    }
+
+    run_async(fox.automatic_config())
+
+    assert fox.args_set.get("num_inverters") == 1
+
+    pv_power = fox.args_set.get("pv_power", [])
+    assert f"sensor.predbat_fox_{sn_lower}_meterpower2" in pv_power, f"Expected meterpower2 in pv_power, got {pv_power}"
+
+    pv_today = fox.args_set.get("pv_today", [])
+    assert f"sensor.predbat_fox_{sn_lower}_feedin2" in pv_today, f"Expected feedin2 in pv_today, got {pv_today}"
+
+    # pvpower/pvenergytotal_today must NOT appear — there is no DC PV on the Fox inverter
+    assert f"sensor.predbat_fox_{sn_lower}_pvpower" not in pv_power, f"pvpower should not be in pv_power, got {pv_power}"
+    assert f"sensor.predbat_fox_{sn_lower}_pvenergytotal_today" not in pv_today, f"pvenergytotal_today should not be in pv_today, got {pv_today}"
+
+    return False
+
+
+def test_automatic_config_battery_only_no_third_party(my_predbat):
+    """
+    Test automatic_config with hasPV=False and thirdPartyGen=False sets no PV sensors.
+    A battery-only system must not pick up meterpower2/feedin2 as phantom PV.
+    """
+    print("  - test_automatic_config_battery_only_no_third_party")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "BATT0000001"
+    sn_lower = deviceSN.lower()
+
+    fox.device_list = [{"deviceSN": deviceSN}]
+    fox.device_detail[deviceSN] = {
+        "hasPV": False,
+        "thirdPartyGen": False,
+        "hasBattery": True,
+        "capacity": 5,
+        "function": {"scheduler": True},
+    }
+
+    run_async(fox.automatic_config())
+
+    pv_power = fox.args_set.get("pv_power", [])
+    pv_today = fox.args_set.get("pv_today", [])
+
+    assert f"sensor.predbat_fox_{sn_lower}_meterpower2" not in pv_power, f"meterpower2 must not appear for battery-only, got {pv_power}"
+    assert f"sensor.predbat_fox_{sn_lower}_feedin2" not in pv_today, f"feedin2 must not appear for battery-only, got {pv_today}"
+
+    return False
+
+
+def test_automatic_config_third_party_gen_with_own_pv(my_predbat):
+    """
+    Test automatic_config when hasPV=True AND thirdPartyGen=True.
+    Both the Fox's own DC PV (pvpower/pvenergytotal_today) and the third-party
+    AC-coupled generator (meterpower2/feedin2) must appear so neither source is lost.
+    """
+    print("  - test_automatic_config_third_party_gen_with_own_pv")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "HYBRID123456"
+    sn_lower = deviceSN.lower()
+
+    fox.device_list = [{"deviceSN": deviceSN}]
+    fox.device_detail[deviceSN] = {
+        "hasPV": True,
+        "thirdPartyGen": True,
+        "hasBattery": True,
+        "capacity": 8,
+        "function": {"scheduler": True},
+    }
+
+    run_async(fox.automatic_config())
+
+    pv_power = fox.args_set.get("pv_power", [])
+    pv_today = fox.args_set.get("pv_today", [])
+
+    assert f"sensor.predbat_fox_{sn_lower}_pvpower" in pv_power, f"pvpower must be in pv_power, got {pv_power}"
+    assert f"sensor.predbat_fox_{sn_lower}_meterpower2" in pv_power, f"meterpower2 must be in pv_power, got {pv_power}"
+    assert f"sensor.predbat_fox_{sn_lower}_pvenergytotal_today" in pv_today, f"pvenergytotal_today must be in pv_today, got {pv_today}"
+    assert f"sensor.predbat_fox_{sn_lower}_feedin2" in pv_today, f"feedin2 must be in pv_today, got {pv_today}"
+
+    return False
+
+
 def test_fox_rate_limiting_normal_operation(my_predbat):
     """Test that normal operation under 60/hour allows retries"""
     print("  - test_fox_rate_limiting_normal_operation")
@@ -5711,6 +5814,9 @@ def run_fox_api_tests(my_predbat):
         failed |= test_automatic_config_export_limit_case_insensitive(my_predbat)
         failed |= test_automatic_config_pv_ignore_enabled(my_predbat)
         failed |= test_automatic_config_pv_ignore_disabled(my_predbat)
+        failed |= test_automatic_config_third_party_gen(my_predbat)
+        failed |= test_automatic_config_battery_only_no_third_party(my_predbat)
+        failed |= test_automatic_config_third_party_gen_with_own_pv(my_predbat)
 
         # Rate limiting tests
         failed |= test_fox_rate_limiting_normal_operation(my_predbat)

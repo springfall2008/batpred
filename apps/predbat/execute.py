@@ -806,6 +806,17 @@ class Execute:
             self.current_charge_limit = calc_percent_limit(self.current_charge_limit_kwh, self.soc_max)
             self.battery_temperature += inverter.battery_temperature
 
+        # Additional PVs without inverters
+        pv_power_sensors = self.get_arg("pv_power", [], indirect=False)
+        if pv_power_sensors and isinstance(pv_power_sensors, list):
+            for idx in range(0, len(pv_power_sensors)):
+                if idx >= self.num_inverters:
+                    pv_power = self.get_arg("pv_power", default=0.0, index=idx, required_unit="W")
+                    try:
+                        self.pv_power += pv_power
+                    except (TypeError, ValueError):
+                        self.log("Warn: Invalid PV power value for sensor {}".format(pv_power_sensors[idx]))
+
         # Work out battery temperature
         self.battery_temperature = int(dp0(self.battery_temperature / self.num_inverters))
 

@@ -394,8 +394,86 @@ def run_execute_test(
     return failed
 
 
+def _run_fetch_inverter_data_pv_test(my_predbat, pv_sensors, pv_power=0):
+    """
+    Helper: configure one inverter with inverter_pv_power W of PV, set pv_sensors as the pv_power
+    config list, optionally place extra_sensor_value under 'sensor.extra_pv', call
+    fetch_inverter_data, and return the resulting my_predbat.pv_power.
+    Restores the original config_index["pv_power"]["value"] on exit.
+    """
+    inverter = ActiveTestInverter(0, soc_kw=5, soc_max=10, now_utc=my_predbat.now_utc)
+    inverter.pv_power = pv_power
+    my_predbat.inverters = [inverter]
+    my_predbat.args["num_inverters"] = 1
+    my_predbat.args["pv_power"] = pv_sensors
+    # Set pv_power via config_index so get_ha_config returns it (args is bypassed for known config items)
+
+    my_predbat.fetch_inverter_data(create=False)
+    result = my_predbat.pv_power
+
+    return result
+
+
+def test_fetch_inverter_data_extra_pv_sensors(my_predbat):
+    """
+    Test that fetch_inverter_data adds extra pv_power sensors beyond num_inverters to the total.
+    This is the Fox thirdPartyGen case: one battery inverter whose pv_power list has an extra
+    sensor (meterpower2) pointing to the AC-coupled Solis inverter measured via CT2.
+    """
+    print("  - test_fetch_inverter_data_extra_pv_sensors")
+
+    result = _run_fetch_inverter_data_pv_test(my_predbat, pv_sensors=[994.0, 500.0], pv_power=994.0)
+    if result != 1494:
+        print("ERROR: pv_power should be 1494 (500 inverter + 994 extra CT2), got {}".format(result))
+        return True
+    return False
+
+
+def test_fetch_inverter_data_extra_pv_sensors_invalid_value(my_predbat):
+    """
+    Test that fetch_inverter_data handles a non-numeric extra PV sensor value gracefully,
+    leaving pv_power unchanged from the inverter total.
+    """
+    print("  - test_fetch_inverter_data_extra_pv_sensors_invalid_value")
+
+    result = _run_fetch_inverter_data_pv_test(
+        my_predbat,
+        pv_sensors=["500", "undefined"],
+        pv_power=500,
+    )
+    if result != 500:
+        print("ERROR: pv_power should be 500 (invalid extra sensor skipped), got {}".format(result))
+        return True
+    return False
+
+
+def test_fetch_inverter_data_no_extra_pv_when_sensors_match_inverters(my_predbat):
+    """
+    Test that fetch_inverter_data does not process extra PV sensors when len(pv_power) == num_inverters.
+    The extra-sensor loop must only fire when the list is longer than the inverter count.
+    """
+    print("  - test_fetch_inverter_data_no_extra_pv_when_sensors_match_inverters")
+
+    result = _run_fetch_inverter_data_pv_test(
+        my_predbat,
+        pv_sensors=["500"],
+        pv_power=500,
+    )
+    if result != 500:
+        print("ERROR: pv_power should be 500 (sensor count matches inverter count, no extra lookup), got {}".format(result))
+        return True
+    return False
+
+
 def run_execute_tests(my_predbat):
     print("**** Running execute tests ****\n")
+
+    failed = test_fetch_inverter_data_extra_pv_sensors(my_predbat)
+    failed |= test_fetch_inverter_data_extra_pv_sensors_invalid_value(my_predbat)
+    failed |= test_fetch_inverter_data_no_extra_pv_when_sensors_match_inverters(my_predbat)
+    if failed:
+        return failed
+
     reset_inverter(my_predbat)
 
     charge_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 1}]
