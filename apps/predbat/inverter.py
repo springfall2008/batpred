@@ -385,9 +385,6 @@ class Inverter:
 
             ivtime = self.base.get_arg("inverter_time", index=self.id, default=None)
 
-        # Track and update battery size (if automatic)
-        self.battery_size_tracking()
-
         # Battery rate max charge, discharge (all converted to kW/min)
         inverter_limit_charge = self.base.get_arg("inverter_limit_charge", self.battery_rate_max_raw, index=self.id, required_unit="W")
         inverter_limit_discharge = self.base.get_arg("inverter_limit_discharge", self.battery_rate_max_raw, index=self.id, required_unit="W")
@@ -403,6 +400,9 @@ class Inverter:
         inverter_limit_export = self.base.get_arg("inverter_limit_export", inverter_limit_discharge, index=self.id, required_unit="W")
         self.battery_rate_max_export = min(inverter_limit_export, self.battery_rate_max_raw) / MINUTE_WATT
         self.battery_rate_min = min(self.base.get_arg("inverter_battery_rate_min", 0, index=self.id, required_unit="W"), self.battery_rate_max_raw) / MINUTE_WATT
+
+        # Track and update battery size (if automatic)
+        self.battery_size_tracking()
 
         # Convert inverter time into timestamp
         if ivtime:
@@ -772,7 +772,7 @@ class Inverter:
 
             # Find continuous charging periods and calculate battery size from energy/SoC relationship
             # Data is indexed backwards: minute 0 = now, minute N = N minutes ago
-            max_power_threshold = max_power * 0.9
+            max_power_threshold = max_power * 0.8
 
             # Scan backwards through time to find charging periods
             in_charge = False
@@ -809,7 +809,7 @@ class Inverter:
                             )
                         )
 
-                        # Clip to 20-80% range and align to percentage boundaries
+                        # Clip to 20-90% range and align to percentage boundaries
                         # to avoid partial energy from transition minutes
                         # A "transition minute" is one where the SoC changed from the previous minute
                         # We want to start AFTER a transition and end BEFORE a transition
@@ -823,27 +823,27 @@ class Inverter:
                             curr_soc = int(soc_percent.get(m, 0))
                             prev_soc = int(soc_percent.get(m + 1, 0))  # m+1 is older
                             # Check if this is a stable minute (no transition) and within range
-                            if curr_soc >= 20 and curr_soc <= 80 and curr_soc != prev_soc:
+                            if curr_soc >= 20 and curr_soc <= 90 and curr_soc != prev_soc:
                                 clipped_start_minute = m
                                 found_start = True
                                 break
                         if not found_start:
-                            # No stable minute found in 20-80% range, skip this period
+                            # No stable minute found in 20-90% range, skip this period
                             continue
 
-                        # Find last stable minute ≤80% (where SoC won't change next minute)
+                        # Find last stable minute ≤90% (where SoC won't change next minute)
                         # Search backward in real time (increasing minute index)
                         found_end = False
                         for m in range(charge_end_minute, charge_start_minute + 1):
                             curr_soc = int(soc_percent.get(m, 0))
                             next_soc = int(soc_percent.get(m + 1, 0))  # m+1 is older
                             # Check if this is a stable minute (no upcoming transition) and within range
-                            if curr_soc >= 20 and curr_soc <= 80 and curr_soc != next_soc:
+                            if curr_soc >= 20 and curr_soc <= 90 and curr_soc != next_soc:
                                 clipped_end_minute = m
                                 found_end = True
                                 break
                         if not found_end:
-                            # No stable minute found in 20-80% range, skip this period
+                            # No stable minute found in 20-90% range, skip this period
                             continue
 
                         # Validate the clipped range is still valid

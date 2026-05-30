@@ -1177,6 +1177,89 @@ def test_find_battery_size_soc_kw_unavailable(my_predbat):
     return failed
 
 
+def test_battery_size_tracking_unset_soc_max_persists(my_predbat):
+    """
+    Regression test: when soc_max is not configured the first call to battery_size_tracking
+    should calculate soc_max from find_battery_size and NOT fall back to the 8 kWh default.
+    A second call (simulating the next 5-minute cycle, where a new Inverter reads the args
+    written by the first call) should keep the calculated value, not reset to 8 kWh.
+    """
+    print("*** Running test: battery_size_tracking_unset_soc_max_persists ***")
+    failed = False
+    expected_size = 9.5  # kWh - the real battery size that find_battery_size measures
+
+    sensor_name = "sensor.{}_soc_max_calculated".format(my_predbat.prefix)
+
+    # --- First cycle: soc_max not set in apps.yaml ---
+    inv = _make_inv_for_scaling(my_predbat, nominal_kwh=0.0)
+    # battery_scaling_auto is False before the cycle runs fetch_config_options
+    my_predbat.battery_scaling_auto = False
+    my_predbat.ha_interface.dummy_items.pop(sensor_name, None)
+    # Ensure soc_max is absent from args (simulating no apps.yaml entry)
+    my_predbat.args.pop("soc_max", None)
+    my_predbat.set_arg("soc_max_nominal", 0.0, index=0)
+
+    inv.find_battery_size = lambda _nc=0: expected_size
+
+    try:
+        inv.battery_size_tracking()
+
+        # battery_scaling_auto must have been auto-enabled
+        if not my_predbat.battery_scaling_auto:
+            print("ERROR: battery_scaling_auto was not auto-enabled when soc_max=0")
+            failed = True
+
+        # soc_max must be the measured value, not the 8 kWh default
+        if abs(inv.soc_max - expected_size) > 0.01:
+            print("ERROR: First call soc_max={:.3f} kWh, expected {:.3f} kWh (not 8.0 default)".format(inv.soc_max, expected_size))
+            failed = True
+        else:
+            print("SUCCESS: First call set soc_max={:.3f} kWh correctly from find_battery_size".format(inv.soc_max))
+
+        # --- Second cycle: new Inverter reads from updated args ---
+        # In real operation fetch_config_options resets battery_scaling_auto to whatever
+        # is in apps.yaml (False when not configured).
+        my_predbat.battery_scaling_auto = False
+
+        inv2 = _make_inv_for_scaling(my_predbat, nominal_kwh=0.0)
+        # Simulate Inverter.__init__ reading soc_max from args (updated by first cycle)
+        inv2.nominal_capacity = my_predbat.get_arg("soc_max", default=0.0, index=0)
+        inv2.soc_max = inv2.nominal_capacity * inv2.battery_scaling
+
+        # find_battery_size must NOT be called on the second cycle (today already in history)
+        second_calls = [0]
+
+        def mock_find_second_call(_nc=0):
+            second_calls[0] += 1
+            return expected_size
+
+        inv2.find_battery_size = mock_find_second_call
+
+        inv2.battery_size_tracking()
+
+        if second_calls[0] > 0:
+            print("WARN: find_battery_size was called on second cycle (today already in history)")
+
+        if abs(inv2.soc_max - expected_size) > 0.01:
+            print("ERROR: Second call soc_max={:.3f} kWh, expected {:.3f} kWh - " "value should not have been reset to the 8 kWh fallback".format(inv2.soc_max, expected_size))
+            failed = True
+        else:
+            print("SUCCESS: Second call preserved soc_max={:.3f} kWh correctly".format(inv2.soc_max))
+
+        if not failed:
+            print("SUCCESS: soc_max calculated on first call and persisted across second call")
+
+    except Exception as e:
+        print("ERROR: test_battery_size_tracking_unset_soc_max_persists raised exception: {}".format(e))
+        import traceback
+
+        traceback.print_exc()
+        failed = True
+
+    my_predbat.battery_scaling_auto = False
+    return failed
+
+
 def run_find_battery_size_tests(my_predbat):
     """
     Run all find_battery_size tests
@@ -1279,6 +1362,10 @@ def run_find_battery_size_tests(my_predbat):
         return failed
 
     failed |= test_find_battery_size_with_scaling(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_battery_size_tracking_unset_soc_max_persists(my_predbat)
     if failed:
         return failed
 
