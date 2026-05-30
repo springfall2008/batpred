@@ -1669,7 +1669,6 @@ class SigenergyAPI(ComponentBase):
             field_type = "number"
             field_units = "%"
 
-        ha_name = "{}.{}_{}_{}".format(field_type, self.prefix, "sigenergy", item_name.replace("sigenergy_{}_".format(slug), slug + "_", 1))
         ha_name = "{}.{}_{}".format(field_type, self.prefix, item_name)
         return item_name, ha_name, friendly_name, field_type, field_units, default, min_value, max_value
 
