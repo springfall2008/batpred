@@ -775,7 +775,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
         """
         GET_DEVICE_PRODUCTION = "/op/v0/device/report/query"
         year = datetime.now(self.local_tz).year
-        variables = ["generation", "feedin", "gridConsumption", "chargeEnergyToTal", "dischargeEnergyToTal"]
+        variables = ["generation", "feedin", "feedin2", "gridConsumption", "chargeEnergyToTal", "dischargeEnergyToTal"]
         result = await self.request_get(GET_DEVICE_PRODUCTION, datain={"sn": deviceSN, "year": year, "dimension": "year", "variables": variables}, post=True)
         if result is not None:
             self.device_production_year[deviceSN] = result
