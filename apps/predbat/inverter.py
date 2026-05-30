@@ -696,7 +696,6 @@ class Inverter:
         soc_kw_sensor = self.base.get_arg("soc_kw", indirect=False, index=self.id)
         battery_power_sensor = self.base.get_arg("battery_power", indirect=False, index=self.id)
         battery_power_invert = self.base.get_arg("battery_power_invert", False, index=self.id)
-        max_power = int(self.battery_rate_max_charge * MINUTE_WATT)
 
         if (soc_percent_sensor or soc_kw_sensor) and battery_power_sensor:
             if soc_percent_sensor:
@@ -772,7 +771,7 @@ class Inverter:
 
             # Find continuous charging periods and calculate battery size from energy/SoC relationship
             # Data is indexed backwards: minute 0 = now, minute N = N minutes ago
-            max_power_threshold = max_power * 0.8
+            max_power_threshold = 50
 
             # Scan backwards through time to find charging periods
             in_charge = False
@@ -809,7 +808,7 @@ class Inverter:
                             )
                         )
 
-                        # Clip to 20-90% range and align to percentage boundaries
+                        # Clip to 10-90% range and align to percentage boundaries
                         # to avoid partial energy from transition minutes
                         # A "transition minute" is one where the SoC changed from the previous minute
                         # We want to start AFTER a transition and end BEFORE a transition
@@ -823,12 +822,12 @@ class Inverter:
                             curr_soc = int(soc_percent.get(m, 0))
                             prev_soc = int(soc_percent.get(m + 1, 0))  # m+1 is older
                             # Check if this is a stable minute (no transition) and within range
-                            if curr_soc >= 20 and curr_soc <= 90 and curr_soc != prev_soc:
+                            if curr_soc >= 10 and curr_soc <= 90 and curr_soc != prev_soc:
                                 clipped_start_minute = m
                                 found_start = True
                                 break
                         if not found_start:
-                            # No stable minute found in 20-90% range, skip this period
+                            # No stable minute found in 10-90% range, skip this period
                             continue
 
                         # Find last stable minute ≤90% (where SoC won't change next minute)
@@ -843,7 +842,7 @@ class Inverter:
                                 found_end = True
                                 break
                         if not found_end:
-                            # No stable minute found in 20-90% range, skip this period
+                            # No stable minute found in 10-90% range, skip this period
                             continue
 
                         # Validate the clipped range is still valid
@@ -865,7 +864,7 @@ class Inverter:
                             )
                         )
 
-                        if percent_change > 15:  # Need at least 15% change for a meaningful estimate
+                        if percent_change > 5:  # Need at least 5% change for a meaningful estimate
                             # Calculate energy added during this period (using clipped range)
                             power_added = 0.0
                             sample_count = 0
