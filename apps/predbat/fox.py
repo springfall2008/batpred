@@ -38,7 +38,7 @@ FOX_DOMAIN = "https://www.foxesscloud.com"
 FOX_LANG = "en"
 TIMEOUT = 60
 FOX_RETRIES = 10
-FOX_SETTINGS = ["ExportLimit", "MaxSoc", "GridCode", "WorkMode", "ExportLimitPower", "MinSoc", "MinSocOnGrid"]
+FOX_SETTINGS = ["ExportLimit", "MaxSoc", "GridCode", "WorkMode", "MinSoc", "MinSocOnGrid"]
 OPTIONS_WORK_MODE = ["SelfUse", "ForceCharge", "ForceDischarge", "Feedin"]
 
 # Dummy attribute table for testing
@@ -775,7 +775,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
         """
         GET_DEVICE_PRODUCTION = "/op/v0/device/report/query"
         year = datetime.now(self.local_tz).year
-        variables = ["generation", "feedin", "feedin2", "gridConsumption", "chargeEnergyToTal", "dischargeEnergyToTal"]
+        variables = ["generation", "feedin", "gridConsumption", "chargeEnergyToTal", "dischargeEnergyToTal"]
         result = await self.request_get(GET_DEVICE_PRODUCTION, datain={"sn": deviceSN, "year": year, "dimension": "year", "variables": variables}, post=True)
         if result is not None:
             self.device_production_year[deviceSN] = result
@@ -794,7 +794,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
         GET_DEVICE_PRODUCTION = "/op/v0/device/report/query"
         year = datetime.now(self.local_tz).year
         month = datetime.now(self.local_tz).month
-        variables = ["generation", "feedin", "feedin2", "gridConsumption", "chargeEnergyToTal", "dischargeEnergyToTal", "PVEnergyTotal"]
+        variables = ["generation", "feedin", "gridConsumption", "chargeEnergyToTal", "dischargeEnergyToTal", "PVEnergyTotal"]
         result = await self.request_get(GET_DEVICE_PRODUCTION, datain={"sn": deviceSN, "year": year, "month": month, "dimension": "month", "variables": variables}, post=True)
         if result is not None:
             self.device_production_month[deviceSN] = result
