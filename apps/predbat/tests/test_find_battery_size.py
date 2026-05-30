@@ -437,6 +437,13 @@ def _make_inv_for_scaling(my_predbat, nominal_kwh=10.0):
     return inv
 
 
+def _clamped_auto_scaling(measured_kwh, nominal_kwh, configured_scaling=1.0):
+    """
+    Return battery_scaling_auto's expected total scaling.
+    """
+    return max(configured_scaling * 0.8, min(configured_scaling, measured_kwh / nominal_kwh))
+
+
 def test_battery_scaling_auto_basic(my_predbat):
     """
     Test that battery_size_tracking with battery_scaling_auto enabled computes a trimmed mean and sets soc_max.
@@ -466,9 +473,13 @@ def test_battery_scaling_auto_basic(my_predbat):
         inv.battery_size_tracking()
         expected_mean = (9.4 + 9.5) / 2  # trimmed: drop 9.0 and 10.0
         # scaling = max(0.8, min(1.0, 9.45/10.0)) = 0.945; soc_max = dp3(10.0 * 0.945) = 9.45
-        expected_soc_max = round(nominal * max(0.8, min(1.0, expected_mean / nominal)), 3)
+        expected_scaling = _clamped_auto_scaling(expected_mean, nominal)
+        expected_soc_max = round(nominal * expected_scaling, 3)
         if abs(inv.soc_max - expected_soc_max) > 0.01:
             print("ERROR: soc_max {} does not match expected {:.3f}".format(inv.soc_max, expected_soc_max))
+            failed = True
+        if abs(inv.battery_scaling - expected_scaling) > 0.001:
+            print("ERROR: battery_scaling {} does not match expected {:.3f}".format(inv.battery_scaling, expected_scaling))
             failed = True
         # Check today's key was added to the sensor history
         sensor_state = my_predbat.ha_interface.dummy_items.get(sensor_name, {})
@@ -540,6 +551,9 @@ def test_battery_scaling_auto_clamping(my_predbat):
     if abs(inv.soc_max - expected_lower) > 0.001:
         print("ERROR: lower clamp failed, expected {:.3f} got {:.3f}".format(expected_lower, inv.soc_max))
         failed = True
+    elif abs(inv.battery_scaling - 0.8) > 0.001:
+        print("ERROR: lower clamp battery_scaling failed, expected 0.800 got {:.3f}".format(inv.battery_scaling))
+        failed = True
     else:
         print("SUCCESS: lower clamp to 0.8 correct")
 
@@ -552,8 +566,62 @@ def test_battery_scaling_auto_clamping(my_predbat):
     if abs(inv2.soc_max - expected_upper) > 0.001:
         print("ERROR: upper clamp failed, expected {:.3f} got {:.3f}".format(expected_upper, inv2.soc_max))
         failed = True
+    elif abs(inv2.battery_scaling - 1.0) > 0.001:
+        print("ERROR: upper clamp battery_scaling failed, expected 1.000 got {:.3f}".format(inv2.battery_scaling))
+        failed = True
     else:
         print("SUCCESS: upper clamp to 1.0 correct")
+
+    my_predbat.battery_scaling_auto = False
+    return failed
+
+
+def test_battery_scaling_auto_preserves_configured_scaling(my_predbat):
+    """
+    Test that battery_scaling_auto clamps relative to configured battery_scaling.
+
+    An 80% DoD battery has configured battery_scaling=0.8. If historical charge data
+    measures 7.2 kWh from a 10 kWh nominal battery, the total effective scaling should
+    become 0.72, not be clamped back up to 0.8 or expanded above the configured DoD.
+    """
+    print("*** Running test: battery_scaling_auto_preserves_configured_scaling ***")
+    failed = False
+    nominal = 10.0
+    configured_scaling = 0.8
+    my_predbat.battery_scaling_auto = True
+    sensor_name = "sensor.{}_soc_max_calculated".format(my_predbat.prefix)
+
+    inv = _make_inv_for_scaling(my_predbat, nominal)
+    inv.battery_scaling = configured_scaling
+    inv.battery_scaling_config = configured_scaling
+    my_predbat.ha_interface.dummy_items.pop(sensor_name, None)
+    inv.find_battery_size = lambda _nc=0: 7.2
+    inv.battery_size_tracking()
+
+    expected_scaling = 0.72
+    expected_soc_max = round(nominal * expected_scaling, 3)
+    if abs(inv.battery_scaling - expected_scaling) > 0.001:
+        print("ERROR: expected battery_scaling {:.3f} got {:.3f}".format(expected_scaling, inv.battery_scaling))
+        failed = True
+    elif abs(inv.soc_max - expected_soc_max) > 0.001:
+        print("ERROR: expected soc_max {:.3f} got {:.3f}".format(expected_soc_max, inv.soc_max))
+        failed = True
+
+    inv2 = _make_inv_for_scaling(my_predbat, nominal)
+    inv2.battery_scaling = configured_scaling
+    inv2.battery_scaling_config = configured_scaling
+    my_predbat.ha_interface.dummy_items.pop(sensor_name, None)
+    inv2.find_battery_size = lambda _nc=0: 8.8
+    inv2.battery_size_tracking()
+
+    if abs(inv2.battery_scaling - configured_scaling) > 0.001:
+        print("ERROR: expected configured upper clamp {:.3f} got {:.3f}".format(configured_scaling, inv2.battery_scaling))
+        failed = True
+    elif abs(inv2.soc_max - nominal * configured_scaling) > 0.001:
+        print("ERROR: expected upper-clamped soc_max {:.3f} got {:.3f}".format(nominal * configured_scaling, inv2.soc_max))
+        failed = True
+    elif not failed:
+        print("SUCCESS: auto scaling preserved configured DoD and allowed measured degradation below it")
 
     my_predbat.battery_scaling_auto = False
     return failed
@@ -590,9 +658,13 @@ def test_battery_scaling_auto_skip_today(my_predbat):
             print("ERROR: find_battery_size was called {} time(s) but should have been skipped".format(calls[0]))
             failed = True
         # stored mean=9.0, nominal=10.0 → scaling=0.9 → soc_max=9.0
-        expected_soc_max = round(nominal * max(0.8, min(1.0, 9.0 / nominal)), 3)
+        expected_scaling = _clamped_auto_scaling(9.0, nominal)
+        expected_soc_max = round(nominal * expected_scaling, 3)
         if abs(inv.soc_max - expected_soc_max) > 0.001:
             print("ERROR: soc_max {} does not match expected {:.3f}".format(inv.soc_max, expected_soc_max))
+            failed = True
+        if abs(inv.battery_scaling - expected_scaling) > 0.001:
+            print("ERROR: battery_scaling {} does not match expected {:.3f}".format(inv.battery_scaling, expected_scaling))
             failed = True
         if not failed:
             print("SUCCESS: find_battery_size correctly skipped for today, used stored mean 9.00")
@@ -1163,6 +1235,10 @@ def run_find_battery_size_tests(my_predbat):
         return failed
 
     failed |= test_battery_scaling_auto_clamping(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_battery_scaling_auto_preserves_configured_scaling(my_predbat)
     if failed:
         return failed
 
