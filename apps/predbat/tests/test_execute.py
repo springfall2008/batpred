@@ -408,7 +408,6 @@ def _run_fetch_inverter_data_pv_test(my_predbat, pv_sensors, pv_power=0):
     my_predbat.args["pv_power"] = pv_sensors
     # Set pv_power via config_index so get_ha_config returns it (args is bypassed for known config items)
 
-
     my_predbat.fetch_inverter_data(create=False)
     result = my_predbat.pv_power
 
@@ -423,11 +422,7 @@ def test_fetch_inverter_data_extra_pv_sensors(my_predbat):
     """
     print("  - test_fetch_inverter_data_extra_pv_sensors")
 
-    result = _run_fetch_inverter_data_pv_test(
-        my_predbat,
-        pv_sensors=[994.0, 500.0],
-        pv_power = 994.0
-    )
+    result = _run_fetch_inverter_data_pv_test(my_predbat, pv_sensors=[994.0, 500.0], pv_power=994.0)
     if result != 1494:
         print("ERROR: pv_power should be 1494 (500 inverter + 994 extra CT2), got {}".format(result))
         return True
