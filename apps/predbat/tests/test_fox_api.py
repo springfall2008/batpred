@@ -1837,12 +1837,12 @@ def test_api_get_device_settings(my_predbat):
 
     run_async(fox.get_device_settings(deviceSN))
 
-    # Should have made requests for all 7 FOX_SETTINGS
-    assert len(fox.request_log) == 7
+    # Should have made requests for all 6 FOX_SETTINGS
+    assert len(fox.request_log) == 6
 
     # Verify each setting was requested
     requested_keys = [req["datain"]["key"] for req in fox.request_log]
-    expected_keys = ["ExportLimit", "MaxSoc", "GridCode", "WorkMode", "ExportLimitPower", "MinSoc", "MinSocOnGrid"]
+    expected_keys = ["ExportLimit", "MaxSoc", "GridCode", "WorkMode", "MinSoc", "MinSocOnGrid"]
     for key in expected_keys:
         assert key in requested_keys, f"Expected key {key} in requests"
 
