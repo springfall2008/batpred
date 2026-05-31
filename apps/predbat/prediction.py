@@ -641,22 +641,21 @@ charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_
 
             # Active Mitigation: Create a 'Hole' in the battery
             soc_max_effective = soc_max
+            purge_target_soc = None
             buffer_now = self.clipping_buffer_forecast_kwh.get(minute_absolute, 0)
             if buffer_now > 0:
                 target_soc = max(0, soc_max - buffer_now)
                 soc_max_effective = target_soc
 
                 # Ensure that any export window (forced or optimizer-selected) stops at the buffer floor
-                if self.clipping_buffer_can_discharge in ["Always", "Cost Optimal"]:
+                if getattr(self, "clipping_buffer_can_discharge", "") in ["Always", "Cost Optimal"]:
                     purge_target_soc = target_soc
 
                 # Always mode: Force discharge if above target natively in simulation
-                if self.clipping_buffer_can_discharge == "Always":
+                if getattr(self, "clipping_buffer_can_discharge", "") == "Always":
                     if soc > target_soc:
                         export_window_active = True
                         export_limit_now = min(export_limit_now, 0.0) # Force export to 0% (but clamped by purge_target_soc later)
-            else:
-                purge_target_soc = None
             # Modelling reset of charge/discharge rate
             if set_charge_window or set_export_window:
                 charge_rate_now = battery_rate_max_charge

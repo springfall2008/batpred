@@ -1894,8 +1894,13 @@ def run_model_tests(my_predbat):
 
     # Clipping Buffer test: Verify that grid charge is capped to leave room for solar clipping
     # Buffer is 2.0kWh, battery size 10kWh. Max grid charge should be 8.0kWh (80%)
-    my_predbat.clipping_buffer_kwh = 2.0
+    my_predbat.clipping_buffer_enable = True
+    my_predbat.clipping_buffer_can_discharge = "None"
+    my_predbat.clipping_buffer_start = 0
     my_predbat.clipping_buffer_end = my_predbat.minutes_now + 24 * 60
+    # Simulate a constant 2kWh buffer requirement
+    my_predbat.clipping_buffer_forecast_kwh = {m: 2.0 for m in range(0, 48 * 60)}
+    
     failed |= simple_scenario(
         "clipping_buffer_grid_charge",
         my_predbat,
@@ -1908,17 +1913,17 @@ def run_model_tests(my_predbat):
         battery_soc=0.0,
         charge=10.0,  # Try to charge to 100%
     )
-    my_predbat.clipping_buffer_kwh = 0
+    my_predbat.clipping_buffer_forecast_kwh = {}
 
-    # Clipping Buffer test: Verify manual time overrides
-    # Buffer is 3.0kWh, battery size 10kWh. Max grid charge should be 7.0kWh (70%)
-    # Manual window is 10:00 to 14:00
-    my_predbat.clipping_buffer_start_time = "10:00:00"
-    my_predbat.clipping_buffer_end_time = "14:00:00"
-    my_predbat.clipping_buffer_kwh = 3.0
-    # Simulate a single charge window that ends at 11:00 (inside the manual window)
+    # Clipping Buffer test: Verify dynamic decay over a specific time window
+    # Buffer is 3.0kWh initially, battery size 10kWh. Max grid charge should be 7.0kWh (70%)
+    my_predbat.clipping_buffer_start = my_predbat.minutes_now + 60
+    my_predbat.clipping_buffer_end = my_predbat.minutes_now + 120
+    my_predbat.clipping_buffer_forecast_kwh = {m: 3.0 for m in range(0, 48 * 60)}
+
+    # Simulate a single charge window that ends before clipping decay
     failed |= simple_scenario(
-        "clipping_buffer_manual_time",
+        "clipping_buffer_decay_charge",
         my_predbat,
         0,
         0,
@@ -1929,10 +1934,216 @@ def run_model_tests(my_predbat):
         battery_soc=0.0,
         charge=10.0,
     )
-    my_predbat.clipping_buffer_kwh = 0
-    my_predbat.clipping_buffer_start_time = "None"
-    my_predbat.clipping_buffer_end_time = "None"
+    my_predbat.clipping_buffer_forecast_kwh = {}
+    my_predbat.clipping_buffer_enable = False
+    my_predbat.clipping_buffer_start = None
+    my_predbat.clipping_buffer_end = None
 
     if failed:
         print("**** ERROR: Some Model tests failed ****")
+    
+    # Run the plan injection tests
+    failed |= test_clipping_buffer_plan_inverter_injection(my_predbat)
+    failed |= test_clipping_buffer_plan_manual_injection(my_predbat)
+    
+    if failed:
+        print("**** ERROR: Some Model tests failed including clipping plan tests ****")
+    return failed
+
+def test_clipping_buffer_plan_inverter_injection(my_predbat):
+    """
+    Test that the calculate_plan method correctly injects an export window
+    to force the inverter to route surplus solar into the battery buffer.
+    """
+    failed = False
+    
+    orig_minutes_now = my_predbat.minutes_now
+    orig_forecast_minutes = my_predbat.forecast_minutes
+    orig_soc_max = my_predbat.soc_max
+    orig_soc_kw = my_predbat.soc_kw
+    
+    my_predbat.minutes_now = 12 * 60
+    my_predbat.forecast_minutes = 24 * 60
+    my_predbat.soc_max = 10.0
+    my_predbat.soc_kw = 10.0  # Battery is full!
+    
+    # Fake PV forecast: 7kW flat during noon, but inverter is 5kW
+    orig_pv_minute = getattr(my_predbat, "pv_forecast_minute", {})
+    orig_pv_minuteCS = getattr(my_predbat, "pv_forecast_minuteCS", {})
+    
+    my_predbat.pv_forecast_minute = {m: 0.0 for m in range(24 * 60)}
+    my_predbat.pv_forecast_minuteCS = {m: 0.0 for m in range(24 * 60)}
+    for m in range(11 * 60, 15 * 60):
+        my_predbat.pv_forecast_minute[m] = 7.0 / 60.0
+        my_predbat.pv_forecast_minuteCS[m] = 7.0 / 60.0
+
+    orig_inverters = getattr(my_predbat, "inverters", [])
+    orig_inverter_limit = my_predbat.inverter_limit
+    orig_pv_ac_limit = getattr(my_predbat, "pv_ac_limit", 0.0)
+    orig_inverter_hybrid = my_predbat.inverter_hybrid
+    orig_export_limits = getattr(my_predbat, "export_limits", [])
+    
+    my_predbat.inverters = []
+    my_predbat.inverter_limit = 5.0
+    my_predbat.pv_ac_limit = 0.0
+    my_predbat.inverter_hybrid = True
+    my_predbat.export_limits = []
+    
+    # Enable clipping buffer (auto-calculated)
+    my_predbat.clipping_buffer_enable = True
+    my_predbat.clipping_buffer_forecast = "pv_estimate"
+    my_predbat.clipping_buffer_can_discharge = "Cost Optimal"
+    my_predbat.clipping_buffer_limit_override = 5000  # 5kW limit so 7kW forecast will clip
+    
+    # Needs a rate import / export to calculate correctly
+    for m in range(24 * 60):
+        my_predbat.rate_import[m] = 10.0
+        my_predbat.rate_export[m] = 5.0
+        my_predbat.load_minutes[m] = 0.5 / 60.0
+    
+    my_predbat.calculate_second_pass = False
+    
+    def mock_optimise_all_windows(*args, **kwargs):
+        my_predbat.charge_limit_best = [0.0 for _ in range(48)]
+        my_predbat.charge_window_best = [{"start": 0, "end": 0, "average": 0} for _ in range(48)]
+        my_predbat.export_window_best = []
+        my_predbat.export_limits_best = []
+    
+    orig_optimise_all = my_predbat.optimise_all_windows
+    my_predbat.optimise_all_windows = mock_optimise_all_windows
+    
+    # Calculate clipping limits by doing a full plan run
+    my_predbat.calculate_plan(recompute=True, publish=False)
+    
+    my_predbat.optimise_all_windows = orig_optimise_all
+    
+    # We can fetch the properties it saved
+    rem = my_predbat.clipping_remaining_today
+    c_start = my_predbat.clipping_buffer_start
+    c_end = my_predbat.clipping_buffer_end
+    
+    injected = False
+    for i, e_win in enumerate(my_predbat.export_window_best):
+        if e_win["start"] <= c_start and e_win["end"] >= c_end:
+            target_kw = max(0, my_predbat.soc_max - rem)
+            target_percent = (target_kw / my_predbat.soc_max) * 100.0
+            if e_win.get("target", 100.0) <= target_percent + 0.1:
+                injected = True
+            
+    if not injected:
+        print(f"ERROR in {__name__}: An export window should have been injected for the clipping buffer.")
+        print(f"Found export windows: {my_predbat.export_window_best}")
+        print(f"Buffer params: rem={rem}, start={c_start}, end={c_end}")
+        failed = True
+
+    # Restore state
+    my_predbat.minutes_now = orig_minutes_now
+    my_predbat.forecast_minutes = orig_forecast_minutes
+    my_predbat.soc_max = orig_soc_max
+    my_predbat.soc_kw = orig_soc_kw
+    my_predbat.pv_forecast_minute = orig_pv_minute
+    my_predbat.pv_forecast_minuteCS = orig_pv_minuteCS
+    my_predbat.inverters = orig_inverters
+    my_predbat.inverter_limit = orig_inverter_limit
+    my_predbat.pv_ac_limit = orig_pv_ac_limit
+    my_predbat.inverter_hybrid = orig_inverter_hybrid
+    my_predbat.export_limits = orig_export_limits
+    
+    return failed
+
+def test_clipping_buffer_plan_manual_injection(my_predbat):
+    """
+    Test that the calculate_plan method correctly injects an export window
+    when the user specifies a manual fixed buffer size.
+    """
+    failed = False
+    
+    orig_minutes_now = my_predbat.minutes_now
+    orig_forecast_minutes = my_predbat.forecast_minutes
+    orig_soc_max = my_predbat.soc_max
+    orig_soc_kw = my_predbat.soc_kw
+    
+    my_predbat.minutes_now = 12 * 60
+    my_predbat.forecast_minutes = 24 * 60
+    my_predbat.soc_max = 10.0
+    my_predbat.soc_kw = 10.0  # Battery is full!
+    
+    orig_pv_minute = getattr(my_predbat, "pv_forecast_minute", {})
+    orig_pv_minuteCS = getattr(my_predbat, "pv_forecast_minuteCS", {})
+    
+    my_predbat.pv_forecast_minute = {m: 0.0 for m in range(24 * 60)}
+    my_predbat.pv_forecast_minuteCS = {m: 0.0 for m in range(24 * 60)}
+
+    orig_inverters = getattr(my_predbat, "inverters", [])
+    orig_inverter_limit = my_predbat.inverter_limit
+    orig_pv_ac_limit = getattr(my_predbat, "pv_ac_limit", 0.0)
+    orig_inverter_hybrid = my_predbat.inverter_hybrid
+    orig_export_limits = getattr(my_predbat, "export_limits", [])
+
+    my_predbat.inverters = []
+    my_predbat.inverter_limit = 5.0
+    my_predbat.pv_ac_limit = 0.0
+    my_predbat.inverter_hybrid = True
+    my_predbat.export_limits = []
+    
+    # Manual clipping buffer overrides
+    my_predbat.clipping_buffer_enable = True
+    my_predbat.clipping_buffer_can_discharge = "Always"
+    my_predbat.clipping_buffer_min_kwh = 2.5
+    my_predbat.clipping_buffer_max_kwh = 2.5
+    my_predbat.clipping_buffer_start_time = "12:00:00"
+    my_predbat.clipping_buffer_end_time = "14:00:00"
+    
+    for m in range(24 * 60):
+        my_predbat.rate_import[m] = 10.0
+        my_predbat.rate_export[m] = 5.0
+        my_predbat.load_minutes[m] = 0.5 / 60.0
+
+    from prediction import PRED_GLOBAL
+    PRED_GLOBAL["dict"] = my_predbat.__dict__.copy()
+
+    rem, c_start, c_end = my_predbat.calculate_clipping_buffer()
+    
+    if rem != 2.5:
+        print(f"ERROR: Clipping buffer should be exactly 2.5kWh based on manual overrides, got {rem}")
+        failed = True
+    if c_start != 12 * 60:
+        print("ERROR: Clipping start should be 12:00")
+        failed = True
+    if c_end != 14 * 60:
+        print("ERROR: Clipping end should be 14:00")
+        failed = True
+        
+    my_predbat.calculate_plan(recompute=False, publish=False)
+    
+    injected = False
+    for i, e_win in enumerate(my_predbat.export_window_best):
+        if e_win["start"] <= c_start and e_win["end"] >= c_end:
+            target_kw = max(0, my_predbat.soc_max - rem)
+            target_percent = (target_kw / my_predbat.soc_max) * 100.0
+            if e_win.get("target", 100.0) <= target_percent + 0.1:
+                injected = True
+            
+    if not injected:
+        print(f"ERROR in manual test: An export window should have been injected. export_window_best={my_predbat.export_window_best}, target_percent={target_percent}, rem={rem}")
+        failed = True
+
+    # Restore state
+    my_predbat.minutes_now = orig_minutes_now
+    my_predbat.forecast_minutes = orig_forecast_minutes
+    my_predbat.soc_max = orig_soc_max
+    my_predbat.soc_kw = orig_soc_kw
+    my_predbat.pv_forecast_minute = orig_pv_minute
+    my_predbat.pv_forecast_minuteCS = orig_pv_minuteCS
+    my_predbat.inverters = orig_inverters
+    my_predbat.inverter_limit = orig_inverter_limit
+    my_predbat.pv_ac_limit = orig_pv_ac_limit
+    my_predbat.inverter_hybrid = orig_inverter_hybrid
+    my_predbat.export_limits = orig_export_limits
+    
+    my_predbat.clipping_buffer_start_time = None
+    my_predbat.clipping_buffer_end_time = None
+    my_predbat.clipping_buffer_min_kwh = 0
+    my_predbat.clipping_buffer_max_kwh = 0
+    
     return failed

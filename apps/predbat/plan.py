@@ -1401,20 +1401,21 @@ class Plan:
                 c_end = getattr(self, "clipping_buffer_end", None)
                 c_rem = getattr(self, "clipping_remaining_today", 0)
                 if getattr(self, "clipping_buffer_can_discharge", "") in ["Always", "Cost Optimal"] and c_start is not None and c_end is not None and c_rem > 0:
-                    if c_start >= self.minutes_now:
+                    if c_end > self.minutes_now:
+                        effective_start = max(c_start, self.minutes_now)
                         target_kw = max(0, self.soc_max - c_rem)
                         target_percent = (target_kw / self.soc_max) * 100.0 if self.soc_max > 0 else 0.0
                         clip_window = {
-                            "start": c_start,
+                            "start": effective_start,
                             "end": c_end,
-                            "average": self.rate_export.get(c_start, 0),
+                            "average": self.rate_export.get(effective_start, 0),
                             "target": target_percent
                         }
                         
                         # Only add if it doesn't heavily overlap an existing export window (simplified check)
                         overlap = False
                         for e_win in self.export_window_best:
-                            if (c_start >= e_win["start"] and c_start < e_win["end"]) or (c_end > e_win["start"] and c_end <= e_win["end"]):
+                            if (effective_start >= e_win["start"] and effective_start < e_win["end"]) or (c_end > e_win["start"] and c_end <= e_win["end"]):
                                 overlap = True
                                 # If it overlaps, just lower the target of the existing window
                                 e_idx = self.export_window_best.index(e_win)
