@@ -464,7 +464,6 @@ class GatewayMQTT(ComponentBase):
         if not self._auto_configured:
             self.automatic_config()
 
-
     def _inject_entities(self, status):
         """Inject inverter entities into PredBat state cache.
 
