@@ -650,7 +650,7 @@ class GatewayMQTT(ComponentBase):
                 inverters = filtered
             else:
                 self.log(f"Warn: GatewayMQTT: gateway_inverter_serial filter {self.gateway_inverter_serial} matched no inverters")
-                return 0
+                return
 
         num_inverters = len(inverters)
         self.log(f"Info: GatewayMQTT: auto-config: {num_inverters} primary inverter(s) of {len(all_inverters)} total")
