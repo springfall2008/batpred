@@ -133,7 +133,7 @@ class GatewayMQTT(ComponentBase):
     Instance methods handle MQTT lifecycle and ComponentBase integration.
     """
 
-    def initialize(self, gateway_device_id=None, mqtt_host=None, mqtt_port=8883, mqtt_token=None, **kwargs):
+    def initialize(self, gateway_device_id=None, mqtt_host=None, mqtt_port=8883, mqtt_token=None, gateway_inverter_serial=None, **kwargs):
         """Initialize gateway configuration and build MQTT topic strings.
 
         Args:
@@ -141,12 +141,22 @@ class GatewayMQTT(ComponentBase):
             mqtt_host: MQTT broker hostname.
             mqtt_port: MQTT broker port (default 8883 for TLS).
             mqtt_token: JWT access token for MQTT authentication.
+            gateway_inverter_serial: Optional serial number(s) to restrict which inverters are configured.
+                If not set, all inverters are used. May be a string or a list of strings.
             **kwargs: Additional keyword arguments (ignored).
         """
         self.gateway_device_id = gateway_device_id
         self.mqtt_host = mqtt_host
         self.mqtt_port = mqtt_port
         self.mqtt_token = mqtt_token
+
+        # Normalise serial filter to a list (or None if not set)
+        if gateway_inverter_serial is None:
+            self.gateway_inverter_serial = []
+        elif isinstance(gateway_inverter_serial, list):
+            self.gateway_inverter_serial = gateway_inverter_serial
+        else:
+            self.gateway_inverter_serial = [gateway_inverter_serial]
         self.mqtt_token_expires_at = 0
 
         # MQTT topic strings
@@ -632,6 +642,16 @@ class GatewayMQTT(ComponentBase):
         if not inverters:
             inverters = all_inverters  # last resort
 
+        # Apply serial filter if configured
+        if self.gateway_inverter_serial:
+            serial_set = set(s.upper() for s in self.gateway_inverter_serial)
+            filtered = [inv for inv in inverters if inv.serial.upper() in serial_set]
+            if filtered:
+                inverters = filtered
+            else:
+                self.log(f"Warn: GatewayMQTT: gateway_inverter_serial filter {self.gateway_inverter_serial} matched no inverters")
+                return
+
         num_inverters = len(inverters)
         self.log(f"Info: GatewayMQTT: auto-config: {num_inverters} primary inverter(s) of {len(all_inverters)} total")
 
@@ -686,8 +706,8 @@ class GatewayMQTT(ComponentBase):
             if inv.battery.capacity_wh > 0:
                 soc_max_entities.append(f"sensor.{base}_battery_capacity")
             else:
-                self.log(f"Warn: GatewayMQTT: inverter {inv.serial} has no battery capacity, using fallback")
                 soc_max_entities.append(None)
+                self.log(f"Warn: GatewayMQTT: inverter {inv.serial} has no battery capacity, setting to None for automatic discovery")
 
         # Map entity lists to PredBat args
         self.set_arg("soc_percent", soc_entities)
@@ -769,6 +789,7 @@ class GatewayMQTT(ComponentBase):
 
         self._auto_configured = True
         self.log(f"Info: GatewayMQTT: auto-config complete: {num_inverters} inverter(s) registered")
+        return num_inverters
 
     async def _publish_predbat_data(self):
         """Publish price/timeline data to the gateway device for display.
