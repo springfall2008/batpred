@@ -35,6 +35,7 @@ class Execute:
     """
 
     def execute_plan(self):
+        """Execute the current charge/discharge plan across all inverters."""
         status_extra = ""  # extra status text added to Predbat notifications
         status_hold_car = ""  # car hold status text
         status_hold_iboost = ""  # iBoost hold status text
@@ -686,6 +687,19 @@ class Execute:
                 "cars_active": displayed_surplus,
             },
         )
+        self.dashboard_item(
+            self.prefix + ".car_charging_solar_surplus_power",
+            state=dp3(self.car_charging_solar_surplus_power / 1000.0),
+            attributes={
+                "friendly_name": "Predbat solar surplus power",
+                "state_class": "measurement",
+                "unit_of_measurement": "kW",
+                "icon": "mdi:solar-power",
+                "threshold": self.car_charging_solar_surplus_threshold,
+                "battery_power": dp3(self.battery_power / 1000.0),
+                "surplus_active": bool(displayed_surplus),
+            },
+        )
 
         # Set the charge/discharge status information
         self.set_charge_export_status(isCharging, isExporting, not (isCharging or isExporting))
@@ -712,6 +726,7 @@ class Execute:
         rather than per inverter.
         """
         self.car_charging_solar_surplus_active = [False] * self.num_cars
+        self.car_charging_solar_surplus_power = 0
         # Skip in read-only mode: we cannot enforce battery-discharge protection,
         # so don't trigger HA automations that would charge the car unprotected.
         if not self.car_charging_solar_surplus or self.num_cars <= 0 or in_force_export_window or self.set_read_only:
@@ -754,6 +769,7 @@ class Execute:
                     self.car_charging_solar_surplus_active[car_n] = True
 
             if self.car_charging_solar_surplus_active[car_n]:
+                self.car_charging_solar_surplus_power = max(0, effective_export)
                 self.log("Solar surplus car charging active for car {}: export {}W (effective {}W), rate {}W, threshold {}W".format(car_n, int(self.grid_power), int(effective_export), int(car_rate_w), int(threshold)))
                 break  # One car at a time from surplus
 

@@ -219,6 +219,7 @@ def run_execute_test(
     grid_power=0,
     battery_power=0,
     assert_solar_surplus_active=None,
+    assert_solar_surplus_power=None,
 ):
     print("Run scenario {}".format(name))
     my_predbat.log("Run scenario {}".format(name))
@@ -420,6 +421,13 @@ def run_execute_test(
         actual = my_predbat.car_charging_solar_surplus_active
         if actual != assert_solar_surplus_active:
             print("ERROR: car_charging_solar_surplus_active should be {} got {}".format(assert_solar_surplus_active, actual))
+            failed = True
+
+    # Validate solar surplus power sensor value
+    if assert_solar_surplus_power is not None:
+        actual_power = my_predbat.car_charging_solar_surplus_power
+        if actual_power != assert_solar_surplus_power:
+            print("ERROR: car_charging_solar_surplus_power should be {} got {}".format(assert_solar_surplus_power, actual_power))
             failed = True
 
     my_predbat.minutes_now = 12 * 60
@@ -2539,6 +2547,7 @@ def run_execute_tests(my_predbat):
         assert_pause_discharge=True,
         assert_immediate_soc_target=0,
         assert_solar_surplus_active=[True],
+        assert_solar_surplus_power=7500,
     )
     if failed:
         return failed
@@ -2580,6 +2589,7 @@ def run_execute_tests(my_predbat):
         battery_power=0,
         assert_status="Demand",
         assert_solar_surplus_active=[False],
+        assert_solar_surplus_power=0,
     )
     if failed:
         return failed
@@ -2700,6 +2710,7 @@ def run_execute_tests(my_predbat):
         assert_pause_discharge=True,
         assert_immediate_soc_target=0,
         assert_solar_surplus_active=[True],
+        assert_solar_surplus_power=7400,
     )
     if failed:
         return failed
@@ -2840,6 +2851,11 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
+    # Verify the numeric power sensor is published with correct value and attributes
+    failed |= run_solar_surplus_power_sensor_test(my_predbat)
+    if failed:
+        return failed
+
     return failed
 
 
@@ -2956,4 +2972,86 @@ def run_solar_surplus_planned_slot_display_test(my_predbat):
     if state != "off":
         print("ERROR: planned-slot suppression — expected surplus sensor state='off', got {}".format(state))
         failed = True
+
+    # The power sensor should still report real surplus even during a planned slot
+    power_sensor_id = my_predbat.prefix + ".car_charging_solar_surplus_power"
+    power_sensor = my_predbat.ha_interface.dummy_items.get(power_sensor_id, {})
+    if isinstance(power_sensor, dict):
+        power_state = power_sensor.get("state", None)
+    else:
+        power_state = power_sensor
+    if power_state != 7.5:
+        print("ERROR: planned-slot power sensor — expected state=7.5 (kW), got {}".format(power_state))
+        failed = True
+    return failed
+
+
+def run_solar_surplus_power_sensor_test(my_predbat):
+    """Verify the numeric power sensor is published with correct value and attributes."""
+    print("Run scenario solar_surplus_power_sensor")
+    my_predbat.log("Run scenario solar_surplus_power_sensor")
+    my_predbat.inverters = [ActiveTestInverter(0, 0, 10.0, my_predbat.now_utc)]
+    my_predbat.args["num_inverters"] = 1
+    my_predbat.num_inverters = 1
+
+    failed = run_execute_test(
+        my_predbat,
+        "solar_surplus_power_sensor_active",
+        set_charge_window=True,
+        set_export_window=True,
+        car_charging_solar_surplus=True,
+        car_charging_planned=[True],
+        grid_power=7500,
+        battery_power=100,
+        car_charging_from_battery=False,
+        assert_status="Hold for car (solar)",
+        assert_pause_discharge=True,
+        assert_immediate_soc_target=0,
+        assert_solar_surplus_active=[True],
+        assert_solar_surplus_power=7500,
+    )
+
+    power_sensor_id = my_predbat.prefix + ".car_charging_solar_surplus_power"
+    power_sensor = my_predbat.ha_interface.dummy_items.get(power_sensor_id, {})
+    if not isinstance(power_sensor, dict):
+        print("ERROR: power sensor not published as dict, got {}".format(type(power_sensor)))
+        return True
+    if power_sensor.get("state") != 7.5:
+        print("ERROR: power sensor state should be 7.5 (kW), got {}".format(power_sensor.get("state")))
+        failed = True
+    if power_sensor.get("unit_of_measurement") != "kW":
+        print("ERROR: power sensor unit should be 'kW', got {}".format(power_sensor.get("unit_of_measurement")))
+        failed = True
+    if power_sensor.get("state_class") != "measurement":
+        print("ERROR: power sensor state_class should be 'measurement', got {}".format(power_sensor.get("state_class")))
+        failed = True
+    if power_sensor.get("threshold") != 500:
+        print("ERROR: power sensor threshold should be 500, got {}".format(power_sensor.get("threshold")))
+        failed = True
+    if power_sensor.get("surplus_active") is not True:
+        print("ERROR: power sensor surplus_active should be True, got {}".format(power_sensor.get("surplus_active")))
+        failed = True
+
+    # Now test with no surplus — sensor should publish 0
+    failed |= run_execute_test(
+        my_predbat,
+        "solar_surplus_power_sensor_inactive",
+        set_charge_window=True,
+        set_export_window=True,
+        car_charging_solar_surplus=True,
+        car_charging_planned=[True],
+        grid_power=3000,
+        battery_power=0,
+        assert_status="Demand",
+        assert_solar_surplus_active=[False],
+        assert_solar_surplus_power=0,
+    )
+    power_sensor = my_predbat.ha_interface.dummy_items.get(power_sensor_id, {})
+    if isinstance(power_sensor, dict):
+        if power_sensor.get("state") != 0.0:
+            print("ERROR: power sensor state should be 0.0 when inactive, got {}".format(power_sensor.get("state")))
+            failed = True
+        if power_sensor.get("surplus_active") is not False:
+            print("ERROR: power sensor surplus_active should be False when inactive, got {}".format(power_sensor.get("surplus_active")))
+            failed = True
     return failed
