@@ -1125,7 +1125,7 @@ class TestAutomaticConfig:
         status.schema_version = 1
         self._make_inverter(status, serial="CE000000AA1", primary=True)
         gw._last_status = status
-        gw.gateway_inverter_serial = ["ZZNONEXISTENT"]
+        gw.gateway_inverter_serial = ["NON_EXISTENT"]
         gw.automatic_config()
 
         assert not gw._auto_configured
