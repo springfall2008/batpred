@@ -464,7 +464,6 @@ class GatewayMQTT(ComponentBase):
         if not self._auto_configured:
             self.automatic_config()
 
-
     def _inject_entities(self, status):
         """Inject inverter entities into PredBat state cache.
 
@@ -707,7 +706,8 @@ class GatewayMQTT(ComponentBase):
             if inv.battery.capacity_wh > 0:
                 soc_max_entities.append(f"sensor.{base}_battery_capacity")
             else:
-                self.log(f"Warn: GatewayMQTT: inverter {inv.serial} has no battery capacity, using fallback")
+                soc_max_entities.append(f"None")
+                self.log(f"Warn: GatewayMQTT: inverter {inv.serial} has no battery capacity, setting to None for automatic discovery")
 
         # Map entity lists to PredBat args
         self.set_arg("soc_percent", soc_entities)
