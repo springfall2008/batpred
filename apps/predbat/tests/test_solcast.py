@@ -2674,6 +2674,66 @@ def test_pv_calibration_15min_period(my_predbat):
 
 
 # ============================================================================
+# azimuth_zero_south tests
+# ============================================================================
+
+
+def test_download_forecast_solar_data_azimuth_zero_south(my_predbat):
+    """
+    When azimuth_zero_south is True the azimuth is passed to forecast.solar
+    as-is (0=South convention); when False (default) convert_azimuth is applied first.
+    """
+    print("  - test_download_forecast_solar_data_azimuth_zero_south")
+    failed = False
+
+    forecast_response = {
+        "result": {"watts": {"2025-06-15T12:00:00+0000": 500}},
+        "message": {"info": {"time": "2025-06-15T11:30:00+0000"}},
+    }
+
+    def create_mock_session(*args, **kwargs):
+        return test_api.mock_aiohttp_session()
+
+    # --- Case 1: azimuth_zero_south=True, azimuth=0 (South in forecast.solar convention) ---
+    # URL path should contain /0/ for azimuth
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "declination": 30, "azimuth": 0, "kwp": 3.0, "efficiency": 1.0, "azimuth_zero_south": True}]
+        test_api.set_mock_response("forecast.solar", forecast_response, 200)
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.download_forecast_solar_data())
+        solar_calls = [r for r in test_api.request_log if "forecast.solar" in r["url"]]
+        if not solar_calls:
+            print("ERROR: No forecast.solar API call made (azimuth_zero_south=True)")
+            failed = True
+        elif "/0/" not in solar_calls[0]["url"]:
+            print(f"ERROR: Expected /0/ in URL with azimuth_zero_south=True, got: {solar_calls[0]['url']}")
+            failed = True
+    finally:
+        test_api.cleanup()
+
+    # --- Case 2: azimuth_zero_south=False (default), azimuth=0 (North in Predbat convention) ---
+    # convert_azimuth(0) → 180; URL path should contain /180/
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "declination": 30, "azimuth": 0, "kwp": 3.0, "efficiency": 1.0}]
+        test_api.set_mock_response("forecast.solar", forecast_response, 200)
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.download_forecast_solar_data())
+        solar_calls = [r for r in test_api.request_log if "forecast.solar" in r["url"]]
+        if not solar_calls:
+            print("ERROR: No forecast.solar API call made (azimuth_zero_south=False)")
+            failed = True
+        elif "/180/" not in solar_calls[0]["url"]:
+            print(f"ERROR: Expected /180/ in URL without azimuth_zero_south, got: {solar_calls[0]['url']}")
+            failed = True
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+# ============================================================================
 # Main Test Runner
 # ============================================================================
 
@@ -2705,6 +2765,7 @@ def run_solcast_tests(my_predbat):
     failed |= test_download_forecast_solar_data_with_postcode_lookup_failure(my_predbat)
     failed |= test_download_forecast_solar_data_personal_api(my_predbat)
     failed |= test_download_forecast_solar_data_rate_limited_no_cache(my_predbat)
+    failed |= test_download_forecast_solar_data_azimuth_zero_south(my_predbat)
 
     # HA sensor tests
     failed |= test_fetch_pv_datapoints_detailed_forecast(my_predbat)

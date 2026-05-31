@@ -307,7 +307,8 @@ class SolarAPI(ComponentBase):
             postcode = config.get("postcode", None)
             tilt = config.get("declination", 35.0)
             az = config.get("azimuth", 180.0)
-            az = self.convert_azimuth(az)
+            if not config.get("azimuth_zero_south", False):
+                az = self.convert_azimuth(az)
             kwp = config.get("kwp", 3.0)
             system_loss = 1.0 - config.get("efficiency", 0.95)
             shading_factors = config.get("shading_factors", None)
@@ -438,7 +439,8 @@ class SolarAPI(ComponentBase):
             postcode = config.get("postcode", None)
             dec = config.get("declination", 35.0)
             az = config.get("azimuth", 180.0)
-            az = self.convert_azimuth(az)  # Convert azimuth to degrees if needed
+            if not config.get("azimuth_zero_south", False):
+                az = self.convert_azimuth(az)
             kwp = config.get("kwp", 3.0)
             efficiency = config.get("efficiency", 0.95)
             api_key = config.get("api_key", None)

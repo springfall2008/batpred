@@ -280,6 +280,7 @@ pred_bat:
   #  azimuth: 180
   #  declination: 10
   #  api_key: !secret forecast_solar_api_key
+  #  azimuth_zero_south: false  # Set to true if azimuth is already in Forecast.solar/Open-Meteo convention (0=South) rather than Predbat convention (0=North)
 
   # Set these to match solcast sensor names if not using the cloud interface
   # The regular expression (re:) makes the solcast bit optional
