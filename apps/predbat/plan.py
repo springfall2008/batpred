@@ -1384,6 +1384,53 @@ class Plan:
                 save="best" if publish else None,
                 end_record=self.end_record,
             )
+            # Apply Clipping Buffer caps to final published limits
+            if getattr(self, "clipping_buffer_enable", False) and getattr(self, "clipping_buffer_forecast_kwh", {}):
+                # 1. Cap any planned grid charging that overlaps with needed buffer
+                for n, window in enumerate(self.charge_window_best):
+                    buffer_needed = self.clipping_buffer_forecast_kwh.get(window["start"], 0)
+                    if buffer_needed > 0:
+                        # Convert kWh to percent
+                        new_target_soc_kw = max(0, self.soc_max - buffer_needed)
+                        new_target_percent = (new_target_soc_kw / self.soc_max) * 100.0 if self.soc_max > 0 else 0
+                        self.charge_limit_best[n] = min(self.charge_limit_best[n], new_target_percent)
+
+                # 2. Inject an Export window to force the inverter to route surplus to the battery
+                # as described by the user (Export mode with a target SOC floor)
+                c_start = getattr(self, "clipping_buffer_start", None)
+                c_end = getattr(self, "clipping_buffer_end", None)
+                c_rem = getattr(self, "clipping_remaining_today", 0)
+                if getattr(self, "clipping_buffer_can_discharge", "") in ["Always", "Cost Optimal"] and c_start is not None and c_end is not None and c_rem > 0:
+                    if c_start >= self.minutes_now:
+                        target_kw = max(0, self.soc_max - c_rem)
+                        target_percent = (target_kw / self.soc_max) * 100.0 if self.soc_max > 0 else 0.0
+                        clip_window = {
+                            "start": c_start,
+                            "end": c_end,
+                            "average": self.rate_export.get(c_start, 0),
+                            "target": target_percent
+                        }
+                        
+                        # Only add if it doesn't heavily overlap an existing export window (simplified check)
+                        overlap = False
+                        for e_win in self.export_window_best:
+                            if (c_start >= e_win["start"] and c_start < e_win["end"]) or (c_end > e_win["start"] and c_end <= e_win["end"]):
+                                overlap = True
+                                # If it overlaps, just lower the target of the existing window
+                                e_idx = self.export_window_best.index(e_win)
+                                self.export_limits_best[e_idx] = min(self.export_limits_best[e_idx], target_percent)
+                                self.export_window_best[e_idx]["target"] = self.export_limits_best[e_idx]
+                        
+                        if not overlap:
+                            self.export_window_best.append(clip_window)
+                            self.export_limits_best.append(target_percent)
+                            
+                            # Sort by start time
+                            paired = list(zip(self.export_window_best, self.export_limits_best))
+                            paired.sort(key=lambda x: x[0]["start"])
+                            self.export_window_best = [x[0] for x in paired]
+                            self.export_limits_best = [x[1] for x in paired]
+
             # round charge_limit_best (kWh) to 3 decimal places
             self.charge_limit_best = [dp3(elem) for elem in self.charge_limit_best]
 
