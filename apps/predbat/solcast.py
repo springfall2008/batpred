@@ -507,7 +507,7 @@ class SolarAPI(ComponentBase):
                 for offset in range(0, self.plan_interval_minutes, 1):
                     pv50 += dp4(forecast_watt_data.get(minute + offset, 0) / 1000.0)
                 pv50 /= 60
-                period_start_stamp = self.midnight_utc.replace(tzinfo=pytz.utc) + timedelta(minutes=minute)
+                period_start_stamp = self.midnight_utc + timedelta(minutes=minute)
                 data_item = {"period_start": period_start_stamp.strftime(TIME_FORMAT), "pv_estimate": pv50}
                 if period_start_stamp in period_data:
                     period_data[period_start_stamp]["pv_estimate"] += pv50
