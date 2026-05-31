@@ -1562,7 +1562,7 @@ class WebInterface(ComponentBase):
         text += "  }\n"
         return text
 
-    def render_chart(self, series_data, yaxis_name, chart_name, now_str, tagname="chart", daily_chart=True, extra_yaxis=None, yaxis_annotations=None, xaxis_annotations=None):
+    def render_chart(self, series_data, yaxis_name, chart_name, now_str, tagname="chart", daily_chart=True, extra_yaxis=None, yaxis_annotations=None, xaxis_annotations=None, yaxis_min=None, yaxis_max=None, yaxis_tick_amount=None):
         """
         Render a chart
         """
@@ -1693,6 +1693,13 @@ var options = {
                 "      title: {{ text: '{}' }}".format(yaxis_name),
                 "      decimalsInFloat: 2",
             ]
+            if yaxis_min is not None:
+                primary_parts.append("      min: {}".format(yaxis_min))
+            if yaxis_max is not None:
+                primary_parts.append("      max: {}".format(yaxis_max))
+            if yaxis_tick_amount is not None:
+                primary_parts.append("      tickAmount: {}".format(yaxis_tick_amount))
+
             if primary_series_names:
                 names = ",".join("'{}'".format(name) for name in primary_series_names)
                 primary_parts.append("      seriesName: [{}]".format(names))
@@ -1707,6 +1714,11 @@ var options = {
                 series_names = axis.get("series_names")
                 opposite = axis.get("opposite", False)
                 labels_formatter = axis.get("labels_formatter")
+                
+                # Apply global scaling to secondary axes as well to force grid line alignment
+                ax_min = axis.get("min", yaxis_min)
+                ax_max = axis.get("max", yaxis_max)
+                ax_tick = axis.get("tickAmount", yaxis_tick_amount)
 
                 axis_parts = []
                 if series_names:
@@ -1716,6 +1728,14 @@ var options = {
                     axis_parts.append("      seriesName: '{}'".format(series_name))
                 axis_parts.append("      title: {{ text: '{}' }}".format(title))
                 axis_parts.append("      decimalsInFloat: {}".format(decimals))
+                
+                if ax_min is not None:
+                    axis_parts.append("      min: {}".format(ax_min))
+                if ax_max is not None:
+                    axis_parts.append("      max: {}".format(ax_max))
+                if ax_tick is not None:
+                    axis_parts.append("      tickAmount: {}".format(ax_tick))
+                
                 if opposite:
                     axis_parts.append("      opposite: true")
                 if labels_formatter:
@@ -3014,12 +3034,15 @@ chart.render();
 
             # Limits
             # Get physical inverter limit (kW)
-            inverter_ac_limit_watts = 0.0
+            inverter_ac_limit_kw = 0.0
             if self.base.inverters:
                 for inverter in self.base.inverters:
-                    inverter_ac_limit_watts += inverter.inverter_limit * 60.0 * 1000.0
-            inverter_ac_limit_kw = inverter_ac_limit_watts / 1000.0
-
+                    inverter_ac_limit_kw += inverter.inverter_limit * 60.0 # internal kW/min back to kW
+            
+            # Get effective limit from logic
+            clipping_limit_kw = getattr(self.base, "clipping_limit", 0.0) * 60.0
+            clipping_mode = getattr(self.base, "clipping_mode", "Inverter Limit")
+            
             # Ceiling for both axes (kWh and kW) to ensure ticks line up
             # Max of (SOC Max, Inverter Limit, Max expected Solar)
             axis_max = 12.0
@@ -3049,25 +3072,49 @@ chart.render();
             xaxis_annotations = []
             clipping_start = getattr(self.base, "clipping_buffer_start", None)
             clipping_end = getattr(self.base, "clipping_buffer_end", None)
+            
+            # Today's window
             if clipping_start is not None and clipping_end is not None:
-                # Use local midnight for chart axis alignment
-                start_dt = self.midnight + timedelta(minutes=clipping_start)
-                end_dt = self.midnight + timedelta(minutes=clipping_end)
-                # Use TIME_FORMAT string which render_chart knows how to parse into new Date()
+                start_dt = self.midnight_utc + timedelta(minutes=clipping_start)
+                end_dt = self.midnight_utc + timedelta(minutes=clipping_end)
                 xaxis_annotations.append({
                     "x": start_dt.strftime(TIME_FORMAT),
-                    "text": "Clipping Start",
+                    "text": "Today's Buffer Start",
                     "color": "#FF9800"
                 })
                 xaxis_annotations.append({
                     "x": end_dt.strftime(TIME_FORMAT),
-                    "text": "Clipping End",
+                    "text": "Today's Buffer End",
                     "color": "#FF9800"
                 })
+            
+            # Tomorrow's window (if available in forecast)
+            if getattr(self.base, "clipping_buffer_forecast_kwh", None):
+                forecast = self.base.clipping_buffer_forecast_kwh
+                tomorrow_start = 1440
+                if any(forecast.get(m, 0) > 0 for m in range(tomorrow_start, tomorrow_start + 1440)):
+                    mid_tomorrow = self.midnight_utc + timedelta(days=1)
+                    xaxis_annotations.append({
+                        "x": mid_tomorrow.strftime(TIME_FORMAT),
+                        "text": "Tomorrow's Buffer Active",
+                        "color": "#FF9800"
+                    })
+
+            # Clipping Remaining Time-Series
+            clipping_remaining_series = {}
+            if getattr(self.base, "clipping_buffer_forecast_kwh", None):
+                forecast = self.base.clipping_buffer_forecast_kwh
+                step_size = getattr(self.base, "plan_interval_minutes", 30)
+                for minute, kwh in forecast.items():
+                    if minute % step_size == 0:
+                        minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
+                        stamp = minute_timestamp.strftime(TIME_FORMAT)
+                        clipping_remaining_series[stamp] = round(kwh, 2)
 
             series_data = [
                 {"name": "Target SOC", "data": soc_kw_best, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#eb2323", "unit": "kWh"},
                 {"name": "Actual SOC", "data": soc_kw_h0, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": "#9b23eb", "unit": "kWh"},
+                {"name": "Clipping Remaining", "data": clipping_remaining_series, "opacity": "0.4", "stroke_width": "2", "stroke_curve": "smooth", "color": "#2196F3", "unit": "kWh"},
                 {"name": "PV Power", "data": pv_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#f5c43d", "unit": "kW"},
                 {"name": "Clipping Forecast (" + clipping_forecast_type + ")", "data": clipping_forecast, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#a8a8a7", "unit": "kW"},
             ]
@@ -3089,12 +3136,21 @@ chart.render();
                     "min": 0,
                     "max": axis_max,
                     "tickAmount": axis_ticks,
+                },
+                {
+                    "title": "kWh",
+                    "series_name": "Clipping Remaining",
+                    "show": False,
+                    "min": 0,
+                    "max": axis_max,
+                    "tickAmount": axis_ticks,
                 }
             ]
 
             # Append dynamic stats to chart title
             clipping_remaining = getattr(self.base, "clipping_remaining_today", 0.0)
-            chart_title = "Clipping Analysis (Remaining Today: {} kWh)".format(round(clipping_remaining, 2))
+            clipping_mitigated = getattr(self.base, "clipping_mitigated_today", 0.0)
+            chart_title = "Clipping Analysis (Remaining: {:.2f} kWh, Mitigated: {:.2f} kWh)".format(clipping_remaining, clipping_mitigated)
             
             text += self.render_chart(series_data, "kWh", chart_title, now_str, yaxis_annotations=annotations, xaxis_annotations=xaxis_annotations, extra_yaxis=secondary_axis, yaxis_min=0, yaxis_max=axis_max, yaxis_tick_amount=axis_ticks)
 

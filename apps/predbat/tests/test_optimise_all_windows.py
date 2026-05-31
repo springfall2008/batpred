@@ -75,7 +75,7 @@ def run_optimise_all_windows(
     export_limits_best = [100 for n in range(len(export_window_best))]
 
     failed = False
-    metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
+    metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g, *_ = my_predbat.run_prediction(
         charge_limit_best, charge_window_best, export_window_best, export_limits_best, False, end_record=end_record
     )
     # Save plan
@@ -92,7 +92,7 @@ def run_optimise_all_windows(
     export_window_best = my_predbat.export_window_best
 
     # Predict
-    metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
+    metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g, *_ = my_predbat.run_prediction(
         charge_limit_best, charge_window_best, export_window_best, export_limits_best, False, end_record=end_record, save="best"
     )
 

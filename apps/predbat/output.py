@@ -2979,20 +2979,7 @@ class Output:
 
         # Simulate yesterday
         self.prediction = Prediction(self, yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, soc_kw=soc_yesterday)
-        (
-            metric_baseline,
-            import_kwh_battery,
-            import_kwh_house,
-            export_kwh,
-            soc_min,
-            final_soc,
-            soc_min_minute,
-            battery_cycle,
-            metric_keep,
-            final_iboost,
-            final_carbon_g,
-            clipping_mitigated,
-            ) = self.run_prediction(
+        (metric_baseline, import_kwh_battery, import_kwh_house, export_kwh, soc_min, final_soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g, *_) = self.run_prediction(
 charge_limit_best, charge_window_best, [], [], False, end_record=end_record, save="yesterday")
 
         # Add back in battery value

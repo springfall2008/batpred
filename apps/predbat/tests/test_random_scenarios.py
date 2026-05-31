@@ -559,8 +559,8 @@ def run_scenario(my_predbat, scenario, debug=False):
         my_predbat.calculate_plan(recompute=True)
 
         # Normal prediction (cost = raw import/export money)
-        cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
-            my_predbat.charge_limit_best,
+        cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g, *_ = my_predbat.run_prediction(
+        my_predbat.charge_limit_best,
             my_predbat.charge_window_best,
             my_predbat.export_window_best,
             my_predbat.export_limits_best,

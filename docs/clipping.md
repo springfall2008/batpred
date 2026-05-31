@@ -17,29 +17,28 @@ Standard solar forecasts are often "smoothed" or averaged, meaning they might mi
 - **Main Forecast (`pv_estimate`)**: The standard calibrated forecast.
 - **Worst Case (`pv_estimate10`)**: 10th percentile (conservative).
 - **Best Case (`pv_estimate90`)**: 90th percentile (likely for sunny days).
-- **Clear Sky (`clearsky`)**: **Recommended.** Theoretical maximum based on site orientation. This provides a "physics-based" upper bound that won't change with the weather.
-- **Historical Max (`historical`)**: Calculated based on your site's absolute peak production in the last 7 days. Best for adapting to local environmental factors (like shade or seasonal variations).
+- **Clear Sky (`pv_clearsky`)**: **Recommended.** Theoretical maximum based on site orientation. This provides a "physics-based" upper bound that won't change with the weather.
+- **Historical Max (`pv_historical`)**: Calculated based on your site's absolute peak production in the last 7 days. Best for adapting to local environmental factors (like shade or seasonal variations).
 
 ### 2. The "Hole" Calculation
-Predbat calculates the `clipping_buffer_kwh` by integrating the area of your chosen safety forecast that exceeds your **Effective Clipping Limit** (the most restrictive of your Inverter, Grid, or Manual limits).
+Predbat calculates the `clipping_buffer_kwh` by integrating the area of your chosen safety forecast that exceeds your **Effective Clipping Limit**.
 *   **Dynamic Sizing**: If the forecast shows 2 hours of 1kW clipping, Predbat reserves a 2kWh hole.
-*   **Time Window**: It identifies the specific start and end times of the expected clipping (e.g., 11:00 to 14:00).
+*   **48-Hour Planning**: The buffer is aware of Predbat's full 48-hour planning window. If clipping is forecast for tomorrow, Predbat will automatically begin reserving space (by capping overnight grid charging) as soon as today's peak is over.
+*   **Dynamic Decay**: As your solar panels produce energy and the peak of the day passes, the reserved buffer dynamically shrinks. This ensures that you don't unnecessarily limit your battery usage in the late afternoon or evening after the risk of clipping has passed.
 
 ### 3. Proactive Reservation (Grid-Charge Capping)
 The core of the implementation is inside the simulation engine. Predbat enforces the buffer by restricting **Grid Charging** only:
-*   Any grid charge window planned to end before the clipping window is proactively capped at `soc_max - clipping_buffer_kwh`.
-*   **PV is never capped**: The battery is always allowed to charge to 100% using solar power.
-*   **Reasoning**: By holding back the grid charge, we create physical space in the battery. During the daytime, that space is filled by the DC spikes that would have otherwise been clipped.   
-
-### 4. Dynamic Release
-As the day progresses and the peak solar period passes, the calculated buffer size naturally reduces to zero. This ensures that the battery is allowed to reach 100% (via solar) by the end of the day, and normal grid-charging behavior can resume for the evening if rates drop.
+*   Any grid charge window is proactively capped at `soc_max - Buffer_Needed`.
+*   **PV Priority**: Solar generation *below* the AC limit is prioritized for load or export, ensuring you get the full financial benefit of your solar while keeping the buffer empty for spikes.
+*   **Active Mitigation**: During the clipping window, any solar production *above* the AC limit is diverted into the reserved buffer, filling the "hole".
+*   **Hole Protection**: The battery is always allowed to charge to 100% using solar power, but only the "clipping" portion is allowed to fill the reserved buffer space during the peak.
 
 ### Advanced Configuration
 
 | Setting | Description |
 | ------- | ----------- |
 | `clipping_buffer_enable` | Master toggle to enable/disable the feature. |
-| `clipping_buffer_forecast` | Which solar curve to use for calculating the buffer. **Recommended: `clearsky`** for maximum safety. |
+| `clipping_buffer_forecast` | Which solar curve to use for calculating the buffer. **Recommended: `pv_clearsky`** for maximum safety. |
 | `clipping_buffer_min_kwh` | The minimum floor for the buffer. Setting this equal to `max_kwh` creates a **fixed manual hole**. |
 | `clipping_buffer_max_kwh` | A hard cap on the buffer size to prevent leaving the battery too empty on over-optimistic forecasts. |
 | `clipping_buffer_can_discharge` | **Optional (Default: `Cost Optimal`).** Controls how aggressively Predbat creates the 'hole'.<br>• `None`: Only stops grid charging.<br>• `Cost Optimal`: **(Recommended)** Automatically chooses to discharge early if the financial value of the saved solar (valued at the current export rate) outweighs the costs of discharging now.<br>• `Always`: Forces a discharge to ensure the buffer is physically available before clipping begins. |
@@ -53,8 +52,9 @@ As the day progresses and the peak solar period passes, the calculated buffer si
 Predbat automatically calculates the **Effective Clipping Limit** by choosing the *most restrictive* constraint on your system:
 1.  **Manual Override:** If `clipping_buffer_limit_override` is set, this is used exclusively.
 2.  **DNO Export Limit:** If your `export_limit` is configured and is lower than your hardware capacity, Predbat will reserve space to prevent export throttling.
-3.  **Physical Inverter AC Capacity:** The maximum AC power your inverters can convert from DC solar.
-4.  **PV AC Capacity:** For non-hybrid systems, the rated limit of your separate PV inverters (e.g., microinverters).
+3.  **Battery Charge Capacity:** For AC-coupled systems, Predbat limits the "absorbable" PV to the sum of your battery charge rate, house load, and grid export limit.
+4.  **Physical Inverter AC Capacity:** The maximum AC power your inverters can convert from DC solar.
+5.  **PV AC Capacity:** For non-hybrid systems, the rated limit of your separate PV inverters (e.g., microinverters).
 
 ### Understanding 'Cost Optimal' Mode
 The default `Cost Optimal` mode allows the Clipping Buffer to work seamlessly with Predbat's primary goal: saving you money.
@@ -67,5 +67,5 @@ You can check the active constraint in Home Assistant via the `clipping_mode` at
 
 ## Visualization
 You can monitor the buffer in two ways:
-1.  **Predbat Web UI**: Use the new **Clipping** chart to see your actual PV power overlaid with your chosen safety forecast.
+1.  **Predbat Web UI**: Use the new **Clipping** chart to see your actual PV power overlaid with your chosen safety forecast. The chart now includes a **Clipping Remaining** line showing how the reservation decays throughout the day.
 2.  **Home Assistant**: Add the `sensor.predbat_clipping_buffer_kwh` to your dashboard to see exactly how much space is being reserved in real-time.

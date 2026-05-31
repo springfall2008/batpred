@@ -119,6 +119,7 @@ class Prediction:
             self.car_energy_reported_load = base.car_energy_reported_load
             self.reserve = base.reserve
             self.clipping_buffer_kwh = getattr(base, "clipping_buffer_kwh", 0)
+            self.clipping_buffer_forecast_kwh = getattr(base, "clipping_buffer_forecast_kwh", {})
             self.clipping_buffer_min_kwh = getattr(base, "clipping_buffer_min_kwh", 0)
             self.clipping_buffer_start = getattr(base, "clipping_buffer_start", None)
             self.clipping_buffer_end = getattr(base, "clipping_buffer_end", None)
@@ -215,26 +216,7 @@ class Prediction:
         Run single prediction in a thread
         """
 
-        (
-            cost,
-            import_kwh_battery,
-            import_kwh_house,
-            export_kwh,
-            soc_min,
-            soc,
-            soc_min_minute,
-            battery_cycle,
-            metric_keep,
-            final_iboost,
-            final_carbon_g,
-            predict_soc,
-            car_charging_soc_next,
-            iboost_next,
-            iboost_running,
-            iboost_running_solar,
-            iboost_running_full,
-            mitigated_today,
-            ) = self.run_prediction(
+        (cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g, predict_soc, car_charging_soc_next, iboost_next, iboost_running, iboost_running_solar, iboost_running_full, mitigated_today, *_) = self.run_prediction(
 charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record, step=step, cache=self.prediction_cache_enable)
         return (
             cost,
@@ -263,26 +245,7 @@ charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_
         else:
             try_charge_limit[window_n] = try_soc
 
-        (
-            cost,
-            import_kwh_battery,
-            import_kwh_house,
-            export_kwh,
-            soc_min,
-            soc,
-            soc_min_minute,
-            battery_cycle,
-            metric_keep,
-            final_iboost,
-            final_carbon_g,
-            predict_soc,
-            car_charging_soc_next,
-            iboost_next,
-            iboost_running,
-            iboost_running_solar,
-            iboost_running_full,
-            mitigated_today,
-            ) = self.run_prediction(
+        (cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g, predict_soc, car_charging_soc_next, iboost_next, iboost_running, iboost_running_solar, iboost_running_full, mitigated_today, *_) = self.run_prediction(
 try_charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record, cache=self.prediction_cache_enable)
         return (
             cost,
@@ -311,26 +274,7 @@ try_charge_limit, charge_window, export_window, export_limits, pv10, end_record=
         else:
             try_charge_limit[window_n] = try_soc
 
-        (
-            cost,
-            import_kwh_battery,
-            import_kwh_house,
-            export_kwh,
-            soc_min,
-            soc,
-            soc_min_minute,
-            battery_cycle,
-            metric_keep,
-            final_iboost,
-            final_carbon_g,
-            predict_soc,
-            car_charging_soc_next,
-            iboost_next,
-            iboost_running,
-            iboost_running_solar,
-            iboost_running_full,
-            mitigated_today,
-            ) = self.run_prediction(
+        (cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g, predict_soc, car_charging_soc_next, iboost_next, iboost_running, iboost_running_solar, iboost_running_full, mitigated_today, *_) = self.run_prediction(
 try_charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record, cache=False)
         min_soc = self.soc_max
         max_soc = 0
@@ -357,6 +301,7 @@ try_charge_limit, charge_window, export_window, export_limits, pv10, end_record=
             metric_keep,
             final_iboost,
             final_carbon_g,
+            mitigated_today,
             min_soc,
             max_soc,
         )
@@ -378,26 +323,7 @@ try_charge_limit, charge_window, export_window, export_limits, pv10, end_record=
             start = min(start, window["end"] - 5)
             export_window[window_n]["start"] = start
 
-        (
-            metricmid,
-            import_kwh_battery,
-            import_kwh_house,
-            export_kwh,
-            soc_min,
-            soc,
-            soc_min_minute,
-            battery_cycle,
-            metric_keep,
-            final_iboost,
-            final_carbon_g,
-            predict_soc,
-            car_charging_soc_next,
-            iboost_next,
-            iboost_running,
-            iboost_running_solar,
-            iboost_running_full,
-            mitigated_today,
-            ) = self.run_prediction(
+        (metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g, predict_soc, car_charging_soc_next, iboost_next, iboost_running, iboost_running_solar, iboost_running_full, mitigated_today, *_) = self.run_prediction(
 charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record, cache=self.prediction_cache_enable)
         return metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g, mitigated_today
 
@@ -421,11 +347,12 @@ charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_
         """
 
         # Enforce clipping buffer on grid charging
-        if self.clipping_buffer_kwh > 0 and self.clipping_buffer_end is not None:
+        if self.clipping_buffer_forecast_kwh:
             charge_limit = list(charge_limit)
             for n, window in enumerate(charge_window):
-                if window["end"] <= self.clipping_buffer_end:
-                    charge_limit[n] = min(charge_limit[n], self.soc_max - self.clipping_buffer_kwh)
+                buffer_needed = self.clipping_buffer_forecast_kwh.get(window["start"], 0)
+                if buffer_needed > 0:
+                    charge_limit[n] = min(charge_limit[n], self.soc_max - buffer_needed)
 
         window_hash = 0
         for window in charge_window:
@@ -714,22 +641,22 @@ charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_
 
             # Active Mitigation: Create a 'Hole' in the battery
             soc_max_effective = soc_max
-            purge_target_soc = None
-            is_before_clipping = self.clipping_buffer_start is not None and minute_absolute < self.clipping_buffer_start
-            is_during_clipping = self.clipping_buffer_start is not None and self.clipping_buffer_end is not None and minute_absolute >= self.clipping_buffer_start and minute_absolute <= self.clipping_buffer_end
-
-            if self.clipping_buffer_kwh > 0 and (is_before_clipping or is_during_clipping):
-                # Hard reservation: Normal charging (solar/grid) stops at target
-                target_soc = max(0, soc_max - self.clipping_buffer_kwh)
+            buffer_now = self.clipping_buffer_forecast_kwh.get(minute_absolute, 0)
+            if buffer_now > 0:
+                target_soc = max(0, soc_max - buffer_now)
                 soc_max_effective = target_soc
-                
-                # Always mode: Force discharge if above target
+
+                # Ensure that any export window (forced or optimizer-selected) stops at the buffer floor
+                if self.clipping_buffer_can_discharge in ["Always", "Cost Optimal"]:
+                    purge_target_soc = target_soc
+
+                # Always mode: Force discharge if above target natively in simulation
                 if self.clipping_buffer_can_discharge == "Always":
                     if soc > target_soc:
                         export_window_active = True
                         export_limit_now = min(export_limit_now, 0.0) # Force export to 0% (but clamped by purge_target_soc later)
-                        purge_target_soc = target_soc
-
+            else:
+                purge_target_soc = None
             # Modelling reset of charge/discharge rate
             if set_charge_window or set_export_window:
                 charge_rate_now = battery_rate_max_charge
@@ -857,9 +784,6 @@ charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_
 
             if purge_target_soc is not None:
                 discharge_min = max(discharge_min, purge_target_soc)
-                
-            if minute_absolute >= 780 and minute_absolute <= 840:
-                print(f"DEBUG: min={minute_absolute} ew={export_window_active} elim={export_limit_now} soc={soc} dmin={discharge_min} braw={battery_draw} diff={diff if 'diff' in locals() else 'None'}")
 
             if not set_export_freeze_only and export_window_active and export_limit_now < 99.0 and (soc > discharge_min):
                 # Discharge enable, capped at export limit

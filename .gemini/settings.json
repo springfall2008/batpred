@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "ha-mcp": {
+      "url": "http://homeassistant.local:9583/private_B-NT4hZwAkYJTbPUJe2ndw",
+      "type": "http"
+    }
+  }
+}

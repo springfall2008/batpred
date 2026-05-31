@@ -645,6 +645,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.isExporting = False
         self.isExporting_Target = 0
         self.clipping_buffer_kwh = 0
+        self.clipping_buffer_forecast_kwh = {}
         self.clipping_buffer_min_kwh = 0
         self.clipping_buffer_start = 0
         self.clipping_buffer_end = 0

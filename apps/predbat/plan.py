@@ -451,9 +451,8 @@ class Plan:
                     max_charge_slots = pred["max_charge_slots"]
                     max_export_slots = pred["max_export_slots"]
 
-                    cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = handle.get()
-                    cost10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10, final_iboost10, final_carbon_g10 = handle10.get()
-
+                    cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g, *_ = handle.get()
+                    cost10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10, final_iboost10, final_carbon_g10, *_ = handle10.get()
                     metric, battery_value = self.compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
 
                     tried_list[try_hash] = metric
@@ -774,20 +773,7 @@ class Plan:
         if end_record is None:
             end_record = self.forecast_minutes
 
-        (
-            cost10,
-            import_kwh_battery10,
-            import_kwh_house10,
-            export_kwh10,
-            soc_min10,
-            soc10,
-            soc_min_minute10,
-            battery_cycle10,
-            metric_keep10,
-            final_iboost10,
-            final_carbon_g,
-            clipping_mitigated,
-            ) = self.run_prediction(
+        (cost10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10, final_iboost10, final_carbon_g, clipping_mitigated, *_) = self.run_prediction(
 
             charge_limit_best,
             charge_window_best,
@@ -797,20 +783,7 @@ class Plan:
             end_record=end_record,
         )
         # Run new plan
-        (
-            cost,
-            import_kwh_battery,
-            import_kwh_house,
-            export_kwh,
-            soc_min,
-            soc,
-            soc_min_minute,
-            battery_cycle,
-            metric_keep,
-            final_iboost,
-            final_carbon_g,
-            clipping_mitigated,
-        ) = self.run_prediction(
+        (cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g, *_) = self.run_prediction(
             charge_limit_best,
             charge_window_best,
             export_window_best,
@@ -850,16 +823,21 @@ class Plan:
     def calculate_clipping_buffer(self):
         """
         Calculate the required clipping buffer (kWh) and times based on the selected forecast.
+        Supports 48-hour planning and dynamic buffer decay.
         """
+        if not self.clipping_buffer_enable:
+            self.clipping_buffer_forecast_kwh = {}
+            return 0, 0, 0
+
         # Determine effective clipping limit (Hierarchy of constraints)
         # 1. Start with Physical Inverter AC Capacity (summed)
         inverter_ac_limit = 0.0
         if self.inverters:
             for inverter in self.inverters:
-                inverter_ac_limit += inverter.inverter_limit # kW/min
+                inverter_ac_limit += inverter.inverter_limit
         
         # If no inverter limit is found, start with a very high limit so others can restrict it
-        effective_limit = inverter_ac_limit if inverter_ac_limit > 0 else 99999.0 / 60.0
+        base_limit = inverter_ac_limit if inverter_ac_limit > 0 else 99999.0 / 60.0
         clipping_mode = "Inverter AC Capacity"
 
         # 2. Check DNO Grid Export Limits
@@ -867,28 +845,26 @@ class Plan:
         if self.export_limits:
             for limit in self.export_limits:
                 if limit and limit > 0:
-                    grid_export_limit += limit # Already in kW/min
+                    grid_export_limit += limit
         
-        if grid_export_limit > 0 and grid_export_limit < effective_limit:
-            effective_limit = grid_export_limit
+        if grid_export_limit > 0 and grid_export_limit < base_limit:
+            base_limit = grid_export_limit
             clipping_mode = "DNO Export Limit"
 
         # 3. Check PV AC Limit (Microinverters / AC-coupled)
-        if not self.inverter_hybrid and self.pv_ac_limit > 0 and self.pv_ac_limit < effective_limit:
-            effective_limit = self.pv_ac_limit
+        if not self.inverter_hybrid and self.pv_ac_limit > 0 and self.pv_ac_limit < base_limit:
+            base_limit = self.pv_ac_limit
             clipping_mode = "PV AC Capacity"
 
-        # 4. Apply Manual Override if set
+        # 4. Apply Manual Override if set (W -> kW/min)
         if self.clipping_buffer_limit_override > 0:
-            effective_limit = self.clipping_buffer_limit_override
+            base_limit = self.clipping_buffer_limit_override / 60000.0
             clipping_mode = "Manual Override"
 
         self.clipping_mode = clipping_mode
-        self.clipping_limit = effective_limit
+        self.clipping_limit = base_limit
 
-        if not self.clipping_buffer_enable:
-            return 0, 0, 0
-
+        # Forecast selection (Standardized)
         forecast_type = self.clipping_buffer_forecast
         if forecast_type == "pv_estimate":
             pv_data = self.pv_forecast_minute
@@ -896,140 +872,126 @@ class Plan:
             pv_data = self.pv_forecast_minute10
         elif forecast_type == "pv_estimate90":
             pv_data = self.pv_forecast_minute90
-        elif forecast_type == "pv_estimateCL":
-            pv_data = self.pv_forecast_minute  # Fallback to minute forecast if CL not directly available
-        elif forecast_type == "clearsky":
-            pv_data = self.pv_forecast_minuteCS
-        elif forecast_type == "historical":
+        elif forecast_type in ["calibrated", "pv_estimateCL"]:
+            pv_data = self.pv_forecast_minute
+        elif forecast_type in ["clearsky", "pv_clearsky"]:
+            pv_data = self.pv_forecast_minuteCS if self.pv_forecast_minuteCS else self.pv_forecast_minute90
+        elif forecast_type in ["historical", "pv_historical"]:
             pv_data = self.pv_forecast_minuteMAX
         else:
             pv_data = self.pv_forecast_minute90
 
         if not pv_data:
+            self.clipping_buffer_forecast_kwh = {}
             return 0, 0, 0
 
-        clipping_kwh = 0
-        clipping_start = None
-        clipping_end = None
+        # Refine Hierarchy: Battery charge capacity for AC-coupled systems
+        limit_minute = {}
+        battery_charge_limit = getattr(self, "battery_rate_max_charge", 3.0) / 60.0
+        
+        for minute in range(0, self.forecast_minutes):
+            eff_limit = base_limit
+            if not self.inverter_hybrid:
+                # AC-coupled: max absorption = battery charge + load + grid export
+                load_now = self.load_minutes.get(minute, self.load_avg / 60.0)
+                # Export limit is already in base_limit
+                can_absorb = battery_charge_limit + load_now + base_limit 
+                eff_limit = min(base_limit, can_absorb)
+            limit_minute[minute] = eff_limit
 
-        # Manual time overrides
+        # 1. Determine Clipping Window (Deterministic/Seasonal)
+        window_source = self.pv_forecast_minuteCS if self.pv_forecast_minuteCS else pv_data
+        
+        def find_window(start_min, end_min):
+            solar_start, solar_end, max_pv, solar_noon = None, None, 0, start_min + 12 * 60
+            for m in range(start_min, end_min):
+                pv_cs = window_source.get(m, 0)
+                if pv_cs > (0.1 / 60.0):
+                    if solar_start is None: solar_start = m
+                    solar_end = m
+                if pv_cs > max_pv:
+                    max_pv = pv_cs
+                    solar_noon = m
+            
+            auto_start, auto_end = None, None
+            threshold = max_pv * 0.5
+            if threshold > 0:
+                for m in range(start_min, end_min):
+                    if window_source.get(m, 0) > threshold:
+                        if auto_start is None: auto_start = m
+                        auto_end = m
+            return auto_start, auto_end, solar_start, solar_end, solar_noon
+
+        # Today and Tomorrow windows
+        auto_start_today, auto_end_today, solar_start_today, solar_end_today, solar_noon_today = find_window(0, 1440)
+
+        # 2. Calculate Clipping Volume (kWh) with Dynamic Decay for 48h
+        clipping_buffer_minute = {}
+        total_forecast_minutes = max(pv_data.keys()) if pv_data else self.forecast_minutes
+        
+        # We process in blocks of 24h to reset decay correctly
+        for day in range(3): # 3 days max
+            day_start = day * 1440
+            day_end = (day + 1) * 1440
+            if day_start > total_forecast_minutes: break
+            
+            current_sum = 0
+            # Process this day in reverse
+            for m in range(min(day_end, total_forecast_minutes), day_start - 1, -1):
+                pv_now = pv_data.get(m, 0)
+                limit_now = limit_minute.get(m, base_limit)
+                if pv_now > limit_now:
+                    current_sum += (pv_now - limit_now)
+                
+                eff_sum = current_sum
+                if self.clipping_buffer_min_kwh > 0:
+                    eff_sum = max(eff_sum, self.clipping_buffer_min_kwh)
+                if self.clipping_buffer_max_kwh > 0:
+                    eff_sum = min(eff_sum, self.clipping_buffer_max_kwh)
+                clipping_buffer_minute[m] = eff_sum
+
+        self.clipping_buffer_forecast_kwh = clipping_buffer_minute
+        self.clipping_remaining_today = clipping_buffer_minute.get(self.minutes_now, 0)
+        self.clipping_tomorrow = clipping_buffer_minute.get(1440, 0)
+
+        # 3. Finalize Window for "Now" (Today's indicators)
         manual_start_minute = None
         manual_end_minute = None
-
         if self.clipping_buffer_start_time and self.clipping_buffer_start_time != "None":
             start_stamp = time_string_to_stamp(self.clipping_buffer_start_time)
             if start_stamp:
                 midnight_stamp = time_string_to_stamp("00:00:00")
                 manual_start_minute = int((start_stamp - midnight_stamp).seconds / 60)
-
         if self.clipping_buffer_end_time and self.clipping_buffer_end_time != "None":
             end_stamp = time_string_to_stamp(self.clipping_buffer_end_time)
             if end_stamp:
                 midnight_stamp = time_string_to_stamp("00:00:00")
                 manual_end_minute = int((end_stamp - midnight_stamp).seconds / 60)
 
-        # 1. Determine Clipping Window (Deterministic/Seasonal)
-        # We ALWAYS use Clear Sky for the window because it represents the physical peak.
-        # This handles the 'window shrinkage' from summer to winter perfectly.
-        auto_start = None
-        auto_end = None
-        window_source = self.pv_forecast_minuteCS if self.pv_forecast_minuteCS else pv_data
+        final_start = manual_start_minute if manual_start_minute is not None else auto_start_today
+        final_end = manual_end_minute if manual_end_minute is not None else auto_end_today
 
-        # We use a sensitive 95% threshold on Clear Sky to find the peak window
-        window_limit = effective_limit * 0.95
-
-        # Also track solar day (first/last light) and solar peak (noon) for fallback
-        solar_start = None
-        solar_end = None
-        max_pv = 0
-        solar_noon = 12 * 60
-
-        for minute in range(0, 24 * 60):
-            pv_cs = window_source.get(minute, 0)
-            if pv_cs > (0.5 / 60.0): # 500W
-                if solar_start is None: solar_start = minute
-                solar_end = minute
-            if pv_cs > max_pv:
-                max_pv = pv_cs
-                solar_noon = minute
-            if pv_cs > window_limit:
-                if auto_start is None: auto_start = minute
-                auto_end = minute
-
-        # 2. Calculate Clipping Volume (kWh)
-        # Use the user's chosen forecast type for the actual sizing
-        clipping_kwh = 0
-        clipping_remaining_today = 0
-        for minute in range(0, 24 * 60):
-            pv_now = pv_data.get(minute, 0)
-            if pv_now > effective_limit:
-                excess = (pv_now - effective_limit)
-                clipping_kwh += excess
-                if minute >= self.minutes_now:
-                    clipping_remaining_today += excess
-
-        # Calculate tomorrow's volume
-        clipping_tomorrow = 0
-        for minute in range(24 * 60, 48 * 60):
-            pv_now = pv_data.get(minute, 0)
-            if pv_now > effective_limit:
-                clipping_tomorrow += (pv_now - effective_limit)
-
-        self.clipping_remaining_today = clipping_remaining_today
-        self.clipping_tomorrow = clipping_tomorrow
-
-        # Apply min/max caps to volume
-        if self.clipping_buffer_max_kwh > 0:
-            clipping_kwh = min(clipping_kwh, self.clipping_buffer_max_kwh)
-        if self.clipping_buffer_min_kwh > 0:
-            clipping_kwh = max(clipping_kwh, self.clipping_buffer_min_kwh)
-
-        # 3. Finalize Window with Priority
-        # Priority: Manual > ClearSky Auto > Configurable Fallback (for floors)
-        final_start = manual_start_minute if manual_start_minute is not None else auto_start
-        final_end = manual_end_minute if manual_end_minute is not None else auto_end
-
-        # Fallback for floor-only buffers (e.g. winter days where CS < Limit)
-        # Center a configurable duration window around solar noon
         fallback_duration = getattr(self, "clipping_buffer_fallback_window", 2.0)
-        if clipping_kwh > 0 and final_start is None and fallback_duration > 0:
+        if self.clipping_remaining_today > 0 and final_start is None and manual_start_minute is None and fallback_duration > 0:
             half_window = (fallback_duration * 60.0) / 2.0
-            final_start = max(solar_start if solar_start else 0, int(solar_noon - half_window))
-            final_end = min(solar_end if solar_end else 1440, int(solar_noon + half_window))
+            final_start = max(solar_start_today if solar_start_today else 0, int(solar_noon_today - half_window))
+            final_end = min(solar_end_today if solar_end_today else 1440, int(solar_noon_today + half_window))
 
-        # 4. Apply Window Padding (Offset)
-        # Buffer window safety offset (defaults to 15 mins)
         offset = getattr(self, "clipping_buffer_window_offset", 15)
         if final_start is not None and manual_start_minute is None:
             final_start = max(0, final_start - offset)
         if final_end is not None and manual_end_minute is None:
             final_end = min(1440, final_end + offset)
 
-        # Ensure end is after start
         if final_start is not None and final_end is not None and final_end <= final_start:
             final_end = final_start + 60
 
-        clipping_start = final_start
-        clipping_end = final_end
+        if self.clipping_remaining_today > 0:
+            self.log("Clipping Buffer: Calculated buffer of {:.2f}kWh based on {}, starts at {}, ends at {}".format(
+                self.clipping_remaining_today, forecast_type, self.time_abs_str(final_start) if final_start is not None else "N/A", self.time_abs_str(final_end) if final_end is not None else "N/A"
+            ))
 
-        if clipping_kwh > 0:
-            window_msg = "starts at {}, ends at {}".format(
-                self.time_abs_str(clipping_start) if clipping_start is not None else "N/A",
-                self.time_abs_str(clipping_end) if clipping_end is not None else "N/A"
-            )
-            if auto_start is None and manual_start_minute is None:
-                window_msg += " (Fallback centered on Solar Noon)"
-
-            self.log(
-                "Clipping Buffer: Calculated buffer of {:.2f}kWh based on {}, {}".format(
-                    clipping_kwh,
-                    forecast_type,
-                    window_msg
-                )
-            )
-
-
-        return clipping_kwh, clipping_start, clipping_end
+        return self.clipping_remaining_today, final_start, final_end
     def calculate_plan(self, recompute=True, debug_mode=False, publish=True):
         """
         Calculate the new plan (best)
@@ -1111,6 +1073,47 @@ class Plan:
             # Pre-fill best export enable with Off
             self.export_limits_best = [100.0 for i in range(len(self.export_window_best))]
 
+            # Inject pre-clipping export window for Cost Optimal / Always evaluation
+            # This is critical to ensure the real-world inverter matches the simulation's behavior
+            can_discharge = getattr(self, "clipping_buffer_can_discharge", "")
+            if self.clipping_buffer_kwh > 0 and self.clipping_buffer_end is not None and can_discharge in ["Always", "Cost Optimal"]:
+                clipping_end = self.clipping_buffer_end
+                target_kwh = max(0, self.soc_max - self.clipping_buffer_kwh)
+                
+                # Check if current battery state (or predicted start state) needs space
+                # We use prediction.soc_kw which is the SoC at minute 0 of the plan
+                current_predicted_soc = self.soc_kw
+                if current_predicted_soc > (target_kwh + 0.1):
+                    # Calculate required minutes based on inverter discharge max (kW)
+                    discharge_rate_kw = getattr(self, "battery_rate_max_discharge", 3.0)
+                    if discharge_rate_kw <= 0: discharge_rate_kw = 3.0
+                    
+                    # How much energy to dump?
+                    energy_to_dump = current_predicted_soc - target_kwh
+                    minutes_needed = int((energy_to_dump / discharge_rate_kw) * 60) + 10
+                    
+                    export_start = self.minutes_now
+                    export_end = min(clipping_end, export_start + minutes_needed)
+                    
+                    if export_end > export_start:
+                        target_percent = (target_kwh / self.soc_max) * 100.0 if self.soc_max > 0 else 0.0
+                        new_window = {
+                            "start": export_start,
+                            "end": export_end,
+                            "average": self.rate_export.get(export_start, 0),
+                            "target": target_percent
+                        }
+                        self.export_window_best.append(new_window)
+                        # For 'Always', we force the limit now. For 'Cost Optimal', we set it to 100.0 
+                        # and let the optimizer evaluate the profit vs cycle loss.
+                        self.export_limits_best.append(target_percent if can_discharge == "Always" else 100.0)
+                        
+                        # Re-sort paired arrays
+                        paired = list(zip(self.export_window_best, self.export_limits_best))
+                        paired.sort(key=lambda x: x[0]["start"])
+                        self.export_window_best = [x[0] for x in paired]
+                        self.export_limits_best = [x[1] for x in paired]
+
             self.end_record = self.forecast_minutes
         # Show best windows
         self.log("Best charge window {}".format(self.window_as_text(self.charge_window_best, calc_percent_limit(self.charge_limit_best, self.soc_max))))
@@ -1189,7 +1192,7 @@ class Plan:
                     self.log("Not using threading as threads is set to 0 in apps.yaml")
 
         # Simulate current settings to get initial data
-        metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g, clipping_mitigated = self.run_prediction(
+        (metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g, *_) = self.run_prediction(
             self.charge_limit, self.charge_window, self.export_window, self.export_limits, False, end_record=self.end_record
         )
 
@@ -1211,6 +1214,47 @@ class Plan:
             # Remove charge windows that overlap with export windows
             self.charge_limit_best, self.charge_window_best = remove_intersecting_windows(self.charge_limit_best, self.charge_window_best, self.export_limits_best, self.export_window_best)
 
+            # Enforce clipping buffer on physical charge limits
+            # This is critical to ensure the real-world inverter matches the simulation's behavior
+            if self.clipping_buffer_kwh > 0 and self.clipping_buffer_end is not None:
+                len_windows = len(self.charge_window_best)
+                len_limits = len(self.charge_limit_best)
+                if len_windows != len_limits:
+                    self.log(f"Warn: Clipping enforcement list mismatch - windows={len_windows}, limits={len_limits}. Attempting to resync.")
+                    # Resync if possible
+                    if len_limits < len_windows:
+                        self.charge_limit_best.extend([self.soc_max] * (len_windows - len_limits))
+                    else:
+                        self.charge_limit_best = self.charge_limit_best[:len_windows]
+                
+                for n, window in enumerate(self.charge_window_best):
+                    if window["end"] <= self.clipping_buffer_end:
+                        self.charge_limit_best[n] = min(self.charge_limit_best[n], self.soc_max - self.clipping_buffer_kwh)
+
+            # Enforce physical export window for clipping buffer if 'Always' is requested
+            if self.clipping_buffer_kwh > 0 and self.clipping_buffer_start is not None and getattr(self, "clipping_buffer_can_discharge", "") == "Always":
+                clipping_start = self.clipping_buffer_start
+                export_start = max(self.minutes_now, clipping_start - 60)
+
+                if export_start < clipping_start:
+                    target_kwh = self.soc_max - self.clipping_buffer_kwh
+                    target_percent = (target_kwh / self.soc_max) * 100.0 if self.soc_max > 0 else 0.0
+
+                    new_window = {
+                        "start": export_start,
+                        "end": clipping_start,
+                        "average": self.rate_export.get(export_start, 0),
+                        "target": target_percent
+                    }
+                    self.export_window_best.append(new_window)
+                    self.export_limits_best.append(target_percent)
+
+                    # We need to sort both parallel arrays together
+                    paired = list(zip(self.export_window_best, self.export_limits_best))
+                    paired.sort(key=lambda x: x[0]["start"])
+                    self.export_window_best = [x[0] for x in paired]
+                    self.export_limits_best = [x[1] for x in paired]
+
             # Filter out any unused export windows
             if self.calculate_best_export and self.export_window_best:
                 # Filter out the windows we disabled
@@ -1219,20 +1263,7 @@ class Plan:
                 # Clipping windows
                 if self.export_window_best:
                     # Re-run prediction to get data for clipping
-                    (
-                        best_metric,
-                        import_kwh_battery,
-                        import_kwh_house,
-                        export_kwh,
-                        soc_min,
-                        soc,
-                        soc_min_minute,
-                        battery_cycle,
-                        metric_keep,
-                        final_iboost,
-                        final_carbon_g,
-                        clipping_mitigated,
-                        ) = self.run_prediction(
+                    (best_metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g, clipping_mitigated, *_) = self.run_prediction(
 
                         self.charge_limit_best,
                         self.charge_window_best,
@@ -1255,20 +1286,7 @@ class Plan:
             # Filter out any unused charge slots
             if self.calculate_best_charge and self.charge_window_best:
                 # Re-run prediction to get data for clipping
-                (
-                    best_metric,
-                    import_kwh_battery,
-                    import_kwh_house,
-                    export_kwh,
-                    soc_min,
-                    soc,
-                    soc_min_minute,
-                    battery_cycle,
-                    metric_keep,
-                    final_iboost,
-                    final_carbon_g,
-                    clipping_mitigated,
-                    ) = self.run_prediction(
+                (best_metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g, clipping_mitigated, *_) = self.run_prediction(
 
                     self.charge_limit_best,
                     self.charge_window_best,
@@ -1329,24 +1347,11 @@ class Plan:
             self.plan_last_updated_minutes = self.minutes_now
 
         # Final simulation of base
-        metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g, clipping_mitigated = self.run_prediction(
+        (metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g, *_) = self.run_prediction(
             self.charge_limit, self.charge_window, self.export_window, self.export_limits, False, save="base" if publish else None, end_record=self.end_record
         )
         # And base 10
-        (
-            metricb10,
-            import_kwh_batteryb10,
-            import_kwh_houseb10,
-            export_kwhb10,
-            soc_minb10,
-            socb10,
-            soc_min_minuteb10,
-            battery_cycle10,
-            metric_keep10,
-            final_iboost10,
-            final_carbon_g,
-            clipping_mitigated,
-            ) = self.run_prediction(
+        (metricb10, import_kwh_batteryb10, import_kwh_houseb10, export_kwhb10, soc_minb10, socb10, soc_min_minuteb10, battery_cycle10, metric_keep10, final_iboost10, final_carbon_g, clipping_mitigated, *_) = self.run_prediction(
 
             self.charge_limit,
             self.charge_window,
@@ -1359,20 +1364,7 @@ class Plan:
 
         if self.calculate_best:
             # Final simulation of best, do 10% and normal scenario
-            (
-                best_metric10,
-                import_kwh_battery10,
-                import_kwh_house10,
-                export_kwh10,
-                soc_min10,
-                soc10,
-                soc_min_minute10,
-                battery_cycle10,
-                metric_keep10,
-                final_iboost10,
-                final_carbon_g,
-                clipping_mitigated,
-                ) = self.run_prediction(
+            (best_metric10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10, final_iboost10, final_carbon_g, clipping_mitigated, *_) = self.run_prediction(
 
                 self.charge_limit_best,
                 self.charge_window_best,
@@ -1382,20 +1374,7 @@ class Plan:
                 save="best10" if publish else None,
                 end_record=self.end_record,
             )
-            (
-                best_metric,
-                import_kwh_battery,
-                import_kwh_house,
-                export_kwh,
-                soc_min,
-                soc,
-                soc_min_minute,
-                battery_cycle,
-                metric_keep,
-                final_iboost,
-                final_carbon_g,
-                clipping_mitigated,
-                ) = self.run_prediction(
+            (best_metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g, clipping_mitigated, *_) = self.run_prediction(
 
                 self.charge_limit_best,
                 self.charge_window_best,
@@ -1538,22 +1517,7 @@ class Plan:
             hans.append(self.launch_run_prediction_charge_min_max(best_soc_min, window_n, charge_limit, charge_window, export_window, export_limits, True, all_n, end_record))
             id = 0
             for han in hans:
-                (
-                    cost,
-                    import_kwh_battery,
-                    import_kwh_house,
-                    export_kwh,
-                    soc_min,
-                    soc,
-                    soc_min_minute,
-                    battery_cycle,
-                    metric_keep,
-                    final_iboost,
-                    final_carbon_g,
-                    clipping_mitigated,
-                    min_soc,
-                    max_soc,
-                ) = han.get()
+                (cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g, clipping_mitigated, min_soc, max_soc, *_) = han.get()
                 all_min_soc = min(all_min_soc, min_soc)
                 all_max_soc = max(all_max_soc, max_soc)
                 if id == 0:
@@ -1569,6 +1533,7 @@ class Plan:
                         metric_keep,
                         final_iboost,
                         final_carbon_g,
+                        clipping_mitigated,
                     ]
                 elif id == 1:
                     result10[loop_soc] = [
@@ -1583,6 +1548,7 @@ class Plan:
                         metric_keep,
                         final_iboost,
                         final_carbon_g,
+                        clipping_mitigated,
                     ]
                 elif id == 2:
                     resultmid[best_soc_min] = [
@@ -1597,6 +1563,7 @@ class Plan:
                         metric_keep,
                         final_iboost,
                         final_carbon_g,
+                        clipping_mitigated,
                     ]
                 elif id == 3:
                     result10[best_soc_min] = [
@@ -1611,6 +1578,7 @@ class Plan:
                         metric_keep,
                         final_iboost,
                         final_carbon_g,
+                        clipping_mitigated,
                     ]
                 id += 1
 
@@ -1686,8 +1654,8 @@ class Plan:
                 try_charge_limit[window_n] = try_soc
 
             # Simulate with medium PV
-            (cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g) = resultmid[try_soc]
-            (cost10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10, final_iboost10, final_carbon_g10) = result10[try_soc]
+            (cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g, *_) = resultmid[try_soc]
+            (cost10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10, final_iboost10, final_carbon_g10, *_) = result10[try_soc]
 
             # Compute the metric from simulation results
             metric, battery_value = self.compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
@@ -1889,20 +1857,8 @@ class Plan:
             start, this_export_limit, hanres, hanres10 = try_option
 
             # Simulate with medium PV
-            cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = hanres
-            (
-                cost10,
-                import_kwh_battery10,
-                import_kwh_house10,
-                export_kwh10,
-                soc_min10,
-                soc10,
-                soc_min_minute10,
-                battery_cycle10,
-                metric_keep10,
-                final_iboost10,
-                final_carbon_g10,
-            ) = hanres10
+            cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g, *_ = hanres
+            (cost10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10, final_iboost10, final_carbon_g10, *_) = hanres10
 
             # Compute the metric from simulation results
             metric, battery_value = self.compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
@@ -2560,20 +2516,7 @@ class Plan:
             orig_charge_window_best = copy.deepcopy(self.charge_window_best)
             self.charge_limit_best, self.charge_window_best = remove_intersecting_windows(self.charge_limit_best, self.charge_window_best, self.export_limits_best, self.export_window_best)
 
-            (
-                cost10,
-                import_kwh_battery10,
-                import_kwh_house10,
-                export_kwh10,
-                soc_min10,
-                soc10,
-                soc_min_minute10,
-                battery_cycle10,
-                metric_keep10,
-                final_iboost10,
-                final_carbon_g,
-                clipping_mitigated,
-                ) = self.run_prediction(
+            (cost10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10, final_iboost10, final_carbon_g, clipping_mitigated, *_) = self.run_prediction(
 
                 self.charge_limit_best,
                 self.charge_window_best,
@@ -3509,26 +3452,7 @@ class Plan:
 
         # Call the prediction model
         pred = self.prediction
-        (
-            final_metric,
-            import_kwh_battery,
-            import_kwh_house,
-            export_kwh,
-            soc_min,
-            final_soc,
-            soc_min_minute,
-            final_battery_cycle,
-            final_metric_keep,
-            final_iboost_kwh,
-            final_carbon_g,
-            predict_soc,
-            car_charging_soc_next,
-            iboost_next,
-            iboost_running,
-            iboost_running_solar,
-            iboost_running_full,
-            mitigated_today,
-        ) = pred.run_prediction(charge_limit, charge_window, export_window, export_limits, pv10, end_record, save, step)
+        (final_metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, final_soc, soc_min_minute, final_battery_cycle, final_metric_keep, final_iboost_kwh, final_carbon_g, predict_soc, car_charging_soc_next, iboost_next, iboost_running, iboost_running_solar, iboost_running_full, mitigated_today, *_) = pred.run_prediction(charge_limit, charge_window, export_window, export_limits, pv10, end_record, save, step)
         self.predict_soc = predict_soc
         self.car_charging_soc_next = car_charging_soc_next
         self.iboost_next = iboost_next
@@ -4062,6 +3986,18 @@ class Plan:
                     },
                 )
 
+                # Note: mitigated_today comes from the simulation results
+                self.dashboard_item(
+                    self.prefix + ".clipping_mitigated_today",
+                    state=dp2(getattr(self, "clipping_mitigated_today", 0.0)),
+                    attributes={
+                        "friendly_name": "Clipping Mitigated Today",
+                        "unit_of_measurement": "kWh",
+                        "device_class": "energy",
+                        "icon": "mdi:battery-check",
+                    },
+                )
+
                 clipping_status_text = "No clipping forecast."
                 clipping_start_iso = None
                 clipping_end_iso = None
@@ -4105,15 +4041,36 @@ class Plan:
                     attributes={
                         "friendly_name": "Clipping Buffer Status",
                         "icon": "mdi:information-outline",
+                        "results": self.filtered_times(self.clipping_buffer_forecast_kwh),
                         "clipping_start": clipping_start_iso,
                         "clipping_end": clipping_end_iso,
                         "clipping_mode": self.clipping_mode,
                         "clipping_remaining_today": dp2(self.clipping_remaining_today),
                         "clipping_tomorrow": dp2(self.clipping_tomorrow),
+                        "clipping_mitigated_today": dp2(getattr(self, "clipping_mitigated_today", 0.0)),
                         "clipping_can_discharge": self.clipping_buffer_can_discharge,
                     },
                 )
-                
+                self.dashboard_item(
+                    self.prefix + ".clipping_remaining_today",
+                    state=dp2(self.clipping_remaining_today),
+                    attributes={
+                        "friendly_name": "Clipping Remaining Today",
+                        "unit_of_measurement": "kWh",
+                        "device_class": "energy",
+                        "icon": "mdi:solar-power",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".clipping_tomorrow",
+                    state=dp2(self.clipping_tomorrow),
+                    attributes={
+                        "friendly_name": "Clipping Tomorrow",
+                        "unit_of_measurement": "kWh",
+                        "device_class": "energy",
+                        "icon": "mdi:solar-power",
+                    },
+                )                
                 self.dashboard_item(self.prefix + ".record", state=0.0, attributes={"results": self.filtered_times(record_time), "friendly_name": "Prediction window", "state_class": "measurement"})
                 self.dashboard_item(
                     self.prefix + ".iboost_best",
@@ -4346,7 +4303,7 @@ class Plan:
             final_metric_keep,
             final_iboost_kwh,
             final_carbon_g,
-            clipping_mitigated,
+            mitigated_today,
         )
 
     def plan_iboost_smart(self):
