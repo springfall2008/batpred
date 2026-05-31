@@ -706,7 +706,7 @@ class GatewayMQTT(ComponentBase):
             if inv.battery.capacity_wh > 0:
                 soc_max_entities.append(f"sensor.{base}_battery_capacity")
             else:
-                soc_max_entities.append(f"None")
+                soc_max_entities.append(None)
                 self.log(f"Warn: GatewayMQTT: inverter {inv.serial} has no battery capacity, setting to None for automatic discovery")
 
         # Map entity lists to PredBat args
