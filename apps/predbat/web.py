@@ -3079,12 +3079,12 @@ chart.render();
                 end_dt = self.midnight_utc + timedelta(minutes=clipping_end)
                 xaxis_annotations.append({
                     "x": start_dt.strftime(TIME_FORMAT),
-                    "text": "Today's Buffer Start",
+                    "text": "Today Buffer Start",
                     "color": "#FF9800"
                 })
                 xaxis_annotations.append({
                     "x": end_dt.strftime(TIME_FORMAT),
-                    "text": "Today's Buffer End",
+                    "text": "Today Buffer End",
                     "color": "#FF9800"
                 })
             
@@ -3096,7 +3096,7 @@ chart.render();
                     mid_tomorrow = self.midnight_utc + timedelta(days=1)
                     xaxis_annotations.append({
                         "x": mid_tomorrow.strftime(TIME_FORMAT),
-                        "text": "Tomorrow's Buffer Active",
+                        "text": "Tomorrow Buffer Active",
                         "color": "#FF9800"
                     })
 
