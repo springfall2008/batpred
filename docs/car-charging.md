@@ -587,7 +587,7 @@ Enable the feature with these Predbat entities:
 
 - **binary_sensor.predbat_car_charging_slot** gains a `solar_surplus: true` attribute when activated by surplus (rather than a planned charging window).
 - **binary_sensor.predbat_car_charging_solar_surplus** -- Dedicated sensor showing whether surplus charging is currently active.
-- **predbat.car_charging_solar_surplus_power** -- Numeric sensor (kW) showing the effective solar surplus power available for car charging. When surplus is active and the car was charging last cycle, this includes the car's own consumption added back to get the true available export. Useful for automations that adjust charging current proportionally (e.g. `surplus_kw * 1000 / 230 = amps`). Attributes include `threshold` (configured shortfall allowance in W), `battery_power` (current home battery power in kW), and `surplus_active` (boolean).
+- **predbat.car_charging_solar_surplus_power** -- Numeric sensor (kW) showing the effective solar surplus power available. Always reports current export power when the solar surplus feature is enabled, even if no car is currently charging from surplus. When a car was surplus-charging last cycle, the car's own consumption is added back to show the true available export. Useful for automations that adjust charging current proportionally (e.g. `surplus_kw * 1000 / 230 = amps`) or for driving other solar surplus loads (iBoost, pool pump). Attributes include `threshold` (configured shortfall allowance in W), `battery_power` (current home battery power in kW), and `surplus_active` (boolean).
 
 ### Interaction with other settings
 

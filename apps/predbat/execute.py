@@ -733,6 +733,7 @@ class Execute:
             self._car_surplus_prev = list(self.car_charging_solar_surplus_active)
             return
 
+        self.car_charging_solar_surplus_power = max(0, self.grid_power)
         surplus_hysteresis = 200  # W deadband to prevent flapping
         # Tolerance for transient battery discharge while surplus is asserted.
         # Distinct from car_charging_solar_surplus_threshold (the user-facing

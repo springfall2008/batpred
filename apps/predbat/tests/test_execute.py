@@ -2589,7 +2589,7 @@ def run_execute_tests(my_predbat):
         battery_power=0,
         assert_status="Demand",
         assert_solar_surplus_active=[False],
-        assert_solar_surplus_power=0,
+        assert_solar_surplus_power=3000,
     )
     if failed:
         return failed
@@ -3032,7 +3032,7 @@ def run_solar_surplus_power_sensor_test(my_predbat):
         print("ERROR: power sensor surplus_active should be True, got {}".format(power_sensor.get("surplus_active")))
         failed = True
 
-    # Now test with no surplus — sensor should publish 0
+    # When car doesn't qualify but there's still export, sensor shows raw export
     failed |= run_execute_test(
         my_predbat,
         "solar_surplus_power_sensor_inactive",
@@ -3044,12 +3044,12 @@ def run_solar_surplus_power_sensor_test(my_predbat):
         battery_power=0,
         assert_status="Demand",
         assert_solar_surplus_active=[False],
-        assert_solar_surplus_power=0,
+        assert_solar_surplus_power=3000,
     )
     power_sensor = my_predbat.ha_interface.dummy_items.get(power_sensor_id, {})
     if isinstance(power_sensor, dict):
-        if power_sensor.get("state") != 0.0:
-            print("ERROR: power sensor state should be 0.0 when inactive, got {}".format(power_sensor.get("state")))
+        if power_sensor.get("state") != 3.0:
+            print("ERROR: power sensor state should be 3.0 (kW) when car inactive, got {}".format(power_sensor.get("state")))
             failed = True
         if power_sensor.get("surplus_active") is not False:
             print("ERROR: power sensor surplus_active should be False when inactive, got {}".format(power_sensor.get("surplus_active")))
