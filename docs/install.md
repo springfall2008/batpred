@@ -190,7 +190,9 @@ Ensemble members are used to derive a P10 pessimistic estimate alongside the cen
 
 You can define one or more arrays (roof aspects). For the UK, use a postcode instead of latitude/longitude.
 
-The azimuth uses the same convention as all other Predbat solar configs (Solcast/Forecast.solar): 0=North, -90=East, 90=West, -180/180=South. Predbat converts this to the Open-Meteo convention (0=South) internally.The optional `azimuth_zero_south` (default False) can be set to True if you prefer to supply the azimuth already in the Open-Meteo convention (0=South, -90=East, 90=West, ±180=North). When True, Predbat passes the value straight to the API without conversion.The declination is the angle of the panels from horizontal, e.g. 35 for a typical pitched roof.
+The azimuth uses the same convention as all other Predbat solar configs (Solcast/Forecast.solar): 0=North, -90=East, 90=West, -180/180=South. Predbat converts this to the Open-Meteo convention (0=South) internally.
+The optional `azimuth_zero_south` (default False) can be set to True if you prefer to supply the azimuth already in the Open-Meteo convention (0=South, -90=East, 90=West, ±180=North). When True, Predbat passes the value straight to the API without conversion.
+The declination is the angle of the panels from horizontal, e.g. 35 for a typical pitched roof.
 The `efficiency` (optional, default 1.0) is the panel efficiency as a fraction where 1.0 = 100% (no losses), e.g. 0.95 for 5% losses. This uses the same convention as Forecast.solar.
 
 ```yaml
