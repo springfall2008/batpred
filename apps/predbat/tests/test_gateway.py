@@ -821,6 +821,7 @@ class TestAutomaticConfig:
         gw._suffix_to_serial = {}
         gw.args = {}
         gw._args = {}
+        gw.gateway_inverter_serial = []  # default: no serial filter
 
         def capture_set_arg(key, value):
             gw._args[key] = value
@@ -1076,6 +1077,111 @@ class TestAutomaticConfig:
 
         assert gw._args["export_limit"][0] == "sensor.predbat_gateway_000aa1_export_limit_w"
         assert gw._args["export_limit"][1] == "sensor.predbat_gateway_000bb2_export_limit_w"
+
+    # ------------------------------------------------------------------
+    # Serial filter (gateway_inverter_serial)
+    # ------------------------------------------------------------------
+
+    def test_no_serial_filter_uses_all_inverters(self):
+        """When gateway_inverter_serial is empty, all inverters are registered."""
+        gw = self._make_gateway()
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_multi"
+        status.firmware = "1.0.0"
+        status.schema_version = 1
+        self._make_inverter(status, serial="CE000000AA1", primary=True)
+        self._make_inverter(status, serial="CE000000BB2", primary=True)
+        gw._last_status = status
+        gw.gateway_inverter_serial = []  # no filter
+        gw.automatic_config()
+
+        assert gw._auto_configured
+        assert gw._args["num_inverters"] == 2
+
+    def test_serial_filter_single_match_restricts_to_one(self):
+        """Providing a matching serial restricts auto-config to only that inverter."""
+        gw = self._make_gateway()
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_multi"
+        status.firmware = "1.0.0"
+        status.schema_version = 1
+        self._make_inverter(status, serial="CE000000AA1", primary=True)
+        self._make_inverter(status, serial="CE000000BB2", primary=True)
+        gw._last_status = status
+        gw.gateway_inverter_serial = ["CE000000AA1"]
+        gw.automatic_config()
+
+        assert gw._auto_configured
+        assert gw._args["num_inverters"] == 1
+        assert any("000aa1" in e for e in gw._args["soc_percent"])
+        assert not any("000bb2" in e for e in gw._args["soc_percent"])
+
+    def test_serial_filter_no_match_fails_auto_config(self):
+        """When the serial filter matches no inverters, auto-config returns early without completing."""
+        gw = self._make_gateway()
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_test"
+        status.firmware = "1.0.0"
+        status.schema_version = 1
+        self._make_inverter(status, serial="CE000000AA1", primary=True)
+        gw._last_status = status
+        gw.gateway_inverter_serial = ["ZZNONEXISTENT"]
+        gw.automatic_config()
+
+        assert not gw._auto_configured
+        assert "num_inverters" not in gw._args
+        gw.log.assert_called()
+        assert any("Warn" in str(c) for c in gw.log.call_args_list)
+
+    def test_serial_filter_case_insensitive(self):
+        """Serial filter matching is case-insensitive."""
+        gw = self._make_gateway()
+        gw._last_status = self._basic_status(serial="CE123456789", primary=True)
+        gw.gateway_inverter_serial = ["ce123456789"]  # lowercase filter against uppercase serial
+        gw.automatic_config()
+
+        assert gw._auto_configured
+        assert gw._args["num_inverters"] == 1
+
+    def test_serial_filter_string_normalised_to_list(self):
+        """A bare string (not a list) passed as gateway_inverter_serial is treated as a single-entry filter."""
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.base = MagicMock()
+        gw.initialize(gateway_device_id="pbgw_test", mqtt_host="mqtt.example.com", mqtt_token="tok", gateway_inverter_serial="CE123456789")
+        assert gw.gateway_inverter_serial == ["CE123456789"]
+
+    def test_serial_filter_none_becomes_empty_list(self):
+        """None gateway_inverter_serial becomes an empty list (no filtering)."""
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.base = MagicMock()
+        gw.initialize(gateway_device_id="pbgw_test", mqtt_host="mqtt.example.com", mqtt_token="tok", gateway_inverter_serial=None)
+        assert gw.gateway_inverter_serial == []
+
+    def test_serial_filter_partial_match_excludes_unmatched(self):
+        """With three inverters and a two-serial filter, only the two matched are registered."""
+        gw = self._make_gateway()
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_tri"
+        status.firmware = "1.0.0"
+        status.schema_version = 1
+        self._make_inverter(status, serial="CE000000AA1", primary=True)
+        self._make_inverter(status, serial="CE000000BB2", primary=True)
+        self._make_inverter(status, serial="CE000000CC3", primary=True)
+        gw._last_status = status
+        gw.gateway_inverter_serial = ["CE000000AA1", "CE000000CC3"]
+        gw.automatic_config()
+
+        assert gw._auto_configured
+        assert gw._args["num_inverters"] == 2
+        assert any("000aa1" in e for e in gw._args["soc_percent"])
+        assert not any("000bb2" in e for e in gw._args["soc_percent"])
+        assert any("000cc3" in e for e in gw._args["soc_percent"])
 
 
 class TestSelectEvent:
