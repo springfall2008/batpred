@@ -677,7 +677,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.pv_forecast_minute10 = {}
         self.pv_forecast_minute90 = {}
         self.pv_forecast_minuteCS = {}
-        self.pv_forecast_minuteMAX = {}
+        self.pv_forecast_minuteHIST = {}
         self.load_scaling_dynamic = {}
         self.carbon_intensity = {}
         self.carbon_history = {}

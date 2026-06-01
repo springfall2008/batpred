@@ -3011,12 +3011,7 @@ chart.render();
             
             # Selected forecast for clipping
             clipping_forecast_type = self.get_arg("clipping_buffer_forecast", "pv_estimate90")
-            if clipping_forecast_type == "clearsky":
-                subitem = "pv_clearsky"
-            elif clipping_forecast_type == "historical":
-                subitem = "pv_estimateMAX"
-            else:
-                subitem = clipping_forecast_type
+            subitem = clipping_forecast_type
                 
             clipping_forecast = prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_today", subitem), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
             clipping_forecast.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_tomorrow", subitem), self.now_utc, self.midnight_utc, prune=False, intermediate=True))

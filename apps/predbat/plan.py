@@ -872,12 +872,10 @@ class Plan:
             pv_data = self.pv_forecast_minute10
         elif forecast_type == "pv_estimate90":
             pv_data = self.pv_forecast_minute90
-        elif forecast_type in ["calibrated", "pv_estimateCL"]:
-            pv_data = self.pv_forecast_minute
-        elif forecast_type in ["clearsky", "pv_clearsky"]:
+        elif forecast_type == "pv_clearsky":
             pv_data = self.pv_forecast_minuteCS if self.pv_forecast_minuteCS else self.pv_forecast_minute90
-        elif forecast_type in ["historical", "pv_historical"]:
-            pv_data = self.pv_forecast_minuteMAX
+        elif forecast_type == "pv_historical":
+            pv_data = self.pv_forecast_minuteHIST
         else:
             pv_data = self.pv_forecast_minute90
 

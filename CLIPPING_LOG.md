@@ -52,7 +52,7 @@ SolarAPI now fetches and processes five distinct solar forecast types:
 - **Worst Case (`pv_estimate10`)**: 10th percentile.
 - **Best Case (`pv_estimate90`)**: 90th percentile.
 - **Clear Sky (`pv_clearsky`)**: Theoretical maximum from Solcast/Open-Meteo.
-- **Historical Max (`pv_estimateMAX`)**: Scaled historical curve shape.
+- **Historical Max (`pv_historical`)**: Scaled historical curve shape.
 
 ### 2. Clipping Buffer Calculation (`Plan.calculate_clipping_buffer`)
 Calculates the "hole" (kWh) and the "clipping window" (start/end times) for the current day based on the user-selected forecast.

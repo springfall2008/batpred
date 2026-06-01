@@ -1087,7 +1087,7 @@ class SolarAPI(ComponentBase):
         pv_estimateCL = {}
         pv_estimate10 = {}
         pv_estimate90 = {}
-        pv_estimateMAX = {}
+        pv_historical = {}
         # The after scaling cap will be applied, but remember that the input data is
         capped_data = max(max_pv_power_hist, max_pv_power_forecast) / 60 * self.plan_interval_minutes
         capped_data = min(max_kwh / 60 * self.plan_interval_minutes, capped_data)
@@ -1107,7 +1107,7 @@ class SolarAPI(ComponentBase):
 
             slot = (int(minute / self.plan_interval_minutes) * self.plan_interval_minutes) % (24 * 60)
             pv_max = pv_power_hist_by_slot.get(slot, 0) * hist_max_scaling
-            pv_estimateMAX[minute] = dp4(min(pv_max / 60 * self.plan_interval_minutes, capped_data))
+            pv_historical[minute] = dp4(min(pv_max / 60 * self.plan_interval_minutes, capped_data))
 
         for entry in pv_forecast_data:
             period_start = entry.get("period_start", "")
@@ -1141,7 +1141,7 @@ class SolarAPI(ComponentBase):
                     if v90 is not None:
                         calibrated90 += v90
                         has_calibrated90 = True
-                    vMAX = pv_estimateMAX.get(s, None)
+                    vMAX = pv_historical.get(s, None)
                     if vMAX is not None:
                         calibratedMAX += vMAX
                         has_calibratedMAX = True
@@ -1150,7 +1150,7 @@ class SolarAPI(ComponentBase):
                 if has_calibrated:
                     entry["pv_estimateCL"] = calibrated * divide_by
                 if has_calibratedMAX:
-                    entry["pv_estimateMAX"] = calibratedMAX * divide_by
+                    entry["pv_historical"] = calibratedMAX * divide_by
                 if create_pv10 and has_calibrated10:
                     entry["pv_estimate10"] = calibrated10 * divide_by
                 if create_pv10 and has_calibrated90:
@@ -1167,21 +1167,21 @@ class SolarAPI(ComponentBase):
         # Do we use calibrated or raw data?
         if self.get_arg("metric_pv_calibration_enable", default=True):
             self.log("SolarAPI: PV Calibration: Using calibrated PV data")
-            return pv_forecast_minute_adjusted, pv_forecast_minute10, pv_forecast_data, pv_estimateMAX
+            return pv_forecast_minute_adjusted, pv_forecast_minute10, pv_forecast_data, pv_historical
         else:
-            return pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, pv_estimateMAX
+            return pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, pv_historical
 
     def pack_and_store_forecast(self, pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90=None, pv_clearsky_minute=None, pv_max_minute=None):
         pv_forecast_pack = {}
         pv_forecast_pack10 = {}
         pv_forecast_pack90 = {}
-        pv_forecast_packCS = {}
-        pv_forecast_packMAX = {}
+        pv_forecast_pack_clearsky = {}
+        pv_forecast_pack_historical = {}
         prev_value = -1
         prev_value10 = -1
         prev_value90 = -1
-        prev_valueCS = -1
-        prev_valueMAX = -1
+        prev_value_clearsky = -1
+        prev_value_historical = -1
 
         # Pre-fill dictionaries to ensure interpolation for packing
         def get_interp_val(data, m):
@@ -1195,8 +1195,8 @@ class SolarAPI(ComponentBase):
             current_value = dp4(pv_forecast_minute.get(minute, 0))
             current_value10 = dp4(pv_forecast_minute10.get(minute, 0))
             current_value90 = dp4(get_interp_val(pv_forecast_minute90, minute))
-            current_valueCS = dp4(get_interp_val(pv_clearsky_minute, minute))
-            current_valueMAX = dp4(get_interp_val(pv_max_minute, minute))
+            current_value_clearsky = dp4(get_interp_val(pv_clearsky_minute, minute))
+            current_value_historical = dp4(get_interp_val(pv_max_minute, minute))
 
             if current_value != prev_value:
                 pv_forecast_pack[minute] = current_value
@@ -1207,12 +1207,12 @@ class SolarAPI(ComponentBase):
             if current_value90 != prev_value90:
                 pv_forecast_pack90[minute] = current_value90
                 prev_value90 = current_value90
-            if current_valueCS != prev_valueCS:
-                pv_forecast_packCS[minute] = current_valueCS
-                prev_valueCS = current_valueCS
-            if current_valueMAX != prev_valueMAX:
-                pv_forecast_packMAX[minute] = current_valueMAX
-                prev_valueMAX = current_valueMAX
+            if current_value_clearsky != prev_value_clearsky:
+                pv_forecast_pack_clearsky[minute] = current_value_clearsky
+                prev_value_clearsky = current_value_clearsky
+            if current_value_historical != prev_value_historical:
+                pv_forecast_pack_historical[minute] = current_value_historical
+                prev_value_historical = current_value_historical
 
 
         current_pv_power = dp4(pv_forecast_minute.get(self.minutes_now, 0))
@@ -1227,8 +1227,8 @@ class SolarAPI(ComponentBase):
                 "forecast": pv_forecast_pack,
                 "forecast10": pv_forecast_pack10,
                 "forecast90": pv_forecast_pack90,
-                "forecastCS": pv_forecast_packCS,
-                "forecastMAX": pv_forecast_packMAX,
+                "forecast_clearsky": pv_forecast_pack_clearsky,
+                "forecast_historical": pv_forecast_pack_historical,
                 "unit_of_measurement": "kW",
                 "device_class": "power",
                 "state_class": "measurement",

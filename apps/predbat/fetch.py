@@ -1235,15 +1235,19 @@ class Fetch:
         pv_forecast_minute10 = {}
         pv_forecast_minute90 = {}
         pv_forecast_minuteCS = {}
-        pv_forecast_minuteMAX = {}
+        pv_forecast_minuteHIST = {}
 
         # Get data from forecast sensor
         entity_id = "sensor." + self.prefix + "_pv_forecast_raw"
         pv_forecast_packed_ld = self.get_state_wrapper(entity_id=entity_id, attribute="forecast")
         pv_forecast10_packed_ld = self.get_state_wrapper(entity_id=entity_id, attribute="forecast10")
         pv_forecast90_packed_ld = self.get_state_wrapper(entity_id=entity_id, attribute="forecast90")
-        pv_forecastCS_packed_ld = self.get_state_wrapper(entity_id=entity_id, attribute="forecastCS")
-        pv_forecastMAX_packed_ld = self.get_state_wrapper(entity_id=entity_id, attribute="forecastMAX")
+        pv_forecastCS_packed_ld = self.get_state_wrapper(entity_id=entity_id, attribute="forecast_clearsky")
+        pv_forecastHIST_packed_ld = self.get_state_wrapper(entity_id=entity_id, attribute="forecast_historical")
+        if pv_forecastCS_packed_ld is None:
+            pv_forecastCS_packed_ld = self.get_state_wrapper(entity_id=entity_id, attribute="forecastCS")
+        if pv_forecastHIST_packed_ld is None:
+            pv_forecastHIST_packed_ld = self.get_state_wrapper(entity_id=entity_id, attribute="forecastMAX")
         relative_time = self.get_state_wrapper(entity_id=entity_id, attribute="relative_time")
         try:
             relative_time = datetime.strptime(relative_time, TIME_FORMAT)
@@ -1256,7 +1260,7 @@ class Fetch:
         pv_forecast10_packed = {}
         pv_forecast90_packed = {}
         pv_forecastCS_packed = {}
-        pv_forecastMAX_packed = {}
+        pv_forecastHIST_packed = {}
 
         if pv_forecast_packed_ld:
             for key, value in pv_forecast_packed_ld.items():
@@ -1290,11 +1294,11 @@ class Fetch:
                 except (ValueError, TypeError):
                     pass
 
-        if pv_forecastMAX_packed_ld:
-            for key, value in pv_forecastMAX_packed_ld.items():
+        if pv_forecastHIST_packed_ld:
+            for key, value in pv_forecastHIST_packed_ld.items():
                 try:
                     minute = int(key)
-                    pv_forecastMAX_packed[minute] = float(value)
+                    pv_forecastHIST_packed[minute] = float(value)
                 except (ValueError, TypeError):
                     pass
 
@@ -1304,7 +1308,7 @@ class Fetch:
         last_value10 = 0
         last_value90 = 0
         last_valueCS = 0
-        last_valueMAX = 0
+        last_valueHIST = 0
         # The forecast could be for a different time to our relative time, so we need to offset the minutes to align with our midnight_utc.
         # relative_time is the midnight at which the forecast was saved, so stored minute keys are relative to that midnight.
         # We subtract the offset so that stored minute X (= relative_time + X) maps to (relative_time + X - midnight_utc) minutes from today's midnight.
@@ -1315,14 +1319,14 @@ class Fetch:
             last_value10 = pv_forecast10_packed.get(minute, last_value10)
             last_value90 = pv_forecast90_packed.get(minute, last_value90)
             last_valueCS = pv_forecastCS_packed.get(minute, last_valueCS)
-            last_valueMAX = pv_forecastMAX_packed.get(minute, last_valueMAX)
+            last_valueHIST = pv_forecastHIST_packed.get(minute, last_valueHIST)
             pv_forecast_minute[target_minute] = last_value
             pv_forecast_minute10[target_minute] = last_value10
             pv_forecast_minute90[target_minute] = last_value90
             pv_forecast_minuteCS[target_minute] = last_valueCS
-            pv_forecast_minuteMAX[target_minute] = last_valueMAX
+            pv_forecast_minuteHIST[target_minute] = last_valueHIST
 
-        return pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_minuteCS, pv_forecast_minuteMAX
+        return pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_minuteCS, pv_forecast_minuteHIST
 
     def predict_battery_temperature(self, battery_temperature_history, step):
         """
