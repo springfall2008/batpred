@@ -3106,9 +3106,22 @@ chart.render();
                         stamp = minute_timestamp.strftime(TIME_FORMAT)
                         clipping_remaining_series[stamp] = round(kwh, 2)
 
+            # Clipping Target SOC series (The "Red Line")
+            clipping_target_series = {}
+            if getattr(self.base, "clipping_buffer_forecast_kwh", None):
+                forecast = self.base.clipping_buffer_forecast_kwh
+                step_size = getattr(self.base, "plan_interval_minutes", 30)
+                for minute, kwh in forecast.items():
+                    if minute % step_size == 0:
+                        minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
+                        stamp = minute_timestamp.strftime(TIME_FORMAT)
+                        # Target is the "Ceiling" we want to stay under
+                        target_val = max(0, self.base.soc_max - kwh)
+                        clipping_target_series[stamp] = round(target_val, 2)
+
             series_data = [
-                {"name": "Target SOC", "data": soc_kw_best, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#eb2323", "unit": "kWh"},
-                {"name": "Actual SOC", "data": soc_kw_h0, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": "#9b23eb", "unit": "kWh"},
+                {"name": "Target SOC", "data": clipping_target_series, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#eb2323", "unit": "kWh"},
+                {"name": "Actual SOC", "data": soc_kw_best, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": "#9b23eb", "unit": "kWh"},
                 {"name": "Clipping Remaining", "data": clipping_remaining_series, "opacity": "0.4", "stroke_width": "2", "stroke_curve": "smooth", "color": "#2196F3", "unit": "kWh"},
                 {"name": "PV Power", "data": pv_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#f5c43d", "unit": "kW"},
                 {"name": "Clipping Forecast (" + clipping_forecast_type + ")", "data": clipping_forecast, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#a8a8a7", "unit": "kW"},
