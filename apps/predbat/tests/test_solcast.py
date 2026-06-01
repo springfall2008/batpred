@@ -948,6 +948,144 @@ def test_download_forecast_solar_data_rate_limited_no_cache(my_predbat):
     return failed
 
 
+def test_forecast_solar_rate_limit_suppresses_fetch(my_predbat):
+    """
+    Test that after a 429 response the rate-limit is set and subsequent calls to
+    download_forecast_solar_data return ([], 0) immediately without making HTTP requests.
+    """
+    print("  - test_forecast_solar_rate_limit_suppresses_fetch")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.forecast_solar = [
+            {
+                "latitude": 51.5,
+                "longitude": -0.1,
+                "declination": 30,
+                "azimuth": 0,
+                "kwp": 3.0,
+                "efficiency": 1.0,
+            }
+        ]
+
+        # Step 1: first call gets a 429 → rate limit should be stored
+        test_api.set_mock_response("forecast.solar", {"error": "rate limit"}, 429)
+
+        def create_mock_session(*args, **kwargs):
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.download_forecast_solar_data())
+
+        if test_api.solar.forecast_solar_rate_limit_until is None:
+            print("ERROR: forecast_solar_rate_limit_until should be set after 429")
+            failed = True
+
+        rate_limit_time = test_api.solar.forecast_solar_rate_limit_until
+
+        # Verify retry time is 60-120 minutes in the future
+        now_utc = datetime.now(timezone.utc)
+        if rate_limit_time is not None:
+            delta_minutes = (rate_limit_time - now_utc).total_seconds() / 60
+            if not (59 <= delta_minutes <= 121):
+                print(f"ERROR: Rate limit retry should be 60-120 minutes from now, got {delta_minutes:.1f} minutes")
+                failed = True
+
+        # Step 2: second call should be suppressed - no HTTP request, returns ([], 0)
+        test_api.request_log.clear()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            result, max_kwh = run_async(test_api.solar.download_forecast_solar_data())
+
+        if result != []:
+            print(f"ERROR: Expected empty list during rate limit backoff, got {result}")
+            failed = True
+
+        if max_kwh != 0:
+            print(f"ERROR: Expected max_kwh=0 during rate limit backoff, got {max_kwh}")
+            failed = True
+
+        if len(test_api.request_log) != 0:
+            print(f"ERROR: Expected no HTTP requests during rate limit backoff, got {len(test_api.request_log)}")
+            failed = True
+
+        # Rate limit should still be set (not expired yet)
+        if test_api.solar.forecast_solar_rate_limit_until != rate_limit_time:
+            print("ERROR: Rate limit time should not change while still active")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_forecast_solar_rate_limit_expires(my_predbat):
+    """
+    Test that once the rate-limit window has passed, download_forecast_solar_data
+    clears the rate limit and resumes fetching from forecast.solar.
+    """
+    print("  - test_forecast_solar_rate_limit_expires")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.forecast_solar = [
+            {
+                "latitude": 51.5,
+                "longitude": -0.1,
+                "declination": 30,
+                "azimuth": 0,
+                "kwp": 3.0,
+                "efficiency": 1.0,
+            }
+        ]
+
+        # Simulate a rate-limit window that has already expired (1 second in the past)
+        from datetime import datetime, timezone, timedelta
+
+        test_api.solar.forecast_solar_rate_limit_until = datetime.now(timezone.utc) - timedelta(seconds=1)
+
+        # Provide a successful mock response for the resumed fetch
+        forecast_response = {
+            "result": {
+                "watts": {
+                    "2025-06-15T12:00:00+0000": 500,
+                    "2025-06-15T13:00:00+0000": 600,
+                }
+            },
+            "message": {"info": {"time": "2025-06-15T11:30:00+0000"}},
+        }
+        test_api.set_mock_response("forecast.solar", forecast_response, 200)
+
+        def create_mock_session(*args, **kwargs):
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            result, max_kwh = run_async(test_api.solar.download_forecast_solar_data())
+
+        # Rate limit should have been cleared
+        if test_api.solar.forecast_solar_rate_limit_until is not None:
+            print("ERROR: forecast_solar_rate_limit_until should be cleared after expiry")
+            failed = True
+
+        # HTTP request should have been made
+        if len(test_api.request_log) == 0:
+            print("ERROR: Expected HTTP request after rate limit expired, got none")
+            failed = True
+
+        # Result should contain forecast data (not empty)
+        if not result:
+            print(f"ERROR: Expected forecast data after rate limit expired, got {result}")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
 # ============================================================================
 # HA Sensor Datapoints Tests
 # ============================================================================
@@ -2765,6 +2903,8 @@ def run_solcast_tests(my_predbat):
     failed |= test_download_forecast_solar_data_with_postcode_lookup_failure(my_predbat)
     failed |= test_download_forecast_solar_data_personal_api(my_predbat)
     failed |= test_download_forecast_solar_data_rate_limited_no_cache(my_predbat)
+    failed |= test_forecast_solar_rate_limit_suppresses_fetch(my_predbat)
+    failed |= test_forecast_solar_rate_limit_expires(my_predbat)
     failed |= test_download_forecast_solar_data_azimuth_zero_south(my_predbat)
 
     # HA sensor tests

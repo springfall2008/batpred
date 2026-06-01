@@ -18,6 +18,7 @@ personal API tiers.
 
 import hashlib
 import math
+import random
 import aiohttp
 import pytz
 from datetime import datetime, timedelta, timezone
@@ -111,6 +112,7 @@ class SolarAPI(ComponentBase):
         self.solcast_last_success_timestamp = None
         self.forecast_solar_last_success_timestamp = None
         self.open_meteo_last_success_timestamp = None
+        self.forecast_solar_rate_limit_until = None
         self.last_fetched_timestamp = None
         self.forecast_days = 4
 
@@ -184,7 +186,13 @@ class SolarAPI(ComponentBase):
                             record_api_call("solcast", False, "server_error")
                         if is_forecast_solar_api:
                             self.forecast_solar_failures_total += 1
-                            record_api_call("forecast_solar", False, "server_error")
+                            if status_code == 429:
+                                retry_minutes = random.randint(60, 120)
+                                self.forecast_solar_rate_limit_until = datetime.now(timezone.utc) + timedelta(minutes=retry_minutes)
+                                self.log("Warn: SolarAPI: Forecast Solar rate limited (429), will retry after {} minutes (at {})".format(retry_minutes, self.forecast_solar_rate_limit_until.strftime(TIME_FORMAT)))
+                                record_api_call("forecast_solar", False, "rate_limit")
+                            else:
+                                record_api_call("forecast_solar", False, "server_error")
                         if is_open_meteo_api:
                             self.open_meteo_failures_total += 1
                             record_api_call("open_meteo", False, "server_error")
@@ -418,6 +426,14 @@ class SolarAPI(ComponentBase):
         """
         Download forecast.solar data directly from a URL or return from cache if recent.
         """
+        if self.forecast_solar_rate_limit_until is not None:
+            now_utc = datetime.now(timezone.utc)
+            if now_utc < self.forecast_solar_rate_limit_until:
+                self.log("Warn: SolarAPI: Forecast Solar rate limit active, skipping fetch until {}".format(self.forecast_solar_rate_limit_until.strftime(TIME_FORMAT)))
+                return [], 0
+            else:
+                self.forecast_solar_rate_limit_until = None
+
         self.forecast_solar_data = {}
         if self.storage:
             cached = await self.storage.load("solcast", "forecast_solar_data")
@@ -1174,6 +1190,7 @@ class SolarAPI(ComponentBase):
         pv_forecast_total_sensor = 0
         create_pv10 = False
         max_kwh = 9999
+        using_ha_data = False
 
         if self.forecast_solar:
             self.log("SolarAPI: Obtaining solar forecast from Forecast Solar API")
@@ -1191,6 +1208,7 @@ class SolarAPI(ComponentBase):
             divide_by = 30.0
         else:
             self.log("SolarAPI: Using Solcast integration from inside HA for solar forecast")
+            using_ha_data = True
 
             # Fetch data from each sensor
             for argname in ["pv_forecast_today", "pv_forecast_tomorrow", "pv_forecast_d3", "pv_forecast_d4"]:
@@ -1277,5 +1295,8 @@ class SolarAPI(ComponentBase):
             self.update_success_timestamp()
             self.last_fetched_timestamp = self.now_utc_exact
         else:
-            self.log("Warn: SolarAPI: No solar data has been configured.")
+            if using_ha_data:
+                self.log("Warn: SolarAPI: No solar forecast data was returned from HA sensors.")
+            else:
+                self.log("Warn: SolarAPI: No solar data was returned.")
             self.last_fetched_timestamp = self.now_utc_exact
