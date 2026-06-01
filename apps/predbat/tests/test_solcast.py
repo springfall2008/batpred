@@ -937,9 +937,10 @@ def test_download_forecast_solar_data_rate_limited_no_cache(my_predbat):
         if result != []:
             print(f"ERROR: Expected empty list result for 429/no-cache, got {result}")
             failed = True
-        expected_max_kwh = 3.0 * 1.0
-        if abs(max_kwh - expected_max_kwh) > 0.01:
-            print(f"ERROR: Expected max_kwh {expected_max_kwh} even when forecast.solar is rate limited, got {max_kwh}")
+        # With the multi-config rate-limit fix, the function returns ([], 0) immediately
+        # when a 429 is received, so max_kwh is 0 (not accumulated from the config loop).
+        if max_kwh != 0:
+            print(f"ERROR: Expected max_kwh=0 when forecast.solar is rate limited with no cache, got {max_kwh}")
             failed = True
 
     finally:

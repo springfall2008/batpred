@@ -488,12 +488,12 @@ class SolarAPI(ComponentBase):
             data = await self.cache_get_url(url, params={}, max_age=self.forecast_solar_max_age * 60)
             if not data:
                 self.log("Warn: SolarAPI: Forecast Solar data for lat {} lon {} could not be downloaded, check your Forecast Solar cloud settings".format(lat, lon))
-                continue
+                return [], 0
             watts = data.get("result", {}).get("watts", {})
             info = data.get("message", {}).get("info", {})
             if not watts or not info:
                 self.log("Warn: SolarAPI: Forecast Solar data for lat {} lon {} could not be downloaded, check your Forecast Solar cloud settings, got {}".format(lat, lon, data))
-                continue
+                return [], 0
 
             # current_time = info.get("time", None)
             # current_time_stamp = datetime.strptime(current_time, TIME_FORMAT)
