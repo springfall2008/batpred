@@ -827,7 +827,7 @@ class Plan:
         """
         if not self.clipping_buffer_enable:
             self.clipping_buffer_forecast_kwh = {}
-            return 0, 0, 0
+            return 0, 0, 0, []
 
         # Determine effective clipping limit (Hierarchy of constraints)
         # 1. Start with Physical Inverter AC Capacity (summed)
@@ -881,7 +881,7 @@ class Plan:
 
         if not pv_data:
             self.clipping_buffer_forecast_kwh = {}
-            return 0, 0, 0
+            return 0, 0, 0, []
 
         # Refine Hierarchy: Battery charge capacity for AC-coupled systems
         limit_minute = {}
@@ -916,11 +916,12 @@ class Plan:
                 manual_end_minute = int((end_stamp - midnight_stamp).seconds / 60)
 
         def find_daily_windows():
-            # Use forecast_minutes to handle user settings (24h, 48h, etc)
-            for day in range(int(self.forecast_minutes / 1440) + 1):
+            # Use max(pv_data) to handle the full range of available forecast
+            max_m = max(pv_data.keys()) if pv_data else self.forecast_minutes
+            for day in range(int(max_m / 1440) + 1):
                 day_start = day * 1440
-                day_end = min(day_start + 1440, self.forecast_minutes)
-                if day_start >= self.forecast_minutes: break
+                day_end = day_start + 1440
+                if day_start > max_m: break
                 
                 # If this is day 0 and we have a manual override, use it
                 if day == 0 and manual_start_minute is not None and manual_end_minute is not None:
@@ -965,15 +966,16 @@ class Plan:
         # 2. Calculate Clipping Volume (kWh) with Dynamic Decay for full forecast
         self.clipping_buffer_minute = {}
         natural_sum = 0
+        max_m = max(pv_data.keys()) if pv_data else self.forecast_minutes
         
         # We calculate the "natural" clipping from the forecast first
-        for m in range(self.forecast_minutes - 1, -1, -1):
+        for m in range(max_m, -1, -1):
             pv_now = pv_data.get(m, 0)
             limit_now = limit_minute.get(m, base_limit)
             
             # Natural clipping integration (backwards for decay)
             # Reset at midnight
-            if m % 1440 == 1439 or m == self.forecast_minutes - 1:
+            if m % 1440 == 1439 or m == max_m:
                 natural_sum = 0
             
             if pv_now > limit_now:
@@ -989,20 +991,16 @@ class Plan:
             
             # Smart Decay for Min Buffer:
             # Required space = max(Natural_Clipping, Min_Buffer_Weighted)
-            # Min_Buffer_Weighted is full value before the peak, and decays to 0 during/after peak
             eff_sum = natural_sum
             if self.clipping_buffer_min_kwh > 0 and active_win:
                 ws, we, wn = active_win
                 if m < ws: # Before window: full min buffer
                     eff_sum = max(eff_sum, self.clipping_buffer_min_kwh)
                 elif m < we: # During window: decay based on Clear Sky accumulation
-                    # Calculate % of Clear Sky energy remaining in this window
-                    # This releases the "hole" as the sun actually fills the battery
                     total_window_pv = sum(window_source.get(t, 0) for t in range(ws, we))
                     remaining_window_pv = sum(window_source.get(t, 0) for t in range(max(ws, m), we))
                     decay_factor = remaining_window_pv / total_window_pv if total_window_pv > 0 else 0
                     eff_sum = max(eff_sum, self.clipping_buffer_min_kwh * decay_factor)
-                # After 'we', it stays at natural_sum (which integrated backwards will be 0)
 
             if self.clipping_buffer_max_kwh > 0:
                 eff_sum = min(eff_sum, self.clipping_buffer_max_kwh)
@@ -1025,8 +1023,9 @@ class Plan:
         final_end = manual_end_minute if manual_end_minute is not None else auto_end_today
 
         if self.clipping_remaining_today > 0:
-            self.log("Clipping Buffer: Calculated buffer of {:.2f}kWh based on {}, starts at {}, ends at {}".format(
-                self.clipping_remaining_today, forecast_type, self.time_abs_str(final_start) if final_start is not None else "N/A", self.time_abs_str(final_end) if final_end is not None else "N/A"
+            self.log("Clipping Buffer: Calculated buffer of {:.2f}kWh based on {}, starts at {}, ends at {} (at minute {})".format(
+                self.clipping_remaining_today, forecast_type, self.time_abs_str(final_start) if final_start is not None else "N/A", 
+                self.time_abs_str(final_end) if final_end is not None else "N/A", self.minutes_now
             ))
 
         return self.clipping_remaining_today, final_start, final_end, clipping_windows

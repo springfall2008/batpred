@@ -2093,6 +2093,7 @@ def test_clipping_buffer_plan_manual_injection(my_predbat):
     my_predbat.clipping_buffer_max_kwh = 2.5
     my_predbat.clipping_buffer_start_time = "12:00:00"
     my_predbat.clipping_buffer_end_time = "14:00:00"
+    my_predbat.minutes_now = 0 # Ensure we are before the window
     
     for m in range(24 * 60):
         my_predbat.rate_import[m] = 10.0
