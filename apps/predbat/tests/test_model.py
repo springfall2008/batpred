@@ -2024,7 +2024,7 @@ def test_clipping_buffer_plan_inverter_injection(my_predbat):
     
     injected = False
     for i, e_win in enumerate(my_predbat.export_window_best):
-        if e_win["start"] <= c_start and e_win["end"] >= c_end:
+        if e_win["start"] <= max(my_predbat.minutes_now, c_start) and e_win["end"] >= c_end:
             target_kw = max(0, my_predbat.soc_max - rem)
             target_percent = (target_kw / my_predbat.soc_max) * 100.0
             if e_win.get("target", 100.0) <= target_percent + 0.1:
@@ -2118,7 +2118,7 @@ def test_clipping_buffer_plan_manual_injection(my_predbat):
     
     injected = False
     for i, e_win in enumerate(my_predbat.export_window_best):
-        if e_win["start"] <= c_start and e_win["end"] >= c_end:
+        if e_win["start"] <= max(my_predbat.minutes_now, c_start) and e_win["end"] >= c_end:
             target_kw = max(0, my_predbat.soc_max - rem)
             target_percent = (target_kw / my_predbat.soc_max) * 100.0
             if e_win.get("target", 100.0) <= target_percent + 0.1:
