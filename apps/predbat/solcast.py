@@ -493,7 +493,7 @@ class SolarAPI(ComponentBase):
             plane = resolved_planes[i]
             next_plane = resolved_planes[i + 1] if i + 1 < len(resolved_planes) else None
             if plane["api_key"] is not None and next_plane is not None and next_plane["api_key"] == plane["api_key"] and next_plane["lat"] == plane["lat"] and next_plane["lon"] == plane["lon"]:
-                fetch_groups.append([plane, next_plane])
+                plane["api_key"]
                 i += 2
             else:
                 fetch_groups.append([plane])
