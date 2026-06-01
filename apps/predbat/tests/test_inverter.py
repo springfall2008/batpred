@@ -642,6 +642,38 @@ def test_adjust_battery_target(test_name, ha, inv, dummy_rest, prev_soc, soc, is
     return failed
 
 
+def test_adjust_battery_target_charge_limit_enable(test_name, my_predbat, ha, inv, prev_soc, soc, expect_soc, expect_enable_written):
+    """
+    Test that adjust_battery_target writes the charge_limit_enable switch when charge_limit_enable is in args.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    inv.rest_data = None
+    inv.inv_time_button_press = False
+    ha.dummy_items["number.charge_limit"] = prev_soc
+    ha.dummy_items["switch.charge_limit_enable"] = "off"
+    my_predbat.args["charge_limit_enable"] = "switch.charge_limit_enable"
+
+    inv.adjust_battery_target(soc, isCharging=True, isExporting=False)
+
+    actual_soc = ha.get_state("number.charge_limit")
+    if actual_soc != expect_soc:
+        print("ERROR: {}: charge_limit should be {} got {}".format(test_name, expect_soc, actual_soc))
+        failed = True
+
+    enable_state = ha.get_state("switch.charge_limit_enable")
+    expected_enable_state = "on" if expect_enable_written else "off"
+    if enable_state != expected_enable_state:
+        print("ERROR: {}: charge_limit_enable should be {} got {}".format(test_name, expected_enable_state, enable_state))
+        failed = True
+
+    # Clean up so remaining tests are not affected
+    del my_predbat.args["charge_limit_enable"]
+
+    return failed
+
+
 def test_inverter_self_test(test_name, my_predbat):
     failed = 0
 
@@ -1837,7 +1869,16 @@ def run_inverter_tests(my_predbat_dummy):
     if failed:
         return failed
 
-    failed |= test_adjust_inverter_mode("adjust_mode_eco1", ha, inv, dummy_rest, "Timed Export", "Eco", "Eco")
+    # Test charge_limit_enable switch is written when charge limit changes
+    failed |= test_adjust_battery_target_charge_limit_enable("charge_limit_enable_written", my_predbat, ha, inv, 50, 80, 80, True)
+    if failed:
+        return failed
+
+    # Test charge_limit_enable switch is NOT written when charge limit is unchanged
+    failed |= test_adjust_battery_target_charge_limit_enable("charge_limit_enable_no_write", my_predbat, ha, inv, 80, 80, 80, False)
+    if failed:
+        return failed
+
     failed |= test_adjust_inverter_mode("adjust_mode_eco2", ha, inv, dummy_rest, "Eco", "Eco", "Eco")
     failed |= test_adjust_inverter_mode("adjust_mode_eco3", ha, inv, dummy_rest, "Eco (Paused)", "Eco", "Eco (Paused)")
     failed |= test_adjust_inverter_mode("adjust_mode_export1", ha, inv, dummy_rest, "Eco (Paused)", "Timed Export", "Timed Export")

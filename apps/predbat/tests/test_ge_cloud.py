@@ -2692,6 +2692,7 @@ def _test_async_automatic_config(my_predbat):
         assert ge.config_args.get("discharge_rate") == ["number.predbat_gecloud_battery001_battery_discharge_power"]
         assert ge.config_args.get("reserve") == ["number.predbat_gecloud_battery001_battery_reserve_percent_limit"]
         assert ge.config_args.get("charge_limit") == ["number.predbat_gecloud_battery001_ac_charge_upper_percent_limit"]
+        assert ge.config_args.get("charge_limit_enable") is None, "charge_limit_enable should be None when enable register is absent"
 
         # Verify time controls
         assert ge.config_args.get("charge_start_time") == ["select.predbat_gecloud_battery001_ac_charge_1_start_time"]
@@ -2804,6 +2805,7 @@ def _test_async_automatic_config(my_predbat):
         assert ge.config_args.get("discharge_rate_percent") == ["number.predbat_gecloud_battery003_discharge_power_rate"]
         assert ge.config_args.get("reserve") == ["number.predbat_gecloud_battery003_battery_reserve_percent"]
         assert ge.config_args.get("charge_limit") == ["number.predbat_gecloud_battery003_ac_charge_1_upper_soc_percent_limit"]
+        assert ge.config_args.get("charge_limit_enable") is None, "charge_limit_enable should be None when enable register is absent"
         assert ge.config_args.get("scheduled_charge_enable") == ["switch.predbat_gecloud_battery003_enable_ac_charge"]
         assert ge.config_args.get("scheduled_discharge_enable") == ["switch.predbat_gecloud_battery003_enable_force_discharge"]
         assert ge.config_args.get("inverter_mode") is None, "inverter_mode should be None when eco toggle is not available"
@@ -2877,6 +2879,64 @@ def _test_async_automatic_config(my_predbat):
         # EMS produces data for all inverters, so additional inverters get 0
         assert ge.config_args.get("battery_power") == ["sensor.predbat_gecloud_ems001_battery_power", 0], "Second inverter should get 0 for battery_power"
         assert ge.config_args.get("pv_power") == ["sensor.predbat_gecloud_ems001_solar_power", 0], "Second inverter should get 0 for pv_power"
+
+        # Test 9: charge_limit_enable entity configuration
+        # Test 9a: battery with Enable_AC_Charge_Upper_Percent_Limit register -> primary switch entity
+        ge.config_args = {}
+        ge.settings = {
+            "battery001": {
+                "reg1": {"name": "AC_Charge_Upper_Percent_Limit"},
+                "reg2": {"name": "Enable_AC_Charge_Upper_Percent_Limit"},
+            }
+        }
+        devices = {"ems": None, "gateway": None, "battery": ["battery001"]}
+        await ge.async_automatic_config(devices)
+        assert ge.config_args.get("charge_limit") == ["number.predbat_gecloud_battery001_ac_charge_upper_percent_limit"], "charge_limit should use primary register"
+        assert ge.config_args.get("charge_limit_enable") == ["switch.predbat_gecloud_battery001_enable_ac_charge_upper_percent_limit"], "charge_limit_enable should use primary enable switch"
+
+        # Test 9b: battery with Enable_AC_Charge_1_Upper_SOC_Percent_Limit (alternative) -> fallback entity
+        ge.config_args = {}
+        ge.settings = {
+            "battery002": {
+                "reg1": {"name": "AC_Charge_1_Upper_SOC_Percent_Limit"},
+                "reg2": {"name": "Enable_AC_Charge_1_Upper_SOC_Percent_Limit"},
+            }
+        }
+        devices = {"ems": None, "gateway": None, "battery": ["battery002"]}
+        await ge.async_automatic_config(devices)
+        assert ge.config_args.get("charge_limit") == ["number.predbat_gecloud_battery002_ac_charge_1_upper_soc_percent_limit"], "charge_limit should use alternative register"
+        assert ge.config_args.get("charge_limit_enable") == ["switch.predbat_gecloud_battery002_enable_ac_charge_1_upper_soc_percent_limit"], "charge_limit_enable should use alternative enable switch"
+
+        # Test 9c: multi-battery system where each battery uses the primary enable switch
+        ge.config_args = {}
+        ge.settings = {
+            "battery001": {
+                "reg1": {"name": "AC_Charge_Upper_Percent_Limit"},
+                "reg2": {"name": "Enable_AC_Charge_Upper_Percent_Limit"},
+            },
+            "battery002": {
+                "reg1": {"name": "AC_Charge_Upper_Percent_Limit"},
+                "reg2": {"name": "Enable_AC_Charge_Upper_Percent_Limit"},
+            },
+        }
+        devices = {"ems": None, "gateway": None, "battery": ["battery001", "battery002"]}
+        await ge.async_automatic_config(devices)
+        assert ge.config_args.get("charge_limit_enable") == [
+            "switch.predbat_gecloud_battery001_enable_ac_charge_upper_percent_limit",
+            "switch.predbat_gecloud_battery002_enable_ac_charge_upper_percent_limit",
+        ], "charge_limit_enable should have one entry per battery"
+
+        # Test 9d: battery with charge limit register but no enable register -> charge_limit_enable is None
+        ge.config_args = {}
+        ge.settings = {
+            "battery001": {
+                "reg1": {"name": "AC_Charge_Upper_Percent_Limit"},
+            }
+        }
+        devices = {"ems": None, "gateway": None, "battery": ["battery001"]}
+        await ge.async_automatic_config(devices)
+        assert ge.config_args.get("charge_limit") == ["number.predbat_gecloud_battery001_ac_charge_upper_percent_limit"]
+        assert ge.config_args.get("charge_limit_enable") is None, "charge_limit_enable should be None when enable register is absent"
 
         return 0
 
