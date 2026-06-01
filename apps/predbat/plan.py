@@ -897,62 +897,11 @@ class Plan:
                 eff_limit = min(base_limit, can_absorb)
             limit_minute[minute] = eff_limit
 
-        # 1. Determine Clipping Window (Deterministic/Seasonal)
+        # 1. Determine Clipping Windows for all forecast days
         window_source = self.pv_forecast_minuteCS if self.pv_forecast_minuteCS else pv_data
+        clipping_windows = [] # List of (start, end, noon) per day
         
-        def find_window(start_min, end_min):
-            solar_start, solar_end, max_pv, solar_noon = None, None, 0, start_min + 12 * 60
-            for m in range(start_min, end_min):
-                pv_cs = window_source.get(m, 0)
-                if pv_cs > (0.1 / 60.0):
-                    if solar_start is None: solar_start = m
-                    solar_end = m
-                if pv_cs > max_pv:
-                    max_pv = pv_cs
-                    solar_noon = m
-            
-            auto_start, auto_end = None, None
-            threshold = max_pv * 0.5
-            if threshold > 0:
-                for m in range(start_min, end_min):
-                    if window_source.get(m, 0) > threshold:
-                        if auto_start is None: auto_start = m
-                        auto_end = m
-            return auto_start, auto_end, solar_start, solar_end, solar_noon
-
-        # Today and Tomorrow windows
-        auto_start_today, auto_end_today, solar_start_today, solar_end_today, solar_noon_today = find_window(0, 1440)
-
-        # 2. Calculate Clipping Volume (kWh) with Dynamic Decay for 48h
-        clipping_buffer_minute = {}
-        total_forecast_minutes = max(pv_data.keys()) if pv_data else self.forecast_minutes
-        
-        # We process in blocks of 24h to reset decay correctly
-        for day in range(3): # 3 days max
-            day_start = day * 1440
-            day_end = (day + 1) * 1440
-            if day_start > total_forecast_minutes: break
-            
-            current_sum = 0
-            # Process this day in reverse
-            for m in range(min(day_end, total_forecast_minutes), day_start - 1, -1):
-                pv_now = pv_data.get(m, 0)
-                limit_now = limit_minute.get(m, base_limit)
-                if pv_now > limit_now:
-                    current_sum += (pv_now - limit_now)
-                
-                eff_sum = current_sum
-                if self.clipping_buffer_min_kwh > 0:
-                    eff_sum = max(eff_sum, self.clipping_buffer_min_kwh)
-                if self.clipping_buffer_max_kwh > 0:
-                    eff_sum = min(eff_sum, self.clipping_buffer_max_kwh)
-                clipping_buffer_minute[m] = eff_sum
-
-        self.clipping_buffer_forecast_kwh = clipping_buffer_minute
-        self.clipping_remaining_today = clipping_buffer_minute.get(self.minutes_now, 0)
-        self.clipping_tomorrow = clipping_buffer_minute.get(1440, 0)
-
-        # 3. Finalize Window for "Now" (Today's indicators)
+        # Handle Manual Overrides for today's primary window
         manual_start_minute = None
         manual_end_minute = None
         if self.clipping_buffer_start_time and self.clipping_buffer_start_time != "None":
@@ -966,30 +915,121 @@ class Plan:
                 midnight_stamp = time_string_to_stamp("00:00:00")
                 manual_end_minute = int((end_stamp - midnight_stamp).seconds / 60)
 
+        def find_daily_windows():
+            # Use forecast_minutes to handle user settings (24h, 48h, etc)
+            for day in range(int(self.forecast_minutes / 1440) + 1):
+                day_start = day * 1440
+                day_end = min(day_start + 1440, self.forecast_minutes)
+                if day_start >= self.forecast_minutes: break
+                
+                # If this is day 0 and we have a manual override, use it
+                if day == 0 and manual_start_minute is not None and manual_end_minute is not None:
+                    clipping_windows.append((manual_start_minute, manual_end_minute, manual_start_minute + 60))
+                    continue
+
+                solar_start, solar_end, max_pv, solar_noon = None, None, 0, day_start + 12 * 60
+                for m in range(day_start, day_end):
+                    pv_cs = window_source.get(m, 0)
+                    if pv_cs > (0.1 / 60.0):
+                        if solar_start is None: solar_start = m
+                        solar_end = m
+                    if pv_cs > max_pv:
+                        max_pv = pv_cs
+                        solar_noon = m
+                
+                # Window logic: If we naturally exceed limit, use that. 
+                # Otherwise, fallback to a window around solar noon using the 'fallback' duration
+                auto_start, auto_end = None, None
+                threshold = max(max_pv * 0.5, base_limit * 0.9) # Cross limit or 50% of peak
+                for m in range(day_start, day_end):
+                    if window_source.get(m, 0) > threshold:
+                        if auto_start is None: auto_start = m
+                        auto_end = m
+                
+                # If still no window (low sun), force the fallback window around noon
+                if auto_start is None and solar_start is not None:
+                    fallback_duration = getattr(self, "clipping_buffer_fallback_window", 2.0)
+                    half_window = (fallback_duration * 60.0) / 2.0
+                    auto_start = max(solar_start, int(solar_noon - half_window))
+                    auto_end = min(solar_end, int(solar_noon + half_window))
+                
+                if auto_start is not None:
+                    # Apply offsets
+                    offset = getattr(self, "clipping_buffer_window_offset", 15)
+                    auto_start = max(day_start, auto_start - offset)
+                    auto_end = min(day_end, auto_end + offset)
+                    clipping_windows.append((auto_start, auto_end, solar_noon))
+
+        find_daily_windows()
+
+        # 2. Calculate Clipping Volume (kWh) with Dynamic Decay for full forecast
+        self.clipping_buffer_minute = {}
+        natural_sum = 0
+        
+        # We calculate the "natural" clipping from the forecast first
+        for m in range(self.forecast_minutes - 1, -1, -1):
+            pv_now = pv_data.get(m, 0)
+            limit_now = limit_minute.get(m, base_limit)
+            
+            # Natural clipping integration (backwards for decay)
+            # Reset at midnight
+            if m % 1440 == 1439 or m == self.forecast_minutes - 1:
+                natural_sum = 0
+            
+            if pv_now > limit_now:
+                natural_sum += (pv_now - limit_now)
+            
+            # Find which window this minute belongs to
+            active_win = None
+            for ws, we, wn in clipping_windows:
+                # Lookahead: minute m requires buffer for the NEXT window
+                if m < we and m >= (ws - 1440):
+                    active_win = (ws, we, wn)
+                    break
+            
+            # Smart Decay for Min Buffer:
+            # Required space = max(Natural_Clipping, Min_Buffer_Weighted)
+            # Min_Buffer_Weighted is full value before the peak, and decays to 0 during/after peak
+            eff_sum = natural_sum
+            if self.clipping_buffer_min_kwh > 0 and active_win:
+                ws, we, wn = active_win
+                if m < ws: # Before window: full min buffer
+                    eff_sum = max(eff_sum, self.clipping_buffer_min_kwh)
+                elif m < we: # During window: decay based on Clear Sky accumulation
+                    # Calculate % of Clear Sky energy remaining in this window
+                    # This releases the "hole" as the sun actually fills the battery
+                    total_window_pv = sum(window_source.get(t, 0) for t in range(ws, we))
+                    remaining_window_pv = sum(window_source.get(t, 0) for t in range(max(ws, m), we))
+                    decay_factor = remaining_window_pv / total_window_pv if total_window_pv > 0 else 0
+                    eff_sum = max(eff_sum, self.clipping_buffer_min_kwh * decay_factor)
+                # After 'we', it stays at natural_sum (which integrated backwards will be 0)
+
+            if self.clipping_buffer_max_kwh > 0:
+                eff_sum = min(eff_sum, self.clipping_buffer_max_kwh)
+            self.clipping_buffer_minute[m] = eff_sum
+
+        self.clipping_buffer_forecast_kwh = self.clipping_buffer_minute
+        self.clipping_remaining_today = self.clipping_buffer_minute.get(self.minutes_now, 0)
+        self.clipping_tomorrow = self.clipping_buffer_minute.get(1440, 0)
+
+        # 3. Finalize Primary Window for "Now" (Indicators for today's sensors)
+        # Find the first window that is relevant for 'today' (starts before 1440)
+        auto_start_today, auto_end_today = None, None
+        for ws, we, wn in clipping_windows:
+            if ws < 1440:
+                auto_start_today = ws
+                auto_end_today = we
+                break
+
         final_start = manual_start_minute if manual_start_minute is not None else auto_start_today
         final_end = manual_end_minute if manual_end_minute is not None else auto_end_today
-
-        fallback_duration = getattr(self, "clipping_buffer_fallback_window", 2.0)
-        if self.clipping_remaining_today > 0 and final_start is None and manual_start_minute is None and fallback_duration > 0:
-            half_window = (fallback_duration * 60.0) / 2.0
-            final_start = max(solar_start_today if solar_start_today else 0, int(solar_noon_today - half_window))
-            final_end = min(solar_end_today if solar_end_today else 1440, int(solar_noon_today + half_window))
-
-        offset = getattr(self, "clipping_buffer_window_offset", 15)
-        if final_start is not None and manual_start_minute is None:
-            final_start = max(0, final_start - offset)
-        if final_end is not None and manual_end_minute is None:
-            final_end = min(1440, final_end + offset)
-
-        if final_start is not None and final_end is not None and final_end <= final_start:
-            final_end = final_start + 60
 
         if self.clipping_remaining_today > 0:
             self.log("Clipping Buffer: Calculated buffer of {:.2f}kWh based on {}, starts at {}, ends at {}".format(
                 self.clipping_remaining_today, forecast_type, self.time_abs_str(final_start) if final_start is not None else "N/A", self.time_abs_str(final_end) if final_end is not None else "N/A"
             ))
 
-        return self.clipping_remaining_today, final_start, final_end
+        return self.clipping_remaining_today, final_start, final_end, clipping_windows
     def calculate_plan(self, recompute=True, debug_mode=False, publish=True):
         """
         Calculate the new plan (best)
@@ -1005,7 +1045,13 @@ class Plan:
         plan_start_time = time.time()
 
         # Calculate clipping buffer
-        self.clipping_buffer_kwh, self.clipping_buffer_start, self.clipping_buffer_end = self.calculate_clipping_buffer()
+        if self.clipping_buffer_enable:
+            self.clipping_buffer_kwh, self.clipping_buffer_start, self.clipping_buffer_end, clipping_windows = self.calculate_clipping_buffer()
+        else:
+            self.clipping_buffer_kwh = 0
+            self.clipping_buffer_start = None
+            self.clipping_buffer_end = None
+            clipping_windows = []
 
         # Re-compute plan due to time wrap
         if self.plan_last_updated_minutes > self.minutes_now:
@@ -1071,46 +1117,48 @@ class Plan:
             # Pre-fill best export enable with Off
             self.export_limits_best = [100.0 for i in range(len(self.export_window_best))]
 
-            # Inject pre-clipping export window for Cost Optimal / Always evaluation
+            # Inject pre-clipping export windows for all peaks (today and tomorrow)
             # This is critical to ensure the real-world inverter matches the simulation's behavior
             can_discharge = getattr(self, "clipping_buffer_can_discharge", "")
-            if self.clipping_buffer_kwh > 0 and self.clipping_buffer_end is not None and can_discharge in ["Always", "Cost Optimal"]:
-                clipping_end = self.clipping_buffer_end
-                target_kwh = max(0, self.soc_max - self.clipping_buffer_kwh)
-                
-                # Check if current battery state (or predicted start state) needs space
-                # We use prediction.soc_kw which is the SoC at minute 0 of the plan
-                current_predicted_soc = self.soc_kw
-                if current_predicted_soc > (target_kwh + 0.1):
-                    # Calculate required minutes based on inverter discharge max (kW)
-                    discharge_rate_kw = getattr(self, "battery_rate_max_discharge", 3.0)
-                    if discharge_rate_kw <= 0: discharge_rate_kw = 3.0
-                    
-                    # How much energy to dump?
-                    energy_to_dump = current_predicted_soc - target_kwh
-                    minutes_needed = int((energy_to_dump / discharge_rate_kw) * 60) + 10
-                    
-                    export_start = self.minutes_now
-                    export_end = min(clipping_end, export_start + minutes_needed)
-                    
-                    if export_end > export_start:
-                        target_percent = (target_kwh / self.soc_max) * 100.0 if self.soc_max > 0 else 0.0
-                        new_window = {
-                            "start": export_start,
-                            "end": export_end,
-                            "average": self.rate_export.get(export_start, 0),
-                            "target": target_percent
-                        }
-                        self.export_window_best.append(new_window)
-                        # For 'Always', we force the limit now. For 'Cost Optimal', we set it to 100.0 
-                        # and let the optimizer evaluate the profit vs cycle loss.
-                        self.export_limits_best.append(target_percent if can_discharge == "Always" else 100.0)
+            if self.clipping_buffer_kwh > 0 and clipping_windows and can_discharge in ["Always", "Cost Optimal"]:
+                for ws, we, wn in clipping_windows:
+                    if we <= self.minutes_now:
+                        continue # Already passed
                         
-                        # Re-sort paired arrays
-                        paired = list(zip(self.export_window_best, self.export_limits_best))
-                        paired.sort(key=lambda x: x[0]["start"])
-                        self.export_window_best = [x[0] for x in paired]
-                        self.export_limits_best = [x[1] for x in paired]
+                    target_kwh = max(0, self.soc_max - self.clipping_buffer_minute.get(ws, self.clipping_buffer_min_kwh))
+                    target_percent = (target_kwh / self.soc_max) * 100.0 if self.soc_max > 0 else 0.0
+
+                    # Check if space is needed at the start of the window
+                    # For future days, we look at the start of the day if ws is > 1440
+                    current_predicted_soc = self.predict_soc.get(max(0, ws - self.minutes_now), self.soc_kw)
+                    
+                    if current_predicted_soc > (target_kwh + 0.1):
+                        discharge_rate_kw = getattr(self, "battery_rate_max_discharge", 3.0)
+                        if discharge_rate_kw <= 0: discharge_rate_kw = 3.0
+                        
+                        energy_to_dump = current_predicted_soc - target_kwh
+                        minutes_needed = int((energy_to_dump / discharge_rate_kw) * 60) + 10
+                        
+                        export_start = max(self.minutes_now, ws - minutes_needed)
+                        export_end = we
+                        
+                        if export_end > export_start:
+                            new_window = {
+                                "start": export_start,
+                                "end": export_end,
+                                "average": self.rate_export.get(export_start, 0),
+                                "target": target_percent
+                            }
+                            self.export_window_best.append(new_window)
+                            # For 'Always', we force the limit now. For 'Cost Optimal', we let the optimizer decide
+                            self.export_limits_best.append(target_percent if can_discharge == "Always" else 100.0)
+
+                # Re-sort and de-duplicate paired arrays if any were added
+                if len(self.export_window_best) > 0:
+                    paired = list(zip(self.export_window_best, self.export_limits_best))
+                    paired.sort(key=lambda x: x[0]["start"])
+                    self.export_window_best = [x[0] for x in paired]
+                    self.export_limits_best = [x[1] for x in paired]
 
             self.end_record = self.forecast_minutes
         # Show best windows
