@@ -517,7 +517,7 @@ class SolarAPI(ComponentBase):
                     az2=p2["az"],
                     kwp2=p2["kwp"] * p2["efficiency"],
                 )
-                days_data = min(p1["days_data"], p2["days_data"])
+                days_data = max(p1["days_data"], p2["days_data"])
                 self.log("SolarAPI: Fetching dual-plane Forecast Solar for lat {} lon {} (plane1: dec={} az={} kwp={}, plane2: dec={} az={} kwp={})".format(p1["lat"], p1["lon"], p1["dec"], p1["az"], p1["kwp"], p2["dec"], p2["az"], p2["kwp"]))
             else:
                 p = group[0]
