@@ -1191,6 +1191,7 @@ or
 - **charge_time** - Battery charge time entity for inverters that require a charge time expressed as a range in the format "*start hour*:*start minute*-*end hour*:*end minute*".
 - **discharge_time** = Ditto battery discharge time expressed as a time range.
 - **charge_limit** - Entity name for used to set the SoC target for the battery in percentage (AC charge target)
+- **charge_limit_enable** - Optional switch entity that enables the AC charge upper percent limit. When set, Predbat will turn this switch on whenever it writes a new charge limit value. Used by inverters (such as GivEnergy via GE Cloud) that have a separate enable/disable control for the charge limit register.
 - **scheduled_charge_enable** - Switch to enable/disable battery charge according to the charge start/end times defined above.
 - **scheduled_discharge_enable** - Switch to enable/disable battery discharge according to the discharge start/end times defined above.
 - **discharge_target_soc** - Set the battery target percent for timed exports, will be written to minimum by Predbat.

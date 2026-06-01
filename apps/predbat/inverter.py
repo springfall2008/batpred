@@ -1801,6 +1801,11 @@ class Inverter:
             else:
                 self.write_and_poll_value("charge_limit", self.base.get_arg("charge_limit", indirect=False, index=self.id, required_unit="%"), soc)
 
+            charge_limit_enable_entity_id = self.base.get_arg("charge_limit_enable", indirect=False, index=self.id)
+            if charge_limit_enable_entity_id:
+                # If we have a separate enable for the charge limit then make sure it's enabled when we set the charge limit
+                self.write_and_poll_switch("charge_limit_enable", charge_limit_enable_entity_id, True)
+
             # For inverters that need a button press to apply changes (e.g., Fox), press the button now
             if self.inv_time_button_press:
                 self.press_and_poll_button()

@@ -860,6 +860,7 @@ class GECloudDirect(ComponentBase):
         self.set_arg("charge_start_time", [f"select.{self.prefix}_gecloud_{device}_ac_charge_1_start_time" for device in batteries])
         self.set_arg("charge_end_time", [f"select.{self.prefix}_gecloud_{device}_ac_charge_1_end_time" for device in batteries])
         self.set_arg("charge_limit", build_entities("number", ["ac_charge_upper_percent_limit", "ac_charge_1_upper_soc_percent_limit"]))
+        self.set_arg("charge_limit_enable", build_entities("switch", ["enable_ac_charge_upper_percent_limit", "enable_ac_charge_1_upper_soc_percent_limit"]))
         self.set_arg("discharge_start_time", [f"select.{self.prefix}_gecloud_{device}_dc_discharge_1_start_time" for device in batteries])
         self.set_arg("discharge_end_time", [f"select.{self.prefix}_gecloud_{device}_dc_discharge_1_end_time" for device in batteries])
         self.set_arg("scheduled_charge_enable", build_entities("switch", ["ac_charge_enable", "enable_ac_charge"]))
