@@ -2102,7 +2102,7 @@ def test_clipping_buffer_plan_manual_injection(my_predbat):
     from prediction import PRED_GLOBAL
     PRED_GLOBAL["dict"] = my_predbat.__dict__.copy()
 
-    rem, c_start, c_end = my_predbat.calculate_clipping_buffer()
+    rem, c_start, c_end, *rest = my_predbat.calculate_clipping_buffer()
     
     if rem != 2.5:
         print(f"ERROR: Clipping buffer should be exactly 2.5kWh based on manual overrides, got {rem}")
