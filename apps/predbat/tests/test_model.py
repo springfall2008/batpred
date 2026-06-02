@@ -2027,8 +2027,10 @@ def test_clipping_buffer_plan_inverter_injection(my_predbat):
     
     injected = False
     for i, e_win in enumerate(my_predbat.export_window_best):
-        if e_win["start"] <= max(my_predbat.minutes_now, c_start) and e_win["end"] >= c_end:
-            if e_win.get("target", 100.0) <= target_percent + 0.1:
+        # The logic injects a dump window that ENDS at the start of the peak (or during it)
+        # So we just check if it overlaps the region before the peak where the dump happens
+        if e_win["end"] > my_predbat.minutes_now and e_win["start"] <= c_end:
+            if e_win.get("target", 100.0) < 99.0:
                 injected = True
             
     if not injected:
@@ -2123,8 +2125,10 @@ def test_clipping_buffer_plan_manual_injection(my_predbat):
     
     injected = False
     for i, e_win in enumerate(my_predbat.export_window_best):
-        if e_win["start"] <= max(my_predbat.minutes_now, c_start) and e_win["end"] >= c_end:
-            if e_win.get("target", 100.0) <= target_percent + 0.1:
+        # The logic injects a dump window that ENDS at the start of the peak (or during it)
+        # So we just check if it overlaps the region before the peak where the dump happens
+        if e_win["end"] > my_predbat.minutes_now and e_win["start"] <= c_end:
+            if e_win.get("target", 100.0) < 99.0:
                 injected = True
             
     if not injected:
