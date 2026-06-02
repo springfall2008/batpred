@@ -1564,6 +1564,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.pool = None
         self.log("Predbat: Startup {}".format(__name__))
         self.update_time(print=False)
+        self.started_time = self.now_utc_real
         run_every = RUN_EVERY * 60
         now = self.now
 
@@ -1630,6 +1631,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.log("Error: " + traceback.format_exc())
             self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc(), had_errors=True)
             raise e
+
+        # Started
+        self.publish_last_started()
 
         # Run every N minutes aligned to the minute
         seconds_now = (now - self.midnight).seconds

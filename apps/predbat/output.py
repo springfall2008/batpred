@@ -2447,6 +2447,20 @@ class Output:
         if had_errors:
             self.had_errors = True
 
+    def publish_last_started(self):
+        """
+        Publish the last started time sensor
+        """
+        self.dashboard_item(
+            self.prefix + ".last_started",
+            state=self.started_time.strftime(TIME_FORMAT),
+            attributes={
+                "friendly_name": "Predbat Last Started",
+                "device_class": "timestamp",
+                "icon": "mdi:clock-start",
+            },
+        )
+
     def load_today_comparison(self, load_minutes, load_forecast, car_minutes, import_minutes, minutes_now, step=5, save=True):
         """
         Compare predicted vs actual load
