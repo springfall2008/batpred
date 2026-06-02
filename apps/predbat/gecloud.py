@@ -1454,7 +1454,7 @@ class GECloudDirect(ComponentBase):
 
         for device in device_list:
             self.log("GECloud: Found device {}".format(device))
-            inverter = device.get("inverter", {})
+            inverter = device.get("inverter", {}) or {}
             serial = inverter.get("serial", None)
             # last_updated = inverter.get("last_updated", None)
             info = inverter.get("info", {})
