@@ -1456,8 +1456,10 @@ class Fetch:
         slot = self.now_utc - timedelta(days=days)
         # Align to a clean half-hour boundary at or after the lookback start.
         if slot.minute % 30 or slot.second or slot.microsecond:
-            offset = 30 - (slot.minute % 30)
-            slot = (slot + timedelta(minutes=offset)).replace(second=0, microsecond=0)
+            slot = slot.replace(second=0, microsecond=0)
+            minute_mod = slot.minute % 30
+            if minute_mod:
+                slot = slot + timedelta(minutes=30 - minute_mod)
 
         end = self.now_utc
         while slot < end:
