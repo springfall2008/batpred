@@ -248,6 +248,7 @@ class SolarAPI(ComponentBase):
 
     URL_FREE = "https://api.forecast.solar/estimate/{lat}/{lon}/{dec}/{az}/{kwp}?time=utc"
     URL_PERSONAL = "https://api.forecast.solar/{api_key}/estimate/{lat}/{lon}/{dec}/{az}/{kwp}?time=utc"
+    URL_PERSONAL_DUAL = "https://api.forecast.solar/{api_key}/estimate/{lat}/{lon}/{dec1}/{az1}/{kwp1}/{dec2}/{az2}/{kwp2}?time=utc"
 
     def convert_azimuth(self, az):
         """
@@ -449,6 +450,9 @@ class SolarAPI(ComponentBase):
 
         period_data = {}
         max_kwh = 0
+
+        # Phase 1: Resolve all configs (postcodes, azimuth conversion) into a flat plane list
+        resolved_planes = []
         for config in configs:
             lat = config.get("latitude", 51.5072)
             lon = config.get("longitude", -0.1276)
@@ -476,34 +480,68 @@ class SolarAPI(ComponentBase):
                     lat = result.get("latitude", lat)
                     self.log("SolarAPI: Postcode {} resolved to latitude {} longitude {}".format(postcode, lat, lon))
 
-            if api_key:
-                url = self.URL_PERSONAL
-                url = url.format(lat=lat, lon=lon, dec=dec, az=az, kwp=kwp, api_key=api_key)
-                days_data = config.get("days", 3)
+            days_data = config.get("days", 3 if api_key else 2)
+            resolved_planes.append({"lat": lat, "lon": lon, "dec": dec, "az": az, "kwp": kwp, "efficiency": efficiency, "api_key": api_key, "days_data": days_data})
+
+        # Phase 2: Build fetch groups.
+        # Consecutive personal planes (api_key set) at the same lat/lon are paired into a single
+        # dual-plane Personal Plus call, halving the number of API requests for those planes.
+        # Free-tier planes and personal planes at different locations are fetched individually.
+        fetch_groups = []
+        i = 0
+        while i < len(resolved_planes):
+            plane = resolved_planes[i]
+            next_plane = resolved_planes[i + 1] if i + 1 < len(resolved_planes) else None
+            if plane["api_key"] and next_plane is not None and next_plane["api_key"] == plane["api_key"] and next_plane["lat"] == plane["lat"] and next_plane["lon"] == plane["lon"]:
+                fetch_groups.append([plane, next_plane])
+                i += 2
             else:
-                url = self.URL_FREE
-                url = url.format(lat=lat, lon=lon, dec=dec, az=az, kwp=kwp)
-                days_data = config.get("days", 2)
+                fetch_groups.append([plane])
+                i += 1
+
+        # Phase 3: Fetch and parse each group
+        for group in fetch_groups:
+            if len(group) == 2:
+                # Dual-plane Personal Plus call.
+                # Efficiency is baked into the kwp sent to the API so that the combined
+                # response (which cannot be split per-plane) is already correctly scaled.
+                p1, p2 = group
+                url = self.URL_PERSONAL_DUAL.format(
+                    api_key=p1["api_key"],
+                    lat=p1["lat"],
+                    lon=p1["lon"],
+                    dec1=p1["dec"],
+                    az1=p1["az"],
+                    kwp1=p1["kwp"] * p1["efficiency"],
+                    dec2=p2["dec"],
+                    az2=p2["az"],
+                    kwp2=p2["kwp"] * p2["efficiency"],
+                )
+                days_data = max(p1["days_data"], p2["days_data"])
+                self.log("SolarAPI: Fetching dual-plane Forecast Solar for lat {} lon {} (plane1: dec={} az={} kwp={}, plane2: dec={} az={} kwp={})".format(p1["lat"], p1["lon"], p1["dec"], p1["az"], p1["kwp"], p2["dec"], p2["az"], p2["kwp"]))
+            else:
+                p = group[0]
+                if p["api_key"]:
+                    url = self.URL_PERSONAL.format(api_key=p["api_key"], lat=p["lat"], lon=p["lon"], dec=p["dec"], az=p["az"], kwp=p["kwp"] * p["efficiency"])
+                else:
+                    url = self.URL_FREE.format(lat=p["lat"], lon=p["lon"], dec=p["dec"], az=p["az"], kwp=p["kwp"] * p["efficiency"])
+                days_data = p["days_data"]
 
             data = await self.cache_get_url(url, params={}, max_age=self.forecast_solar_max_age * 60)
             if not data:
-                self.log("Warn: SolarAPI: Forecast Solar data for lat {} lon {} could not be downloaded, check your Forecast Solar cloud settings".format(lat, lon))
+                self.log("Warn: SolarAPI: Forecast Solar data could not be downloaded, check your Forecast Solar cloud settings")
                 return [], 0
             watts = data.get("result", {}).get("watts", {})
             info = data.get("message", {}).get("info", {})
             if not watts or not info:
-                self.log("Warn: SolarAPI: Forecast Solar data for lat {} lon {} could not be downloaded, check your Forecast Solar cloud settings, got {}".format(lat, lon, data))
+                self.log("Warn: SolarAPI: Forecast Solar data could not be downloaded, check your Forecast Solar cloud settings, got {}".format(data))
                 return [], 0
-
-            # current_time = info.get("time", None)
-            # current_time_stamp = datetime.strptime(current_time, TIME_FORMAT)
 
             period_start_stamp = None
             forecast_watt_data = {}
             for period_end in watts:
                 period_end_stamp = datetime.strptime(period_end, TIME_FORMAT)
-                # Convert period_end_stamp to a offset aware time using current_time_offset as the timezone
-                pv50 = watts[period_end] * efficiency  # Apply efficiency to the watt
+                pv50 = watts[period_end]  # efficiency already baked into kwp in the URL
                 if period_start_stamp:
                     if period_end_stamp - period_start_stamp > timedelta(minutes=60):
                         period_start_stamp = None
@@ -515,7 +553,6 @@ class SolarAPI(ComponentBase):
                 minutes_end = (period_end_stamp - self.midnight_utc).total_seconds() / 60
                 for minute in range(int(minutes_start), int(minutes_end) + 1):
                     forecast_watt_data[minute] = pv50
-
                 period_start_stamp = period_end_stamp
 
             for minute in range(0, days_data * 24 * 60, self.plan_interval_minutes):
