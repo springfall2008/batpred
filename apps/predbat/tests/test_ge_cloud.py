@@ -56,6 +56,8 @@ class MockGECloudDirect(GECloudDirect):
         self.gateway_device = None
         self._now_utc_exact = datetime.now(timezone.utc)
         self.settings_from_cache = False
+        self.default_options_done = False
+        self._read_only = False
 
         class MockHAInterface:
             def __init__(self):
@@ -90,6 +92,12 @@ class MockGECloudDirect(GECloudDirect):
     def set_arg(self, name, value):
         """Mock set_arg"""
         self.config_args[name] = value
+
+    def get_state_wrapper(self, entity_id, default=None):
+        """Mock get_state_wrapper"""
+        if "_set_read_only" in entity_id:
+            return "on" if self._read_only else "off"
+        return default
 
     def update_success_timestamp(self):
         """Mock update_success_timestamp"""
@@ -221,6 +229,8 @@ def test_ge_cloud(my_predbat=None):
         ("automatic_config", _test_async_automatic_config, "Automatic config"),
         ("hybrid_detection", _test_hybrid_detection, "Hybrid inverter detection"),
         ("enable_defaults", _test_enable_default_options, "Enable default options"),
+        ("enable_defaults_read_only", _test_run_read_only_skips_reset, "Enable defaults skipped in read-only mode"),
+        ("enable_defaults_after_read_only", _test_run_enables_reset_after_read_only, "Enable defaults on first non-read-only run"),
         ("download_single", _test_download_ge_data_single_day, "Download single day"),
         ("download_multi", _test_download_ge_data_multi_day, "Download multi-day"),
         ("download_pagination", _test_download_ge_data_pagination, "Download pagination"),
@@ -3306,6 +3316,142 @@ def _test_enable_default_options(my_predbat):
             return 1
         if write_calls[0]["value"] != 4:
             print("ERROR: Expected value=4 for discharge down to percent, got {}".format(write_calls[0]["value"]))
+            return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _make_run_mocks(ge_cloud, enable_default_calls=None):
+    """Attach minimal async mocks to ge_cloud so run() can execute without real I/O."""
+
+    async def mock_get_devices():
+        return {"battery": ["inv001"], "ems": None, "gateway": None}
+
+    async def mock_get_evc_devices():
+        return []
+
+    async def mock_get_inverter_status(_device, _previous):
+        return {}
+
+    async def mock_publish_status(_device, _status):
+        pass
+
+    async def mock_get_inverter_meter(_device, _previous):
+        return {}
+
+    async def mock_publish_meter(_device, _meter):
+        pass
+
+    async def mock_get_device_info(_device, _previous):
+        return {}
+
+    async def mock_publish_info(_device, _info):
+        pass
+
+    async def mock_get_inverter_settings(_device, **_kwargs):
+        return {}
+
+    async def mock_publish_registers(_device, _settings):
+        pass
+
+    async def mock_automatic_config(_devices_dict):
+        pass
+
+    async def mock_enable_default_options(device, _settings):
+        if enable_default_calls is not None:
+            enable_default_calls.append(device)
+
+    ge_cloud.async_get_devices = mock_get_devices
+    ge_cloud.async_get_evc_devices = mock_get_evc_devices
+    ge_cloud.async_get_inverter_status = mock_get_inverter_status
+    ge_cloud.publish_status = mock_publish_status
+    ge_cloud.async_get_inverter_meter = mock_get_inverter_meter
+    ge_cloud.publish_meter = mock_publish_meter
+    ge_cloud.async_get_device_info = mock_get_device_info
+    ge_cloud.publish_info = mock_publish_info
+    ge_cloud.async_get_inverter_settings = mock_get_inverter_settings
+    ge_cloud.publish_registers = mock_publish_registers
+    ge_cloud.async_automatic_config = mock_automatic_config
+    ge_cloud.enable_default_options = mock_enable_default_options
+
+
+def _test_run_read_only_skips_reset(my_predbat):
+    """enable_default_options is NOT called when predbat is in read-only mode"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.automatic = False
+        ge_cloud._read_only = True
+
+        enable_default_calls = []
+        _make_run_mocks(ge_cloud, enable_default_calls)
+
+        result = await ge_cloud.run(seconds=0, first=True)
+        if not result:
+            print("ERROR: run() should return True")
+            return 1
+
+        if enable_default_calls:
+            print("ERROR: enable_default_options should NOT be called in read-only mode, got calls for: {}".format(enable_default_calls))
+            return 1
+
+        if ge_cloud.default_options_done:
+            print("ERROR: default_options_done should remain False when skipped due to read-only mode")
+            return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_run_enables_reset_after_read_only(my_predbat):
+    """enable_default_options IS called on the first run after read-only mode is disabled"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.automatic = False
+        ge_cloud._read_only = True
+
+        enable_default_calls = []
+        _make_run_mocks(ge_cloud, enable_default_calls)
+
+        # First run in read-only mode — reset should be skipped
+        result = await ge_cloud.run(seconds=0, first=True)
+        if not result:
+            print("ERROR: run() should return True on first run")
+            return 1
+
+        if enable_default_calls:
+            print("ERROR: enable_default_options should NOT be called in read-only mode, got: {}".format(enable_default_calls))
+            return 1
+        if ge_cloud.default_options_done:
+            print("ERROR: default_options_done should be False after read-only first run")
+            return 1
+
+        # Disable read-only — next 10-minute settings tick should trigger the reset
+        ge_cloud._read_only = False
+        result = await ge_cloud.run(seconds=600, first=False)
+        if not result:
+            print("ERROR: run() should return True on second run")
+            return 1
+
+        if not enable_default_calls:
+            print("ERROR: enable_default_options should be called once read-only is disabled")
+            return 1
+        if enable_default_calls != ["inv001"]:
+            print("ERROR: Expected enable_default_options called for inv001, got: {}".format(enable_default_calls))
+            return 1
+        if not ge_cloud.default_options_done:
+            print("ERROR: default_options_done should be True after reset ran")
+            return 1
+
+        # Verify the reset does not run again on subsequent ticks
+        enable_default_calls.clear()
+        await ge_cloud.run(seconds=1200, first=False)
+        if enable_default_calls:
+            print("ERROR: enable_default_options should not be called again after default_options_done=True")
             return 1
 
         return 0
