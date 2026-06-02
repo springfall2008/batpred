@@ -953,7 +953,7 @@ class GECloudDirect(ComponentBase):
         model_name = "Unknown"
         for device_serial in batteries_real:
             device = self.info.get(device_serial, {})
-            info = device.get("info", {})
+            info = device.get("info", {}) or {}
             model = info.get("model", "").lower()
             if model:
                 model_name = info["model"]
@@ -1457,11 +1457,11 @@ class GECloudDirect(ComponentBase):
             inverter = device.get("inverter", {}) or {}
             serial = inverter.get("serial", None)
             # last_updated = inverter.get("last_updated", None)
-            info = inverter.get("info", {})
+            info = inverter.get("info", {}) or {}
             model = info.get("model", "").lower()
             # battery = info.get("battery_type", {})
-            batteries = inverter.get("connections", {}).get("batteries", [])
-            meters = inverter.get("connections", {}).get("meters", [])
+            batteries = inverter.get("connections", {}).get("batteries", []) or []
+            meters = inverter.get("connections", {}).get("meters", []) or []
             meter_serials = [m.get("serial_number") for m in meters if m.get("serial_number") is not None]
             if serial:
                 serial = serial.lower()
