@@ -1609,6 +1609,7 @@ INVERTER_DEF = {
         "can_span_midnight": False,
         "charge_discharge_with_rate": False,
         "target_soc_used_for_discharge": False,
+        "clear_slot_on_disable": True,
     },
     "SE": {
         "name": "SolarEdge",
