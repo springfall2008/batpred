@@ -1504,6 +1504,74 @@ def test_discharge_window_none_value(test_name, my_predbat, dummy_items):
     return failed
 
 
+def test_force_export_unchanged_times_HM_format(test_name, ha, inv):
+    """
+    Regression test for GS_fb00 (Solis) 'count register writes 0' bug.
+
+    When force_export=True, the H M format time entities and the scheduled_discharge_enable
+    switch should be written on every PredBat cycle — even when the times are unchanged and
+    HA already shows the switch as 'on'.  Before the fix, adjust_force_export skipped all
+    writes when times were identical, resulting in 0 register writes and the inverter never
+    actually exporting.
+
+    The button (schedule_write_button) must also be pressed so the Solis hardware applies
+    the time-slot schedule.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    # Simulate GS_fb00 / H M format configuration
+    inv.rest_data = None
+    inv.inv_charge_time_format = "H M"
+    inv.inv_time_button_press = True
+
+    export_time = "07:58:00"
+    export_end = "09:02:00"
+
+    # Pre-set all discharge entities to the *same* time that will be written,
+    # and the switch to "on" — this is the "stable state" where the bug triggered.
+    ha.dummy_items["select.discharge_start_time"] = export_time
+    ha.dummy_items["select.discharge_end_time"] = export_end
+    ha.dummy_items["time.discharge_start_hour"] = export_time
+    ha.dummy_items["time.discharge_end_hour"] = export_end
+    ha.dummy_items["switch.scheduled_discharge_enable"] = "on"
+    ha.dummy_items["number.discharge_target_soc"] = inv.reserve_percent
+    ha.dummy_items["select.inverter_mode"] = "Timed Export"
+    ha.dummy_items["switch.inverter_button"] = "off"
+
+    inv.base.args["discharge_start_time"] = "select.discharge_start_time"
+    inv.base.args["discharge_end_time"] = "select.discharge_end_time"
+    inv.base.args["discharge_start_hour"] = "time.discharge_start_hour"
+    inv.base.args["discharge_end_hour"] = "time.discharge_end_hour"
+    inv.base.args["scheduled_discharge_enable"] = "switch.scheduled_discharge_enable"
+
+    before_writes = inv.count_register_writes
+
+    ts = datetime.strptime(export_time, "%H:%M:%S")
+    te = datetime.strptime(export_end, "%H:%M:%S")
+    inv.adjust_force_export(True, ts, te)
+
+    # Time entities must be written even though times are unchanged (H M format always writes)
+    if ha.dummy_items.get("time.discharge_start_hour") != export_time:
+        print("ERROR: {}: discharge_start_hour should still be {} got {}".format(test_name, export_time, ha.dummy_items.get("time.discharge_start_hour")))
+        failed = True
+    if ha.dummy_items.get("time.discharge_end_hour") != export_end:
+        print("ERROR: {}: discharge_end_hour should still be {} got {}".format(test_name, export_end, ha.dummy_items.get("time.discharge_end_hour")))
+        failed = True
+
+    # Register write count must have increased (time entities were actually written)
+    if inv.count_register_writes <= before_writes:
+        print("ERROR: {}: count_register_writes should have increased, was {} now {}".format(test_name, before_writes, inv.count_register_writes))
+        failed = True
+
+    # The schedule_write_button must be pressed so the Solis hardware applies the schedule
+    if ha.dummy_items.get("switch.inverter_button") != "on":
+        print("ERROR: {}: inverter_button (schedule_write_button) should be 'on' (pressed), got {}".format(test_name, ha.dummy_items.get("switch.inverter_button")))
+        failed = True
+
+    return failed
+
+
 def test_time_entity_hour_write(test_name, ha, inv, dummy_rest, direction, new_start, new_end):
     """
     Test that when *_start_hour / *_end_hour args resolve to time.* entities the full
@@ -2364,6 +2432,11 @@ charge_start_service:
     if failed:
         return failed
     failed |= test_time_entity_hour_write("time_entity_charge_hour2", ha, inv, dummy_rest, "charge", "23:00:00", "23:59:00")
+    if failed:
+        return failed
+
+    # Regression test: GS_fb00 H M format must write time entities and press button even when times are unchanged
+    failed |= test_force_export_unchanged_times_HM_format("force_export_unchanged_HM_format", ha, inv)
     if failed:
         return failed
 

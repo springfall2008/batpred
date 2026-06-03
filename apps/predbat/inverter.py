@@ -2318,7 +2318,7 @@ class Inverter:
             self.adjust_idle_time(discharge_start="00:00:00", discharge_end="00:00:00")
 
         # Change start time
-        if new_start and new_start != old_start:
+        if new_start and (new_start != old_start or self.inv_charge_time_format in ["H M", "H:M-H:M"]):
             self.base.log("Inverter {} set new export start time to {}".format(self.id, new_start))
             if self.rest_data:
                 pass  # REST writes as a single start/end time
@@ -2350,7 +2350,7 @@ class Inverter:
                 self.log("Warn: Inverter {} unable write export start time as neither REST or discharge_start_time are set".format(self.id))
 
         # Change end time
-        if new_end and new_end != old_end:
+        if new_end and (new_end != old_end or self.inv_charge_time_format in ["H M", "H:M-H:M"]):
             self.base.log("Inverter {} Set new export end time to {} was {}".format(self.id, new_end, old_end))
             if self.rest_data:
                 pass  # REST writes as a single start/end time
@@ -2409,11 +2409,12 @@ class Inverter:
             self.rest_setDischargeSlot1(new_start, new_end)
 
         # Change scheduled discharge enable
-        if force_export and not old_discharge_enable:
+        if force_export:
             self.write_and_poll_switch("scheduled_discharge_enable", self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id), True)
-            self.log("Inverter {} Turning on scheduled export".format(self.id))
+            if not old_discharge_enable:
+                self.log("Inverter {} Turning on scheduled export".format(self.id))
 
-        if (new_end != old_end) or (new_start != old_start) or (force_export != old_discharge_enable):
+        if (new_end != old_end) or (new_start != old_start) or (force_export != old_discharge_enable) or changed_start_end:
             if self.inv_time_button_press:
                 self.press_and_poll_button()
 
