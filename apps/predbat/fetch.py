@@ -2319,6 +2319,7 @@ class Fetch:
         self.iboost_solar_excess = self.get_arg("iboost_solar_excess")
         self.iboost_rate_threshold = self.get_arg("iboost_rate_threshold")
         self.iboost_rate_threshold_export = self.get_arg("iboost_rate_threshold_export")
+        self.curtail_on_negative_export_price = self.get_arg("curtail_on_negative_export_price", "off")
         self.iboost_charging = self.get_arg("iboost_charging")
         self.iboost_gas_scale = self.get_arg("iboost_gas_scale")
         self.iboost_max_energy = self.get_arg("iboost_max_energy")

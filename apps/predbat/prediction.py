@@ -157,6 +157,7 @@ class Prediction:
             self.inverter_hybrid = base.inverter_hybrid
             self.inverter_limit = base.inverter_limit
             self.export_limit = base.export_limit
+            self.curtail_on_negative_export_price = base.curtail_on_negative_export_price
             self.pv_ac_limit = base.pv_ac_limit
             self.battery_rate_min = base.battery_rate_min
             self.battery_rate_max_charge = base.battery_rate_max_charge
@@ -513,6 +514,7 @@ class Prediction:
         car_energy_reported_load = self.car_energy_reported_load
         inverter_limit = self.inverter_limit * step
         export_limit = self.export_limit * step
+        curtail_on_negative_export_price = self.curtail_on_negative_export_price
         pv_ac_limit = self.pv_ac_limit * step
         set_charge_low_power = self.set_charge_window and self.set_charge_low_power and (save in ["best", "best10", "test"])
         carbon_enable = self.carbon_enable
@@ -578,6 +580,13 @@ class Prediction:
             if io_adjusted.get(minute_absolute, 0) and pv10 and minute > 30:
                 import_rate = self.rate_max  # Assume in worst case that slot goes away and max rate applies
             export_rate = rate_export.get(minute_absolute, 0)
+
+            # Model curtailment of export when the export price is negative (issue #3986). In curtail_excess
+            # mode the export is modelled as curtailed to net-zero while PV still charges the battery and serves
+            # the house; in solar_production_off mode the PV is modelled as fully off (see where pv_now is read).
+            # Predbat does not drive the curtailment, it only models it.
+            export_curtailed = curtail_on_negative_export_price != "off" and export_rate < 0
+            effective_export_limit = 0 if export_curtailed else export_limit
 
             # Alert?
             alert_keep = all_active_keep.get(minute_absolute, 0)
@@ -656,6 +665,9 @@ class Prediction:
 
             # Get load and pv forecast, total up for all values in the step
             pv_now = pv_forecast_minute_step_flat[minute]
+            # Model PV as fully off during curtailed slots for inverters that can only disable generation (issue #3986)
+            if export_curtailed and curtail_on_negative_export_price == "solar_production_off":
+                pv_now = 0
             load_yesterday = load_minutes_step_flat[minute]
 
             # Count PV kWh
@@ -812,8 +824,8 @@ class Prediction:
 
                 # Exceed export limit?
                 diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp)
-                if diff < 0 and abs(diff) > export_limit:
-                    over_limit = abs(diff) - export_limit
+                if diff < 0 and abs(diff) > effective_export_limit:
+                    over_limit = abs(diff) - effective_export_limit
                     reduce_by = over_limit
 
                     if reduce_by > battery_draw:
@@ -1027,8 +1039,8 @@ class Prediction:
 
             # Export limit, clip PV output
             diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp)
-            if diff < 0 and abs(diff) > export_limit:
-                over_limit = abs(diff) - export_limit
+            if diff < 0 and abs(diff) > effective_export_limit:
+                over_limit = abs(diff) - effective_export_limit
                 # Only solar PV is truly "clipped" (lost energy); excess battery discharge just gets limited
                 pv_ac_before = pv_ac
                 pv_ac = max(pv_ac - over_limit, 0)

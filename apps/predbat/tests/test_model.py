@@ -489,6 +489,49 @@ def run_model_tests(my_predbat):
     failed |= simple_scenario("pv_only_bat_ac_clips2c", my_predbat, 0, 2, assert_final_metric=-export_rate * 24, assert_final_soc=24, with_battery=True, battery_rate_max_charge=2.0)
     failed |= simple_scenario("pv_only_bat_ac_clips3", my_predbat, 0, 3, assert_final_metric=-export_rate * 48, assert_final_soc=24, with_battery=True)
     failed |= simple_scenario("pv_only_bat_ac_export_limit", my_predbat, 0, 3, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=24, with_battery=True, export_limit=0.5, assert_clipped=24 * 1.5)
+    # Curtailment on negative export price (issue #3986). Switch the export rate negative so curtailment triggers.
+    reset_rates(my_predbat, import_rate, -export_rate)
+    # curtail_excess: grid export is modelled as blocked, so the surplus PV that can no longer be exported is all
+    # clipped (no export, and no negative-price cost), while the battery still charges from PV (soc 24).
+    failed |= simple_scenario(
+        "curtail_excess_negative",
+        my_predbat,
+        0,
+        3,
+        assert_final_metric=0,
+        assert_final_soc=24,
+        with_battery=True,
+        export_limit=10.0,
+        curtail_on_negative_export_price="curtail_excess",
+        assert_clipped=24 * 2,
+    )
+    # solar_production_off: the PV is modelled as fully off, so the battery never charges (soc 0), nothing is
+    # exported or imported, and there is no PV to clip.
+    failed |= simple_scenario(
+        "curtail_solar_off_negative",
+        my_predbat,
+        0,
+        3,
+        assert_final_metric=0,
+        assert_final_soc=0,
+        with_battery=True,
+        export_limit=10.0,
+        curtail_on_negative_export_price="solar_production_off",
+        assert_clipped=0,
+    )
+    reset_rates(my_predbat, import_rate, export_rate)
+    # Positive export price: even with the feature enabled, curtailment does NOT trigger and export proceeds as
+    # normal (matches pv_only_bat_ac_clips3 above). Guards against false triggering when the price is not negative.
+    failed |= simple_scenario(
+        "curtail_excess_positive_rate",
+        my_predbat,
+        0,
+        3,
+        assert_final_metric=-export_rate * 48,
+        assert_final_soc=24,
+        with_battery=True,
+        curtail_on_negative_export_price="curtail_excess",
+    )
     failed |= simple_scenario(
         "pv_only_bat_ac_export_limit_loss",
         my_predbat,
