@@ -1141,6 +1141,10 @@ class Plan:
                         target_kw = max(0, self.soc_max - c_rem)
                         target_percent = (target_kw / self.soc_max) * 100.0 if self.soc_max > 0 else 0.0
 
+                        # Avoid exactly 99.0 as this triggers Freeze Export which disables charging
+                        if target_percent == 99.0:
+                            target_percent = 98.9
+
                         if current_predicted_soc > (target_kw + 0.1):
                             discharge_rate_kw = getattr(self, "battery_rate_max_discharge", 3.0)
                             if discharge_rate_kw <= 0: discharge_rate_kw = 3.0
@@ -1302,6 +1306,10 @@ class Plan:
                 if export_start < clipping_start:
                     target_kwh = self.soc_max - self.clipping_buffer_kwh
                     target_percent = (target_kwh / self.soc_max) * 100.0 if self.soc_max > 0 else 0.0
+                    
+                    # Avoid exactly 99.0 as this triggers Freeze Export which disables charging
+                    if target_percent == 99.0:
+                        target_percent = 98.9
 
                     new_window = {
                         "start": export_start,
@@ -1453,6 +1461,10 @@ class Plan:
 
                         target_kw = max(0, self.soc_max - c_rem)
                         target_percent = (target_kw / self.soc_max) * 100.0 if self.soc_max > 0 else 0.0
+
+                        # Avoid exactly 99.0 as this triggers Freeze Export which disables charging
+                        if target_percent == 99.0:
+                            target_percent = 98.9
 
                         clip_window = {
                             "start": effective_start,
