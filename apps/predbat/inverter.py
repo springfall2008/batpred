@@ -2310,6 +2310,7 @@ class Inverter:
 
         self.base.log("Inverter {} Adjust force export to {}, change times from {} - {} to {} - {}".format(self.id, force_export, old_start, old_end, new_start, new_end))
         changed_start_end = False
+        is_hm_format = self.inv_charge_time_format in ["H M", "H:M-H:M"]
 
         # Some inverters have an idle time setting
         if force_export:
@@ -2318,7 +2319,7 @@ class Inverter:
             self.adjust_idle_time(discharge_start="00:00:00", discharge_end="00:00:00")
 
         # Change start time
-        if new_start and (new_start != old_start or self.inv_charge_time_format in ["H M", "H:M-H:M"]):
+        if new_start and (new_start != old_start or is_hm_format):
             self.base.log("Inverter {} set new export start time to {}".format(self.id, new_start))
             if self.rest_data:
                 pass  # REST writes as a single start/end time
@@ -2350,7 +2351,7 @@ class Inverter:
                 self.log("Warn: Inverter {} unable write export start time as neither REST or discharge_start_time are set".format(self.id))
 
         # Change end time
-        if new_end and (new_end != old_end or self.inv_charge_time_format in ["H M", "H:M-H:M"]):
+        if new_end and (new_end != old_end or is_hm_format):
             self.base.log("Inverter {} Set new export end time to {} was {}".format(self.id, new_end, old_end))
             if self.rest_data:
                 pass  # REST writes as a single start/end time

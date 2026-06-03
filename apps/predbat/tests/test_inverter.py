@@ -1553,20 +1553,20 @@ def test_force_export_unchanged_times_HM_format(test_name, ha, inv):
 
     # Time entities must be written even though times are unchanged (H M format always writes)
     if ha.dummy_items.get("time.discharge_start_hour") != export_time:
-        print("ERROR: {}: discharge_start_hour should still be {} got {}".format(test_name, export_time, ha.dummy_items.get("time.discharge_start_hour")))
+        print(f"ERROR: {test_name}: discharge_start_hour should still be {export_time} got {ha.dummy_items.get('time.discharge_start_hour')}")
         failed = True
     if ha.dummy_items.get("time.discharge_end_hour") != export_end:
-        print("ERROR: {}: discharge_end_hour should still be {} got {}".format(test_name, export_end, ha.dummy_items.get("time.discharge_end_hour")))
+        print(f"ERROR: {test_name}: discharge_end_hour should still be {export_end} got {ha.dummy_items.get('time.discharge_end_hour')}")
         failed = True
 
-    # Register write count must have increased (time entities were actually written)
-    if inv.count_register_writes <= before_writes:
-        print("ERROR: {}: count_register_writes should have increased, was {} now {}".format(test_name, before_writes, inv.count_register_writes))
+    # Register write count must have increased by at least 2 (discharge_start_hour + discharge_end_hour)
+    if inv.count_register_writes < before_writes + 2:
+        print(f"ERROR: {test_name}: count_register_writes should have increased by at least 2, was {before_writes} now {inv.count_register_writes}")
         failed = True
 
     # The schedule_write_button must be pressed so the Solis hardware applies the schedule
     if ha.dummy_items.get("switch.inverter_button") != "on":
-        print("ERROR: {}: inverter_button (schedule_write_button) should be 'on' (pressed), got {}".format(test_name, ha.dummy_items.get("switch.inverter_button")))
+        print(f"ERROR: {test_name}: inverter_button (schedule_write_button) should be 'on' (pressed), got {ha.dummy_items.get('switch.inverter_button')}")
         failed = True
 
     return failed
