@@ -2312,6 +2312,8 @@ class Octopus:
             slot = {}
             slot["start"] = slot_start_date.strftime(TIME_FORMAT)
             slot["end"] = slot_end_date.strftime(TIME_FORMAT)
+            slot["source"] = "car_charging_now"
+            slot["kwh"] = self.car_charging_rate[car_n] * 60 / 30  # Scale to 30 minute slot
             octopus_slots.append(slot)
             self.log("Octopus: Car is charging now - added new IO slot {}".format(slot))
         return octopus_slots
