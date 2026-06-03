@@ -475,7 +475,7 @@ class UserInterface:
                     if has_changed and item.get("reset_inverter_force", False):
                         self.inverter_needs_reset = True
                         self.log("Set reset inverter true due to reset_inverter_force on item {}".format(name))
-                        if event:
+                        if event and item.get("value", None) is not None:
                             self.inverter_needs_reset_force = name
                             self.log("Set reset inverter force true due to reset_inverter_force on item {}".format(name))
                     item["value"] = value
