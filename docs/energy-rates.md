@@ -387,6 +387,22 @@ A template sensor can be used to manipulate the rates provided by the integratio
             {{ out.list | tojson }}
 ```
 
+## Curtailment on a negative export price
+
+On a dynamic tariff the export price can go negative, where exporting solar to the grid costs you money rather than earning it.
+A common way to avoid this is to curtail the inverter to net-zero export during negative-price slots, for example with an automation that sets the inverter's export limit to zero whenever the export rate is below zero.
+
+Predbat has no way of knowing this curtailment happens. With a static **export_limit** it models the export as proceeding normally during those slots, which has two consequences:
+
+- The plan books an export cost (or credit) and models the PV as exported for negative-price slots that you actually avoid through curtailment, so the projected economics do not match reality.
+- Because the measured generation drops while the inverter is throttled back, PV calibration reads it as panel underperformance and pulls the forecast down (see [PV calibration](customisation.md#solar-pv-adjustment-options)).
+
+Predbat can model this curtailment instead, via **select.predbat_curtail_on_negative_export_price**. Set it to **curtail_excess** to model grid export as blocked whenever the export price is negative (PV still charges the battery and supplies the house), or to **solar_production_off** if your inverter can only disable generation entirely (the PV is then modelled as fully off during those slots). The default **off** disables the feature.
+For negative-price slots Predbat then models the export as curtailed instead of using the normal **export_limit**, and excludes the slot from PV calibration so the curtailment is not mistaken for panel underperformance.
+
+Predbat does not drive the curtailment, it only models it - the actual curtailment stays with your inverter or automation.
+The control is described in [Solar PV adjustment options](customisation.md#curtailment-on-a-negative-export-price), and the curtailed slots are shown in a distinct colour in the Predbat plan.
+
 ## Rate Bands to manually configure Energy Rates
 
 If you are not an Octopus Energy customer, or you are but your energy rates repeat simply, you can configure your rate bands in apps.yaml using rates_import/rates_export/rates_gas.
