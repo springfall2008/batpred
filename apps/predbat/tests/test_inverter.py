@@ -1592,6 +1592,55 @@ def test_time_entity_hour_write(test_name, ha, inv, dummy_rest, direction, new_s
     return failed
 
 
+def test_rest_battery_capacity_fallback(test_name, my_predbat):
+    """
+    Verify that when V3 REST data omits Battery_Capacity_kWh and battery_nominal_capacity,
+    nominal_capacity and soc_max fall back to the soc_max value configured in apps.yaml.
+    """
+    failed = False
+    print("**** Running Test: {} ****".format(test_name))
+    dummy_rest = DummyRestAPI()
+    my_predbat.args["givtcp_rest"] = "dummy"
+
+    if "inverter_limit" in my_predbat.args:
+        del my_predbat.args["inverter_limit"]
+    if "export_limit" in my_predbat.args:
+        del my_predbat.args["export_limit"]
+
+    # Load the real V3 fixture and strip battery capacity fields to simulate an inverter
+    # that doesn't report Battery_Capacity_kWh or battery_nominal_capacity via REST.
+    with open("cases/rest_v3.json", "r") as f:
+        rest_v3_data = json.load(f)
+
+    orig_serial = "EA2303G082"
+    new_serial = "GW2347G084"
+    rest_v3_data[new_serial] = rest_v3_data.pop(orig_serial)
+    rest_v3_data["raw"]["invertor"]["serial_number"] = new_serial
+    rest_v3_data["Stats"]["GivTCP_Version"] = "3.1.6"
+
+    del rest_v3_data[new_serial]["Battery_Capacity_kWh"]
+    del rest_v3_data["raw"]["invertor"]["battery_nominal_capacity"]
+
+    dummy_rest.rest_data = rest_v3_data
+
+    my_predbat.restart_active = True
+    inv = Inverter(my_predbat, 0, rest_postCommand=dummy_rest.dummy_rest_postCommand, rest_getData=dummy_rest.dummy_rest_getData, quiet=False)
+    inv.sleep = dummy_sleep
+    inv.update_status(my_predbat.minutes_now)
+    my_predbat.restart_active = False
+
+    # sensor.soc_max = 10.0 in dummy_items, so the fallback should produce nominal_capacity 10.0
+    expected_nominal = 10.0
+    if inv.nominal_capacity != expected_nominal:
+        print("ERROR: nominal_capacity should be {} (apps.yaml fallback) got {}".format(expected_nominal, inv.nominal_capacity))
+        failed = True
+    if inv.soc_max != expected_nominal:
+        print("ERROR: soc_max should be {} (apps.yaml fallback) got {}".format(expected_nominal, inv.soc_max))
+        failed = True
+
+    return failed
+
+
 def run_inverter_tests(my_predbat_dummy):
     """
     Test the inverter functions
@@ -1826,6 +1875,10 @@ def run_inverter_tests(my_predbat_dummy):
         assert_nominal_capacity=9.52,
         assert_battery_temperature=25.0,
     )
+    if failed:
+        return failed
+
+    failed |= test_rest_battery_capacity_fallback("rest_capacity_fallback", my_predbat)
     if failed:
         return failed
 

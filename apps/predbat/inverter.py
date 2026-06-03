@@ -336,6 +336,12 @@ class Inverter:
                         self.base.log("Warn: REST data reports Battery Capacity kWh as {} but nominal indicates {} - using nominal".format(self.soc_max, self.nominal_capacity))
                     self.soc_max = self.nominal_capacity * self.battery_scaling
 
+            # Rest fails to return battery capacity
+            if not self.nominal_capacity:
+                self.log("Warn: REST data does not report Battery Capacity kWh, attempting to use soc_max apps.yaml instead as fallback for nominal capacity")
+                self.nominal_capacity = self.base.get_arg("soc_max", default=0.0, index=self.id)
+                self.soc_max = self.nominal_capacity * self.battery_scaling
+
             if self.rest_v3:
                 # GivTCP v3 indicates battery is being calibrated via [Control][Battery_Calibration]
                 if ("Control" in self.rest_data) and ("Battery_Calibration" in self.rest_data["Control"]):
