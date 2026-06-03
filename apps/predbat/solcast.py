@@ -882,6 +882,15 @@ class SolarAPI(ComponentBase):
                     app="solar",
                 )
 
+    def slot_export_curtailed(self, rate):
+        """
+        Return True if the slot (given its historical export rate) was curtailed under the negative-export-price
+        curtailment and should be excluded from PV calibration (issue #3986). Curtailment applies when the
+        feature is enabled and the export rate was negative. Slots with no known historical rate (rate is None)
+        are treated as not curtailed (conservative), and with the feature off nothing is excluded.
+        """
+        return self.base.curtail_on_negative_export_price != "off" and rate is not None and rate < 0
+
     def pv_calibration(self, pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10, divide_by, max_kwh, forecast_days, period=None):
         """
         Perform PV calibration based on historical data and forecast data.
@@ -920,6 +929,13 @@ class SolarAPI(ComponentBase):
             self.now_utc_exact, prune_today(history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", days + 1, required=False)), self.now_utc_exact, self.midnight_utc, prune=False, intermediate=True)
         )
 
+        # Find the historical export rates, used to exclude slots that were curtailed under the rate-conditional
+        # export limit from calibration (issue #3986). The rates_export sensor's state is the export rate at each
+        # point in time, so its recorded history gives the historical rate per slot keyed the same way as pv_forecast.
+        rate_export_hist, _ = history_attribute_to_minute_data(
+            self.now_utc_exact, prune_today(history_attribute(self.get_history_wrapper(self.prefix + ".rates_export", days + 1, required=False)), self.now_utc_exact, self.midnight_utc, prune=False, intermediate=True)
+        )
+
         hist_days = min(pv_today_hist_days, pv_forecast_hist_days, days)
         enabled_calibration = True
         if hist_days < 3:
@@ -941,6 +957,10 @@ class SolarAPI(ComponentBase):
                 days_prev = int(abs(minute_absolute) / (24 * 60)) + 1
                 slot_abs = minute_absolute % (24 * 60)
                 slot = int(slot_abs / self.plan_interval_minutes) * self.plan_interval_minutes
+                # Exclude slots curtailed under the rate-conditional export limit so deliberate curtailment
+                # is not read as panel underperformance and dragged into the forecast (issue #3986).
+                if self.slot_export_curtailed(rate_export_hist.get(minute, None)):
+                    continue
                 pv_power_hist_by_slot[slot] = pv_power_hist_by_slot.get(slot, 0) + pv_power_hist[minute]
                 pv_power_hist_by_slot_count[slot] = pv_power_hist_by_slot_count.get(slot, 0) + 1
                 past_day_actual[days_prev] = past_day_actual.get(days_prev, 0) + pv_power_hist[minute]
@@ -958,6 +978,10 @@ class SolarAPI(ComponentBase):
             if minute_absolute < 0:
                 slot_abs = minute_absolute % (24 * 60)
                 slot = int(slot_abs / self.plan_interval_minutes) * self.plan_interval_minutes
+                # Mirror the actual-history exclusion so curtailed slots drop out of both aggregates,
+                # keeping the per-day and per-slot scaling factors consistent (issue #3986).
+                if self.slot_export_curtailed(rate_export_hist.get(minute, None)):
+                    continue
                 pv_forecast_by_slot[slot] = pv_forecast_by_slot.get(slot, 0) + pv_forecast[minute]
                 pv_forecast_by_slot_count[slot] = pv_forecast_by_slot_count.get(slot, 0) + 1
                 max_pv_power_forecast = max(max_pv_power_forecast, pv_forecast[minute])
