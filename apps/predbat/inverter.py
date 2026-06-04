@@ -410,7 +410,12 @@ class Inverter:
         # Track and update battery size (if automatic)
         self.battery_size_tracking()
 
-        # Convert inverter time into timestamp
+        # Convert inverter time into timestamp.
+        # An absent or unavailable reading (e.g. the cloud API denied access because a GivEnergy
+        # Premium subscription is now required) is treated as "no reading" — skew detection is
+        # skipped rather than misreporting it as inverter clock skew or triggering an auto-restart.
+        if isinstance(ivtime, str) and ivtime.strip().lower() in ("", "unavailable", "unknown", "none"):
+            ivtime = None
         if ivtime:
             try:
                 self.inverter_time = datetime.strptime(ivtime, TIME_FORMAT)
