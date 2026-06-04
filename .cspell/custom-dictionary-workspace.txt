@@ -8,6 +8,7 @@ AIO's
 aiofiles
 aiohttp
 aiomqtt
+aios
 Alertfeed
 allclose
 Anson
@@ -361,6 +362,7 @@ stepline
 Stromligning
 strptime
 Strømligning
+submessage
 substep
 sunspec
 sunsynk
@@ -396,6 +398,7 @@ treforsiphone
 twinx
 tzfile
 tzpath
+unconfigured
 unsmoothed
 unstaged
 useid
