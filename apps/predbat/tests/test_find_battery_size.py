@@ -149,6 +149,48 @@ def create_test_history_data_soc_kw(my_predbat, num_days=2, battery_size_kwh=10.
     my_predbat.ha_interface.get_history = mock_get_history
 
 
+def create_test_history_data_with_soc_glitches(my_predbat, battery_size_kwh=10.0):
+    """
+    Create one real charge period plus short SoC jumps that should be rejected.
+    """
+    ha = my_predbat.ha_interface
+    base_time = my_predbat.midnight_utc - timedelta(hours=8)
+
+    history_dict = {"sensor.soc_percent": [], "sensor.battery_power": []}
+    ha.dummy_items["sensor.soc_percent"] = 70
+    ha.dummy_items["sensor.battery_power"] = 0
+
+    charge_power_w = 2500
+    current_soc = 20.0
+    glitch_soc = {300: 30.0, 301: 50.0, 302: 70.0, 303: 80.0, 360: 25.0, 361: 60.0, 362: 85.0}
+
+    for minutes in range(0, 8 * 60):
+        timestamp = base_time + timedelta(minutes=minutes)
+        timestamp_str = timestamp.strftime("%Y-%m-%dT%H:%M:%S%z")
+
+        if 60 <= minutes < 180:
+            battery_power = -charge_power_w
+            energy_added_wh = charge_power_w / 60.0
+            current_soc = min(100.0, current_soc + (energy_added_wh / (battery_size_kwh * 1000.0)) * 100.0)
+            soc = current_soc
+        elif minutes in glitch_soc:
+            battery_power = -charge_power_w
+            soc = glitch_soc[minutes]
+        else:
+            battery_power = 0
+            soc = current_soc
+
+        history_dict["sensor.soc_percent"].append({"state": str(round(soc)), "last_updated": timestamp_str, "attributes": {"unit_of_measurement": "%"}})
+        history_dict["sensor.battery_power"].append({"state": round(battery_power, 1), "last_updated": timestamp_str, "attributes": {"unit_of_measurement": "W"}})
+
+    def mock_get_history(entity_id, now=None, days=30):
+        if entity_id in history_dict:
+            return [history_dict[entity_id]]
+        return None
+
+    my_predbat.ha_interface.get_history = mock_get_history
+
+
 def remove_test_history_data(my_predbat):
     def mock_get_history(entity_id, now=None, days=30):
         return None
@@ -411,6 +453,49 @@ def test_find_battery_size_different_size(my_predbat):
         else:
             print("ERROR: No battery size estimate returned")
             failed = True
+    except Exception as e:
+        print("ERROR: find_battery_size raised exception: {}".format(e))
+        import traceback
+
+        traceback.print_exc()
+        failed = True
+
+    return failed
+
+
+def test_find_battery_size_rejects_soc_glitches(my_predbat):
+    """
+    Test that short, physically impossible SoC jumps do not drag down the capacity estimate.
+    """
+    print("*** Running test: find_battery_size_rejects_soc_glitches ***")
+    failed = False
+
+    expected_battery_size = 10.0
+    inv = Inverter(my_predbat, 0)
+    inv.battery_rate_max_charge = 2600 / 60000
+    inv.battery_rate_max_discharge = 2600 / 60000
+    inv.soc_max = expected_battery_size
+    inv.nominal_capacity = expected_battery_size
+    inv.battery_scaling = 1.0
+
+    setup_predbat(my_predbat)
+    create_test_history_data_with_soc_glitches(my_predbat, battery_size_kwh=expected_battery_size)
+
+    try:
+        estimated_size = inv.find_battery_size(expected_battery_size)
+        if estimated_size is None:
+            print("ERROR: No battery size estimate returned")
+            failed = True
+        else:
+            print("Estimated battery size with SoC glitches: {} kWh (expected: {} kWh)".format(estimated_size, expected_battery_size))
+            tolerance = 0.15
+            lower_bound = expected_battery_size * (1 - tolerance)
+            upper_bound = expected_battery_size * (1 + tolerance)
+            if not (lower_bound <= estimated_size <= upper_bound):
+                print("ERROR: Estimated battery size {} kWh is outside acceptable range [{}, {}] kWh".format(estimated_size, lower_bound, upper_bound))
+                failed = True
+            else:
+                print("SUCCESS: SoC glitches were rejected from the estimate")
     except Exception as e:
         print("ERROR: find_battery_size raised exception: {}".format(e))
         import traceback
@@ -1306,6 +1391,10 @@ def run_find_battery_size_tests(my_predbat):
         return failed
 
     failed |= test_find_battery_size_different_size(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_find_battery_size_rejects_soc_glitches(my_predbat)
     if failed:
         return failed
 
