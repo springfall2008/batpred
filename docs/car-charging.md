@@ -579,38 +579,38 @@ alias: Allocate EV Charging Cost
 description: ""
 triggers:
   - entity_id:
-	  - predbat.cost_today_car
-	trigger: state
+   - predbat.cost_today_car
+ trigger: state
 actions:
   - variables:
-	  new_cost: "{{ trigger.to_state.state | float }}"
-	  old_cost: "{{ trigger.from_state.state | float }}"
-	  delta: "{{ new_cost - old_cost }}"
+   new_cost: "{{ trigger.to_state.state | float }}"
+   old_cost: "{{ trigger.from_state.state | float }}"
+   delta: "{{ new_cost - old_cost }}"
   - condition: template
-	value_template: "{{ delta > 0 }}"
+ value_template: "{{ delta > 0 }}"
   - choose:
-	  - conditions:
-		  - condition: template
-			value_template: "{{ is_state('sensor.car1_connected', 'on') }}"
-		sequence:
-		  - target:
-			  entity_id: input_number.car_car1_cost_today
-			data:
-			  value: >
-				{{ (states('input_number.car_car1_cost_today') | float) + delta
-				}}
-			action: input_number.set_value
-	  - conditions:
-		  - condition: template
-			value_template: "{{ is_state('sensor.car2_connected', 'on') }}"
-		sequence:
-		  - target:
-			  entity_id: input_number.car_car2_cost_today
-			data:
-			  value: >
-				{{ (states('input_number.car_car2_cost_today') | float) + delta
-				}}
-			action: input_number.set_value
+   - conditions:
+    - condition: template
+   value_template: "{{ is_state('sensor.car1_connected', 'on') }}"
+  sequence:
+    - target:
+     entity_id: input_number.car_car1_cost_today
+   data:
+     value: >
+    {{ (states('input_number.car_car1_cost_today') | float) + delta
+    }}
+   action: input_number.set_value
+   - conditions:
+    - condition: template
+   value_template: "{{ is_state('sensor.car2_connected', 'on') }}"
+  sequence:
+    - target:
+     entity_id: input_number.car_car2_cost_today
+   data:
+     value: >
+    {{ (states('input_number.car_car2_cost_today') | float) + delta
+    }}
+   action: input_number.set_value
 mode: single
 ```
 
@@ -621,14 +621,14 @@ alias: Reset Daily EV Car Costs
 description: ""
 triggers:
   - at: "00:00:00"
-	trigger: time
+ trigger: time
 actions:
   - target:
-	  entity_id:
-		- input_number.car_car1_cost_today
-		- input_number.car_car2_cost_today
-	data:
-	  value: 0
-	action: input_number.set_value
+   entity_id:
+  - input_number.car_car1_cost_today
+  - input_number.car_car2_cost_today
+ data:
+   value: 0
+ action: input_number.set_value
 mode: single
 ```
