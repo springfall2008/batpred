@@ -2773,6 +2773,11 @@ class Output:
                     kwh = slot["kwh"]
                     kwh_drain = kwh / self.car_charging_loss
                     load_reported = 0
+
+                    # Skip empty slot
+                    if end_minutes <= start_minutes:
+                        continue
+
                     for minute in range(start_minutes, end_minutes, PREDICT_STEP):
                         load_reported += yesterday_load_step.get(minute, 0)
                     if load_reported < kwh_drain:
