@@ -602,11 +602,11 @@ Predbat can also [optimise your grid charging based on the Carbon footprint](cus
 
 ### UK Grid Carbon intensity (HA Integration)
 
-If you prefer you can instead install the Carbon Intensity integration <https://github.com/jfparis/sensor.carbon_intensity_uk>. There have been reports that this integration might not be working any more.
+If you prefer you can instead install the Carbon Intensity integration <https://github.com/jscruz/sensor.carbon_intensity_uk>.
 
 Once the integration is active, update `apps.yaml` to link Predbat to the Carbon intensity sensor:
 
 ```yaml
   # Carbon Intensity data from National grid
-  carbon_intensity: 're:(sensor.carbon_intensity_uk)'
+  carbon_intensity: 're:(sensor.carbon_intensity_uk_sensor)'
 ```
