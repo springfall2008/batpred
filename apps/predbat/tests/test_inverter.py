@@ -12,7 +12,7 @@ import json
 import copy
 import yaml
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from utils import calc_percent_limit
 from tests.test_infra import TestHAInterface
 from predbat import PredBat
@@ -1641,6 +1641,63 @@ def test_rest_battery_capacity_fallback(test_name, my_predbat):
     return failed
 
 
+def test_inverter_time_handling(my_predbat, dummy_items):
+    """Verify inverter clock-skew detection handles a stale/unavailable cloud time source correctly.
+
+    When the cloud time source is unavailable (e.g. GivEnergy API access denied because a
+    GivEnergy Premium subscription is now required), PredBat must treat it as "no reading" and
+    skip skew detection rather than misreporting it as inverter clock skew and triggering an
+    auto-restart loop. A genuinely skewed inverter clock must still be detected.
+    """
+    failed = False
+    print("**** Running Test: inverter_time_handling ****")
+
+    def _no_sleep(self, seconds):
+        """No-op sleep so construction never really blocks, even if an auto-restart path is hit."""
+        return None
+
+    saved_time = dummy_items.get("sensor.inverter_time")
+    saved_sleep = Inverter.sleep
+    Inverter.sleep = _no_sleep
+    try:
+        # Case 1: cloud time source unavailable -> skip skew detection, no auto-restart.
+        dummy_items["sensor.inverter_time"] = "unavailable"
+        my_predbat.ha_interface.dummy_items = dummy_items
+        my_predbat.current_status = ""
+        my_predbat.restart_active = False
+        inv = Inverter(my_predbat, 0)
+        if inv.inverter_time is not None:
+            print("ERROR: unavailable inverter time should resolve to None, got {}".format(inv.inverter_time))
+            failed = True
+        if my_predbat.restart_active:
+            print("ERROR: unavailable inverter time must not trigger an auto-restart")
+            failed = True
+        if "skew" in (my_predbat.current_status or "").lower():
+            print("ERROR: unavailable inverter time must not be reported as clock skew, status={}".format(my_predbat.current_status))
+            failed = True
+
+        # Case 2: a genuinely skewed clock (2 hours ahead) must still be detected.
+        skew_time = (my_predbat.now_utc + timedelta(minutes=120)).strftime("%Y-%m-%dT%H:%M:%S%z")
+        dummy_items["sensor.inverter_time"] = skew_time
+        my_predbat.ha_interface.dummy_items = dummy_items
+        my_predbat.current_status = ""
+        my_predbat.restart_active = True  # suppress real restart side-effects; record_status still fires
+        Inverter(my_predbat, 0)
+        if "skew" not in (my_predbat.current_status or "").lower():
+            print("ERROR: a 2-hour clock skew should still be detected, status={}".format(my_predbat.current_status))
+            failed = True
+    finally:
+        Inverter.sleep = saved_sleep
+        dummy_items["sensor.inverter_time"] = saved_time
+        my_predbat.ha_interface.dummy_items = dummy_items
+        my_predbat.current_status = ""
+        my_predbat.restart_active = False
+
+    if not failed:
+        print("**** Test inverter_time_handling PASSED ****")
+    return failed
+
+
 def run_inverter_tests(my_predbat_dummy):
     """
     Test the inverter functions
@@ -1701,6 +1758,8 @@ def run_inverter_tests(my_predbat_dummy):
     for entity_id in dummy_items.keys():
         arg_name = entity_id.split(".")[1]
         my_predbat.args[arg_name] = entity_id
+
+    failed |= test_inverter_time_handling(my_predbat, dummy_items)
 
     failed |= test_inverter_update(
         "update1",
