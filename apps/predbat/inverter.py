@@ -558,6 +558,13 @@ class Inverter:
             self.nominal_capacity = self.base.get_arg("soc_max_nominal", index=self.id, default=0.0)
         self.base.set_arg("soc_max_nominal", self.nominal_capacity, index=self.id)
 
+        # If the live soc_max read was invalid (e.g. the source sensor was momentarily unavailable)
+        # but we recovered a valid nominal from soc_max_nominal, recompute soc_max so the known-good
+        # capacity takes effect instead of falling through to the 8 kWh default below.
+        if (not self.soc_max or self.soc_max <= 0) and self.nominal_capacity and self.nominal_capacity > 0:
+            self.soc_max = dp3(self.nominal_capacity * self.battery_scaling)
+            self.log("Note: inverter {} soc_max source unavailable this cycle, retained last known battery size {:.3f} kWh".format(self.id, self.soc_max))
+
         if not self.nominal_capacity or self.nominal_capacity <= 0:
             self.log("Note: Battery size was not set for inverter {}, enabling battery_scaling_auto".format(self.id))
             self.base.battery_scaling_auto = True
@@ -605,11 +612,13 @@ class Inverter:
 
         # Final fallback if soc_max is still not determined
         if not self.soc_max or self.soc_max <= 0:
-            self.log("Warn: Unable to determine battery size for inverter {}, setting to 8 kWh default, you must set soc_max in apps.yaml or wait until enough data is collected to estimate battery size".format(self.id))
+            self.log("Warn: Unable to determine battery size for inverter {}, using 8 kWh default for this cycle, you must set soc_max in apps.yaml or wait until enough data is collected to estimate battery size".format(self.id))
             self.soc_max = 8.0
-            self.base.set_arg("soc_max", self.soc_max, index=self.id)
-            self.base.set_arg("soc_max_nominal", 0.0, index=self.id)
             self.nominal_capacity = self.soc_max
+            # Intentionally do NOT persist the fallback into the soc_max / soc_max_nominal args:
+            # caching 8.0 would override a configured (but momentarily unavailable) source and pin
+            # soc_max to 8 kWh until restart. Leaving the args intact lets the next cycle re-read the
+            # real source (or restore soc_max_nominal) and recover automatically.
 
     def update_soc_max_calculated_sensor(self, found_size, nominal_capacity=0):
         """
