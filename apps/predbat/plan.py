@@ -1144,7 +1144,7 @@ class Plan:
             if getattr(self, "clipping_buffer_enable", False) and getattr(self, "clipping_buffer_forecast_kwh", {}):
                 # A. Cap grid charging that overlaps with a needed buffer
                 for n, window in enumerate(self.charge_window_best):
-                    buffer_needed = self.clipping_buffer_minute.get(window["start"], 0)
+                    buffer_needed = self.clipping_buffer_forecast_kwh.get(window["start"], 0)
                     if buffer_needed > 0:
                         new_target_soc_kw = max(0, self.soc_max - buffer_needed)
                         new_target_percent = (new_target_soc_kw / self.soc_max) * 100.0 if self.soc_max > 0 else 0
@@ -1457,67 +1457,80 @@ class Plan:
         )
 
         if self.calculate_best:
-            # 1. Apply Clipping Buffer caps to the "Best" plan for ALL forecast days
+            # 1. Apply Clipping Buffer constraints to the "Best" plan for ALL forecast days
             if getattr(self, "clipping_buffer_enable", False) and getattr(self, "clipping_buffer_forecast_kwh", {}):
-                # A. Cap any planned grid charging that overlaps with a needed buffer
-                for n, window in enumerate(self.charge_window_best):
-                    buffer_needed = self.clipping_buffer_forecast_kwh.get(window["start"], 0)
-                    if buffer_needed > 0:
-                        # Convert kWh to percent
-                        new_target_soc_kw = max(0, self.soc_max - buffer_needed)
-                        new_target_percent = (new_target_soc_kw / self.soc_max) * 100.0 if self.soc_max > 0 else 0
-                        self.charge_limit_best[n] = min(self.charge_limit_best[n], new_target_percent)
-
-                # B. Inject 'Hold' Export windows for all detected solar peaks (today and tomorrow)
-                # This ensures the simulation (and real inverter) reserves the required space
                 can_discharge = getattr(self, "clipping_buffer_can_discharge", "")
-                if can_discharge in ["Always", "Cost Optimal"] and clipping_windows:
-                    for ws, we, wn in clipping_windows:
-                        if we <= self.minutes_now: continue
+                
+                for ws, we, wn in clipping_windows:
+                    if we <= self.minutes_now: continue
 
-                        # Amount reserved at the start of this peak
-                        c_rem = self.clipping_buffer_forecast_kwh.get(ws, 0)
-                        if c_rem <= 0: continue
+                    # Required buffer for this specific solar peak
+                    c_rem = self.clipping_buffer_forecast_kwh.get(ws, 0)
+                    if c_rem <= 0: continue
 
-                        effective_start = max(ws - 60, self.minutes_now) # Start 60m before peak or NOW
-                        if effective_start >= we: continue
+                    target_kw = max(0, self.soc_max - c_rem)
+                    target_percent = (target_kw / self.soc_max) * 100.0 if self.soc_max > 0 else 0.0
+                    
+                    # Avoid exactly 99.0 as this triggers Freeze Export which disables charging
+                    if target_percent == 99.0:
+                        target_percent = 98.9
 
-                        target_kw = max(0, self.soc_max - c_rem)
-                        target_percent = (target_kw / self.soc_max) * 100.0 if self.soc_max > 0 else 0.0
+                    # A. Cap any planned grid charging that happens BEFORE this peak (e.g. overnight)
+                    # We check windows ending up to 24 hours before the peak starts
+                    for n, window in enumerate(self.charge_window_best):
+                        if window["end"] <= ws and window["end"] > (ws - 1440):
+                            self.charge_limit_best[n] = min(self.charge_limit_best[n], target_percent)
 
-                        # Avoid exactly 99.0 as this triggers Freeze Export which disables charging
-                        if target_percent == 99.0:
-                            target_percent = 98.9
+                    # B. Inject 'Hold' Export windows to clear space if the battery is already too full
+                    if can_discharge in ["Always", "Cost Optimal"]:
+                        # How much do we need to dump? Use predicted SOC from last iteration or now
+                        current_predicted_soc = self.predict_soc.get(max(0, ws - self.minutes_now), self.soc_kw)
+                        
+                        if current_predicted_soc > (target_kw + 0.1):
+                            # Calculate how early to start discharging
+                            # Assume 50% max discharge rate to account for rising PV/House load using AC limit
+                            discharge_rate_kw = getattr(self, "battery_rate_max_discharge", 3.0)
+                            if discharge_rate_kw <= 0: discharge_rate_kw = 3.0
+                            effective_rate = discharge_rate_kw * 0.5 
+                            
+                            energy_to_dump = current_predicted_soc - target_kw
+                            minutes_needed = int((energy_to_dump / effective_rate) * 60) + 15
+                            effective_start = max(self.minutes_now, ws - minutes_needed)
+                        else:
+                            effective_start = ws
 
-                        clip_window = {
-                            "start": effective_start,
-                            "end": we,
-                            "average": self.rate_export.get(effective_start, 0),
-                            "target": target_percent
-                        }
+                        if effective_start < we:
+                            clip_window = {
+                                "start": effective_start,
+                                "end": we,
+                                "average": self.rate_export.get(effective_start, 0),
+                                "target": target_percent,
+                                "clipping": True
+                            }
 
-                        # Merge or add window
-                        overlap = False
-                        for i, e_win in enumerate(self.export_window_best):
-                            if (effective_start >= e_win["start"] and effective_start < e_win["end"]) or \
-                               (we > e_win["start"] and we <= e_win["end"]) or \
-                               (effective_start <= e_win["start"] and we >= e_win["end"]):
-                                overlap = True
-                                # If it overlaps, the more restrictive (lower) target wins
-                                self.export_limits_best[i] = min(self.export_limits_best[i], target_percent)
-                                self.export_window_best[i]["target"] = self.export_limits_best[i]
-                                break
+                            # Merge or add window
+                            overlap = False
+                            for i, e_win in enumerate(self.export_window_best):
+                                if (effective_start >= e_win["start"] and effective_start < e_win["end"]) or \
+                                   (we > e_win["start"] and we <= e_win["end"]) or \
+                                   (effective_start <= e_win["start"] and we >= e_win["end"]):
+                                    overlap = True
+                                    # If it overlaps, the more restrictive (lower) target wins
+                                    self.export_limits_best[i] = min(self.export_limits_best[i], target_percent)
+                                    self.export_window_best[i]["target"] = self.export_limits_best[i]
+                                    self.export_window_best[i]["clipping"] = True
+                                    break
 
-                        if not overlap:
-                            self.export_window_best.append(clip_window)
-                            self.export_limits_best.append(target_percent)
+                            if not overlap:
+                                self.export_window_best.append(clip_window)
+                                self.export_limits_best.append(target_percent)
 
-                    # Re-sort paired arrays
-                    if len(self.export_window_best) > 0:
-                        paired = list(zip(self.export_window_best, self.export_limits_best))
-                        paired.sort(key=lambda x: x[0]["start"])
-                        self.export_window_best = [x[0] for x in paired]
-                        self.export_limits_best = [x[1] for x in paired]
+                # Re-sort paired arrays after all injections
+                if len(self.export_window_best) > 0:
+                    paired = list(zip(self.export_window_best, self.export_limits_best))
+                    paired.sort(key=lambda x: x[0]["start"])
+                    self.export_window_best = [x[0] for x in paired]
+                    self.export_limits_best = [x[1] for x in paired]
 
             # 2. Final simulation of best (now including all clipping caps), do 10% and normal scenario
             (best_metric10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10, final_iboost10, final_carbon_g, clipping_mitigated, *_) = self.run_prediction(
@@ -2525,6 +2538,11 @@ class Plan:
 
             if limit == 100:
                 # Ignore disabled windows
+                pass
+            elif window.get("clipping", False):
+                # DO NOT CLIP CLIPPING BUFFER WINDOWS!
+                # These are designed to PREVENT charging above a limit, 
+                # so the fact that the battery is currently below the limit is the WHOLE POINT.
                 pass
             elif window_length > 0:
                 predict_minute_start = max(int((window_start - minutes_now) / 5) * 5, 0)
