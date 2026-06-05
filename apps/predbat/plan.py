@@ -1029,9 +1029,10 @@ class Plan:
                 eff_sum = min(eff_sum, self.clipping_buffer_max_kwh * 60.0)
             self.clipping_buffer_minute[m] = eff_sum
 
-        self.clipping_buffer_forecast_kwh = self.clipping_buffer_minute
-        self.clipping_remaining_today = self.clipping_buffer_minute.get(self.minutes_now, 0)
-        self.clipping_tomorrow = self.clipping_buffer_minute.get(1440, 0)
+        # Convert back from kW-minutes to kWh for the forecast outputs
+        self.clipping_buffer_forecast_kwh = {k: v / 60.0 for k, v in self.clipping_buffer_minute.items()}
+        self.clipping_remaining_today = self.clipping_buffer_forecast_kwh.get(self.minutes_now, 0)
+        self.clipping_tomorrow = self.clipping_buffer_forecast_kwh.get(1440, 0)
 
         # 3. Finalize Primary Window for "Now" (Indicators for today's sensors)
         # Find the first window that is relevant for 'today' (starts before 1440)
@@ -1156,7 +1157,7 @@ class Plan:
                     for ws, we, wn in clipping_windows:
                         if we <= self.minutes_now: continue
                         
-                        c_rem = self.clipping_buffer_minute.get(ws, 0)
+                        c_rem = self.clipping_buffer_forecast_kwh.get(ws, 0)
                         if c_rem <= 0: continue
                         
                         # Check predicted SOC at peak start to see if we need to dump energy early
@@ -1476,7 +1477,7 @@ class Plan:
                         if we <= self.minutes_now: continue
 
                         # Amount reserved at the start of this peak
-                        c_rem = self.clipping_buffer_minute.get(ws, 0)
+                        c_rem = self.clipping_buffer_forecast_kwh.get(ws, 0)
                         if c_rem <= 0: continue
 
                         effective_start = max(ws - 60, self.minutes_now) # Start 60m before peak or NOW
