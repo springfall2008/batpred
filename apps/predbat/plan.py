@@ -967,22 +967,21 @@ class Plan:
         # If the user hasn't hardcoded a min buffer, we calculate one automatically
         # by looking at the Clear Sky (or best available) profile to find the max possible clipping.
         # This provides robust protection against intermittent cloud spikes that exceed the average forecast.
-        auto_spike_buffer_kw_mins = {}
+        auto_spike_buffer_kwh = {}
         for ws, we, wn in clipping_windows:
-            clearsky_clipping_kw_mins = 0
+            clearsky_clipping_kwh = 0
             for t in range(ws, we):
                 pv_cs = window_source.get(t, 0)
                 lim = limit_minute.get(t, base_limit)
                 if pv_cs > lim:
-                    clearsky_clipping_kw_mins += (pv_cs - lim)
+                    clearsky_clipping_kwh += (pv_cs - lim)
 
             user_min_kwh = getattr(self, "clipping_buffer_min_kwh", 0)
             if user_min_kwh > 0:
-                # Convert user kWh to kW-minutes for the internal calculation
-                auto_spike_buffer_kw_mins[(ws, we, wn)] = user_min_kwh * 60.0
+                auto_spike_buffer_kwh[(ws, we, wn)] = user_min_kwh
             else:
                 # Automated protection: Reserve space for the max potential clipping
-                auto_spike_buffer_kw_mins[(ws, we, wn)] = clearsky_clipping_kw_mins
+                auto_spike_buffer_kwh[(ws, we, wn)] = clearsky_clipping_kwh
 
         # 3. Calculate Clipping Volume (kWh) with Dynamic Decay for full forecast
         self.clipping_buffer_minute = {}
@@ -1015,22 +1014,22 @@ class Plan:
             eff_sum = natural_sum
             if active_win:
                 ws, we, wn = active_win
-                spike_kw_mins = auto_spike_buffer_kw_mins.get(active_win, 0)
-                if spike_kw_mins > 0:
+                spike_kwh = auto_spike_buffer_kwh.get(active_win, 0)
+                if spike_kwh > 0:
                     if m < ws: # Before window: full spike buffer
-                        eff_sum = max(eff_sum, spike_kw_mins)
+                        eff_sum = max(eff_sum, spike_kwh)
                     elif m < we: # During window: decay based on Clear Sky accumulation
                         total_window_pv = sum(window_source.get(t, 0) for t in range(ws, we))
                         remaining_window_pv = sum(window_source.get(t, 0) for t in range(max(ws, m), we))
                         decay_factor = remaining_window_pv / total_window_pv if total_window_pv > 0 else 0
-                        eff_sum = max(eff_sum, spike_kw_mins * decay_factor)
+                        eff_sum = max(eff_sum, spike_kwh * decay_factor)
 
             if getattr(self, "clipping_buffer_max_kwh", 0) > 0:
-                eff_sum = min(eff_sum, self.clipping_buffer_max_kwh * 60.0)
+                eff_sum = min(eff_sum, self.clipping_buffer_max_kwh)
             self.clipping_buffer_minute[m] = eff_sum
 
-        # Convert back from kW-minutes to kWh for the forecast outputs
-        self.clipping_buffer_forecast_kwh = {k: v / 60.0 for k, v in self.clipping_buffer_minute.items()}
+        # Export directly to the outputs (already in kWh)
+        self.clipping_buffer_forecast_kwh = self.clipping_buffer_minute
         self.clipping_remaining_today = self.clipping_buffer_forecast_kwh.get(self.minutes_now, 0)
         self.clipping_tomorrow = self.clipping_buffer_forecast_kwh.get(1440, 0)
 
