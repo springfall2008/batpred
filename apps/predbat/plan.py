@@ -22,7 +22,7 @@ import traceback
 from datetime import datetime, timedelta
 from multiprocessing import Pool, cpu_count
 from const import PREDICT_STEP, TIME_FORMAT, MINUTE_WATT
-from utils import calc_percent_limit, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, in_car_slot, time_string_to_stamp, minutes_to_time
+from utils import calc_percent_limit, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, in_car_slot, time_string_to_stamp, minutes_to_time, get_discharge_rate_curve
 from prediction import Prediction, wrapped_run_prediction_single, wrapped_run_prediction_charge, wrapped_run_prediction_charge_min_max, wrapped_run_prediction_export, wrapped_run_prediction_charge_min_max
 from predbat_metrics import metrics
 import time
@@ -1487,11 +1487,20 @@ class Plan:
                         current_predicted_soc = self.predict_soc.get(max(0, ws - self.minutes_now), self.soc_kw)
                         
                         if current_predicted_soc > (target_kw + 0.1):
-                            # Calculate how early to start discharging
-                            # Assume 50% max discharge rate to account for rising PV/House load using AC limit
-                            discharge_rate_kw = getattr(self, "battery_rate_max_discharge", 3.0)
-                            if discharge_rate_kw <= 0: discharge_rate_kw = 3.0
-                            effective_rate = discharge_rate_kw * 0.5 
+                            # Calculate how early to start discharging using native battery curves
+                            # We use a 10% safety margin on top of the calculated curve rate
+                            curve_rate_kw = get_discharge_rate_curve(
+                                current_predicted_soc, 
+                                getattr(self, "battery_rate_max_discharge", 3.0),
+                                self.soc_max,
+                                getattr(self, "battery_rate_max_discharge", 3.0),
+                                getattr(self, "battery_discharge_power_curve", {}),
+                                getattr(self, "battery_rate_min", 0),
+                                getattr(self, "battery_temperature", 20.0),
+                                getattr(self, "battery_temperature_discharge_curve", {})
+                            )
+                            
+                            effective_rate = max(0.1, curve_rate_kw * 0.9) # 10% safety margin
                             
                             energy_to_dump = current_predicted_soc - target_kw
                             minutes_needed = int((energy_to_dump / effective_rate) * 60) + 15
