@@ -1665,6 +1665,13 @@ var options = {
         text += "  },\n"
         text += "  xaxis: {\n"
         text += "    type: 'datetime',\n"
+        
+        # Enforce +/- 48 hours bounding box to prevent chart from showing too much trailing history
+        min_x_str = (self.now_utc - timedelta(hours=48)).strftime(TIME_FORMAT)
+        max_x_str = (self.now_utc + timedelta(hours=48)).strftime(TIME_FORMAT)
+        text += "    min: new Date('{}').getTime(),\n".format(min_x_str)
+        text += "    max: new Date('{}').getTime(),\n".format(max_x_str)
+        
         text += "    labels: {\n"
         text += "           datetimeUTC: false\n"
         text += "       }\n"
@@ -2867,10 +2874,15 @@ chart.render();
         soc_kw_h0 = {}
         if self.base.soc_kwh_history:
             hist = self.base.soc_kwh_history
-            for minute in range(0, self.minutes_now, self.plan_interval_minutes):
+            # Fetch up to 48 hours of history
+            start_minute = self.minutes_now - (48 * 60)
+            for minute in range(start_minute, self.minutes_now, self.plan_interval_minutes):
                 minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
                 stamp = minute_timestamp.strftime(TIME_FORMAT)
-                soc_kw_h0[stamp] = hist.get(self.minutes_now - minute, 0)
+                age_minutes = self.minutes_now - minute
+                # Only add if we actually have history data to avoid filling with 0s
+                if age_minutes in hist or age_minutes < 1440: # Fallback to 0 for recent history, but avoid plotting old 0s if no data
+                    soc_kw_h0[stamp] = hist.get(age_minutes, 0)
         soc_kw_h0[now_str] = self.base.soc_kw
         soc_kw = self.get_entity_results(self.prefix + ".soc_kw")
         soc_kw_best = self.get_entity_results(self.prefix + ".soc_kw_best")
@@ -3117,10 +3129,13 @@ chart.render();
                         stamp = minute_timestamp.strftime(TIME_FORMAT)
                         # Target is the "Ceiling" we want to stay under
                         target_val = max(0, self.base.soc_max - kwh)
-                        clipping_target_series[stamp] = round(target_val, 2)
+                        if kwh > 0:
+                            clipping_target_series[stamp] = round(target_val, 2)
+                        else:
+                            clipping_target_series[stamp] = None # Don't plot the ceiling when there is no buffer
 
             series_data = [
-                {"name": "Target SOC", "data": clipping_target_series, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#eb2323", "unit": "kWh"},
+                {"name": "Clipping Ceiling", "data": clipping_target_series, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#eb2323", "unit": "kWh"},
                 {"name": "Actual SOC", "data": soc_kw_best, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": "#9b23eb", "unit": "kWh"},
                 {"name": "Clipping Remaining", "data": clipping_remaining_series, "opacity": "0.4", "stroke_width": "2", "stroke_curve": "smooth", "color": "#2196F3", "unit": "kWh"},
                 {"name": "PV Power", "data": pv_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#f5c43d", "unit": "kW"},
