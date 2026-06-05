@@ -944,11 +944,7 @@ class Inverter:
 
             # Average the estimated battery sizes
             if len(estimate_battery_sizes) > 0:
-                strong_battery_sizes = [
-                    sample
-                    for sample in estimate_battery_sizes
-                    if sample["soc_change"] >= 20 and sample["sample_count"] >= 60 and sample["power_added_kwh"] >= max(min_power_added_kwh * 4, 4.0)
-                ]
+                strong_battery_sizes = [sample for sample in estimate_battery_sizes if sample["soc_change"] >= 20 and sample["sample_count"] >= 60 and sample["power_added_kwh"] >= max(min_power_added_kwh * 4, 4.0)]
                 selected_battery_sizes = strong_battery_sizes if len(strong_battery_sizes) >= 3 else estimate_battery_sizes
                 selected_values = sorted([sample["adjusted_size"] for sample in selected_battery_sizes])
 
