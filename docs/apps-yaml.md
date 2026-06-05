@@ -143,7 +143,7 @@ As another example, the configuration entry for the Solcast day 3 forecast follo
 
 Syntax errors will be highlighted by the Home Assistant editor or via other YAML-aware editors such as VSCode.
 
-Once you have completed your `apps.yaml` and started Predbat you may want to open the Predbat Web Interface and click on 'apps.yaml'. Review any items shown
+Once you have completed your `apps.yaml` and started Predbat you may want to open the Predbat Web Interface and click on 'Apps' at the top. Review any items shown
 in a red background as those do not match (it's okay for a 2nd inverter not to match if you only have one configured). Regular expressions that do not
 match can be ignored if you are not supporting that feature (e.g. Car SoC if you don't have a car).
 
@@ -893,6 +893,8 @@ for more accurate predictions.
 
 ## Inverter control configurations
 
+NB: literal numeric values for the power-limit settings below (`inverter_limit`, `pv_ac_limit`, `export_limit`, `inverter_limit_charge`, `inverter_limit_discharge`, `inverter_limit_export`, `inverter_limit_charge_dc`, `battery_rate_max`, `inverter_battery_rate_min`) must always be in **watts** — e.g. `7300` for a 7.3 kW inverter, never `7.3`. Predbat's unit auto-conversion only fires when the value is a sensor reference (it reads `unit_of_measurement` from the HA entity); for literal values there is no entity to read, so the raw number is taken as watts. A literal `inverter_limit: 7.3` will be interpreted as 7.3 W and clamp `battery_draw` to ~0.0006 kWh per 5-min step, producing a plan that looks like Predbat refuses to discharge the battery.
+
 ### **inverter_limit**
 
 One per inverter.
@@ -910,6 +912,12 @@ For an AC Coupled inverter make sure the Hybrid Inverter toggle is off and set t
 Do not add on separate Micro Inverters to the total power.
 
 If you have multiple inverters then set the value of each one in a list format.
+
+Example:
+
+```yaml
+  inverter_limit: 5000   # 5 kW — must be in watts when set as a literal
+```
 
 NB: inverter_limit is ONLY used by Predbat to improve the quality of the plan, any solar clipping is done by the inverter and is not controlled by Predbat.
 
@@ -1191,6 +1199,7 @@ or
 - **charge_time** - Battery charge time entity for inverters that require a charge time expressed as a range in the format "*start hour*:*start minute*-*end hour*:*end minute*".
 - **discharge_time** = Ditto battery discharge time expressed as a time range.
 - **charge_limit** - Entity name for used to set the SoC target for the battery in percentage (AC charge target)
+- **charge_limit_enable** - Optional switch entity that enables the AC charge upper percent limit. When set, Predbat will turn this switch on whenever it writes a new charge limit value. Used by inverters (such as GivEnergy via GE Cloud) that have a separate enable/disable control for the charge limit register.
 - **scheduled_charge_enable** - Switch to enable/disable battery charge according to the charge start/end times defined above.
 - **scheduled_discharge_enable** - Switch to enable/disable battery discharge according to the discharge start/end times defined above.
 - **discharge_target_soc** - Set the battery target percent for timed exports, will be written to minimum by Predbat.

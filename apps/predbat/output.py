@@ -2466,6 +2466,20 @@ class Output:
         if had_errors:
             self.had_errors = True
 
+    def publish_last_started(self):
+        """
+        Publish the last started time sensor
+        """
+        self.dashboard_item(
+            self.prefix + ".last_started",
+            state=self.started_time.strftime(TIME_FORMAT),
+            attributes={
+                "friendly_name": "Predbat Last Started",
+                "device_class": "timestamp",
+                "icon": "mdi:clock-start",
+            },
+        )
+
     def load_today_comparison(self, load_minutes, load_forecast, car_minutes, import_minutes, minutes_now, step=5, save=True):
         """
         Compare predicted vs actual load
@@ -2778,6 +2792,11 @@ class Output:
                     kwh = slot["kwh"]
                     kwh_drain = kwh / self.car_charging_loss
                     load_reported = 0
+
+                    # Skip empty slot
+                    if end_minutes <= start_minutes:
+                        continue
+
                     for minute in range(start_minutes, end_minutes, PREDICT_STEP):
                         load_reported += yesterday_load_step.get(minute, 0)
                     if load_reported < kwh_drain:

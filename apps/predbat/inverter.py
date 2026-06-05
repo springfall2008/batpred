@@ -336,6 +336,12 @@ class Inverter:
                         self.base.log("Warn: REST data reports Battery Capacity kWh as {} but nominal indicates {} - using nominal".format(self.soc_max, self.nominal_capacity))
                     self.soc_max = self.nominal_capacity * self.battery_scaling
 
+            # Rest fails to return battery capacity
+            if not self.nominal_capacity:
+                self.log("Warn: REST data does not report Battery Capacity kWh, attempting to use soc_max apps.yaml instead as fallback for nominal capacity")
+                self.nominal_capacity = self.base.get_arg("soc_max", default=0.0, index=self.id)
+                self.soc_max = self.nominal_capacity * self.battery_scaling
+
             if self.rest_v3:
                 # GivTCP v3 indicates battery is being calibrated via [Control][Battery_Calibration]
                 if ("Control" in self.rest_data) and ("Battery_Calibration" in self.rest_data["Control"]):
@@ -404,7 +410,12 @@ class Inverter:
         # Track and update battery size (if automatic)
         self.battery_size_tracking()
 
-        # Convert inverter time into timestamp
+        # Convert inverter time into timestamp.
+        # An absent or unavailable reading (e.g. the cloud API denied access because a GivEnergy
+        # Premium subscription is now required) is treated as "no reading" — skew detection is
+        # skipped rather than misreporting it as inverter clock skew or triggering an auto-restart.
+        if isinstance(ivtime, str) and ivtime.strip().lower() in ("", "unavailable", "unknown", "none"):
+            ivtime = None
         if ivtime:
             try:
                 self.inverter_time = datetime.strptime(ivtime, TIME_FORMAT)
@@ -1801,6 +1812,11 @@ class Inverter:
             else:
                 self.write_and_poll_value("charge_limit", self.base.get_arg("charge_limit", indirect=False, index=self.id, required_unit="%"), soc)
 
+            charge_limit_enable_entity_id = self.base.get_arg("charge_limit_enable", indirect=False, index=self.id)
+            if charge_limit_enable_entity_id:
+                # If we have a separate enable for the charge limit then make sure it's enabled when we set the charge limit
+                self.write_and_poll_switch("charge_limit_enable", charge_limit_enable_entity_id, True)
+
             # For inverters that need a button press to apply changes (e.g., Fox), press the button now
             if self.inv_time_button_press:
                 self.press_and_poll_button()
@@ -2299,6 +2315,7 @@ class Inverter:
 
         self.base.log("Inverter {} Adjust force export to {}, change times from {} - {} to {} - {}".format(self.id, force_export, old_start, old_end, new_start, new_end))
         changed_start_end = False
+        is_hm_format = self.inv_charge_time_format in ["H M", "H:M-H:M"]
 
         # Some inverters have an idle time setting
         if force_export:
@@ -2307,7 +2324,7 @@ class Inverter:
             self.adjust_idle_time(discharge_start="00:00:00", discharge_end="00:00:00")
 
         # Change start time
-        if new_start and new_start != old_start:
+        if new_start and (new_start != old_start or is_hm_format):
             self.base.log("Inverter {} set new export start time to {}".format(self.id, new_start))
             if self.rest_data:
                 pass  # REST writes as a single start/end time
@@ -2339,7 +2356,7 @@ class Inverter:
                 self.log("Warn: Inverter {} unable write export start time as neither REST or discharge_start_time are set".format(self.id))
 
         # Change end time
-        if new_end and new_end != old_end:
+        if new_end and (new_end != old_end or is_hm_format):
             self.base.log("Inverter {} Set new export end time to {} was {}".format(self.id, new_end, old_end))
             if self.rest_data:
                 pass  # REST writes as a single start/end time
@@ -2398,11 +2415,12 @@ class Inverter:
             self.rest_setDischargeSlot1(new_start, new_end)
 
         # Change scheduled discharge enable
-        if force_export and not old_discharge_enable:
+        if force_export:
             self.write_and_poll_switch("scheduled_discharge_enable", self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id), True)
-            self.log("Inverter {} Turning on scheduled export".format(self.id))
+            if not old_discharge_enable:
+                self.log("Inverter {} Turning on scheduled export".format(self.id))
 
-        if (new_end != old_end) or (new_start != old_start) or (force_export != old_discharge_enable):
+        if (new_end != old_end) or (new_start != old_start) or (force_export != old_discharge_enable) or changed_start_end:
             if self.inv_time_button_press:
                 self.press_and_poll_button()
 

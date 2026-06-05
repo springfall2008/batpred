@@ -239,6 +239,8 @@ class GECloudDirect(ComponentBase):
         self.evc_data = {}
         self.evc_sessions = {}
         self.api_fatal = False
+        self.api_auth_failed = False
+        self.auth_denied_reported = False
         self.devices_dict = {}
         self.device_list = []
         self.ems_device = None
@@ -246,6 +248,7 @@ class GECloudDirect(ComponentBase):
         self.evc_devices_dict = {}
         self.evc_device_list = []
         self.settings_from_cache = False
+        self.default_options_done = False
 
         # API request metrics for monitoring
         self.requests_total = 0
@@ -505,6 +508,14 @@ class GECloudDirect(ComponentBase):
                'inverter': {'temperature': 27.2, 'power': 1029, 'output_voltage': 237.8, 'output_frequency': 50.06, 'eps_power': 10}, 'consumption': 878}
 
         """
+
+        if not status and self.api_auth_failed:
+            # No fresh status because the API denied access (e.g. GivEnergy Premium now required).
+            # Mark the time sensor unavailable so downstream skew detection treats it as "no reading"
+            # instead of misreading a frozen timestamp as inverter clock skew.
+            entity_name = f"sensor.{self.prefix}_gecloud_{device}".lower()
+            self.dashboard_item(entity_name + "_time", state="unavailable", attributes=attribute_table.get("time", {}), app="gecloud")
+            return
 
         for key in status:
             entity_name = f"sensor.{self.prefix}_gecloud_{device}"
@@ -860,6 +871,7 @@ class GECloudDirect(ComponentBase):
         self.set_arg("charge_start_time", [f"select.{self.prefix}_gecloud_{device}_ac_charge_1_start_time" for device in batteries])
         self.set_arg("charge_end_time", [f"select.{self.prefix}_gecloud_{device}_ac_charge_1_end_time" for device in batteries])
         self.set_arg("charge_limit", build_entities("number", ["ac_charge_upper_percent_limit", "ac_charge_1_upper_soc_percent_limit"]))
+        self.set_arg("charge_limit_enable", build_entities("switch", ["enable_ac_charge_upper_percent_limit", "enable_ac_charge_1_upper_soc_percent_limit"]))
         self.set_arg("discharge_start_time", [f"select.{self.prefix}_gecloud_{device}_dc_discharge_1_start_time" for device in batteries])
         self.set_arg("discharge_end_time", [f"select.{self.prefix}_gecloud_{device}_dc_discharge_1_end_time" for device in batteries])
         self.set_arg("scheduled_charge_enable", build_entities("switch", ["ac_charge_enable", "enable_ac_charge"]))
@@ -952,7 +964,7 @@ class GECloudDirect(ComponentBase):
         model_name = "Unknown"
         for device_serial in batteries_real:
             device = self.info.get(device_serial, {})
-            info = device.get("info", {})
+            info = device.get("info", {}) or {}
             model = info.get("model", "").lower()
             if model:
                 model_name = info["model"]
@@ -1026,13 +1038,33 @@ class GECloudDirect(ComponentBase):
                     self.log("GECloud: No valid settings found in storage cache, will poll")
 
         if first or (seconds % 120 == 0):
+            inverter_auth_denied = False
             for device in self.device_list:
                 self.status[device] = await self.async_get_inverter_status(device, self.status.get(device, {}))
+                # Capture auth state from the core inverter status call (before EVC/other endpoints
+                # below can toggle the shared flag), so the status we surface reflects the inverter
+                # data path that actually drives optimisation.
+                inverter_auth_denied = inverter_auth_denied or self.api_auth_failed
                 await self.publish_status(device, self.status[device])
                 self.meter[device] = await self.async_get_inverter_meter(device, self.meter.get(device, {}))
                 await self.publish_meter(device, self.meter[device])
                 self.info[device] = await self.async_get_device_info(device, self.info.get(device, {}))
                 await self.publish_info(device, self.info[device])
+
+            # Surface a clear, correct status when the GivEnergy cloud API denied access to the core
+            # inverter data, rather than letting stale data be misdiagnosed downstream (e.g. as
+            # inverter clock skew). Scoped to inverter — not EVC — auth failures, and reported only
+            # once per episode (on transition into the denied state) to avoid inflating error_count.
+            if inverter_auth_denied:
+                if not self.auth_denied_reported and getattr(self.base, "record_status", None):
+                    self.base.record_status(
+                        "Warn: GivEnergy cloud API access denied — check your GivEnergy API key. A GivEnergy Premium subscription is now required for API access (since May 2026). PredBat cannot read live inverter data.",
+                        had_errors=True,
+                    )
+                self.auth_denied_reported = True
+            else:
+                self.auth_denied_reported = False
+
             for uuid in self.evc_device_list:
                 self.evc_device[uuid] = await self.async_get_evc_device(uuid, self.evc_device.get(uuid, {}))
                 serial = self.evc_device[uuid].get("serial_number", "unknown")
@@ -1060,6 +1092,9 @@ class GECloudDirect(ComponentBase):
             if first:
                 if self.automatic:
                     await self.async_automatic_config(self.devices_dict)
+
+            if not self.default_options_done and self.get_state_wrapper(f"switch.{self.prefix}_set_read_only", default="off") != "on":
+                self.default_options_done = True
                 for device in self.device_list:
                     await self.enable_default_options(device, self.settings[device])
 
@@ -1453,14 +1488,14 @@ class GECloudDirect(ComponentBase):
 
         for device in device_list:
             self.log("GECloud: Found device {}".format(device))
-            inverter = device.get("inverter", {})
+            inverter = device.get("inverter", {}) or {}
             serial = inverter.get("serial", None)
             # last_updated = inverter.get("last_updated", None)
-            info = inverter.get("info", {})
+            info = inverter.get("info", {}) or {}
             model = info.get("model", "").lower()
             # battery = info.get("battery_type", {})
-            batteries = inverter.get("connections", {}).get("batteries", [])
-            meters = inverter.get("connections", {}).get("meters", [])
+            batteries = inverter.get("connections", {}).get("batteries", []) or []
+            meters = inverter.get("connections", {}).get("meters", []) or []
             meter_serials = [m.get("serial_number") for m in meters if m.get("serial_number") is not None]
             if serial:
                 serial = serial.lower()
@@ -1555,6 +1590,7 @@ class GECloudDirect(ComponentBase):
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             self.log(f"GECloud: Warn: Exception during request to {url}: {e}")
             self.failures_total += 1
+            self.api_auth_failed = False
             record_api_call("givenergy", False, "connection_error")
             return None
 
@@ -1563,17 +1599,30 @@ class GECloudDirect(ComponentBase):
             data = data["data"]
         else:
             data = None
+
+        # Only a 401/403 indicates an auth/subscription problem; any other outcome (success, 404/422,
+        # 429, 5xx) clears the flag so a transient failure after an auth failure is not reported as an
+        # ongoing access-denied condition.
+        self.api_auth_failed = status in [401, 403]
+
         if status in [200, 201]:
             if data is None:
                 data = {}
             self.update_success_timestamp()
             record_api_call("givenergy")
             return data
-        elif status in [401, 403, 404, 422]:
-            # Unauthorized
+        elif status in [401, 403]:
+            # Authentication / authorisation failure. As well as an invalid API key this now
+            # covers accounts without an active GivEnergy Premium subscription, which (since
+            # May 2026) is required for cloud API access.
+            self.failures_total += 1
+            self.log("GECloud: Warn: API access denied from {}, response code {} — check your GivEnergy API key; a GivEnergy Premium subscription may now be required for API access".format(endpoint, status))
+            record_api_call("givenergy", False, "auth_error")
+            return {}
+        elif status in [404, 422]:
             self.failures_total += 1
             self.log("GECloud: Warn: Failed to get data from {}, response code {}".format(endpoint, status))
-            record_api_call("givenergy", False, "auth_error")
+            record_api_call("givenergy", False, "client_error")
             return {}
         elif status == 429:
             # Rate limiting so wait up to 30 seconds

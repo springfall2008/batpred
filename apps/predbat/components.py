@@ -404,6 +404,7 @@ if HAS_GATEWAY:
             "mqtt_host": {"required": True, "config": "gateway_mqtt_host"},
             "mqtt_port": {"required": False, "config": "gateway_mqtt_port", "default": 8883},
             "mqtt_token": {"required": True, "config": "gateway_mqtt_token"},
+            "gateway_inverter_serial": {"required": False, "config": "gateway_inverter_serial", "default": None},
         },
         "phase": 1,
         "can_restart": True,

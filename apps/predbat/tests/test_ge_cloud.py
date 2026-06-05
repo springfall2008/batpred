@@ -37,6 +37,8 @@ class MockGECloudDirect(GECloudDirect):
         # Initialise instance variables that GECloudDirect expects
         self.requests_total = 0
         self.failures_total = 0
+        self.api_auth_failed = False
+        self.auth_denied_reported = False
         self.register_list = {}
         self.settings = {}
         self.status = {}
@@ -56,6 +58,8 @@ class MockGECloudDirect(GECloudDirect):
         self.gateway_device = None
         self._now_utc_exact = datetime.now(timezone.utc)
         self.settings_from_cache = False
+        self.default_options_done = False
+        self._read_only = False
 
         class MockHAInterface:
             def __init__(self):
@@ -90,6 +94,12 @@ class MockGECloudDirect(GECloudDirect):
     def set_arg(self, name, value):
         """Mock set_arg"""
         self.config_args[name] = value
+
+    def get_state_wrapper(self, entity_id, default=None):
+        """Mock get_state_wrapper"""
+        if "_set_read_only" in entity_id:
+            return "on" if self._read_only else "off"
+        return default
 
     def update_success_timestamp(self):
         """Mock update_success_timestamp"""
@@ -179,6 +189,12 @@ def test_ge_cloud(my_predbat=None):
     sub_tests = [
         ("api_success", _test_async_get_inverter_data_success, "API call success"),
         ("api_auth_error", _test_async_get_inverter_data_auth_error, "API auth error handling"),
+        ("api_auth_sets_flag", _test_async_get_inverter_data_auth_sets_flag, "API 403 sets api_auth_failed flag"),
+        ("api_success_clears_auth_flag", _test_async_get_inverter_data_success_clears_auth_flag, "API success clears api_auth_failed flag"),
+        ("publish_status_auth_unavailable", _test_publish_status_auth_failure_marks_time_unavailable, "Auth failure marks time sensor unavailable"),
+        ("run_auth_denied_scoped", _test_run_reports_auth_denied_scoped, "Auth-denied status scoped to inverter poll cycle"),
+        ("non_auth_clears_auth_flag", _test_async_get_inverter_data_non_auth_clears_flag, "Non-401/403 response clears api_auth_failed"),
+        ("auth_status_transition_only", _test_run_auth_status_reported_on_transition_only, "Auth-denied status reported once per episode"),
         ("api_rate_limit", _test_async_get_inverter_data_rate_limit, "API rate limit handling"),
         ("api_timeout", _test_async_get_inverter_data_timeout, "API timeout handling"),
         ("api_json_error", _test_async_get_inverter_data_json_error, "API JSON error handling"),
@@ -221,6 +237,8 @@ def test_ge_cloud(my_predbat=None):
         ("automatic_config", _test_async_automatic_config, "Automatic config"),
         ("hybrid_detection", _test_hybrid_detection, "Hybrid inverter detection"),
         ("enable_defaults", _test_enable_default_options, "Enable default options"),
+        ("enable_defaults_read_only", _test_run_read_only_skips_reset, "Enable defaults skipped in read-only mode"),
+        ("enable_defaults_after_read_only", _test_run_enables_reset_after_read_only, "Enable defaults on first non-read-only run"),
         ("download_single", _test_download_ge_data_single_day, "Download single day"),
         ("download_multi", _test_download_ge_data_multi_day, "Download multi-day"),
         ("download_pagination", _test_download_ge_data_pagination, "Download pagination"),
@@ -315,6 +333,247 @@ def _test_async_get_inverter_data_auth_error(my_predbat):
                 if ge_cloud.failures_total != 1:
                     print("ERROR: Expected failures_total=1, got {}".format(ge_cloud.failures_total))
                     return 1
+        return 0
+
+    return run_async(test())
+
+
+def _test_async_get_inverter_data_auth_sets_flag(my_predbat):
+    """Test that a 403 (e.g. GivEnergy Premium / subscription required) sets the api_auth_failed flag"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.api_auth_failed = False
+
+        mock_response = create_aiohttp_mock_response(status=403, json_data={"error": "Forbidden"})
+        mock_session = create_aiohttp_mock_session(mock_response)
+
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+                mock_session_class.return_value = mock_session
+
+                result = await ge_cloud.async_get_inverter_data(GE_API_DEVICES)
+
+                if result != {}:
+                    print("ERROR: Expected empty dict for 403, got {}".format(result))
+                    return 1
+                if not ge_cloud.api_auth_failed:
+                    print("ERROR: Expected api_auth_failed=True after 403")
+                    return 1
+        return 0
+
+    return run_async(test())
+
+
+def _test_async_get_inverter_data_success_clears_auth_flag(my_predbat):
+    """Test that a successful call clears a previously-set api_auth_failed flag"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.api_auth_failed = True
+
+        mock_response = create_aiohttp_mock_response(status=200, json_data={"data": {"ok": 1}})
+        mock_session = create_aiohttp_mock_session(mock_response)
+
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+                mock_session_class.return_value = mock_session
+
+                await ge_cloud.async_get_inverter_data(GE_API_DEVICES)
+
+                if ge_cloud.api_auth_failed:
+                    print("ERROR: Expected api_auth_failed=False after a successful call")
+                    return 1
+        return 0
+
+    return run_async(test())
+
+
+def _test_publish_status_auth_failure_marks_time_unavailable(my_predbat):
+    """Test that when auth has failed and no fresh status is available, the inverter time
+    sensor is marked unavailable rather than left holding a stale (frozen) timestamp.
+
+    A frozen timestamp drifts against wall-clock and is misdiagnosed downstream as inverter
+    clock skew, triggering false warnings and auto-restart loops.
+    """
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.api_auth_failed = True
+
+        await ge_cloud.publish_status("ABC123", {})
+
+        entity = "sensor.predbat_gecloud_abc123_time"
+        item = ge_cloud.dashboard_items.get(entity, {})
+        if item.get("state") != "unavailable":
+            print("ERROR: Expected {} state 'unavailable', got {}".format(entity, item.get("state")))
+            return 1
+        return 0
+
+    return run_async(test())
+
+
+def _test_run_reports_auth_denied_scoped(my_predbat):
+    """run() must report GivEnergy access-denied only on a poll cycle and only for INVERTER auth
+    failures — not from a stale flag on an in-between 60s tick, and not from an EVC/other-endpoint
+    403 while inverter polling succeeded.
+    """
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.automatic = False
+        ge_cloud.device_list = ["inv001"]
+        ge_cloud.evc_device_list = ["evc-001"]
+        ge_cloud.pending_writes = {"inv001": []}
+
+        status_messages = []
+
+        def capture_status(message, had_errors=False, **kwargs):
+            status_messages.append(message)
+
+        ge_cloud.base.record_status = capture_status
+
+        async def benign(*args, **kwargs):
+            return {}
+
+        async def status_ok(device, previous):
+            ge_cloud.api_auth_failed = False
+            return {"power": 1}
+
+        async def status_auth_fail(device, previous):
+            ge_cloud.api_auth_failed = True
+            return {}
+
+        async def evc_clears_flag(uuid, previous):
+            ge_cloud.api_auth_failed = False
+            return {"serial_number": "evc-serial"}
+
+        async def evc_sets_flag(uuid, previous):
+            ge_cloud.api_auth_failed = True
+            return {"serial_number": "evc-serial"}
+
+        ge_cloud.publish_status = benign
+        ge_cloud.async_get_inverter_meter = benign
+        ge_cloud.publish_meter = benign
+        ge_cloud.async_get_device_info = benign
+        ge_cloud.publish_info = benign
+        ge_cloud.async_get_evc_device_data = benign
+        ge_cloud.async_get_evc_sessions = benign
+        ge_cloud.publish_evc_data = benign
+
+        denied = "access denied"
+
+        # Case 1: inverter status auth-fails on a poll cycle -> report denied, even though the later
+        # EVC call clears the global flag.
+        ge_cloud.async_get_inverter_status = status_auth_fail
+        ge_cloud.async_get_evc_device = evc_clears_flag
+        status_messages.clear()
+        await ge_cloud.run(seconds=120, first=False)
+        if not any(denied in m for m in status_messages):
+            print("ERROR: inverter auth failure on a poll cycle should report access-denied, got {}".format(status_messages))
+            return 1
+
+        # Case 2 (cadence): a stale flag on a non-poll 60s tick must NOT re-report.
+        ge_cloud.api_auth_failed = True
+        status_messages.clear()
+        await ge_cloud.run(seconds=60, first=False)
+        if any(denied in m for m in status_messages):
+            print("ERROR: non-poll 60s tick must not re-report denied from a stale flag, got {}".format(status_messages))
+            return 1
+
+        # Case 3 (scope): inverter ok but an EVC-only 403 must NOT report inverter access-denied.
+        ge_cloud.api_auth_failed = False
+        ge_cloud.async_get_inverter_status = status_ok
+        ge_cloud.async_get_evc_device = evc_sets_flag
+        status_messages.clear()
+        await ge_cloud.run(seconds=120, first=False)
+        if any(denied in m for m in status_messages):
+            print("ERROR: an EVC-only auth failure must not report inverter access-denied, got {}".format(status_messages))
+            return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_async_get_inverter_data_non_auth_clears_flag(my_predbat):
+    """A non-401/403 response (404/429/5xx) must clear a previously-set api_auth_failed flag, so a
+    transient failure after an auth failure is not reported as an ongoing access-denied condition."""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+
+        for status in (404, 429, 500):
+            ge_cloud.api_auth_failed = True
+            mock_response = create_aiohttp_mock_response(status=status, json_data={"error": "x"})
+            mock_session = create_aiohttp_mock_session(mock_response)
+
+            with patch("aiohttp.ClientSession") as mock_session_class:
+                with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+                    mock_session_class.return_value = mock_session
+
+                    await ge_cloud.async_get_inverter_data(GE_API_DEVICES)
+
+                    if ge_cloud.api_auth_failed:
+                        print("ERROR: a {} response should clear api_auth_failed (not an auth failure)".format(status))
+                        return 1
+        return 0
+
+    return run_async(test())
+
+
+def _test_run_auth_status_reported_on_transition_only(my_predbat):
+    """A persistent inverter auth failure must report access-denied only once (on transition), not
+    on every poll cycle, to avoid inflating the HA error_count. A new episode after recovery reports
+    again."""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.automatic = False
+        ge_cloud.device_list = ["inv001"]
+        ge_cloud.evc_device_list = []
+        ge_cloud.pending_writes = {"inv001": []}
+
+        status_messages = []
+        ge_cloud.base.record_status = lambda message, had_errors=False, **kwargs: status_messages.append(message)
+
+        async def benign(*args, **kwargs):
+            return {}
+
+        async def status_auth_fail(device, previous):
+            ge_cloud.api_auth_failed = True
+            return {}
+
+        async def status_ok(device, previous):
+            ge_cloud.api_auth_failed = False
+            return {"power": 1}
+
+        ge_cloud.publish_status = benign
+        ge_cloud.async_get_inverter_meter = benign
+        ge_cloud.publish_meter = benign
+        ge_cloud.async_get_device_info = benign
+        ge_cloud.publish_info = benign
+
+        denied = "access denied"
+
+        # Two consecutive denied poll cycles -> reported only once.
+        ge_cloud.async_get_inverter_status = status_auth_fail
+        await ge_cloud.run(seconds=120, first=False)
+        await ge_cloud.run(seconds=240, first=False)
+        count = sum(1 for m in status_messages if denied in m)
+        if count != 1:
+            print("ERROR: a persistent auth denial should report once (transition), got {} reports".format(count))
+            return 1
+
+        # Recover, then deny again -> reported again (new episode).
+        ge_cloud.async_get_inverter_status = status_ok
+        await ge_cloud.run(seconds=360, first=False)
+        ge_cloud.async_get_inverter_status = status_auth_fail
+        status_messages.clear()
+        await ge_cloud.run(seconds=480, first=False)
+        if not any(denied in m for m in status_messages):
+            print("ERROR: a new denial episode after recovery should report again")
+            return 1
         return 0
 
     return run_async(test())
@@ -2692,6 +2951,7 @@ def _test_async_automatic_config(my_predbat):
         assert ge.config_args.get("discharge_rate") == ["number.predbat_gecloud_battery001_battery_discharge_power"]
         assert ge.config_args.get("reserve") == ["number.predbat_gecloud_battery001_battery_reserve_percent_limit"]
         assert ge.config_args.get("charge_limit") == ["number.predbat_gecloud_battery001_ac_charge_upper_percent_limit"]
+        assert ge.config_args.get("charge_limit_enable") is None, "charge_limit_enable should be None when enable register is absent"
 
         # Verify time controls
         assert ge.config_args.get("charge_start_time") == ["select.predbat_gecloud_battery001_ac_charge_1_start_time"]
@@ -2804,6 +3064,7 @@ def _test_async_automatic_config(my_predbat):
         assert ge.config_args.get("discharge_rate_percent") == ["number.predbat_gecloud_battery003_discharge_power_rate"]
         assert ge.config_args.get("reserve") == ["number.predbat_gecloud_battery003_battery_reserve_percent"]
         assert ge.config_args.get("charge_limit") == ["number.predbat_gecloud_battery003_ac_charge_1_upper_soc_percent_limit"]
+        assert ge.config_args.get("charge_limit_enable") is None, "charge_limit_enable should be None when enable register is absent"
         assert ge.config_args.get("scheduled_charge_enable") == ["switch.predbat_gecloud_battery003_enable_ac_charge"]
         assert ge.config_args.get("scheduled_discharge_enable") == ["switch.predbat_gecloud_battery003_enable_force_discharge"]
         assert ge.config_args.get("inverter_mode") is None, "inverter_mode should be None when eco toggle is not available"
@@ -2877,6 +3138,64 @@ def _test_async_automatic_config(my_predbat):
         # EMS produces data for all inverters, so additional inverters get 0
         assert ge.config_args.get("battery_power") == ["sensor.predbat_gecloud_ems001_battery_power", 0], "Second inverter should get 0 for battery_power"
         assert ge.config_args.get("pv_power") == ["sensor.predbat_gecloud_ems001_solar_power", 0], "Second inverter should get 0 for pv_power"
+
+        # Test 9: charge_limit_enable entity configuration
+        # Test 9a: battery with Enable_AC_Charge_Upper_Percent_Limit register -> primary switch entity
+        ge.config_args = {}
+        ge.settings = {
+            "battery001": {
+                "reg1": {"name": "AC_Charge_Upper_Percent_Limit"},
+                "reg2": {"name": "Enable_AC_Charge_Upper_Percent_Limit"},
+            }
+        }
+        devices = {"ems": None, "gateway": None, "battery": ["battery001"]}
+        await ge.async_automatic_config(devices)
+        assert ge.config_args.get("charge_limit") == ["number.predbat_gecloud_battery001_ac_charge_upper_percent_limit"], "charge_limit should use primary register"
+        assert ge.config_args.get("charge_limit_enable") == ["switch.predbat_gecloud_battery001_enable_ac_charge_upper_percent_limit"], "charge_limit_enable should use primary enable switch"
+
+        # Test 9b: battery with Enable_AC_Charge_1_Upper_SOC_Percent_Limit (alternative) -> fallback entity
+        ge.config_args = {}
+        ge.settings = {
+            "battery002": {
+                "reg1": {"name": "AC_Charge_1_Upper_SOC_Percent_Limit"},
+                "reg2": {"name": "Enable_AC_Charge_1_Upper_SOC_Percent_Limit"},
+            }
+        }
+        devices = {"ems": None, "gateway": None, "battery": ["battery002"]}
+        await ge.async_automatic_config(devices)
+        assert ge.config_args.get("charge_limit") == ["number.predbat_gecloud_battery002_ac_charge_1_upper_soc_percent_limit"], "charge_limit should use alternative register"
+        assert ge.config_args.get("charge_limit_enable") == ["switch.predbat_gecloud_battery002_enable_ac_charge_1_upper_soc_percent_limit"], "charge_limit_enable should use alternative enable switch"
+
+        # Test 9c: multi-battery system where each battery uses the primary enable switch
+        ge.config_args = {}
+        ge.settings = {
+            "battery001": {
+                "reg1": {"name": "AC_Charge_Upper_Percent_Limit"},
+                "reg2": {"name": "Enable_AC_Charge_Upper_Percent_Limit"},
+            },
+            "battery002": {
+                "reg1": {"name": "AC_Charge_Upper_Percent_Limit"},
+                "reg2": {"name": "Enable_AC_Charge_Upper_Percent_Limit"},
+            },
+        }
+        devices = {"ems": None, "gateway": None, "battery": ["battery001", "battery002"]}
+        await ge.async_automatic_config(devices)
+        assert ge.config_args.get("charge_limit_enable") == [
+            "switch.predbat_gecloud_battery001_enable_ac_charge_upper_percent_limit",
+            "switch.predbat_gecloud_battery002_enable_ac_charge_upper_percent_limit",
+        ], "charge_limit_enable should have one entry per battery"
+
+        # Test 9d: battery with charge limit register but no enable register -> charge_limit_enable is None
+        ge.config_args = {}
+        ge.settings = {
+            "battery001": {
+                "reg1": {"name": "AC_Charge_Upper_Percent_Limit"},
+            }
+        }
+        devices = {"ems": None, "gateway": None, "battery": ["battery001"]}
+        await ge.async_automatic_config(devices)
+        assert ge.config_args.get("charge_limit") == ["number.predbat_gecloud_battery001_ac_charge_upper_percent_limit"]
+        assert ge.config_args.get("charge_limit_enable") is None, "charge_limit_enable should be None when enable register is absent"
 
         return 0
 
@@ -3246,6 +3565,142 @@ def _test_enable_default_options(my_predbat):
             return 1
         if write_calls[0]["value"] != 4:
             print("ERROR: Expected value=4 for discharge down to percent, got {}".format(write_calls[0]["value"]))
+            return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _make_run_mocks(ge_cloud, enable_default_calls=None):
+    """Attach minimal async mocks to ge_cloud so run() can execute without real I/O."""
+
+    async def mock_get_devices():
+        return {"battery": ["inv001"], "ems": None, "gateway": None}
+
+    async def mock_get_evc_devices():
+        return []
+
+    async def mock_get_inverter_status(_device, _previous):
+        return {}
+
+    async def mock_publish_status(_device, _status):
+        pass
+
+    async def mock_get_inverter_meter(_device, _previous):
+        return {}
+
+    async def mock_publish_meter(_device, _meter):
+        pass
+
+    async def mock_get_device_info(_device, _previous):
+        return {}
+
+    async def mock_publish_info(_device, _info):
+        pass
+
+    async def mock_get_inverter_settings(_device, **_kwargs):
+        return {}
+
+    async def mock_publish_registers(_device, _settings):
+        pass
+
+    async def mock_automatic_config(_devices_dict):
+        pass
+
+    async def mock_enable_default_options(device, _settings):
+        if enable_default_calls is not None:
+            enable_default_calls.append(device)
+
+    ge_cloud.async_get_devices = mock_get_devices
+    ge_cloud.async_get_evc_devices = mock_get_evc_devices
+    ge_cloud.async_get_inverter_status = mock_get_inverter_status
+    ge_cloud.publish_status = mock_publish_status
+    ge_cloud.async_get_inverter_meter = mock_get_inverter_meter
+    ge_cloud.publish_meter = mock_publish_meter
+    ge_cloud.async_get_device_info = mock_get_device_info
+    ge_cloud.publish_info = mock_publish_info
+    ge_cloud.async_get_inverter_settings = mock_get_inverter_settings
+    ge_cloud.publish_registers = mock_publish_registers
+    ge_cloud.async_automatic_config = mock_automatic_config
+    ge_cloud.enable_default_options = mock_enable_default_options
+
+
+def _test_run_read_only_skips_reset(my_predbat):
+    """enable_default_options is NOT called when predbat is in read-only mode"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.automatic = False
+        ge_cloud._read_only = True
+
+        enable_default_calls = []
+        _make_run_mocks(ge_cloud, enable_default_calls)
+
+        result = await ge_cloud.run(seconds=0, first=True)
+        if not result:
+            print("ERROR: run() should return True")
+            return 1
+
+        if enable_default_calls:
+            print("ERROR: enable_default_options should NOT be called in read-only mode, got calls for: {}".format(enable_default_calls))
+            return 1
+
+        if ge_cloud.default_options_done:
+            print("ERROR: default_options_done should remain False when skipped due to read-only mode")
+            return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_run_enables_reset_after_read_only(my_predbat):
+    """enable_default_options IS called on the first run after read-only mode is disabled"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.automatic = False
+        ge_cloud._read_only = True
+
+        enable_default_calls = []
+        _make_run_mocks(ge_cloud, enable_default_calls)
+
+        # First run in read-only mode — reset should be skipped
+        result = await ge_cloud.run(seconds=0, first=True)
+        if not result:
+            print("ERROR: run() should return True on first run")
+            return 1
+
+        if enable_default_calls:
+            print("ERROR: enable_default_options should NOT be called in read-only mode, got: {}".format(enable_default_calls))
+            return 1
+        if ge_cloud.default_options_done:
+            print("ERROR: default_options_done should be False after read-only first run")
+            return 1
+
+        # Disable read-only — next 10-minute settings tick should trigger the reset
+        ge_cloud._read_only = False
+        result = await ge_cloud.run(seconds=600, first=False)
+        if not result:
+            print("ERROR: run() should return True on second run")
+            return 1
+
+        if not enable_default_calls:
+            print("ERROR: enable_default_options should be called once read-only is disabled")
+            return 1
+        if enable_default_calls != ["inv001"]:
+            print("ERROR: Expected enable_default_options called for inv001, got: {}".format(enable_default_calls))
+            return 1
+        if not ge_cloud.default_options_done:
+            print("ERROR: default_options_done should be True after reset ran")
+            return 1
+
+        # Verify the reset does not run again on subsequent ticks
+        enable_default_calls.clear()
+        await ge_cloud.run(seconds=1200, first=False)
+        if enable_default_calls:
+            print("ERROR: enable_default_options should not be called again after default_options_done=True")
             return 1
 
         return 0

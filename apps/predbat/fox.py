@@ -1636,9 +1636,9 @@ class FoxAPI(ComponentBase, OAuthMixin):
                             "endMinute": end_minute,
                             "workMode": "ForceCharge",
                             "fdSoc": 100,
-                            "maxSoc": soc,
+                            "maxSoc": max(soc, reserve),
                             "fdPwr": power,
-                            "minSocOnGrid": soc,
+                            "minSocOnGrid": max(soc, reserve),
                         }
                     )
                 elif direction == "discharge":

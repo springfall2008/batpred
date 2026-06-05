@@ -12,7 +12,7 @@ import json
 import copy
 import yaml
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from utils import calc_percent_limit
 from tests.test_infra import TestHAInterface
 from predbat import PredBat
@@ -638,6 +638,38 @@ def test_adjust_battery_target(test_name, ha, inv, dummy_rest, prev_soc, soc, is
     if json.dumps(expect_data) != json.dumps(rest_command):
         print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
         failed = True
+
+    return failed
+
+
+def test_adjust_battery_target_charge_limit_enable(test_name, my_predbat, ha, inv, prev_soc, soc, expect_soc, expect_enable_written):
+    """
+    Test that adjust_battery_target writes the charge_limit_enable switch when charge_limit_enable is in args.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    inv.rest_data = None
+    inv.inv_time_button_press = False
+    ha.dummy_items["number.charge_limit"] = prev_soc
+    ha.dummy_items["switch.charge_limit_enable"] = "off"
+    my_predbat.args["charge_limit_enable"] = "switch.charge_limit_enable"
+
+    inv.adjust_battery_target(soc, isCharging=True, isExporting=False)
+
+    actual_soc = ha.get_state("number.charge_limit")
+    if actual_soc != expect_soc:
+        print("ERROR: {}: charge_limit should be {} got {}".format(test_name, expect_soc, actual_soc))
+        failed = True
+
+    enable_state = ha.get_state("switch.charge_limit_enable")
+    expected_enable_state = "on" if expect_enable_written else "off"
+    if enable_state != expected_enable_state:
+        print("ERROR: {}: charge_limit_enable should be {} got {}".format(test_name, expected_enable_state, enable_state))
+        failed = True
+
+    # Clean up so remaining tests are not affected
+    del my_predbat.args["charge_limit_enable"]
 
     return failed
 
@@ -1472,6 +1504,74 @@ def test_discharge_window_none_value(test_name, my_predbat, dummy_items):
     return failed
 
 
+def test_force_export_unchanged_times_HM_format(test_name, ha, inv):
+    """
+    Regression test for GS_fb00 (Solis) 'count register writes 0' bug.
+
+    When force_export=True, the H M format time entities and the scheduled_discharge_enable
+    switch should be written on every PredBat cycle — even when the times are unchanged and
+    HA already shows the switch as 'on'.  Before the fix, adjust_force_export skipped all
+    writes when times were identical, resulting in 0 register writes and the inverter never
+    actually exporting.
+
+    The button (schedule_write_button) must also be pressed so the Solis hardware applies
+    the time-slot schedule.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    # Simulate GS_fb00 / H M format configuration
+    inv.rest_data = None
+    inv.inv_charge_time_format = "H M"
+    inv.inv_time_button_press = True
+
+    export_time = "07:58:00"
+    export_end = "09:02:00"
+
+    # Pre-set all discharge entities to the *same* time that will be written,
+    # and the switch to "on" — this is the "stable state" where the bug triggered.
+    ha.dummy_items["select.discharge_start_time"] = export_time
+    ha.dummy_items["select.discharge_end_time"] = export_end
+    ha.dummy_items["time.discharge_start_hour"] = export_time
+    ha.dummy_items["time.discharge_end_hour"] = export_end
+    ha.dummy_items["switch.scheduled_discharge_enable"] = "on"
+    ha.dummy_items["number.discharge_target_soc"] = inv.reserve_percent
+    ha.dummy_items["select.inverter_mode"] = "Timed Export"
+    ha.dummy_items["switch.inverter_button"] = "off"
+
+    inv.base.args["discharge_start_time"] = "select.discharge_start_time"
+    inv.base.args["discharge_end_time"] = "select.discharge_end_time"
+    inv.base.args["discharge_start_hour"] = "time.discharge_start_hour"
+    inv.base.args["discharge_end_hour"] = "time.discharge_end_hour"
+    inv.base.args["scheduled_discharge_enable"] = "switch.scheduled_discharge_enable"
+
+    before_writes = inv.count_register_writes
+
+    ts = datetime.strptime(export_time, "%H:%M:%S")
+    te = datetime.strptime(export_end, "%H:%M:%S")
+    inv.adjust_force_export(True, ts, te)
+
+    # Time entities must be written even though times are unchanged (H M format always writes)
+    if ha.dummy_items.get("time.discharge_start_hour") != export_time:
+        print(f"ERROR: {test_name}: discharge_start_hour should still be {export_time} got {ha.dummy_items.get('time.discharge_start_hour')}")
+        failed = True
+    if ha.dummy_items.get("time.discharge_end_hour") != export_end:
+        print(f"ERROR: {test_name}: discharge_end_hour should still be {export_end} got {ha.dummy_items.get('time.discharge_end_hour')}")
+        failed = True
+
+    # Register write count must have increased by at least 2 (discharge_start_hour + discharge_end_hour)
+    if inv.count_register_writes < before_writes + 2:
+        print(f"ERROR: {test_name}: count_register_writes should have increased by at least 2, was {before_writes} now {inv.count_register_writes}")
+        failed = True
+
+    # The schedule_write_button must be pressed so the Solis hardware applies the schedule
+    if ha.dummy_items.get("switch.inverter_button") != "on":
+        print(f"ERROR: {test_name}: inverter_button (schedule_write_button) should be 'on' (pressed), got {ha.dummy_items.get('switch.inverter_button')}")
+        failed = True
+
+    return failed
+
+
 def test_time_entity_hour_write(test_name, ha, inv, dummy_rest, direction, new_start, new_end):
     """
     Test that when *_start_hour / *_end_hour args resolve to time.* entities the full
@@ -1560,6 +1660,112 @@ def test_time_entity_hour_write(test_name, ha, inv, dummy_rest, direction, new_s
     return failed
 
 
+def test_rest_battery_capacity_fallback(test_name, my_predbat):
+    """
+    Verify that when V3 REST data omits Battery_Capacity_kWh and battery_nominal_capacity,
+    nominal_capacity and soc_max fall back to the soc_max value configured in apps.yaml.
+    """
+    failed = False
+    print("**** Running Test: {} ****".format(test_name))
+    dummy_rest = DummyRestAPI()
+    my_predbat.args["givtcp_rest"] = "dummy"
+
+    if "inverter_limit" in my_predbat.args:
+        del my_predbat.args["inverter_limit"]
+    if "export_limit" in my_predbat.args:
+        del my_predbat.args["export_limit"]
+
+    # Load the real V3 fixture and strip battery capacity fields to simulate an inverter
+    # that doesn't report Battery_Capacity_kWh or battery_nominal_capacity via REST.
+    with open("cases/rest_v3.json", "r") as f:
+        rest_v3_data = json.load(f)
+
+    orig_serial = "EA2303G082"
+    new_serial = "GW2347G084"
+    rest_v3_data[new_serial] = rest_v3_data.pop(orig_serial)
+    rest_v3_data["raw"]["invertor"]["serial_number"] = new_serial
+    rest_v3_data["Stats"]["GivTCP_Version"] = "3.1.6"
+
+    del rest_v3_data[new_serial]["Battery_Capacity_kWh"]
+    del rest_v3_data["raw"]["invertor"]["battery_nominal_capacity"]
+
+    dummy_rest.rest_data = rest_v3_data
+
+    my_predbat.restart_active = True
+    inv = Inverter(my_predbat, 0, rest_postCommand=dummy_rest.dummy_rest_postCommand, rest_getData=dummy_rest.dummy_rest_getData, quiet=False)
+    inv.sleep = dummy_sleep
+    inv.update_status(my_predbat.minutes_now)
+    my_predbat.restart_active = False
+
+    # sensor.soc_max = 10.0 in dummy_items, so the fallback should produce nominal_capacity 10.0
+    expected_nominal = 10.0
+    if inv.nominal_capacity != expected_nominal:
+        print("ERROR: nominal_capacity should be {} (apps.yaml fallback) got {}".format(expected_nominal, inv.nominal_capacity))
+        failed = True
+    if inv.soc_max != expected_nominal:
+        print("ERROR: soc_max should be {} (apps.yaml fallback) got {}".format(expected_nominal, inv.soc_max))
+        failed = True
+
+    return failed
+
+
+def test_inverter_time_handling(my_predbat, dummy_items):
+    """Verify inverter clock-skew detection handles a stale/unavailable cloud time source correctly.
+
+    When the cloud time source is unavailable (e.g. GivEnergy API access denied because a
+    GivEnergy Premium subscription is now required), PredBat must treat it as "no reading" and
+    skip skew detection rather than misreporting it as inverter clock skew and triggering an
+    auto-restart loop. A genuinely skewed inverter clock must still be detected.
+    """
+    failed = False
+    print("**** Running Test: inverter_time_handling ****")
+
+    def _no_sleep(self, seconds):
+        """No-op sleep so construction never really blocks, even if an auto-restart path is hit."""
+        return None
+
+    saved_time = dummy_items.get("sensor.inverter_time")
+    saved_sleep = Inverter.sleep
+    Inverter.sleep = _no_sleep
+    try:
+        # Case 1: cloud time source unavailable -> skip skew detection, no auto-restart.
+        dummy_items["sensor.inverter_time"] = "unavailable"
+        my_predbat.ha_interface.dummy_items = dummy_items
+        my_predbat.current_status = ""
+        my_predbat.restart_active = False
+        inv = Inverter(my_predbat, 0)
+        if inv.inverter_time is not None:
+            print("ERROR: unavailable inverter time should resolve to None, got {}".format(inv.inverter_time))
+            failed = True
+        if my_predbat.restart_active:
+            print("ERROR: unavailable inverter time must not trigger an auto-restart")
+            failed = True
+        if "skew" in (my_predbat.current_status or "").lower():
+            print("ERROR: unavailable inverter time must not be reported as clock skew, status={}".format(my_predbat.current_status))
+            failed = True
+
+        # Case 2: a genuinely skewed clock (2 hours ahead) must still be detected.
+        skew_time = (my_predbat.now_utc + timedelta(minutes=120)).strftime("%Y-%m-%dT%H:%M:%S%z")
+        dummy_items["sensor.inverter_time"] = skew_time
+        my_predbat.ha_interface.dummy_items = dummy_items
+        my_predbat.current_status = ""
+        my_predbat.restart_active = True  # suppress real restart side-effects; record_status still fires
+        Inverter(my_predbat, 0)
+        if "skew" not in (my_predbat.current_status or "").lower():
+            print("ERROR: a 2-hour clock skew should still be detected, status={}".format(my_predbat.current_status))
+            failed = True
+    finally:
+        Inverter.sleep = saved_sleep
+        dummy_items["sensor.inverter_time"] = saved_time
+        my_predbat.ha_interface.dummy_items = dummy_items
+        my_predbat.current_status = ""
+        my_predbat.restart_active = False
+
+    if not failed:
+        print("**** Test inverter_time_handling PASSED ****")
+    return failed
+
+
 def run_inverter_tests(my_predbat_dummy):
     """
     Test the inverter functions
@@ -1620,6 +1826,8 @@ def run_inverter_tests(my_predbat_dummy):
     for entity_id in dummy_items.keys():
         arg_name = entity_id.split(".")[1]
         my_predbat.args[arg_name] = entity_id
+
+    failed |= test_inverter_time_handling(my_predbat, dummy_items)
 
     failed |= test_inverter_update(
         "update1",
@@ -1797,6 +2005,10 @@ def run_inverter_tests(my_predbat_dummy):
     if failed:
         return failed
 
+    failed |= test_rest_battery_capacity_fallback("rest_capacity_fallback", my_predbat)
+    if failed:
+        return failed
+
     my_predbat.args["givtcp_rest"] = None
     dummy_rest = DummyRestAPI()
     inv = Inverter(my_predbat, 0, rest_postCommand=dummy_rest.dummy_rest_postCommand, rest_getData=dummy_rest.dummy_rest_getData)
@@ -1837,7 +2049,16 @@ def run_inverter_tests(my_predbat_dummy):
     if failed:
         return failed
 
-    failed |= test_adjust_inverter_mode("adjust_mode_eco1", ha, inv, dummy_rest, "Timed Export", "Eco", "Eco")
+    # Test charge_limit_enable switch is written when charge limit changes
+    failed |= test_adjust_battery_target_charge_limit_enable("charge_limit_enable_written", my_predbat, ha, inv, 50, 80, 80, True)
+    if failed:
+        return failed
+
+    # Test charge_limit_enable switch is NOT written when charge limit is unchanged
+    failed |= test_adjust_battery_target_charge_limit_enable("charge_limit_enable_no_write", my_predbat, ha, inv, 80, 80, 80, False)
+    if failed:
+        return failed
+
     failed |= test_adjust_inverter_mode("adjust_mode_eco2", ha, inv, dummy_rest, "Eco", "Eco", "Eco")
     failed |= test_adjust_inverter_mode("adjust_mode_eco3", ha, inv, dummy_rest, "Eco (Paused)", "Eco", "Eco (Paused)")
     failed |= test_adjust_inverter_mode("adjust_mode_export1", ha, inv, dummy_rest, "Eco (Paused)", "Timed Export", "Timed Export")
@@ -2270,6 +2491,11 @@ charge_start_service:
     if failed:
         return failed
     failed |= test_time_entity_hour_write("time_entity_charge_hour2", ha, inv, dummy_rest, "charge", "23:00:00", "23:59:00")
+    if failed:
+        return failed
+
+    # Regression test: GS_fb00 H M format must write time entities and press button even when times are unchanged
+    failed |= test_force_export_unchanged_times_HM_format("force_export_unchanged_HM_format", ha, inv)
     if failed:
         return failed
 
