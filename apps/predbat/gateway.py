@@ -843,6 +843,24 @@ class GatewayMQTT(ComponentBase):
         self.set_arg("ge_cloud_data", False)
         self.set_arg("ge_cloud_direct", False)
 
+        # AC-coupled vs hybrid: mirror gecloud — if any battery inverter reports an
+        # AC / AIO / All-in-One model, the system is AC-coupled, so turn the PredBat
+        # hybrid switch off; a Hybrid/HV unit turns it on. Needs the gateway firmware
+        # to report inv.model; left untouched on older firmware that omits it (empty).
+        ac_coupled = False
+        model_name = ""
+        for inv in candidate_aios:
+            model = (inv.model or "").lower()
+            if model:
+                model_name = inv.model
+                if ("ac" in model) or ("aio" in model) or ("all-in-one" in model):
+                    ac_coupled = True
+                    break
+        if model_name:
+            hybrid_entity = f"switch.{self.prefix}_inverter_hybrid"
+            self.set_state_wrapper(hybrid_entity, "off" if ac_coupled else "on")
+            self.log(f"Info: GatewayMQTT: model '{model_name}' -> ac_coupled={ac_coupled}, set {hybrid_entity} {'off' if ac_coupled else 'on'}")
+
         self._auto_configured = True
         self._configured_inverter_serials = frozenset(inv.serial for inv in all_inverters)
         self.log(f"Info: GatewayMQTT: auto-config complete: {num_inverters} inverter(s) registered")

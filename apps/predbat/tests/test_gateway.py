@@ -2453,6 +2453,52 @@ class TestGatewayUnitControlBinding:
         assert gw._args["num_inverters"] == 1
         assert gw._args["charge_start_time"][0] == "select.predbat_gateway_47g077_charge_slot1_start"
 
+    # ------------------------------------------------------------------
+    # AC-coupled vs hybrid switch (from inv.model)
+    # ------------------------------------------------------------------
+
+    def _aio_status_with_model(self, model, serial="CH2414G318"):
+        """Single-AIO status reporting a given GivEnergy model string."""
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_model"
+        status.firmware = "1.0.0"
+        status.schema_version = 1
+        inv = status.inverters.add()
+        inv.type = pb.INVERTER_TYPE_GIVENERGY
+        inv.serial = serial
+        inv.primary = True
+        inv.model = model
+        inv.battery.soc_percent = 100
+        inv.battery.capacity_wh = 12680
+        inv.battery.rate_max_w = 6000
+        return status
+
+    def _hybrid_switch_calls(self, gw):
+        """The set_state_wrapper calls that targeted the inverter_hybrid switch."""
+        return [c for c in gw.base.set_state_wrapper.call_args_list if c.args and c.args[0] == "switch.predbat_inverter_hybrid"]
+
+    def test_hybrid_switch_off_for_ac_coupled_model(self):
+        """An AC / AIO / All-in-One model turns the hybrid switch off (AC-coupled)."""
+        for model in ("All-in-One", "AC 3ph"):
+            gw = self._make_gateway()
+            gw._last_status = self._aio_status_with_model(model)
+            gw.automatic_config()
+            gw.base.set_state_wrapper.assert_any_call("switch.predbat_inverter_hybrid", "off", attributes={}, required_unit=None)
+
+    def test_hybrid_switch_on_for_hybrid_model(self):
+        """A Hybrid / HV model turns the hybrid switch on (DC-coupled)."""
+        gw = self._make_gateway()
+        gw._last_status = self._aio_status_with_model("Hybrid HV Gen3")
+        gw.automatic_config()
+        gw.base.set_state_wrapper.assert_any_call("switch.predbat_inverter_hybrid", "on", attributes={}, required_unit=None)
+
+    def test_hybrid_switch_untouched_when_model_absent(self):
+        """Older firmware that omits the model leaves the hybrid switch alone."""
+        gw = self._make_gateway()
+        gw._last_status = self._aio_status_with_model("")  # no model reported
+        gw.automatic_config()
+        assert self._hybrid_switch_calls(gw) == []
+
 
 def run_gateway_tests(my_predbat=None):
     """Run all GatewayMQTT tests. Returns True on failure, False on success."""
