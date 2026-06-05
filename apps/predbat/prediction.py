@@ -330,14 +330,26 @@ charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_
     def find_charge_window_optimised(self, charge_windows, charge_limit, is_export=False):
         """
         Takes in an array of charge windows
-        Returns a dictionary defining for each minute that is in the charge window will contain the window number
+        Returns a dictionary defining for each minute that is in the charge window will contain the window number.
+        In case of overlaps, the window with the LOWEST target SOC wins.
         """
         charge_window_optimised = {}
         for window_n in range(len(charge_windows)):
+            limit = charge_limit[window_n]
+            # Skip disabled windows
+            if is_export and limit >= 100.0:
+                continue
+            if not is_export and limit <= 0.0:
+                continue
+                
             for minute in range(charge_windows[window_n]["start"], charge_windows[window_n]["end"], PREDICT_STEP):
-                if is_export and charge_limit[window_n] < 100.0:
-                    charge_window_optimised[minute] = window_n
-                elif not is_export and charge_limit[window_n] > 0.0:
+                if minute in charge_window_optimised:
+                    # Overlap! Lowest SOC target wins
+                    existing_window_n = charge_window_optimised[minute]
+                    existing_limit = charge_limit[existing_window_n]
+                    if limit < existing_limit:
+                        charge_window_optimised[minute] = window_n
+                else:
                     charge_window_optimised[minute] = window_n
         return charge_window_optimised
 
@@ -350,9 +362,10 @@ charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_
         if self.clipping_buffer_forecast_kwh:
             charge_limit = list(charge_limit)
             for n, window in enumerate(charge_window):
-                buffer_needed = self.clipping_buffer_forecast_kwh.get(window["start"], 0)
-                if buffer_needed > 0:
-                    charge_limit[n] = min(charge_limit[n], self.soc_max - buffer_needed)
+                buffer_needed_kwh = self.clipping_buffer_forecast_kwh.get(window["start"], 0)
+                if buffer_needed_kwh > 0:
+                    target_soc_percent = ((self.soc_max - buffer_needed_kwh) / self.soc_max) * 100.0 if self.soc_max > 0 else 0
+                    charge_limit[n] = min(charge_limit[n], target_soc_percent)
 
         window_hash = 0
         for window in charge_window:

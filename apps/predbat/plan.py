@@ -941,7 +941,7 @@ class Plan:
                 # Window logic: If we naturally exceed limit, use that. 
                 # Otherwise, fallback to a window around solar noon using the 'fallback' duration
                 auto_start, auto_end = None, None
-                threshold = max(max_pv * 0.5, base_limit * 0.9) # Cross limit or 50% of peak
+                threshold = max(max_pv * 0.5, base_limit * 0.8) # Lowered to 80% for safety
                 for m in range(day_start, day_end):
                     if window_source.get(m, 0) > threshold:
                         if auto_start is None: auto_start = m
@@ -1488,7 +1488,6 @@ class Plan:
                         
                         if current_predicted_soc > (target_kw + 0.1):
                             # Calculate how early to start discharging using native battery curves
-                            # We use a 10% safety margin on top of the calculated curve rate
                             curve_rate_kw = get_discharge_rate_curve(
                                 current_predicted_soc, 
                                 getattr(self, "battery_rate_max_discharge", 3.0),
@@ -1500,7 +1499,19 @@ class Plan:
                                 getattr(self, "battery_temperature_discharge_curve", {})
                             )
                             
-                            effective_rate = max(0.1, curve_rate_kw * 0.9) # 10% safety margin
+                            # Account for PV filling the battery while we try to empty it
+                            # We look at average PV in the 2 hours before the peak
+                            lookback = 120
+                            avg_pv_kw = 0
+                            pv_data_local = self.pv_forecast_minute90 # Use conservative forecast
+                            pv_points = [pv_data_local.get(t, 0) for t in range(max(0, ws - lookback), ws)]
+                            if pv_points:
+                                avg_pv_kw = (sum(pv_points) / len(pv_points)) * 60.0
+                            
+                            # Effective clearing rate = Battery Discharge - PV filling
+                            # (Max discharge rate is limited by inverter AC cap which PV also uses, 
+                            # so this is a conservative estimate)
+                            effective_rate = max(0.5, (curve_rate_kw * 0.9) - avg_pv_kw)
                             
                             energy_to_dump = current_predicted_soc - target_kw
                             minutes_needed = int((energy_to_dump / effective_rate) * 60) + 15
