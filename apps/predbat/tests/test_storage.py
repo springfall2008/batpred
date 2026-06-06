@@ -106,6 +106,22 @@ def test_storage(my_predbat=None):
         # 12. age() returns None for a missing file
         assert run_async(storage.age("mod", "nonexistent_age")) is None, "age() should return None for missing file"
 
+        # fetch_cached: miss → calls fetch_fn once, stores, returns
+        calls = {"n": 0}
+
+        async def _fetch():
+            calls["n"] += 1
+            return {"v": calls["n"]}
+
+        first = run_async(storage.fetch_cached("fc", "k", _fetch, fresh_minutes=30, stale_minutes=35, format="json"))
+        assert first == {"v": 1}, "fetch_cached miss should fetch: {}".format(first)
+        assert calls["n"] == 1, "fetch_fn should be called exactly once on miss"
+
+        # fetch_cached: fresh hit → does NOT call fetch_fn again
+        second = run_async(storage.fetch_cached("fc", "k", _fetch, fresh_minutes=30, stale_minutes=35, format="json"))
+        assert second == {"v": 1}, "fresh hit should return cached value: {}".format(second)
+        assert calls["n"] == 1, "fetch_fn must not be called on a fresh hit"
+
         print("All storage tests passed!")
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)

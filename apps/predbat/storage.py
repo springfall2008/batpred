@@ -112,6 +112,64 @@ class StorageBase(ABC):
         """Delete all expired cached files."""
         pass
 
+    async def _acquire_refresh_lock(self, module, filename):
+        """Try to acquire a refresh lock for a key. Default: always succeeds (no coordination).
+
+        Args:
+            module: The calling module name
+            filename: Logical filename identifier
+
+        Returns:
+            True if the caller should perform the refresh.
+        """
+        return True
+
+    async def _release_refresh_lock(self, module, filename):
+        """Release a refresh lock. Default: no-op.
+
+        Args:
+            module: The calling module name
+            filename: Logical filename identifier
+        """
+        return None
+
+    async def fetch_cached(self, module, filename, fetch_fn, fresh_minutes=30, stale_minutes=35, format="yaml"):
+        """Return cached data if fresh; serve stale while one caller refreshes; else fetch and store.
+
+        Args:
+            module: The calling module name
+            filename: Logical filename identifier
+            fetch_fn: Zero-arg coroutine function that fetches fresh data
+            fresh_minutes: Below this age the cached value is returned without refresh
+            stale_minutes: Between fresh_minutes and this, serve stale while one caller refreshes
+            format: One of 'yaml', 'json', or 'text'
+
+        Returns:
+            Cached or freshly fetched data, or None if nothing could be obtained
+        """
+        age_minutes = await self.age(module, filename)
+
+        if age_minutes is not None and age_minutes < fresh_minutes:
+            return await self.load(module, filename)
+
+        if age_minutes is not None and age_minutes < stale_minutes:
+            cached = await self.load(module, filename)
+            if await self._acquire_refresh_lock(module, filename):
+                try:
+                    data = await fetch_fn()
+                    if data is not None:
+                        await self.save(module, filename, data, format=format)
+                        return data
+                finally:
+                    await self._release_refresh_lock(module, filename)
+            return cached
+
+        data = await fetch_fn()
+        if data is not None:
+            await self.save(module, filename, data, format=format)
+            return data
+        return await self.load(module, filename)
+
 
 class StorageLocalFiles(StorageBase):
     """Local filesystem storage backend.
@@ -393,6 +451,22 @@ class StorageComponent(ComponentBase):
             Age in minutes as a float, or None if the entry does not exist
         """
         return await self.backend.age(module, filename)
+
+    async def fetch_cached(self, module, filename, fetch_fn, fresh_minutes=30, stale_minutes=35, format="yaml"):
+        """Fetch-or-cache via the storage backend's stale-while-revalidate helper.
+
+        Args:
+            module: The calling module name
+            filename: Logical filename identifier
+            fetch_fn: Zero-arg coroutine function that fetches fresh data
+            fresh_minutes: Below this age the cached value is returned without refresh
+            stale_minutes: Between fresh_minutes and this, serve stale while one caller refreshes
+            format: One of 'yaml', 'json', or 'text'
+
+        Returns:
+            Cached or freshly fetched data
+        """
+        return await self.backend.fetch_cached(module, filename, fetch_fn, fresh_minutes=fresh_minutes, stale_minutes=stale_minutes, format=format)
 
     async def run(self, seconds, first):
         """Run the storage component, cleaning up expired files every hour.
