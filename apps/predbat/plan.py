@@ -938,11 +938,11 @@ class Plan:
                         max_pv = pv_cs
                         solar_noon = m
                 
-                # Window logic: If Clear Sky exceeds 80% of limit, we have a clipping risk day.
+                # Window logic: If Clear Sky exceeds the risk threshold, we have a clipping risk day.
                 # The protection window should then span the entire period where spikes are possible.
-                # We use 20% of the limit as a broad 'daylight' boundary for protection.
-                risk_threshold = base_limit * 0.8
-                duration_threshold = base_limit * 0.2
+                # We use the duration threshold as a broad boundary for protection.
+                risk_threshold = base_limit * getattr(self, "clipping_buffer_risk_threshold", 0.8)
+                duration_threshold = base_limit * getattr(self, "clipping_buffer_duration_threshold", 0.2)
                 
                 has_risk = False
                 auto_start, auto_end = None, None
