@@ -2149,7 +2149,7 @@ APPS_SCHEMA = {
     "sigenergy_app_secret": {"type": "string", "empty": False},
     "sigenergy_base_url": {"type": "string", "empty": False},
     "sigenergy_mqtt_host": {"type": "string", "empty": False},
-    "sigenergy_system_id": {"type": "string", "empty": False},
+    "sigenergy_system_id": {"type": "string|string_list", "empty": False},
     "sigenergy_automatic": {"type": "boolean"},
     "sigenergy_enable_controls": {"type": "boolean"},
     "sigenergy_ca_pem": {"type": "string", "empty": False},

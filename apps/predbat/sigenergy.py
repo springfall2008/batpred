@@ -98,7 +98,6 @@ SIGENERGY_COMMAND_RETRY_DELAY = 2.0
 # Sigenergy API response codes
 SIGENERGY_CODE_SUCCESS = 0
 SIGENERGY_CODE_PARAM_ILLEGAL = 1000
-SIGENERGY_CODE_RPC_FAIL = 1001
 SIGENERGY_CODE_WRONG_SERIAL = 1101
 SIGENERGY_CODE_REGISTRATION_INCOMPLETE = 1102
 SIGENERGY_CODE_IN_OTHER_VPP = 1103
@@ -141,6 +140,7 @@ SIGENERGY_MQTT_TOPIC_CHANGE = "openapi/change/{app_key}/{system_id}"    # system
 SIGENERGY_MQTT_TOPIC_PERIOD = "openapi/period/{app_key}/{system_id}"    # telemetry data
 SIGENERGY_MQTT_TOPIC_ALARM = "openapi/alarm/{app_key}/{system_id}"      # alarm data
 SIGENERGY_MQTT_TOPIC_COMMAND = "openapi/instruction/command"            # battery command publish
+SIGENERGY_MQTT_TOPIC_MODE = "openapi/instruction/mode"                  # V1 operating mode switch (MQTT)
 
 # Operating mode enums (REST mode switch endpoint — MSC and FFG only; NBI is not used)
 SIGENERGY_MODE_MSC = 0   # Maximum Self-Consumption (eco)
@@ -154,6 +154,15 @@ SIGENERGY_MODE_NAMES = {
     5: "Fully Feed-in to Grid",
     6: "VPP",
     8: "Northbound Integration",
+}
+
+# API mode name strings for the V1 MQTT switch-mode endpoint (openapi/instruction/mode).
+# The 'mode' field takes these string values from the Operational Mode Enum.
+SIGENERGY_MODE_API_NAMES = {
+    SIGENERGY_MODE_MSC: "MSC",
+    SIGENERGY_MODE_FFG: "FFG",
+    SIGENERGY_MODE_VPP: "VPP",
+    SIGENERGY_MODE_NBI: "NBI",
 }
 
 # Human-readable names for systemStatus integer values
@@ -178,9 +187,13 @@ SIGENERGY_DEVICE_BATTERY = "Battery"
 SIGENERGY_DEVICE_GATEWAY = "Gateway"
 SIGENERGY_DEVICE_METER = "Meter"
 
-# Time options for schedule selects (HH:MM, one per minute)
-_BASE_TIME = datetime.strptime("00:00", "%H:%M")
-SIGENERGY_OPTIONS_TIME = [(_BASE_TIME + timedelta(seconds=m * 60)).strftime("%H:%M") for m in range(0, 24 * 60)]
+# Time options for schedule selects (HH:MM:SS, one per minute)
+_BASE_TIME = datetime.strptime("00:00:00", "%H:%M:%S")
+SIGENERGY_OPTIONS_TIME = [(_BASE_TIME + timedelta(seconds=m * 60)).strftime("%H:%M:%S") for m in range(0, 24 * 60)]
+
+# Sentinel returned by _request() when the API responds with code=0 but an empty/null data field.
+# Distinguishes "success with no payload" from None which always means "request failed".
+_SIGENERGY_OK = object()
 
 
 def _safe_float(value, default=0.0):
@@ -487,7 +500,7 @@ class SigenergyAPI(ComponentBase):
                                 decoded.append(item)
                             data = decoded
                         record_api_call("sigenergy")
-                        return data
+                        return _SIGENERGY_OK if data is None else data
 
             except asyncio.TimeoutError:
                 self.log("Warn: SigenergyAPI: Timeout on {} {} (attempt {}/{})".format(method, path, attempt + 1, retries))
@@ -751,50 +764,80 @@ class SigenergyAPI(ComponentBase):
     # -----------------------------------------------------------------------
 
     async def set_operating_mode(self, system_id, mode_int):
-        """Set the energy storage operating mode via REST.
+        """Set the energy storage operating mode via MQTT (V1 endpoint).
+
+        Publishes to openapi/instruction/mode with the mode name string from
+        SIGENERGY_MODE_API_NAMES rather than the integer used by the REST endpoint.
 
         Args:
             system_id: Sigenergy system unique identifier.
-            mode_int: Operating mode integer (SIGENERGY_MODE_MSC/FFG/NBI).
+            mode_int: Operating mode integer (SIGENERGY_MODE_MSC/FFG/VPP).
 
         Returns:
             True on success, False on failure.
         """
+        mode_name = SIGENERGY_MODE_API_NAMES.get(mode_int)
+        if mode_name is None:
+            self.log("Warn: SigenergyAPI: Unknown operating mode int {} for system {}".format(mode_int, system_id))
+            return False
+        token = await self.get_access_token()
+        if not token:
+            self.log("Warn: SigenergyAPI: No access token for MQTT mode switch")
+            return False
         payload = {
+            "accessToken": token,
             "systemId": system_id,
-            "energyStorageOperationMode": mode_int,
+            "mode": mode_name,
         }
-        result = await self._request("PUT", "/openapi/instruction/settings", json_data=payload)
-        if result is None:
-            # Some implementations return an empty data field on success — treat None as success
-            # if the HTTP call didn't raise (the _request wrapper returns None for both API errors
-            # and non-zero code responses, but we can't distinguish here without more context).
-            self.log("SigenergyAPI: set_operating_mode({}) returned None — assuming success".format(mode_int))
-            return True
-        self.log("SigenergyAPI: Operating mode set to {} for system {}".format(mode_int, system_id))
+        ok = await self._publish_mqtt(SIGENERGY_MQTT_TOPIC_MODE, payload)
+        if not ok:
+            self.log("Warn: SigenergyAPI: Failed to set operating mode {} ({}) for system {}".format(mode_name, mode_int, system_id))
+            return False
+        self.log("SigenergyAPI: Operating mode set to {} ({}) for system {}".format(mode_name, mode_int, system_id))
         return True
 
     async def onboard_systems(self, system_ids):
         """Onboard one or more systems into the Sigenergy platform.
 
         Calls POST /openapi/board/onboard with a batch of system IDs.
+        Inspects per-system result codes and logs the outcome.
 
         Args:
             system_ids: A single system ID string or a list of system ID strings.
 
         Returns:
-            List of per-system result dicts on success (may be empty), or None on failure.
+            True on success, None if pending user approval (code 1116), False on failure.
         """
         if isinstance(system_ids, str):
             system_ids = [system_ids]
-        #payload = {"systemIds": system_ids}
         self.log("SigenergyAPI: Onboarding systems: {}".format(system_ids))
         result = await self._request("POST", "/openapi/board/onboard", json_data=system_ids)
-        if result is None:
-            self.log("Warn: SigenergyAPI: Onboard request failed for systems {}".format(system_ids))
+
+        # Extract the outcome code: prefer codeList[0] from the first per-system result dict,
+        # fall back to the API-level error code set by _request.
+        code = self._last_api_code
+        if isinstance(result, list) and result:
+            item = result[0]
+            if isinstance(item, dict) and not item.get("result", True):
+                item_codes = item.get("codeList", [])
+                if item_codes:
+                    code = item_codes[0]
+
+        if code == SIGENERGY_CODE_SYSTEM_PENDING_REVIEW:
+            self.log("Warn: SigenergyAPI: Onboard for {} pending user approval in the Sigenergy app — approve to enable controls".format(system_ids))
             return None
-        self.log("SigenergyAPI: Onboard completed for {}: {}".format(system_ids, result))
-        return result
+        if code in (SIGENERGY_CODE_IN_OTHER_VPP, SIGENERGY_CODE_IN_OTHER_VPP_EVERGEN):
+            self.log("Warn: SigenergyAPI: Onboard failed — system {} is registered to another VPP (code={})".format(system_ids, code))
+            return False
+        if code == SIGENERGY_CODE_SOFTWARE_NO_VPP:
+            self.log("Warn: SigenergyAPI: Onboard failed — system {} firmware does not support VPP (code=1105)".format(system_ids))
+            return False
+        if result is None:
+            self.log("Warn: SigenergyAPI: Onboard request failed for systems {} (code={})".format(system_ids, code))
+            return False
+
+        self.log("SigenergyAPI: Onboard accepted for {}: {}".format(system_ids, result))
+        return True
 
     async def offboard_systems(self, system_ids):
         """Offboard (remove) one or more systems from the Sigenergy platform.
@@ -1114,6 +1157,8 @@ class SigenergyAPI(ComponentBase):
         }
         self.energy_flow[system_id] = flow
         self.system_status[system_id] = flow_status
+        if "operationalMode" in value_dict:
+            self.current_mode[system_id] = int(_safe_float(value_dict["operationalMode"]))
         self.log(
             "SigenergyAPI: MQTT period {}: SOC {:.0f}% bat {:.2f}kW pv {:.2f}kW grid {:.2f}kW load {:.2f}kW".format(
                 system_id, flow["batterySoc"], bat_power_kw, pv_power_kw, grid_power_kw, flow["loadPower"]
@@ -1643,7 +1688,7 @@ class SigenergyAPI(ComponentBase):
             friendly_name = "Sigenergy {} {} {}".format(system_name, direction.capitalize(), field.replace("_", " ").capitalize())
 
         if "_time" in field:
-            default = "00:00"
+            default = "00:00:00"
             field_type = "select"
             field_units = "time"
         elif field == "enable":
@@ -1876,13 +1921,13 @@ class SigenergyAPI(ComponentBase):
         now = datetime.now(self.local_tz)
 
         charge_enable = self.controls[system_id].get("charge", {}).get("enable", False)
-        charge_start_str = self.controls[system_id].get("charge", {}).get("start_time", "00:00")
-        charge_end_str = self.controls[system_id].get("charge", {}).get("end_time", "00:00")
+        charge_start_str = self.controls[system_id].get("charge", {}).get("start_time", "00:00:00")
+        charge_end_str = self.controls[system_id].get("charge", {}).get("end_time", "00:00:00")
         charge_target_soc = _safe_int(self.controls[system_id].get("charge", {}).get("target_soc", 100), 100)
         charge_rate_w = _safe_int(self.controls[system_id].get("charge", {}).get("rate", round(battery_max_kw * 1000)), round(battery_max_kw * 1000))
         export_enable = self.controls[system_id].get("export", {}).get("enable", False)
-        export_start_str = self.controls[system_id].get("export", {}).get("start_time", "00:00")
-        export_end_str = self.controls[system_id].get("export", {}).get("end_time", "00:00")
+        export_start_str = self.controls[system_id].get("export", {}).get("start_time", "00:00:00")
+        export_end_str = self.controls[system_id].get("export", {}).get("end_time", "00:00:00")
         export_target_soc = _safe_int(self.controls[system_id].get("export", {}).get("target_soc", 0), 0)
         export_rate_w = _safe_int(self.controls[system_id].get("export", {}).get("rate", round(battery_max_kw * 1000)), round(battery_max_kw * 1000))
         reserve_soc = _safe_int(self.controls[system_id].get("reserve", 10), 10)
@@ -1958,6 +2003,44 @@ class SigenergyAPI(ComponentBase):
         return await self.send_battery_command(system_id, active_mode, duration_min, charging_power_kw=charge_power_kw, charge_priority_type=charge_priority_type, discharge_priority_type=discharge_priority_type)
 
     # -----------------------------------------------------------------------
+    # VPP registration management
+    # -----------------------------------------------------------------------
+
+    async def _manage_vpp_registration(self, system_id, is_readonly):
+        """Align the operating mode with the read-only switch setting.
+
+        Assumes the system is already visible in self.systems (i.e. onboarded).
+        Onboarding of missing systems is handled separately by the missing_ids
+        block in run().
+
+        Four cases:
+          readonly=True  + VPP active   → switch to MSC so the user's app regains control
+          readonly=True  + VPP inactive → nothing to do
+          readonly=False + VPP active   → nothing to do (ready for controls)
+          readonly=False + VPP inactive → switch to VPP mode to enable controls
+
+        Args:
+            system_id: Sigenergy system unique identifier.
+            is_readonly: Current state of the Predbat read-only switch.
+
+        Returns:
+            True if the system is in VPP mode and controls can proceed, False otherwise.
+        """
+        in_vpp = self.current_mode.get(system_id) == SIGENERGY_MODE_VPP
+
+        if is_readonly and in_vpp:
+            self.log("SigenergyAPI: Read-only mode active — switching system {} from VPP to MSC".format(system_id))
+            await self.set_operating_mode(system_id, SIGENERGY_MODE_MSC)
+            return False
+
+        if not is_readonly and not in_vpp:
+            self.log("SigenergyAPI: System {} is not in VPP mode — switching to VPP to enable controls".format(system_id))
+            await self.set_operating_mode(system_id, SIGENERGY_MODE_VPP)
+            return False  # current_mode will be updated by MQTT/REST on the next cycle
+
+        return in_vpp
+
+    # -----------------------------------------------------------------------
     # Main run loop
     # -----------------------------------------------------------------------
 
@@ -1989,20 +2072,19 @@ class SigenergyAPI(ComponentBase):
             missing_ids = self.system_id_filter - set(self.systems.keys()) if self.system_id_filter else set()
             for sid in missing_ids:
                 self.log("SigenergyAPI: System {} not found in authorised list — attempting onboard".format(sid))
-                self._last_api_code = 0
                 result = await self.onboard_systems([sid])
-                if result is None:
-                    if self._last_api_code == SIGENERGY_CODE_SYSTEM_PENDING_REVIEW:
-                        self.log("Warn: SigenergyAPI: System {} is pending review approval — cannot proceed yet".format(sid))
-                    else:
-                        self.log("Warn: SigenergyAPI: Failed to onboard system {} (code={}) — cannot proceed".format(sid, self._last_api_code))
+                if result is not True:
                     return False
-                self.log("SigenergyAPI: Onboard accepted for system {} — re-fetching system list".format(sid))
                 await self.fetch_system_list()
 
             if not self.systems:
                 self.log("Warn: SigenergyAPI: No systems available after discovery, will retry")
                 return False
+
+            # Bootstrap current_mode via REST so VPP management can run immediately.
+            # After this, MQTT period messages keep current_mode up to date each cycle.
+            for sid in list(self.systems.keys()):
+                await self.fetch_current_mode(sid)
 
         # Start (or restart) the background MQTT listener task after systems are known
         if self.systems and (self._mqtt_task is None or self._mqtt_task.done()):
@@ -2018,6 +2100,17 @@ class SigenergyAPI(ComponentBase):
         if first or seconds % SIGENERGY_DEVICE_POLL_INTERVAL == 0:
             for sid in list(self.systems.keys()):
                 await self.fetch_device_list(sid)
+
+        # VPP registration management — runs at startup and every 5 minutes.
+        # Skips any system whose operating mode is not yet known (REST bootstrap
+        # may have failed; MQTT will populate current_mode once it arrives).
+        if first or seconds % SIGENERGY_POLL_INTERVAL == 0:
+            is_readonly_vpp = self.get_state_wrapper("switch.{}_set_read_only".format(self.prefix), default="off") == "on"
+            for sid in list(self.systems.keys()):
+                if sid not in self.current_mode:
+                    self.log("SigenergyAPI: Skipping VPP registration check for {} — operating mode not yet known".format(sid))
+                    continue
+                await self._manage_vpp_registration(sid, is_readonly_vpp)
 
         # Fetch controls from HA on first run only
         if first:
@@ -2054,10 +2147,20 @@ class SigenergyAPI(ComponentBase):
         if self.enable_controls and not is_readonly:
             if first or seconds % 60 == 0:
                 for sid in list(self.systems.keys()):
+                    if self.current_mode.get(sid) != SIGENERGY_MODE_VPP:
+                        self.log(
+                            "Warn: SigenergyAPI: System {} is not in VPP mode ({}) — controls skipped until onboard is approved".format(
+                                sid, SIGENERGY_MODE_NAMES.get(self.current_mode.get(sid, -1), "Unknown")
+                            )
+                        )
+                        continue
                     await self.apply_controls(sid)
         else:
             if first:
-                self.log("SigenergyAPI: Controls disabled or read-only mode active")
+                if is_readonly:
+                    self.log("SigenergyAPI: Read-only mode active — controls skipped")
+                else:
+                    self.log("SigenergyAPI: Controls disabled")
 
         self.update_success_timestamp()
         return True
@@ -2077,12 +2180,14 @@ class SigenergyAPI(ComponentBase):
 class MockBase:  # pragma: no cover
     """Mock base class for standalone testing."""
 
-    def __init__(self):
+    def __init__(self, readonly=False):
         """Initialise mock base."""
         self.prefix = "predbat"
         self.local_tz = datetime.now().astimezone().tzinfo
         self.args = {}
         self.entities = {}
+        # Pre-populate the read-only switch so get_state_wrapper returns the right value
+        self.entities["switch.predbat_set_read_only"] = {"state": "on" if readonly else "off"}
 
     def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=None):
         """Return entity state or default."""
@@ -2120,7 +2225,7 @@ class MockBase:  # pragma: no cover
         """No-op success timestamp update."""
 
 
-async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode, action=None, mqtt_host=None, ca_cert=None, client_cert=None, client_key=None):  # pragma: no cover
+async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode, action=None, mqtt_host=None, ca_cert=None, client_cert=None, client_key=None, readonly=False):  # pragma: no cover
     """Run one cycle of the Sigenergy API and optionally test a control mode or boarding action.
 
     Args:
@@ -2130,6 +2235,7 @@ async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode
         system_id: Optional system ID filter string (required for onboard/offboard).
         test_mode: One of 'eco', 'charge', 'freeze_charge', 'export', 'freeze_export', or None.
         action: One of 'onboard', 'offboard', or None.
+        readonly: When True simulate the Predbat read-only switch being on.
     """
     print("\n{}".format("=" * 60))
     print("Testing Sigenergy Cloud API")
@@ -2141,9 +2247,11 @@ async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode
         print("Test mode: {}".format(test_mode))
     if action:
         print("Action: {}".format(action))
+    if readonly:
+        print("Read-only: ON")
     print("{}\n".format("=" * 60))
 
-    mock_base = MockBase()
+    mock_base = MockBase(readonly=readonly)
 
     sig = SigenergyAPI(
         mock_base,
@@ -2173,11 +2281,10 @@ async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode
             board_result = await sig.onboard_systems(system_id)
         else:
             board_result = await sig.offboard_systems(system_id)
-        if board_result is None:
-            print("x {} failed for system {}".format(action.capitalize(), system_id))
+        if board_result is not True:
+            print("x {} failed or pending for system {}".format(action.capitalize(), system_id))
             return 1
         print("+ {} successful for system {}".format(action.capitalize(), system_id))
-        print("  Results: {}".format(board_result))
         return 0
 
     if not test_mode:
@@ -2201,9 +2308,9 @@ async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode
         print("{}\n".format("=" * 60))
 
         def _window(offset_start_min, offset_end_min):
-            """Return HH:MM strings offset from now."""
-            s = (now + timedelta(minutes=offset_start_min)).strftime("%H:%M")
-            e = (now + timedelta(minutes=offset_end_min)).strftime("%H:%M")
+            """Return HH:MM:SS strings offset from now."""
+            s = (now + timedelta(minutes=offset_start_min)).strftime("%H:%M:%S")
+            e = (now + timedelta(minutes=offset_end_min)).strftime("%H:%M:%S")
             return s, e
 
         battery_max_w = round(sig._get_battery_max_power_kw(sid) * 1000) or 5000
@@ -2211,8 +2318,8 @@ async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode
         if test_mode == "eco":
             sig.controls[sid] = {
                 "reserve": 10,
-                "charge": {"start_time": "23:00", "end_time": "23:30", "enable": False, "target_soc": 100, "rate": battery_max_w},
-                "export": {"start_time": "23:30", "end_time": "23:59", "enable": False, "target_soc": 10, "rate": battery_max_w},
+                "charge": {"start_time": "23:00:00", "end_time": "23:30:00", "enable": False, "target_soc": 100, "rate": battery_max_w},
+                "export": {"start_time": "23:30:00", "end_time": "23:59:00", "enable": False, "target_soc": 10, "rate": battery_max_w},
             }
             print("+ Configured for ECO mode (no active windows)")
 
@@ -2221,7 +2328,7 @@ async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode
             sig.controls[sid] = {
                 "reserve": 10,
                 "charge": {"start_time": cs, "end_time": ce, "enable": True, "target_soc": 95, "rate": battery_max_w},
-                "export": {"start_time": "23:30", "end_time": "23:59", "enable": False, "target_soc": 10, "rate": battery_max_w},
+                "export": {"start_time": "23:30:00", "end_time": "23:59:00", "enable": False, "target_soc": 10, "rate": battery_max_w},
             }
             print("+ Configured for CHARGE mode ({} - {}, target 95%)".format(cs, ce))
 
@@ -2231,7 +2338,7 @@ async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode
             sig.controls[sid] = {
                 "reserve": 10,
                 "charge": {"start_time": cs, "end_time": ce, "enable": True, "target_soc": target, "rate": battery_max_w},
-                "export": {"start_time": "23:30", "end_time": "23:59", "enable": False, "target_soc": 10, "rate": battery_max_w},
+                "export": {"start_time": "23:30:00", "end_time": "23:59:00", "enable": False, "target_soc": 10, "rate": battery_max_w},
             }
             print("+ Configured for FREEZE CHARGE mode ({} - {}, target=current {:.0f}%)".format(cs, ce, battery_soc_pct))
 
@@ -2239,7 +2346,7 @@ async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode
             es, ee = _window(-30, 120)
             sig.controls[sid] = {
                 "reserve": 10,
-                "charge": {"start_time": "23:00", "end_time": "23:30", "enable": False, "target_soc": 100, "rate": battery_max_w},
+                "charge": {"start_time": "23:00:00", "end_time": "23:30:00", "enable": False, "target_soc": 100, "rate": battery_max_w},
                 "export": {"start_time": es, "end_time": ee, "enable": True, "target_soc": 15, "rate": battery_max_w},
             }
             print("+ Configured for EXPORT mode ({} - {}, target 15%)".format(es, ee))
@@ -2249,7 +2356,7 @@ async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode
             target = min(100, round(battery_soc_pct) + 10)  # above current = freeze
             sig.controls[sid] = {
                 "reserve": 10,
-                "charge": {"start_time": "23:00", "end_time": "23:30", "enable": False, "target_soc": 100, "rate": battery_max_w},
+                "charge": {"start_time": "23:00:00", "end_time": "23:30:00", "enable": False, "target_soc": 100, "rate": battery_max_w},
                 "export": {"start_time": es, "end_time": ee, "enable": True, "target_soc": target, "rate": battery_max_w},
             }
             print("+ Configured for FREEZE EXPORT mode ({} - {}, current {:.0f}% target {}%)".format(es, ee, battery_soc_pct, target))
@@ -2373,6 +2480,7 @@ def main():  # pragma: no cover
     parser.add_argument("--ca-cert", default=None, help="Path to CA certificate PEM file (overrides --cert-dir/ca.pem)")
     parser.add_argument("--client-cert", default=None, help="Path to client certificate PEM file (overrides --cert-dir/client.pem)")
     parser.add_argument("--client-key", default=None, help="Path to client private key file (overrides --cert-dir/client.key)")
+    parser.add_argument("--readonly", action="store_true", help="Simulate read-only mode (switch.predbat_set_read_only = on)")
 
     action_group = parser.add_mutually_exclusive_group()
     action_group.add_argument(
@@ -2419,7 +2527,7 @@ def main():  # pragma: no cover
         result = asyncio.run(test_mqtt_connection(args.app_key, args.app_secret, args.base_url, args.system_id, args.mqtt_topic, ca_cert=ca_cert, client_cert=client_cert, client_key=client_key))
     else:
         action = "onboard" if args.onboard else ("offboard" if args.offboard else None)
-        result = asyncio.run(test_sigenergy_api(args.app_key, args.app_secret, args.base_url, args.system_id, args.test_mode, action, mqtt_host=args.mqtt_host, ca_cert=ca_cert, client_cert=client_cert, client_key=client_key))
+        result = asyncio.run(test_sigenergy_api(args.app_key, args.app_secret, args.base_url, args.system_id, args.test_mode, action, mqtt_host=args.mqtt_host, ca_cert=ca_cert, client_cert=client_cert, client_key=client_key, readonly=args.readonly))
     raise SystemExit(result or 0)
 
 

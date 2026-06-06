@@ -19,6 +19,11 @@ from sigenergy import (
     SIGENERGY_ACTIVE_MODE_CHARGE,
     SIGENERGY_ACTIVE_MODE_DISCHARGE,
     SIGENERGY_ACTIVE_MODE_SELF,
+    SIGENERGY_CODE_IN_OTHER_VPP,
+    SIGENERGY_CODE_SYSTEM_PENDING_REVIEW,
+    SIGENERGY_MODE_VPP,
+    SIGENERGY_OPTIONS_TIME,
+    _SIGENERGY_OK,
     _safe_float,
     _safe_int,
 )
@@ -391,8 +396,8 @@ def test_sigenergy_publish_controls(my_predbat):
     api.systems[system_id] = {"systemName": "Home", "batteryCapacity": 10.0}
     api.devices[system_id] = []
     api.controls[system_id] = {
-        "charge": {"start_time": "01:00", "end_time": "05:00", "enable": False, "target_soc": 100, "rate": 2000},
-        "export": {"start_time": "17:00", "end_time": "19:00", "enable": False, "target_soc": 20, "rate": 2000},
+        "charge": {"start_time": "01:00:00", "end_time": "05:00:00", "enable": False, "target_soc": 100, "rate": 2000},
+        "export": {"start_time": "17:00:00", "end_time": "19:00:00", "enable": False, "target_soc": 20, "rate": 2000},
         "reserve": 10,
     }
 
@@ -406,6 +411,11 @@ def test_sigenergy_publish_controls(my_predbat):
     assert charge_enable_key in api.dashboard_items, "Charge enable switch published: {}".format(charge_enable_key)
     assert export_start_key in api.dashboard_items, "Export start time select published"
     assert reserve_key in api.dashboard_items, "Reserve number published"
+
+    # Options must be HH:MM:SS to match what inverter.adjust_charge_window writes
+    export_start_opts = api.dashboard_items[export_start_key]["attributes"].get("options", [])
+    assert "17:00:00" in export_start_opts, "HH:MM:SS option present in select options"
+    assert "17:00" not in export_start_opts, "Plain HH:MM must not appear in select options"
 
     return failed
 
@@ -641,11 +651,11 @@ def test_sigenergy_apply_controls_charge_mode(my_predbat):
     # SOC at 50%, charge window active now, target 90%
     api.energy_flow[system_id] = {"batterySoc": 50.0}
     now = datetime.now(timezone.utc)
-    start_str = (now - timedelta(hours=1)).strftime("%H:%M")
-    end_str = (now + timedelta(hours=2)).strftime("%H:%M")
+    start_str = (now - timedelta(hours=1)).strftime("%H:%M:%S")
+    end_str = (now + timedelta(hours=2)).strftime("%H:%M:%S")
     api.controls[system_id] = {
         "charge": {"enable": True, "start_time": start_str, "end_time": end_str, "target_soc": 90, "rate": 3000},
-        "export": {"enable": False, "start_time": "00:00", "end_time": "00:00", "target_soc": 20, "rate": 3000},
+        "export": {"enable": False, "start_time": "00:00:00", "end_time": "00:00:00", "target_soc": 20, "rate": 3000},
         "reserve": 10,
     }
 
@@ -681,8 +691,8 @@ def test_sigenergy_apply_controls_eco_mode(my_predbat):
     api.devices[system_id] = []
     api.energy_flow[system_id] = {"batterySoc": 70.0}
     api.controls[system_id] = {
-        "charge": {"enable": False, "start_time": "00:00", "end_time": "00:00", "target_soc": 100, "rate": 3000},
-        "export": {"enable": False, "start_time": "00:00", "end_time": "00:00", "target_soc": 0, "rate": 3000},
+        "charge": {"enable": False, "start_time": "00:00:00", "end_time": "00:00:00", "target_soc": 100, "rate": 3000},
+        "export": {"enable": False, "start_time": "00:00:00", "end_time": "00:00:00", "target_soc": 0, "rate": 3000},
         "reserve": 10,
     }
 
@@ -718,8 +728,8 @@ def test_sigenergy_apply_controls_deduplication(my_predbat):
     api.devices[system_id] = []
     api.energy_flow[system_id] = {"batterySoc": 70.0}
     api.controls[system_id] = {
-        "charge": {"enable": False, "start_time": "00:00", "end_time": "00:00", "target_soc": 100, "rate": 3000},
-        "export": {"enable": False, "start_time": "00:00", "end_time": "00:00", "target_soc": 0, "rate": 3000},
+        "charge": {"enable": False, "start_time": "00:00:00", "end_time": "00:00:00", "target_soc": 100, "rate": 3000},
+        "export": {"enable": False, "start_time": "00:00:00", "end_time": "00:00:00", "target_soc": 0, "rate": 3000},
         "reserve": 10,
     }
     # Provide a valid token so send_battery_command doesn't bail early
@@ -757,10 +767,10 @@ def test_sigenergy_apply_controls_export_mode(my_predbat):
     api.energy_flow[system_id] = {"batterySoc": 80.0}
 
     now = datetime.now(timezone.utc)
-    start_str = (now - timedelta(hours=1)).strftime("%H:%M")
-    end_str = (now + timedelta(hours=1)).strftime("%H:%M")
+    start_str = (now - timedelta(hours=1)).strftime("%H:%M:%S")
+    end_str = (now + timedelta(hours=1)).strftime("%H:%M:%S")
     api.controls[system_id] = {
-        "charge": {"enable": False, "start_time": "00:00", "end_time": "00:00", "target_soc": 100, "rate": 3000},
+        "charge": {"enable": False, "start_time": "00:00:00", "end_time": "00:00:00", "target_soc": 100, "rate": 3000},
         "export": {"enable": True, "start_time": start_str, "end_time": end_str, "target_soc": 10, "rate": 3000},
         "reserve": 10,
     }
@@ -1271,6 +1281,305 @@ def test_sigenergy_build_tls_context(my_predbat):
     return failed
 
 
+def test_sigenergy_set_operating_mode(my_predbat):
+    """Test set_operating_mode publishes MQTT and returns True on success, False on failure."""
+    failed = False
+    api = MockSigenergyAPI()
+
+    async def mock_token():
+        return "test-token"
+
+    api.get_access_token = mock_token
+
+    # Success: MQTT publish succeeds
+    async def mock_publish_ok(topic, payload_dict):
+        return True
+
+    api._publish_mqtt = mock_publish_ok
+    ok = run_async(api.set_operating_mode("SIG001", 0))
+    assert ok is True, "set_operating_mode should return True when MQTT publish succeeds"
+    assert not any("Failed" in m for m in api.log_messages), "No failure logged on success"
+
+    # Failure: MQTT publish fails
+    api.log_messages = []
+
+    async def mock_publish_fail(topic, payload_dict):
+        return False
+
+    api._publish_mqtt = mock_publish_fail
+    ok = run_async(api.set_operating_mode("SIG001", 0))
+    assert ok is False, "set_operating_mode should return False when MQTT publish fails"
+    assert any("Failed" in m for m in api.log_messages), "Failure warning logged when publish fails"
+
+    # Failure: unknown mode int
+    api.log_messages = []
+    api._publish_mqtt = mock_publish_ok
+    ok = run_async(api.set_operating_mode("SIG001", 99))
+    assert ok is False, "set_operating_mode should return False for unknown mode int"
+
+    return failed
+
+
+def _make_api_with_system(system_id="SIG001"):
+    """Return a MockSigenergyAPI pre-loaded with one system and its device list."""
+    api = MockSigenergyAPI()
+    api.systems[system_id] = {"systemName": "Home", "batteryCapacity": 10.0}
+    api.devices[system_id] = []
+    return api
+
+
+def test_sigenergy_manage_vpp_registration_switch_to_msc(my_predbat):
+    """Readonly=True + VPP active → set_operating_mode(MSC) called, returns False."""
+    from sigenergy import SIGENERGY_MODE_MSC
+    failed = False
+    sid = "SIG001"
+    api = _make_api_with_system(sid)
+    api.current_mode[sid] = SIGENERGY_MODE_VPP
+
+    mode_calls = []
+
+    async def mock_set_mode(system_id, mode_int):
+        mode_calls.append((system_id, mode_int))
+        return True
+
+    api.set_operating_mode = mock_set_mode
+
+    result = run_async(api._manage_vpp_registration(sid, is_readonly=True))
+    assert result is False, "Should return False after switching to MSC"
+    assert len(mode_calls) == 1, "set_operating_mode called once"
+    assert mode_calls[0] == (sid, SIGENERGY_MODE_MSC), "Mode switched to MSC"
+    assert any("MSC" in m for m in api.log_messages), "MSC switch logged"
+
+    return failed
+
+
+def test_sigenergy_manage_vpp_registration_switch_to_vpp(my_predbat):
+    """Readonly=False + not VPP → set_operating_mode(VPP) called, returns False (activating async)."""
+    failed = False
+    sid = "SIG001"
+    api = _make_api_with_system(sid)
+    api.current_mode[sid] = 0  # MSC — not VPP
+
+    mode_calls = []
+
+    async def mock_set_mode(system_id, mode_int):
+        mode_calls.append((system_id, mode_int))
+        return True
+
+    api.set_operating_mode = mock_set_mode
+
+    result = run_async(api._manage_vpp_registration(sid, is_readonly=False))
+    assert result is False, "Should return False (VPP not yet confirmed, activating async)"
+    assert len(mode_calls) == 1, "set_operating_mode called once"
+    assert mode_calls[0] == (sid, SIGENERGY_MODE_VPP), "Mode switched to VPP"
+    assert any("VPP" in m for m in api.log_messages), "VPP switch logged"
+
+    return failed
+
+
+def test_sigenergy_onboard_systems_pending_per_item(my_predbat):
+    """onboard_systems: real API per-item response result=False codeList=[1116] → returns None and logs warning."""
+    failed = False
+    sid = "SIG001"
+    api = _make_api_with_system(sid)
+    api.access_token = "tok"
+    api.token_expires_at = 9_999_999_999
+
+    # Real Sigenergy API response: [{'systemId': '...', 'result': False, 'codeList': [1116]}]
+    async def mock_request(method, path, json_data=None, params=None, retries=3):
+        return [{"systemId": sid, "result": False, "codeList": [SIGENERGY_CODE_SYSTEM_PENDING_REVIEW]}]
+
+    api._request = mock_request
+
+    result = run_async(api.onboard_systems([sid]))
+    assert result is None, "Per-item code 1116 should return None (pending)"
+    assert any("pending" in m.lower() for m in api.log_messages), "Pending approval warning logged"
+
+    return failed
+
+
+def test_sigenergy_onboard_systems_other_vpp(my_predbat):
+    """onboard_systems: per-item codeList=[1103] (other VPP) → returns False and logs warning."""
+    failed = False
+    sid = "SIG001"
+    api = _make_api_with_system(sid)
+    api.access_token = "tok"
+    api.token_expires_at = 9_999_999_999
+
+    async def mock_request(method, path, json_data=None, params=None, retries=3):
+        return [{"systemId": sid, "result": False, "codeList": [SIGENERGY_CODE_IN_OTHER_VPP]}]
+
+    api._request = mock_request
+
+    result = run_async(api.onboard_systems([sid]))
+    assert result is False, "Other-VPP code should return False"
+    assert any("another VPP" in m for m in api.log_messages), "Other-VPP warning logged"
+
+    return failed
+
+
+def test_sigenergy_manage_vpp_registration_ready(my_predbat):
+    """Readonly=False + VPP active → no onboard/offboard, returns True."""
+    failed = False
+    sid = "SIG001"
+    api = _make_api_with_system(sid)
+    api.current_mode[sid] = SIGENERGY_MODE_VPP
+
+    called = []
+
+    async def mock_onboard(system_ids):
+        called.append("onboard")
+        return None
+
+    async def mock_offboard(system_ids):
+        called.append("offboard")
+        return None
+
+    api.onboard_systems = mock_onboard
+    api.offboard_systems = mock_offboard
+
+    result = run_async(api._manage_vpp_registration(sid, is_readonly=False))
+    assert result is True, "Should return True when already in VPP"
+    assert not called, "Neither onboard nor offboard should be called"
+
+    return failed
+
+
+def test_sigenergy_manage_vpp_registration_readonly_no_vpp(my_predbat):
+    """Readonly=True + VPP not active → nothing to do, returns False."""
+    failed = False
+    sid = "SIG001"
+    api = _make_api_with_system(sid)
+    api.current_mode[sid] = 0  # not VPP, and readonly — nothing to do
+
+    called = []
+
+    async def mock_onboard(system_ids):
+        called.append("onboard")
+        return None
+
+    async def mock_offboard(system_ids):
+        called.append("offboard")
+        return None
+
+    api.onboard_systems = mock_onboard
+    api.offboard_systems = mock_offboard
+
+    result = run_async(api._manage_vpp_registration(sid, is_readonly=True))
+    assert result is False, "Should return False (readonly, not in VPP)"
+    assert not called, "No board operations when readonly and not in VPP"
+
+    return failed
+
+
+def test_sigenergy_mqtt_period_updates_current_mode(my_predbat):
+    """_handle_mqtt_period should update current_mode from operationalMode."""
+    failed = False
+    api = MockSigenergyAPI()
+
+    # VPP mode (6)
+    api._handle_mqtt_period("SYS1", {"storageSOC%": "50.0", "operationalMode": "6.0"})
+    assert api.current_mode.get("SYS1") == SIGENERGY_MODE_VPP, "current_mode updated to VPP (6)"
+
+    # Switch to MSC (0)
+    api._handle_mqtt_period("SYS1", {"storageSOC%": "50.0", "operationalMode": "0.0"})
+    assert api.current_mode.get("SYS1") == 0, "current_mode updated to MSC (0)"
+
+    # Missing operationalMode — current_mode should not change
+    api._handle_mqtt_period("SYS1", {"storageSOC%": "50.0"})
+    assert api.current_mode.get("SYS1") == 0, "current_mode unchanged when operationalMode absent"
+
+    return failed
+
+
+def test_sigenergy_apply_controls_skipped_when_not_vpp(my_predbat):
+    """Controls should be skipped with a warning when system is not in VPP mode."""
+    failed = False
+    api = MockSigenergyAPI()
+    sid = "SIG001"
+    api.systems[sid] = {"systemName": "Home", "batteryCapacity": 10.0}
+    api.devices[sid] = []
+    api.energy_flow[sid] = {"batterySoc": 60.0}
+    api.controls[sid] = {
+        "charge": {"enable": False, "start_time": "00:00:00", "end_time": "00:00:00", "target_soc": 100, "rate": 3000},
+        "export": {"enable": False, "start_time": "00:00:00", "end_time": "00:00:00", "target_soc": 0, "rate": 3000},
+        "reserve": 10,
+    }
+    api.current_mode[sid] = 0  # MSC, not VPP
+    api.enable_controls = True
+
+    apply_calls = []
+
+    async def mock_apply_controls(system_id):
+        apply_calls.append(system_id)
+        return True
+
+    api.apply_controls = mock_apply_controls
+
+    # Simulate the apply-controls block from run() directly
+    async def run_controls_block():
+        for s in list(api.systems.keys()):
+            if api.current_mode.get(s) != SIGENERGY_MODE_VPP:
+                api.log("Warn: SigenergyAPI: System {} is not in VPP mode — controls skipped".format(s))
+                continue
+            await api.apply_controls(s)
+
+    run_async(run_controls_block())
+
+    assert not apply_calls, "apply_controls must not be called when not in VPP mode"
+    assert any("VPP" in m and "skipped" in m for m in api.log_messages), "VPP skip warning logged"
+
+    # Now set VPP mode — controls should fire
+    api.current_mode[sid] = SIGENERGY_MODE_VPP
+    run_async(run_controls_block())
+    assert apply_calls == [sid], "apply_controls called once system is in VPP mode"
+
+    return failed
+
+
+def test_sigenergy_options_time_format(my_predbat):
+    """Test SIGENERGY_OPTIONS_TIME entries are HH:MM:SS, not HH:MM."""
+    failed = False
+
+    assert len(SIGENERGY_OPTIONS_TIME) == 1440, "1440 entries (one per minute): got {}".format(len(SIGENERGY_OPTIONS_TIME))
+    assert SIGENERGY_OPTIONS_TIME[0] == "00:00:00", "First entry is 00:00:00, got {}".format(SIGENERGY_OPTIONS_TIME[0])
+    assert SIGENERGY_OPTIONS_TIME[60] == "01:00:00", "60th entry is 01:00:00, got {}".format(SIGENERGY_OPTIONS_TIME[60])
+    assert SIGENERGY_OPTIONS_TIME[-1] == "23:59:00", "Last entry is 23:59:00, got {}".format(SIGENERGY_OPTIONS_TIME[-1])
+    # Plain HH:MM must not appear — inverter writes HH:MM:SS and validation must match
+    assert "01:00" not in SIGENERGY_OPTIONS_TIME, "Plain HH:MM must not be in options"
+    assert "01:00:00" in SIGENERGY_OPTIONS_TIME, "HH:MM:SS must be in options"
+
+    return failed
+
+
+def test_sigenergy_update_control_time_validation(my_predbat):
+    """Test _update_control accepts HH:MM:SS times and rejects plain HH:MM."""
+    failed = False
+    api = MockSigenergyAPI()
+    system_id = "SIG001"
+    api.systems[system_id] = {"systemName": "Home", "batteryCapacity": 10.0}
+    api.devices[system_id] = []
+    api.controls[system_id] = {
+        "charge": {"enable": False, "start_time": "00:00:00", "end_time": "00:00:00", "target_soc": 100, "rate": 3000},
+        "export": {"enable": False, "start_time": "00:00:00", "end_time": "00:00:00", "target_soc": 0, "rate": 3000},
+        "reserve": 10,
+    }
+
+    slug = api._system_slug(system_id)
+    entity_id = "select.predbat_sigenergy_{}_charge_start_time".format(slug)
+
+    # HH:MM:SS (what inverter.adjust_charge_window writes) must be accepted
+    run_async(api._update_control(entity_id, "01:00:00", "charge", "start_time", system_id))
+    assert api.controls[system_id]["charge"]["start_time"] == "01:00:00", "HH:MM:SS accepted and stored"
+
+    # Plain HH:MM must be rejected — value should remain unchanged
+    run_async(api._update_control(entity_id, "02:00", "charge", "start_time", system_id))
+    assert api.controls[system_id]["charge"]["start_time"] == "01:00:00", "Plain HH:MM rejected, value unchanged"
+    assert any("Invalid time" in m for m in api.log_messages), "Rejection warning logged for HH:MM"
+
+    return failed
+
+
 # ---------------------------------------------------------------------------
 
 
@@ -1315,6 +1624,17 @@ def run_sigenergy_tests(my_predbat):
         ("get_inverter_serial", test_sigenergy_get_inverter_serial),
         ("build_tls_context", test_sigenergy_build_tls_context),
         ("battery_max_power", test_sigenergy_battery_max_power),
+        ("options_time_format", test_sigenergy_options_time_format),
+        ("update_control_time_validation", test_sigenergy_update_control_time_validation),
+        ("set_operating_mode", test_sigenergy_set_operating_mode),
+        ("manage_vpp_registration_switch_to_msc", test_sigenergy_manage_vpp_registration_switch_to_msc),
+        ("manage_vpp_registration_switch_to_vpp", test_sigenergy_manage_vpp_registration_switch_to_vpp),
+        ("onboard_systems_pending_per_item", test_sigenergy_onboard_systems_pending_per_item),
+        ("onboard_systems_other_vpp", test_sigenergy_onboard_systems_other_vpp),
+        ("manage_vpp_registration_ready", test_sigenergy_manage_vpp_registration_ready),
+        ("manage_vpp_registration_readonly_no_vpp", test_sigenergy_manage_vpp_registration_readonly_no_vpp),
+        ("mqtt_period_updates_current_mode", test_sigenergy_mqtt_period_updates_current_mode),
+        ("apply_controls_skipped_when_not_vpp", test_sigenergy_apply_controls_skipped_when_not_vpp),
     ]
 
     for name, fn in tests:
