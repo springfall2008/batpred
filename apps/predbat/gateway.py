@@ -156,7 +156,17 @@ class GatewayMQTT(ComponentBase):
         elif isinstance(gateway_inverter_serial, list):
             self.gateway_inverter_serial = gateway_inverter_serial
         else:
-            self.gateway_inverter_serial = [gateway_inverter_serial]
+            if isinstance(gateway_inverter_serial, str) and (gateway_inverter_serial.startswith("{") or gateway_inverter_serial.startswith("[")):
+                try:
+                    parsed = json.loads(gateway_inverter_serial)
+                    if isinstance(parsed, list):
+                        self.gateway_inverter_serial = [str(s) for s in parsed]
+                    else:
+                        self.gateway_inverter_serial = [str(parsed)]
+                except json.JSONDecodeError:
+                    self.gateway_inverter_serial = [str(gateway_inverter_serial)]
+            else:
+                self.gateway_inverter_serial = [gateway_inverter_serial]
         self.mqtt_token_expires_at = 0
 
         # MQTT topic strings

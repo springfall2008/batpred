@@ -1163,6 +1163,53 @@ class TestAutomaticConfig:
         gw.initialize(gateway_device_id="pbgw_test", mqtt_host="mqtt.example.com", mqtt_token="tok", gateway_inverter_serial=None)
         assert gw.gateway_inverter_serial == []
 
+    def test_serial_filter_json_array_string_expanded_to_list(self):
+        """A JSON-encoded array string is parsed and expanded into a list of serials."""
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.base = MagicMock()
+        gw.initialize(
+            gateway_device_id="pbgw_test",
+            mqtt_host="mqtt.example.com",
+            mqtt_token="tok",
+            gateway_inverter_serial='["CE000000AA1", "CE000000BB2"]',
+        )
+        assert gw.gateway_inverter_serial == ["CE000000AA1", "CE000000BB2"]
+
+    def test_serial_filter_json_object_string_becomes_single_entry(self):
+        """A JSON-encoded object (not an array) is str-converted and wrapped in a list."""
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.base = MagicMock()
+        gw.initialize(
+            gateway_device_id="pbgw_test",
+            mqtt_host="mqtt.example.com",
+            mqtt_token="tok",
+            gateway_inverter_serial='{"serial": "CE123456789"}',
+        )
+        assert len(gw.gateway_inverter_serial) == 1
+        assert isinstance(gw.gateway_inverter_serial[0], str)
+
+    def test_serial_filter_invalid_json_falls_back_to_raw_string(self):
+        """A string starting with '[' that is not valid JSON is kept as a single-entry list."""
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        raw = "[not valid json"
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.base = MagicMock()
+        gw.initialize(
+            gateway_device_id="pbgw_test",
+            mqtt_host="mqtt.example.com",
+            mqtt_token="tok",
+            gateway_inverter_serial=raw,
+        )
+        assert gw.gateway_inverter_serial == [raw]
+
     def test_serial_filter_partial_match_excludes_unmatched(self):
         """With three inverters and a two-serial filter, only the two matched are registered."""
         gw = self._make_gateway()
