@@ -21,6 +21,7 @@ from sigenergy import (
     SIGENERGY_ACTIVE_MODE_SELF,
     SIGENERGY_CODE_IN_OTHER_VPP,
     SIGENERGY_CODE_SYSTEM_PENDING_REVIEW,
+    SIGENERGY_MODE_MSC,
     SIGENERGY_MODE_VPP,
     SIGENERGY_OPTIONS_TIME,
     _SIGENERGY_OK,
@@ -1580,6 +1581,84 @@ def test_sigenergy_update_control_time_validation(my_predbat):
     return failed
 
 
+def test_sigenergy_offboard_toggle_in_vpp(my_predbat):
+    """offboard=True → return False immediately regardless of VPP state (no mode switch)."""
+    failed = False
+    sid = "SIG001"
+    api = _make_api_with_system(sid)
+    api.current_mode[sid] = SIGENERGY_MODE_VPP
+
+    modes_set = []
+
+    async def mock_set_mode(system_id, mode_int):
+        modes_set.append(mode_int)
+        return True
+
+    api.set_operating_mode = mock_set_mode
+
+    result = run_async(api._manage_vpp_registration(sid, is_readonly=False, is_offboard=True))
+    assert result is False, "offboard=True should return False"
+    assert not modes_set, "Should not call set_operating_mode — offboard API already changes mode"
+
+    return failed
+
+
+def test_sigenergy_offboard_toggle_not_in_vpp(my_predbat):
+    """offboard=True + not in VPP → return False, no mode switch."""
+    failed = False
+    sid = "SIG001"
+    api = _make_api_with_system(sid)
+    api.current_mode[sid] = SIGENERGY_MODE_MSC
+
+    modes_set = []
+
+    async def mock_set_mode(system_id, mode_int):
+        modes_set.append(mode_int)
+        return True
+
+    api.set_operating_mode = mock_set_mode
+
+    result = run_async(api._manage_vpp_registration(sid, is_readonly=False, is_offboard=True))
+    assert result is False, "offboard=True should return False"
+    assert not modes_set, "No mode switch needed"
+
+    return failed
+
+
+def test_sigenergy_offboard_toggle_switch_event(my_predbat):
+    """Turning on the offboard switch triggers offboard_systems (no mode switch)."""
+    failed = False
+    sid = "SIG001"
+    api = _make_api_with_system(sid)
+    api.controls[sid] = {"offboard": False}
+
+    offboarded = []
+    modes_set = []
+
+    async def mock_offboard(system_ids):
+        offboarded.append(system_ids)
+        return True
+
+    async def mock_set_mode(system_id, mode_int):
+        modes_set.append((system_id, mode_int))
+        return True
+
+    async def mock_publish_controls(system_id=None):
+        pass
+
+    api.offboard_systems = mock_offboard
+    api.set_operating_mode = mock_set_mode
+    api.publish_controls = mock_publish_controls
+
+    run_async(api._update_control("switch.predbat_sigenergy_sig001_offboard", "turn_on", None, "offboard", sid))
+
+    assert api.controls[sid]["offboard"] is True, "offboard control should be True after turn_on"
+    assert offboarded, "offboard_systems should be called"
+    assert not modes_set, "set_operating_mode should NOT be called — offboard API changes the mode"
+
+    return failed
+
+
 # ---------------------------------------------------------------------------
 
 
@@ -1635,6 +1714,9 @@ def run_sigenergy_tests(my_predbat):
         ("manage_vpp_registration_readonly_no_vpp", test_sigenergy_manage_vpp_registration_readonly_no_vpp),
         ("mqtt_period_updates_current_mode", test_sigenergy_mqtt_period_updates_current_mode),
         ("apply_controls_skipped_when_not_vpp", test_sigenergy_apply_controls_skipped_when_not_vpp),
+        ("offboard_toggle_in_vpp", test_sigenergy_offboard_toggle_in_vpp),
+        ("offboard_toggle_not_in_vpp", test_sigenergy_offboard_toggle_not_in_vpp),
+        ("offboard_toggle_switch_event", test_sigenergy_offboard_toggle_switch_event),
     ]
 
     for name, fn in tests:

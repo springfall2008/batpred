@@ -1713,6 +1713,9 @@ class SigenergyAPI(ComponentBase):
             default = 10
             field_type = "number"
             field_units = "%"
+        elif field == "offboard":
+            default = False
+            field_type = "switch"
 
         ha_name = "{}.{}_{}".format(field_type, self.prefix, item_name)
         return item_name, ha_name, friendly_name, field_type, field_units, default, min_value, max_value
@@ -1744,7 +1747,7 @@ class SigenergyAPI(ComponentBase):
                 self.controls[system_id][direction][field] = state
 
         # Global fields
-        for field in ("reserve",):
+        for field in ("reserve", "offboard"):
             item_name, ha_name, friendly_name, field_type, field_units, default, min_value, max_value = self._control_info(system_id, None, field)
             state = self.get_state_wrapper(ha_name, default=default)
             if field_type == "number":
@@ -1753,6 +1756,9 @@ class SigenergyAPI(ComponentBase):
                     state = max(min_value, state)
                 if max_value is not None:
                     state = min(max_value, state)
+            elif field_type == "switch":
+                if isinstance(state, str):
+                    state = state.lower() == "on"
             self.controls[system_id][field] = state
 
     async def publish_controls(self, system_id=None):
@@ -1785,21 +1791,20 @@ class SigenergyAPI(ComponentBase):
                         value = "on" if value else "off"
                     self.dashboard_item(ha_name, state=value, attributes=attributes, app="sigenergy")
 
-            for field in ("reserve",):
+            for field in ("reserve", "offboard"):
                 item_name, ha_name, friendly_name, field_type, field_units, default, min_value, max_value = self._control_info(sid, None, field)
                 value = self.controls[sid].get(field, default)
-                self.dashboard_item(
-                    ha_name,
-                    state=value,
-                    attributes={
-                        "friendly_name": friendly_name,
-                        "unit_of_measurement": field_units,
-                        "min": min_value,
-                        "max": max_value,
-                        "step": 1,
-                    },
-                    app="sigenergy",
-                )
+                attributes = {"friendly_name": friendly_name}
+                if field_type == "switch":
+                    value = "on" if value else "off"
+                else:
+                    if field_units:
+                        attributes["unit_of_measurement"] = field_units
+                    if min_value is not None:
+                        attributes["min"] = min_value
+                        attributes["max"] = max_value
+                        attributes["step"] = 1
+                self.dashboard_item(ha_name, state=value, attributes=attributes, app="sigenergy")
 
     def _apply_service_to_toggle(self, current, service):
         """Map a switch service call to a boolean."""
@@ -1822,6 +1827,9 @@ class SigenergyAPI(ComponentBase):
         if field == "enable":
             current = self.controls[system_id].get(direction, {}).get(field, False)
             value = self._apply_service_to_toggle(current, value)
+        elif field == "offboard":
+            current = self.controls[system_id].get(field, False)
+            value = self._apply_service_to_toggle(current, value)
         elif "_time" in field:
             if value not in SIGENERGY_OPTIONS_TIME:
                 self.log("Warn: SigenergyAPI: Invalid time value {} for {}".format(value, entity_id))
@@ -1842,6 +1850,10 @@ class SigenergyAPI(ComponentBase):
 
         self.log("SigenergyAPI: Control update system={} direction={} field={} value={}".format(system_id, direction, field, value))
         await self.publish_controls(system_id)
+
+        if field == "offboard" and value is True:
+            self.log("SigenergyAPI: Offboard toggle turned on for {} — offboarding".format(system_id))
+            await self.offboard_systems(system_id)
 
     def _parse_entity_system(self, entity_id):
         """Extract (system_id, direction, field) from a control entity ID.
@@ -2006,14 +2018,16 @@ class SigenergyAPI(ComponentBase):
     # VPP registration management
     # -----------------------------------------------------------------------
 
-    async def _manage_vpp_registration(self, system_id, is_readonly):
-        """Align the operating mode with the read-only switch setting.
+    async def _manage_vpp_registration(self, system_id, is_readonly, is_offboard=False):
+        """Align the operating mode with the read-only and offboard switch settings.
 
         Assumes the system is already visible in self.systems (i.e. onboarded).
         Onboarding of missing systems is handled separately by the missing_ids
         block in run().
 
-        Four cases:
+        Cases (offboard takes priority over readonly):
+          offboard=True  + VPP active   → switch to MSC so the user's app regains control
+          offboard=True  + VPP inactive → nothing to do (already out of VPP)
           readonly=True  + VPP active   → switch to MSC so the user's app regains control
           readonly=True  + VPP inactive → nothing to do
           readonly=False + VPP active   → nothing to do (ready for controls)
@@ -2022,11 +2036,15 @@ class SigenergyAPI(ComponentBase):
         Args:
             system_id: Sigenergy system unique identifier.
             is_readonly: Current state of the Predbat read-only switch.
+            is_offboard: Current state of the per-system offboard toggle switch.
 
         Returns:
             True if the system is in VPP mode and controls can proceed, False otherwise.
         """
         in_vpp = self.current_mode.get(system_id) == SIGENERGY_MODE_VPP
+
+        if is_offboard:
+            return False
 
         if is_readonly and in_vpp:
             self.log("SigenergyAPI: Read-only mode active — switching system {} from VPP to MSC".format(system_id))
@@ -2071,6 +2089,11 @@ class SigenergyAPI(ComponentBase):
             # For each expected system ID not yet visible, attempt onboarding
             missing_ids = self.system_id_filter - set(self.systems.keys()) if self.system_id_filter else set()
             for sid in missing_ids:
+                slug = self._system_slug(sid)
+                is_offboard_at_start = self.get_state_wrapper("switch.{}_sigenergy_{}_offboard".format(self.prefix, slug), default="off") == "on"
+                if is_offboard_at_start:
+                    self.log("SigenergyAPI: System {} offboard toggle is on — skipping onboard attempt".format(sid))
+                    continue
                 self.log("SigenergyAPI: System {} not found in authorised list — attempting onboard".format(sid))
                 result = await self.onboard_systems([sid])
                 if result is not True:
@@ -2110,7 +2133,9 @@ class SigenergyAPI(ComponentBase):
                 if sid not in self.current_mode:
                     self.log("SigenergyAPI: Skipping VPP registration check for {} — operating mode not yet known".format(sid))
                     continue
-                await self._manage_vpp_registration(sid, is_readonly_vpp)
+                slug = self._system_slug(sid)
+                is_offboard = self.get_state_wrapper("switch.{}_sigenergy_{}_offboard".format(self.prefix, slug), default="off") == "on"
+                await self._manage_vpp_registration(sid, is_readonly_vpp, is_offboard)
 
         # Fetch controls from HA on first run only
         if first:
