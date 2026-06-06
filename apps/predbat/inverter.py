@@ -780,11 +780,13 @@ class Inverter:
             # Data is indexed backwards: minute 0 = now, minute N = N minutes ago
             max_charge_power_w = max(self.battery_rate_max_charge * MINUTE_WATT, 0)
             max_power_threshold = max(250, max_charge_power_w * 0.2)
-            loss_factor = self.base.battery_loss * self.base.inverter_loss
-            capacity_reference = nominal_capacity if nominal_capacity and nominal_capacity > 0 else self.soc_max
-            plausible_min = capacity_reference * 0.65 if capacity_reference and capacity_reference > 0 else 0
-            plausible_max = capacity_reference * 1.20 if capacity_reference and capacity_reference > 0 else 0
-            min_power_added_kwh = max(0.5, min(1.0, capacity_reference * 0.04)) if capacity_reference and capacity_reference > 0 else 0.5
+loss_factor = self.base.battery_loss * self.base.inverter_loss
+size_hint = self.soc_max if self.soc_max and self.soc_max > 0 else 0
+capacity_reference = nominal_capacity if nominal_capacity and nominal_capacity > 0 else 0
+plausible_min = capacity_reference * 0.65 if capacity_reference else 0
+plausible_max = capacity_reference * 1.20 if capacity_reference else 0
+reference_for_energy = capacity_reference or size_hint
+min_power_added_kwh = max(0.5, min(1.0, reference_for_energy * 0.04)) if reference_for_energy else 0.5
 
             def reject_battery_sample(reason):
                 rejected_battery_sizes[reason] = rejected_battery_sizes.get(reason, 0) + 1
