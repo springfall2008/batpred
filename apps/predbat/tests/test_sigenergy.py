@@ -24,7 +24,6 @@ from sigenergy import (
     SIGENERGY_MODE_MSC,
     SIGENERGY_MODE_VPP,
     SIGENERGY_OPTIONS_TIME,
-    _SIGENERGY_OK,
     _safe_float,
     _safe_int,
 )
