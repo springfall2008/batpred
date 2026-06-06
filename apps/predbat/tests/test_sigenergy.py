@@ -23,7 +23,6 @@ from sigenergy import (
     SIGENERGY_CODE_SYSTEM_PENDING_REVIEW,
     SIGENERGY_MODE_VPP,
     SIGENERGY_OPTIONS_TIME,
-    _SIGENERGY_OK,
     _safe_float,
     _safe_int,
 )
