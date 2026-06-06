@@ -368,7 +368,7 @@ class AxleAPI(ComponentBase):
                     if self.get_arg("set_event_notify"):
                         local_start = start_time.astimezone(self.local_tz)
                         local_end = end_time.astimezone(self.local_tz)
-                        msg = "Scheduled Axle VPP event " + local_start.strftime("%a %d/%m %H:%M") + "-" + local_end.strftime("%H:%M") + self.pence_per_kwh + " p/kWh"
+                        msg = f"Scheduled Axle VPP event {local_start.strftime('%a %d/%m %H:%M')}-{local_end.strftime('%H:%M')}, {self.pence_per_kwh} p/kWh"
                         self.call_notify(f"{self.prefix.capitalize()}: {msg}")
 
             self.cleanup_event_history()
