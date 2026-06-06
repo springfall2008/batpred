@@ -122,6 +122,24 @@ def test_storage(my_predbat=None):
         assert second == {"v": 1}, "fresh hit should return cached value: {}".format(second)
         assert calls["n"] == 1, "fetch_fn must not be called on a fresh hit"
 
+        # fetch_cached: with fresh_minutes=0 every existing entry is "stale" → refresh path runs once
+        calls2 = {"n": 0}
+
+        async def _fetch2():
+            calls2["n"] += 1
+            return {"w": calls2["n"]}
+
+        run_async(storage.save("fc2", "k", {"w": 0}, format="json"))
+        out = run_async(storage.fetch_cached("fc2", "k", _fetch2, fresh_minutes=0, stale_minutes=999999, format="json"))
+        assert out == {"w": 1}, "stale path should refresh and return fresh data: {}".format(out)
+        assert calls2["n"] == 1, "stale path should call fetch_fn once"
+
+        # fetch_cached: fetch_fn returning None on a hard miss → returns None, no crash
+        async def _fetch_none():
+            return None
+
+        assert run_async(storage.fetch_cached("fc3", "missing", _fetch_none, format="json")) is None
+
         print("All storage tests passed!")
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
