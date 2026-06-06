@@ -1197,8 +1197,8 @@ class Inverter:
                         self.log("Warn: Found incomplete battery {} curve (no data points), maybe try again when you have more data.".format(curve_type))
                 else:
                     self.log(
-                        "Warn: Cannot find battery {} curve (no full rate {} curve found for battery to {}), one of the required settings for {}, {}_rate, battery_power and predbat.status do not have history, check apps.yaml".format(
-                            curve_type, curve_type, curve_label, soc_label, curve_type
+                        "Info: Cannot find battery {} curve (no full rate {} cycle to {} found in history), battery may not have been fully charged/discharged at max rate recently - this is normal in cost-optimised operation".format(
+                            curve_type, curve_type, curve_label
                         )
                     )
             else:
