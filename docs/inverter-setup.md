@@ -1722,7 +1722,7 @@ See the [Components - Sigenergy Cloud](components.md#sigenergy-cloud-api-sigener
    - Give it a descriptive name, e.g. *PredBat home battery prediction*
    - Make sure you tick **VPP Mode** — this is required for Predbat to send charge and discharge commands
 
-3. Submit the application for approval. Approval may take a day or two.
+3. Submit the application for approval. Approval may take a few days.
 
 4. Once approved, go to **Dashboard → (your application) → Settings**.
 
@@ -1792,6 +1792,31 @@ With `automatic: true`, Predbat will wire all sensor and control entities automa
 The first time Predbat starts with the Sigenergy Cloud integration enabled, Sigenergy sends an **onboarding approval email** to the account holder.
 You must click the approval link in that email before Predbat can subscribe to live data from the MQTT broker.
 Once approved, the authorisation persists and no further action is required.
+
+### Temporarily returning control to the Sigenergy app
+
+While your system is in VPP mode, the native Sigenergy app cannot send its own schedule or mode commands.
+To temporarily hand control back, turn on the Predbat **Read-only** switch:
+
+```text
+switch.predbat_set_read_only
+```
+
+When read-only mode is enabled, Predbat switches the inverter back to **Maximise Self-Consumption** (self-use) mode, which restores full control in the Sigenergy app.
+Turn read-only mode back **off** and Predbat will automatically switch the inverter back to VPP mode on the next cycle.
+
+### Offboarding — leaving Predbat VPP entirely
+
+If you want to stop using Predbat's cloud integration altogether, flip the per-system **Offboard** toggle in Home Assistant:
+
+```text
+switch.predbat_sigenergy_<slug>_offboard
+```
+
+Turning this switch **on** calls the Sigenergy offboard API, which removes the system from VPP and exits VPP mode automatically.
+Predbat will not attempt to re-onboard or re-enter VPP mode while this switch remains on.
+
+**Note:** If you later want Predbat to resume control, turn the offboard switch back **off** — but be aware that re-onboarding will require a new approval from Sigenergy (another approval email to the account holder).
 
 ## Sofar Inverters
 
