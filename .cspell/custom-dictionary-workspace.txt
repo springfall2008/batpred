@@ -15,6 +15,7 @@ apexcharts
 apikey
 appdaemon
 appkey
+Apprent
 appsyaml
 argname
 ASHP
@@ -26,6 +27,7 @@ autopep
 autoupdate
 axvline
 axvspan
+Backfeed
 backprop
 Backpropagate
 backpropagation
@@ -39,6 +41,7 @@ beforeunload
 bierner
 brickatius
 byok
+cadata
 calib
 Cantarell
 cexxxx
@@ -109,6 +112,7 @@ energydataservice
 energythroughput
 epod
 euids
+evergen
 evse
 exog
 exportlimit
@@ -265,6 +269,7 @@ onmouseout
 onmouseover
 openweathermap
 overfitting
+overvoltage
 ownerapi
 pbgw
 pdata
@@ -330,7 +335,9 @@ Selfuse
 semodbus
 Sergoe
 SFMB
+sigcloud
 sigen
+sigencloud
 sigenergy
 sigenstor
 Slee
@@ -415,6 +422,7 @@ xaxistooltip
 xlabel
 xlim
 xload
+xrtkq
 xticks
 yaxis
 yaxistooltip
@@ -422,3 +430,4 @@ yday
 ylabel
 yuanzhi
 zappi
+zigbee
