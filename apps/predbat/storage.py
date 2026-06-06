@@ -160,11 +160,19 @@ class StorageBase(ABC):
                     if data is not None:
                         await self.save(module, filename, data, format=format)
                         return data
+                except Exception as e:  # pylint: disable=broad-except
+                    if hasattr(self, "log") and callable(getattr(self, "log")):
+                        self.log("Storage: Warn: refresh failed for {}/{}, serving cached: {}".format(module, filename, e))
                 finally:
                     await self._release_refresh_lock(module, filename)
             return cached
 
-        data = await fetch_fn()
+        try:
+            data = await fetch_fn()
+        except Exception as e:  # pylint: disable=broad-except
+            if hasattr(self, "log") and callable(getattr(self, "log")):
+                self.log("Storage: Warn: fetch failed for {}/{}: {}".format(module, filename, e))
+            data = None
         if data is not None:
             await self.save(module, filename, data, format=format)
             return data
@@ -464,7 +472,7 @@ class StorageComponent(ComponentBase):
             format: One of 'yaml', 'json', or 'text'
 
         Returns:
-            Cached or freshly fetched data
+            Cached or freshly fetched data, or None if nothing could be obtained
         """
         return await self.backend.fetch_cached(module, filename, fetch_fn, fresh_minutes=fresh_minutes, stale_minutes=stale_minutes, format=format)
 
