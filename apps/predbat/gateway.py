@@ -156,7 +156,7 @@ class GatewayMQTT(ComponentBase):
         elif isinstance(gateway_inverter_serial, list):
             self.gateway_inverter_serial = gateway_inverter_serial
         else:
-            if isinstance(gateway_inverter_serial, str) and (gateway_inverter_serial.startswith('{') or gateway_inverter_serial.startswith('[')):
+            if isinstance(gateway_inverter_serial, str) and (gateway_inverter_serial.startswith("{") or gateway_inverter_serial.startswith("[")):
                 try:
                     parsed = json.loads(gateway_inverter_serial)
                     if isinstance(parsed, list):
