@@ -1669,10 +1669,11 @@ var options = {
         text += "    type: 'datetime',\n"
         
         # Enforce +/- 48 hours bounding box to prevent chart from showing too much trailing history
-        min_x_str = (self.now_utc - timedelta(hours=48)).strftime(TIME_FORMAT)
-        max_x_str = (self.now_utc + timedelta(hours=48)).strftime(TIME_FORMAT)
-        text += "    min: new Date('{}').getTime(),\n".format(min_x_str)
-        text += "    max: new Date('{}').getTime(),\n".format(max_x_str)
+        # Use numeric timestamps (ms) which is much safer than string parsing in the browser
+        min_x = int((self.now_utc - timedelta(hours=48)).timestamp() * 1000)
+        max_x = int((self.now_utc + timedelta(hours=48)).timestamp() * 1000)
+        text += "    min: {},\n".format(min_x)
+        text += "    max: {},\n".format(max_x)
         
         text += "    labels: {\n"
         text += "           datetimeUTC: false\n"
@@ -2874,7 +2875,7 @@ chart.render();
         """
         now_str = self.now_utc.strftime(TIME_FORMAT)
         soc_kw_h0 = {}
-        if self.base.soc_kwh_history:
+        if self.base.soc_kwh_history and self.midnight_utc:
             hist = self.base.soc_kwh_history
             # Fetch up to 48 hours of history
             start_minute = self.minutes_now - (48 * 60)
@@ -2886,6 +2887,7 @@ chart.render();
                 if age_minutes in hist or age_minutes < 1440: # Fallback to 0 for recent history, but avoid plotting old 0s if no data
                     soc_kw_h0[stamp] = hist.get(age_minutes, 0)
         soc_kw_h0[now_str] = self.base.soc_kw
+        
         soc_kw = self.get_entity_results(self.prefix + ".soc_kw")
         soc_kw_best = self.get_entity_results(self.prefix + ".soc_kw_best")
         soc_kw_best10 = self.get_entity_results(self.prefix + ".soc_kw_best10")
