@@ -943,14 +943,10 @@ class Fetch:
             history_buckets_import = None
             if self.rate_history_days_average > 0:
                 source = self.rate_history_source_import or self.get_arg("metric_octopus_import", indirect=False)
-                history_buckets_import = self.build_rate_history_buckets(
-                    source, self.rate_history_days_average, scaling=self.rate_history_scaling_import
-                )
+                history_buckets_import = self.build_rate_history_buckets(source, self.rate_history_days_average, scaling=self.rate_history_scaling_import)
                 if history_buckets_import:
                     self.log("Built rate history buckets from {} days of {}".format(self.rate_history_days_average, source))
-            self.rate_import, self.rate_import_replicated = self.rate_replicate(
-                self.rate_import, self.io_adjusted, is_import=True, history_buckets=history_buckets_import
-            )
+            self.rate_import, self.rate_import_replicated = self.rate_replicate(self.rate_import, self.io_adjusted, is_import=True, history_buckets=history_buckets_import)
             self.rate_import_no_io = self.rate_import.copy()
             for car_n in range(self.num_cars):
                 self.rate_import = self.rate_add_io_slots(car_n, self.rate_import, self.octopus_slots[car_n])
@@ -971,12 +967,8 @@ class Fetch:
             history_buckets_export = None
             if self.rate_history_days_average > 0:
                 source = self.rate_history_source_export or self.get_arg("metric_octopus_export", indirect=False)
-                history_buckets_export = self.build_rate_history_buckets(
-                    source, self.rate_history_days_average, scaling=self.rate_history_scaling_export
-                )
-            self.rate_export, self.rate_export_replicated = self.rate_replicate(
-                self.rate_export, is_import=False, history_buckets=history_buckets_export
-            )
+                history_buckets_export = self.build_rate_history_buckets(source, self.rate_history_days_average, scaling=self.rate_history_scaling_export)
+            self.rate_export, self.rate_export_replicated = self.rate_replicate(self.rate_export, is_import=False, history_buckets=history_buckets_export)
             # For export tariff only load the saving session if enabled
             if self.rate_export_max > 0:
                 self.load_saving_slot(self.octopus_saving_slots, export=True, rate_replicate=self.rate_export_replicated)
