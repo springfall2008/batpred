@@ -2479,6 +2479,7 @@ class Octopus:
             if kwh == 0 and start_minutes <= self.minutes_now < end_minutes:
                 remaining_minutes = end_minutes - self.minutes_now
                 kwh = remaining_minutes * self.car_charging_rate[car_n] / 60.0
+                start_minutes = self.minutes_now  # align span with the synthesised kwh so downstream rate calculations are consistent
             if kwh > 0:
                 # Don't add overlapping slots, bug in Octopus API means that sometimes slots overlap
                 for current_slot in slots_decoded:

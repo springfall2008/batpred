@@ -179,7 +179,7 @@ def run_load_octopus_slots_tests(my_predbat):
     active_start = midnight_utc + timedelta(minutes=my_predbat.minutes_now - 30)
     active_end = midnight_utc + timedelta(minutes=my_predbat.minutes_now + 60)
     slot_active_zero = [{"start": active_start.strftime(TIME_FORMAT), "end": active_end.strftime(TIME_FORMAT), "charge_in_kwh": 0, "source": "null", "location": "AT_HOME"}]
-    expected_active_zero = [{"start": my_predbat.minutes_now - 30, "end": my_predbat.minutes_now + 60, "kwh": 5.0, "average": 4, "cost": 20.0, "soc": 0.0, "octopus": True}]
+    expected_active_zero = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "kwh": 5.0, "average": 4, "cost": 20.0, "soc": 0.0, "octopus": True}]
     failed |= run_load_octopus_slot_test("zero_kwh_active", my_predbat, slot_active_zero, expected_active_zero, False, 0.0, 0.0, 1.0)
 
     # Fully-past slot with chargeKwh = 0: still dropped (end is before minutes_now)
