@@ -2473,6 +2473,13 @@ class Octopus:
         # Decode the slots
         for slot in octopus_slots:
             start_minutes, end_minutes, kwh, source, location = self.decode_octopus_slot(car_n, slot)
+            # Octopus zeros chargeKwh once it calculates the car has hit its target SoC, but the
+            # dispatch window stays open and the charger may still draw power. Preserve active slots
+            # with a duration-based kwh so the "Hold for car" guard in execute.py still fires.
+            if kwh == 0 and start_minutes <= self.minutes_now < end_minutes:
+                remaining_minutes = end_minutes - self.minutes_now
+                kwh = remaining_minutes * self.car_charging_rate[car_n] / 60.0
+                start_minutes = self.minutes_now  # align span with the synthesised kwh so downstream rate calculations are consistent
             if kwh > 0:
                 # Don't add overlapping slots, bug in Octopus API means that sometimes slots overlap
                 for current_slot in slots_decoded:
