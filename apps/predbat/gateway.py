@@ -700,17 +700,21 @@ class GatewayMQTT(ComponentBase):
         if not inverters:
             inverters = candidate_aios or list(all_inverters)  # last resort
 
-        # Apply serial filter if configured. A filter that matches nothing must NOT
-        # leave inverters unconfigured — that bricks control (the inverter falls back
-        # to GE defaults and raises "unable to read charge window"). Warn and keep the
-        # full controllable set instead of returning early.
+        # Apply serial filter if configured. A no-match is an error — configuring the
+        # wrong inverter set is worse than not configuring at all. Leave _auto_configured
+        # False so the run loop stays blocked and we retry on the next telemetry.
         if self.gateway_inverter_serial:
             serial_set = set(s.upper() for s in self.gateway_inverter_serial)
             filtered = [inv for inv in inverters if inv.serial.upper() in serial_set]
             if filtered:
                 inverters = filtered
             else:
-                self.log(f"Warn: GatewayMQTT: gateway_inverter_serial filter {self.gateway_inverter_serial} matched no inverters; using all {len(inverters)} controllable inverter(s)")
+                available = [inv.serial for inv in inverters]
+                self.log(
+                    f"Error: GatewayMQTT: gateway_inverter_serial filter {self.gateway_inverter_serial} matched no inverters"
+                    f" (available serials: {available}); auto-config aborted — will retry on next telemetry"
+                )
+                return 0
 
         # Bind PredBat inverter slots to a stable key (serial), not discovery order, so
         # a given physical inverter always maps to the same slot/entities across a
