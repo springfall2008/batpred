@@ -952,6 +952,14 @@ class SolarAPI(ComponentBase):
             for sub_minute in range(1, 6):
                 pv_power_hist[minute + 5 - sub_minute] = power_amount
 
+        # Past days actual data
+        past_day_actual = {}
+        for minute in pv_power_hist:
+            minute_absolute = self.minutes_now - minute
+            if minute_absolute < 0:
+                days_prev = int(abs(minute_absolute) / (24 * 60)) + 1
+                past_day_actual[days_prev] = past_day_actual.get(days_prev, 0) + pv_power_hist[minute]
+
         # Find the forecast history
         pv_forecast, pv_forecast_hist_days = history_attribute_to_minute_data(
             self.now_utc_exact, prune_today(history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", days + 1, required=False)), self.now_utc_exact, self.midnight_utc, prune=False, intermediate=True)
@@ -963,12 +971,31 @@ class SolarAPI(ComponentBase):
             enabled_calibration = False
             self.log("SolarAPI: PV Calibration: Not enough historical data for calibration, only {} days of history".format(hist_days))
 
+        # Past days forecast data
+        past_day_forecast = {}
+        for minute in pv_forecast:
+            minute_absolute = self.minutes_now - minute
+            if minute_absolute < 0:
+                days_prev = int(abs(minute_absolute) / (24 * 60)) + 1
+                if days_prev <= hist_days:
+                    past_day_forecast[days_prev] = past_day_forecast.get(days_prev, 0) + pv_forecast[minute]
+
+        # Work out which days are missing either a forecast or an actual value
+        down_days = {}
+        for day in range(1, days + 1):
+            if day not in past_day_forecast:
+                down_days[day] = True
+            elif past_day_forecast[day] < 0.1:
+                down_days[day] = True
+            elif day not in past_day_actual:
+                down_days[day] = True
+            elif past_day_actual[day] < 0.1 * past_day_forecast[day]:
+                down_days[day] = True
+
         pv_power_hist_by_slot = {}
         pv_power_hist_by_slot_count = {}
         pv_forecast_by_slot = {}
         pv_forecast_by_slot_count = {}
-        past_day_forecast = {}
-        past_day_actual = {}
         max_pv_power_hist = 0
 
         # Work out the history for each slot in the day, and the history for each day, and the max power in the history for scaling purposes
@@ -976,11 +1003,12 @@ class SolarAPI(ComponentBase):
             minute_absolute = self.minutes_now - minute
             if minute_absolute < 0:
                 days_prev = int(abs(minute_absolute) / (24 * 60)) + 1
+                if days_prev in down_days:
+                    continue
                 slot_abs = minute_absolute % (24 * 60)
                 slot = int(slot_abs / self.plan_interval_minutes) * self.plan_interval_minutes
                 pv_power_hist_by_slot[slot] = pv_power_hist_by_slot.get(slot, 0) + pv_power_hist[minute]
                 pv_power_hist_by_slot_count[slot] = pv_power_hist_by_slot_count.get(slot, 0) + 1
-                past_day_actual[days_prev] = past_day_actual.get(days_prev, 0) + pv_power_hist[minute]
                 max_pv_power_hist = max(max_pv_power_hist, pv_power_hist[minute])
 
         # Average the history for each slot in the day
@@ -993,14 +1021,14 @@ class SolarAPI(ComponentBase):
         for minute in pv_forecast:
             minute_absolute = self.minutes_now - minute
             if minute_absolute < 0:
+                days_prev = int(abs(minute_absolute) / (24 * 60)) + 1
+                if days_prev in down_days:
+                    continue
                 slot_abs = minute_absolute % (24 * 60)
                 slot = int(slot_abs / self.plan_interval_minutes) * self.plan_interval_minutes
                 pv_forecast_by_slot[slot] = pv_forecast_by_slot.get(slot, 0) + pv_forecast[minute]
                 pv_forecast_by_slot_count[slot] = pv_forecast_by_slot_count.get(slot, 0) + 1
                 max_pv_power_forecast = max(max_pv_power_forecast, pv_forecast[minute])
-                days_prev = int(abs(minute_absolute) / (24 * 60)) + 1
-                if days_prev <= hist_days:
-                    past_day_forecast[days_prev] = past_day_forecast.get(days_prev, 0) + pv_forecast[minute]
 
         # Average the forecast for each slot in the day
         for slot in pv_forecast_by_slot:
@@ -1015,6 +1043,9 @@ class SolarAPI(ComponentBase):
         average_day_scaling = 0
         total_weight = 0.0
         for day in past_day_forecast:
+            if day in down_days:
+                self.log("SolarAPI: PV Calibration: Past day {} skipped - actual {} kWh is less than 10% of forecast {} kWh (system may have been down)".format(day, dp2(past_day_actual.get(day, 0) / 60.0), dp2(past_day_forecast[day] / 60.0)))
+                continue
             past_day_forecast[day] = dp4(past_day_forecast[day] / 60.0)  # Convert to kWh
             past_day_actual[day] = dp4(past_day_actual.get(day, 0) / 60.0)  # Convert to kWh
             scaling_factor = dp4(past_day_actual[day] / past_day_forecast[day] if past_day_forecast[day] > 0 else 1.0)
@@ -1024,7 +1055,7 @@ class SolarAPI(ComponentBase):
             average_day_scaling += scaling_factor * weight
             total_weight += weight
             self.log("SolarAPI: PV Calibration: Past day {} had {} kWh of forecast PV, and actual {} kWh PV generation (weight {})".format(day, dp2(past_day_forecast[day]), dp2(past_day_actual[day]), dp2(weight)))
-        average_day_scaling = dp4(average_day_scaling / total_weight) if past_day_forecast else 1.0
+        average_day_scaling = dp4(average_day_scaling / total_weight) if total_weight > 0 else 1.0
         average_day_scaling = min(max(average_day_scaling, 0.1), 2.0)
 
         # Now adjust worst and best day scaling through by average scaling so they are just a factor on the average day, and clamp to sensible values to prevent extreme outliers from causing crazy forecasts.
