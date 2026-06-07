@@ -1020,7 +1020,9 @@ def get_discharge_rate_curve(soc, discharge_rate_setting, soc_max, battery_rate_
     """
     Compute true discharging rate from SoC and charge rate setting
     """
-    return get_discharge_rate_curve_cached(round(soc, 1), discharge_rate_setting, soc_max, battery_rate_max_discharge, charge_curve_to_tuple(battery_discharge_power_curve), battery_rate_min, battery_temperature, charge_curve_to_tuple(battery_temperature_curve))
+    return get_discharge_rate_curve_cached(
+        round(soc, 1), discharge_rate_setting, soc_max, battery_rate_max_discharge, charge_curve_to_tuple(battery_discharge_power_curve), battery_rate_min, battery_temperature, charge_curve_to_tuple(battery_temperature_curve)
+    )
 
 
 """
