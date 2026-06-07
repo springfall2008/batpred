@@ -718,6 +718,10 @@ class UserInterface:
                     new_inverters.append(inverter_obj)
                 self.inverters = new_inverters
 
+        # Handle old-format octopus_slots (flat list of dicts) vs new format (list-of-lists per car)
+        if isinstance(self.octopus_slots, list) and self.octopus_slots and isinstance(self.octopus_slots[0], dict):
+            self.octopus_slots = [self.octopus_slots] + [[] for _ in range(7)]
+
         for item in debug["CONFIG_ITEMS"]:
             current = self.config_index.get(item["name"], None)
             if current:
