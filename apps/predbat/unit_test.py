@@ -28,6 +28,7 @@ from tests.test_window2minutes import test_window2minutes
 from tests.test_history_attribute import test_history_attribute
 from tests.test_inverter import run_inverter_tests
 from tests.test_basic_rates import test_basic_rates
+from tests.test_rate_min_forward_calc import test_rate_min_forward_calc
 from tests.test_find_charge_curve import run_find_charge_curve_tests
 from tests.test_find_battery_size import run_find_battery_size_tests
 from tests.test_optimise_all_windows import run_optimise_all_windows_tests
@@ -181,6 +182,7 @@ def main():
         ("inverter", run_inverter_tests, "Inverter tests", False),
         ("execute", run_execute_tests, "Execute tests", False),
         ("basic_rates", test_basic_rates, "Basic rates tests", False),
+        ("rate_min_forward_calc", test_rate_min_forward_calc, "Rate min forward calc tests", False),
         ("window_sort", run_window_sort_tests, "Window sort tests", False),
         ("window2minutes", test_window2minutes, "Window to minutes tests", False),
         ("compute_metric", run_compute_metric_tests, "Compute metric tests", False),

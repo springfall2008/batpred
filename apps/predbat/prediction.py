@@ -776,11 +776,11 @@ class Prediction:
 
             # Current real charge rate
             charge_rate_now_curve = (
-                get_charge_rate_curve_cached(soc, charge_rate_now, soc_max, battery_rate_max_charge, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_charge_curve_tuple) * battery_rate_max_scaling
+                get_charge_rate_curve_cached(round(soc, 1), charge_rate_now, soc_max, battery_rate_max_charge, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_charge_curve_tuple) * battery_rate_max_scaling
             )
             charge_rate_now_curve_step = charge_rate_now_curve * step
             discharge_rate_now_curve = (
-                get_discharge_rate_curve_cached(soc, discharge_rate_now, soc_max, battery_rate_max_discharge, battery_discharge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_discharge_curve_tuple)
+                get_discharge_rate_curve_cached(round(soc, 1), discharge_rate_now, soc_max, battery_rate_max_discharge, battery_discharge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_discharge_curve_tuple)
                 * self.battery_rate_max_scaling_discharge
             )
             discharge_rate_now_curve_step = discharge_rate_now_curve * step
@@ -800,7 +800,7 @@ class Prediction:
                     export_rate_adjust = 1.0
                 discharge_rate_now = battery_rate_max_export * export_rate_adjust
                 discharge_rate_now_curve = (
-                    get_discharge_rate_curve_cached(soc, discharge_rate_now, soc_max, battery_rate_max_export, battery_discharge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_discharge_curve_tuple)
+                    get_discharge_rate_curve_cached(round(soc, 1), discharge_rate_now, soc_max, battery_rate_max_export, battery_discharge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_discharge_curve_tuple)
                     * self.battery_rate_max_scaling_discharge
                 )
                 discharge_rate_now_curve_step = discharge_rate_now_curve * step
