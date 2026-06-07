@@ -2362,7 +2362,15 @@ def test_pv_calibration_partial_history(my_predbat):
             pv_forecast_minute10 = {m: 0.01 for m in range(total_minutes)}
             pv_forecast_data = [{"period_start": "2025-06-15T00:00:00+0000", "pv_estimate": 0.5}]
 
-            solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
+            # Build synthetic h0 forecast history: 1.0 kW during 10:00-11:00 UTC for each past day.
+            # From noon (minutes_now=720): day d at 10:00 is (d*1440+120) min ago, 11:00 is (d*1440+60) min ago.
+            pv_forecast_hist = {}
+            for d in range(1, days_back + 1):
+                for m_ago in range(d * 1440 + 60, d * 1440 + 121):
+                    pv_forecast_hist[m_ago] = 1.0
+
+            with patch("solcast.history_attribute_to_minute_data", return_value=(pv_forecast_hist, days_back)):
+                solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
 
             worst = solar.pv_calibration_worst_scaling
             best = solar.pv_calibration_best_scaling

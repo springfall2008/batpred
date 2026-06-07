@@ -970,6 +970,7 @@ class SolarAPI(ComponentBase):
         if hist_days < 3:
             enabled_calibration = False
             self.log("SolarAPI: PV Calibration: Not enough historical data for calibration, only {} days of history".format(hist_days))
+        # Note: enabled_calibration may be further disabled after down_days are computed below
 
         # Past days forecast data
         past_day_forecast = {}
@@ -980,17 +981,24 @@ class SolarAPI(ComponentBase):
                 if days_prev <= hist_days:
                     past_day_forecast[days_prev] = past_day_forecast.get(days_prev, 0) + pv_forecast[minute]
 
-        # Work out which days are missing either a forecast or an actual value
-        down_days = {}
-        for day in range(1, days + 1):
-            if day not in past_day_forecast:
-                down_days[day] = True
-            elif past_day_forecast[day] < 0.1:
-                down_days[day] = True
-            elif day not in past_day_actual:
-                down_days[day] = True
-            elif past_day_actual[day] < 0.1 * past_day_forecast[day]:
-                down_days[day] = True
+        # Convert to kWh
+        for day in past_day_forecast:
+            past_day_forecast[day] = dp4(past_day_forecast[day] / 60.0)  # Convert to kWh
+            past_day_actual[day] = dp4(past_day_actual.get(day, 0) / 60.0)  # Convert to kWh
+
+        # Work out which days are missing either a forecast or had insufficient actual production (system was likely down)
+        down_days = set()
+        for day in range(1, hist_days + 1):
+            if day not in past_day_forecast or past_day_forecast[day] < 0.1:
+                down_days.add(day)
+            elif past_day_actual.get(day, 0) < 0.1 * past_day_forecast[day]:
+                self.log("SolarAPI: PV Calibration: Past day {} skipped - actual {} kWh is less than 10% of forecast {} kWh (system may have been down)".format(day, dp2(past_day_actual.get(day, 0)), dp2(past_day_forecast[day])))
+                down_days.add(day)
+
+        valid_days = hist_days - len(down_days)
+        if valid_days < 3:
+            enabled_calibration = False
+            self.log("SolarAPI: PV Calibration: Not enough valid (non-down) days for calibration, only {} valid days after excluding {} down days".format(valid_days, len(down_days)))
 
         pv_power_hist_by_slot = {}
         pv_power_hist_by_slot_count = {}
@@ -1044,10 +1052,7 @@ class SolarAPI(ComponentBase):
         total_weight = 0.0
         for day in past_day_forecast:
             if day in down_days:
-                self.log("SolarAPI: PV Calibration: Past day {} skipped - actual {} kWh is less than 10% of forecast {} kWh (system may have been down)".format(day, dp2(past_day_actual.get(day, 0) / 60.0), dp2(past_day_forecast[day] / 60.0)))
                 continue
-            past_day_forecast[day] = dp4(past_day_forecast[day] / 60.0)  # Convert to kWh
-            past_day_actual[day] = dp4(past_day_actual.get(day, 0) / 60.0)  # Convert to kWh
             scaling_factor = dp4(past_day_actual[day] / past_day_forecast[day] if past_day_forecast[day] > 0 else 1.0)
             worst_day_scaling = min(worst_day_scaling, scaling_factor)
             best_day_scaling = max(best_day_scaling, scaling_factor)
