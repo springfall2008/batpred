@@ -710,10 +710,7 @@ class GatewayMQTT(ComponentBase):
                 inverters = filtered
             else:
                 available = [inv.serial for inv in inverters]
-                self.log(
-                    f"Error: GatewayMQTT: gateway_inverter_serial filter {self.gateway_inverter_serial} matched no inverters"
-                    f" (available serials: {available}); auto-config aborted — will retry on next telemetry"
-                )
+                self.log(f"Error: GatewayMQTT: gateway_inverter_serial filter {self.gateway_inverter_serial} matched no inverters" f" (available serials: {available}); auto-config aborted — will retry on next telemetry")
                 return 0
 
         # Bind PredBat inverter slots to a stable key (serial), not discovery order, so
