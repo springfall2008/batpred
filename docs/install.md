@@ -97,12 +97,12 @@ Installing HACS, Appdaemon and then Predbat within Appdaemon has been deprecated
 
 The process to [upgrade from Predbat within Appdaemon to Predbat addon](#upgrading-from-appdaemon-to-predbat-app) is described below.
 
-## Solcast Install
+## Solar Forecast Install
 
 Predbat needs a solar forecast to predict solar generation and battery charging.
 If you have solar panels it's recommended to use the Solcast integration to retrieve your forecast solar generation.
 
-If you do not want to use Solcast you can also use [Forecast.solar](#predbat-direct-to-forecastsolar) (less accurate) - see below.
+If you do not want to use Solcast you can also use [Forecast.solar](#predbat-direct-to-forecastsolar) (less accurate) or [Open-Meteo](#predbat-direct-to-open-meteo) - see below.
 
 If you don't have one already, register for a free [Solcast hobbyist account](https://solcast.com/) and enter the details of your system.
 You can create 2 sites maximum under one (free hobbyist) account, if you have more aspects then it suggests you average the angle based on the number of panels
@@ -322,7 +322,7 @@ multiple import rates during the day, and variable tariffs such as Agile, etc.
 
 The detailed [Predbat Customisation Guide](customisation.md) details all the Predbat configuration items (switches, input numbers, etc) in Home Assistant, and what each of them does.
 
-The Predbat [Web Interface](web-interface.md) provides an easy way to view all of the Predbat configuration items, check apps.yaml for errors, and view the logfile.
+The Predbat [Web Interface](web-interface.md) provides an easy way to view all of the Predbat configuration items, check `apps.yaml` for errors, and view the logfile.
 
 ## Ready to light the touch-paper
 
@@ -451,7 +451,7 @@ The Predbat code that runs is the same and the configuration is exactly the same
 6. Briefly start the new Predbat app so that it creates the addon_config folder and the template `apps.yaml` file:
     - Go to Settings/Apps
     - Click on the Predbat app
-    - Click START, wait a minute for the app to initialise itself, then click STOP. A predbat status warning that you have a template apps.yaml file is normal and can be ignored
+    - Click START, wait a minute for the app to initialise itself, then click STOP. A predbat status warning that you have a template `apps.yaml` file is normal and can be ignored
 
 7. Open your file editor and open your existing `apps.yaml` file:
     - If you are using the old 'combined AppDaemon/Predbat app installation method' it's in the directory `/addon_configs/46f69597_appdaemon-predbat/apps`,
@@ -459,10 +459,10 @@ The Predbat code that runs is the same and the configuration is exactly the same
 
     - with the old HACS Appdaemon app then Predbat installation method it's in `/config/appdaemon/apps/batpred/config/`
 
-8. Select all the contents of the apps.yaml file and 'copy' (control-C, command-C, etc as appropriate)
+8. Select all the contents of the `apps.yaml` file and 'copy' (control-C, command-C, etc as appropriate)
 
 9. Now open the template `apps.yaml` file that's supplied with the Predbat app and has been created in the directory `/addon_configs/6adb4f0d_predbat`,
-select all the contents of the template apps.yaml file, and paste in the contents of your existing apps.yaml, overwriting the template with your specific configuration
+select all the contents of the template `apps.yaml` file, and paste in the contents of your existing `apps.yaml`, overwriting the template with your specific configuration
 
 10. Now you are ready to swap from running the AppDaemon or AppDaemon-predbat app to the Predbat app:
     - Go to Settings/Apps

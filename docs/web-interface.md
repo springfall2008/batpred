@@ -100,8 +100,9 @@ The chart also shows where charging is planned under the Base and Best scenarios
 - **Cost** - Shows the historic import, export and net total cost incurred for today and the predicted cost for the plan duration under the Base/Base10/Best and Best10 scenarios
 - **Rates** - Shows historic and future import and export rates along with historic hourly and today pence per kWh so you can see where you have earned or spent the most on electricity during today
 - **InDay** - Shows Predbat's predicted house load for today, the actual house load that has occurred so far today, and then Predbat's adjusted house load prediction based on the variance of today's actual load to predicted load
-- **PV** - Shows today's predicted solar generation under the PV, PV10 and PV90 scenarios alongside today's actual solar generation
-- **PV7** - Similar to the PV chart, but shows actual solar generation and forecast for the last 7 days including today
+- **PV** - Shows today's predicted solar power generation under the PV, PV10 and PV90 scenarios alongside today's actual solar power generation
+- **PV7** - Similar to the PV chart, but shows actual solar power generation and forecast for the last 7 days including today
+- **PVAccuracy** - Shows how accurate the PV energy forecast is, comparing cumulative PV forecast energy for today to today's actual cumulative solar energy generation
 - **Load ML** - Shows the correlation between your actual house load and the [Load ML predictions](load-ml.md), charting current prediction, the 1 hour in the future prediction, and the 8 hours future prediction
 - **LoadMLPower** - Similar to the Load ML chart, but also plots actual PV production, predicted PV production and temperature predictions.
 - **MarginalCosts** - Shows the marginal cost of consuming extra electricity at different load levels (1, 2, 4, 8 kWh) across upcoming time windows.
@@ -170,8 +171,7 @@ You can restart individual Predbat components if required.
 
 ### Editor View
 
-The editor view allows you to edit `apps.yaml` as text directly within the web interface. If you make a syntax error then the error will be highlighted and save
-will be disabled pending a fix.
+The editor view allows you to edit `apps.yaml` as text directly within the web interface. If you make a syntax error then the error will be highlighted and save will be disabled pending a fix.
 
 <img alt="image of Predbat Editor view" src="https://github.com/user-attachments/assets/17383694-2300-4c81-996e-63970671b903" />
 
@@ -188,6 +188,19 @@ The Internals view gives a view of Predbat's internal operations.
 It gives the hierarchy of threads, and their status; and the Predbat code object hierarchy.
 
 These are intended for debugging and developer activities, in normal use you can ignore this view!
+
+### Metrics View
+
+The Metrics view provides a self-contained dashboard giving an overview of Predbat and what's happening with your batteries.  The dashboard auto-refreshes every 30 seconds and contains the following 5 sections:
+
+- **System Health** - shows a set of system health cards including confirming that Predbat is running, the configuration and plan are valid, how long since the last Predbat run, that there are no component errors and the amount of data history that Predbat is using
+- **Battery Status** - shows battery SoC doughnut and power meters for current battery charge, discharge, house load, PV, grid import and grid export
+- **Energy Today** - shows total energy today for house load, grid import, grid export and PV generation
+- **Cost & Savings** - shows electricity cost today and yesterday, and savings achieved yesterday from having solar and battery and from using predbat
+- **API & Solar Status** - shows API health (requests, failures and last call) made by Predbat to Axle, Solcast/Forecast.Solar, GivEnergy Cloud, Fox ESS Cloud, Solis Cloud, and Open Meteo (Temperature for LoadML). Data is only shown for components that are active, i.e. if Predbat is not using the GivEnergy Cloud integration, no API call metrics are shown.<BR>
+Solar status shows Solcast API calls (Predbat Solcast direct only) and PV Calibration Scaling (worst day, best day and total)
+
+![image](images/web-interface-metrics-view.png)
 
 ### Docs View
 

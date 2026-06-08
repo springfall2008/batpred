@@ -2412,7 +2412,7 @@ class Output:
                 # Already in error state, do not notify second error in a single run (spam)
                 pass
             else:
-                self.call_notify("Predbat status change to: " + message + extra)
+                self.call_notify(f"{self.prefix.capitalize()} status change to: {message} {extra}")
                 self.previous_status = message
 
         error_count = self.get_state_wrapper(self.prefix + ".status", attribute="error_count", default=0)

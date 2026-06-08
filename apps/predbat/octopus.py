@@ -2790,7 +2790,7 @@ class Octopus:
         octopus_saving_slots = []
         if "octopus_saving_session" in self.args:
             saving_rate = 200  # Default rate if not reported
-            octopoints_per_penny = self.get_arg("octopus_saving_session_octopoints_per_penny", 8)  # Default 8 octopoints per found
+            octopoints_per_penny = self.get_arg("octopus_saving_session_octopoints_per_penny", 8)  # Default 8 octopoints per penny
 
             joined_events = []
             available_events = []
@@ -2820,17 +2820,23 @@ class Octopus:
                             saving_rate = octopoints_kwh / octopoints_per_penny  # Octopoints per pence
                         else:
                             saving_rate = saving_rate  # Use default if not specified
-                        if code:  # Join the new Octopus saving event and send an alert
+                        if code:  # Join the new Octopus saving event and send an alert if successfully joined
                             self.log("Octopus: Joining Octopus saving event code {} {}-{} at rate {} p/kWh".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
                             entity_id_join = self.get_arg("octopus_saving_session_join", indirect=False)
                             if entity_id_join:
                                 # Join via selector
-                                self.call_service_wrapper("select/select_option", entity_id=entity_id_join, option=code)
+                                cmd = "select/select_option, entity_id={}, option={}".format(entity_id_join, code)
+                                result = self.call_service_wrapper("select/select_option", entity_id=entity_id_join, option=code)
                             else:
                                 # Join via octopus event (Bottle Cap Dave)
-                                self.call_service_wrapper("octopus_energy/join_octoplus_saving_session_event", event_code=code, entity_id=entity_id)
-                            if self.get_arg("set_event_notify"):
-                                self.call_notify("Predbat: Joined Octopus saving event {}-{}, {} p/kWh".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
+                                cmd = "octopus_energy/join_octoplus_saving_session_event, event_code={}, entity_id={}".format(code, entity_id)
+                                result = self.call_service_wrapper("octopus_energy/join_octoplus_saving_session_event", event_code=code, entity_id=entity_id)
+                            if result:
+                                if self.get_arg("set_event_notify"):
+                                    msg = "Joined Octopus saving event " + start_time.strftime("%a %d/%m %H:%M") + "-" + end_time.strftime("%H:%M") + ", " + saving_rate + " p/kWh"
+                                    self.call_notify(f"{self.prefix.capitalize()}: {msg}")
+                            else:
+                                self.log("Warn: Unable to join Octoplus saving event with command {}, result was {}".format(cmd, result))
                             self.octopus_last_joined_try = self.now_utc
 
             # Default saving session rate for when octopoints_per_kwh is not available

@@ -100,9 +100,9 @@ If you are on the Octopus Intelligent Tariff set the following entries in `apps.
 
 - **octopus_slot_low_rate** - Default is `true`, meaning any Octopus Intelligent Slot reported will be at the lowest rate if at home. If `false` the existing rates only will be used which is only suitable for tariffs other than IOG.
 
-- **octopus_slot_max** - Default is 48 (disabled). Sets the maximum number of 30-minute cheap rate slots per 24-hour period.
-Octopus Intelligent users maybe from March 2026 limited to 6 hours of cheap charging per day. Slots beyond this limit will use standard rates.
-Its recommended you set this to 12 (for 6 hours) once Octopus enforce this Octopus Intelligent limit.
+- **octopus_slot_max** - Default is 48 (disabled). Sets the maximum number of 30-minute cheap rate EV charging slots per 24-hour period.
+Octopus Intelligent users maybe from May 2026 will be limited to 6 hours of cheap EV charging per day. Slots beyond this limit will use standard rates.
+Its recommended you leave this set this to 12 (for 6 hours) once Octopus enforce this Octopus Intelligent limit.  The cap can be disabled by setting it to 48.
 
 If you are using Octopus-led charging with the [Octopus Energy integration](energy-rates.md#octopus-energy-home-assistant-integration):
 
