@@ -172,7 +172,10 @@ cd coverage/
 ./run_all
 ```
 
-Use --quick argument to skip long tests:
+Use --quick argument to skip long tests.
+
+Tests take time to run, _always_ save the test output to a file and then grep the file afterwards.
+Never just pipe the output to grep as if you search for the wrong thing you will have to re-run it again.
 
 **Test structure**: 9994-line `unit_test.py` contains ALL tests. Uses custom `TestHAInterface` mock, not pytest/unittest.
 

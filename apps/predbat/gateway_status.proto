@@ -123,6 +123,7 @@ message InverterEntry {
   bool           managed   = 15;  // true = accepts commands, false = poll-only
   bool           primary   = 16;  // true = PredBat should use this inverter for control/config
   string         dongle_serial = 17;  // WiFi dongle serial (internal, used for Modbus framing)
+  string         model         = 18;  // GivEnergy model class (e.g. "All-in-One", "Hybrid HV Gen3", "AC 3ph", "Gateway") — drives AC-coupled vs hybrid handling in PredBat
 }
 
 message GatewayStatus {

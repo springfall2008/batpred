@@ -9,6 +9,8 @@ batpred.code-workspace
 .Trashes
 ehthumbs.db
 Thumbs.db
+dev_code
+sigenergy_mqtt_key
 
 # Python cache files
 __pycache__/

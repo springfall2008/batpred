@@ -1801,9 +1801,12 @@ class Fetch:
                 rate = rates[minute]
             rate_array.append(rate)
 
-        # Work out the min rate going forward
-        for minute in range(self.minutes_now, self.forecast_minutes + 24 * 60 + self.minutes_now):
-            rate_min_forward[minute] = min(rate_array[minute:])
+        # Work out the min rate going forward — O(n) right-to-left scan avoids O(n²) slice allocations
+        running_min = rate_array[-1] if rate_array else self.rate_min
+        for minute in range(len(rate_array) - 1, self.minutes_now - 1, -1):
+            running_min = min(running_min, rate_array[minute])
+            if minute < self.forecast_minutes + 24 * 60 + self.minutes_now:
+                rate_min_forward[minute] = running_min
 
         self.log("Rate min forward looking: now {}{} at end of forecast {}{}".format(dp2(rate_min_forward[self.minutes_now]), self.currency_symbols[1], dp2(rate_min_forward[self.forecast_minutes]), self.currency_symbols[1]))
 
