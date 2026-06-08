@@ -19,7 +19,7 @@ If you want to buy me a beer then please use [Paypal](https://paypal.me/predbat?
 * Use my referral code for Axle Energy (UK): <https://vpp.axle.energy/landing/grid?ref=R-VWIICRSA>
 
 If you are finding Home Assistant and Predbat too difficult to set up yourself there is now [PredBat Cloud](https://predbat.com/) which is a paid for version of Predbat hosted in the cloud.
-Please note that while I have given permission for PredBat Cloud to operate under license, PredBat will remain open source for everyone personal use.
+Please note that while I have given permission for PredBat Cloud to operate this is not my company, PredBat will remain open source for personal use.
 
 ## Predbat documentation
 
@@ -45,6 +45,6 @@ Please see [License](https://github.com/springfall2008/batpred/blob/main/License
 
 ```text
 Copyright (c) Trefor Southwell 2025-2026 - All rights reserved
-This software maybe used at no cost for personal use only.
+This software may be used at no cost for personal use only.
 No warranty is given, either expressed or implied.
 ```

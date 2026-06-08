@@ -87,7 +87,7 @@ The Predbat web interface will work through the Predbat app, you can click on th
 
 As an alternative to the Predbat app, Predbat can be installed via Docker
 
-The Predbat docker image is [https://hub.docker.com/r/nipar44/predbat_addon](https://hub.docker.com/r/nipar44/predbat_addon) and is a fork of the Predbat app with updates so it will run directly as a Docker docker container.
+The Predbat docker image is [https://hub.docker.com/r/nipar44/predbat_addon](https://hub.docker.com/r/nipar44/predbat_addon) and is a fork of the Predbat app with updates so it will run directly as a Docker container.
 
 Installation instructions can be found at [https://github.com/nipar4/predbat_addon](https://github.com/nipar4/predbat_addon).
 
@@ -378,7 +378,7 @@ Click on the update and select Install:
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/e708899d-a4aa-4bd4-b7d1-1c6687dd7e23)
 
-Note that clicking the 'Skip' button give an error about auto-update being enabled for Predbat and that the update cannot be skipped.  This warning appears because of Predbat's built-in auto-update feature and can be safely ignored.
+Note that clicking the 'Skip' button gives an error about auto-update being enabled for Predbat and that the update cannot be skipped.  This warning appears because of Predbat's built-in auto-update feature and can be safely ignored.
 If you wish to skip or ignore a Predbat update then you don't need to do anything; Predbat will not auto-update (despite what HA says) unless you turn on Predbat's auto-update (see below) or choose a version to install.
 Predbat will remain running on the current version until you choose to update.
 
@@ -502,11 +502,11 @@ you can get Predbat working quickly again by copying it back again.
 
 ## Uninstalling Predbat
 
-Incredible though it may be to imagine, its possible you may want to uninstall Predbat.
+Incredible though it may be to imagine, it's possible you may want to uninstall Predbat.
 
 Removing the Predbat app is easy, System / Apps / Predbat then select 'Uninstall'.
 
-Its recommended that you do a full restart of Home Assistant and all apps after removing Predbat.
+It's recommended that you do a full restart of Home Assistant and all apps after removing Predbat.
 
 You will find that entities created by Predbat unfortunately don't get removed when you remove the Predbat app, and as they do not have unique Home Assistant id's, they can't be removed from the Devices & Services / Entities list.
 

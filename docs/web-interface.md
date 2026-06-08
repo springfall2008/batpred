@@ -1,6 +1,6 @@
 # Web Interface
 
-The Predbat Web Interface provides an easy to use way to see and change different aspects of your Predbat system including view the current plan, adjust the configuration, view the charts, check your apps.yaml and view the logfiles.
+The Predbat Web Interface provides an easy to use way to see and change different aspects of your Predbat system including viewing the current plan, adjusting the configuration, viewing the charts, checking your apps.yaml and viewing the logfiles.
 
 ![image](images/web-interface-plan-view.png)
 
@@ -188,6 +188,10 @@ The Internals view gives a view of Predbat's internal operations.
 It gives the hierarchy of threads, and their status; and the Predbat code object hierarchy.
 
 These are intended for debugging and developer activities, in normal use you can ignore this view!
+
+### Metrics View
+
+The Metrics view gives a dashboard of Predbat's internal metrics, including application health, plan status, battery state, energy totals, costs, savings and API status.
 
 ### Docs View
 
