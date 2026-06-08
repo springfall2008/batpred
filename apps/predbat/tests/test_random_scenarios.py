@@ -43,19 +43,54 @@ BATTERY_SOC_OPTIONS_KWH = [2.4, 4.8, 7.0, 9.5, 13.5, 20.0]
 PV_PEAK_OPTIONS_KW = [0.0, 1.0, 2.0, 4.0, 6.0, 10.0]
 
 RATE_TYPES = ["single", "dual", "triple", "halfhourly"]
+IMPORT_RATE_TYPES = RATE_TYPES + ["negative_halfhourly"]
 
 # ---------------------------------------------------------------------------
 # Daily profile generators  (return list[float] with exactly 1440 elements)
 # ---------------------------------------------------------------------------
 
 
+def _smooth_rate_profile(control_points, allow_negative=False):
+    """Cosine-interpolate between control points to produce a 1440-minute rate profile.
+
+    Adjacent control points are connected with a smooth S-curve (raised cosine), so the
+    profile ramps gradually between each peak/trough rather than jumping abruptly.
+
+    Args:
+        control_points: list of (minute, rate) pairs covering at least minute 0 and 1439
+        allow_negative: if False, clamp all output values to >= 0
+
+    Returns:
+        list[float] of 1440 values
+    """
+    pts = sorted(control_points, key=lambda x: x[0])
+    profile = []
+    idx = 0
+    n = len(pts)
+    for m in range(MINUTES_PER_DAY):
+        while idx + 1 < n and pts[idx + 1][0] <= m:
+            idx += 1
+        t0, v0 = pts[idx]
+        if idx + 1 >= n:
+            val = v0
+        else:
+            t1, v1 = pts[idx + 1]
+            span = t1 - t0
+            mu = (m - t0) / span if span > 0 else 1.0
+            val = v0 + (v1 - v0) * (1.0 - math.cos(mu * math.pi)) / 2.0
+        if not allow_negative:
+            val = max(0.0, val)
+        profile.append(val)
+    return profile
+
+
 def generate_rates_day(rate_type, params, seed):
     """Generate a single-day (1440-minute) per-minute rate profile in p/kWh.
 
     Args:
-        rate_type: One of "single", "dual", "triple", "halfhourly"
+        rate_type: One of "single", "dual", "triple", "halfhourly", "negative_halfhourly"
         params: dict of rate parameters (see per-type docs below)
-        seed: integer seed for halfhourly random generation
+        seed: integer seed for halfhourly/negative_halfhourly random generation
 
     Returns:
         list[float] of 1440 values
@@ -95,15 +130,21 @@ def generate_rates_day(rate_type, params, seed):
             else:
                 profile[m] = shoulder_rate
 
-    elif rate_type == "halfhourly":
-        # 48 half-hourly slots, randomly priced, each slot is 30 minutes
+    elif rate_type in ("halfhourly", "negative_halfhourly"):
+        # Smooth profile: cosine-interpolate between randomly placed peaks and troughs
+        allow_negative = rate_type == "negative_halfhourly"
         rng = random.Random(seed)
-        base = float(params.get("base_rate", 10.0))
-        spread = float(params.get("spread", 20.0))
-        slots = [max(0.0, base + rng.uniform(-spread / 2, spread / 2)) for _ in range(48)]
-        for m in range(MINUTES_PER_DAY):
-            slot = m // 30
-            profile[m] = slots[slot]
+        base = float(params.get("base_rate", 15.0))
+        low = float(params.get("low_rate", 5.0))
+        high = float(params.get("high_rate", 30.0))
+        num_highs = int(params.get("num_highs", 2))
+        num_lows = int(params.get("num_lows", 2))
+        control_points = [(0, base), (MINUTES_PER_DAY - 1, base)]
+        for _ in range(num_highs):
+            control_points.append((rng.randint(0, MINUTES_PER_DAY - 1), high))
+        for _ in range(num_lows):
+            control_points.append((rng.randint(0, MINUTES_PER_DAY - 1), low))
+        profile = _smooth_rate_profile(control_points, allow_negative)
 
     return profile
 
@@ -228,7 +269,7 @@ def generate_random_scenario(scenario_id, seed):
     sunset_minute = rng.randint(PV_SUNSET_MINUTE_MIN, PV_SUNSET_MINUTE_MAX)
 
     # --- Import rate ---
-    import_rate_type = rng.choice(RATE_TYPES)
+    import_rate_type = rng.choice(IMPORT_RATE_TYPES)
     import_rate_params = _sample_rate_params(rng, import_rate_type, cheap=True)
     import_rate_seed = rng.randint(0, 2**31)
 
@@ -1039,7 +1080,19 @@ def _sample_rate_params(rng, rate_type, cheap):
             "peak_end_hhmm": "{}:00".format(peak_end_hour),
         }
 
-    else:  # halfhourly
-        base = round(rng.uniform(10.0, 25.0), 2)
-        spread = round(rng.uniform(10.0, 30.0), 2)
-        return {"base_rate": base, "spread": spread}
+    elif rate_type == "halfhourly":
+        if cheap:
+            base = round(rng.uniform(15.0, 25.0), 2)
+            low = round(rng.uniform(3.0, 12.0), 2)
+            high = round(rng.uniform(30.0, 50.0), 2)
+        else:
+            base = round(rng.uniform(8.0, 18.0), 2)
+            low = round(rng.uniform(2.0, 8.0), 2)
+            high = round(rng.uniform(18.0, 30.0), 2)
+        return {"base_rate": base, "low_rate": low, "high_rate": high, "num_highs": rng.randint(1, 3), "num_lows": rng.randint(1, 3)}
+
+    else:  # negative_halfhourly — troughs go negative to test plunge-pricing scenarios
+        base = round(rng.uniform(5.0, 15.0), 2)
+        low = round(rng.uniform(-15.0, 0.0), 2)
+        high = round(rng.uniform(25.0, 50.0), 2)
+        return {"base_rate": base, "low_rate": low, "high_rate": high, "num_highs": rng.randint(1, 3), "num_lows": rng.randint(1, 3)}

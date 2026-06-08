@@ -69,6 +69,7 @@ class SolarAPI(ComponentBase):
         solcast_poll_hours,
         forecast_solar,
         forecast_solar_max_age,
+        forecast_solar_open_meteo_backup,
         pv_forecast_today,
         pv_forecast_tomorrow,
         pv_forecast_d3,
@@ -84,6 +85,7 @@ class SolarAPI(ComponentBase):
         self.solcast_poll_hours = solcast_poll_hours
         self.forecast_solar = forecast_solar
         self.forecast_solar_max_age = forecast_solar_max_age
+        self.forecast_solar_open_meteo_backup = forecast_solar_open_meteo_backup
         self.pv_forecast_today = pv_forecast_today
         self.pv_forecast_tomorrow = pv_forecast_tomorrow
         self.pv_forecast_d3 = pv_forecast_d3
@@ -283,16 +285,18 @@ class SolarAPI(ComponentBase):
             result[ts] = dp4((gti_p10 / 1000.0) * kwp * (1.0 - system_loss))
         return result
 
-    async def download_open_meteo_data(self):
+    async def download_open_meteo_data(self, configs=None):
         """
         Download Open-Meteo forecast data and convert to PV power estimates.
         Uses GTI (global tilted irradiance) with simple temperature derating for P50,
         and ensemble members for P10. Returns (sorted_data, max_kwh).
+        If configs is provided it is used directly; otherwise self.open_meteo_forecast is used.
         """
         period_data = {}
         max_kwh = 0
 
-        configs = self.open_meteo_forecast
+        if configs is None:
+            configs = self.open_meteo_forecast
         if configs is None:
             raise ValueError("SolarAPI: No Open-Meteo forecast configurations found")
         if not isinstance(configs, list):
@@ -1258,6 +1262,10 @@ class SolarAPI(ComponentBase):
             pv_forecast_data, max_kwh = await self.download_forecast_solar_data()
             divide_by = 30.0
             create_pv10 = True
+            if not pv_forecast_data and self.forecast_solar_open_meteo_backup:
+                self.log("SolarAPI: Forecast Solar returned no data, falling back to Open-Meteo backup")
+                backup_configs = self.open_meteo_forecast if self.open_meteo_forecast else self.forecast_solar
+                pv_forecast_data, max_kwh = await self.download_open_meteo_data(configs=backup_configs)
         elif self.open_meteo_forecast:
             self.log("SolarAPI: Obtaining solar forecast from Open-Meteo API")
             pv_forecast_data, max_kwh = await self.download_open_meteo_data()
