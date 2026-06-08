@@ -23,16 +23,8 @@ import aiohttp
 import pytz
 from datetime import datetime, timedelta, timezone
 
-try:
-    from pvlib.temperature import sapm_cell as _pvlib_sapm_cell
-    from pvlib.temperature import TEMPERATURE_MODEL_PARAMETERS as _PVLIB_TEMP_PARAMS
-
-    _PVLIB_SAPM_PARAMS = _PVLIB_TEMP_PARAMS["sapm"]["open_rack_glass_glass"]
-    _HAS_PVLIB = True
-except ImportError:
-    _HAS_PVLIB = False
-
 # PVWatts / SAPM cell temperature model constants (glass/glass, open rack)
+# Equivalent to pvlib.temperature.sapm_cell with open_rack_glass_glass parameters
 _SAPM_A = -3.47
 _SAPM_B = -0.0594
 _SAPM_DELTA_T = 3.0
@@ -41,13 +33,9 @@ _SAPM_DELTA_T = 3.0
 def pvwatts_cell_temperature(poa_global, temp_air, wind_speed):
     """Compute PV cell temperature using the SAPM (PVWatts) model.
 
-    Uses pvlib.temperature.sapm_cell when available; falls back to the
-    equivalent inline formula otherwise.  Parameters correspond to a
-    glass/glass module on an open rack (the most common residential case).
+    Parameters correspond to a glass/glass module on an open rack (the most
+    common residential case). Formula: T_cell = T_air + GTI*exp(a + b*wind) + (GTI/1000)*deltaT
     """
-    if _HAS_PVLIB:
-        return float(_pvlib_sapm_cell(poa_global, temp_air, wind_speed, _PVLIB_SAPM_PARAMS["a"], _PVLIB_SAPM_PARAMS["b"], _PVLIB_SAPM_PARAMS["deltaT"]))
-    # Inline SAPM formula: T_cell = T_air + GTI * exp(a + b*wind) + (GTI/1000) * deltaT
     return temp_air + poa_global * math.exp(_SAPM_A + _SAPM_B * wind_speed) + (poa_global / 1000.0) * _SAPM_DELTA_T
 
 
