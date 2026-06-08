@@ -1116,12 +1116,12 @@ class TestAutomaticConfig:
         assert any("000aa1" in e for e in gw._args["soc_percent"])
         assert not any("000bb2" in e for e in gw._args["soc_percent"])
 
-    def test_serial_filter_no_match_falls_back_to_all_controllable(self):
-        """A serial filter matching nothing warns but still configures (never leaves control unset).
+    def test_serial_filter_no_match_aborts_config(self):
+        """A serial filter matching nothing logs an error and aborts auto-config.
 
-        Returning early here used to leave the inverter in GE defaults and raise
-        "unable to read charge window" — so a no-match filter now falls back to the
-        full controllable set rather than bricking control.
+        Configuring the wrong inverter set is worse than not configuring at all, so
+        a no-match clears _auto_configured and returns early. The run loop is blocked
+        until a subsequent telemetry succeeds with a matching serial.
         """
         gw = self._make_gateway()
         status = pb.GatewayStatus()
@@ -1133,10 +1133,34 @@ class TestAutomaticConfig:
         gw.gateway_inverter_serial = ["NON_EXISTENT"]
         gw.automatic_config()
 
-        assert gw._auto_configured
-        assert gw._args["num_inverters"] == 1  # fell back to the one real inverter
+        assert not gw._auto_configured
+        assert "num_inverters" not in gw._args
         gw.log.assert_called()
-        assert any("Warn" in str(c) and "matched no inverters" in str(c) for c in gw.log.call_args_list)
+        assert any("Error" in str(c) and "matched no inverters" in str(c) for c in gw.log.call_args_list)
+
+    def test_serial_filter_no_match_clears_previously_good_config(self):
+        """A no-match filter during reconfigure clears _auto_configured even if it was True.
+
+        Without this, a stale successful config (e.g. from a prior run with different
+        inverters) would remain active, causing PredBat to keep controlling the wrong set.
+        """
+        gw = self._make_gateway()
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_test"
+        status.firmware = "1.0.0"
+        status.schema_version = 1
+        self._make_inverter(status, serial="CE000000AA1", primary=True)
+        gw._last_status = status
+
+        # First pass: matching filter — succeeds
+        gw.gateway_inverter_serial = ["CE000000AA1"]
+        gw.automatic_config()
+        assert gw._auto_configured
+
+        # Second pass (reconfigure): filter no longer matches anything
+        gw.gateway_inverter_serial = ["NON_EXISTENT"]
+        gw.automatic_config()
+        assert not gw._auto_configured
 
     def test_serial_filter_case_insensitive(self):
         """Serial filter matching is case-insensitive."""
