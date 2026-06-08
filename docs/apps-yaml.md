@@ -1460,6 +1460,22 @@ Optionally you can set an api_key for personal or professional accounts and you 
 
 Note you can omit any of these settings for a default value. They do not have to be exact if you use Predbat auto calibration for PV to improve the data quality.
 
+### Open-Meteo backup for Forecast.solar
+
+If you set `forecast_solar_open_meteo_backup: true`, Predbat will automatically fall back to the [Open-Meteo](#open-meteo-solar-forecast) API whenever Forecast.solar returns no data (for example, due to a server error, rate limiting, or an outage).
+
+When the fallback is active, Predbat derives the Open-Meteo request from the same `forecast_solar` configuration entries (latitude, longitude, postcode, declination, azimuth, kwp, efficiency), so no extra configuration is needed. If you also have an `open_meteo_forecast` section configured, that configuration is used for the backup request instead, which lets you apply Open-Meteo-specific options such as `shading_factors`.
+
+```yaml
+  forecast_solar:
+    - postcode: SW1A 2AB
+      kwp: 3
+      azimuth: 45
+      declination: 45
+      efficiency: 0.95
+  forecast_solar_open_meteo_backup: true
+```
+
 ## Open-Meteo Solar Forecast
 
 [Open-Meteo](https://open-meteo.com/) is a free, open-source weather API that provides solar irradiance forecasts with no API key required.
