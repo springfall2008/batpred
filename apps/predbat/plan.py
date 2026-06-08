@@ -1016,7 +1016,8 @@ class Plan:
             active_win = None
             for win in clipping_windows:
                 ws, we, wn = win
-                if m < we and m >= (ws - 1440):
+                start_of_day_ws = (ws // 1440) * 1440
+                if m < we and m >= start_of_day_ws:
                     active_win = win
                     break
             

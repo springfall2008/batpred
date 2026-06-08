@@ -23,7 +23,8 @@ Standard solar forecasts are often "smoothed" or averaged, meaning they might mi
 ### 2. The "Hole" Calculation
 Predbat calculates the `clipping_buffer_kwh` by integrating the area of your chosen safety forecast that exceeds your **Effective Clipping Limit**.
 *   **Dynamic Sizing**: If the forecast shows 2 hours of 1kW clipping, Predbat reserves a 2kWh hole.
-*   **48-Hour Planning**: The buffer is aware of Predbat's full 48-hour planning window. If clipping is forecast for tomorrow, Predbat will automatically begin reserving space (by capping overnight grid charging) as soon as today's peak is over.
+*   **Proactive Risk Margin**: If the forecast comes close to your limit (e.g. >80% of capacity), Predbat proactively reserves a **5% safety margin** of the window's total forecasted solar, even if hard clipping isn't explicitly forecast. This protects against unpredictable cloud-edge spikes on high-generation days.
+*   **48-Hour Planning**: The buffer is aware of Predbat's full 48-hour planning window. If clipping is forecast for tomorrow, Predbat will automatically begin reserving space (by capping overnight grid charging) at midnight of that day.
 *   **Dynamic Decay**: As your solar panels produce energy and the peak of the day passes, the reserved buffer dynamically shrinks. This ensures that you don't unnecessarily limit your battery usage in the late afternoon or evening after the risk of clipping has passed.
 
 ### 3. Proactive Reservation (Grid-Charge Capping)
