@@ -866,6 +866,7 @@ class Plan:
 
         # Forecast selection (Standardized)
         forecast_type = self.clipping_buffer_forecast
+        has_cs_data = self.pv_forecast_minuteCS and max(self.pv_forecast_minuteCS.values() or [0]) > 0
         if forecast_type == "pv_estimate":
             pv_data = self.pv_forecast_minute
         elif forecast_type == "pv_estimate10":
@@ -873,7 +874,7 @@ class Plan:
         elif forecast_type == "pv_estimate90":
             pv_data = self.pv_forecast_minute90
         elif forecast_type == "pv_clearsky":
-            pv_data = self.pv_forecast_minuteCS if self.pv_forecast_minuteCS else self.pv_forecast_minute90
+            pv_data = self.pv_forecast_minuteCS if has_cs_data else self.pv_forecast_minute90
         elif forecast_type == "pv_historical":
             pv_data = self.pv_forecast_minuteHIST
         else:
@@ -898,7 +899,7 @@ class Plan:
             limit_minute[minute] = eff_limit
 
         # 1. Determine Clipping Windows for all forecast days
-        window_source = self.pv_forecast_minuteCS if self.pv_forecast_minuteCS else pv_data
+        window_source = self.pv_forecast_minuteCS if has_cs_data else pv_data
         clipping_windows = [] # List of (start, end, noon) per day
         
         # Handle Manual Overrides for today's primary window
@@ -984,7 +985,10 @@ class Plan:
                     clearsky_clipping_kwh += (pv_cs - lim)
 
             user_min_kwh = getattr(self, "clipping_buffer_min_kwh", 0)
-            auto_spike_buffer_kwh[win] = user_min_kwh if user_min_kwh > 0 else clearsky_clipping_kwh
+            # If no manual min is set, use clearsky clipping BUT also add a small safety margin 
+            # (e.g. 5% of window PV) if we detected risk, to account for spikes/unpredictability.
+            spike_protection = (win_total_pv * 0.05) if win_total_pv > 0 else 0
+            auto_spike_buffer_kwh[win] = user_min_kwh if user_min_kwh > 0 else max(clearsky_clipping_kwh, spike_protection)
             window_totals_kwh[win] = win_total_pv
 
         # 3. Calculate Clipping Volume (kWh) with Dynamic Decay
@@ -1062,11 +1066,15 @@ class Plan:
         final_start = manual_start_minute if manual_start_minute is not None else auto_start_today
         final_end = manual_end_minute if manual_end_minute is not None else auto_end_today
 
-        if self.clipping_remaining_today > 0:
-            self.log("Clipping Buffer: Calculated buffer of {:.2f}kWh based on {}, starts at {}, ends at {} (at minute {})".format(
-                self.clipping_remaining_today, forecast_type, self.time_abs_str(final_start) if final_start is not None else "N/A", 
-                self.time_abs_str(final_end) if final_end is not None else "N/A", self.minutes_now
+        if True:
+            self.log("Clipping Buffer DEBUG: remaining_today={:.4f}, max_m={}, has_cs_data={}, base_limit={:.4f}, risk_threshold={:.4f}, clipping_windows={}".format(
+                self.clipping_remaining_today, max_m, has_cs_data, base_limit, base_limit * getattr(self, "clipping_buffer_risk_threshold", 0.8), clipping_windows
             ))
+            if self.clipping_remaining_today > 0:
+                self.log("Clipping Buffer: Calculated buffer of {:.2f}kWh based on {}, starts at {}, ends at {} (at minute {})".format(
+                    self.clipping_remaining_today, forecast_type, self.time_abs_str(final_start) if final_start is not None else "N/A", 
+                    self.time_abs_str(final_end) if final_end is not None else "N/A", self.minutes_now
+                ))
 
         return self.clipping_remaining_today, final_start, final_end, clipping_windows
     def calculate_plan(self, recompute=True, debug_mode=False, publish=True):

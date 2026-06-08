@@ -1558,7 +1558,11 @@ class WebInterface(ComponentBase):
             first = False
             text += "{"
             text += "x: new Date('{}').getTime(),".format(key)
-            text += "y: {}".format(results[key])
+            val = results[key]
+            if val is None:
+                text += "y: null"
+            else:
+                text += "y: {}".format(val)
             text += "}"
         text += "  ]\n"
         text += "  }\n"

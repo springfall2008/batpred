@@ -1533,35 +1533,45 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         Check if the app is running
         """
         if self.stop_thread:
+            self.log("is_running false: stop_thread is True")
             return False
         if not self.dashboard_index:
+            self.log("is_running false: dashboard_index is empty")
             return False
         if self.fatal_error:
+            self.log("is_running false: fatal_error is True")
             return False
 
         if not self.ha_interface:
+            self.log("is_running false: ha_interface is None")
             return False
 
         if self.components:
             if not self.components.is_all_alive():
+                self.log(f"is_running false: components not all alive. Statuses: {{name: self.components.is_alive(name) for name in self.components.components.keys()}}")
                 return False
 
         # Read predbat.status
         status_entity = self.prefix + ".status"
         predbat_error = self.get_state_wrapper(status_entity, attribute="error", default=True)
         if predbat_error is None or predbat_error:
+            self.log(f"is_running false: predbat_error is {predbat_error}")
             return False
         predbat_last_updated = self.get_state_wrapper(status_entity, attribute="last_updated", default=None)
         if predbat_last_updated is None:
+            self.log("is_running false: predbat_last_updated is None")
             return False
 
         try:
             predbat_last_updated = datetime.fromisoformat(predbat_last_updated)
         except ValueError:
+            self.log("is_running false: ValueError parsing last_updated")
             return False
 
         # Check if the last updated time is within the last 15 minutes
-        if (datetime.now() - predbat_last_updated).total_seconds() > 15 * 60:
+        dt_diff = (datetime.now() - predbat_last_updated).total_seconds()
+        if dt_diff > 15 * 60:
+            self.log(f"is_running false: last_updated too old (dt_diff={dt_diff} > 900). now={datetime.now()}, last_updated={predbat_last_updated}")
             return False
         return True
 
