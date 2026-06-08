@@ -1345,6 +1345,155 @@ def test_battery_size_tracking_unset_soc_max_persists(my_predbat):
     return failed
 
 
+def test_battery_size_tracking_transient_unavailable_recovers(my_predbat):
+    """
+    Regression test: a transient 'unavailable' read of a configured soc_max sensor must not
+    pin the battery size to the 8 kWh default.
+
+    Models three consecutive 5-minute cycles (a fresh Inverter is created each cycle, so only
+    the base.args cache persists between them):
+      1. soc_max source reads a valid 28.35 kWh -> soc_max == 28.35, soc_max_nominal persisted.
+      2. soc_max source reads 'unavailable' (get_arg returns 0.0) -> soc_max restored from
+         soc_max_nominal to ~28.35 (NOT 8.0), and the soc_max arg is not clobbered with 8.0.
+      3. soc_max source reads valid 28.35 again -> still 28.35.
+    """
+    print("*** Running test: battery_size_tracking_transient_unavailable_recovers ***")
+    failed = False
+    real_size = 28.35  # kWh - sum of both batteries on the real-world SolarEdge dual setup
+
+    sensor_name = "sensor.{}_soc_max_calculated".format(my_predbat.prefix)
+    my_predbat.ha_interface.dummy_items.pop(sensor_name, None)
+    # Configured system: battery_scaling_auto is off and starts with no persisted nominal/fallback
+    my_predbat.battery_scaling_auto = False
+    my_predbat.args.pop("soc_max", None)
+    my_predbat.set_arg("soc_max_nominal", 0.0, index=0)
+    setup_predbat(my_predbat)
+    # No calibration history, so find_battery_size returns None during each cycle's construction
+    remove_test_history_data(my_predbat)
+
+    def run_cycle(soc_max_read):
+        """Simulate one 5-minute cycle: a fresh Inverter reads soc_max from the args cache.
+
+        soc_max_read is the value the configured source reports (None models an 'unavailable'
+        sensor, where get_arg falls back to its 0.0 default). Inverter.__init__ runs the full
+        battery_size_tracking, so this exercises the real per-cycle path.
+        """
+        if soc_max_read is None:
+            my_predbat.args.pop("soc_max", None)
+        else:
+            my_predbat.set_arg("soc_max", soc_max_read, index=0)
+        return Inverter(my_predbat, 0)
+
+    try:
+        # --- Cycle 1: source reads valid 28.35 ---
+        inv1 = run_cycle(real_size)
+        if abs(inv1.soc_max - real_size) > 0.01:
+            print("ERROR: Cycle 1 soc_max={:.3f}, expected {:.3f}".format(inv1.soc_max, real_size))
+            failed = True
+        if abs(my_predbat.get_arg("soc_max_nominal", default=0.0, index=0) - real_size) > 0.01:
+            print("ERROR: Cycle 1 did not persist soc_max_nominal={:.3f}".format(real_size))
+            failed = True
+
+        # --- Cycle 2: source 'unavailable' -> get_arg returns the 0.0 default ---
+        inv2 = run_cycle(None)
+        if abs(inv2.soc_max - real_size) > 0.01:
+            print("ERROR: Cycle 2 soc_max={:.3f} after transient outage, expected restored {:.3f} (NOT 8.0 default)".format(inv2.soc_max, real_size))
+            failed = True
+        # The 8 kWh fallback must never have clobbered the configured soc_max arg
+        soc_max_arg = my_predbat.get_arg("soc_max", default=0.0, index=0)
+        if abs(soc_max_arg - 8.0) < 0.01:
+            print("ERROR: Cycle 2 pinned soc_max arg to 8.0 - configured source would stay clobbered until restart")
+            failed = True
+        # soc_max_nominal must remain intact (not wiped to 0)
+        if abs(my_predbat.get_arg("soc_max_nominal", default=0.0, index=0) - real_size) > 0.01:
+            print("ERROR: Cycle 2 wiped soc_max_nominal recovery value")
+            failed = True
+
+        # --- Cycle 3: source recovers ---
+        inv3 = run_cycle(real_size)
+        if abs(inv3.soc_max - real_size) > 0.01:
+            print("ERROR: Cycle 3 soc_max={:.3f} after recovery, expected {:.3f}".format(inv3.soc_max, real_size))
+            failed = True
+
+        if not failed:
+            print("SUCCESS: transient unavailable soc_max recovered to {:.3f} kWh without pinning 8 kWh".format(real_size))
+    except Exception as e:
+        print("ERROR: test_battery_size_tracking_transient_unavailable_recovers raised exception: {}".format(e))
+        import traceback
+
+        traceback.print_exc()
+        failed = True
+
+    my_predbat.battery_scaling_auto = False
+    return failed
+
+
+def test_battery_size_tracking_fallback_non_sticky(my_predbat):
+    """
+    Regression test: the genuine first-run 8 kWh fallback still applies, but is non-sticky.
+
+    With no configured soc_max, no persisted nominal and no calibration history, soc_max falls
+    back to 8.0 for the cycle - but must NOT cache 8.0 into the soc_max / soc_max_nominal args,
+    so a later cycle where the source becomes readable recovers the real value automatically.
+    """
+    print("*** Running test: battery_size_tracking_fallback_non_sticky ***")
+    failed = False
+    real_size = 9.5  # kWh - value the source reports once it becomes available
+
+    sensor_name = "sensor.{}_soc_max_calculated".format(my_predbat.prefix)
+    my_predbat.ha_interface.dummy_items.pop(sensor_name, None)
+    my_predbat.battery_scaling_auto = False
+    my_predbat.args.pop("soc_max", None)
+    my_predbat.set_arg("soc_max_nominal", 0.0, index=0)
+    setup_predbat(my_predbat)
+    # No calibration history, so find_battery_size returns None during each cycle's construction
+    remove_test_history_data(my_predbat)
+
+    def run_cycle(soc_max_read):
+        """Simulate one 5-minute cycle via a fresh Inverter (see the transient test)."""
+        if soc_max_read is None:
+            my_predbat.args.pop("soc_max", None)
+        else:
+            my_predbat.set_arg("soc_max", soc_max_read, index=0)
+        return Inverter(my_predbat, 0)
+
+    try:
+        # --- Cycle 1: nothing configured, no history -> 8 kWh fallback ---
+        inv = run_cycle(None)
+
+        if abs(inv.soc_max - 8.0) > 0.001:
+            print("ERROR: fallback soc_max expected 8.0, got {:.3f}".format(inv.soc_max))
+            failed = True
+        # The fallback must NOT have been cached into the args
+        if abs(my_predbat.get_arg("soc_max", default=0.0, index=0) - 8.0) < 0.01:
+            print("ERROR: fallback pinned soc_max arg to 8.0 (should stay unset so it self-heals)")
+            failed = True
+        if abs(my_predbat.get_arg("soc_max_nominal", default=0.0, index=0) - 8.0) < 0.01:
+            print("ERROR: fallback pinned soc_max_nominal arg to 8.0")
+            failed = True
+
+        # --- Cycle 2: source now readable -> recovers to the real value, not stuck at 8.0 ---
+        # battery_scaling_auto was auto-enabled by cycle 1 (nominal was 0); the recovered read now
+        # provides a real nominal, so soc_max must follow the source rather than the 8 kWh fallback.
+        inv2 = run_cycle(real_size)
+
+        if abs(inv2.soc_max - real_size) > 0.01:
+            print("ERROR: after source recovered soc_max={:.3f}, expected {:.3f} (fallback was sticky)".format(inv2.soc_max, real_size))
+            failed = True
+
+        if not failed:
+            print("SUCCESS: 8 kWh fallback applied for the cycle and self-healed to {:.3f} kWh once readable".format(real_size))
+    except Exception as e:
+        print("ERROR: test_battery_size_tracking_fallback_non_sticky raised exception: {}".format(e))
+        import traceback
+
+        traceback.print_exc()
+        failed = True
+
+    my_predbat.battery_scaling_auto = False
+    return failed
+
+
 def run_find_battery_size_tests(my_predbat):
     """
     Run all find_battery_size tests
@@ -1455,6 +1604,14 @@ def run_find_battery_size_tests(my_predbat):
         return failed
 
     failed |= test_battery_size_tracking_unset_soc_max_persists(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_battery_size_tracking_transient_unavailable_recovers(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_battery_size_tracking_fallback_non_sticky(my_predbat)
     if failed:
         return failed
 
