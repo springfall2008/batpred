@@ -556,7 +556,7 @@ Predbat will plan and charge the car with the kW that are needed to reach the ta
 
 Predbat provides **predbat.cost_today_car** and **predbat.cost_total_car** which give the cost today and total accumulated cost for all car charging.
 
-If you have multiple cars with a single EV charger then its not possible to segregate the cost per car.
+If you have multiple cars with a single EV charger then it's not possible to segregate the cost per car.
 
 The following solution will accumulate individual charging costs for each car.
 
