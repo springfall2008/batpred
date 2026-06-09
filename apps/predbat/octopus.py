@@ -1306,10 +1306,12 @@ class OctopusAPI(ComponentBase):
         """
         Fetch a URL from the shared cache or reload it via the storage component.
 
-        Uses storage.fetch_cached (stale-while-revalidate) so that in multi-instance
-        deployments only one instance refreshes while others serve stale. Single-instance
-        behaviour is unchanged. If json_only=True, the raw JSON dict is returned without
-        results unwrapping or pagination.
+        Uses storage.fetch_cached (stale-while-revalidate). With the default
+        single-instance StorageBase the refresh lock is a no-op; a StorageBase
+        subclass that implements a real distributed lock (e.g. a multi-instance
+        backend) ensures only one instance refreshes while others serve stale.
+        If json_only=True, the raw JSON dict is returned without results
+        unwrapping or pagination.
         """
         url_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
         storage = self._get_storage()
@@ -1318,7 +1320,7 @@ class OctopusAPI(ComponentBase):
             data = await self.async_download_octopus_url(url, json_only=json_only)
             if not data:
                 self.log("Warn: Unable to download Octopus data from URL {}".format(url))
-            return data
+            return data or None
 
         async def _download():
             result = await self.async_download_octopus_url(url, json_only=json_only)
