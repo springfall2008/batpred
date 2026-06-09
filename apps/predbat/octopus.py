@@ -9,8 +9,8 @@
 
 Provides both REST and GraphQL API access to Octopus Energy for fetching
 tariff rates, intelligent dispatch schedules, saving sessions, and account
-data. Implements file-based caching with stale-while-revalidate strategy
-for multi-pod deployments.
+data. Delegates caching to the StorageComponent with stale-while-revalidate
+semantics for multi-pod deployments.
 """
 
 import asyncio
@@ -22,9 +22,9 @@ from const import TIME_FORMAT, TIME_FORMAT_OCTOPUS
 from utils import str2time, minutes_to_time, dp1, dp2, dp4, minute_data
 from component_base import ComponentBase
 import aiohttp
+import hashlib
 import json
 import os
-import json
 import pytz
 
 user_agent_value = "predbat-octopus-energy"
@@ -358,7 +358,6 @@ class OctopusAPI(ComponentBase):
         self.graphql_token = None
         self.graphql_expiration = None
         self.account_data = {}
-        self.url_cache = {}
         self.tariffs = {}
         self.saving_sessions = {}
         self.saving_sessions_to_join = []
@@ -513,7 +512,6 @@ class OctopusAPI(ComponentBase):
         Returns datetime object if successful, None otherwise.
         """
         import base64
-        import json
 
         if not token:
             return None
@@ -545,9 +543,6 @@ class OctopusAPI(ComponentBase):
             self.graphql_token = data.get("kraken_token")
 
         self.tariffs = {}
-        self.url_cache = {}
-        if self.tariffs is None:
-            self.tariffs = {}
         if self.account_data is None:
             self.account_data = {}
         if self.saving_sessions is None:
@@ -1316,8 +1311,6 @@ class OctopusAPI(ComponentBase):
         behaviour is unchanged. If json_only=True, the raw JSON dict is returned without
         results unwrapping or pagination.
         """
-        import hashlib
-
         url_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
         storage = self._get_storage()
 
@@ -1328,7 +1321,8 @@ class OctopusAPI(ComponentBase):
             return data
 
         async def _download():
-            return await self.async_download_octopus_url(url, json_only=json_only)
+            result = await self.async_download_octopus_url(url, json_only=json_only)
+            return result if result else None
 
         data = await storage.fetch_cached("octopus", url_hash, _download, fresh_minutes=30, stale_minutes=35, format="yaml")
         if not data:

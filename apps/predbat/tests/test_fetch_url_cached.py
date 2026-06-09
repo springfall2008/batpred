@@ -74,6 +74,9 @@ async def test_fetch_url_cached_async(my_predbat):
             return mock_rate_data_agile
         elif "INVALID" in url:
             return None
+        elif "empty-error" in url:
+            # Mirrors async_download_octopus_url's real error return ({} on HTTP/parse errors)
+            return {}
         else:
             # Return generic data for other URLs
             return [{"value_inc_vat": 10.0, "valid_from": "2025-01-01T00:00:00Z", "valid_to": "2025-01-01T00:30:00Z"}]
@@ -171,6 +174,22 @@ async def test_fetch_url_cached_async(my_predbat):
             failed = True
         else:
             print("Successfully handled invalid URL")
+
+        # Test 5: Download returns {} (the real error return) — must NOT be cached
+        print("*** Test 5: Empty error response is not cached")
+        empty_url = "https://api.octopus.energy/v1/products/empty-error/electricity-tariffs/empty-error/standard-unit-rates/"
+        empty_hash = hashlib.sha256(empty_url.encode()).hexdigest()[:16]
+
+        data5 = await api.fetch_url_cached(empty_url)
+        cached5 = await storage.load("octopus", empty_hash)
+        if data5:
+            print("ERROR Test 5: Expected falsy result for empty error response, got {}".format(data5))
+            failed = True
+        elif cached5 is not None:
+            print("ERROR Test 5: Empty error response should not be cached, found {}".format(cached5))
+            failed = True
+        else:
+            print("Empty error response not cached")
 
     finally:
         # Clean up temporary directory
