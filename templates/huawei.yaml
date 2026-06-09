@@ -1,11 +1,12 @@
 pred_bat:
   module: predbat
   class: PredBat
+  template: True
 
   # ------------------------------------------------------------------
   # Machine learning and forecasting options
   # ------------------------------------------------------------------
-  battery_scaling_auto: false
+  battery_scaling_auto: true
 
   # Enable ML load prediction
   load_ml_enable: true
