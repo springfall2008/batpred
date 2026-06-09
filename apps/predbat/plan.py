@@ -985,9 +985,10 @@ class Plan:
                     clearsky_clipping_kwh += (pv_cs - lim)
 
             user_min_kwh = getattr(self, "clipping_buffer_min_kwh", 0)
-            # If no manual min is set, use clearsky clipping BUT also add a small safety margin 
+            # If no manual min is set, use clearsky clipping BUT also add a small safety margin
             # (e.g. 5% of window PV) if we detected risk, to account for spikes/unpredictability.
-            spike_protection = (win_total_pv * 0.05) if win_total_pv > 0 else 0
+            safety_margin_pct = getattr(self, "clipping_buffer_safety_margin", 0.05)
+            spike_protection = (win_total_pv * safety_margin_pct) if win_total_pv > 0 else 0
             auto_spike_buffer_kwh[win] = user_min_kwh if user_min_kwh > 0 else max(clearsky_clipping_kwh, spike_protection)
             window_totals_kwh[win] = win_total_pv
 

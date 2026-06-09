@@ -1090,6 +1090,18 @@ CONFIG_ITEMS = [
         "enable": "clipping_buffer_enable",
     },
     {
+        "name": "clipping_buffer_safety_margin",
+        "friendly_name": "Clipping Safety Margin",
+        "type": "input_number",
+        "min": 0,
+        "max": 1.0,
+        "step": 0.01,
+        "unit": "factor",
+        "icon": "mdi:shield-check",
+        "default": 0.05,
+        "enable": "clipping_buffer_enable",
+    },
+    {
         "name": "clipping_buffer_can_discharge",
         "friendly_name": "Clipping Buffer Discharge",
         "type": "select",
