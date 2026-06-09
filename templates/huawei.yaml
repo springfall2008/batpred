@@ -279,7 +279,7 @@ pred_bat:
   # Notifications
   # ------------------------------------------------------------------
   notify_devices:
-  - mobile_app_iphone13pro
+  - !secret predbat_notify_device
 
   # ------------------------------------------------------------------
   # Alert feeds
