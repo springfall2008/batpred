@@ -54,7 +54,7 @@ message LoadStatus {
 message InverterData {
   int32 active_power_w  = 1;
   float temperature_c   = 2;
-  int32 rate_max_w      = 3; 
+  int32 rate_max_w      = 3;
 }
 
 message ControlStatus {
