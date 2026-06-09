@@ -577,6 +577,47 @@ class TestInjectEntities:
         _, attrs = gw._dashboard_calls[f"sensor.{pfx}_sub0_temp"]
         assert attrs == GATEWAY_ATTRIBUTE_TABLE.get("temp", {})
 
+    def test_inverter_rate_max_published_from_inverter(self):
+        """inverter_rate_max sensor uses InverterData.rate_max_w when non-zero."""
+        from gateway import GATEWAY_ATTRIBUTE_TABLE
+
+        status = self._make_status()
+        status.inverters[0].inverter.rate_max_w = 6000
+        gw = self._make_gateway()
+        gw._inject_entities(status)
+
+        entity = "sensor.predbat_gateway_456789_inverter_rate_max"
+        assert entity in gw._dashboard_calls
+        state, attrs = gw._dashboard_calls[entity]
+        assert state == 6000
+        assert attrs == GATEWAY_ATTRIBUTE_TABLE.get("inverter_rate_max", {})
+
+    def test_inverter_rate_max_falls_back_to_battery(self):
+        """inverter_rate_max sensor uses BatteryStatus.rate_max_w when InverterData.rate_max_w is zero."""
+        status = self._make_status()
+        status.inverters[0].inverter.rate_max_w = 0
+        status.inverters[0].battery.rate_max_w = 5000
+        gw = self._make_gateway()
+        gw._inject_entities(status)
+
+        entity = "sensor.predbat_gateway_456789_inverter_rate_max"
+        assert entity in gw._dashboard_calls
+        state, _ = gw._dashboard_calls[entity]
+        assert state == 5000
+
+    def test_inverter_rate_max_uses_6000_when_both_zero(self):
+        """inverter_rate_max sensor is still published with the 6000 W default when both InverterData and BatteryStatus report zero."""
+        status = self._make_status()
+        status.inverters[0].inverter.rate_max_w = 0
+        status.inverters[0].battery.rate_max_w = 0
+        gw = self._make_gateway()
+        gw._inject_entities(status)
+
+        entity = "sensor.predbat_gateway_456789_inverter_rate_max"
+        assert entity in gw._dashboard_calls
+        state, _ = gw._dashboard_calls[entity]
+        assert state == 6000
+
 
 class TestTokenRefresh:
     def test_jwt_expiry_extraction(self):
@@ -927,12 +968,46 @@ class TestAutomaticConfig:
         assert gw._args["inverter_time"] == [f"sensor.{base}_inverter_time"]
 
     def test_no_rate_max_falls_back_to_6000(self):
-        """When firmware reports no battery_rate_max, a 6000 W default is used."""
+        """When firmware reports no battery_rate_max, the sensor is still published with a 6000 W default."""
         gw = self._make_gateway()
         gw._last_status = self._basic_status(serial="CE123456789", primary=False, rate_max_w=0)
         gw.automatic_config()
 
-        assert gw._args["battery_rate_max"] == [6000]
+        base = f"{gw.prefix}_gateway_456789"
+        assert gw._args["battery_rate_max"] == [f"sensor.{base}_battery_rate_max"]
+
+    def test_inverter_limit_set_from_inverter_rate_max(self):
+        """inverter_limit points to inverter_rate_max sensor when InverterData.rate_max_w is non-zero."""
+        gw = self._make_gateway()
+        status = self._basic_status(serial="CE123456789", primary=False)
+        status.inverters[0].inverter.rate_max_w = 6000
+        gw._last_status = status
+        gw.automatic_config()
+
+        base = f"{gw.prefix}_gateway_456789"
+        assert gw._args["inverter_limit"] == [f"sensor.{base}_inverter_rate_max"]
+
+    def test_inverter_limit_set_when_only_battery_rate_max(self):
+        """inverter_limit points to inverter_rate_max sensor even when only BatteryStatus.rate_max_w is set (sensor value is the battery fallback)."""
+        gw = self._make_gateway()
+        status = self._basic_status(serial="CE123456789", primary=False, rate_max_w=5000)
+        status.inverters[0].inverter.rate_max_w = 0
+        gw._last_status = status
+        gw.automatic_config()
+
+        base = f"{gw.prefix}_gateway_456789"
+        assert gw._args["inverter_limit"] == [f"sensor.{base}_inverter_rate_max"]
+
+    def test_inverter_limit_set_when_both_rate_max_zero(self):
+        """inverter_limit still points to inverter_rate_max sensor when both rates are zero (sensor falls back to 6000)."""
+        gw = self._make_gateway()
+        status = self._basic_status(serial="CE123456789", primary=False, rate_max_w=0)
+        status.inverters[0].inverter.rate_max_w = 0
+        gw._last_status = status
+        gw.automatic_config()
+
+        base = f"{gw.prefix}_gateway_456789"
+        assert gw._args["inverter_limit"] == [f"sensor.{base}_inverter_rate_max"]
 
     # ------------------------------------------------------------------
     # Primary-flag filtering

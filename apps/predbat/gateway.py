@@ -98,6 +98,7 @@ GATEWAY_ATTRIBUTE_TABLE = {
     # Inverter
     "inverter_power": {"friendly_name": "Inverter Power", "icon": "mdi:flash", "unit_of_measurement": "W", "device_class": "power", "state_class": "measurement"},
     "inverter_temperature": {"friendly_name": "Inverter Temperature", "icon": "mdi:thermometer", "unit_of_measurement": "°C", "device_class": "temperature", "state_class": "measurement"},
+    "inverter_rate_max": {"friendly_name": "Inverter Max Rate", "icon": "mdi:flash", "unit_of_measurement": "W", "device_class": "power"},
     # Control switches
     "charge_enabled": {"friendly_name": "Charge Enabled", "icon": "mdi:battery-plus"},
     "discharge_enabled": {"friendly_name": "Discharge Enabled", "icon": "mdi:battery-minus"},
@@ -546,10 +547,10 @@ class GatewayMQTT(ComponentBase):
         self.dashboard_item(f"sensor.{pfx}_battery_temperature", bat.temperature_c, attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_temperature", {}), app="gateway")
         if bat.capacity_wh:
             self.dashboard_item(f"sensor.{pfx}_battery_capacity", round(bat.capacity_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_capacity", {}), app="gateway")
-        if bat.soh_percent > 0:
+        if bat.soh_percent:
             self.dashboard_item(f"sensor.{pfx}_battery_soh", bat.soh_percent, attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_soh", {}), app="gateway")
-        if bat.rate_max_w > 0:
-            self.dashboard_item(f"sensor.{pfx}_battery_rate_max", bat.rate_max_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_rate_max", {}), app="gateway")
+        battery_rate_max = bat.rate_max_w or 6000
+        self.dashboard_item(f"sensor.{pfx}_battery_rate_max", battery_rate_max, attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_rate_max", {}), app="gateway")
 
         self.dashboard_item(f"sensor.{pfx}_pv_power", inv.pv.power_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("pv_power", {}), app="gateway")
 
@@ -565,6 +566,9 @@ class GatewayMQTT(ComponentBase):
         self.dashboard_item(f"sensor.{pfx}_inverter_power", inv.inverter.active_power_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("inverter_power", {}), app="gateway")
         if inv.inverter.temperature_c:
             self.dashboard_item(f"sensor.{pfx}_inverter_temperature", inv.inverter.temperature_c, attributes=GATEWAY_ATTRIBUTE_TABLE.get("inverter_temperature", {}), app="gateway")
+        inverter_rate_max = inv.inverter.rate_max_w or battery_rate_max
+        if inverter_rate_max:
+            self.dashboard_item(f"sensor.{pfx}_inverter_rate_max", inverter_rate_max, attributes=GATEWAY_ATTRIBUTE_TABLE.get("inverter_rate_max", {}), app="gateway")
 
         control = inv.control
         self.dashboard_item(f"switch.{pfx}_charge_enabled", "on" if control.charge_enabled else "off", attributes=GATEWAY_ATTRIBUTE_TABLE.get("charge_enabled", {}), app="gateway")
@@ -746,6 +750,7 @@ class GatewayMQTT(ComponentBase):
         charge_enable_entities = []
         discharge_enable_entities = []
         export_limit_entities = []
+        inverter_limit_entities = []
 
         for inv in inverters:
             suffix = inv.serial[-6:].lower()
@@ -777,6 +782,8 @@ class GatewayMQTT(ComponentBase):
                 soc_max_entities.append(None)
                 self.log(f"Warn: GatewayMQTT: inverter {inv.serial} has no battery capacity, setting to None for automatic discovery")
 
+            inverter_limit_entities.append(f"sensor.{base}_inverter_rate_max")
+
         # Map entity lists to PredBat args
         self.set_arg("soc_percent", soc_entities)
         self.set_arg("soc_max", soc_max_entities)
@@ -796,6 +803,7 @@ class GatewayMQTT(ComponentBase):
         self.set_arg("scheduled_charge_enable", charge_enable_entities)
         self.set_arg("scheduled_discharge_enable", discharge_enable_entities)
         self.set_arg("export_limit", export_limit_entities)
+        self.set_arg("inverter_limit", inverter_limit_entities)
 
         # Energy counters (first inverter)
         suffix0 = inverters[0].serial[-6:].lower()
@@ -810,12 +818,7 @@ class GatewayMQTT(ComponentBase):
         self.set_arg("battery_scaling", [f"sensor.{base0}_battery_dod"])
 
         # Battery rate max
-        rate_max = inverters[0].battery.rate_max_w
-        if rate_max > 0:
-            self.set_arg("battery_rate_max", [f"sensor.{base0}_battery_rate_max"])
-        else:
-            self.log("Warn: GatewayMQTT: no battery_rate_max from gateway, using default 6000W")
-            self.set_arg("battery_rate_max", [6000])
+        self.set_arg("battery_rate_max", [f"sensor.{base0}_battery_rate_max"])
 
         # Inverter time (clock drift detection — uses GatewayStatus.timestamp)
         self.set_arg("inverter_time", [f"sensor.{base0}_inverter_time"])
