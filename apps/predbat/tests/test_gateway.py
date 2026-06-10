@@ -567,7 +567,7 @@ class TestInjectEntities:
 
         # Sub-inverter entities
         assert gw._dashboard_calls[f"sensor.{pfx}_sub0_soc"][0] == 65
-        assert gw._dashboard_calls[f"sensor.{pfx}_sub0_battery_power"][0] == 2000
+        assert gw._dashboard_calls[f"sensor.{pfx}_sub0_battery_power"][0] == -2000
         assert gw._dashboard_calls[f"sensor.{pfx}_sub0_pv_power"][0] == 3000
         assert gw._dashboard_calls[f"sensor.{pfx}_sub1_soc"][0] == 75
 
@@ -2646,6 +2646,133 @@ class TestGatewayUnitControlBinding:
         assert self._hybrid_switch_calls(gw) == []
 
 
+class TestCheckInverterResets:
+    """Tests for GatewayMQTT._check_inverter_resets()."""
+
+    def _make_gateway(self, read_only=False, alive=True, auto_configured=True):
+        """Build a minimal GatewayMQTT stub for _check_inverter_resets() tests.
+
+        Sets _mqtt_connected and _gateway_online so is_alive() returns *alive*
+        without needing to mock the method itself.  When alive=True the gateway
+        is connected to the broker but its LWT reports offline — is_alive()
+        returns True in that state without requiring fresh telemetry.
+        """
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.log = MagicMock()
+        gw._suffix_to_serial = {}
+        gw._inverter_reset_done = set()
+        gw._mqtt_connected = alive
+        gw._gateway_online = False  # broker-connected but LWT-offline → is_alive() True when _mqtt_connected
+        gw._last_telemetry_time = 0
+        gw._auto_configured = auto_configured
+        gw._published = []
+
+        def fake_get_arg(key, default=None):
+            if key == "set_read_only":
+                return read_only
+            return default
+
+        gw.get_arg = fake_get_arg
+
+        async def fake_publish_command(command, **kwargs):
+            gw._published.append((command, kwargs))
+
+        gw.publish_command = fake_publish_command
+        return gw
+
+    def _run(self, coro):
+        import asyncio
+
+        return asyncio.run(coro)
+
+    def test_sends_reset_for_un_reset_inverter(self):
+        """inverter_reset is published for a serial not yet in _inverter_reset_done."""
+        gw = self._make_gateway()
+        gw._suffix_to_serial["456789"] = "CE123456789"
+        self._run(gw._check_inverter_resets())
+        assert len(gw._published) == 1
+        cmd, kwargs = gw._published[0]
+        assert cmd == "inverter_reset"
+        assert kwargs["serial"] == "CE123456789"
+
+    def test_serial_added_to_done_set_after_reset(self):
+        """After reset the serial is recorded in _inverter_reset_done."""
+        gw = self._make_gateway()
+        gw._suffix_to_serial["456789"] = "CE123456789"
+        self._run(gw._check_inverter_resets())
+        assert "CE123456789" in gw._inverter_reset_done
+
+    def test_no_duplicate_reset_on_second_call(self):
+        """A second call does not re-send inverter_reset for an already-reset serial."""
+        gw = self._make_gateway()
+        gw._suffix_to_serial["456789"] = "CE123456789"
+        self._run(gw._check_inverter_resets())
+        self._run(gw._check_inverter_resets())
+        assert len(gw._published) == 1
+
+    def test_read_only_skips_reset(self):
+        """No reset is sent when set_read_only is True."""
+        gw = self._make_gateway(read_only=True)
+        gw._suffix_to_serial["456789"] = "CE123456789"
+        self._run(gw._check_inverter_resets())
+        assert gw._published == []
+        assert "CE123456789" not in gw._inverter_reset_done
+
+    def test_not_alive_skips_reset(self):
+        """No reset is sent when is_alive() returns False (MQTT disconnected)."""
+        gw = self._make_gateway(alive=False)
+        gw._suffix_to_serial["456789"] = "CE123456789"
+        self._run(gw._check_inverter_resets())
+        assert gw._published == []
+
+    def test_not_auto_configured_skips_reset(self):
+        """No reset is sent before auto-config has completed."""
+        gw = self._make_gateway(auto_configured=False)
+        gw._suffix_to_serial["456789"] = "CE123456789"
+        self._run(gw._check_inverter_resets())
+        assert gw._published == []
+
+    def test_multi_inverter_each_gets_reset(self):
+        """Each inverter in a multi-inverter setup receives its own inverter_reset."""
+        gw = self._make_gateway()
+        gw._suffix_to_serial["000aa1"] = "CE000000AA1"
+        gw._suffix_to_serial["000bb2"] = "CE000000BB2"
+        self._run(gw._check_inverter_resets())
+        sent_serials = {kwargs["serial"] for _, kwargs in gw._published}
+        assert sent_serials == {"CE000000AA1", "CE000000BB2"}
+        assert len(gw._published) == 2
+
+    def test_multi_inverter_partial_done_resets_only_new(self):
+        """Only inverters not in _inverter_reset_done are reset; already-reset ones are skipped."""
+        gw = self._make_gateway()
+        gw._suffix_to_serial["000aa1"] = "CE000000AA1"
+        gw._suffix_to_serial["000bb2"] = "CE000000BB2"
+        gw._inverter_reset_done.add("CE000000AA1")
+        self._run(gw._check_inverter_resets())
+        assert len(gw._published) == 1
+        assert gw._published[0][1]["serial"] == "CE000000BB2"
+
+    def test_no_inverters_sends_nothing(self):
+        """No commands are sent when _suffix_to_serial is empty."""
+        gw = self._make_gateway()
+        self._run(gw._check_inverter_resets())
+        assert gw._published == []
+
+    def test_log_emitted_per_inverter(self):
+        """An Info log is emitted for each inverter that is reset."""
+        gw = self._make_gateway()
+        gw._suffix_to_serial["000aa1"] = "CE000000AA1"
+        gw._suffix_to_serial["000bb2"] = "CE000000BB2"
+        self._run(gw._check_inverter_resets())
+        logged = [str(c) for c in gw.log.call_args_list]
+        assert any("CE000000AA1" in s for s in logged)
+        assert any("CE000000BB2" in s for s in logged)
+        assert gw.log.call_count == 2
+
+
 def run_gateway_tests(my_predbat=None):
     """Run all GatewayMQTT tests. Returns True on failure, False on success."""
     test_classes = [
@@ -2663,6 +2790,7 @@ def run_gateway_tests(my_predbat=None):
         TestMQTTIntegration,
         TestPublishPredbatData,
         TestIanaToPosixTz,
+        TestCheckInverterResets,
     ]
     for cls in test_classes:
         instance = cls()

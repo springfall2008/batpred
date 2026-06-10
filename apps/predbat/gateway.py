@@ -203,6 +203,9 @@ class GatewayMQTT(ComponentBase):
         # Predbat data publish state (price/timeline for device display)
         self._last_predbat_data = None
 
+        # Track which inverter serials have received an inverter_reset command
+        self._inverter_reset_done = set()
+
         # Register for plan execution hook so we receive plan updates generically
         if hasattr(self.base, "register_hook"):
             self.base.register_hook("on_plan_executed", self._on_plan_executed)
@@ -335,6 +338,9 @@ class GatewayMQTT(ComponentBase):
                 plan_entries, tz = self._pending_plan
                 self._pending_plan = None
                 await self.publish_plan(plan_entries, tz)
+
+            # Send inverter_reset for any inverter not yet reset when not in read-only mode
+            await self._check_inverter_resets()
 
             # Publish predbat data (price, timeline) to device display
             if self._mqtt_connected and self._auto_configured:
@@ -526,7 +532,7 @@ class GatewayMQTT(ComponentBase):
             for idx, sub in enumerate(inv0.ems.sub_inverters):
                 sp = f"sensor.{pfx}_sub{idx}"
                 self.dashboard_item(f"{sp}_soc", sub.soc, attributes=GATEWAY_ATTRIBUTE_TABLE.get("soc", {}), app="gateway")
-                self.dashboard_item(f"{sp}_battery_power", sub.battery_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_power", {}), app="gateway")
+                self.dashboard_item(f"{sp}_battery_power", -sub.battery_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_power", {}), app="gateway")
                 self.dashboard_item(f"{sp}_pv_power", sub.pv_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("pv_power", {}), app="gateway")
                 self.dashboard_item(f"{sp}_grid_power", sub.grid_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("grid_power", {}), app="gateway")
                 self.dashboard_item(f"{sp}_temp", sub.temp_c, attributes=GATEWAY_ATTRIBUTE_TABLE.get("temp", {}), app="gateway")
@@ -1048,6 +1054,21 @@ class GatewayMQTT(ComponentBase):
 
         except Exception as e:
             self.log(f"Warn: Failed to publish predbat_data: {e}")
+
+    async def _check_inverter_resets(self):
+        """Send inverter_reset for each configured inverter not yet reset in control mode.
+
+        Called on every run() cycle. Skips when is_alive() is False, auto-config has
+        not yet run, or set_read_only is active. Each serial is reset at most once per
+        process lifetime (tracked in _inverter_reset_done).
+        """
+        if not self.is_alive() or not self._auto_configured or self.get_arg("set_read_only", False):
+            return
+        for suffix, serial in self._suffix_to_serial.items():
+            if serial not in self._inverter_reset_done:
+                await self.publish_command("inverter_reset", serial=serial)
+                self._inverter_reset_done.add(serial)
+                self.log(f"Info: GatewayMQTT: inverter_reset sent for inverter {serial}")
 
     def _plan_changed(self, plan_entries):
         """Check if the plan differs from the last published plan."""
