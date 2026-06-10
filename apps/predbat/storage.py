@@ -150,8 +150,11 @@ class StorageBase(ABC):
         age_minutes = await self.age(module, filename)
 
         if age_minutes is not None and age_minutes < fresh_minutes:
-            return await self.load(module, filename)
-
+            cached = await self.load(module, filename)
+            if cached is not None:
+                return cached
+            # Entry exists but is expired/unreadable; treat as a miss and re-fetch.
+            age_minutes = None
         if age_minutes is not None and age_minutes < stale_minutes:
             cached = await self.load(module, filename)
             if await self._acquire_refresh_lock(module, filename):
