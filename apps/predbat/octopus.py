@@ -362,6 +362,8 @@ class OctopusAPI(ComponentBase):
         self.saving_sessions = {}
         self.saving_sessions_to_join = []
         self.intelligent_devices = {}
+        self.tariff_fetched_at = None
+        self.device_fetched_at = None
         self.automatic = automatic
         self.commands = []
         self.mpan = None
@@ -371,22 +373,10 @@ class OctopusAPI(ComponentBase):
         self.requests_total = 0
         self.failures_total = 0
 
-        # Storage override (tests set this to inject a StorageComponent); when None the
-        # storage component is resolved lazily via the orchestrator in _get_storage().
-        self._storage_override = None
-
         # In-memory cache for product info (keyed by product_code) to avoid repeated API calls
         self._product_info_cache = {}
 
         self.log("OctopusAPI: Initialised with account ID {}".format(self.account_id))
-
-    def _get_storage(self):
-        """Return the storage component, preferring an explicitly-set one (tests), else resolving via the orchestrator."""
-        existing = getattr(self, "_storage_override", None)
-        if existing is not None:
-            return existing
-        components = getattr(self.base, "components", None)
-        return components.get_component("storage") if components else None
 
     async def select_event(self, entity_id, value):
         suffix = self.get_entity_suffix(entity_id)
@@ -423,12 +413,18 @@ class OctopusAPI(ComponentBase):
     def is_alive(self):
         return self.api_started and self.account_data
 
+    def _data_age_minutes(self, fetched_at):
+        """Return how many minutes ago fetched_at was, or 9999 if not set."""
+        if fetched_at is None:
+            return 9999
+        return (datetime.now() - fetched_at).total_seconds() / 60
+
     async def run(self, seconds, first):
         """
         Main run loop
         """
         if first:
-            # Load cached data
+            # Load cached data (restores tariff_fetched_at / device_fetched_at timestamps)
             await self.load_octopus_cache()
             self.log("OctopusAPI: Started")
 
@@ -442,21 +438,41 @@ class OctopusAPI(ComponentBase):
             # Commands processed - will trigger refresh on next cycle
             refresh = True
 
-        if first or (count_minutes % 30) == 0:
-            # 30-minute update for tariff
-            await self.async_get_account(self.account_id)
+        # On first run, use the stored fetch timestamps to decide what is stale so that fast
+        # restarts skip re-fetching data that was already retrieved recently.  None means the
+        # data was never fetched (no cache), so treat as stale.  Sensor data is always pushed
+        # on startup so HA entities are populated immediately.
+
+        tariff_due = self._data_age_minutes(self.tariff_fetched_at) >= 30
+        device_due = refresh or self._data_age_minutes(self.device_fetched_at) >= 10
+        sensor_due = first or refresh or (count_minutes % 2) == 0
+
+        if tariff_due:
+            # 30-minute API refresh for account and tariff discovery
+            if await self.async_get_account(self.account_id):
+                self.tariff_fetched_at = datetime.now()
+
+        if tariff_due or first:
+            # Rebuild tariff structure from account_data (no API call, needed after cache load)
             await self.async_find_tariffs()
 
-        if first or refresh or (count_minutes % 10) == 0:
-            # 10-minute update for intelligent device
+        if device_due:
+            # 10-minute API refresh for intelligent device and saving sessions
             await self.async_update_intelligent_devices(self.account_id)
-            await self.fetch_tariffs(self.tariffs)
             self.saving_sessions = await self.async_get_flexibility_events(self.account_id)
             self.get_saving_session_data()
+            self.device_fetched_at = datetime.now()
 
-        if first or refresh or (count_minutes % 2) == 0:
+        if device_due or first:
+            # Download rate data into tariff structure (uses storage cache, needed after cache load)
+            await self.fetch_tariffs(self.tariffs)
+
+        if sensor_due:
             # 2-minute update for intelligent device sensor
             await self.async_intelligent_update_sensor(self.account_id)
+
+        if tariff_due or device_due:
+            # Don't save cache every 2 minutes, if we lose it then we re-fresh it anyhow
             await self.save_octopus_cache()
 
         if first and self.automatic:
@@ -534,13 +550,14 @@ class OctopusAPI(ComponentBase):
 
     async def load_octopus_cache(self):
         """Load the octopus user cache via the storage component, normalising missing fields."""
-        storage = self._get_storage()
-        data = await storage.load("octopus_user", "account") if storage else None
+        data = await self.storage.load("octopus_user", "account") if self.storage else None
         if data:
             self.account_data = data.get("account_data", {})
             self.saving_sessions = data.get("saving_sessions", {})
             self.intelligent_devices = data.get("intelligent_devices", {})
             self.graphql_token = data.get("kraken_token")
+            self.tariff_fetched_at = data.get("tariff_fetched_at")
+            self.device_fetched_at = data.get("device_fetched_at")
 
         self.tariffs = {}
         if self.account_data is None:
@@ -557,10 +574,11 @@ class OctopusAPI(ComponentBase):
             "saving_sessions": self.saving_sessions,
             "intelligent_devices": self.intelligent_devices,
             "kraken_token": self.graphql_token,
+            "tariff_fetched_at": self.tariff_fetched_at,
+            "device_fetched_at": self.device_fetched_at,
         }
-        storage = self._get_storage()
-        if storage:
-            await storage.save("octopus_user", "account", octopus_cache, format="yaml", expiry=None)
+        if self.storage:
+            await self.storage.save("octopus_user", "account", octopus_cache, format="yaml", expiry=None)
 
     def get_tariff(self, tariff_type):
         if tariff_type in self.tariffs:
@@ -1314,9 +1332,7 @@ class OctopusAPI(ComponentBase):
         unwrapping or pagination.
         """
         url_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
-        storage = self._get_storage()
-
-        if not storage:
+        if not self.storage:
             data = await self.async_download_octopus_url(url, json_only=json_only)
             if not data:
                 self.log("Warn: Unable to download Octopus data from URL {}".format(url))
@@ -1326,7 +1342,7 @@ class OctopusAPI(ComponentBase):
             result = await self.async_download_octopus_url(url, json_only=json_only)
             return result if result else None
 
-        data = await storage.fetch_cached("octopus", url_hash, _download, fresh_minutes=30, stale_minutes=35, format="yaml")
+        data = await self.storage.fetch_cached("octopus", url_hash, _download, fresh_minutes=30, stale_minutes=35, format="yaml")
         if not data:
             self.log("Warn: Unable to download Octopus data from URL {}".format(url))
         return data

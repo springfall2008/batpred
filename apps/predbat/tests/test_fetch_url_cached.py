@@ -24,11 +24,25 @@ def test_fetch_url_cached(my_predbat):
     return asyncio.run(test_fetch_url_cached_async(my_predbat))
 
 
+class _MockComponents:
+    """Minimal components mock that returns a pre-configured storage component."""
+
+    def __init__(self, storage):
+        """Initialise with a storage instance."""
+        self._storage = storage
+
+    def get_component(self, name):
+        """Return the mocked storage for 'storage', None for others."""
+        if name == "storage":
+            return self._storage
+        return None
+
+
 def _attach_storage(api, temp_dir):
     """Attach a real StorageComponent backed by a temp directory to the api instance."""
     storage = StorageComponent(api.base)
     storage.backend = StorageLocalFiles(temp_dir, api.base.log)
-    api._storage_override = storage
+    api.base.components = _MockComponents(storage)
     return storage
 
 
