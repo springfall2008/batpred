@@ -449,8 +449,8 @@ class OctopusAPI(ComponentBase):
 
         if tariff_due:
             # 30-minute API refresh for account and tariff discovery
-            await self.async_get_account(self.account_id)
-            self.tariff_fetched_at = datetime.now()
+            if await self.async_get_account(self.account_id):
+                self.tariff_fetched_at = datetime.now()
 
         if tariff_due or first:
             # Rebuild tariff structure from account_data (no API call, needed after cache load)
