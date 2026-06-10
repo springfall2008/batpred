@@ -47,6 +47,7 @@ Once you get everything working please share the configuration as a github issue
    | [Kostal Plenticore](#kostal-plenticore) | [Kostal Plenticore](https://www.home-assistant.io/integrations/kostal_plenticore) | [kostal.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/kostal.yaml) |
    | [LuxPower](#luxpower) | [LuxPython](https://github.com/guybw/LuxPython_DEV) | [luxpower.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/luxpower.yaml) |
    | [SigEnergy](#sigenergy-sigenstor) | [SigEnergy](https://github.com/TypQxQ/Sigenergy-Home-Assistant-Integration) | [sigenergy_sigenstor.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_sigenstor.yaml) |
+   | [SigEnergy Cloud](#sigenergy-cloud) | Predbat built-in | [sigenergy_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_cloud.yaml) |
    | [Sofar inverters](#sofar-inverters) | [Sofar MQTT integration](https://github.com/cmcgerty/Sofar2mqtt) | [sofar.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar.yaml) |
    | [SolarEdge inverters](#solaredge-inverters) | [Solaredge Modbus Multi](https://github.com/WillCodeForCats/solaredge-modbus-multi) | [solaredge.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solaredge.yaml) |
    | [Solax Cloud](#solax-cloud) | Predbat | [solax_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/solax_cloud.yaml) |
@@ -1587,7 +1588,6 @@ Add the following automations to `automations.yaml` (or configure via the UI):
           {% elif is_state('input_select.predbat_requested_mode', "Discharging") %}Command Discharging (PV First)
           {% elif is_state('input_select.predbat_requested_mode', "Freeze Discharging") %}Maximum Self Consumption
           {% endif %}
-
     - choose:
         # Freeze Charging
         # Docs:
@@ -1601,19 +1601,21 @@ Add the following automations to `automations.yaml` (or configure via the UI):
               entity_id: input_select.predbat_requested_mode
               state: "Freeze Charging"
           sequence:
-            - service: number.set_value
-              data_template:
+            - action: number.set_value
+              target:
                 entity_id: number.sigen_plant_ess_charge_cut_off_state_of_charge
+              data:
                 value: 100
-            - service: number.set_value
-              data_template:
+            - action: number.set_value
+              target:
                 entity_id: number.sigen_plant_ess_discharge_cut_off_state_of_charge
+              data:
                 value: 100
-            - service: number.set_value
-              data_template:
+            - action: number.set_value
+              target:
                 entity_id: number.sigen_plant_grid_import_limitation
+              data:
                 value: 0
-
         # Freeze Discharging
         # Docs:
         #  Freeze exporting (mapped to Freeze Discharging in sigenergy_sigenstor.yaml) - The battery is in demand mode,
@@ -1626,19 +1628,21 @@ Add the following automations to `automations.yaml` (or configure via the UI):
               entity_id: input_select.predbat_requested_mode
               state: "Freeze Discharging"
           sequence:
-            - service: number.set_value
-              data_template:
+            - action: number.set_value
+              target:
                 entity_id: number.sigen_plant_ess_charge_cut_off_state_of_charge
+              data:
                 value: 0
-            - service: number.set_value
-              data_template:
+            - action: number.set_value
+              target:
                 entity_id: number.sigen_plant_ess_discharge_cut_off_state_of_charge
+              data:
                 value: 0
-            - service: number.set_value
-              data_template:
+            - action: number.set_value
+              target:
                 entity_id: number.sigen_plant_grid_import_limitation
+              data:
                 value: 0
-
         # If neither of the above conditions are met, set the limits to the input numbers
         - conditions:
           - condition: not
@@ -1650,17 +1654,20 @@ Add the following automations to `automations.yaml` (or configure via the UI):
                 entity_id: input_select.predbat_requested_mode
                 state: "Freeze Discharging"
           sequence:
-            - service: number.set_value
-              data_template:
+            - action: number.set_value
+              target:
                 entity_id: number.sigen_plant_ess_charge_cut_off_state_of_charge
+              data:
                 value: 100
-            - service: number.set_value
-              data_template:
+            - action: number.set_value
+              target:
                 entity_id: number.sigen_plant_ess_discharge_cut_off_state_of_charge
+              data:
                 value: 0
-            - service: number.set_value
-              data_template:
+            - action: number.set_value
+              target:
                 entity_id: number.sigen_plant_grid_import_limitation
+              data:
                 value: 100
 
   - id: automation_sigen_ess_max_charging_limit_input_number_action
@@ -1704,9 +1711,120 @@ so you may need to adapt the above automations and `apps.yaml` (or rename your e
 *Important:* Depending upon your electricity supply, you may need to change where **number.sigen_plant_grid_import_limitation** is set to 100 in the first integration to any lower import limit that your electricity supplier may have imposed,
 e.g. 18kW roughly corresponds to an 80A supply.
 
-## Sofar Inverters
+## Sigenergy Cloud
 
-For this integration, the key elements are:
+**Experimental**
+
+Predbat has a built-in Sigenergy Cloud integration that connects directly to the Sigenergy OpenAPI and MQTT broker — no local Home Assistant integration is required.
+It publishes all necessary sensor entities itself and can automatically configure Predbat to use them.
+
+See the [Components - Sigenergy Cloud](components.md#sigenergy-cloud-api-sigenergy) documentation for full configuration options.
+
+### Obtaining Sigenergy Cloud API credentials
+
+1. Log in to the [Sigenergy Developer Portal](https://developer.sigencloud.com).
+
+2. Create a new application (if you do not already have one):
+   - Give it a descriptive name, e.g. *PredBat home battery prediction*
+   - Make sure you tick **VPP Mode** — this is required for Predbat to send charge and discharge commands
+
+3. Submit the application for approval. Approval may take a few days.
+
+4. Once approved, go to **Dashboard → (your application) → Settings**.
+
+5. Copy the **App Key** shown on the settings page.
+
+6. Click **Reset** next to App Secret and copy the secret that is displayed.
+   **Save it immediately** — it will not be shown again.
+
+7. Go to **Data Subscription → MQTT Certificates** (expand the section).
+
+8. Download all three certificate files:
+   - **CA Certificate** (`.pem`)
+   - **Client Certificate** (`.pem`)
+   - **Client Key** (`.key` or `.pem`)
+
+### Storing credentials in secrets.yaml
+
+The certificate files contain multi-line PEM text. YAML supports multi-line strings with the `|` (literal block scalar) syntax — each line of the certificate must be indented consistently below the key name.
+
+Add the following to your `secrets.yaml`:
+
+```yaml
+sigenergy_app_key: "your-app-key-here"
+sigenergy_app_secret: "your-app-secret-here"
+
+sigenergy_ca_pem: |
+  -----BEGIN CERTIFICATE-----
+  ... note entire key must be indented 2 spaces
+  -----END CERTIFICATE-----
+
+sigenergy_client_pem: |
+  -----BEGIN CERTIFICATE-----
+  ... note entire key must be indented 2 spaces
+  -----END CERTIFICATE-----
+
+sigenergy_client_key: |
+  -----BEGIN RSA PRIVATE KEY-----
+  ... note entire key must be indented 2 spaces
+  -----END RSA PRIVATE KEY-----
+```
+
+### Configuring apps.yaml
+
+Copy the template [sigenergy_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_cloud.yaml) over your `apps.yaml` and configure the Sigenergy Cloud component section:
+
+```yaml
+  sigenergy_app_key: !secret sigenergy_app_key
+  sigenergy_app_secret: !secret sigenergy_app_secret
+  sigenergy_ca_cert: !secret sigenergy_ca_pem
+  sigenergy_client_cert: !secret sigenergy_client_pem
+  sigenergy_client_key: !secret sigenergy_client_key
+  sigenergy_automatic: true
+  sigenergy_system_id:
+    - "YOUR_SYSTEM_ID"
+```
+
+You must set at least one system ID as it is required to onboard your system.
+The System ID can be found in the **SigEnergy app** under **Settings → System Settings → About → System ID**. Tap the System ID to copy it to the clipboard.
+
+With `automatic: true`, Predbat will wire all sensor and control entities automatically — no manual `apps.yaml` sensor configuration is needed.
+
+```yaml
+```
+
+### First run — onboarding approval
+
+The first time Predbat starts with the Sigenergy Cloud integration enabled, Sigenergy sends an **onboarding approval email** to the account holder.
+You must click the approval link in that email before Predbat can subscribe to live data from the MQTT broker.
+Once approved, the authorisation persists and no further action is required.
+
+### Temporarily returning control to the Sigenergy app
+
+While your system is in VPP mode, the native Sigenergy app cannot send its own schedule or mode commands.
+To temporarily hand control back, turn on the Predbat **Read-only** switch:
+
+```text
+switch.predbat_set_read_only
+```
+
+When read-only mode is enabled, Predbat switches the inverter back to **Maximise Self-Consumption** (self-use) mode, which restores full control in the Sigenergy app.
+Turn read-only mode back **off** and Predbat will automatically switch the inverter back to VPP mode on the next cycle.
+
+### Offboarding — leaving Predbat VPP entirely
+
+If you want to stop using Predbat's cloud integration altogether, flip the per-system **Offboard** toggle in Home Assistant:
+
+```text
+switch.predbat_sigenergy_<slug>_offboard
+```
+
+Turning this switch **on** calls the Sigenergy offboard API, which removes the system from VPP and exits VPP mode automatically.
+Predbat will not attempt to re-onboard or re-enter VPP mode while this switch remains on.
+
+**Note:** If you later want Predbat to resume control, turn the offboard switch back **off** — but be aware that re-onboarding will require a new approval from Sigenergy (another approval email to the account holder).
+
+## Sofar Inverters
 
 - Hardware - [sofar2mqtt EPS board](https://www.instructables.com/Sofar2mqtt-Remote-Control-for-Sofar-Solar-Inverter/) - Relatively easy to solder and flash, or can be bought pre-made.
 
@@ -2427,15 +2545,78 @@ input_text:
     max: 255
     mode: password
 
+  tesla_access_token_part5:
+    name: "Tesla Access Token - Part 5"
+    max: 255
+    mode: password
+
   tesla_energy_site_id:
     name: "Tesla Energy Site ID"
     unit_of_measurement: ""
     icon: mdi:lightning-bolt-outline
 ```
 
-- Use the [Access Token Generator for Tesla](https://chromewebstore.google.com/detail/access-token-generator-fo/djpjpanpjaimfjalnpkppkjiedmgpjpe?hl=en) to create a token
+You then need to obtain an access token for the API. There are two ways - either use the existing Fleet Integration if you have that setup, or manually obtain them.
 
-- This token needs to be copied, and then split into 4 parts (up to 255 characters long), so each part can be copied into the "refresh" input helpers
+### Option 1: Tesla Fleet Integration (recommended)
+
+The Tesla Fleet integration already handles token exchanges for you. You can simply use this token for the REST API calls.
+
+Create a shell command to access the Tesla Fleet token:
+
+```yaml
+shell_command:
+  get_tesla_fleet_token: >-
+    jq -r 'first(.data.entries[] | select(.domain == "tesla_fleet")) | .data.token.access_token' /config/.storage/core.config_entries
+```
+
+Now create an automation to populate the access token:
+
+```yaml
+- id: refresh_tesla_access_token
+  alias: Refresh Tesla Access Token
+  description: Sync Tesla Fleet token from HA integration every hour
+  triggers:
+    - hours: /1
+      trigger: time_pattern
+    - event: start
+      trigger: homeassistant
+  actions:
+    - action: shell_command.get_tesla_fleet_token
+      response_variable: token_response
+    - action: input_text.set_value
+      target:
+        entity_id: input_text.tesla_access_token_part1
+      data:
+        value: "{{ token_response.stdout[0:220] }}"
+    - action: input_text.set_value
+      target:
+        entity_id: input_text.tesla_access_token_part2
+      data:
+        value: "{{ token_response.stdout[220:440] }}"
+    - action: input_text.set_value
+      target:
+        entity_id: input_text.tesla_access_token_part3
+      data:
+        value: "{{ token_response.stdout[440:660] }}"
+    - action: input_text.set_value
+      target:
+        entity_id: input_text.tesla_access_token_part4
+      data:
+        value: "{{ token_response.stdout[660:880] }}"
+    - action: input_text.set_value
+      target:
+        entity_id: input_text.tesla_access_token_part5
+      data:
+        value: "{{ token_response.stdout[880:] }}"
+  mode: single
+  ```
+
+### Option 2: Another integration
+
+- Consult either the [Tesla Fleet API Documentation](https://developer.tesla.com/docs/fleet-api/authentication/third-party-tokens) or use the [Easy Tesla API Token Generator](https://www.myteslamate.com/tesla-token) to generate an access + refresh token.
+
+- This token needs to be copied, and then split into 4-5 parts (up to 255 characters long), so each part can be copied into the input helpers
 
 - An automation then uses the refresh token to generate an access token valid for 8 hours, and a new refresh token than is valid for ~30 days.<BR>
   Create the following automation using the HA UI or by adding to `configuration.yaml`, the automation triggers an automatic refresh of the access token every 8 hours:
@@ -2469,7 +2650,12 @@ automation:
       target:
         entity_id: input_text.tesla_access_token_part4
       data:
-        value: "{{ tesla_response.content.access_token[750:] }}"
+        value: "{{ tesla_response.content.access_token[750:1000] }}"
+    - service: input_text.set_value
+      target:
+        entity_id: input_text.tesla_access_token_part5
+      data:
+        value: "{{ tesla_response.content.access_token[1000:] }}"
     - service: input_text.set_value
       target:
         entity_id: input_text.tesla_refresh_token_part1
@@ -2502,8 +2688,11 @@ automation:
       notification_id: "tesla_token_update"
 ```
 
-- An automation executes every time HA starts and every midnight to populate the Tesla site id input_helper.
-  Create the following automation using the HA UI or by adding to `configuration.yaml`:
+### Automations
+
+Whether using Fleet or another method, you will need to create a site ID automation.
+
+Create the following automation using the HA UI or by adding to `configuration.yaml`:
 
 ```yaml
 automation:
@@ -2548,34 +2737,37 @@ rest_command:
         (states('input_text.tesla_refresh_token_part5') or '') }}&scope=openid%20email%20offline_access"
 
   tesla_api_get_products:
-    url: "https://owner-api.teslamotors.com/api/1/products"
+    url: "https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/products"
     method: GET
     headers:
       Authorization: >-
         Bearer {{ (states('input_text.tesla_access_token_part1') or '') +
           (states('input_text.tesla_access_token_part2') or '') +
           (states('input_text.tesla_access_token_part3') or '') +
-          (states('input_text.tesla_access_token_part4') or '') }}
+          (states('input_text.tesla_access_token_part4') or '') +
+          (states('input_text.tesla_access_token_part5') or '') }}
 
   tesla_api_get_current_tariff:
-    url: "https://owner-api.teslamotors.com/api/1/energy_sites/{{ states('input_text.tesla_energy_site_id') }}/tariff_rate"
+    url: "https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/energy_sites/{{ states('input_text.tesla_energy_site_id') }}/tariff_rate"
     method: GET
     headers:
       Authorization: >-
         Bearer {{ (states('input_text.tesla_access_token_part1') or '') +
           (states('input_text.tesla_access_token_part2') or '') +
           (states('input_text.tesla_access_token_part3') or '') +
-          (states('input_text.tesla_access_token_part4') or '') }}
+          (states('input_text.tesla_access_token_part4') or '') +
+          (states('input_text.tesla_access_token_part5') or '') }}
 
   tesla_api_set_export_now_tariff:
-    url: "https://owner-api.teslamotors.com/api/1/energy_sites/{{ states('input_text.tesla_energy_site_id') }}/time_of_use_settings"
+    url: "https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/energy_sites/{{ states('input_text.tesla_energy_site_id') }}/time_of_use_settings"
     method: POST
     headers:
       Authorization: >-
         Bearer {{ (states('input_text.tesla_access_token_part1') or '') +
           (states('input_text.tesla_access_token_part2') or '') +
           (states('input_text.tesla_access_token_part3') or '') +
-          (states('input_text.tesla_access_token_part4') or '') }}
+          (states('input_text.tesla_access_token_part4') or '') +
+          (states('input_text.tesla_access_token_part5') or '') }}
       Content-Type: application/json
     payload: >
       {% set now = now() %}
@@ -2682,14 +2874,15 @@ rest_command:
       }
 
   tesla_api_set_iog_custom_tariff:
-    url: "https://owner-api.teslamotors.com/api/1/energy_sites/{{ states('input_text.tesla_energy_site_id') }}/time_of_use_settings"
+    url: "https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/energy_sites/{{ states('input_text.tesla_energy_site_id') }}/time_of_use_settings"
     method: POST
     headers:
       Authorization: >-
         Bearer {{ (states('input_text.tesla_access_token_part1') or '') +
           (states('input_text.tesla_access_token_part2') or '') +
           (states('input_text.tesla_access_token_part3') or '') +
-          (states('input_text.tesla_access_token_part4') or '') }}
+          (states('input_text.tesla_access_token_part4') or '') +
+          (states('input_text.tesla_access_token_part5') or '') }}
       Content-Type: application/json
     payload: >
       {
@@ -2810,6 +3003,7 @@ This is at an early stage of development, see Github discussion [#789](https://g
 - You **must** set [inverter_type in apps.yaml](apps-yaml.md#inverter_type) with a custom name ('MINE' in the example below) - if you do not do this then Predbat will assume you have a GivEnergy inverter
   and will apply inverter limits for that inverter (e.g. max charge/discharge of 2600W)
 - Configure Predbat with the appropriate Home Assistant services to start charges and discharges, etc.
+- If your inverter doesn't expose a sensor for its power limits, set them as **literal watt values** in `apps.yaml` (e.g. `inverter_limit: 5000` not `inverter_limit: 5`). Predbat's unit auto-conversion only fires for sensor references — literal values are taken as watts regardless. See [Inverter control configurations](apps-yaml.md#inverter-control-configurations) for the full list of affected keys.
 
 The following template can be used as a starting point:
 

@@ -54,6 +54,7 @@ message LoadStatus {
 message InverterData {
   int32 active_power_w  = 1;
   float temperature_c   = 2;
+  int32 rate_max_w      = 3;
 }
 
 message ControlStatus {
@@ -66,6 +67,7 @@ message ControlStatus {
   uint32 target_soc         = 7;  // charge target SOC %
   uint32 force_power_w      = 8;
   uint32 command_expires    = 9;  // unix timestamp
+  uint32 export_limit_w     = 10; // export limit in watts, 0=undefined (publish as 99999/unlimited), 1=zero limit (publish as 0), otherwise value in watts
 }
 
 message ScheduleStatus {
@@ -122,6 +124,7 @@ message InverterEntry {
   bool           managed   = 15;  // true = accepts commands, false = poll-only
   bool           primary   = 16;  // true = PredBat should use this inverter for control/config
   string         dongle_serial = 17;  // WiFi dongle serial (internal, used for Modbus framing)
+  string         model         = 18;  // GivEnergy model class (e.g. "All-in-One", "Hybrid HV Gen3", "AC 3ph", "Gateway") — drives AC-coupled vs hybrid handling in PredBat
 }
 
 message GatewayStatus {

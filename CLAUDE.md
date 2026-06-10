@@ -12,6 +12,9 @@ See .github/copilot-instructions.md for more details.
 
 ## Running Tests
 
+Tests take time to run, _always_ save the test output to a file and then grep the file afterwards.
+Never just pipe the output to grep as if you search for the wrong thing you will have to re-run it again.
+
 Tests live in `apps/predbat/tests/` and are run from the `coverage/` directory:
 
 ```bash

@@ -203,6 +203,12 @@ class TestHAInterface:
                 print("Warn: Service for entity {} not a select".format(entity_id))
             elif entity_id in self.dummy_items:
                 self.dummy_items[entity_id] = kwargs.get("option", None)
+        elif service == "time/set_value":
+            entity_id = kwargs.get("entity_id", None)
+            if not entity_id.startswith("time."):
+                print("Warn: Service for entity {} not a time".format(entity_id))
+            elif entity_id in self.dummy_items:
+                self.dummy_items[entity_id] = kwargs.get("time", None)
         return None
 
     def set_state(self, entity_id, state, attributes=None):
@@ -331,7 +337,6 @@ class MockConfigProvider:
             "calculate_export_on_pv": True,
             "calculate_second_pass": True,
             "calculate_inday_adjustment": True,
-            "calculate_tweak_plan": True,
             "calculate_import_low_export": True,
             "calculate_export_high_import": True,
             "balance_inverters_enable": False,
@@ -407,6 +412,8 @@ def reset_rates(my_predbat, ir, xr):
         my_predbat.rate_export[minute] = xr
     my_predbat.rate_export_min = xr
     my_predbat.rate_scan(my_predbat.rate_import, print=False)
+    my_predbat.rate_min_base = my_predbat.rate_min
+    my_predbat.rate_max_base = my_predbat.rate_max
     my_predbat.rate_scan_export(my_predbat.rate_export, print=False)
 
 
@@ -421,6 +428,8 @@ def reset_rates2(my_predbat, ir, xr):
             my_predbat.rate_export[minute] = xr * 2
     my_predbat.rate_export_min = xr
     my_predbat.rate_scan(my_predbat.rate_import, print=False)
+    my_predbat.rate_min_base = my_predbat.rate_min
+    my_predbat.rate_max_base = my_predbat.rate_max
     my_predbat.rate_scan_export(my_predbat.rate_export, print=False)
 
 
@@ -442,6 +451,7 @@ def reset_inverter(my_predbat):
     my_predbat.inverter_limit = 1 / 60.0
     my_predbat.num_inverters = 1
     my_predbat.export_limit = 10 / 60.0
+    my_predbat.pv_ac_limit = 0
     my_predbat.inverters = [TestInverter()]
     my_predbat.charge_window = []
     my_predbat.export_window = []
@@ -591,6 +601,8 @@ def simple_scenario(
     ignore_failed=False,
     set_charge_freeze=True,
     calculate_export_on_pv=True,
+    assert_clipped=0,
+    pv_ac_limit=0,
 ):
     """
     No PV, No Load
@@ -649,11 +661,13 @@ def simple_scenario(
     my_predbat.inverter_hybrid = hybrid
     my_predbat.export_limit = export_limit / 60.0
     my_predbat.inverter_limit = inverter_limit / 60.0
+    my_predbat.pv_ac_limit = pv_ac_limit / 60.0
     my_predbat.reserve = reserve
     my_predbat.inverter_loss = inverter_loss
     my_predbat.battery_rate_max_charge = battery_rate_max_charge / 60.0
     my_predbat.battery_rate_max_charge_dc = battery_rate_max_charge_dc / 60.0
     my_predbat.battery_rate_max_discharge = battery_rate_max_charge / 60.0
+    my_predbat.battery_rate_max_export = battery_rate_max_charge / 60.0
     my_predbat.car_charging_from_battery = car_charging_from_battery
     my_predbat.car_energy_reported_load = car_energy_reported_load
     my_predbat.set_charge_low_power = set_charge_low_power
@@ -817,6 +831,13 @@ def simple_scenario(
         if not ignore_failed:
             print("ERROR: iBoost running full should be {}".format(assert_iboost_running_full))
         failed = True
+
+    if save != "none":
+        total_clipped = prediction.predict_clipped_best[max(prediction.predict_clipped_best.keys())] if prediction.predict_clipped_best else 0
+        if abs(total_clipped - assert_clipped) >= 0.9:
+            if not ignore_failed:
+                print("ERROR: Total clipped {} should be {}".format(total_clipped, assert_clipped))
+            failed = True
 
     if failed and not ignore_failed:
         (

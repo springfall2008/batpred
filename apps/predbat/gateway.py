@@ -98,12 +98,14 @@ GATEWAY_ATTRIBUTE_TABLE = {
     # Inverter
     "inverter_power": {"friendly_name": "Inverter Power", "icon": "mdi:flash", "unit_of_measurement": "W", "device_class": "power", "state_class": "measurement"},
     "inverter_temperature": {"friendly_name": "Inverter Temperature", "icon": "mdi:thermometer", "unit_of_measurement": "°C", "device_class": "temperature", "state_class": "measurement"},
+    "inverter_rate_max": {"friendly_name": "Inverter Max Rate", "icon": "mdi:flash", "unit_of_measurement": "W", "device_class": "power"},
     # Control switches
     "charge_enabled": {"friendly_name": "Charge Enabled", "icon": "mdi:battery-plus"},
     "discharge_enabled": {"friendly_name": "Discharge Enabled", "icon": "mdi:battery-minus"},
     # Operating mode selector
     "mode_select": {"friendly_name": "Operating Mode", "icon": "mdi:cog", "options": GATEWAY_OPERATING_MODE_OPTIONS},
     # Control numbers
+    "export_limit_w": {"friendly_name": "Export Limit", "icon": "mdi:transmission-tower", "unit_of_measurement": "W", "device_class": "power"},
     "charge_rate": {"friendly_name": "Charge Rate", "icon": "mdi:battery-plus", "unit_of_measurement": "W", "min": 0, "max": 10000, "step": 10},
     "discharge_rate": {"friendly_name": "Discharge Rate", "icon": "mdi:battery-minus", "unit_of_measurement": "W", "min": 0, "max": 10000, "step": 10},
     "reserve_soc": {"friendly_name": "Reserve SOC", "icon": "mdi:battery-lock", "unit_of_measurement": "%", "min": 0, "max": 100, "step": 1},
@@ -132,7 +134,7 @@ class GatewayMQTT(ComponentBase):
     Instance methods handle MQTT lifecycle and ComponentBase integration.
     """
 
-    def initialize(self, gateway_device_id=None, mqtt_host=None, mqtt_port=8883, mqtt_token=None, **kwargs):
+    def initialize(self, gateway_device_id=None, mqtt_host=None, mqtt_port=8883, mqtt_token=None, gateway_inverter_serial=None, **kwargs):
         """Initialize gateway configuration and build MQTT topic strings.
 
         Args:
@@ -140,12 +142,32 @@ class GatewayMQTT(ComponentBase):
             mqtt_host: MQTT broker hostname.
             mqtt_port: MQTT broker port (default 8883 for TLS).
             mqtt_token: JWT access token for MQTT authentication.
+            gateway_inverter_serial: Optional serial number(s) to restrict which inverters are configured.
+                If not set, all inverters are used. May be a string or a list of strings.
             **kwargs: Additional keyword arguments (ignored).
         """
         self.gateway_device_id = gateway_device_id
         self.mqtt_host = mqtt_host
         self.mqtt_port = mqtt_port
         self.mqtt_token = mqtt_token
+
+        # Normalise serial filter to a list (or None if not set)
+        if gateway_inverter_serial is None:
+            self.gateway_inverter_serial = []
+        elif isinstance(gateway_inverter_serial, list):
+            self.gateway_inverter_serial = gateway_inverter_serial
+        else:
+            if isinstance(gateway_inverter_serial, str) and (gateway_inverter_serial.startswith("{") or gateway_inverter_serial.startswith("[")):
+                try:
+                    parsed = json.loads(gateway_inverter_serial)
+                    if isinstance(parsed, list):
+                        self.gateway_inverter_serial = [str(s) for s in parsed]
+                    else:
+                        self.gateway_inverter_serial = [str(parsed)]
+                except json.JSONDecodeError:
+                    self.gateway_inverter_serial = [str(gateway_inverter_serial)]
+            else:
+                self.gateway_inverter_serial = [gateway_inverter_serial]
         self.mqtt_token_expires_at = 0
 
         # MQTT topic strings
@@ -173,6 +195,7 @@ class GatewayMQTT(ComponentBase):
         # Auto-config state
         self._last_status = None
         self._auto_configured = False
+        self._configured_inverter_serials = frozenset()  # serials discovered at the last auto-config
         self._last_published_plan = None
         self._pending_plan = None
         self._suffix_to_serial = {}  # maps entity suffix (last 6 chars of serial) -> full serial string
@@ -450,7 +473,7 @@ class GatewayMQTT(ComponentBase):
 
         self._inject_entities(status)
 
-        if not self._auto_configured:
+        if self._needs_reconfigure(status):
             self.automatic_config()
 
     def _inject_entities(self, status):
@@ -524,10 +547,10 @@ class GatewayMQTT(ComponentBase):
         self.dashboard_item(f"sensor.{pfx}_battery_temperature", bat.temperature_c, attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_temperature", {}), app="gateway")
         if bat.capacity_wh:
             self.dashboard_item(f"sensor.{pfx}_battery_capacity", round(bat.capacity_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_capacity", {}), app="gateway")
-        if bat.soh_percent > 0:
+        if bat.soh_percent:
             self.dashboard_item(f"sensor.{pfx}_battery_soh", bat.soh_percent, attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_soh", {}), app="gateway")
-        if bat.rate_max_w > 0:
-            self.dashboard_item(f"sensor.{pfx}_battery_rate_max", bat.rate_max_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_rate_max", {}), app="gateway")
+        battery_rate_max = bat.rate_max_w or 6000
+        self.dashboard_item(f"sensor.{pfx}_battery_rate_max", battery_rate_max, attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_rate_max", {}), app="gateway")
 
         self.dashboard_item(f"sensor.{pfx}_pv_power", inv.pv.power_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("pv_power", {}), app="gateway")
 
@@ -543,10 +566,17 @@ class GatewayMQTT(ComponentBase):
         self.dashboard_item(f"sensor.{pfx}_inverter_power", inv.inverter.active_power_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("inverter_power", {}), app="gateway")
         if inv.inverter.temperature_c:
             self.dashboard_item(f"sensor.{pfx}_inverter_temperature", inv.inverter.temperature_c, attributes=GATEWAY_ATTRIBUTE_TABLE.get("inverter_temperature", {}), app="gateway")
+        inverter_rate_max = inv.inverter.rate_max_w or battery_rate_max
+        if inverter_rate_max:
+            self.dashboard_item(f"sensor.{pfx}_inverter_rate_max", inverter_rate_max, attributes=GATEWAY_ATTRIBUTE_TABLE.get("inverter_rate_max", {}), app="gateway")
 
         control = inv.control
         self.dashboard_item(f"switch.{pfx}_charge_enabled", "on" if control.charge_enabled else "off", attributes=GATEWAY_ATTRIBUTE_TABLE.get("charge_enabled", {}), app="gateway")
         self.dashboard_item(f"switch.{pfx}_discharge_enabled", "on" if control.discharge_enabled else "off", attributes=GATEWAY_ATTRIBUTE_TABLE.get("discharge_enabled", {}), app="gateway")
+        # Proto sentinel: 0=undefined→publish 99999 (unlimited), 1=zero limit→publish 0, otherwise use value as-is
+        _raw_export_limit = control.export_limit_w
+        export_limit_publish = 99999 if _raw_export_limit == 0 else (0 if _raw_export_limit == 1 else _raw_export_limit)
+        self.dashboard_item(f"sensor.{pfx}_export_limit_w", export_limit_publish, attributes=GATEWAY_ATTRIBUTE_TABLE.get("export_limit_w", {}), app="gateway")
         self.dashboard_item(f"number.{pfx}_charge_rate", control.charge_rate_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("charge_rate", {}), app="gateway")
         self.dashboard_item(f"number.{pfx}_discharge_rate", control.discharge_rate_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("discharge_rate", {}), app="gateway")
         self.dashboard_item(f"number.{pfx}_reserve_soc", control.reserve_soc, attributes=GATEWAY_ATTRIBUTE_TABLE.get("reserve_soc", {}), app="gateway")
@@ -595,11 +625,31 @@ class GatewayMQTT(ComponentBase):
             self.dashboard_item(f"sensor.{pfx}_battery_charge_today", round(energy.battery_charge_today_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_charge_today", {}), app="gateway")
             self.dashboard_item(f"sensor.{pfx}_battery_discharge_today", round(energy.battery_discharge_today_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_discharge_today", {}), app="gateway")
 
+    def _needs_reconfigure(self, status):
+        """Whether automatic_config should (re-)run for this status.
+
+        Runs on first telemetry, and again when a *new* inverter serial appears — e.g.
+        a second AIO is discovered later, which (per GivTCP) moves the control point
+        from the AIO to the Gateway. Removals are deliberately ignored so a transient
+        drop-out does not thrash the config; a permanent removal is handled by the
+        onboarding/restart path. (NOTE: re-running re-selects the control target and
+        rewrites the inverter args; whether PredBat core re-reads ``num_inverters`` at
+        runtime vs. needing a component restart is tracked separately.)
+        """
+        if not self._auto_configured:
+            return True
+        new_serials = frozenset(inv.serial for inv in status.inverters) - self._configured_inverter_serials
+        if new_serials:
+            self.log(f"Info: GatewayMQTT: new inverter(s) discovered {sorted(new_serials)} — re-running auto-config")
+            return True
+        return False
+
     def automatic_config(self):
         """Register gateway entities with PredBat's inverter model.
 
-        Called once after first telemetry is received. Maps proto fields
-        to PredBat args so the plan engine has data to work with.
+        Called on first telemetry and re-run when a new inverter serial appears
+        (see ``_needs_reconfigure``). Maps proto fields to PredBat args so the plan
+        engine has data to work with.
         """
         if not self._last_status:
             self.log("Error: GatewayMQTT: automatic_config called with no status data")
@@ -612,20 +662,67 @@ class GatewayMQTT(ComponentBase):
             self.log("Error: GatewayMQTT: no inverters in gateway status")
             return
 
-        # Filter to primary inverters with battery data for planning.
-        # EMS/gateway units may be primary but lack battery — they provide
-        # monitoring entities but shouldn't be registered as plan inverters.
-        any_primary = any(inv.primary for inv in all_inverters)
+        # Classify discovered units and route control per GivTCP / GE-Cloud. Neither a
+        # GivEnergy Gateway (INVERTER_TYPE_GIVENERGY_GATEWAY) nor a Plant EMS
+        # (INVERTER_TYPE_GIVENERGY_EMS) is itself a battery inverter — they are
+        # coordinators with no usable charge window of their own. The battery inverters
+        # (AIO / AC / AC3 / hybrid / HV — all reported as INVERTER_TYPE_GIVENERGY) are
+        # the controllable units. Control-target priority mirrors GivTCP:
+        #   * Plant EMS present     -> control the EMS (it manages all inverters)
+        #   * Gateway + >=2 AIOs    -> control the Gateway (it coordinates the parallel AIOs)
+        #   * Gateway + 1 AIO / none-> control the AIO(s) directly
+        # Selection is by type/count and slots are bound by serial below, so a
+        # re-discovery that reorders the units never changes which unit is controlled.
+        # (The 2026-06-04 incident bound the Gateway as "inverter 0" — which has no
+        # charge window — and broke control after an NVS wipe re-ordered discovery.)
+        ems_units = [inv for inv in all_inverters if inv.type == pb.INVERTER_TYPE_GIVENERGY_EMS]
+        gateway_units = [inv for inv in all_inverters if inv.type == pb.INVERTER_TYPE_GIVENERGY_GATEWAY]
+        coordinator_types = (pb.INVERTER_TYPE_GIVENERGY_EMS, pb.INVERTER_TYPE_GIVENERGY_GATEWAY)
+        candidate_aios = [inv for inv in all_inverters if inv.type not in coordinator_types]
+
+        # Filter AIOs to primary units with battery data for planning.
+        any_primary = any(inv.primary for inv in candidate_aios)
         if any_primary:
-            inverters = [inv for inv in all_inverters if inv.primary and inv.battery.ByteSize() > 0]
-            if not inverters:
-                # All primary inverters lack battery — fall back to any with battery
-                inverters = [inv for inv in all_inverters if inv.battery.capacity_wh > 0]
+            aios = [inv for inv in candidate_aios if inv.primary and inv.battery.ByteSize() > 0]
+            if not aios:
+                # All primary AIOs lack battery — fall back to any with battery
+                aios = [inv for inv in candidate_aios if inv.battery.capacity_wh > 0]
         else:
             # Old firmware: no primary flags, use all with battery data
-            inverters = [inv for inv in all_inverters if inv.battery.ByteSize() > 0]
+            aios = [inv for inv in candidate_aios if inv.battery.ByteSize() > 0]
+
+        if ems_units:
+            # A Plant EMS is the single control point for the whole system.
+            inverters = ems_units[:1]
+        elif gateway_units and len(aios) > 1:
+            # Multiple AIOs behind a Gateway: the Gateway is the single control point.
+            # NOTE: control commands are addressed to the Gateway/EMS serial — the firmware
+            # must fan these out to the AIOs (tracked separately in command_handler.cpp).
+            inverters = gateway_units[:1]
+        else:
+            inverters = aios
         if not inverters:
-            inverters = all_inverters  # last resort
+            inverters = candidate_aios or list(all_inverters)  # last resort
+
+        # Apply serial filter if configured. A no-match is an error — configuring the
+        # wrong inverter set is worse than not configuring at all. Leave _auto_configured
+        # False so the run loop stays blocked and we retry on the next telemetry.
+        if self.gateway_inverter_serial:
+            serial_set = set(s.upper() for s in self.gateway_inverter_serial)
+            filtered = [inv for inv in inverters if inv.serial.upper() in serial_set]
+            if filtered:
+                inverters = filtered
+            else:
+                available = [inv.serial for inv in inverters]
+                self.log(f"Error: GatewayMQTT: gateway_inverter_serial filter {self.gateway_inverter_serial} matched no inverters" f" (available serials: {available}); auto-config aborted — will retry on next telemetry")
+                self._auto_configured = False
+                return
+
+        # Bind PredBat inverter slots to a stable key (serial), not discovery order, so
+        # a given physical inverter always maps to the same slot/entities across a
+        # re-discovery (NVS wipe, gateway reboot, repair). PredBat core is positional;
+        # sorting by serial makes the slot index a deterministic function of identity.
+        inverters = sorted(inverters, key=lambda inv: inv.serial)
 
         num_inverters = len(inverters)
         self.log(f"Info: GatewayMQTT: auto-config: {num_inverters} primary inverter(s) of {len(all_inverters)} total")
@@ -652,6 +749,8 @@ class GatewayMQTT(ComponentBase):
         discharge_end_entities = []
         charge_enable_entities = []
         discharge_enable_entities = []
+        export_limit_entities = []
+        inverter_limit_entities = []
 
         for inv in inverters:
             suffix = inv.serial[-6:].lower()
@@ -674,13 +773,16 @@ class GatewayMQTT(ComponentBase):
             discharge_end_entities.append(f"select.{base}_discharge_slot1_end")
             charge_enable_entities.append(f"switch.{base}_charge_enabled")
             discharge_enable_entities.append(f"switch.{base}_discharge_enabled")
+            export_limit_entities.append(f"sensor.{base}_export_limit_w")
 
             # soc_max: from battery capacity entity
             if inv.battery.capacity_wh > 0:
                 soc_max_entities.append(f"sensor.{base}_battery_capacity")
             else:
-                self.log(f"Warn: GatewayMQTT: inverter {inv.serial} has no battery capacity, using fallback")
                 soc_max_entities.append(None)
+                self.log(f"Warn: GatewayMQTT: inverter {inv.serial} has no battery capacity, setting to None for automatic discovery")
+
+            inverter_limit_entities.append(f"sensor.{base}_inverter_rate_max")
 
         # Map entity lists to PredBat args
         self.set_arg("soc_percent", soc_entities)
@@ -700,6 +802,8 @@ class GatewayMQTT(ComponentBase):
         self.set_arg("discharge_end_time", discharge_end_entities)
         self.set_arg("scheduled_charge_enable", charge_enable_entities)
         self.set_arg("scheduled_discharge_enable", discharge_enable_entities)
+        self.set_arg("export_limit", export_limit_entities)
+        self.set_arg("inverter_limit", inverter_limit_entities)
 
         # Energy counters (first inverter)
         suffix0 = inverters[0].serial[-6:].lower()
@@ -714,12 +818,7 @@ class GatewayMQTT(ComponentBase):
         self.set_arg("battery_scaling", [f"sensor.{base0}_battery_dod"])
 
         # Battery rate max
-        rate_max = inverters[0].battery.rate_max_w
-        if rate_max > 0:
-            self.set_arg("battery_rate_max", [f"sensor.{base0}_battery_rate_max"])
-        else:
-            self.log("Warn: GatewayMQTT: no battery_rate_max from gateway, using default 6000W")
-            self.set_arg("battery_rate_max", [6000])
+        self.set_arg("battery_rate_max", [f"sensor.{base0}_battery_rate_max"])
 
         # Inverter time (clock drift detection — uses GatewayStatus.timestamp)
         self.set_arg("inverter_time", [f"sensor.{base0}_inverter_time"])
@@ -759,8 +858,28 @@ class GatewayMQTT(ComponentBase):
         self.set_arg("ge_cloud_data", False)
         self.set_arg("ge_cloud_direct", False)
 
+        # AC-coupled vs hybrid: mirror gecloud — if any battery inverter reports an
+        # AC / AIO / All-in-One model, the system is AC-coupled, so turn the PredBat
+        # hybrid switch off; a Hybrid/HV unit turns it on. Needs the gateway firmware
+        # to report inv.model; left untouched on older firmware that omits it (empty).
+        ac_coupled = False
+        model_name = ""
+        for inv in candidate_aios:
+            model = (inv.model or "").lower()
+            if model:
+                model_name = inv.model
+                if ("ac" in model) or ("aio" in model) or ("all-in-one" in model):
+                    ac_coupled = True
+                    break
+        if model_name:
+            hybrid_entity = f"switch.{self.prefix}_inverter_hybrid"
+            self.set_state_wrapper(hybrid_entity, "off" if ac_coupled else "on")
+            self.log(f"Info: GatewayMQTT: model '{model_name}' -> ac_coupled={ac_coupled}, set {hybrid_entity} {'off' if ac_coupled else 'on'}")
+
         self._auto_configured = True
+        self._configured_inverter_serials = frozenset(inv.serial for inv in all_inverters)
         self.log(f"Info: GatewayMQTT: auto-config complete: {num_inverters} inverter(s) registered")
+        return num_inverters
 
     async def _publish_predbat_data(self):
         """Publish price/timeline data to the gateway device for display.

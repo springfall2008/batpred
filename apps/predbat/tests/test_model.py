@@ -230,6 +230,7 @@ def run_model_tests(my_predbat):
         battery_soc=50.0,
         inverter_loss=0.8,
         hybrid=True,
+        assert_clipped=2 * 24,  # 1 for the battery on DC and 1 for the PV on AC
     )
     failed |= simple_scenario("load_carbon", my_predbat, 1, 0, assert_final_metric=import_rate * 24, assert_final_soc=0, with_battery=False, carbon=3, assert_final_carbon=3 * 24)
     failed |= simple_scenario(
@@ -487,7 +488,7 @@ def run_model_tests(my_predbat):
     failed |= simple_scenario("pv_only_bat_ac_clips2b", my_predbat, 0, 2, assert_final_metric=-export_rate * 24, assert_final_soc=24, with_battery=True, battery_rate_max_charge_dc=2.0)
     failed |= simple_scenario("pv_only_bat_ac_clips2c", my_predbat, 0, 2, assert_final_metric=-export_rate * 24, assert_final_soc=24, with_battery=True, battery_rate_max_charge=2.0)
     failed |= simple_scenario("pv_only_bat_ac_clips3", my_predbat, 0, 3, assert_final_metric=-export_rate * 48, assert_final_soc=24, with_battery=True)
-    failed |= simple_scenario("pv_only_bat_ac_export_limit", my_predbat, 0, 3, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=24, with_battery=True, export_limit=0.5)
+    failed |= simple_scenario("pv_only_bat_ac_export_limit", my_predbat, 0, 3, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=24, with_battery=True, export_limit=0.5, assert_clipped=24 * 1.5)
     failed |= simple_scenario(
         "pv_only_bat_ac_export_limit_loss",
         my_predbat,
@@ -498,14 +499,15 @@ def run_model_tests(my_predbat):
         with_battery=True,
         export_limit=0.1,
         inverter_loss=0.5,
+        assert_clipped=24 * 2.9,
     )
-    failed |= simple_scenario("pv_only_bat_ac_export_limit_load", my_predbat, 0.5, 3, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=24, with_battery=True, export_limit=0.5)
+    failed |= simple_scenario("pv_only_bat_ac_export_limit_load", my_predbat, 0.5, 3, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=24, with_battery=True, export_limit=0.5, assert_clipped=24 * 1)
     failed |= simple_scenario("pv_only_bat_dc_clips2", my_predbat, 0, 2, assert_final_metric=-export_rate * 24, assert_final_soc=24, with_battery=True, hybrid=True)
     failed |= simple_scenario("pv_only_bat_dc_clips2dc", my_predbat, 0, 2, assert_final_metric=0, assert_final_soc=48, with_battery=True, hybrid=True, battery_rate_max_charge_dc=2.0)
     failed |= simple_scenario("pv_only_bat_dc_clips2dch", my_predbat, 0, 2, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=36, with_battery=True, hybrid=True, battery_rate_max_charge_dc=1.5)
     failed |= simple_scenario("pv_only_bat_dc_clips2l", my_predbat, 0, 2, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=24, with_battery=True, hybrid=True, inverter_loss=0.5)
-    failed |= simple_scenario("pv_only_bat_dc_clips3", my_predbat, 0, 3, assert_final_metric=-export_rate * 24, assert_final_soc=24, with_battery=True, hybrid=True)
-    failed |= simple_scenario("pv_only_bat_dc_clips3l", my_predbat, 0, 3, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=24, with_battery=True, hybrid=True, inverter_loss=0.5)
+    failed |= simple_scenario("pv_only_bat_dc_clips3", my_predbat, 0, 3, assert_final_metric=-export_rate * 24, assert_final_soc=24, with_battery=True, hybrid=True, assert_clipped=24 * 1)
+    failed |= simple_scenario("pv_only_bat_dc_clips3l", my_predbat, 0, 3, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=24, with_battery=True, hybrid=True, inverter_loss=0.5, assert_clipped=24 * 1)
     failed |= simple_scenario(
         "pv_only_bat_dc_clips3l2",
         my_predbat,
@@ -518,7 +520,7 @@ def run_model_tests(my_predbat):
         inverter_loss=0.5,
         inverter_limit=2.0,
     )
-    failed |= simple_scenario("pv_only_bat_dc_export_limit", my_predbat, 0, 3, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=24, with_battery=True, hybrid=True, export_limit=0.5)
+    failed |= simple_scenario("pv_only_bat_dc_export_limit", my_predbat, 0, 3, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=24, with_battery=True, hybrid=True, export_limit=0.5, assert_clipped=24 * 1.5)
     failed |= simple_scenario(
         "pv_only_bat_dc_export_limit_loss",
         my_predbat,
@@ -530,8 +532,32 @@ def run_model_tests(my_predbat):
         hybrid=True,
         export_limit=0.1,
         inverter_loss=0.5,
+        assert_clipped=24 * 1.9,
     )
-    failed |= simple_scenario("pv_only_bat_dc_export_limit_load", my_predbat, 0.5, 3, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=24, with_battery=True, hybrid=True, export_limit=0.5)
+
+    # Export limit less than battery max discharge rate, no solar - battery should just be rate-limited, no clipping
+    failed_local, prediction = simple_scenario(
+        "export_limit_no_clip_no_solar",
+        my_predbat,
+        0,
+        0,
+        assert_final_metric=-export_rate * 24 * 0.5,  # 0.5 kW * 24h = 12 kWh exported at 5p
+        assert_final_soc=100 - 12,  # 12 kWh drained from 100 kWh battery
+        with_battery=True,
+        battery_soc=100.0,
+        battery_size=100,
+        battery_rate_max_charge=1.0,  # 1 kW max discharge, higher than the export limit
+        export_limit=0.5,  # 0.5 kW export limit - less than max battery discharge rate
+        discharge=0,  # export all the way to empty
+        return_prediction_handle=True,
+    )
+    failed |= failed_local
+    total_clipped = max(prediction.predict_clipped_best.values()) if prediction.predict_clipped_best else 0
+    if total_clipped > 0:
+        print("ERROR: export_limit_no_clip_no_solar: clipping should be 0 but got {}".format(total_clipped))
+        failed = True
+
+    failed |= simple_scenario("pv_only_bat_dc_export_limit_load", my_predbat, 0.5, 3, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=24, with_battery=True, hybrid=True, export_limit=0.5, assert_clipped=24 * 1)
     failed |= simple_scenario("battery_charge", my_predbat, 0, 0, assert_final_metric=import_rate * 10, assert_final_soc=10, with_battery=True, charge=10, battery_size=10)
 
     failed |= simple_scenario("battery_charge_low_off", my_predbat, 0, 0, assert_final_metric=import_rate * 10, assert_final_soc=10, with_battery=True, charge=10, battery_size=10, set_charge_low_power=False, keep=5, assert_keep=24.59)
@@ -675,6 +701,7 @@ def run_model_tests(my_predbat):
         battery_rate_max_charge_dc=2.0,
         hybrid=True,
         export_limit=10.0,
+        assert_clipped=24 * 1,
     )
 
     failed |= simple_scenario(
@@ -703,6 +730,7 @@ def run_model_tests(my_predbat):
         inverter_loss=0.5,
         inverter_limit=2,
         hybrid=True,
+        assert_clipped=24 * 1,
     )
     failed |= simple_scenario(
         "battery_charge_pv_term_dc1",
@@ -995,7 +1023,7 @@ def run_model_tests(my_predbat):
     )
     failed |= simple_scenario("battery_discharge_pv2_hybrid", my_predbat, 0, 1.5, assert_final_metric=-export_rate * 24, assert_final_soc=22, with_battery=True, discharge=0, battery_soc=10, hybrid=True)
     failed |= simple_scenario("battery_discharge_pv3_hybrid", my_predbat, 0, 2, assert_final_metric=-export_rate * 24, assert_final_soc=24, with_battery=True, discharge=0, battery_soc=0, hybrid=True)
-    failed |= simple_scenario("battery_discharge_pv3_hybrid2", my_predbat, 0, 3, assert_final_metric=-export_rate * 24, assert_final_soc=24, with_battery=True, discharge=0, battery_soc=0, hybrid=True)
+    failed |= simple_scenario("battery_discharge_pv3_hybrid2", my_predbat, 0, 3, assert_final_metric=-export_rate * 24, assert_final_soc=24, with_battery=True, discharge=0, battery_soc=0, hybrid=True, assert_clipped=24 * 1)
     failed |= simple_scenario("battery_discharge_pv3_hybrid3", my_predbat, 0, 3, assert_final_metric=-export_rate * 24, assert_final_soc=48, with_battery=True, discharge=0, battery_soc=0, hybrid=True, battery_rate_max_charge_dc=2.0)
     failed |= simple_scenario(
         "battery_discharge_pv4_hybrid",
@@ -1010,6 +1038,7 @@ def run_model_tests(my_predbat):
         hybrid=True,
         inverter_limit=2,
         inverter_loss=0.5,
+        assert_clipped=24 * 2,
     )
     failed |= simple_scenario("battery_discharge_freeze", my_predbat, 0, 0.5, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=10, with_battery=True, discharge=99, battery_soc=10)
     failed |= simple_scenario("battery_discharge_freeze2", my_predbat, 0, 0.5, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=10, with_battery=True, discharge=99, battery_soc=10, set_export_freeze_only=True)
@@ -1083,6 +1112,7 @@ def run_model_tests(my_predbat):
         battery_soc=50,
         export_limit=0.5,
         battery_rate_max_charge_dc=10.0,
+        assert_clipped=24 * 1.5,
     )
     failed |= simple_scenario(
         "battery_discharge_export_limit_ac_pv2",
@@ -1109,6 +1139,7 @@ def run_model_tests(my_predbat):
         battery_soc=50,
         export_limit=0.5,
         inverter_limit=2.0,
+        assert_clipped=24 * 0.5,
     )
     failed |= simple_scenario(
         "battery_discharge_export_limit_ac_pv4",
@@ -1123,6 +1154,7 @@ def run_model_tests(my_predbat):
         export_limit=0.5,
         inverter_limit=2.0,
         inverter_loss=0.5,
+        assert_clipped=24 * 0.5,
     )
     failed |= simple_scenario(
         "battery_discharge_export_limit_ac_pv5",
@@ -1152,6 +1184,7 @@ def run_model_tests(my_predbat):
         inverter_limit=2.0,
         battery_rate_max_charge=1.0,
         inverter_can_charge_during_export=False,
+        assert_clipped=24 * 1.5,
     )
     failed |= simple_scenario(
         "battery_discharge_export_limit_hybrid",
@@ -1219,6 +1252,7 @@ def run_model_tests(my_predbat):
         battery_soc=50,
         export_limit=0.5,
         hybrid=True,
+        assert_clipped=24 * 0.5,
     )
     failed |= simple_scenario(
         "battery_discharge_export_limit_hybrid_pv5",
@@ -1233,6 +1267,7 @@ def run_model_tests(my_predbat):
         export_limit=0.5,
         hybrid=True,
         battery_rate_max_charge_dc=2.0,
+        assert_clipped=24 * 0.5,
     )
     failed |= simple_scenario(
         "battery_charge_ac_loss",
@@ -1834,6 +1869,28 @@ def run_model_tests(my_predbat):
         assert_iboost_running=True,
         assert_iboost_running_solar=True,
     )
+
+    # PV AC limit tests (AC-coupled / non-hybrid inverters only)
+    reset_rates(my_predbat, import_rate, export_rate)
+    reset_inverter(my_predbat)
+    # No clipping when pv_ac_limit is above the actual PV output
+    failed |= simple_scenario("pv_ac_limit_no_clip", my_predbat, 0, 1.0, assert_final_metric=-export_rate * 24, assert_final_soc=0, with_battery=False, pv_ac_limit=2.0, assert_clipped=0)
+    # Clipping when pv_ac_limit is below the actual PV output (non-hybrid AC-coupled)
+    failed |= simple_scenario("pv_ac_limit_ac_clip", my_predbat, 0, 2.0, assert_final_metric=-export_rate * 24 * 1.5, assert_final_soc=0, with_battery=False, pv_ac_limit=1.5, assert_clipped=24 * 0.5)
+    # With a load, clipping still applies; load is met from grid when pv is capped
+    failed |= simple_scenario(
+        "pv_ac_limit_ac_clip_with_load",
+        my_predbat,
+        0.5,
+        2.0,
+        assert_final_metric=-export_rate * 24 * 1.0,
+        assert_final_soc=0,
+        with_battery=False,
+        pv_ac_limit=1.5,
+        assert_clipped=24 * 0.5,
+    )
+    # pv_ac_limit must NOT apply to hybrid inverters (PV is DC-coupled, clipping handled by inverter_limit)
+    failed |= simple_scenario("pv_ac_limit_hybrid_ignored", my_predbat, 0, 2.0, assert_final_metric=-export_rate * 24, assert_final_soc=24, with_battery=True, hybrid=True, pv_ac_limit=1.5, assert_clipped=0)
 
     if failed:
         print("**** ERROR: Some Model tests failed ****")

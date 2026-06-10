@@ -146,6 +146,7 @@ class Inverter:
         self.soc_kw = 0
         self.soc_percent = 0
         self.soc_max = None
+        self.nominal_capacity = None
         self.rest_data = None
         self.inverter_limit = 7500.0 / MINUTE_WATT
         self.export_limit = 99999.0 / MINUTE_WATT
@@ -153,12 +154,14 @@ class Inverter:
         self.reserve_percent = self.base.get_arg("battery_min_soc", default=4.0, index=self.id, required_unit="%")
         self.reserve_percent_current = self.base.get_arg("battery_min_soc", default=4.0, index=self.id, required_unit="%")
         self.battery_scaling = self.base.get_arg("battery_scaling", default=1.0, index=self.id)
+        self.battery_scaling_config = self.battery_scaling
 
         self.reserve_max = 100
         self.battery_rate_max_raw = 2600.0
         self.battery_rate_max_charge = 2600.0 / MINUTE_WATT
         self.battery_rate_max_charge_dc = 2600.0 / MINUTE_WATT
         self.battery_rate_max_discharge = 2600.0 / MINUTE_WATT
+        self.battery_rate_max_export = 2600.0 / MINUTE_WATT
         self.battery_temperature = 20
         self.battery_power = 0
         self.battery_voltage = 52.0
@@ -333,6 +336,12 @@ class Inverter:
                         self.base.log("Warn: REST data reports Battery Capacity kWh as {} but nominal indicates {} - using nominal".format(self.soc_max, self.nominal_capacity))
                     self.soc_max = self.nominal_capacity * self.battery_scaling
 
+            # Rest fails to return battery capacity
+            if not self.nominal_capacity:
+                self.log("Warn: REST data does not report Battery Capacity kWh, attempting to use soc_max apps.yaml instead as fallback for nominal capacity")
+                self.nominal_capacity = self.base.get_arg("soc_max", default=0.0, index=self.id)
+                self.soc_max = self.nominal_capacity * self.battery_scaling
+
             if self.rest_v3:
                 # GivTCP v3 indicates battery is being calibrated via [Control][Battery_Calibration]
                 if ("Control" in self.rest_data) and ("Battery_Calibration" in self.rest_data["Control"]):
@@ -370,8 +379,8 @@ class Inverter:
                 ivtime = idetails["Invertor_Time"]
         else:
             self.battery_temperature = self.base.get_arg("battery_temperature", default=20, index=self.id, required_unit="°C")
-            self.soc_max = self.base.get_arg("soc_max", default=0.0, index=self.id) * self.battery_scaling
-            self.nominal_capacity = self.soc_max
+            self.nominal_capacity = self.base.get_arg("soc_max", default=0.0, index=self.id)
+            self.soc_max = self.nominal_capacity * self.battery_scaling
 
             if self.inverter_type in ["GE", "GEC", "GEE"]:
                 self.battery_rate_max_raw = self.base.get_arg("charge_rate", attribute="max", index=self.id, default=2600.0, required_unit="W")
@@ -381,19 +390,6 @@ class Inverter:
                 self.battery_rate_max_raw = 2600.0
 
             ivtime = self.base.get_arg("inverter_time", index=self.id, default=None)
-
-        # Battery cannot be zero size
-        if not self.soc_max or self.soc_max <= 0:
-            self.log("Note: Battery size was not set for inverter {}, attempting to find it..".format(self.id))
-            found_size = self.find_battery_size()
-            if not found_size or found_size <= 0:
-                self.log("Warn: Unable to determine battery size for inverter {}, setting to 8 kWh default, you must set soc_max in apps.yaml or wait until enough data is collected to estimate battery size".format(self.id))
-                self.soc_max = 8.0
-            else:
-                # Store found battery size so we don't keep having to fetch it
-                self.soc_max = found_size * self.battery_scaling
-                self.base.set_arg("soc_max", found_size, index=self.id)
-            self.nominal_capacity = self.soc_max
 
         # Battery rate max charge, discharge (all converted to kW/min)
         inverter_limit_charge = self.base.get_arg("inverter_limit_charge", self.battery_rate_max_raw, index=self.id, required_unit="W")
@@ -407,9 +403,19 @@ class Inverter:
         self.battery_rate_max_charge = min(inverter_limit_charge, self.battery_rate_max_raw) / MINUTE_WATT
         self.battery_rate_max_charge_dc = inverter_limit_charge_dc / MINUTE_WATT
         self.battery_rate_max_discharge = min(inverter_limit_discharge, self.battery_rate_max_raw) / MINUTE_WATT
+        inverter_limit_export = self.base.get_arg("inverter_limit_export", inverter_limit_discharge, index=self.id, required_unit="W")
+        self.battery_rate_max_export = min(inverter_limit_export, self.battery_rate_max_raw) / MINUTE_WATT
         self.battery_rate_min = min(self.base.get_arg("inverter_battery_rate_min", 0, index=self.id, required_unit="W"), self.battery_rate_max_raw) / MINUTE_WATT
 
-        # Convert inverter time into timestamp
+        # Track and update battery size (if automatic)
+        self.battery_size_tracking()
+
+        # Convert inverter time into timestamp.
+        # An absent or unavailable reading (e.g. the cloud API denied access because a GivEnergy
+        # Premium subscription is now required) is treated as "no reading" — skew detection is
+        # skipped rather than misreporting it as inverter clock skew or triggering an auto-restart.
+        if isinstance(ivtime, str) and ivtime.strip().lower() in ("", "unavailable", "unknown", "none"):
+            ivtime = None
         if ivtime:
             try:
                 self.inverter_time = datetime.strptime(ivtime, TIME_FORMAT)
@@ -548,36 +554,219 @@ class Inverter:
             self.base.args["idle_start_time"][id] = self.create_entity("idle_start_time", "00:00:00")
             self.base.args["idle_end_time"][id] = self.create_entity("idle_end_time", "00:00:00")
 
-    def find_battery_size(self):
+    def battery_size_tracking(self):
+        # Battery size determination: fused auto-scaling + find_battery_size logic
+        # If soc_max is unset, automatically enable battery_scaling_auto
+        if self.id > 0:
+            soc_max_sensor_name = "sensor.{}_soc_max_calculated_{}".format(self.base.prefix, self.id)
+        else:
+            soc_max_sensor_name = "sensor.{}_soc_max_calculated".format(self.base.prefix)
+
+        # Store nominal capacity.
+        # Only read the persisted arg when nominal_capacity was not already set from REST or config (i.e. still 0).
+        # This prevents a stale arg value from overwriting a real REST/config-provided nominal.
+        if not self.nominal_capacity or self.nominal_capacity <= 0:
+            self.nominal_capacity = self.base.get_arg("soc_max_nominal", index=self.id, default=0.0)
+        self.base.set_arg("soc_max_nominal", self.nominal_capacity, index=self.id)
+
+        # If the live soc_max read was invalid (e.g. the source sensor was momentarily unavailable)
+        # but we recovered a valid nominal from soc_max_nominal, recompute soc_max so the known-good
+        # capacity takes effect instead of falling through to the 8 kWh default below.
+        if (not self.soc_max or self.soc_max <= 0) and self.nominal_capacity and self.nominal_capacity > 0:
+            self.soc_max = dp3(self.nominal_capacity * self.battery_scaling)
+            self.log("Note: inverter {} soc_max source unavailable this cycle, retained last known battery size {:.3f} kWh".format(self.id, self.soc_max))
+
+        if not self.nominal_capacity or self.nominal_capacity <= 0:
+            self.log("Note: Battery size was not set for inverter {}, enabling battery_scaling_auto".format(self.id))
+            self.base.battery_scaling_auto = True
+
+        # Run find_battery_size at most once per calendar day, always update the history sensor
+        existing_history = self.base.get_state_wrapper(soc_max_sensor_name, attribute="history", default={})
+        if not isinstance(existing_history, dict):
+            existing_history = {}
+        today_key = str(self.base.now_utc.date())
+
+        # Already calculated today - use stored mean from sensor state
+        trimmed_mean_state = self.base.get_state_wrapper(soc_max_sensor_name)
+        try:
+            trimmed_mean = float(trimmed_mean_state) if trimmed_mean_state is not None else None
+        except (ValueError, TypeError):
+            trimmed_mean = None
+
+        if today_key not in existing_history:
+            # Only calculate once per day to save compute resources
+            found_size = self.find_battery_size(self.nominal_capacity)
+            if found_size and found_size > 0:
+                trimmed_mean = self.update_soc_max_calculated_sensor(found_size, self.nominal_capacity)
+            else:
+                # Store None to prevent recalculation every cycle when data is unavailable
+                self.update_soc_max_calculated_sensor(None, self.nominal_capacity)
+
+        if self.base.battery_scaling_auto and trimmed_mean and trimmed_mean > 0:
+            if self.nominal_capacity > 0:
+                # Clamp scaling to [80%, 100%] of the configured usable scaling.
+                # This preserves manual DoD/SOH correction (e.g. 0.8) while allowing measured degradation below it.
+                scaling_upper = self.battery_scaling_config
+                scaling_lower = self.battery_scaling_config * 0.8
+                new_scaling = max(scaling_lower, min(scaling_upper, trimmed_mean / self.nominal_capacity))
+                self.battery_scaling = new_scaling
+                self.soc_max = dp3(self.nominal_capacity * new_scaling)
+                self.log("Info: inverter {} battery_scaling_auto set scaling {:.3f} (mean {:.2f} kWh, nominal {:.2f} kWh) resulting in soc_max {:.3f} kWh".format(self.id, new_scaling, trimmed_mean, self.nominal_capacity, self.soc_max))
+            else:
+                # No nominal configured - use trimmed mean directly without clamping
+                self.soc_max = dp3(trimmed_mean)
+                self.nominal_capacity = self.soc_max
+                self.battery_scaling = 1.0
+                self.base.set_arg("soc_max", self.soc_max, index=self.id)
+                self.base.set_arg("soc_max_nominal", 0.0, index=self.id)
+                self.log("Info: Inverter {} battery_scaling_auto using measured mean {:.2f} kWh (no nominal configured)".format(self.id, trimmed_mean))
+
+        # Final fallback if soc_max is still not determined
+        if not self.soc_max or self.soc_max <= 0:
+            self.log("Warn: Unable to determine battery size for inverter {}, using 8 kWh default for this cycle, you must set soc_max in apps.yaml or wait until enough data is collected to estimate battery size".format(self.id))
+            self.soc_max = 8.0
+            self.nominal_capacity = self.soc_max
+            # Intentionally do NOT persist the fallback into the soc_max / soc_max_nominal args:
+            # caching 8.0 would override a configured (but momentarily unavailable) source and pin
+            # soc_max to 8 kWh until restart. Leaving the args intact lets the next cycle re-read the
+            # real source (or restore soc_max_nominal) and recover automatically.
+
+    def update_soc_max_calculated_sensor(self, found_size, nominal_capacity=0):
+        """
+        Update the soc_max_calculated sensor with a new data point and return the trimmed mean.
+
+        Stores one data point per calendar day (keyed by date string) and keeps the 7 most-recent days.
+        The sensor state is the trimmed mean (min and max dropped when >= 3 samples, plain average otherwise).
+        nominal_capacity is stored as a sensor attribute (0 if not configured).
+        Returns the trimmed mean or None if no data.
+        """
+        if self.id > 0:
+            sensor_name = "sensor.{}_soc_max_calculated_{}".format(self.base.prefix, self.id)
+        else:
+            sensor_name = "sensor.{}_soc_max_calculated".format(self.base.prefix)
+
+        history = self.base.get_state_wrapper(sensor_name, attribute="history", default={})
+        if not isinstance(history, dict):
+            history = {}
+
+        today_key = str(self.base.now_utc.date())
+        history[today_key] = round(found_size, 3) if found_size is not None else None
+
+        # Prune to 7 most-recent days
+        sorted_keys = sorted(history.keys(), reverse=True)[:7]
+        history = {k: history[k] for k in sorted_keys}
+
+        # Filter out None entries (days where calculation failed) before computing the mean
+        values = [v for v in history.values() if v is not None]
+        if not values:
+            self.log("Inverter {} battery size tracking: found_size None, history {}, no valid data for mean calculation".format(self.id, history))
+            self.base.dashboard_item(
+                sensor_name,
+                state=nominal_capacity if nominal_capacity > 0 else "unknown",
+                attributes={
+                    "history": history,
+                    "nominal_capacity": round(nominal_capacity, 3),
+                    "degradation_percent": None,
+                    "configured_degradation": round((1 - self.battery_scaling) * 100, 2),
+                    "unit_of_measurement": "kWh",
+                    "device_class": "energy",
+                    "state_class": "measurement",
+                    "friendly_name": "Predbat calculated battery capacity{}".format(" inverter {}".format(self.id) if self.id > 0 else ""),
+                    "icon": "mdi:battery-charging",
+                },
+            )
+            return None
+
+        if len(values) >= 3:
+            trimmed = sorted(values)[1:-1]
+            trimmed_mean = sum(trimmed) / len(trimmed)
+        else:
+            trimmed_mean = sum(values) / len(values)
+
+        found_size_str = "{:.2f} kWh".format(found_size) if found_size is not None else "None"
+        degradation = (self.nominal_capacity - trimmed_mean) / self.nominal_capacity if self.nominal_capacity > 0 else 0
+        self.log(
+            "Inverter {} battery size tracking: found_size {}, history {}, trimmed_mean {:.2f} kWh, degradation {:.2%}, configured battery_scaling {:.0f}% (configured degradation {:.0f}%)".format(
+                self.id, found_size_str, history, trimmed_mean, degradation, self.battery_scaling * 100, (1 - self.battery_scaling) * 100
+            )
+        )
+
+        self.base.dashboard_item(
+            sensor_name,
+            state=dp2(trimmed_mean),
+            attributes={
+                "history": history,
+                "nominal_capacity": round(nominal_capacity, 3),
+                "degradation_percent": round(degradation * 100, 2),
+                "configured_degradation": round((1 - self.battery_scaling) * 100, 2),
+                "unit_of_measurement": "kWh",
+                "device_class": "energy",
+                "state_class": "measurement",
+                "friendly_name": "Predbat calculated battery capacity{}".format(" inverter {}".format(self.id) if self.id > 0 else ""),
+                "icon": "mdi:battery-charging",
+            },
+        )
+        return trimmed_mean
+
+    def find_battery_size(self, nominal_capacity=0):
         """
         Given SOC Percent and battery power figure out the approximate battery size in kWh
         """
         soc_percent_sensor = self.base.get_arg("soc_percent", indirect=False, index=self.id)
+        soc_kw_sensor = self.base.get_arg("soc_kw", indirect=False, index=self.id)
         battery_power_sensor = self.base.get_arg("battery_power", indirect=False, index=self.id)
         battery_power_invert = self.base.get_arg("battery_power_invert", False, index=self.id)
-        max_power = int(self.battery_rate_max_charge * MINUTE_WATT)
 
-        if soc_percent_sensor and battery_power_sensor:
-            soc_percent_data = self.base.get_history_wrapper(entity_id=soc_percent_sensor, days=self.base.max_days_previous, required=False)
+        if (soc_percent_sensor or soc_kw_sensor) and battery_power_sensor:
+            if soc_percent_sensor:
+                soc_percent_data = self.base.get_history_wrapper(entity_id=soc_percent_sensor, days=self.base.max_days_previous, required=False)
+                if soc_percent_data:
+                    soc_percent, _ = minute_data(
+                        soc_percent_data[0],
+                        self.base.max_days_previous,
+                        self.base.now_utc,
+                        "state",
+                        "last_updated",
+                        backwards=True,
+                        clean_increment=False,
+                        smoothing=False,
+                        divide_by=1.0,
+                        scale=1.0,
+                        required_unit="%",
+                    )
+                else:
+                    soc_percent = {}
+            else:
+                soc_kw_data = self.base.get_history_wrapper(entity_id=soc_kw_sensor, days=self.base.max_days_previous, required=False)
+                soc_percent = {}
+                if soc_kw_data:
+                    # Parse kWh history into a clean minute dict then convert to percent
+                    soc_kw_minute, _ = minute_data(
+                        soc_kw_data[0],
+                        self.base.max_days_previous,
+                        self.base.now_utc,
+                        "state",
+                        "last_updated",
+                        backwards=True,
+                        clean_increment=False,
+                        smoothing=False,
+                        divide_by=1.0,
+                        scale=1.0,
+                        required_unit="kWh",
+                    )
+                    # Determine soc_max from nominal_capacity or the observed maximum
+                    if nominal_capacity and nominal_capacity > 0:
+                        soc_max = nominal_capacity
+                    else:
+                        soc_max = max(soc_kw_minute.values()) if soc_kw_minute else 0
+                    if soc_max > 0:
+                        soc_percent = {minute: (kw / soc_max) * 100.0 for minute, kw in soc_kw_minute.items()}
             battery_power_data = self.base.get_history_wrapper(entity_id=battery_power_sensor, days=self.base.max_days_previous, required=False)
 
-            if not soc_percent_data or not battery_power_data:
+            if not soc_percent or not battery_power_data:
                 self.log("Warn: Unable to estimate battery size - no history data available")
                 return None
 
-            soc_percent, _ = minute_data(
-                soc_percent_data[0],
-                self.base.max_days_previous,
-                self.base.now_utc,
-                "state",
-                "last_updated",
-                backwards=True,
-                clean_increment=False,
-                smoothing=False,
-                divide_by=1.0,
-                scale=self.battery_scaling,
-                required_unit="%",
-            )
             battery_power, _ = minute_data(
                 battery_power_data[0],
                 self.base.max_days_previous,
@@ -599,10 +788,22 @@ class Inverter:
             self.log("Find battery size has {} days of data, max days {}".format(dp0(min_len / 60 / 24.0), self.base.max_days_previous))
 
             estimate_battery_sizes = []
+            rejected_battery_sizes = {}
 
             # Find continuous charging periods and calculate battery size from energy/SoC relationship
             # Data is indexed backwards: minute 0 = now, minute N = N minutes ago
-            max_power_threshold = max_power * 0.9
+            max_charge_power_w = max(self.battery_rate_max_charge * MINUTE_WATT, 0)
+            max_power_threshold = max(250, max_charge_power_w * 0.2)
+            loss_factor = self.base.battery_loss * self.base.inverter_loss
+            size_hint = self.soc_max if self.soc_max and self.soc_max > 0 else 0
+            capacity_reference = nominal_capacity if nominal_capacity and nominal_capacity > 0 else 0
+            plausible_min = capacity_reference * 0.65 if capacity_reference else 0
+            plausible_max = capacity_reference * 1.20 if capacity_reference else 0
+            reference_for_energy = capacity_reference or size_hint
+            min_power_added_kwh = max(0.5, min(1.0, reference_for_energy * 0.04)) if reference_for_energy else 0.5
+
+            def reject_battery_sample(reason):
+                rejected_battery_sizes[reason] = rejected_battery_sizes.get(reason, 0) + 1
 
             # Scan backwards through time to find charging periods
             in_charge = False
@@ -639,41 +840,41 @@ class Inverter:
                             )
                         )
 
-                        # Clip to 20-80% range and align to percentage boundaries
+                        # Clip to 10-90% range and align to percentage boundaries
                         # to avoid partial energy from transition minutes
                         # A "transition minute" is one where the SoC changed from the previous minute
                         # We want to start AFTER a transition and end BEFORE a transition
                         clipped_start_minute = charge_start_minute
                         clipped_end_minute = charge_end_minute
 
-                        # Find first stable minute ≥20% (where SoC didn't just change)
+                        # Find first stable minute ≥10% (where SoC didn't just change)
                         # Search forward in real time (decreasing minute index)
                         found_start = False
                         for m in range(charge_start_minute, charge_end_minute - 1, -1):
                             curr_soc = int(soc_percent.get(m, 0))
                             prev_soc = int(soc_percent.get(m + 1, 0))  # m+1 is older
                             # Check if this is a stable minute (no transition) and within range
-                            if curr_soc >= 20 and curr_soc <= 80 and curr_soc != prev_soc:
+                            if curr_soc >= 10 and curr_soc <= 90 and curr_soc != prev_soc:
                                 clipped_start_minute = m
                                 found_start = True
                                 break
                         if not found_start:
-                            # No stable minute found in 20-80% range, skip this period
+                            # No stable minute found in 10-90% range, skip this period
                             continue
 
-                        # Find last stable minute ≤80% (where SoC won't change next minute)
+                        # Find last stable minute ≤90% (where SoC won't change next minute)
                         # Search backward in real time (increasing minute index)
                         found_end = False
                         for m in range(charge_end_minute, charge_start_minute + 1):
                             curr_soc = int(soc_percent.get(m, 0))
                             next_soc = int(soc_percent.get(m + 1, 0))  # m+1 is older
                             # Check if this is a stable minute (no upcoming transition) and within range
-                            if curr_soc >= 20 and curr_soc <= 80 and curr_soc != next_soc:
+                            if curr_soc >= 10 and curr_soc <= 90 and curr_soc != next_soc:
                                 clipped_end_minute = m
                                 found_end = True
                                 break
                         if not found_end:
-                            # No stable minute found in 20-80% range, skip this period
+                            # No stable minute found in 10-90% range, skip this period
                             continue
 
                         # Validate the clipped range is still valid
@@ -695,32 +896,98 @@ class Inverter:
                             )
                         )
 
-                        if percent_change > 15:  # Need at least 15% change for a meaningful estimate
-                            # Calculate energy added during this period (using clipped range)
-                            power_added = 0.0
-                            sample_count = 0
-                            for power_minute in range(clipped_start_minute, clipped_end_minute - 1, -1):
-                                minute_power = -battery_power.get(power_minute, 0)
-                                power_added += minute_power / 60.0  # W to Wh
-                                sample_count += 1
+                        if percent_change < 10:
+                            reject_battery_sample("soc_change_too_small")
+                            continue
 
-                            self.log("  Power added over {} samples is {}kWh".format(sample_count, dp1(power_added / 1000)))
+                        if percent_change > 80:
+                            reject_battery_sample("soc_change_too_large")
+                            continue
 
-                            if power_added > 0:
-                                estimated_battery_size = (power_added / percent_change) * 100.0 / 1000.0  # Convert Wh to kWh
-                                estimated_battery_size = dp2(estimated_battery_size)
-                                estimate_battery_sizes.append(estimated_battery_size)
+                        # Need enough real charge data to avoid SoC telemetry jumps being mistaken for capacity.
+                        if clipped_start_minute - clipped_end_minute < 20:
+                            reject_battery_sample("charge_period_too_short")
+                            continue
+
+                        if percent_change >= clipped_start_minute - clipped_end_minute:
+                            reject_battery_sample("soc_jump_too_fast")
+                            continue
+
+                        # Calculate energy added during this period (using clipped range)
+                        power_added = 0.0
+                        sample_count = 0
+                        for power_minute in range(clipped_start_minute, clipped_end_minute - 1, -1):
+                            minute_power = -battery_power.get(power_minute, 0)
+                            power_added += minute_power / 60.0  # W to Wh
+                            sample_count += 1
+
+                        power_added_kwh = power_added / 1000.0
+                        self.log("  Power added over {} samples is {}kWh".format(sample_count, dp1(power_added_kwh)))
+
+                        if power_added_kwh < min_power_added_kwh:
+                            reject_battery_sample("energy_too_small")
+                            continue
+
+                        estimated_battery_size = (power_added / percent_change) * 100.0 / 1000.0  # Convert Wh to kWh
+                        adjusted_battery_size = estimated_battery_size * loss_factor
+
+                        if plausible_min and adjusted_battery_size < plausible_min:
+                            reject_battery_sample("capacity_too_low")
+                            continue
+
+                        if plausible_max and adjusted_battery_size > plausible_max:
+                            reject_battery_sample("capacity_too_high")
+                            continue
+
+                        estimate_battery_sizes.append(
+                            {
+                                "size": estimated_battery_size,
+                                "adjusted_size": adjusted_battery_size,
+                                "soc_change": percent_change,
+                                "sample_count": sample_count,
+                                "power_added_kwh": power_added_kwh,
+                            }
+                        )
+
+                        self.log(
+                            "  Battery size sample accepted raw {}kWh adjusted {}kWh from {}% SoC over {} minutes".format(
+                                dp2(estimated_battery_size),
+                                dp2(adjusted_battery_size),
+                                percent_change,
+                                sample_count,
+                            )
+                        )
 
             # Average the estimated battery sizes
             if len(estimate_battery_sizes) > 0:
-                average_battery_size = sum(estimate_battery_sizes) / len(estimate_battery_sizes)
-                average_battery_size = dp2(average_battery_size)
-                # Add in charging loss factor, assume the inverter loss is not counted in the charge rate sensor (as it's AC side)
-                average_battery_size *= self.base.battery_loss * self.base.inverter_loss
-                self.log("Estimated battery size is {}kWh from {} samples (assumed charging loss factor {})".format(dp2(average_battery_size), len(estimate_battery_sizes), dp1(self.base.battery_loss * self.base.inverter_loss)))
+                strong_battery_sizes = [sample for sample in estimate_battery_sizes if sample["soc_change"] >= 20 and sample["sample_count"] >= 60 and sample["power_added_kwh"] >= max(min_power_added_kwh * 4, 4.0)]
+                selected_battery_sizes = strong_battery_sizes if len(strong_battery_sizes) >= 3 else estimate_battery_sizes
+                selected_values = sorted([sample["adjusted_size"] for sample in selected_battery_sizes])
+
+                if len(selected_values) >= 5:
+                    trim_count = max(1, int(len(selected_values) * 0.1))
+                    trimmed_values = selected_values[trim_count:-trim_count]
+                elif len(selected_values) >= 3:
+                    trimmed_values = selected_values[1:-1]
+                else:
+                    trimmed_values = selected_values
+
+                average_battery_size = dp2(sum(trimmed_values) / len(trimmed_values))
+                median_battery_size = selected_values[len(selected_values) // 2] if len(selected_values) % 2 else (selected_values[len(selected_values) // 2 - 1] + selected_values[len(selected_values) // 2]) / 2
+                self.log(
+                    "Estimated battery size is {}kWh from {} selected samples, {} accepted samples, {} rejected samples, median {}kWh (assumed charging loss factor {}, rejects {})".format(
+                        dp2(average_battery_size),
+                        len(selected_battery_sizes),
+                        len(estimate_battery_sizes),
+                        sum(rejected_battery_sizes.values()),
+                        dp2(median_battery_size),
+                        dp1(loss_factor),
+                        rejected_battery_sizes,
+                    )
+                )
                 return average_battery_size
             else:
-                self.log("Warn: Unable to find any suitable charge periods to estimate battery size")
+                self.log("Warn: Unable to find any suitable charge periods to estimate battery size, rejected samples {}".format(rejected_battery_sizes))
                 return None
         else:
             self.log("Warn: Unable to estimate battery size from soc_percent and battery_power data")
@@ -1017,8 +1284,8 @@ class Inverter:
                         self.log("Warn: Found incomplete battery {} curve (no data points), maybe try again when you have more data.".format(curve_type))
                 else:
                     self.log(
-                        "Warn: Cannot find battery {} curve (no full rate {} curve found for battery to {}), one of the required settings for {}, {}_rate, battery_power and predbat.status do not have history, check apps.yaml".format(
-                            curve_type, curve_type, curve_label, soc_label, curve_type
+                        "Info: Cannot find battery {} curve (no full rate {} cycle to {} found in history), battery may not have been fully charged/discharged at max rate recently - this is normal in cost-optimised operation".format(
+                            curve_type, curve_type, curve_label
                         )
                     )
             else:
@@ -1632,6 +1899,11 @@ class Inverter:
             else:
                 self.write_and_poll_value("charge_limit", self.base.get_arg("charge_limit", indirect=False, index=self.id, required_unit="%"), soc)
 
+            charge_limit_enable_entity_id = self.base.get_arg("charge_limit_enable", indirect=False, index=self.id)
+            if charge_limit_enable_entity_id:
+                # If we have a separate enable for the charge limit then make sure it's enabled when we set the charge limit
+                self.write_and_poll_switch("charge_limit_enable", charge_limit_enable_entity_id, True)
+
             # For inverters that need a button press to apply changes (e.g., Fox), press the button now
             if self.inv_time_button_press:
                 self.press_and_poll_button()
@@ -1770,6 +2042,10 @@ class Inverter:
             return self.write_and_poll_value(name, entity_id, new_value, ignore_fail=ignore_fail)
 
         old_value = self.base.get_state_wrapper(entity_id, refresh=True)
+
+        # Ensure new_value is a string for string operations (e.g. when an integer hour/minute is passed for a time entity)
+        if not isinstance(new_value, str):
+            new_value = str(new_value)
 
         # If time format of the selector is %H:%M and we pass in %H:%M:%S then we need to strip the seconds
         if old_value and (":" in old_value) and (":" in new_value) and (len(old_value) == 5) and (len(new_value) == 8):
@@ -2126,6 +2402,7 @@ class Inverter:
 
         self.base.log("Inverter {} Adjust force export to {}, change times from {} - {} to {} - {}".format(self.id, force_export, old_start, old_end, new_start, new_end))
         changed_start_end = False
+        is_hm_format = self.inv_charge_time_format in ["H M", "H:M-H:M"]
 
         # Some inverters have an idle time setting
         if force_export:
@@ -2134,7 +2411,7 @@ class Inverter:
             self.adjust_idle_time(discharge_start="00:00:00", discharge_end="00:00:00")
 
         # Change start time
-        if new_start and new_start != old_start:
+        if new_start and (new_start != old_start or is_hm_format):
             self.base.log("Inverter {} set new export start time to {}".format(self.id, new_start))
             if self.rest_data:
                 pass  # REST writes as a single start/end time
@@ -2147,8 +2424,17 @@ class Inverter:
 
                 if self.inv_charge_time_format == "H M":
                     # If the inverter uses hours and minutes then write to these entities too
-                    self.write_and_poll_option("discharge_start_hour", self.base.get_arg("discharge_start_hour", indirect=False, index=self.id), int(new_start[:2]))
-                    self.write_and_poll_option("discharge_start_minute", self.base.get_arg("discharge_start_minute", indirect=False, index=self.id), int(new_start[3:5]))
+                    # If the entity is a time entity (e.g. for FB00 firmware), write the full time string instead of just the integer component
+                    start_hour_id = self.base.get_arg("discharge_start_hour", indirect=False, index=self.id)
+                    if start_hour_id and isinstance(start_hour_id, str) and start_hour_id.startswith("time."):
+                        self.write_and_poll_option("discharge_start_hour", start_hour_id, new_start)
+                    else:
+                        self.write_and_poll_option("discharge_start_hour", start_hour_id, int(new_start[:2]))
+                    start_minute_id = self.base.get_arg("discharge_start_minute", indirect=False, index=self.id)
+                    if start_minute_id and isinstance(start_minute_id, str) and start_minute_id.startswith("time."):
+                        self.write_and_poll_option("discharge_start_minute", start_minute_id, new_start)
+                    else:
+                        self.write_and_poll_option("discharge_start_minute", start_minute_id, int(new_start[3:5]))
                 elif self.inv_charge_time_format == "H:M-H:M":
                     # If the inverter uses hours and minutes then write to these entities too
                     discharge_time = new_start + "-" + new_end
@@ -2157,7 +2443,7 @@ class Inverter:
                 self.log("Warn: Inverter {} unable write export start time as neither REST or discharge_start_time are set".format(self.id))
 
         # Change end time
-        if new_end and new_end != old_end:
+        if new_end and (new_end != old_end or is_hm_format):
             self.base.log("Inverter {} Set new export end time to {} was {}".format(self.id, new_end, old_end))
             if self.rest_data:
                 pass  # REST writes as a single start/end time
@@ -2169,8 +2455,17 @@ class Inverter:
 
                 # If the inverter uses hours and minutes then write to these entities too
                 if self.inv_charge_time_format == "H M":
-                    self.write_and_poll_option("discharge_end_hour", self.base.get_arg("discharge_end_hour", indirect=False, index=self.id), int(new_end[:2]))
-                    self.write_and_poll_option("discharge_end_minute", self.base.get_arg("discharge_end_minute", indirect=False, index=self.id), int(new_end[3:5]))
+                    # If the entity is a time entity (e.g. for FB00 firmware), write the full time string instead of just the integer component
+                    end_hour_id = self.base.get_arg("discharge_end_hour", indirect=False, index=self.id)
+                    if end_hour_id and isinstance(end_hour_id, str) and end_hour_id.startswith("time."):
+                        self.write_and_poll_option("discharge_end_hour", end_hour_id, new_end)
+                    else:
+                        self.write_and_poll_option("discharge_end_hour", end_hour_id, int(new_end[:2]))
+                    end_minute_id = self.base.get_arg("discharge_end_minute", indirect=False, index=self.id)
+                    if end_minute_id and isinstance(end_minute_id, str) and end_minute_id.startswith("time."):
+                        self.write_and_poll_option("discharge_end_minute", end_minute_id, new_end)
+                    else:
+                        self.write_and_poll_option("discharge_end_minute", end_minute_id, int(new_end[3:5]))
                 elif self.inv_charge_time_format == "H:M-H:M":
                     pass
             else:
@@ -2207,11 +2502,12 @@ class Inverter:
             self.rest_setDischargeSlot1(new_start, new_end)
 
         # Change scheduled discharge enable
-        if force_export and not old_discharge_enable:
+        if force_export:
             self.write_and_poll_switch("scheduled_discharge_enable", self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id), True)
-            self.log("Inverter {} Turning on scheduled export".format(self.id))
+            if not old_discharge_enable:
+                self.log("Inverter {} Turning on scheduled export".format(self.id))
 
-        if (new_end != old_end) or (new_start != old_start) or (force_export != old_discharge_enable):
+        if (new_end != old_end) or (new_start != old_start) or (force_export != old_discharge_enable) or changed_start_end:
             if self.inv_time_button_press:
                 self.press_and_poll_button()
 
@@ -2587,8 +2883,17 @@ class Inverter:
 
                 if self.inv_charge_time_format == "H M":
                     # If the inverter uses hours and minutes then write to these entities too
-                    self.write_and_poll_option("charge_start_hour", self.base.get_arg("charge_start_hour", indirect=False, index=self.id), int(new_start[:2]))
-                    self.write_and_poll_option("charge_start_minute", self.base.get_arg("charge_start_minute", indirect=False, index=self.id), int(new_start[3:5]))
+                    # If the entity is a time entity (e.g. for FB00 firmware), write the full time string instead of just the integer component
+                    start_hour_id = self.base.get_arg("charge_start_hour", indirect=False, index=self.id)
+                    if start_hour_id and isinstance(start_hour_id, str) and start_hour_id.startswith("time."):
+                        self.write_and_poll_option("charge_start_hour", start_hour_id, new_start)
+                    else:
+                        self.write_and_poll_option("charge_start_hour", start_hour_id, int(new_start[:2]))
+                    start_minute_id = self.base.get_arg("charge_start_minute", indirect=False, index=self.id)
+                    if start_minute_id and isinstance(start_minute_id, str) and start_minute_id.startswith("time."):
+                        self.write_and_poll_option("charge_start_minute", start_minute_id, new_start)
+                    else:
+                        self.write_and_poll_option("charge_start_minute", start_minute_id, int(new_start[3:5]))
                 elif self.inv_charge_time_format == "H:M-H:M":
                     # If the inverter uses hours and minutes then write to these entities too
                     charge_time = new_start + "-" + new_end
@@ -2606,8 +2911,17 @@ class Inverter:
                 self.write_and_poll_option("charge_end_time", entity_id_end, new_end)
 
                 if self.inv_charge_time_format == "H M":
-                    self.write_and_poll_option("charge_end_hour", self.base.get_arg("charge_end_hour", indirect=False, index=self.id), int(new_end[:2]))
-                    self.write_and_poll_option("charge_end_minute", self.base.get_arg("charge_end_minute", indirect=False, index=self.id), int(new_end[3:5]))
+                    # If the entity is a time entity (e.g. for FB00 firmware), write the full time string instead of just the integer component
+                    end_hour_id = self.base.get_arg("charge_end_hour", indirect=False, index=self.id)
+                    if end_hour_id and isinstance(end_hour_id, str) and end_hour_id.startswith("time."):
+                        self.write_and_poll_option("charge_end_hour", end_hour_id, new_end)
+                    else:
+                        self.write_and_poll_option("charge_end_hour", end_hour_id, int(new_end[:2]))
+                    end_minute_id = self.base.get_arg("charge_end_minute", indirect=False, index=self.id)
+                    if end_minute_id and isinstance(end_minute_id, str) and end_minute_id.startswith("time."):
+                        self.write_and_poll_option("charge_end_minute", end_minute_id, new_end)
+                    else:
+                        self.write_and_poll_option("charge_end_minute", end_minute_id, int(new_end[3:5]))
                 elif self.inv_charge_time_format == "H:M-H:M":
                     pass
             else:

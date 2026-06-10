@@ -145,14 +145,14 @@ def get_entity_detailed_row_js():
                 row.style.display = 'none';
             });
             mainRow.classList.remove('expanded');
-            timeCell.innerHTML = timeCell.innerHTML.replace('▼', '▶');
+            timeCell.innerHTML = timeCell.innerHTML.replace('\u25bc', '\u25b6');
         } else {
             // Expand
             detailRows.forEach(function(row) {
                 row.style.display = 'table-row';
             });
             mainRow.classList.add('expanded');
-            timeCell.innerHTML = timeCell.innerHTML.replace('▶', '▼');
+            timeCell.innerHTML = timeCell.innerHTML.replace('\u25b6', '\u25bc');
         }
     }
     </script>
@@ -180,12 +180,13 @@ def get_entity_js(selected_entities_json, entity_attributes_json):
 
         document.addEventListener('DOMContentLoaded', function() {
             // Load entity data from API
-            loadEntityData();
+            loadEntityData(false);
         });
 
-        async function loadEntityData() {
+        async function loadEntityData(showAll) {
             try {
-                const response = await fetch('./api/entities');
+                const url = showAll ? './api/entities?all=1' : './api/entities';
+                const response = await fetch(url);
                 if (!response.ok) {
                     throw new Error('Failed to load entities');
                 }
@@ -199,6 +200,14 @@ def get_entity_js(selected_entities_json, entity_attributes_json):
                 allEntities = [];
                 setupEventListeners();
             }
+        }
+
+        function toggleShowAll(checked) {
+            loadEntityData(checked).then(function() {
+                if (isDropdownVisible) {
+                    filterEntityOptions();
+                }
+            });
         }
 
         function setupEventListeners() {
@@ -6366,8 +6375,9 @@ def get_plan_renderer_js():
             // Render header
             html += '<tr>';
             html += '<th><b>Time</b></th>';
-            html += showDebug ? '<th><b>Import p (w/loss)</b></th>' : '<th><b>Import p</b></th>';
-            html += showDebug ? '<th><b>Export p (w/loss)</b></th>' : '<th><b>Export p</b></th>';
+            const currencyMinor = jsonData.currency_symbols?.[1] ?? 'p';
+            html += showDebug ? `<th><b>Import ${currencyMinor} (w/loss)</b></th>` : `<th><b>Import ${currencyMinor}</b></th>`;
+            html += showDebug ? `<th><b>Export ${currencyMinor} (w/loss)</b></th>` : `<th><b>Export ${currencyMinor}</b></th>`;
             html += '<th colspan="2"><b>State</b></th>';
             html += '<th><b>Limit %</b></th>';
             html += showDebug ? '<th><b>PV kWh (10%)</b></th>' : '<th><b>PV kWh</b></th>';
@@ -6545,7 +6555,7 @@ def get_plan_renderer_js():
                 const totals = jsonData.totals;
                 html += '<tr style="color:black">';
 
-                // Empty cells for Time, Import p, Export p, State (colspan 2), Limit %
+                // Empty cells for Time, Import, Export, State (colspan 2), Limit %
                 html += '<td></td><td></td><td></td><td></td><td></td><td></td>';
 
                 // PV forecast total
@@ -6721,14 +6731,14 @@ def get_plan_renderer_js():
         const rateDisplay = displayText !== undefined ? displayText : rate.toFixed(2);
 
         // Use the actual stored override rate for the input field if one exists
-        const inputValue = isOverride ? override.rate : rate;
+        const inputValue = parseFloat((isOverride ? override.rate : rate).toFixed(1));
 
         let html = `<td id=${type} data-minute="${minutesFromMidnight}" data-rate="${rate}" ${cellStyle} bgcolor=${bgColor} onclick="toggleForceDropdown('${dropdownId}')" class="clickable-time-cell">`;
         html += `${rateDisplay}${isOverride ? ' &#8526;' : ''}`;
         html += '<div class="dropdown">';
         html += `<div id="${dropdownId}" class="dropdown-content">`;
         html += `<label>Override ${type} rate:</label>`;
-        html += `<input type="number" id="rate_${dropdownId}" value="${inputValue}" step="0.01">`;
+        html += `<input type="number" id="rate_${dropdownId}" value="${inputValue}" step="0.1">`;
         html += `<button onclick="handleRateOverride('${timeDisplay}', '${type}', '${dropdownId}')">Set Override</button>`;
         if (isOverride) {
             html += `<a onclick="handleRateOverride('${timeDisplay}', '${type}', null, true)">Clear</a>`;
@@ -7158,6 +7168,7 @@ def get_header_html(title, calculating, default_page, arg_errors, THIS_VERSION, 
     """
 
     text = '<!doctype html><html><head><meta charset="utf-8"><title>{}</title>'.format(title)
+    text += '<link rel="icon" type="image/svg+xml" href="https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo.svg">'
     text += '<link rel="icon" type="image/png" href="https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_light.png">'
 
     text += """

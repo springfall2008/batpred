@@ -649,9 +649,11 @@ async def test_octopus_fetch_tariffs(my_predbat):
     ]
     mock_standing_data = [{"valid_from": "2025-01-01T00:00:00Z", "valid_to": None, "value_inc_vat": 45.0}]
 
-    async def mock_fetch_url(url):
+    async def mock_fetch_url(url, **kwargs):
         if "standing-charges" in url:
             return mock_standing_data
+        elif kwargs.get("json_only"):
+            return {}  # product info: no matching tariff found -> fallback to standard path
         else:
             return mock_rates_data
 
@@ -705,9 +707,11 @@ async def test_octopus_fetch_tariffs(my_predbat):
         {"valid_from": "2025-01-01T00:00:00Z", "valid_to": "2025-01-01T00:30:00Z", "value_inc_vat": 5.5},
     ]
 
-    async def mock_fetch_url2(url):
+    async def mock_fetch_url2(url, **kwargs):
         if "standing-charges" in url:
             return []
+        elif kwargs.get("json_only"):
+            return {}  # product info: no matching tariff found -> fallback to standard path
         else:
             return mock_export_rates
 
@@ -740,7 +744,7 @@ async def test_octopus_fetch_tariffs(my_predbat):
     # Track URLs called
     urls_called = []
 
-    async def mock_fetch_url3(url):
+    async def mock_fetch_url3(url, **kwargs):
         urls_called.append(url)
         if "standing-charges" in url:
             return []
@@ -773,7 +777,9 @@ async def test_octopus_fetch_tariffs(my_predbat):
 
     tariffs_input4 = {"import": {"productCode": "AGILE-FLEX-22-11-25", "tariffCode": "E-1R-AGILE-FLEX-22-11-25-C"}, "export": {"productCode": "AGILE-OUTGOING-19-05-13", "tariffCode": "E-1R-AGILE-OUTGOING-19-05-13-C"}}
 
-    async def mock_fetch_url4(url):
+    async def mock_fetch_url4(url, **kwargs):
+        if kwargs.get("json_only"):
+            return {}  # product info: no matching tariff found -> fallback to standard path
         return [{"valid_from": "2025-01-01T00:00:00Z", "valid_to": "2025-01-01T00:30:00Z", "value_inc_vat": 15.0}]
 
     api4.fetch_url_cached = mock_fetch_url4
@@ -802,7 +808,9 @@ async def test_octopus_fetch_tariffs(my_predbat):
 
     tariffs_input5 = {"import": {"productCode": "TEST-PRODUCT", "tariffCode": "TEST-TARIFF"}}
 
-    async def mock_fetch_url5(url):
+    async def mock_fetch_url5(url, **kwargs):
+        if kwargs.get("json_only"):
+            return {}  # product info: no matching tariff found -> fallback to standard path
         return [{"valid_from": "2025-01-01T00:00:00Z", "valid_to": "2025-01-01T00:30:00Z", "value_inc_vat": 20.0}]
 
     api5.fetch_url_cached = mock_fetch_url5
@@ -863,6 +871,75 @@ async def test_octopus_fetch_tariffs(my_predbat):
     else:
         print("PASS: All dashboard_item calls use app='octopus'")
 
+    # Test 7: Product info returns day/night links → async_get_day_night_rates is used
+    print("\n*** Test 7: Product info with day_unit_rates links → routes to async_get_day_night_rates ***")
+    api7 = OctopusAPI(my_predbat, key="test-api-key-7", account_id="test-account-7", automatic=False)
+
+    iog_tariff_code = "E-1R-IOG-SMB-TOU-25-12-12-H"
+    iog_product_code = "IOG-SMB-TOU-25-12-12"
+    tariffs_input7 = {"import": {"productCode": iog_product_code, "tariffCode": iog_tariff_code}}
+
+    # Minimal product-info JSON that _async_get_product_rate_link_types will parse:
+    # contains only day/night links for this tariff — no standard_unit_rates link.
+    mock_product_info = {
+        "single_register_electricity_tariffs": {
+            "_H": {
+                "direct_debit_monthly": {
+                    "code": iog_tariff_code,
+                    "links": [
+                        {"rel": "day_unit_rates", "href": f"https://api.octopus.energy/v1/products/{iog_product_code}/electricity-tariffs/{iog_tariff_code}/day-unit-rates/"},
+                        {"rel": "night_unit_rates", "href": f"https://api.octopus.energy/v1/products/{iog_product_code}/electricity-tariffs/{iog_tariff_code}/night-unit-rates/"},
+                        {"rel": "standing_charges", "href": f"https://api.octopus.energy/v1/products/{iog_product_code}/electricity-tariffs/{iog_tariff_code}/standing-charges/"},
+                    ],
+                }
+            }
+        }
+    }
+
+    mock_day_night_result = [
+        {"valid_from": "2026-05-09T23:30:00+0100", "valid_to": "2026-05-10T05:30:00+0100", "value_inc_vat": 7.0},
+        {"valid_from": "2026-05-10T05:30:00+0100", "valid_to": "2026-05-10T23:30:00+0100", "value_inc_vat": 29.14},
+    ]
+
+    async def mock_fetch_url7(url, **kwargs):
+        if kwargs.get("json_only"):
+            return mock_product_info  # product info with day/night links only
+        if "standing-charges" in url:
+            return []
+        return []  # should not be called for rate data in this path
+
+    api7.fetch_url_cached = mock_fetch_url7
+    api7.clean_url_cache = AsyncMock()
+    api7.dashboard_item = MagicMock()
+    api7.async_get_day_night_rates = AsyncMock(return_value=mock_day_night_result)
+
+    await api7.fetch_tariffs(tariffs_input7)
+
+    # async_get_day_night_rates must have been called (not the standard URL path)
+    if api7.async_get_day_night_rates.call_count != 1:
+        print(f"ERROR: Expected async_get_day_night_rates called once, got {api7.async_get_day_night_rates.call_count}")
+        failed = True
+    else:
+        call_kwargs = api7.async_get_day_night_rates.call_args
+        # Verify correct tariff/product codes passed through
+        passed_tariff = call_kwargs.kwargs.get("tariff_code", "")
+        passed_product = call_kwargs.kwargs.get("product_code", "")
+        if passed_tariff != iog_tariff_code:
+            print(f"ERROR: Expected tariff_code={iog_tariff_code}, got {passed_tariff}")
+            failed = True
+        elif passed_product != iog_product_code:
+            print(f"ERROR: Expected product_code={iog_product_code}, got {passed_product}")
+            failed = True
+        else:
+            print("PASS: async_get_day_night_rates called with correct tariff/product codes")
+
+    # The returned day/night data must be stored in tariffs["import"]["data"]
+    if tariffs_input7["import"].get("data") != mock_day_night_result:
+        print(f"ERROR: Expected day/night data stored in tariff, got {tariffs_input7['import'].get('data')}")
+        failed = True
+    else:
+        print("PASS: Day/night rate data stored correctly in tariff")
+
     if failed:
         print("\n**** ❌ Octopus fetch_tariffs tests FAILED ****")
         return 1
@@ -892,10 +969,10 @@ def test_octopus_get_octopus_rates_direct(my_predbat):
 
     # Setup tariff with rate data (midnight_utc comes from my_predbat)
     # Use dates relative to my_predbat.midnight_utc for compatibility
-    midnight_str = my_predbat.midnight_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
-    midnight_plus_30 = (my_predbat.midnight_utc + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    midnight_plus_60 = (my_predbat.midnight_utc + timedelta(minutes=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    midnight_plus_90 = (my_predbat.midnight_utc + timedelta(minutes=90)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    midnight_str = my_predbat.midnight_utc.strftime("%Y-%m-%dT%H:%M:%S%z")
+    midnight_plus_30 = (my_predbat.midnight_utc + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S%z")
+    midnight_plus_60 = (my_predbat.midnight_utc + timedelta(minutes=60)).strftime("%Y-%m-%dT%H:%M:%S%z")
+    midnight_plus_90 = (my_predbat.midnight_utc + timedelta(minutes=90)).strftime("%Y-%m-%dT%H:%M:%S%z")
 
     api.tariffs = {
         "import": {
@@ -936,8 +1013,8 @@ def test_octopus_get_octopus_rates_direct(my_predbat):
     print("\n*** Test 2: Get standing charges with valid tariff data ***")
     api2 = OctopusAPI(my_predbat, key="test-api-key-2", account_id="test-account-2", automatic=False)
 
-    midnight_str = my_predbat.midnight_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
-    midnight_plus_30 = (my_predbat.midnight_utc + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    midnight_str = my_predbat.midnight_utc.strftime("%Y-%m-%dT%H:%M:%S%z")
+    midnight_plus_30 = (my_predbat.midnight_utc + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S%z")
 
     api2.tariffs = {
         "import": {
@@ -966,7 +1043,7 @@ def test_octopus_get_octopus_rates_direct(my_predbat):
     print("\n*** Test 3: Handle None valid_to (extends to 7 days) ***")
     api3 = OctopusAPI(my_predbat, key="test-api-key-3", account_id="test-account-3", automatic=False)
 
-    midnight_str = my_predbat.midnight_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+    midnight_str = my_predbat.midnight_utc.strftime("%Y-%m-%dT%H:%M:%S%z")
 
     # Create tariff with None valid_to
     tariff_data_before = [{"valid_from": midnight_str, "valid_to": None, "value_inc_vat": 20.0}]
@@ -1062,9 +1139,9 @@ def test_octopus_get_octopus_rates_direct(my_predbat):
     print("\n*** Test 6: Verify minute_data conversion format ***")
     api6 = OctopusAPI(my_predbat, key="test-api-key-6", account_id="test-account-6", automatic=False)
 
-    midnight_str = my_predbat.midnight_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
-    midnight_plus_30 = (my_predbat.midnight_utc + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    midnight_plus_60 = (my_predbat.midnight_utc + timedelta(minutes=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    midnight_str = my_predbat.midnight_utc.strftime("%Y-%m-%dT%H:%M:%S%z")
+    midnight_plus_30 = (my_predbat.midnight_utc + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S%z")
+    midnight_plus_60 = (my_predbat.midnight_utc + timedelta(minutes=60)).strftime("%Y-%m-%dT%H:%M:%S%z")
 
     # Create clear test data - 30 min rates
     api6.tariffs = {

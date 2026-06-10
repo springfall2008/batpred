@@ -5,8 +5,10 @@ adbase
 afci
 AIO
 AIO's
+aiofiles
 aiohttp
 aiomqtt
+aios
 Alertfeed
 allclose
 Anson
@@ -14,6 +16,7 @@ apexcharts
 apikey
 appdaemon
 appkey
+Apprent
 appsyaml
 argname
 ASHP
@@ -25,6 +28,7 @@ autopep
 autoupdate
 axvline
 axvspan
+Backfeed
 backprop
 Backpropagate
 backpropagation
@@ -38,6 +42,7 @@ beforeunload
 bierner
 brickatius
 byok
+cadata
 calib
 Cantarell
 cexxxx
@@ -55,6 +60,7 @@ compareform
 configform
 Consolas
 coro
+cprofile
 creds
 crosscharge
 customisation
@@ -107,6 +113,7 @@ energydataservice
 energythroughput
 epod
 euids
+evergen
 evse
 exog
 exportlimit
@@ -125,6 +132,7 @@ Forestfire
 foxess
 freephase
 fronius
+funcs
 futurerate
 gecloud
 gekey
@@ -144,6 +152,7 @@ HACS
 hadashboard
 hahistory
 hainterface
+halfhourly
 hanres
 HAOS
 hass
@@ -196,6 +205,7 @@ loadml
 loadmlpower
 loadspower
 localfolder
+locationless
 lockstep
 logdata
 loglines
@@ -215,6 +225,7 @@ meterpoint
 meterpower
 metricb
 metricmid
+microinverters
 minb
 minmax
 minsoc
@@ -238,10 +249,11 @@ nattribute
 ncalls
 nearr
 njpwerner
+nobat
 nocharge
 nodischarge
 nord
-Nordpool
+nordpool
 nosc
 nrgheat
 numpy
@@ -258,6 +270,7 @@ onmouseout
 onmouseover
 openweathermap
 overfitting
+overvoltage
 ownerapi
 pbgw
 pdata
@@ -323,7 +336,9 @@ Selfuse
 semodbus
 Sergoe
 SFMB
+sigcloud
 sigen
+sigencloud
 sigenergy
 sigenstor
 Slee
@@ -351,7 +366,10 @@ startswith
 startt
 stdlib
 stepline
+Stromligning
 strptime
+Strømligning
+submessage
 substep
 sunspec
 sunsynk
@@ -380,12 +398,14 @@ timestr
 timezone
 tmrw
 tojson
+tottime
 trapz
 Trefor
 treforsiphone
 twinx
 tzfile
 tzpath
+unconfigured
 unsmoothed
 unstaged
 useid
@@ -405,6 +425,7 @@ xaxistooltip
 xlabel
 xlim
 xload
+xrtkq
 xticks
 yaxis
 yaxistooltip
@@ -412,3 +433,4 @@ yday
 ylabel
 yuanzhi
 zappi
+zigbee

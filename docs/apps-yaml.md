@@ -143,7 +143,7 @@ As another example, the configuration entry for the Solcast day 3 forecast follo
 
 Syntax errors will be highlighted by the Home Assistant editor or via other YAML-aware editors such as VSCode.
 
-Once you have completed your `apps.yaml` and started Predbat you may want to open the Predbat Web Interface and click on 'apps.yaml'. Review any items shown
+Once you have completed your `apps.yaml` and started Predbat you may want to open the Predbat Web Interface and click on 'Apps' at the top. Review any items shown
 in a red background as those do not match (it's okay for a 2nd inverter not to match if you only have one configured). Regular expressions that do not
 match can be ignored if you are not supporting that feature (e.g. Car SoC if you don't have a car).
 
@@ -893,6 +893,8 @@ for more accurate predictions.
 
 ## Inverter control configurations
 
+NB: literal numeric values for the power-limit settings below (`inverter_limit`, `pv_ac_limit`, `export_limit`, `inverter_limit_charge`, `inverter_limit_discharge`, `inverter_limit_export`, `inverter_limit_charge_dc`, `battery_rate_max`, `inverter_battery_rate_min`) must always be in **watts** — e.g. `7300` for a 7.3 kW inverter, never `7.3`. Predbat's unit auto-conversion only fires when the value is a sensor reference (it reads `unit_of_measurement` from the HA entity); for literal values there is no entity to read, so the raw number is taken as watts. A literal `inverter_limit: 7.3` will be interpreted as 7.3 W and clamp `battery_draw` to ~0.0006 kWh per 5-min step, producing a plan that looks like Predbat refuses to discharge the battery.
+
 ### **inverter_limit**
 
 One per inverter.
@@ -911,7 +913,35 @@ Do not add on separate Micro Inverters to the total power.
 
 If you have multiple inverters then set the value of each one in a list format.
 
+Example:
+
+```yaml
+  inverter_limit: 5000   # 5 kW — must be in watts when set as a literal
+```
+
 NB: inverter_limit is ONLY used by Predbat to improve the quality of the plan, any solar clipping is done by the inverter and is not controlled by Predbat.
+
+### **pv_ac_limit**
+
+Optional, applies to **non-hybrid (AC coupled) inverters only**.
+
+Controls the way Predbat models the maximum AC output of your PV system.
+This does not change the way the inverter is controlled.
+
+When set, defines the maximum AC output power in watts for your PV system (e.g. microinverters).
+This is used by Predbat to model clipping that occurs when your PV generation exceeds the AC output limit,
+for example if you have microinverters with a rated maximum AC output.
+
+This setting is ignored for hybrid inverters (`inverter_hybrid: true`) because in a hybrid system the PV
+connects directly to the DC bus and clipping is already modelled via `inverter_limit`.
+
+Example:
+
+```yaml
+  pv_ac_limit: 3600
+```
+
+NB: pv_ac_limit is ONLY used by Predbat to improve the quality of the plan, any solar clipping is done by the inverter and is not controlled by Predbat.
 
 ### **export_limit**
 
@@ -944,6 +974,25 @@ When set in Watts, overrides the maximum charge/discharge rate settings used whe
 This can be used if you need Predbat to cap your inverter battery rate (e.g. due to grid import/export limitations or to charge overnight at a slower rate to reduce inverter/battery heating).
 By default Predbat will normally configure all timed charges or discharges to be at the inverter's maximum rate and these options enable you to reduce that maximum rate.
 [Low rate charging](customisation.md#inverter-control-options) could also be used to slow down Predbat's charge rate whilst still meeting the battery plan.
+
+### **inverter_limit_export**
+
+An optional list of values with one entry per inverter.
+
+e.g.
+
+```yaml
+  inverter_limit_export:
+    - 2000
+```
+
+When set in Watts, caps the maximum discharge rate used specifically during forced export windows, without affecting the ECO mode discharge rate.
+
+This is useful when you want to limit how fast the battery discharges to the grid during forced export periods (e.g. to reduce battery wear or meet grid export limits)
+while still allowing the battery to discharge at full rate during ECO mode to cover house load.
+
+If not set, the value defaults to `inverter_limit_discharge` (or the inverter maximum if that is also not set).
+Predbat will also use this rate when modelling the plan so the prediction accurately reflects the capped export rate.
 
 ### **inverter_limit_charge_dc**
 
@@ -1150,6 +1199,7 @@ or
 - **charge_time** - Battery charge time entity for inverters that require a charge time expressed as a range in the format "*start hour*:*start minute*-*end hour*:*end minute*".
 - **discharge_time** = Ditto battery discharge time expressed as a time range.
 - **charge_limit** - Entity name for used to set the SoC target for the battery in percentage (AC charge target)
+- **charge_limit_enable** - Optional switch entity that enables the AC charge upper percent limit. When set, Predbat will turn this switch on whenever it writes a new charge limit value. Used by inverters (such as GivEnergy via GE Cloud) that have a separate enable/disable control for the charge limit register.
 - **scheduled_charge_enable** - Switch to enable/disable battery charge according to the charge start/end times defined above.
 - **scheduled_discharge_enable** - Switch to enable/disable battery discharge according to the discharge start/end times defined above.
 - **discharge_target_soc** - Set the battery target percent for timed exports, will be written to minimum by Predbat.
@@ -1380,6 +1430,7 @@ The azimuth is the direction of the roof: 0=North, -90=East, 90=West, -180/180 =
 The declination is the angle of the panels, e.g. 45 for a sloped roof or 20 for those on a flat roof
 The efficiency relates to the aging of your panels, 0.95 is for newer systems but they will lose around 1% each year.
 The optional forecast_solar_max_age setting sets the number of hours between updates to PV data, the default is 8.
+The optional `azimuth_zero_south` (default False) can be set to True if you prefer to supply the azimuth already in the Forecast.solar convention (0=South, -90=East, 90=West, ±180=North) rather than the default Predbat convention (0=North). When True, Predbat passes the value straight to the API without conversion.
 
 ```yaml
   forecast_solar:
@@ -1409,6 +1460,22 @@ Optionally you can set an api_key for personal or professional accounts and you 
 
 Note you can omit any of these settings for a default value. They do not have to be exact if you use Predbat auto calibration for PV to improve the data quality.
 
+### Open-Meteo backup for Forecast.solar
+
+If you set `forecast_solar_open_meteo_backup: true`, Predbat will automatically fall back to the [Open-Meteo](#open-meteo-solar-forecast) API whenever Forecast.solar returns no data (for example, due to a server error, rate limiting, or an outage).
+
+When the fallback is active, Predbat derives the Open-Meteo request from the same `forecast_solar` configuration entries (latitude, longitude, postcode, declination, azimuth, kwp, efficiency), so no extra configuration is needed. If you also have an `open_meteo_forecast` section configured, that configuration is used for the backup request instead, which lets you apply Open-Meteo-specific options such as `shading_factors`.
+
+```yaml
+  forecast_solar:
+    - postcode: SW1A 2AB
+      kwp: 3
+      azimuth: 45
+      declination: 45
+      efficiency: 0.95
+  forecast_solar_open_meteo_backup: true
+```
+
 ## Open-Meteo Solar Forecast
 
 [Open-Meteo](https://open-meteo.com/) is a free, open-source weather API that provides solar irradiance forecasts with no API key required.
@@ -1418,6 +1485,7 @@ Ensemble members are used to derive a P10 pessimistic estimate alongside the cen
 You can define one or more rooftop arrays by providing a list; they will be summed automatically.
 
 The azimuth uses the same convention as all other Predbat solar configs (Solcast/Forecast.solar): 0=North, -90=East, 90=West, -180/180=South. Predbat converts this to the Open-Meteo convention (0=South) internally.
+The optional `azimuth_zero_south` (default False) can be set to True if you prefer to supply the azimuth already in the Open-Meteo convention (0=South, -90=East, 90=West, ±180=North). When True, Predbat passes the value straight to the API without conversion.
 The declination is the angle of the panels from horizontal (e.g. 35 for a typical pitched UK roof).
 For the UK you can use a postcode instead of latitude/longitude.
 The optional `efficiency` (default 1.0) is the panel efficiency as a fraction where 1.0 = 100% (no losses), e.g. 0.95 for 5% losses from wiring and soiling. This uses the same convention as Forecast.solar.
@@ -1690,6 +1758,26 @@ it will incorrectly report the 13.5kWh usable capacity of each AIO as 15.9kWh, s
 
 If you are going to chart your battery SoC in Home Assistant then you may want to use **predbat.soc_kw_h0** as your current SoC (as this will be scaled)
 rather than the usual *givtcp_SERIAL_NUMBER_soc* GivTCP entity so everything lines up.
+
+```yaml
+  battery_scaling_auto: true|false
+```
+
+Default false. When set to true Predbat will automatically calculate `battery_scaling` based on historical charge data rather than using the static value above.
+
+The calculation uses `find_battery_size()` to estimate the actual usable battery capacity from historical charging periods and
+compares it to the nominal capacity (`soc_max`). A 7-day rolling history of daily estimates is stored in a new sensor
+`sensor.predbat_soc_max_calculated` (or `sensor.predbat_soc_max_calculated_N` for inverter N > 0).
+The sensor state is the trimmed mean of the history (the highest and lowest samples are discarded when 3 or more data points exist,
+giving a stable average that is robust to occasional outliers).
+
+The calculation is performed at most once per calendar day to avoid wasting compute resources.
+On subsequent Predbat cycles in the same day the stored sensor state is used instead.
+
+The resulting `battery_scaling` is clamped to the range [0.8, 1.0] if `soc_max` is configured.
+
+This is useful for batteries that degrade over time — the scaling will gradually reduce as the measured capacity drifts
+below the nominal figure, without needing any manual adjustment.
 
 ### Import export scaling
 

@@ -735,11 +735,12 @@ def in_iboost_slot(minute, iboost_plan):
     return load_amount
 
 
-def in_car_slot(minute, num_cars, car_charging_slots):
+def in_car_slot(minute, num_cars, car_charging_slots, slot_cap=None, slot_cap_period=None):
     """
     Is the given minute inside a car slot
     """
     load_amount = [0 for car_n in range(num_cars)]
+    rate_amount = [0 for car_n in range(num_cars)]
 
     for car_n in range(num_cars):
         if car_charging_slots[car_n]:
@@ -747,14 +748,17 @@ def in_car_slot(minute, num_cars, car_charging_slots):
                 start_minutes = slot["start"]
                 end_minutes = slot["end"]
                 kwh = slot["kwh"]
+                octopus = slot.get("octopus", False)
                 slot_minutes = end_minutes - start_minutes
                 slot_hours = slot_minutes / 60.0
 
                 # Return the load in that slot
                 if minute >= start_minutes and minute < end_minutes:
                     load_amount[car_n] = abs(kwh / slot_hours)
+                    # Only return rate for octopus as its used for premium calculations
+                    rate_amount[car_n] = slot.get("average", 0) if octopus else 0
                     break
-    return load_amount
+    return load_amount, rate_amount
 
 
 def time_string_to_stamp(time_string):
@@ -773,7 +777,11 @@ def time_string_to_stamp(time_string):
     if isinstance(time_string, str) and time_string.startswith("24:"):
         time_string = "00:" + time_string[3:]
 
-    return datetime.strptime(time_string, "%H:%M:%S")
+    try:
+        return datetime.strptime(time_string, "%H:%M:%S")
+    except (ValueError, TypeError):
+        print("WARN: time_string_to_stamp: invalid time string '{}', returning None".format(time_string))
+        return None
 
 
 def compute_window_minutes(start_time, end_time, minutes_now):
@@ -989,7 +997,7 @@ def get_charge_rate_curve(soc, charge_rate_setting, soc_max, battery_rate_max_ch
     """
     Compute true charging rate from SoC and charge rate setting
     """
-    return get_charge_rate_curve_cached(soc, charge_rate_setting, soc_max, battery_rate_max_charge, charge_curve_to_tuple(battery_charge_power_curve), battery_rate_min, battery_temperature, charge_curve_to_tuple(battery_temperature_curve))
+    return get_charge_rate_curve_cached(round(soc, 1), charge_rate_setting, soc_max, battery_rate_max_charge, charge_curve_to_tuple(battery_charge_power_curve), battery_rate_min, battery_temperature, charge_curve_to_tuple(battery_temperature_curve))
 
 
 @lru_cache(maxsize=8192)
@@ -1012,7 +1020,9 @@ def get_discharge_rate_curve(soc, discharge_rate_setting, soc_max, battery_rate_
     """
     Compute true discharging rate from SoC and charge rate setting
     """
-    return get_discharge_rate_curve_cached(soc, discharge_rate_setting, soc_max, battery_rate_max_discharge, charge_curve_to_tuple(battery_discharge_power_curve), battery_rate_min, battery_temperature, charge_curve_to_tuple(battery_temperature_curve))
+    return get_discharge_rate_curve_cached(
+        round(soc, 1), discharge_rate_setting, soc_max, battery_rate_max_discharge, charge_curve_to_tuple(battery_discharge_power_curve), battery_rate_min, battery_temperature, charge_curve_to_tuple(battery_temperature_curve)
+    )
 
 
 """
@@ -1076,7 +1086,7 @@ def find_charge_rate(
     battery_charge_power_curve_tuple = charge_curve_to_tuple(battery_charge_power_curve)
 
     # Real achieved max rate
-    max_rate_real = get_charge_rate_curve_cached(soc, max_rate, soc_max, max_rate, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple) * battery_rate_max_scaling
+    max_rate_real = get_charge_rate_curve_cached(round(soc, 1), max_rate, soc_max, max_rate, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple) * battery_rate_max_scaling
 
     if set_charge_low_power:
         minutes_left = window["end"] - minutes_now - margin
@@ -1132,7 +1142,7 @@ def find_charge_rate(
                 rate_scale_max = 0
                 # Compute over the time period, include the completion time
                 for minute in range(0, minutes_left, PREDICT_STEP):
-                    rate_scale = get_charge_rate_curve_cached(charge_now, rate, soc_max, max_rate, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple)
+                    rate_scale = get_charge_rate_curve_cached(round(charge_now, 1), rate, soc_max, max_rate, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple)
                     highest_achievable_rate = max(highest_achievable_rate, rate_scale)
                     rate_scale *= battery_rate_max_scaling
                     rate_scale_max = max(rate_scale_max, rate_scale)
@@ -1159,7 +1169,7 @@ def find_charge_rate(
                     )
                 )
 
-        best_rate_real = get_charge_rate_curve_cached(soc, best_rate, soc_max, max_rate, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple) * battery_rate_max_scaling
+        best_rate_real = get_charge_rate_curve_cached(round(soc, 1), best_rate, soc_max, max_rate, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple) * battery_rate_max_scaling
         if log_to:
             log_to(
                 "Low Power mode: minutes left: {}, absolute: {}, SoC: {}kW, Target SoC: {}kW, Charge left: {}kW, Max rate: {}W, Min rate: {}W, Best rate: {}W, Best rate real: {}W, Battery temp {}°C".format(

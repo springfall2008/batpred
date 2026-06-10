@@ -9,6 +9,8 @@ batpred.code-workspace
 .Trashes
 ehthumbs.db
 Thumbs.db
+dev_code
+sigenergy_mqtt_key
 
 # Python cache files
 __pycache__/
@@ -60,6 +62,7 @@ htmlcov/
 .mypy_cache/
 .dmypy.json
 dmypy.json
+temp_octopus
 
 # Generated test files
 *_test.html

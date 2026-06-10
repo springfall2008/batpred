@@ -17,6 +17,7 @@ initialising, starting, stopping, and restarting components in the correct
 phase order. Routes HA events to components based on entity prefix filtering.
 """
 
+from storage import StorageComponent
 from solcast import SolarAPI
 from gecloud import GECloudDirect, GECloudData
 from ohme import OhmeAPI
@@ -25,6 +26,7 @@ from carbon import CarbonAPI
 from temperature import TemperatureAPI
 from axle import AxleAPI
 from solax import SolaxAPI
+from sigenergy import SigenergyAPI
 from solis import SolisAPI
 from alertfeed import AlertFeed
 from web import WebInterface
@@ -48,6 +50,7 @@ import os
 
 
 COMPONENT_LIST = {
+    "storage": {"class": StorageComponent, "name": "Storage", "args": {}, "can_restart": True, "phase": 0},
     "db": {
         "class": DatabaseManager,
         "name": "Database Manager",
@@ -100,6 +103,7 @@ COMPONENT_LIST = {
             "solcast_poll_hours": {"required": False, "config": "solcast_poll_hours", "default": 8},
             "forecast_solar": {"required": False, "config": "forecast_solar", "default": False},
             "forecast_solar_max_age": {"required": False, "config": "forecast_solar_max_age", "default": 8},
+            "forecast_solar_open_meteo_backup": {"required": False, "config": "forecast_solar_open_meteo_backup", "default": False},
             "pv_forecast_today": {"required": False, "config": "pv_forecast_today"},
             "pv_forecast_tomorrow": {"required": False, "config": "pv_forecast_tomorrow"},
             "pv_forecast_d3": {"required": False, "config": "pv_forecast_d3"},
@@ -210,6 +214,11 @@ COMPONENT_LIST = {
                 "required": False,
                 "default": False,
                 "config": "fox_automatic",
+            },
+            "automatic_ignore_pv": {
+                "required": False,
+                "default": False,
+                "config": "fox_automatic_ignore_pv",
             },
             "inverter_sn": {
                 "required": False,
@@ -338,6 +347,25 @@ COMPONENT_LIST = {
         "required_or": ["api_key", "managed_mode"],
         "phase": 1,
     },
+    "sigenergy": {
+        "class": SigenergyAPI,
+        "name": "Sigenergy Cloud API",
+        "event_filter": "predbat_sigenergy_",
+        "args": {
+            "system_id": {"required": True, "config": "sigenergy_system_id"},
+            "app_key": {"required": True, "config": "sigenergy_app_key"},
+            "app_secret": {"required": True, "config": "sigenergy_app_secret"},
+            "base_url": {"required": False, "config": "sigenergy_base_url", "default": "https://openapi-eu.sigencloud.com"},
+            "mqtt_host": {"required": False, "config": "sigenergy_mqtt_host"},
+            "ca_cert": {"required": False, "config": "sigenergy_ca_pem"},
+            "client_cert": {"required": False, "config": "sigenergy_client_pem"},
+            "client_key": {"required": False, "config": "sigenergy_client_key"},
+            "automatic": {"required": False, "config": "sigenergy_automatic", "default": False},
+            "enable_controls": {"required": False, "config": "sigenergy_enable_controls", "default": True},
+        },
+        "phase": 1,
+        "can_restart": True,
+    },
     "solax": {
         "class": SolaxAPI,
         "name": "SolaX Cloud API",
@@ -397,6 +425,7 @@ if HAS_GATEWAY:
             "mqtt_host": {"required": True, "config": "gateway_mqtt_host"},
             "mqtt_port": {"required": False, "config": "gateway_mqtt_port", "default": 8883},
             "mqtt_token": {"required": True, "config": "gateway_mqtt_token"},
+            "gateway_inverter_serial": {"required": False, "config": "gateway_inverter_serial", "default": None},
         },
         "phase": 1,
         "can_restart": True,

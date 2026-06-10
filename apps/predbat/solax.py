@@ -399,18 +399,20 @@ class SolaxAPI(ComponentBase):
         self.set_arg("export_today", [f"sensor.{self.prefix}_solax_{plant}_total_exported" for plant in plants])
         self.set_arg("pv_today", [f"sensor.{self.prefix}_solax_{plant}_total_yield" for plant in plants])
         self.set_arg("battery_power", [f"sensor.{self.prefix}_solax_{plant}_battery_charge_discharge_power" for plant in plants])
+        self.set_arg("battery_power_invert", [f"True" for plant in plants])
 
         # Power and SOC from device realtime data (using first inverter)
         inverter_list = [self.plant_inverters[plant][0] for plant in plants]
         self.set_arg("grid_power", [f"sensor.{self.prefix}_solax_{plant}_{inv}_grid_power" for plant, inv in zip(plants, inverter_list)])
         self.set_arg("pv_power", [f"sensor.{self.prefix}_solax_{plant}_{inv}_pv_power" for plant, inv in zip(plants, inverter_list)])
-        self.set_arg("load_power", [f"sensor.{self.prefix}_solax_{plant}_{inv}_ac_power" for plant, inv in zip(plants, inverter_list)])
+        self.set_arg("load_power", [f"sensor.{self.prefix}_solax_{plant}_{inv}_load_power" for plant, inv in zip(plants, inverter_list)])
+        self.set_arg("battery_scaling", [f"sensor.{self.prefix}_solax_{plant}_{inv}_battery_soh" for plant, inv in zip(plants, inverter_list)])
 
         # Sensors
         self.set_arg("battery_temperature", [f"sensor.{self.prefix}_solax_{plant}_battery_temperature" for plant in plants])
         self.set_arg("soc_max", [f"sensor.{self.prefix}_solax_{plant}_battery_capacity" for plant in plants])
         self.set_arg("soc_kw", [f"sensor.{self.prefix}_solax_{plant}_battery_soc" for plant in plants])
-        self.set_arg("battery_rate_max_charge", [f"sensor.{self.prefix}_solax_{plant}_battery_max_power" for plant in plants])
+        self.set_arg("battery_rate_max", [f"sensor.{self.prefix}_solax_{plant}_battery_max_power" for plant in plants])
         self.set_arg("inverter_limit", [f"sensor.{self.prefix}_solax_{plant}_inverter_max_power" for plant in plants])
 
         # Control entities using the controls system
@@ -668,7 +670,14 @@ class SolaxAPI(ComponentBase):
             charge_end = now.replace(hour=int(charge_end_str.split(":")[0]), minute=int(charge_end_str.split(":")[1]), second=0, microsecond=0)
             charge_end_minutes = charge_end.hour * 60 + charge_end.minute
             if charge_end <= charge_start:
-                charge_end += timedelta(days=1)
+                # Window spans midnight: slide the appropriate end so comparisons work.
+                # If now is before the end time (we're in the after-midnight portion), pull start
+                # back to yesterday so start < now < end.  Otherwise push end to tomorrow so the
+                # window is treated as fully in the future (or already passed today).
+                if now <= charge_end:
+                    charge_start -= timedelta(days=1)
+                else:
+                    charge_end += timedelta(days=1)
             if charge_start <= now <= charge_end:
                 charge_window = True
         if export_enable:
@@ -676,7 +685,11 @@ class SolaxAPI(ComponentBase):
             export_end = now.replace(hour=int(export_end_str.split(":")[0]), minute=int(export_end_str.split(":")[1]), second=0, microsecond=0)
             export_end_minutes = export_end.hour * 60 + export_end.minute
             if export_end <= export_start:
-                export_end += timedelta(days=1)
+                # Window spans midnight: same logic as charge window above.
+                if now <= export_end:
+                    export_start -= timedelta(days=1)
+                else:
+                    export_end += timedelta(days=1)
             if export_start <= now <= export_end:
                 export_window = True
 
@@ -2015,6 +2028,9 @@ class SolaxAPI(ComponentBase):
         """
         Publish data on INVERTER and BATTERY device extracted with query_device_realtime_data_all()
         """
+        # Per-plant accumulators for the load-power calculation (second pass below)
+        plant_save = {}  # plant_id -> {"grid": W, "pv": W, "battery": W, "inverter_sn": sn, "friendly_name": name}
+
         # Publish per-device realtime data
         for device_sn, realtime in self.realtime_device_data.items():
             device = self.device_info.get(device_sn, {})
@@ -2030,8 +2046,6 @@ class SolaxAPI(ComponentBase):
                 device_model = "Unknown Device"
 
             friendly_name = f"SolaX {device_model} {device_sn}"
-
-            load_power = 0
 
             if device_type == 1:  # Inverter
                 ac_power1 = realtime.get("acPower1", 0)
@@ -2057,6 +2071,16 @@ class SolaxAPI(ComponentBase):
                     for key in mpptMap:  # cSpell:disable-line
                         if "Power" in key:
                             pvPower += mpptMap.get(key, 0)  # cSpell:disable-line
+
+                # Store per-plant values for load-power calculation (second pass).
+                # Aggregate PV and grid across all inverters in the plant.
+                # The entity SN is pinned to plant_inverters[plant_id][0] for stability; it is
+                # only set once (first inverter processed) so it never gets overwritten.
+                if plant_id not in plant_save:
+                    stable_sn = self.plant_inverters.get(plant_id, [device_sn])[0]
+                    plant_save[plant_id] = {"grid": 0, "pv": 0, "battery": 0, "inverter_sn": stable_sn, "friendly_name": friendly_name, "total_soh": 0, "count_soh": 0}
+                plant_save[plant_id]["pv"] = (plant_save[plant_id]["pv"] or 0) + (pvPower or 0)
+                plant_save[plant_id]["grid"] = (plant_save[plant_id]["grid"] or 0) + (gridPower or 0)
 
                 self.dashboard_item(
                     f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_device_status",
@@ -2140,12 +2164,19 @@ class SolaxAPI(ComponentBase):
                 )
             elif device_type == 2:  # Battery
                 battery_soc = realtime.get("batterySOC", 0)
+                battery_soh = realtime.get("batterySOH", 100.0)
                 battery_voltage = realtime.get("batteryVoltage", 0)
                 charge_discharge_power = realtime.get("chargeDischargePower", 0)
                 battery_current = realtime.get("batteryCurrent", 0)
                 battery_temperature = realtime.get("batteryTemperature", 0)
                 deviceStatus = realtime.get("deviceStatus", 0)
                 deviceStatusText = SOLAX_BATTERY_STATUS_RESIDENTIAL.get(deviceStatus, "Unknown Status")
+
+                # Store per-plant battery value for load-power calculation (second pass)
+                if plant_id not in plant_save:
+                    plant_save[plant_id] = {"grid": 0, "pv": 0, "battery": 0, "inverter_sn": device_sn, "friendly_name": friendly_name, "total_soh": 0, "count_soh": 0}
+
+                plant_save[plant_id]["battery"] += charge_discharge_power if charge_discharge_power is not None else 0
 
                 self.dashboard_item(
                     f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_device_status",
@@ -2164,6 +2195,29 @@ class SolaxAPI(ComponentBase):
                     attributes={
                         "friendly_name": f"{friendly_name} Battery SOC",
                         "unit_of_measurement": "%",
+                        "device_class": "battery",
+                        "state_class": "measurement",
+                    },
+                    app="solax",
+                )
+
+                # Convert to float range 0-1
+                try:
+                    battery_soh = float(battery_soh) / 100.0
+                except (ValueError, TypeError):
+                    battery_soh = 1.0
+                if battery_soh == 0:
+                    battery_soh = 1.0
+
+                plant_save[plant_id]["total_soh"] += battery_soh
+                plant_save[plant_id]["count_soh"] += 1
+
+                self.dashboard_item(
+                    f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_battery_soh",
+                    state=battery_soh,
+                    attributes={
+                        "friendly_name": f"{friendly_name} Battery State of Health",
+                        "unit_of_measurement": "*",
                         "device_class": "battery",
                         "state_class": "measurement",
                     },
@@ -2213,6 +2267,41 @@ class SolaxAPI(ComponentBase):
                     },
                     app="solax",
                 )
+
+        # Second pass: publish load_power per plant using the accumulated per-plant values.
+        # Load = PV - battery_charge_discharge - grid  (grid negative = import, battery positive = charging)
+        for plant_id, saved in plant_save.items():
+            device_sn = saved.get("inverter_sn")
+            if device_sn is None:
+                continue
+            friendly_name = saved["friendly_name"]
+            grid = saved["grid"] if saved["grid"] is not None else 0
+            pv = saved["pv"] if saved["pv"] is not None else 0
+            battery = saved["battery"] if saved["battery"] is not None else 0
+            load_power = pv - battery - grid
+            self.dashboard_item(
+                f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_load_power",
+                state=load_power,
+                attributes={
+                    "friendly_name": f"{friendly_name} Load Power",
+                    "unit_of_measurement": "W",
+                    "device_class": "power",
+                    "state_class": "measurement",
+                },
+                app="solax",
+            )
+            self.dashboard_item(
+                f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_battery_soh",
+                state=plant_save[plant_id]["total_soh"] / plant_save[plant_id]["count_soh"] if plant_save[plant_id]["count_soh"] > 0 else 1.0,
+                attributes={
+                    "friendly_name": f"{friendly_name} Battery State of Health",
+                    "unit_of_measurement": "*",
+                    "device_class": "battery",
+                    "state_class": "measurement",
+                },
+                app="solax",
+            )
+
 
     async def publish_plant_info(self):
         # Publish per-plant sensors

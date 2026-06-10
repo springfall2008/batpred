@@ -49,7 +49,6 @@ DEBUG_EXCLUDE_LIST = [
     "comparison",
     "plugin_system",
     "ge_url_cache",
-    "futurerate_url_cache",
     "github_url_cache",
     "octopus_url_cache",
     "secrets",
@@ -476,7 +475,7 @@ class UserInterface:
                     if has_changed and item.get("reset_inverter_force", False):
                         self.inverter_needs_reset = True
                         self.log("Set reset inverter true due to reset_inverter_force on item {}".format(name))
-                        if event:
+                        if event and item.get("value", None) is not None:
                             self.inverter_needs_reset_force = name
                             self.log("Set reset inverter force true due to reset_inverter_force on item {}".format(name))
                     item["value"] = value
@@ -718,6 +717,10 @@ class UserInterface:
                         inverter_obj.__dict__[key] = copy.deepcopy(inverter[key])
                     new_inverters.append(inverter_obj)
                 self.inverters = new_inverters
+
+        # Handle old-format octopus_slots (flat list of dicts) vs new format (list-of-lists per car)
+        if isinstance(self.octopus_slots, list) and self.octopus_slots and isinstance(self.octopus_slots[0], dict):
+            self.octopus_slots = [self.octopus_slots] + [[] for _ in range(7)]
 
         for item in debug["CONFIG_ITEMS"]:
             current = self.config_index.get(item["name"], None)

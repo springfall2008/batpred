@@ -51,6 +51,7 @@ class ActiveTestInverter:
         self.battery_rate_max_charge = 1 / 60.0
         self.battery_rate_max_charge_dc = 1 / 60.0
         self.battery_rate_max_discharge = 1 / 60.0
+        self.battery_rate_max_export = 1 / 60.0
         self.reserve_max = 100.0
         self.now_utc = now_utc
         self.midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -200,6 +201,7 @@ def run_execute_test(
     has_ge_eco_toggle=False,
     inverter_hybrid=False,
     battery_max_rate=1000,
+    battery_max_export_rate=None,
     minutes_now=12 * 60,
     update_plan=False,
     reserve=1,
@@ -234,11 +236,14 @@ def run_execute_test(
         assert_charge_rate = battery_max_rate
     if assert_discharge_rate is None:
         assert_discharge_rate = battery_max_rate
+    if battery_max_export_rate is None:
+        battery_max_export_rate = battery_max_rate
 
     total_inverters = len(my_predbat.inverters)
     my_predbat.battery_rate_max_charge = battery_max_rate / 1000.0 * total_inverters / 60.0
     my_predbat.battery_rate_max_charge_dc = battery_max_rate / 1000.0 * total_inverters / 60.0
     my_predbat.battery_rate_max_discharge = battery_max_rate / 1000.0 * total_inverters / 60.0
+    my_predbat.battery_rate_max_export = battery_max_export_rate / 1000.0 * total_inverters / 60.0
     my_predbat.set_reserve_enable = set_reserve_enable
     for inverter in my_predbat.inverters:
         inverter.charge_start_time_minutes = inverter_charge_time_minutes_start
@@ -253,6 +258,7 @@ def run_execute_test(
         inverter.battery_rate_max_charge = my_predbat.battery_rate_max_charge / total_inverters
         inverter.battery_rate_max_charge_dc = my_predbat.battery_rate_max_charge_dc / total_inverters
         inverter.battery_rate_max_discharge = my_predbat.battery_rate_max_discharge / total_inverters
+        inverter.battery_rate_max_export = my_predbat.battery_rate_max_export / total_inverters
         inverter.inv_has_timed_pause = has_timed_pause
         inverter.inv_has_target_soc = has_target_soc
         inverter.inv_has_charge_enable_time = has_charge_enable_time
@@ -388,8 +394,86 @@ def run_execute_test(
     return failed
 
 
+def _run_fetch_inverter_data_pv_test(my_predbat, pv_sensors, pv_power=0):
+    """
+    Helper: configure one inverter with inverter_pv_power W of PV, set pv_sensors as the pv_power
+    config list, optionally place extra_sensor_value under 'sensor.extra_pv', call
+    fetch_inverter_data, and return the resulting my_predbat.pv_power.
+    Restores the original config_index["pv_power"]["value"] on exit.
+    """
+    inverter = ActiveTestInverter(0, soc_kw=5, soc_max=10, now_utc=my_predbat.now_utc)
+    inverter.pv_power = pv_power
+    my_predbat.inverters = [inverter]
+    my_predbat.args["num_inverters"] = 1
+    my_predbat.args["pv_power"] = pv_sensors
+    # Set pv_power via config_index so get_ha_config returns it (args is bypassed for known config items)
+
+    my_predbat.fetch_inverter_data(create=False)
+    result = my_predbat.pv_power
+
+    return result
+
+
+def test_fetch_inverter_data_extra_pv_sensors(my_predbat):
+    """
+    Test that fetch_inverter_data adds extra pv_power sensors beyond num_inverters to the total.
+    This is the Fox thirdPartyGen case: one battery inverter whose pv_power list has an extra
+    sensor (meterpower2) pointing to the AC-coupled Solis inverter measured via CT2.
+    """
+    print("  - test_fetch_inverter_data_extra_pv_sensors")
+
+    result = _run_fetch_inverter_data_pv_test(my_predbat, pv_sensors=[994.0, 500.0], pv_power=994.0)
+    if result != 1494:
+        print("ERROR: pv_power should be 1494 (500 inverter + 994 extra CT2), got {}".format(result))
+        return True
+    return False
+
+
+def test_fetch_inverter_data_extra_pv_sensors_invalid_value(my_predbat):
+    """
+    Test that fetch_inverter_data handles a non-numeric extra PV sensor value gracefully,
+    leaving pv_power unchanged from the inverter total.
+    """
+    print("  - test_fetch_inverter_data_extra_pv_sensors_invalid_value")
+
+    result = _run_fetch_inverter_data_pv_test(
+        my_predbat,
+        pv_sensors=["500", "undefined"],
+        pv_power=500,
+    )
+    if result != 500:
+        print("ERROR: pv_power should be 500 (invalid extra sensor skipped), got {}".format(result))
+        return True
+    return False
+
+
+def test_fetch_inverter_data_no_extra_pv_when_sensors_match_inverters(my_predbat):
+    """
+    Test that fetch_inverter_data does not process extra PV sensors when len(pv_power) == num_inverters.
+    The extra-sensor loop must only fire when the list is longer than the inverter count.
+    """
+    print("  - test_fetch_inverter_data_no_extra_pv_when_sensors_match_inverters")
+
+    result = _run_fetch_inverter_data_pv_test(
+        my_predbat,
+        pv_sensors=["500"],
+        pv_power=500,
+    )
+    if result != 500:
+        print("ERROR: pv_power should be 500 (sensor count matches inverter count, no extra lookup), got {}".format(result))
+        return True
+    return False
+
+
 def run_execute_tests(my_predbat):
     print("**** Running execute tests ****\n")
+
+    failed = test_fetch_inverter_data_extra_pv_sensors(my_predbat)
+    failed |= test_fetch_inverter_data_extra_pv_sensors_invalid_value(my_predbat)
+    failed |= test_fetch_inverter_data_no_extra_pv_when_sensors_match_inverters(my_predbat)
+    if failed:
+        return failed
+
     reset_inverter(my_predbat)
 
     charge_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 1}]
@@ -1998,6 +2082,27 @@ def run_execute_tests(my_predbat):
         assert_immediate_soc_target=0,
         assert_discharge_start_time_minutes=my_predbat.minutes_now,
         assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
+    )
+    if failed:
+        return failed
+
+    # Test inverter_limit_export: discharge rate during forced export should be capped to battery_max_export_rate (500) not battery_max_rate (1000)
+    failed |= run_execute_test(
+        my_predbat,
+        "discharge_limit_export",
+        export_window_best=export_window_best,
+        export_limits_best=export_limits_best,
+        assert_force_export=True,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=10,
+        assert_status="Exporting",
+        assert_immediate_soc_target=0,
+        assert_discharge_start_time_minutes=my_predbat.minutes_now,
+        assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
+        battery_max_rate=1000,
+        battery_max_export_rate=500,
+        assert_discharge_rate=500,
     )
     if failed:
         return failed

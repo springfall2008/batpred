@@ -830,12 +830,21 @@ class Fetch:
                 self.record_status(message="Error: metric_octopus_import not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
                 raise ValueError
         elif "metric_energidataservice_import" in self.args:
-            # Octopus import rates
+            # Energi Data Service import rates
             entity_id = self.get_arg("metric_energidataservice_import", None, indirect=False)
             self.rate_import = self.fetch_energidataservice_rates(entity_id, adjust_key="is_intelligent_adjusted")
             if not self.rate_import:
                 self.log("Error: metric_energidataservice_import is not set correctly in apps.yaml, or no energy rates can be read")
                 self.record_status(message="Error: metric_energidataservice_import not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
+                raise ValueError
+        elif "metric_stromligning_import_today" in self.args or "metric_stromligning_import_tomorrow" in self.args:
+            # Strømligning import rates
+            entity_id_today = self.get_arg("metric_stromligning_import_today", None, indirect=False)
+            entity_id_tomorrow = self.get_arg("metric_stromligning_import_tomorrow", None, indirect=False)
+            self.rate_import = self.fetch_stromligning_rates(entity_id_today, entity_id_tomorrow, adjust_key="is_intelligent_adjusted")
+            if not self.rate_import:
+                self.log("Error: metric_stromligning_import sensors are not set correctly or no energy rates can be read")
+                self.record_status(message="Error: metric_stromligning_import sensors not set correctly or no energy rates can be read", had_errors=True)
                 raise ValueError
         else:
             # Basic rates defined by user over time
@@ -895,12 +904,20 @@ class Fetch:
                 self.log("Warning: metric_octopus_export is not set correctly in apps.yaml, or no energy rates can be read")
                 self.record_status(message="Error: metric_octopus_export not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
         elif "metric_energidataservice_export" in self.args:
-            # Octopus export rates
+            # Energi Data Service export rates
             entity_id = self.get_arg("metric_energidataservice_export", None, indirect=False)
             self.rate_export = self.fetch_energidataservice_rates(entity_id)
             if not self.rate_export:
                 self.log("Warning: metric_energidataservice_export is not set correctly in apps.yaml, or no energy rates can be read")
                 self.record_status(message="Error: metric_energidataservice_export not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
+        elif "metric_stromligning_export_today" in self.args or "metric_stromligning_export_tomorrow" in self.args:
+            # Strømligning export rates
+            entity_id_today = self.get_arg("metric_stromligning_export_today", None, indirect=False)
+            entity_id_tomorrow = self.get_arg("metric_stromligning_export_tomorrow", None, indirect=False)
+            self.rate_export = self.fetch_stromligning_rates(entity_id_today, entity_id_tomorrow)
+            if not self.rate_export:
+                self.log("Warning: metric_stromligning_export sensors are not set correctly or no energy rates can be read")
+                self.record_status(message="Error: metric_stromligning_export sensors not set correctly or no energy rates can be read", had_errors=True)
         else:
             # Basic rates defined by user over time
             self.rate_export = self.basic_rates(self.get_arg("rates_export", [], indirect=False), "rates_export")
@@ -920,6 +937,8 @@ class Fetch:
         # Replicate and scan import rates
         if self.rate_import:
             self.rate_scan(self.rate_import, print=False)
+            self.rate_max_base = self.rate_max  # True peak rate before saving sessions / overrides inflate it
+            self.rate_min_base = self.rate_min  # True off-peak rate before free sessions / overrides deflate it
             self.rate_import, self.rate_import_replicated = self.rate_replicate(self.rate_import, self.io_adjusted, is_import=True)
             self.rate_import_no_io = self.rate_import.copy()
             for car_n in range(self.num_cars):
@@ -1558,16 +1577,14 @@ class Fetch:
                 if end_str.count(":") < 2:
                     end_str += ":00"
 
-                try:
-                    start = time_string_to_stamp(start_str)
-                except (ValueError, TypeError):
+                start = time_string_to_stamp(start_str)
+                if start is None:
                     self.log("Warn: Bad start time {} provided in energy rates".format(start_str))
                     self.record_status("Warn: Bad start time {} provided in energy rates".format(start_str), had_errors=True)
                     continue
 
-                try:
-                    end = time_string_to_stamp(end_str)
-                except (ValueError, TypeError):
+                end = time_string_to_stamp(end_str)
+                if end is None:
                     self.log("Warn: Bad end time {} provided in energy rates".format(end_str))
                     self.record_status("Warn: Bad end time {} provided in energy rates".format(end_str), had_errors=True)
                     continue
@@ -1738,9 +1755,12 @@ class Fetch:
                 rate = rates[minute]
             rate_array.append(rate)
 
-        # Work out the min rate going forward
-        for minute in range(self.minutes_now, self.forecast_minutes + 24 * 60 + self.minutes_now):
-            rate_min_forward[minute] = min(rate_array[minute:])
+        # Work out the min rate going forward — O(n) right-to-left scan avoids O(n²) slice allocations
+        running_min = rate_array[-1] if rate_array else self.rate_min
+        for minute in range(len(rate_array) - 1, self.minutes_now - 1, -1):
+            running_min = min(running_min, rate_array[minute])
+            if minute < self.forecast_minutes + 24 * 60 + self.minutes_now:
+                rate_min_forward[minute] = running_min
 
         self.log("Rate min forward looking: now {}{} at end of forecast {}{}".format(dp2(rate_min_forward[self.minutes_now]), self.currency_symbols[1], dp2(rate_min_forward[self.forecast_minutes]), self.currency_symbols[1]))
 
@@ -2152,10 +2172,12 @@ class Fetch:
 
         # Battery charging options
         self.battery_capacity_nominal = self.get_arg("battery_capacity_nominal")
+        self.battery_scaling_auto = self.get_arg("battery_scaling_auto", default=False)
         self.battery_loss = 1.0 - self.get_arg("battery_loss")
         self.battery_loss_discharge = 1.0 - self.get_arg("battery_loss_discharge")
         self.inverter_loss = 1.0 - self.get_arg("inverter_loss")
         self.inverter_hybrid = self.get_arg("inverter_hybrid")
+        self.pv_ac_limit = self.get_arg("pv_ac_limit", 0.0) / MINUTE_WATT
         self.base_load = self.get_arg("base_load", 0) / 1000.0
 
         # Charge curve
@@ -2264,7 +2286,6 @@ class Fetch:
         self.calculate_export_on_pv = self.get_arg("calculate_export_on_pv")
         self.calculate_second_pass = self.get_arg("calculate_second_pass")
         self.calculate_inday_adjustment = self.get_arg("calculate_inday_adjustment")
-        self.calculate_tweak_plan = self.get_arg("calculate_tweak_plan")
         self.calculate_regions = True
         self.calculate_import_low_export = self.get_arg("calculate_import_low_export")
         self.calculate_export_high_import = self.get_arg("calculate_export_high_import")

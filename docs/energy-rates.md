@@ -276,6 +276,42 @@ The following configuration items in `apps.yaml` are used to configure Predbat t
 
 - **metric_energidataservice_export** - Export rates from the Energidataservice integration. This should point to the sensor that provides hourly export rates (e.g., solar feed-in rates), such as sensor.energi_data_service_export.
 
+## Strømligning Integration
+
+Strømligning is a Danish electricity price comparison service that provides detailed 15-minute interval pricing data.
+Unlike Energi Data Service, where Predbat reads both today's and tomorrow's prices from a single sensor entity per rate type using the `raw_today` and `raw_tomorrow` attributes, Strømligning requires 4 separate sensors:
+two for import prices (today and tomorrow) and optionally two for export prices (today and tomorrow).
+
+Each Strømligning sensor should provide attributes with the following format:
+
+- **prices_today** or **prices_tomorrow** - List of price intervals with:
+    - `price` - Price value
+    - `start` - Start time in ISO format (e.g., '2025-11-08T00:00:00+01:00')
+    - `end` - End time in ISO format (e.g., '2025-11-08T00:15:00+01:00')
+
+### Configuring Predbat to Use the Strømligning Integration
+
+The following configuration items in `apps.yaml` are used to configure Predbat to use Strømligning sensors:
+
+**Import Rates (Required):**
+
+- **metric_stromligning_import_today** - Sensor for today's import prices (must have `prices_today` attribute)
+- **metric_stromligning_import_tomorrow** - Sensor for tomorrow's import prices (must have `prices_tomorrow` attribute)
+
+**Export Rates (Optional):**
+
+- **metric_stromligning_export_today** - Sensor for today's export prices (must have `prices_today` attribute)
+- **metric_stromligning_export_tomorrow** - Sensor for tomorrow's export prices (must have `prices_tomorrow` attribute)
+
+Example configuration in `apps.yaml`:
+
+```yaml
+  metric_stromligning_import_today: 'sensor.stromligning_import_today'
+  metric_stromligning_import_tomorrow: 'sensor.stromligning_import_tomorrow'
+  metric_stromligning_export_today: 'sensor.stromligning_export_today'
+  metric_stromligning_export_tomorrow: 'sensor.stromligning_export_tomorrow'
+```
+
 ## Other Energy Spot Rate sensor integrations
 
 Different spot rate integrations that include forecast prices may be used.
@@ -288,22 +324,28 @@ Because integrations format their attribute data differently, a template sensor 
 
 ### Czech Republic example
 
+Czech republic has moved to 15 minute spot pricing.
+
+To make sure Predbat calculates 15-minute pricing correctly, add `plan_interval_minutes: 15` to `apps.yaml`.
 <https://github.com/rnovacek/homeassistant_cz_energy_spot_prices>
 
 ```yaml
 {% set attributes = states.sensor.current_buy_electricity_price.attributes %}
-{% set datetime_dict = zip(attributes.keys() | map('as_datetime', default={}), attributes.values()) | selectattr(0, 'datetime') %}
-{% set ns = namespace(output=[]) %}
-{% for start_time, price in datetime_dict %}
- {% if start_time < today_at() + timedelta(days=1) %}
-   {% set ns.output = ns.output + [{'start': start_time.isoformat(), 'end': (start_time + timedelta(hours=1)).isoformat(), 'value': price | round(5)}] %}
- {% endif %}
-{% endfor %}
-{{ns.output | sort(attribute='start') }}
+            {% set attributes = states.sensor.current_buy_electricity_price_15min.attributes %}
+            {% set datetime_dict = zip(attributes.keys() | map('as_datetime', default={}), attributes.values()) | selectattr(0, 'datetime') %}
+            {% set ns = namespace(output=[]) %}
+            {% for start_time, price in datetime_dict %}
+              {% if start_time < today_at() + timedelta(days=1) %}
+                {% set ns.output = ns.output + [{'start': start_time.isoformat(), 'end': (start_time + timedelta(minutes=15)).isoformat(), 'value': price | round(5)}] %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.output | sort(attribute='start') }}
 ```
 
 Full code for CZ energy spot rate template:
-<https://gist.github.com/ziat007/ae29e26ae257f069520b65f0168c3a6b>
+<https://gist.github.com/ziat007/9c33453d5fa24b037d764dc40786f977>
+
+(flat clamped sell price sensor is used to trick predbat when invertor is set to block export during negative pricing)
 
 ### Frank Energie Export rates with export fee
 
@@ -560,11 +602,11 @@ Predbat can also [optimise your grid charging based on the Carbon footprint](cus
 
 ### UK Grid Carbon intensity (HA Integration)
 
-If you prefer you can instead install the Carbon Intensity integration <https://github.com/jfparis/sensor.carbon_intensity_uk>. There have been reports that this integration might not be working any more.
+If you prefer you can instead install the Carbon Intensity integration <https://github.com/jscruz/sensor.carbon_intensity_uk>.
 
 Once the integration is active, update `apps.yaml` to link Predbat to the Carbon intensity sensor:
 
 ```yaml
   # Carbon Intensity data from National grid
-  carbon_intensity: 're:(sensor.carbon_intensity_uk)'
+  carbon_intensity: 're:(sensor.carbon_intensity_uk_sensor)'
 ```
