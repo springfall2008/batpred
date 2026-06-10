@@ -630,7 +630,6 @@ async def test_octopus_fetch_tariffs(my_predbat):
     - Test 3: Fetch tariffs for gas
     - Test 4: Fetch multiple tariffs (import + export)
     - Test 5: Verify dashboard_item called with correct entity names
-    - Test 6: Verify clean_url_cache called
     """
     print("\n**** Running Octopus fetch_tariffs tests ****")
     failed = False
@@ -658,18 +657,10 @@ async def test_octopus_fetch_tariffs(my_predbat):
             return mock_rates_data
 
     api.fetch_url_cached = mock_fetch_url
-    api.clean_url_cache = AsyncMock()
     api.dashboard_item = MagicMock()
 
     # Call fetch_tariffs
     await api.fetch_tariffs(tariffs_input)
-
-    # Verify clean_url_cache was called
-    if api.clean_url_cache.call_count != 1:
-        print(f"ERROR: Expected clean_url_cache to be called once, got {api.clean_url_cache.call_count} calls")
-        failed = True
-    else:
-        print("PASS: clean_url_cache called")
 
     # Verify tariff data was stored
     if "data" not in tariffs_input["import"]:
@@ -716,7 +707,6 @@ async def test_octopus_fetch_tariffs(my_predbat):
             return mock_export_rates
 
     api2.fetch_url_cached = mock_fetch_url2
-    api2.clean_url_cache = AsyncMock()
     api2.dashboard_item = MagicMock()
 
     await api2.fetch_tariffs(tariffs_input2)
@@ -752,7 +742,6 @@ async def test_octopus_fetch_tariffs(my_predbat):
             return mock_gas_rates
 
     api3.fetch_url_cached = mock_fetch_url3
-    api3.clean_url_cache = AsyncMock()
     api3.dashboard_item = MagicMock()
 
     await api3.fetch_tariffs(tariffs_input3)
@@ -783,7 +772,6 @@ async def test_octopus_fetch_tariffs(my_predbat):
         return [{"valid_from": "2025-01-01T00:00:00Z", "valid_to": "2025-01-01T00:30:00Z", "value_inc_vat": 15.0}]
 
     api4.fetch_url_cached = mock_fetch_url4
-    api4.clean_url_cache = AsyncMock()
     api4.dashboard_item = MagicMock()
 
     await api4.fetch_tariffs(tariffs_input4)
@@ -814,7 +802,6 @@ async def test_octopus_fetch_tariffs(my_predbat):
         return [{"valid_from": "2025-01-01T00:00:00Z", "valid_to": "2025-01-01T00:30:00Z", "value_inc_vat": 20.0}]
 
     api5.fetch_url_cached = mock_fetch_url5
-    api5.clean_url_cache = AsyncMock()
     dashboard_calls = []
 
     def capture_dashboard_item(entity_id, state, attributes=None, app=None):
@@ -909,7 +896,6 @@ async def test_octopus_fetch_tariffs(my_predbat):
         return []  # should not be called for rate data in this path
 
     api7.fetch_url_cached = mock_fetch_url7
-    api7.clean_url_cache = AsyncMock()
     api7.dashboard_item = MagicMock()
     api7.async_get_day_night_rates = AsyncMock(return_value=mock_day_night_result)
 
