@@ -2649,7 +2649,14 @@ class TestGatewayUnitControlBinding:
 class TestCheckInverterResets:
     """Tests for GatewayMQTT._check_inverter_resets()."""
 
-    def _make_gateway(self, read_only=False, mqtt_connected=True, auto_configured=True):
+    def _make_gateway(self, read_only=False, alive=True, auto_configured=True):
+        """Build a minimal GatewayMQTT stub for _check_inverter_resets() tests.
+
+        Sets _mqtt_connected and _gateway_online so is_alive() returns *alive*
+        without needing to mock the method itself.  When alive=True the gateway
+        is connected to the broker but its LWT reports offline — is_alive()
+        returns True in that state without requiring fresh telemetry.
+        """
         from gateway import GatewayMQTT
         from unittest.mock import MagicMock
 
@@ -2657,7 +2664,9 @@ class TestCheckInverterResets:
         gw.log = MagicMock()
         gw._suffix_to_serial = {}
         gw._inverter_reset_done = set()
-        gw._mqtt_connected = mqtt_connected
+        gw._mqtt_connected = alive
+        gw._gateway_online = False  # broker-connected but LWT-offline → is_alive() True when _mqtt_connected
+        gw._last_telemetry_time = 0
         gw._auto_configured = auto_configured
         gw._published = []
 
@@ -2679,7 +2688,7 @@ class TestCheckInverterResets:
 
         return asyncio.run(coro)
 
-    def test_sends_reset_for_un_reset_inverter(self):
+    def test_sends_reset_for_unreset_inverter(self):
         """inverter_reset is published for a serial not yet in _inverter_reset_done."""
         gw = self._make_gateway()
         gw._suffix_to_serial["456789"] = "CE123456789"
@@ -2712,9 +2721,9 @@ class TestCheckInverterResets:
         assert gw._published == []
         assert "CE123456789" not in gw._inverter_reset_done
 
-    def test_mqtt_disconnected_skips_reset(self):
-        """No reset is sent when MQTT is not connected."""
-        gw = self._make_gateway(mqtt_connected=False)
+    def test_not_alive_skips_reset(self):
+        """No reset is sent when is_alive() returns False (MQTT disconnected)."""
+        gw = self._make_gateway(alive=False)
         gw._suffix_to_serial["456789"] = "CE123456789"
         self._run(gw._check_inverter_resets())
         assert gw._published == []

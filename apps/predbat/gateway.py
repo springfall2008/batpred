@@ -1058,11 +1058,11 @@ class GatewayMQTT(ComponentBase):
     async def _check_inverter_resets(self):
         """Send inverter_reset for each configured inverter not yet reset in control mode.
 
-        Called on every run() cycle. Skips when MQTT is disconnected, auto-config has
+        Called on every run() cycle. Skips when is_alive() is False, auto-config has
         not yet run, or set_read_only is active. Each serial is reset at most once per
         process lifetime (tracked in _inverter_reset_done).
         """
-        if not self._mqtt_connected or not self._auto_configured or self.get_arg("set_read_only", False):
+        if not self.is_alive() or not self._auto_configured or self.get_arg("set_read_only", False):
             return
         for suffix, serial in self._suffix_to_serial.items():
             if serial not in self._inverter_reset_done:
