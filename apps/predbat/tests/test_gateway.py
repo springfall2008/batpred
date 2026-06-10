@@ -2688,7 +2688,7 @@ class TestCheckInverterResets:
 
         return asyncio.run(coro)
 
-    def test_sends_reset_for_unreset_inverter(self):
+    def test_sends_reset_for_un_reset_inverter(self):
         """inverter_reset is published for a serial not yet in _inverter_reset_done."""
         gw = self._make_gateway()
         gw._suffix_to_serial["456789"] = "CE123456789"
