@@ -1376,8 +1376,8 @@ class OctopusAPI(ComponentBase):
             else:
                 tariffs[tariff]["data"] = await self.fetch_url_cached(standard_url)
             if not tariffs[tariff]["data"] and tariff == "export" and "INTELLI-FLUX-EXPORT" in product_code:
-                # INTELLI-FLUX-EXPORT rates are the same as INTELLI-FLUX-IMPORT rates but FLUX-EXPORT
-                # is not on the public REST API — fetch the equivalent FLUX-IMPORT tariff instead
+                # INTELLI-FLUX-EXPORT rates are the same as INTELLI-FLUX-IMPORT rates, but INTELLI-FLUX-EXPORT
+                # is not on the public REST API — fetch the equivalent INTELLI-FLUX-IMPORT tariff instead
                 flux_import_product = product_code.replace("FLUX-EXPORT", "FLUX-IMPORT")
                 flux_import_tariff_code = tariff_code.replace("FLUX-EXPORT", "FLUX-IMPORT")
                 flux_import_url = f"https://api.octopus.energy/v1/products/{flux_import_product}/electricity-tariffs/{flux_import_tariff_code}/standard-unit-rates/"
