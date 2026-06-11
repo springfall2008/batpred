@@ -151,23 +151,23 @@ pred_bat:
   # ------------------------------------------------------------------
   charge_start_service:
     service: huawei_solar.forcible_charge_soc
-    device_id: !secret predbat_huawei_device_id
+    device_id: "YOUR_HUAWEI_DEVICE_ID"
     target_soc: "{target_soc}"
     power: "{power}"
 
   charge_stop_service:
     service: huawei_solar.stop_forcible_charge
-    device_id: !secret predbat_huawei_device_id
+    device_id: "YOUR_HUAWEI_DEVICE_ID"
 
   discharge_start_service:
     service: huawei_solar.forcible_discharge_soc
-    device_id: !secret predbat_huawei_device_id
+    device_id: "YOUR_HUAWEI_DEVICE_ID"
     target_soc: "{target_soc}"
     power: "{power}"
 
   discharge_stop_service:
     service: huawei_solar.stop_forcible_charge
-    device_id: !secret predbat_huawei_device_id
+    device_id: "YOUR_HUAWEI_DEVICE_ID"
 
   # ------------------------------------------------------------------
   # Inverter and battery power limits
@@ -214,8 +214,8 @@ pred_bat:
   #pv_forecast_d4_attribute: detailedForecast
 
   open_meteo_forecast:
-    - latitude: !secret predbat_home_latitude
-      longitude: !secret predbat_home_longitude
+    - latitude: 0.0  # Replace with your latitude
+      longitude: 0.0  # Replace with your longitude
       kwp: 9.5
       declination: 18
       azimuth: 47
@@ -280,7 +280,7 @@ pred_bat:
   # Notifications
   # ------------------------------------------------------------------
   notify_devices:
-  - !secret predbat_notify_device
+  - "YOUR_NOTIFY_DEVICE"
 
   # ------------------------------------------------------------------
   # Alert feeds
