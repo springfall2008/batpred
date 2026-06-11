@@ -55,11 +55,13 @@ def _reset_free_cache(predbat):
 _URL = "https://octopus.energy/free-electricity"
 _URL2 = "https://octopus.energy/free-electricity-b"
 
-_JSON_BODY = json.dumps({
-    "sessions": [
-        {"session_start": "2026-06-11T14:00:00Z", "session_end": "2026-06-11T16:00:00Z"},
-    ]
-})
+_JSON_BODY = json.dumps(
+    {
+        "sessions": [
+            {"session_start": "2026-06-11T14:00:00Z", "session_end": "2026-06-11T16:00:00Z"},
+        ]
+    }
+)
 
 
 def test_octopus_free(my_predbat):
