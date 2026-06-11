@@ -85,40 +85,81 @@ class AxleAPI(ComponentBase):
         elif not self.api_key:
             self.log("Warn: AxleAPI: BYOK mode requires api_key — Axle integration disabled")
 
-    def load_event_history(self):
-        """
-        Load event history from the sensor on startup.
-        Only keep past events (not future ones).
-        """
+    async def load_event_history(self):
+        """Load state from sensor (preferred) or storage (fallback) on startup.
 
-        try:
-            sensor_id = "binary_sensor." + self.prefix + "_axle_event"
-            state = self.get_state_wrapper(sensor_id)
+        Storage survives restarts; the sensor may not exist yet when loading on first run.
+        After loading from either source, publishes the sensor so HA state is current
+        without waiting for the first API fetch.
+        """
+        loaded = False
 
-            if state:
-                attributes = self.get_state_wrapper(sensor_id, attribute="event_history")
-                if attributes and isinstance(attributes, list):
+        if not loaded:
+            # Fallback: load from HA sensor (may be unavailable on fresh restart)
+            try:
+                sensor_id = "binary_sensor." + self.prefix + "_axle_event"
+                event_history = self.get_state_wrapper(sensor_id, attribute="event_history")
+                event_current = self.get_state_wrapper(sensor_id, attribute="event_current")
+                updated_at = self.get_state_wrapper(sensor_id, attribute="updated_at")
+                if isinstance(event_history, list):
                     now = self.now_utc
-                    # Only keep past events (end_time in the past)
-                    for event in attributes:
+                    for event in event_history:
                         if isinstance(event, dict):
                             end_time = event.get("end_time")
                             if end_time:
-                                # Parse if string
                                 if isinstance(end_time, str):
                                     try:
                                         end_time = datetime.fromisoformat(end_time.replace("Z", "+00:00"))
                                     except Exception:
                                         continue
-                                # Only keep if event has ended
                                 if end_time < now:
                                     self.event_history.append(event)
 
-                    self.log(f"AxleAPI: Loaded {len(self.event_history)} past events from sensor history")
-        except Exception as e:
-            self.log(f"Warn: AxleAPI: Failed to load event history: {e}")
+                    if isinstance(event_current, list) and event_current:
+                        self.current_event = event_current[0]
+
+                    if self.event_history or self.current_event.get("start_time"):
+                        loaded = True
+                        self.log(f"AxleAPI: Loaded {len(self.event_history)} past events from sensor history")
+                        if updated_at:
+                            self.updated_at = updated_at
+
+            except Exception as e:
+                self.log(f"Warn: AxleAPI: Failed to load event history: {e}")
+
+        storage = getattr(self, "storage", None)
+        if not loaded and storage:
+            try:
+                data = await storage.load("axle", "event_history")
+                if data and isinstance(data, dict):
+                    # Support both old list format and new dict format
+                    self.event_history = data.get("event_history", [])
+                    self.current_event = data.get("current_event", {})
+                    self.updated_at = data.get("updated_at")
+                    loaded = True
+                    self.log(f"AxleAPI: Loaded {len(self.event_history)} past events from storage (updated_at: {self.updated_at})")
+            except Exception as e:
+                self.log(f"Warn: AxleAPI: Failed to load event history from storage: {e}")
+
+        if loaded:
+            # Publish will happen in run() after loading, to ensure state is up to date immediately on startup without waiting for next fetch
+            self.update_success_timestamp()
 
         self.history_loaded = True
+
+    async def save_event_history(self):
+        """Persist event history, current event, and updated_at to storage so they survive restarts."""
+        storage = getattr(self, "storage", None)
+        if storage:
+            try:
+                data = {
+                    "event_history": self.event_history,
+                    "current_event": self.current_event,
+                    "updated_at": self.updated_at,
+                }
+                await storage.save("axle", "event_history", data, format="yaml", expiry=None)
+            except Exception as e:
+                self.log(f"Warn: AxleAPI: Failed to save event history: {e}")
 
     def cleanup_event_history(self):
         """
@@ -371,6 +412,7 @@ class AxleAPI(ComponentBase):
                         self.call_notify("Predbat: Scheduled Axle VPP event {}-{}, {} p/kWh".format(local_start.strftime("%a %d/%m %H:%M"), local_end.strftime("%H:%M"), self.pence_per_kwh))
 
             self.cleanup_event_history()
+            await self.save_event_history()
             self.publish_axle_event()
             self.log(f"AxleAPI: Successfully fetched event data - {import_export} event from {start_time} to {end_time}" if start_time else "AxleAPI: No scheduled event")
             self.update_success_timestamp()
@@ -408,6 +450,7 @@ class AxleAPI(ComponentBase):
 
         self._process_price_curve(data)
         self.cleanup_event_history()
+        await self.save_event_history()
         self.publish_axle_event()
         self.update_success_timestamp()
         self.log("AxleAPI: Price curve processed successfully (managed mode)")
@@ -544,16 +587,19 @@ class AxleAPI(ComponentBase):
         self.set_arg("axle_session", "binary_sensor." + self.prefix + "_axle_event")
 
     async def run(self, seconds, first):
-        # Load history from sensor on first run
+        """Main run loop — fetch when data is 10+ minutes old, publish state every minute."""
         if first:
-            self.load_event_history()
+            await self.load_event_history()
             if self.automatic:
                 await self.automatic_config()
 
-        """
-        Main run loop - poll API every 10 minutes (600 seconds)
-        """
-        if first or (seconds % (10 * 60) == 0):  # Every 10 minutes
+        try:
+            updated_at_dt = str2time(self.updated_at) if self.updated_at else None
+        except (ValueError, TypeError):
+            updated_at_dt = None
+        fetch_due = updated_at_dt is None or (self.now_utc - updated_at_dt) >= timedelta(minutes=10)
+
+        if fetch_due:
             try:
                 await self.fetch_axle_event()
             except Exception as e:

@@ -9,8 +9,8 @@
 
 Provides both REST and GraphQL API access to Octopus Energy for fetching
 tariff rates, intelligent dispatch schedules, saving sessions, and account
-data. Implements file-based caching with stale-while-revalidate strategy
-for multi-pod deployments.
+data. Delegates caching to the StorageComponent with stale-while-revalidate
+semantics for multi-pod deployments.
 """
 
 import asyncio
@@ -22,10 +22,9 @@ from const import TIME_FORMAT, TIME_FORMAT_OCTOPUS
 from utils import str2time, minutes_to_time, dp1, dp2, dp4, minute_data
 from component_base import ComponentBase
 import aiohttp
+import hashlib
 import json
 import os
-import yaml
-import json
 import pytz
 
 user_agent_value = "predbat-octopus-energy"
@@ -359,11 +358,12 @@ class OctopusAPI(ComponentBase):
         self.graphql_token = None
         self.graphql_expiration = None
         self.account_data = {}
-        self.url_cache = {}
         self.tariffs = {}
         self.saving_sessions = {}
         self.saving_sessions_to_join = []
         self.intelligent_devices = {}
+        self.tariff_fetched_at = None
+        self.device_fetched_at = None
         self.automatic = automatic
         self.commands = []
         self.mpan = None
@@ -373,22 +373,10 @@ class OctopusAPI(ComponentBase):
         self.requests_total = 0
         self.failures_total = 0
 
-        # Shared cache directories for tariffs and URLs (shared across all users)
-        self.cache_path = self.config_root + "/octopus"
-        self.shared_cache_path = self.config_root + "/octopus/shared"
-        self.urls_cache_path = self.shared_cache_path + "/urls"
-
-        for path in [self.cache_path, self.shared_cache_path, self.urls_cache_path]:
-            if not os.path.exists(path):
-                os.makedirs(path, exist_ok=True)
-
-        # User-specific cache file (account_data, intelligent_device, saving_sessions only)
-        self.user_cache_file = self.cache_path + "/octopus_user_{}.yaml".format(self.account_id)
-
         # In-memory cache for product info (keyed by product_code) to avoid repeated API calls
         self._product_info_cache = {}
 
-        self.log("OctopusAPI: Initialised with account ID {}, cache {}, shared {}".format(self.account_id, self.user_cache_file, self.shared_cache_path))
+        self.log("OctopusAPI: Initialised with account ID {}".format(self.account_id))
 
     async def select_event(self, entity_id, value):
         suffix = self.get_entity_suffix(entity_id)
@@ -425,12 +413,18 @@ class OctopusAPI(ComponentBase):
     def is_alive(self):
         return self.api_started and self.account_data
 
+    def _data_age_minutes(self, fetched_at):
+        """Return how many minutes ago fetched_at was, or 9999 if not set."""
+        if fetched_at is None:
+            return 9999
+        return (datetime.now() - fetched_at).total_seconds() / 60
+
     async def run(self, seconds, first):
         """
         Main run loop
         """
         if first:
-            # Load cached data
+            # Load cached data (restores tariff_fetched_at / device_fetched_at timestamps)
             await self.load_octopus_cache()
             self.log("OctopusAPI: Started")
 
@@ -444,21 +438,41 @@ class OctopusAPI(ComponentBase):
             # Commands processed - will trigger refresh on next cycle
             refresh = True
 
-        if first or (count_minutes % 30) == 0:
-            # 30-minute update for tariff
-            await self.async_get_account(self.account_id)
+        # On first run, use the stored fetch timestamps to decide what is stale so that fast
+        # restarts skip re-fetching data that was already retrieved recently.  None means the
+        # data was never fetched (no cache), so treat as stale.  Sensor data is always pushed
+        # on startup so HA entities are populated immediately.
+
+        tariff_due = self._data_age_minutes(self.tariff_fetched_at) >= 30
+        device_due = refresh or self._data_age_minutes(self.device_fetched_at) >= 10
+        sensor_due = first or refresh or (count_minutes % 2) == 0
+
+        if tariff_due:
+            # 30-minute API refresh for account and tariff discovery
+            if await self.async_get_account(self.account_id):
+                self.tariff_fetched_at = datetime.now()
+
+        if tariff_due or first:
+            # Rebuild tariff structure from account_data (no API call, needed after cache load)
             await self.async_find_tariffs()
 
-        if first or refresh or (count_minutes % 10) == 0:
-            # 10-minute update for intelligent device
+        if device_due:
+            # 10-minute API refresh for intelligent device and saving sessions
             await self.async_update_intelligent_devices(self.account_id)
-            await self.fetch_tariffs(self.tariffs)
             self.saving_sessions = await self.async_get_flexibility_events(self.account_id)
             self.get_saving_session_data()
+            self.device_fetched_at = datetime.now()
 
-        if first or refresh or (count_minutes % 2) == 0:
+        if device_due or first:
+            # Download rate data into tariff structure (uses storage cache, needed after cache load)
+            await self.fetch_tariffs(self.tariffs)
+
+        if sensor_due:
             # 2-minute update for intelligent device sensor
             await self.async_intelligent_update_sensor(self.account_id)
+
+        if tariff_due or device_due:
+            # Don't save cache every 2 minutes, if we lose it then we re-fresh it anyhow
             await self.save_octopus_cache()
 
         if first and self.automatic:
@@ -508,45 +522,12 @@ class OctopusAPI(ComponentBase):
         key = f"{product_code}_{tariff_code}".replace("/", "_").replace("\\", "_")
         return key
 
-    def load_url_from_cache(self, url):
-        """
-        Load cached HTTP response for a URL
-        Returns: cached data or None
-        """
-        import hashlib
-
-        url_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
-        cache_file = f"{self.urls_cache_path}/{url_hash}.yaml"
-        if os.path.exists(cache_file):
-            try:
-                with open(cache_file, "r") as f:
-                    return yaml.safe_load(f)
-            except Exception as e:
-                self.log(f"Warn: OctopusAPI: Failed to load URL cache {url_hash}: {e}")
-        return None
-
-    def save_url_to_cache(self, url, data):
-        """
-        Save HTTP response to cache for a URL
-        No locking needed - each URL is in a separate file
-        """
-        import hashlib
-
-        url_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
-        cache_file = f"{self.urls_cache_path}/{url_hash}.yaml"
-        try:
-            with open(cache_file, "w") as f:
-                yaml.dump(data, f)
-        except Exception as e:
-            self.log(f"Warn: OctopusAPI: Failed to save URL cache {url_hash}: {e}")
-
     def decode_kraken_token_expiry(self, token):
         """
         Extract expiration timestamp from Kraken JWT token without verification.
         Returns datetime object if successful, None otherwise.
         """
         import base64
-        import json
 
         if not token:
             return None
@@ -568,34 +549,17 @@ class OctopusAPI(ComponentBase):
             return None
 
     async def load_octopus_cache(self):
-        """
-        Load the octopus cache
-        User-specific data from user file, tariffs/URLs from shared individual files
-        """
-        # Load user-specific data
-        data = {}
-        if os.path.exists(self.user_cache_file):
-            try:
-                with open(self.user_cache_file, "r") as f:
-                    data = yaml.safe_load(f)
-            except Exception as e:
-                self.log("Warn: OctopusAPI: Failed to load cache from {} - {}".format(self.user_cache_file, e))
+        """Load the octopus user cache via the storage component, normalising missing fields."""
+        data = await self.storage.load("octopus_user", "account") if self.storage else None
+        if data:
+            self.account_data = data.get("account_data", {})
+            self.saving_sessions = data.get("saving_sessions", {})
+            self.intelligent_devices = data.get("intelligent_devices", {})
+            self.graphql_token = data.get("kraken_token")
+            self.tariff_fetched_at = data.get("tariff_fetched_at")
+            self.device_fetched_at = data.get("device_fetched_at")
 
-            if data:
-                self.account_data = data.get("account_data", {})
-                self.saving_sessions = data.get("saving_sessions", {})
-                self.intelligent_devices = data.get("intelligent_devices", {})
-                self.graphql_token = data.get("kraken_token")
-
-        # Load tariffs from individual shared cache files
-        # Tariffs will be loaded on-demand when needed via load_tariff_from_cache()
         self.tariffs = {}
-
-        # Load URL cache from individual shared files
-        # URL cache will be checked on-demand via load_url_from_cache()
-        self.url_cache = {}
-        if self.tariffs is None:
-            self.tariffs = {}
         if self.account_data is None:
             self.account_data = {}
         if self.saving_sessions is None:
@@ -604,21 +568,17 @@ class OctopusAPI(ComponentBase):
             self.intelligent_devices = {}
 
     async def save_octopus_cache(self):
-        """
-        Save the octopus cache
-        User-specific data to user file, tariffs/URLs to individual shared files
-        """
-        # Save user-specific data only
-        octopus_cache = {}
-        octopus_cache["account_data"] = self.account_data
-        octopus_cache["saving_sessions"] = self.saving_sessions
-        octopus_cache["intelligent_devices"] = self.intelligent_devices
-        octopus_cache["kraken_token"] = self.graphql_token
-        with open(self.user_cache_file, "w") as f:
-            yaml.dump(octopus_cache, f)
-
-        # URL cache entries are saved on-demand via save_url_to_cache()
-        # These allow the re-loading of tariffs so we don't need to save them directly
+        """Save the octopus user cache (account data, tokens, sessions, devices) via the storage component."""
+        octopus_cache = {
+            "account_data": self.account_data,
+            "saving_sessions": self.saving_sessions,
+            "intelligent_devices": self.intelligent_devices,
+            "kraken_token": self.graphql_token,
+            "tariff_fetched_at": self.tariff_fetched_at,
+            "device_fetched_at": self.device_fetched_at,
+        }
+        if self.storage:
+            await self.storage.save("octopus_user", "account", octopus_cache, format="yaml", expiry=None)
 
     def get_tariff(self, tariff_type):
         if tariff_type in self.tariffs:
@@ -1360,92 +1320,37 @@ class OctopusAPI(ComponentBase):
 
         return mdata
 
-    async def clean_url_cache(self):
-        """
-        Clean the URL cache - now uses individual files in shared cache
-        """
-        now = datetime.now()
-
-        # Clean old cache files from shared URLs directory
-        if os.path.exists(self.urls_cache_path):
-            for filename in os.listdir(self.urls_cache_path):
-                filepath = os.path.join(self.urls_cache_path, filename)
-                if filename.endswith(".yaml"):
-                    try:
-                        with open(filepath, "r") as f:
-                            cache_entry = yaml.safe_load(f)
-                        if cache_entry and "stamp" in cache_entry:
-                            stamp = cache_entry["stamp"]
-                            age = now - stamp
-                            if age.total_seconds() > (24 * 60 * 60):
-                                os.remove(filepath)
-                                self.log(f"OctopusAPI: Cleaned old URL cache file: {filename}")
-                    except Exception as e:
-                        self.log(f"Warn: OctopusAPI: Failed to clean cache file {filename}: {e}")
-
     async def fetch_url_cached(self, url, json_only=False):
         """
-        Fetch a URL from the cache or reload it
-        Uses individual file per URL in shared cache directory
-        Implements stale-while-revalidate to prevent thundering herd
-        If json_only=True, the raw JSON dict is returned without results unwrapping or pagination.
+        Fetch a URL from the shared cache or reload it via the storage component.
+
+        Uses storage.fetch_cached (stale-while-revalidate). With the default
+        single-instance StorageBase the refresh lock is a no-op; a StorageBase
+        subclass that implements a real distributed lock (e.g. a multi-instance
+        backend) ensures only one instance refreshes while others serve stale.
+        If json_only=True, the raw JSON dict is returned without results
+        unwrapping or pagination.
         """
-        import hashlib
-
         url_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
+        if not self.storage:
+            data = await self.async_download_octopus_url(url, json_only=json_only)
+            if not data:
+                self.log("Warn: Unable to download Octopus data from URL {}".format(url))
+            return data or None
 
-        # Check shared file cache first
-        cached_data = self.load_url_from_cache(url)
-        if cached_data and "stamp" in cached_data and "data" in cached_data:
-            stamp = cached_data["stamp"]
-            age = datetime.now() - stamp
+        async def _download():
+            result = await self.async_download_octopus_url(url, json_only=json_only)
+            return result if result else None
 
-            # Fresh cache (< 30 minutes) - return immediately
-            if age.total_seconds() < (30 * 60):
-                return cached_data["data"]
-
-            # Stale cache (30-35 minutes) - serve stale while ONE pod refreshes
-            if age.total_seconds() < (35 * 60):
-                lock_file = f"{self.urls_cache_path}/{url_hash}.lock"
-                try:
-                    # Try to acquire lock atomically (non-blocking)
-                    # cspell:ignore CREAT WRONLY
-                    fd = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                    try:
-                        # We got the lock! Refresh in background
-                        data = await self.async_download_octopus_url(url, json_only=json_only)
-                        if data:
-                            cache_entry = {"stamp": datetime.now(), "data": data}
-                            self.save_url_to_cache(url, cache_entry)
-                            self.log(f"OctopusAPI: Refreshed stale cache for {url_hash}")
-                    finally:
-                        os.close(fd)
-                        os.remove(lock_file)
-                except FileExistsError:
-                    # Another pod is refreshing, serve stale data
-                    self.log(f"OctopusAPI: Serving stale cache due to file access lock {url_hash}")
-                    pass
-
-                # Serve stale data (either we just refreshed, or another pod is refreshing)
-                return cached_data["data"]
-
-        # Cache completely missing or too stale (>35 min) - must fetch
-        data = await self.async_download_octopus_url(url, json_only=json_only)
-        if data:
-            # Save to shared file cache
-            cache_entry = {"stamp": datetime.now(), "data": data}
-            self.save_url_to_cache(url, cache_entry)
-            return data
-        else:
+        data = await self.storage.fetch_cached("octopus", url_hash, _download, fresh_minutes=30, stale_minutes=35, format="yaml")
+        if not data:
             self.log("Warn: Unable to download Octopus data from URL {}".format(url))
-            return None
+        return data
 
     async def fetch_tariffs(self, tariffs):
         """
         Fetch the tariff data
         """
-        await self.clean_url_cache()
-
         for tariff in sorted(tariffs, key=lambda t: 0 if t == "import" else 1):
             product_code = tariffs[tariff]["productCode"]
             tariff_code = tariffs[tariff]["tariffCode"]
@@ -1470,15 +1375,23 @@ class OctopusAPI(ComponentBase):
                     tariffs[tariff]["data"] = await self.fetch_url_cached(standard_url)
             else:
                 tariffs[tariff]["data"] = await self.fetch_url_cached(standard_url)
-            if not tariffs[tariff]["data"] and tariff == "export" and "INTELLI-FLUX" in product_code:
-                # INTELLI-FLUX-EXPORT rates are the same as import rates but the product is not on the public REST API
-                # Use the import tariff rates as a fallback
-                import_data = tariffs.get("import", {}).get("data", None)
+            if not tariffs[tariff]["data"] and tariff == "export" and "INTELLI-FLUX-EXPORT" in product_code:
+                # INTELLI-FLUX-EXPORT rates are the same as INTELLI-FLUX-IMPORT rates, but INTELLI-FLUX-EXPORT
+                # is not on the public REST API — fetch the equivalent INTELLI-FLUX-IMPORT tariff instead
+                flux_import_product = product_code.replace("FLUX-EXPORT", "FLUX-IMPORT")
+                flux_import_tariff_code = tariff_code.replace("FLUX-EXPORT", "FLUX-IMPORT")
+                flux_import_url = f"https://api.octopus.energy/v1/products/{flux_import_product}/electricity-tariffs/{flux_import_tariff_code}/standard-unit-rates/"
+                import_data = await self.fetch_url_cached(flux_import_url)
                 if import_data:
                     tariffs[tariff]["data"] = import_data
-                    self.log("OctopusAPI: Using import rates as fallback for {} export tariff (INTELLI-FLUX-EXPORT not on REST API)".format(product_code))
+                    self.log("OctopusAPI: Using FLUX-IMPORT ({}) rates as fallback for {} export tariff".format(flux_import_product, product_code))
                 else:
-                    self.log("Warn: OctopusAPI: No import data available yet for INTELLI-FLUX-EXPORT fallback, export rates will be zero")
+                    import_data = tariffs.get("import", {}).get("data", None)
+                    if import_data:
+                        tariffs[tariff]["data"] = import_data
+                        self.log("OctopusAPI: Using current import rates as fallback for {} export tariff (FLUX-IMPORT also unavailable)".format(product_code))
+                    else:
+                        self.log("Warn: OctopusAPI: No import data available for INTELLI-FLUX-EXPORT fallback, export rates will be zero")
             tariffs[tariff]["standing"] = await self.fetch_url_cached(f"https://api.octopus.energy/v1/products/{product_code}/{tariff_type}-tariffs/{tariff_code}/standing-charges/")
 
             rates = self.get_octopus_rates_direct(tariff)
