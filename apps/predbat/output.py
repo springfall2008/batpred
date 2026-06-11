@@ -33,6 +33,66 @@ class Output:
     charging schedules, and financial metric summaries.
     """
 
+    def additional_load_plan_time(self, timestamp):
+        """
+        Return a compact local time string for an additional load timestamp.
+        """
+        return datetime.fromisoformat(timestamp).strftime("%H:%M")
+
+    def get_additional_load_text(self):
+        """
+        Return a textual summary of planned and suggested additional load forecasts.
+        """
+        planned_loads = []
+        for name, forecast in sorted(getattr(self, "house_load_additional_forecasts", {}).items()):
+            if not forecast.get("enabled", False):
+                continue
+            target_times = forecast.get("target_times", [])
+            total_energy = forecast.get("total_energy", 0.0)
+            if target_times and total_energy > 0:
+                running = forecast.get("selection_locked", False)
+                start = forecast.get("suggested_start") if running and forecast.get("suggested_start") else target_times[0].get("start")
+                end = forecast.get("suggested_end") if running and forecast.get("suggested_end") else target_times[-1].get("end")
+                if running:
+                    total_energy = forecast.get("energy", total_energy) or total_energy
+                    status = "running"
+                    text = "{} is running from {} to {} using {:.2f} kWh".format(name, self.additional_load_plan_time(start), self.additional_load_plan_time(end), dp2(total_energy)) if start and end else None
+                else:
+                    status = "planned"
+                    text = "{} from {} to {} using {:.2f} kWh is planned".format(name, self.additional_load_plan_time(start), self.additional_load_plan_time(end), dp2(total_energy)) if start and end else None
+            else:
+                start = forecast.get("suggested_start")
+                end = forecast.get("suggested_end")
+                total_energy = forecast.get("energy", 0.0)
+                if not total_energy:
+                    plan_interval = forecast.get("plan_interval_minutes", self.plan_interval_minutes)
+                    periods = int((int(forecast.get("duration", 0.0) * 60) + plan_interval - 1) / plan_interval) if plan_interval > 0 else 0
+                    total_energy = forecast.get("slot_energy", 0.0) * periods
+                status = "suggested"
+                text = "{} is suggested from {} to {} using {:.2f} kWh".format(name, self.additional_load_plan_time(start), self.additional_load_plan_time(end), dp2(total_energy)) if start and end and total_energy > 0 else None
+
+            if not start or not end:
+                continue
+            if not text:
+                continue
+            planned_loads.append(
+                {
+                    "name": name,
+                    "start": start,
+                    "end": end,
+                    "status": status,
+                    "text": text,
+                }
+            )
+
+        if not planned_loads:
+            return ""
+
+        planned_loads = sorted(planned_loads, key=lambda load: load["start"])
+        if len(planned_loads) == 1:
+            return "- Additional load {}.\n".format(planned_loads[0]["text"])
+        return "- Additional loads are planned/suggested: {}.\n".format("; ".join(load["text"] for load in planned_loads))
+
     def publish_car_plan(self):
         """
         Publish the car charging plan
@@ -915,6 +975,8 @@ class Output:
         car_charging_kwh = self.car_charge_slot_kwh(self.minutes_now, self.minutes_now + 5)
         if car_charging_kwh > 0:
             sentence += "- Your car is currently charging.\n"
+
+        sentence += self.get_additional_load_text()
 
         charge_window_n_next = self.get_next_charge_window(self.minutes_now)
         export_window_n_next = self.get_next_export_window(self.minutes_now)

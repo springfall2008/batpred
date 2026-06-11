@@ -1674,6 +1674,149 @@ Set **load_forecast_only** to `true` if you do not wish to use the Predbat forec
     - sensor.givtcp_{geserial}_load_energy_today_kwh_prediction$results
 ```
 
+## Additional House Load Forecast
+
+In addition to the normal historical or ML load forecast, Predbat can add named future load deltas to the forward plan. This is intended for known loads that may not be represented well by history, such as a dishwasher, cooking, hot water, or heating demand.
+
+Each item in **house_load_additional_forecast** is labelled by **name** and can be updated later from a Home Assistant automation using **select.predbat_load_forecast_delta_api**.
+
+For appliances where you know the total cycle energy, use **energy** in kWh. Predbat will divide the total across the generated plan slots:
+
+```yaml
+  house_load_additional_forecast:
+    - name: dishwasher
+      start_time: "20:00"
+      duration: 2.0
+      energy: 1.2
+```
+
+With a 15-minute plan interval this adds 0.15kWh to each of the eight slots from 20:00 to 22:00, for a total of 1.2kWh.
+
+For advanced cases, use **slot_energy** when you want to set the kWh for each Predbat plan slot directly:
+
+```yaml
+  house_load_additional_forecast:
+    - name: heating
+      start_time: "20:00"
+      duration: 2.0
+      slot_energy: 0.5
+```
+
+The **slot_energy** value is kWh per Predbat plan slot, not the total energy for the full duration. With the default 30-minute plan interval, the example above adds 0.5kWh to each of the four slots from 20:00 to 22:00, for a total of 2.0kWh. With a 15-minute plan interval it would add 0.5kWh to each of eight slots, for a total of 4.0kWh.
+
+Set **enabled** to `false` to leave a named load configured but disabled by default. Predbat will still publish the binary sensor, but it will not add any load to the plan until the API sends `enabled=true`.
+
+```yaml
+  house_load_additional_forecast:
+    - name: dishwasher_eco
+      enabled: false
+      start_time: "20:00"
+      duration: 2.0
+      energy: 1.2
+```
+
+Set **duration** to `0` to disable an entry completely.
+
+You can optionally set **end_time** instead of **duration**:
+
+```yaml
+  house_load_additional_forecast:
+    - name: cooking
+      start_time: "18:00"
+      end_time: "19:30"
+      energy: 1.2
+```
+
+You can optionally set **weighting** to change the load profile across the duration. A `*` means normal weight `1.0`; if fewer weights are supplied than slots, the final weight is repeated. With **energy**, weighting redistributes the total energy without changing the total. With **slot_energy**, weighting multiplies the per-slot energy.
+
+```yaml
+  house_load_additional_forecast:
+    - name: heating
+      start_time: "20:00"
+      duration: 2.0
+      slot_energy: 0.5
+      weighting: "2,2,*"
+```
+
+With a 30-minute plan interval this adds 1.0kWh, 1.0kWh, 0.5kWh, and 0.5kWh over the four slots.
+
+Using total **energy** with weighting:
+
+```yaml
+  house_load_additional_forecast:
+    - name: dishwasher
+      start_time: "20:00"
+      duration: 2.0
+      energy: 1.2
+      weighting: "2,2,*"
+```
+
+With a 30-minute plan interval this redistributes 1.2kWh as 0.4kWh, 0.4kWh, 0.2kWh, and 0.2kWh.
+
+Set **mode** to `flexible` when the load can run at any time before a deadline. For flexible loads, **start_time** means the earliest allowed start and **end_time** means the load must be done by that time. If **start_time** is omitted in `apps.yaml`, Predbat uses the current plan slot each time the forecast is refreshed; if **end_time** is omitted, Predbat uses the remaining forecast horizon.
+
+Predbat scores flexible candidates with the prediction metric, not just the import rate. This means the suggested time considers the current plan, solar forecast, battery state, import/export rates, losses, and other predicted load.
+
+```yaml
+  house_load_additional_forecast:
+    - name: dishwasher_eco
+      enabled: false
+      mode: flexible
+      duration: 2.0
+      energy: 1.2
+```
+
+You can also restrict a flexible load to a same-day or overnight done-by window:
+
+```yaml
+  house_load_additional_forecast:
+    - name: dishwasher_eco
+      enabled: false
+      mode: flexible
+      start_time: "22:00"
+      end_time: "07:00"
+      duration: 2.0
+      energy: 1.2
+```
+
+If this is enabled at 16:00, the example above means the load may start any time from 22:00 and must finish by 07:00. If **start_time** is omitted, for example `end_time: "07:00"`, the YAML load may start any time from now and must finish by 07:00. Because YAML entries are static configuration, this "now" rolls forward on each forecast refresh.
+
+Predbat publishes each named load as a binary sensor, for example **binary_sensor.predbat_load_forecast_delta_dishwasher**, with a **target_times** attribute showing the generated slots. The sensor attributes also show **enabled**, **mode**, **energy**, **slot_energy**, **load_mode**, **plan_interval_minutes**, **slots**, **total_energy**, **source**, **auto_expire**, **expires_at**, and for flexible loads **requested_start**, **requested_end**, **suggested_start**, **suggested_end**, **selection_reason**, and **candidate_count** so you can confirm how much load will be added and when.
+
+Forecasts created through **select.predbat_load_forecast_delta_api** are one-shot dynamic loads. Predbat publishes a delete button for these forecasts, for example **button.predbat_load_forecast_delta_dishwasher_delete**, and automatically removes them after their finish time. YAML entries are static load injections and do not get delete buttons; remove or edit them in `apps.yaml` instead.
+
+To update a named load from a Home Assistant automation, call **select.select_option** on **select.predbat_load_forecast_delta_api** with the format `name?start_time=HH:MM&duration=hours&energy=kWh`:
+
+```yaml
+action: select.select_option
+target:
+  entity_id: select.predbat_load_forecast_delta_api
+data:
+  option: "dishwasher?start_time=20:00&duration=2.0&energy=1.2"
+```
+
+For a flexible API update, include `mode=flexible` and optionally `enabled=true`:
+
+```yaml
+action: select.select_option
+target:
+  entity_id: select.predbat_load_forecast_delta_api
+data:
+  option: "dishwasher_eco?enabled=true&mode=flexible&start_time=22:00&end_time=07:00&duration=2.0&energy=1.2"
+```
+
+To run any time from now but be done by 07:00, omit **start_time**:
+
+```yaml
+action: select.select_option
+target:
+  entity_id: select.predbat_load_forecast_delta_api
+data:
+  option: "dishwasher_eco?enabled=true&mode=flexible&end_time=07:00&duration=2.0&energy=1.2"
+```
+
+For one-shot forecasts created through **select.predbat_load_forecast_delta_api**, an omitted **start_time** is frozen to the current Predbat plan slot when the command is received. This prevents the published **requested_start** drifting forward on later replans. Sending the command again creates a fresh request and freezes a new start time.
+
 ## Balance Inverters
 
 When you have two or more inverters it's possible they get out of sync so they are at different charge levels or they start to cross-charge (one discharges into another).
