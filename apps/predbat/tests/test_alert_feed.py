@@ -452,6 +452,7 @@ def test_alert_feed(my_predbat):
         else:
             print("  PASS: fresh cache skips fetch")
     finally:
+        my_predbat.components = None
         shutil.rmtree(temp_dir_fresh, ignore_errors=True)
 
     print("- Test run: stale storage cache triggers fetch and saves")
@@ -487,6 +488,7 @@ def test_alert_feed(my_predbat):
             else:
                 print("  PASS: stale cache triggers fetch and saves result")
     finally:
+        my_predbat.components = None
         shutil.rmtree(temp_dir_stale, ignore_errors=True)
 
     print("- Test process alerts")
