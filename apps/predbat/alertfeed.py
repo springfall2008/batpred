@@ -53,7 +53,7 @@ class AlertFeed(ComponentBase):
         if not self.storage:
             return
         data = await self.storage.load("alertfeed", "feed")
-        if data is not None:
+        if data is not None and isinstance(data, dict):
             self.alert_xml = data.get("xml")
             ts = data.get("timestamp")
             if isinstance(ts, datetime):
