@@ -926,6 +926,91 @@ async def test_octopus_fetch_tariffs(my_predbat):
     else:
         print("PASS: Day/night rate data stored correctly in tariff")
 
+    # Test 8: INTELLI-FLUX-EXPORT 404s → fetches FLUX-IMPORT as fallback
+    print("\n*** Test 8: INTELLI-FLUX-EXPORT 404s → fetches FLUX-IMPORT as fallback ***")
+    api8 = OctopusAPI(my_predbat, key="test-api-key-8", account_id="test-account-8", automatic=False)
+
+    flux_export_product = "INTELLI-FLUX-EXPORT-23-07-14"
+    flux_export_tariff = "E-1R-INTELLI-FLUX-EXPORT-23-07-14-A"
+    flux_import_product = "INTELLI-FLUX-IMPORT-23-07-14"
+    flux_import_tariff = "E-1R-INTELLI-FLUX-IMPORT-23-07-14-A"
+    tariffs_input8 = {"export": {"productCode": flux_export_product, "tariffCode": flux_export_tariff}}
+
+    mock_flux_import_rates = [
+        {"valid_from": "2025-01-01T00:00:00Z", "valid_to": "2025-01-01T00:30:00Z", "value_inc_vat": 3.49},
+        {"valid_from": "2025-01-01T05:30:00Z", "valid_to": "2025-01-01T06:00:00Z", "value_inc_vat": 28.14},
+    ]
+    urls_called8 = []
+
+    async def mock_fetch_url8(url, **kwargs):
+        urls_called8.append(url)
+        if kwargs.get("json_only"):
+            return {}
+        if "standing-charges" in url:
+            return []
+        if flux_export_product in url:
+            return None  # FLUX-EXPORT 404s
+        if flux_import_product in url:
+            return mock_flux_import_rates
+        return None
+
+    api8.fetch_url_cached = mock_fetch_url8
+    api8.dashboard_item = MagicMock()
+
+    await api8.fetch_tariffs(tariffs_input8)
+
+    flux_import_url_fetched = any(flux_import_product in url and "standard-unit-rates" in url for url in urls_called8)
+    if not flux_import_url_fetched:
+        print(f"ERROR: Expected FLUX-IMPORT standard-unit-rates URL to be fetched, got {urls_called8}")
+        failed = True
+    else:
+        print("PASS: FLUX-IMPORT standard-unit-rates URL was fetched as fallback")
+
+    if tariffs_input8["export"].get("data") != mock_flux_import_rates:
+        print(f"ERROR: Expected FLUX-IMPORT rates stored as export data, got {tariffs_input8['export'].get('data')}")
+        failed = True
+    else:
+        print("PASS: FLUX-IMPORT rates stored correctly as export fallback")
+
+    # Verify the URL constructed has FLUX-IMPORT, not FLUX-EXPORT
+    wrong_url_called = any(flux_export_product in url and "standard-unit-rates" in url and url != f"https://api.octopus.energy/v1/products/{flux_export_product}/electricity-tariffs/{flux_export_tariff}/standard-unit-rates/" for url in urls_called8)
+    expected_flux_import_url = f"https://api.octopus.energy/v1/products/{flux_import_product}/electricity-tariffs/{flux_import_tariff}/standard-unit-rates/"
+    if expected_flux_import_url not in urls_called8:
+        print(f"ERROR: Expected exact URL {expected_flux_import_url}, got {urls_called8}")
+        failed = True
+    else:
+        print("PASS: FLUX-IMPORT URL constructed correctly with correct product and tariff codes")
+
+    # Test 9: INTELLI-FLUX-EXPORT 404s, FLUX-IMPORT also 404s → falls back to current import data
+    print("\n*** Test 9: FLUX-EXPORT and FLUX-IMPORT both fail → falls back to current import data ***")
+    api9 = OctopusAPI(my_predbat, key="test-api-key-9", account_id="test-account-9", automatic=False)
+
+    fix_import_rates = [{"valid_from": "2025-01-01T00:00:00Z", "valid_to": "2025-01-01T00:30:00Z", "value_inc_vat": 28.14}]
+    tariffs_input9 = {
+        "import": {"productCode": "INTELLI-FIX-12M-25-08-29", "tariffCode": "E-1R-INTELLI-FIX-12M-25-08-29-A"},
+        "export": {"productCode": flux_export_product, "tariffCode": flux_export_tariff},
+    }
+
+    async def mock_fetch_url9(url, **kwargs):
+        if kwargs.get("json_only"):
+            return {}
+        if "standing-charges" in url:
+            return []
+        if flux_export_product in url or flux_import_product in url:
+            return None  # both FLUX tariffs fail
+        return fix_import_rates  # FIX import succeeds
+
+    api9.fetch_url_cached = mock_fetch_url9
+    api9.dashboard_item = MagicMock()
+
+    await api9.fetch_tariffs(tariffs_input9)
+
+    if tariffs_input9["export"].get("data") != fix_import_rates:
+        print(f"ERROR: Expected current import rates as final fallback, got {tariffs_input9['export'].get('data')}")
+        failed = True
+    else:
+        print("PASS: Current import rates used as final fallback when FLUX-IMPORT also unavailable")
+
     if failed:
         print("\n**** ❌ Octopus fetch_tariffs tests FAILED ****")
         return 1
