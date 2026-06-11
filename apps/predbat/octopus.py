@@ -1375,15 +1375,23 @@ class OctopusAPI(ComponentBase):
                     tariffs[tariff]["data"] = await self.fetch_url_cached(standard_url)
             else:
                 tariffs[tariff]["data"] = await self.fetch_url_cached(standard_url)
-            if not tariffs[tariff]["data"] and tariff == "export" and "INTELLI-FLUX" in product_code:
-                # INTELLI-FLUX-EXPORT rates are the same as import rates but the product is not on the public REST API
-                # Use the import tariff rates as a fallback
-                import_data = tariffs.get("import", {}).get("data", None)
+            if not tariffs[tariff]["data"] and tariff == "export" and "INTELLI-FLUX-EXPORT" in product_code:
+                # INTELLI-FLUX-EXPORT rates are the same as INTELLI-FLUX-IMPORT rates but FLUX-EXPORT
+                # is not on the public REST API — fetch the equivalent FLUX-IMPORT tariff instead
+                flux_import_product = product_code.replace("FLUX-EXPORT", "FLUX-IMPORT")
+                flux_import_tariff_code = tariff_code.replace("FLUX-EXPORT", "FLUX-IMPORT")
+                flux_import_url = f"https://api.octopus.energy/v1/products/{flux_import_product}/electricity-tariffs/{flux_import_tariff_code}/standard-unit-rates/"
+                import_data = await self.fetch_url_cached(flux_import_url)
                 if import_data:
                     tariffs[tariff]["data"] = import_data
-                    self.log("OctopusAPI: Using import rates as fallback for {} export tariff (INTELLI-FLUX-EXPORT not on REST API)".format(product_code))
+                    self.log("OctopusAPI: Using FLUX-IMPORT ({}) rates as fallback for {} export tariff".format(flux_import_product, product_code))
                 else:
-                    self.log("Warn: OctopusAPI: No import data available yet for INTELLI-FLUX-EXPORT fallback, export rates will be zero")
+                    import_data = tariffs.get("import", {}).get("data", None)
+                    if import_data:
+                        tariffs[tariff]["data"] = import_data
+                        self.log("OctopusAPI: Using current import rates as fallback for {} export tariff (FLUX-IMPORT also unavailable)".format(product_code))
+                    else:
+                        self.log("Warn: OctopusAPI: No import data available for INTELLI-FLUX-EXPORT fallback, export rates will be zero")
             tariffs[tariff]["standing"] = await self.fetch_url_cached(f"https://api.octopus.energy/v1/products/{product_code}/{tariff_type}-tariffs/{tariff_code}/standing-charges/")
 
             rates = self.get_octopus_rates_direct(tariff)
