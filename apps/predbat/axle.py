@@ -128,7 +128,7 @@ class AxleAPI(ComponentBase):
                 self.log(f"Warn: AxleAPI: Failed to load event history: {e}")
 
         storage = getattr(self, "storage", None)
-        if storage:
+        if not loaded and storage:
             try:
                 data = await storage.load("axle", "event_history")
                 if data and isinstance(data, dict):
