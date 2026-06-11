@@ -431,7 +431,7 @@ def test_alert_feed(my_predbat):
     try:
         alert_feed_fresh = AlertFeed(my_predbat, alert_config={"url": url})
         storage_fresh = _attach_storage(alert_feed_fresh, temp_dir_fresh)
-        fresh_ts = (datetime.now() - timedelta(minutes=5)).isoformat()
+        fresh_ts = datetime.now() - timedelta(minutes=5)
         asyncio.run(storage_fresh.save("alertfeed", "feed", {"xml": alert_data, "timestamp": fresh_ts}, format="yaml", expiry=None))
 
         fresh_download_count = [0]
@@ -459,7 +459,7 @@ def test_alert_feed(my_predbat):
     try:
         alert_feed_stale = AlertFeed(my_predbat, alert_config={"url": url})
         storage_stale = _attach_storage(alert_feed_stale, temp_dir_stale)
-        stale_ts = (datetime.now() - timedelta(minutes=45)).isoformat()
+        stale_ts = datetime.now() - timedelta(minutes=45)
         asyncio.run(storage_stale.save("alertfeed", "feed", {"xml": "<old_data/>", "timestamp": stale_ts}, format="yaml", expiry=None))
 
         new_xml = "<new_alert_data/>"

@@ -55,19 +55,16 @@ class AlertFeed(ComponentBase):
         data = await self.storage.load("alertfeed", "feed")
         if data is not None:
             self.alert_xml = data.get("xml")
-            timestamp_str = data.get("timestamp")
-            if timestamp_str:
-                try:
-                    self.last_downloaded_timestamp = datetime.fromisoformat(timestamp_str)
-                except (ValueError, TypeError):
-                    self.last_downloaded_timestamp = None
+            ts = data.get("timestamp")
+            if isinstance(ts, datetime):
+                self.last_downloaded_timestamp = ts.replace(tzinfo=None)
 
     async def save_alert_cache(self):
         """Persist the current alert XML to storage."""
         if self.storage and self.alert_xml is not None:
             data = {
                 "xml": self.alert_xml,
-                "timestamp": self.last_downloaded_timestamp.isoformat() if self.last_downloaded_timestamp else None,
+                "timestamp": self.last_downloaded_timestamp,
             }
             await self.storage.save("alertfeed", "feed", data, format="yaml", expiry=None)
 
