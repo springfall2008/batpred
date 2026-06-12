@@ -18,7 +18,7 @@ If you want to buy me a beer, then please use [Paypal](https://paypal.me/predbat
 * Use my referral code for Octopus Energy: <https://share.octopus.energy/jolly-eel-176>
 * Use my referral code for Axle Energy (UK): <https://vpp.axle.energy/landing/grid?ref=R-VWIICRSA>
 
-If you find Home Assistant and Predbat too difficult to set up yourself, there is now [PredBat Cloud](https://predbat.com/), a paid version of Predbat hosted in the cloud. Please note that while I have given permission for PredBat Cloud to operate under license, PredBat will remain open source for personal use. 
+If you find Home Assistant and Predbat too difficult to set up yourself, there is now [PredBat Cloud](https://predbat.com/), a paid version of Predbat hosted in the cloud. Please note that while I have given permission for PredBat Cloud to operate under license, PredBat will remain open source for personal use.
 
 ## Predbat documentation
 
