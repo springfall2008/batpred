@@ -1848,7 +1848,9 @@ def run_execute_tests(my_predbat):
     failed |= run_execute_test(my_predbat, "no_discharge", export_window_best=export_window_best, export_limits_best=export_limits_best, assert_reserve=-1)
     failed |= run_execute_test(my_predbat, "no_discharge2", export_window_best=export_window_best, export_limits_best=export_limits_best, set_charge_window=True, set_export_window=True, soc_kw=0, assert_status="Hold exporting")
     my_predbat.rate_best_cost_threshold_export = 5.0
-    failed |= run_execute_test(my_predbat, "no_discharge_below_export_threshold", export_window_best=export_window_best, export_limits_best=export_limits_best, set_charge_window=True, set_export_window=True, soc_kw=5, assert_force_export=False, assert_status="Demand")
+    failed |= run_execute_test(
+        my_predbat, "no_discharge_below_export_threshold", export_window_best=export_window_best, export_limits_best=export_limits_best, set_charge_window=True, set_export_window=True, soc_kw=5, assert_force_export=False, assert_status="Demand"
+    )
     my_predbat.manual_export_times = [my_predbat.minutes_now]
     failed |= run_execute_test(
         my_predbat,
