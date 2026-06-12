@@ -1015,6 +1015,8 @@ class Plan:
 
             # Full plan
             self.optimise_all_windows(metric, metric_keep, debug_mode)
+            if self.calculate_best_export and self.export_window_best:
+                self.restore_export_windows_above_threshold()
 
             # Update target values, will be refined via clipping
             self.update_target_values()
@@ -2364,6 +2366,44 @@ class Plan:
         if rate_values:
             new_window["average"] = dp2(sum(rate_values) / len(rate_values))
         return new_window
+
+    def restore_export_windows_above_threshold(self):
+        """
+        Undo optimiser tail-trimming for selected export windows when the skipped
+        start of the original window is still above the final export threshold.
+        """
+        threshold = self.export_threshold_for_window()
+        if threshold is None:
+            return
+
+        for window_n in range(len(self.export_window_best)):
+            window = self.export_window_best[window_n]
+            if self.export_limits_best[window_n] >= 100.0:
+                continue
+
+            window_start = window["start"]
+            window_start_orig = window.get("start_orig", window_start)
+            if window_start_orig >= window_start:
+                continue
+
+            rate_minutes = list(range(window_start_orig, window_start, PREDICT_STEP))
+            has_rate_data = any(minute in self.rate_export for minute in rate_minutes)
+            if has_rate_data:
+                skipped_above_threshold = all(self.rate_export.get(minute, 0) >= threshold for minute in rate_minutes)
+            else:
+                skipped_above_threshold = window.get("average", self.rate_export.get(window_start_orig, 0)) >= threshold
+
+            if skipped_above_threshold:
+                self.log(
+                    "Restore export window start {} - {} to {} using optimisation threshold {}{}".format(
+                        self.time_abs_str(window_start),
+                        self.time_abs_str(window["end"]),
+                        self.time_abs_str(window_start_orig),
+                        dp2(threshold),
+                        self.currency_symbols[1],
+                    )
+                )
+                window["start"] = window_start_orig
 
     def prune_export_windows_below_threshold(self, export_limits_best, export_window_best):
         """

@@ -29,6 +29,8 @@ def run_discard_unused_export_slots_tests(my_predbat):
     failed |= test_prune_export_trims_low_rate_edge(my_predbat)
     failed |= test_prune_freeze_export_below_threshold(my_predbat)
     failed |= test_prune_manual_export_below_threshold_kept(my_predbat)
+    failed |= test_restore_export_window_above_threshold(my_predbat)
+    failed |= test_restore_export_window_below_threshold_kept_trimmed(my_predbat)
     return failed
 
 
@@ -375,6 +377,64 @@ def test_prune_manual_export_below_threshold_kept(my_predbat):
         failed = True
     elif len(result_windows) != 1 or result_windows[0]["start"] != 720:
         print("ERROR: Expected manual window to remain but got {}".format(result_windows))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_restore_export_window_above_threshold(my_predbat):
+    """Tail-trimmed optimiser exports are restored when skipped rates are above threshold"""
+    print("**** test_restore_export_window_above_threshold ****")
+    failed = False
+    setup(my_predbat)
+    my_predbat.rate_best_cost_threshold_export = 10.0
+    my_predbat.rate_export = {
+        720: 12.0,
+        725: 12.0,
+        730: 12.0,
+        735: 12.0,
+        740: 12.0,
+        745: 12.0,
+    }
+    my_predbat.export_window_best = [make_window(740, 750, average=12.0)]
+    my_predbat.export_window_best[0]["start_orig"] = 720
+    my_predbat.export_limits_best = [50.0]
+
+    my_predbat.restore_export_windows_above_threshold()
+
+    if my_predbat.export_window_best[0]["start"] != 720:
+        print("ERROR: Expected export window start to restore to 720 but got {}".format(my_predbat.export_window_best[0]["start"]))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_restore_export_window_below_threshold_kept_trimmed(my_predbat):
+    """Tail-trimmed optimiser exports are not restored across below-threshold rates"""
+    print("**** test_restore_export_window_below_threshold_kept_trimmed ****")
+    failed = False
+    setup(my_predbat)
+    my_predbat.rate_best_cost_threshold_export = 10.0
+    my_predbat.rate_export = {
+        720: 8.0,
+        725: 8.0,
+        730: 12.0,
+        735: 12.0,
+        740: 12.0,
+        745: 12.0,
+    }
+    my_predbat.export_window_best = [make_window(730, 750, average=12.0)]
+    my_predbat.export_window_best[0]["start_orig"] = 720
+    my_predbat.export_limits_best = [50.0]
+
+    my_predbat.restore_export_windows_above_threshold()
+
+    if my_predbat.export_window_best[0]["start"] != 730:
+        print("ERROR: Expected export window start to remain 730 but got {}".format(my_predbat.export_window_best[0]["start"]))
         failed = True
 
     if not failed:
