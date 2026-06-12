@@ -47,6 +47,7 @@ def setup(my_predbat):
     my_predbat.manual_freeze_export_times = []
     my_predbat.rate_best_cost_threshold_export = None
     my_predbat.rate_export_cost_threshold = 99
+    my_predbat.rate_export = {}
 
 
 def test_discard_disabled(my_predbat):
