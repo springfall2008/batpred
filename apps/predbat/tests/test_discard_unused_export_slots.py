@@ -25,6 +25,10 @@ def run_discard_unused_export_slots_tests(my_predbat):
     failed |= test_mixed_slots(my_predbat)
     failed |= test_all_disabled(my_predbat)
     failed |= test_freeze_export_kept(my_predbat)
+    failed |= test_prune_export_below_threshold(my_predbat)
+    failed |= test_prune_export_trims_low_rate_edge(my_predbat)
+    failed |= test_prune_freeze_export_below_threshold(my_predbat)
+    failed |= test_prune_manual_export_below_threshold_kept(my_predbat)
     return failed
 
 
@@ -39,6 +43,10 @@ def setup(my_predbat):
     reset_inverter(my_predbat)
     my_predbat.debug_enable = False
     my_predbat.manual_all_times = []
+    my_predbat.manual_export_times = []
+    my_predbat.manual_freeze_export_times = []
+    my_predbat.rate_best_cost_threshold_export = None
+    my_predbat.rate_export_cost_threshold = 99
 
 
 def test_discard_disabled(my_predbat):
@@ -266,6 +274,106 @@ def test_freeze_export_kept(my_predbat):
         failed = True
     elif result_windows[0]["start"] != 720 or result_windows[0]["end"] != 780:
         print("ERROR: Expected combined window 720-780 but got {}-{}".format(result_windows[0]["start"], result_windows[0]["end"]))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_prune_export_below_threshold(my_predbat):
+    """Optimiser-selected export slots below the final export threshold should be removed"""
+    print("**** test_prune_export_below_threshold ****")
+    failed = False
+    setup(my_predbat)
+    my_predbat.rate_best_cost_threshold_export = 10.0
+
+    windows = [make_window(720, 750, average=8.0), make_window(780, 810, average=12.0)]
+    limits = [50.0, 40.0]
+
+    result_limits, result_windows = my_predbat.prune_export_windows_below_threshold(limits, windows)
+
+    if result_limits != [40.0]:
+        print("ERROR: Expected only the above-threshold limit [40.0] but got {}".format(result_limits))
+        failed = True
+    elif len(result_windows) != 1 or result_windows[0]["start"] != 780:
+        print("ERROR: Expected only the above-threshold window to remain but got {}".format(result_windows))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_prune_export_trims_low_rate_edge(my_predbat):
+    """Below-threshold edge periods should be trimmed from optimiser export windows"""
+    print("**** test_prune_export_trims_low_rate_edge ****")
+    failed = False
+    setup(my_predbat)
+    my_predbat.rate_best_cost_threshold_export = 8.16
+    my_predbat.rate_export = {955: 4.74}
+    for minute in range(960, 1140, 5):
+        my_predbat.rate_export[minute] = 10.75
+
+    windows = [make_window(955, 1140, average=10.75)]
+    limits = [17.0]
+
+    result_limits, result_windows = my_predbat.prune_export_windows_below_threshold(limits, windows)
+
+    if result_limits != [17.0]:
+        print("ERROR: Expected trimmed export limit [17.0] but got {}".format(result_limits))
+        failed = True
+    elif len(result_windows) != 1 or result_windows[0]["start"] != 960 or result_windows[0]["end"] != 1140:
+        print("ERROR: Expected window to be trimmed to 960-1140 but got {}".format(result_windows))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_prune_freeze_export_below_threshold(my_predbat):
+    """Optimiser freeze export slots below the final export threshold should be removed"""
+    print("**** test_prune_freeze_export_below_threshold ****")
+    failed = False
+    setup(my_predbat)
+    my_predbat.rate_best_cost_threshold_export = 10.0
+
+    windows = [make_window(720, 750, average=8.0)]
+    limits = [99.0]
+
+    result_limits, result_windows = my_predbat.prune_export_windows_below_threshold(limits, windows)
+
+    if result_limits:
+        print("ERROR: Expected below-threshold freeze export to be removed but got {}".format(result_limits))
+        failed = True
+    elif result_windows:
+        print("ERROR: Expected no windows but got {}".format(result_windows))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_prune_manual_export_below_threshold_kept(my_predbat):
+    """Manual export overrides should remain even when below the optimiser threshold"""
+    print("**** test_prune_manual_export_below_threshold_kept ****")
+    failed = False
+    setup(my_predbat)
+    my_predbat.rate_best_cost_threshold_export = 10.0
+    my_predbat.manual_export_times = [720]
+
+    windows = [make_window(720, 750, average=8.0)]
+    limits = [50.0]
+
+    result_limits, result_windows = my_predbat.prune_export_windows_below_threshold(limits, windows)
+
+    if result_limits != [50.0]:
+        print("ERROR: Expected manual below-threshold export to be kept but got {}".format(result_limits))
+        failed = True
+    elif len(result_windows) != 1 or result_windows[0]["start"] != 720:
+        print("ERROR: Expected manual window to remain but got {}".format(result_windows))
         failed = True
 
     if not failed:

@@ -345,9 +345,15 @@ class Execute:
                 discharge_start_time = self.midnight_utc + timedelta(minutes=minutes_start)
                 discharge_end_time = self.midnight_utc + timedelta(minutes=(minutes_end + export_adjust))  # Add in 1 minute margin to allow Predbat to restore demand mode
                 discharge_soc = max((int(self.export_limits_best[0]) * self.soc_max) / 100.0, self.reserve, self.best_soc_min)
+                export_window_above_threshold = self.export_window_above_threshold(window, self.export_limits_best[0])
                 self.log("Next export window will be: {} - {} at reserve {}".format(discharge_start_time, discharge_end_time, self.export_limits_best[0]))
                 if (self.minutes_now >= minutes_start) and (self.minutes_now < minutes_end) and (self.export_limits_best[0] < 100.0):
-                    if not self.set_export_freeze_only and self.export_limits_best[0] < 99.0 and (self.soc_kw > discharge_soc):
+                    if not export_window_above_threshold:
+                        export_rate = window.get("average", self.rate_export.get(window["start"], 0))
+                        self.log("Not exporting now as export rate {}{} is below optimisation threshold {}{}".format(dp2(export_rate), self.currency_symbols[1], dp2(self.export_threshold_for_window()), self.currency_symbols[1]))
+                        inverter.adjust_force_export(False)
+                        disabled_export = True
+                    elif not self.set_export_freeze_only and self.export_limits_best[0] < 99.0 and (self.soc_kw > discharge_soc):
                         if self.set_export_low_power:
                             export_rate_adjust = 1 - (self.export_limits_best[0] - int(self.export_limits_best[0]))
                         else:
@@ -399,7 +405,7 @@ class Execute:
                             self.isExporting_Target = inverter.soc_percent
                             self.log("Export Hold (Demand mode) as export is now at/below target or freeze only is set - current SoC {}kWh and target {}kWh".format(self.soc_kw, discharge_soc))
                 else:
-                    if (self.minutes_now < minutes_end) and ((minutes_start - self.minutes_now) <= self.set_window_minutes) and (self.export_limits_best[0] < 99.0):
+                    if (self.minutes_now < minutes_end) and ((minutes_start - self.minutes_now) <= self.set_window_minutes) and (self.export_limits_best[0] < 99.0) and export_window_above_threshold:
                         # We can't schedule freeze export only full export
                         # Don't turn off ECO mode for GE inverters except when we are within the export window as it will stop the battery being used
                         ge_inverters = inverter.inv_has_ge_eco_toggle or inverter.inv_has_ge_inverter_mode
