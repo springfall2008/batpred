@@ -35,6 +35,7 @@ from tests.test_optimise_all_windows import run_optimise_all_windows_tests
 from tests.test_nordpool import run_nordpool_test
 from tests.test_futurerate_auto import test_futurerate_auto
 from tests.test_car_charging_smart import run_car_charging_smart_tests
+from tests.test_car_charging_plan_date import run_car_charging_plan_date_tests
 from tests.test_plugin_startup import test_plugin_startup_order
 from tests.test_optimise_levels import run_optimise_levels_tests
 from tests.test_energydataservice import run_energydataservice_tests
@@ -252,6 +253,7 @@ def main():
         ("sigenergy", run_sigenergy_tests, "Sigenergy Cloud API tests", False),
         ("iboost_smart", run_iboost_smart_tests, "iBoost smart tests", False),
         ("car_charging_smart", run_car_charging_smart_tests, "Car charging smart tests", False),
+        ("car_charging_plan_date", run_car_charging_plan_date_tests, "Car charging plan_date multi-day tests", False),
         ("intersect_window", run_intersect_window_tests, "Intersect window tests", False),
         ("inverter_multi", run_inverter_multi_tests, "Inverter multi tests", False),
         ("octopus_free", test_octopus_free, "Octopus free electricity tests", False),

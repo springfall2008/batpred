@@ -1869,6 +1869,7 @@ class Fetch:
         self.car_charging_plan_smart = [False for c in range(self.num_cars)]
         self.car_charging_plan_max_price = [0 for c in range(self.num_cars)]
         self.car_charging_plan_time = ["07:00:00" for c in range(self.num_cars)]
+        self.car_charging_plan_date = ["Default" for c in range(self.num_cars)]
         self.car_charging_battery_size = [100.0 for c in range(self.num_cars)]
         self.car_charging_limit = [100.0 for c in range(self.num_cars)]
         self.car_charging_rate = [7.4 for c in range(max(self.num_cars, 1))]
@@ -1904,9 +1905,10 @@ class Fetch:
             self.car_charging_now[car_n] = charging_now
 
             # Other car related configuration
-            self.car_charging_plan_smart[car_n] = self.get_arg("car_charging_plan_smart", False)
-            self.car_charging_plan_max_price[car_n] = self.get_arg("car_charging_plan_max_price", 0.0)
-            self.car_charging_plan_time[car_n] = self.get_arg("car_charging_plan_time", "07:00:00")
+            self.car_charging_plan_smart[car_n] = self.get_arg("car_charging_plan_smart", False, index=car_n)
+            self.car_charging_plan_max_price[car_n] = self.get_arg("car_charging_plan_max_price", 0.0, index=car_n)
+            self.car_charging_plan_time[car_n] = self.get_arg("car_charging_plan_time", "07:00:00", index=car_n)
+            self.car_charging_plan_date[car_n] = self.get_arg("car_charging_plan_date", "Default", index=car_n)
             self.car_charging_battery_size[car_n] = dp2(float(self.get_arg("car_charging_battery_size", 100.0, index=car_n)))
             car_postfix = "" if car_n == 0 else "_" + str(car_n)
             self.car_charging_rate[car_n] = float(self.get_arg("car_charging_rate" + car_postfix))
@@ -2356,6 +2358,8 @@ class Fetch:
         self.manual_freeze_charge_times = self.manual_times("manual_freeze_charge")
         self.manual_freeze_export_times = self.manual_times("manual_freeze_export")
         self.manual_demand_times = self.manual_times("manual_demand")
+        if self.num_cars > 0:
+            self.car_plan_date_options()
         self.manual_all_times = self.manual_charge_times + self.manual_export_times + self.manual_demand_times + self.manual_freeze_charge_times + self.manual_freeze_export_times
         self.manual_api = self.api_select_update("manual_api")
         self.manual_import_rates = self.manual_rates("manual_import_rates", default_rate=self.get_arg("manual_import_value"))

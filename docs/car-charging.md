@@ -341,6 +341,11 @@ NB2: If you have **car_charging_soc** set and working for your car SoC sensor in
 
 - Set **select.predbat_car_charging_plan_time** to the time you want the car charging to be completed by
 
+- Set **select.predbat_car_charging_plan_date** to pick the day the car needs to be ready by. The default is "Default" which means within the next 24 hours; pick a specific date (e.g. "Fri 09 May 2026") if the car will not be needed for several days. Once the chosen date passes, the entity automatically reverts to "Default".<BR>
+This setting only applies to Predbat-managed car charging. With Octopus Intelligent Go, the ready-by date is managed by Octopus and the dropdown has no effect.<BR>
+The list of selectable dates comes from your planning horizon, **input_number.predbat_forecast_plan_hours** (*expert mode*). On the default 24-hour horizon you will only see today; raise it (up to 96 hours) to see more days.<BR>
+Predbat needs import-rate data to plan ahead. Beyond the rates published by your tariff (typically 24 hours), it assumes the same daily rate pattern repeats. That works well for fixed tariffs and is a best-guess for variable tariffs such as Octopus Agile. See **input_number.predbat_metric_future_rate_offset_import** (*expert mode*) if you want to add pessimism to those assumed rates.
+
 - Turn On **switch.predbat_car_charging_plan_smart** if you want to use the cheapest slots only. When disabled (turned Off) all low-rate slots will be used in time order.
 Low-rate slots are time periods where the import rate is below the threshold determined by **input_number.predbat_rate_low_threshold** (*expert mode*).
 By default this threshold is calculated automatically based upon future import rates - see [Battery margins and metrics options](customisation.md#battery-margins-and-metrics-options) for details of configuring this threshold.
