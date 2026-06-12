@@ -1755,6 +1755,7 @@ class Plan:
                 )
 
             window_size = try_export_window[window_n]["end"] - start
+            original_window_size = try_export_window[window_n]["end"] - window["start"]
             window_key = str(dp2(this_export_limit)) + "_" + str(window_size)
             window_results[window_key] = [metric, cost]
 
@@ -1767,7 +1768,7 @@ class Plan:
             elif all_n:
                 min_improvement_scaled = self.metric_min_improvement_export * rate_scale * len(all_n)
             else:
-                min_improvement_scaled = self.metric_min_improvement_export * window_size * rate_scale / float(self.plan_interval_minutes)
+                min_improvement_scaled = self.metric_min_improvement_export * original_window_size * rate_scale / float(self.plan_interval_minutes)
 
             # Only select an export if it makes a notable improvement has defined by min_improvement (divided in M windows)
             # Also require cost improvement to prevent exports that only game metric_keep without actual savings (issue #2984)
