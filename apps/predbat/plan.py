@@ -2304,12 +2304,7 @@ class Plan:
         """
         window_start = window["start"]
         window_start_orig = window.get("start_orig", window_start)
-        return (
-            (window_start in self.manual_export_times)
-            or (window_start_orig in self.manual_export_times)
-            or (window_start in self.manual_freeze_export_times)
-            or (window_start_orig in self.manual_freeze_export_times)
-        )
+        return (window_start in self.manual_export_times) or (window_start_orig in self.manual_export_times) or (window_start in self.manual_freeze_export_times) or (window_start_orig in self.manual_freeze_export_times)
 
     def export_window_above_threshold(self, window, export_limit):
         """
