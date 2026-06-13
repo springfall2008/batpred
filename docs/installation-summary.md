@@ -13,7 +13,7 @@ see the [video guides](video-guides.md) section for those and other videos
     - [Install and configure the Solcast integration](install.md#solcast-home-assistant-integration-method), and check that you see the Solcast data in Home Assistant
 6. Follow the [Energy Rates](energy-rates.md) instructions to tell Predbat what your import and export energy rates are.
 If you use Octopus Energy then this includes installing the Octopus Energy integration (if you haven't already) - [Octopus Energy](energy-rates.md#octopus-energy-integration)
-7. Edit Predbat's `apps.yaml` configuration file to to match your system - [apps.yaml settings](apps-yaml.md)<BR>
+7. Edit Predbat's `apps.yaml` configuration file to match your system - [apps.yaml settings](apps-yaml.md)<BR>
 The apps.yaml file will be in either the directory `/addon_configs/6adb4f0d_predbat` or `/config/appdaemon/apps/predbat/config/` depending on which Predbat install method you used.
     - Inverter settings match the names in GivTCP - should be automatic (but if you have 2 names you will have to edit apps.yaml)
         - You have set the right number of inverters (**num_inverters**)

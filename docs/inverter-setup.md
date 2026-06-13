@@ -13,7 +13,7 @@ To setup the inverter with Predbat you will need to:
 3. Confirm that the integration is working.  Are you receiving data from the various sensors (grid energy, charge limit, solar PV generated, etc)?<BR>
    Can you control the inverter using its Home Assistant controls?
 
-4. For each inverter there is a custom `apps.yaml` template configuration file that must be used in place of the GivTCP template file installed by default with Predbat:
+4. For most inverters there is a custom `apps.yaml` template configuration file that must be used in place of the GivTCP template file installed by default with Predbat:
 
    - Open the inverter-specific template file with a browser
    - Using a [file editor in Home Assistant](install.md#editing-configuration-files-in-home-assistant), edit the default `apps.yaml` configuration file
@@ -31,7 +31,7 @@ To setup the inverter with Predbat you will need to:
 The table below lists the inverters and required Home Assistant integrations that have had Predbat configurations developed.
 
 Additionally, if your inverter type is not listed, you can create a [custom inverter definition for Predbat](#i-want-to-add-an-unsupported-inverter-to-predbat).
-Once you get everything working please share the configuration as a github issue so it can be incorporated into the Predbat documentation.
+Once you get everything working please share the configuration as a GitHub issue so it can be incorporated into the Predbat documentation.
 
    | Name | Integration | Template |
    | :---------------------------- | :------------- | :------------ |
@@ -1777,8 +1777,8 @@ Copy the template [sigenergy_cloud.yaml](https://raw.githubusercontent.com/sprin
 ```yaml
   sigenergy_app_key: !secret sigenergy_app_key
   sigenergy_app_secret: !secret sigenergy_app_secret
-  sigenergy_ca_cert: !secret sigenergy_ca_pem
-  sigenergy_client_cert: !secret sigenergy_client_pem
+  sigenergy_ca_pem: !secret sigenergy_ca_pem
+  sigenergy_client_pem: !secret sigenergy_client_pem
   sigenergy_client_key: !secret sigenergy_client_key
   sigenergy_automatic: true
   sigenergy_system_id:
@@ -2230,7 +2230,7 @@ Please see this ticket in Github for ongoing discussion: <https://github.com/spr
 
 - Predbat now has a built-in Solis cloud integration.
 
-See the components documentation for details [Components - Solis cloud](components.md#solis-cloud-api-solax)
+See the components documentation for details [Components - Solis cloud](components.md#solis-cloud-api-solis)
 
 ## Solis Inverters before FB00
 
@@ -2992,7 +2992,7 @@ rest_command:
 
 ## Victron
 
-This is at an early stage of development, see Github discussion [#789](https://github.com/springfall2008/batpred/discussions/798) and [#2846](https://github.com/springfall2008/batpred/issues/2846)
+This is at an early stage of development, see GitHub discussion [#789](https://github.com/springfall2008/batpred/discussions/798) and [#2846](https://github.com/springfall2008/batpred/issues/2846)
 
 ## I want to add an unsupported inverter to Predbat
 
