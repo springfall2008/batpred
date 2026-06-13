@@ -558,6 +558,7 @@ class OctopusAPI(ComponentBase):
             self.graphql_token = data.get("kraken_token")
             self.tariff_fetched_at = data.get("tariff_fetched_at")
             self.device_fetched_at = data.get("device_fetched_at")
+            self.update_success_timestamp()
 
         self.tariffs = {}
         if self.account_data is None:
