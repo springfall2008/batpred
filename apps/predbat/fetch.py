@@ -308,7 +308,7 @@ class Fetch:
 
                 amount_to_fill = 0
                 for minute in range(period_end, period_start, -1):
-                    power = load_power_data.get(minute, 0)
+                    power = max(load_power_data.get(minute, 0), 0)
                     energy = power / 60.0 / 1000.0
                     amount_to_fill += energy
                     new_load_minutes[minute] = new_load_minutes.get(minute, 0) + amount_to_fill
@@ -355,7 +355,7 @@ class Fetch:
                 running_total = load_at_start
                 for minute in range(period_start, period_end + 1):
                     new_load_minutes[minute] = dp4(running_total)
-                    power = load_power_data.get(minute, 0)
+                    power = max(load_power_data.get(minute, 0), 0)
                     energy_decrement = (power / 60.0 / 1000.0) * scale_factor
                     running_total -= energy_decrement
             elif load_total > 0:
