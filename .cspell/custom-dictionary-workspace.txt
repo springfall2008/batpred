@@ -54,6 +54,8 @@ chargehold
 chargelater
 Chrg
 citem
+clearsky
+clipping
 Codespaces
 collapsable
 compareform
@@ -93,6 +95,7 @@ dischargeenergytotal
 dischargefreeze
 diverter
 dlimit
+dno
 dnoregion
 docstrings
 dstamp
@@ -166,6 +169,7 @@ homeassistant
 houseb
 htmlcov
 husforbrukning
+hybrid
 hypervolt
 iboost
 idag
@@ -177,6 +181,7 @@ INTELLI
 intelligentdevice
 interp
 invbatpower
+inverter
 invname
 isoformat
 isort
