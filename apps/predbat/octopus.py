@@ -26,6 +26,7 @@ import hashlib
 import json
 import os
 import pytz
+from ha import run_async
 
 user_agent_value = "predbat-octopus-energy"
 integration_context_header = "Ha-Integration-Context"
@@ -579,7 +580,7 @@ class OctopusAPI(ComponentBase):
             "device_fetched_at": self.device_fetched_at,
         }
         if self.storage:
-            await self.storage.save("octopus_user", "account", octopus_cache, format="yaml", expiry=None)
+            await self.storage.save("octopus_user", "account", octopus_cache, format="yaml", expiry=datetime.now(timezone.utc) + timedelta(days=7))
 
     def get_tariff(self, tariff_type):
         if tariff_type in self.tariffs:
@@ -1973,23 +1974,8 @@ class Octopus:
 
     def download_octopus_free_func(self, url):
         """
-        Download octopus free session data directly from a URL
+        Download octopus free session data directly from a URL, no caching.
         """
-        # Check the cache first
-        now = datetime.now()
-        if url in self.octopus_url_cache:
-            stamp = self.octopus_url_cache[url]["stamp"]
-            cached_midnight = self.octopus_url_cache[url].get("midnight_utc")
-            pdata = self.octopus_url_cache[url]["data"]
-            age = now - stamp
-
-            # Cache is valid if: age < 30 minutes AND midnight_utc hasn't changed (to avoid stale data after midnight)
-            if age.total_seconds() < (30 * 60) and cached_midnight == self.midnight_utc:
-                self.log("Octopus: Return cached octopus data for {} age {} minutes".format(url, dp1(age.total_seconds() / 60)))
-                return pdata
-            elif cached_midnight != self.midnight_utc:
-                self.log("Octopus: Cached octopus data for {} is stale (midnight crossed), re-downloading".format(url))
-
         try:
             r = requests.get(url)
         except requests.exceptions.ConnectionError:
@@ -2002,18 +1988,67 @@ class Octopus:
             self.record_status("Warn: Error downloading Octopus free session data", debug=url, had_errors=True)
             return None
 
-        # Return new data
-        self.octopus_url_cache[url] = {}
-        self.octopus_url_cache[url]["stamp"] = now
-        self.octopus_url_cache[url]["midnight_utc"] = self.midnight_utc
-        self.octopus_url_cache[url]["data"] = r.text
         return r.text
+
+    def _load_octopus_url_cache_from_storage(self):
+        """Pre-warm the entire octopus_url_cache (free sessions and rates) from storage on first call after restart."""
+        components = getattr(self, "components", None)
+        storage = components.get_component("storage") if components else None
+        if self.octopus_url_cache_loaded or not storage:
+            return
+        try:
+            self.octopus_url_cache_loaded = True
+            data = run_async(storage.load("octopus_free", "url_cache"))
+            if data:
+                self.octopus_url_cache = data
+                self.log("Octopus: Loaded URL cache from storage ({} entries)".format(len(data)))
+        except Exception as e:
+            self.log("Warn: Octopus: Failed to load URL cache from storage: {}".format(e))
+
+    def _save_octopus_url_cache_to_storage(self):
+        """Persist the entire octopus_url_cache (free sessions and rates) to storage so it survives restarts."""
+        components = getattr(self, "components", None)
+        storage = components.get_component("storage") if components else None
+        if not storage:
+            return
+
+        # Prune entries older than 2 days so stale keys (e.g. after a tariff URL change) don't accumulate forever
+        now = datetime.now()
+        stale = [url for url, entry in self.octopus_url_cache.items() if not isinstance(entry, dict) or not entry.get("stamp") or (now - entry["stamp"]) > timedelta(days=2)]
+        for url in stale:
+            del self.octopus_url_cache[url]
+        if stale:
+            self.log("Octopus: Pruned {} stale URL cache entries (older than 2 days)".format(len(stale)))
+
+        try:
+            run_async(storage.save("octopus_free", "url_cache", self.octopus_url_cache, format="yaml", expiry=datetime.now(timezone.utc) + timedelta(hours=8)))
+        except Exception as e:
+            self.log("Warn: Octopus: Failed to save URL cache to storage: {}".format(e))
 
     def download_octopus_free(self, url):
         """
         Download octopus free session data.
         If response is JSON, parse as Go API response. Otherwise, use legacy HTML parsing.
+        Caches the parsed sessions list (not the raw response) to avoid retaining large text bodies.
+        On first call after a restart, pre-warms the in-memory cache from storage before checking expiry.
         """
+        # Pre-warm the entire cache from storage once per process lifetime
+        self._load_octopus_url_cache_from_storage()
+
+        # Check the cache first
+        now = datetime.now()
+        if url in self.octopus_url_cache:
+            stamp = self.octopus_url_cache[url]["stamp"]
+            cached_midnight = self.octopus_url_cache[url].get("midnight_utc")
+            age = now - stamp
+
+            # Cache is valid if: age < 30 minutes AND midnight_utc hasn't changed (to avoid stale data after midnight)
+            if age.total_seconds() < (30 * 60) and cached_midnight == self.midnight_utc:
+                self.log("Octopus: Return cached octopus data for {} age {} minutes".format(url, dp1(age.total_seconds() / 60)))
+                return self.octopus_url_cache[url]["data"]
+            elif cached_midnight != self.midnight_utc:
+                self.log("Octopus: Cached octopus data for {} is stale (midnight crossed), re-downloading".format(url))
+
         free_sessions = []
         pdata = self.download_octopus_free_func(url)
         if not pdata:
@@ -2036,19 +2071,20 @@ class Octopus:
                     predbat_session = {"start": start_local.strftime(TIME_FORMAT), "end": end_local.strftime(TIME_FORMAT), "rate": 0.0}
                     free_sessions.append(predbat_session)
 
-            return free_sessions
-
         except json.JSONDecodeError:
             # Not JSON, use legacy HTML parsing
-            return self.download_octopus_free_legacy(url)
+            free_sessions = self.download_octopus_free_legacy(pdata)
 
-    def download_octopus_free_legacy(self, url):
+        self.octopus_url_cache[url] = {"stamp": now, "midnight_utc": self.midnight_utc, "data": free_sessions}
+        self._save_octopus_url_cache_to_storage()
+        return free_sessions
+
+    def download_octopus_free_legacy(self, pdata):
         """
-        Legacy method: Download and parse HTML directly (fallback only).
+        Legacy method: Parse HTML directly (fallback only).
         Kept for backward compatibility when Go API is unavailable.
         """
         free_sessions = []
-        pdata = self.download_octopus_free_func(url)
         if not pdata:
             return free_sessions
 
@@ -2137,6 +2173,10 @@ class Octopus:
 
         self.log("Octopus: Download Octopus rates from {}".format(url))
 
+        # Pre-warm the entire cache from storage once per process lifetime (shared with free sessions).
+        # Done before any in-memory population so the one-shot storage load cannot clobber freshly cached entries.
+        self._load_octopus_url_cache_from_storage()
+
         # Check the cache first
         now = datetime.now()
         if url in self.octopus_url_cache:
@@ -2172,6 +2212,7 @@ class Octopus:
         self.octopus_url_cache[url]["stamp"] = now
         self.octopus_url_cache[url]["midnight_utc"] = self.midnight_utc
         self.octopus_url_cache[url]["data"] = pdata
+        self._save_octopus_url_cache_to_storage()
         return pdata
 
     def download_octopus_rates_func(self, url):
