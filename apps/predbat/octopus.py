@@ -579,7 +579,7 @@ class OctopusAPI(ComponentBase):
             "device_fetched_at": self.device_fetched_at,
         }
         if self.storage:
-            await self.storage.save("octopus_user", "account", octopus_cache, format="yaml", expiry=datetime.now(timezone.utc) + timedelta(days=2))
+            await self.storage.save("octopus_user", "account", octopus_cache, format="yaml", expiry=datetime.now(timezone.utc) + timedelta(days=7))
 
     def get_tariff(self, tariff_type):
         if tariff_type in self.tariffs:
@@ -1989,8 +1989,8 @@ class Octopus:
 
         return r.text
 
-    def _load_octopus_free_from_storage(self):
-        """Pre-warm the entire octopus_url_cache from storage on first call after restart."""
+    def _load_octopus_url_cache_from_storage(self):
+        """Pre-warm the entire octopus_url_cache (free sessions and rates) from storage on first call after restart."""
         components = getattr(self, "components", None)
         storage = components.get_component("storage") if components else None
         if self.octopus_url_cache_loaded or not storage:
@@ -2004,12 +2004,21 @@ class Octopus:
         except Exception as e:
             self.log("Warn: Octopus: Failed to load URL cache from storage: {}".format(e))
 
-    def _save_octopus_free_to_storage(self):
-        """Persist the entire octopus_url_cache to storage so it survives restarts."""
+    def _save_octopus_url_cache_to_storage(self):
+        """Persist the entire octopus_url_cache (free sessions and rates) to storage so it survives restarts."""
         components = getattr(self, "components", None)
         storage = components.get_component("storage") if components else None
         if not storage:
             return
+
+        # Prune entries older than 2 days so stale keys (e.g. after a tariff URL change) don't accumulate forever
+        now = datetime.now()
+        stale = [url for url, entry in self.octopus_url_cache.items() if not isinstance(entry, dict) or not entry.get("stamp") or (now - entry["stamp"]) > timedelta(days=2)]
+        for url in stale:
+            del self.octopus_url_cache[url]
+        if stale:
+            self.log("Octopus: Pruned {} stale URL cache entries (older than 2 days)".format(len(stale)))
+
         try:
             run_async(storage.save("octopus_free", "url_cache", self.octopus_url_cache, format="yaml", expiry=datetime.now(timezone.utc) + timedelta(hours=8)))
         except Exception as e:
@@ -2023,7 +2032,7 @@ class Octopus:
         On first call after a restart, pre-warms the in-memory cache from storage before checking expiry.
         """
         # Pre-warm the entire cache from storage once per process lifetime
-        self._load_octopus_free_from_storage()
+        self._load_octopus_url_cache_from_storage()
 
         # Check the cache first
         now = datetime.now()
@@ -2066,7 +2075,7 @@ class Octopus:
             free_sessions = self.download_octopus_free_legacy(pdata)
 
         self.octopus_url_cache[url] = {"stamp": now, "midnight_utc": self.midnight_utc, "data": free_sessions}
-        self._save_octopus_free_to_storage()
+        self._save_octopus_url_cache_to_storage()
         return free_sessions
 
     def download_octopus_free_legacy(self, pdata):
@@ -2163,6 +2172,10 @@ class Octopus:
 
         self.log("Octopus: Download Octopus rates from {}".format(url))
 
+        # Pre-warm the entire cache from storage once per process lifetime (shared with free sessions).
+        # Done before any in-memory population so the one-shot storage load cannot clobber freshly cached entries.
+        self._load_octopus_url_cache_from_storage()
+
         # Check the cache first
         now = datetime.now()
         if url in self.octopus_url_cache:
@@ -2198,6 +2211,7 @@ class Octopus:
         self.octopus_url_cache[url]["stamp"] = now
         self.octopus_url_cache[url]["midnight_utc"] = self.midnight_utc
         self.octopus_url_cache[url]["data"] = pdata
+        self._save_octopus_url_cache_to_storage()
         return pdata
 
     def download_octopus_rates_func(self, url):

@@ -31,7 +31,11 @@ class _MockComponents:
 
 
 def _attach_storage(predbat, temp_dir):
-    """Attach a real StorageLocalFiles-backed StorageComponent to predbat."""
+    """Attach a real StorageLocalFiles-backed StorageComponent to predbat, rooted at temp_dir."""
+    # Point config_root at temp_dir first: StorageComponent.initialize() builds a StorageLocalFiles
+    # in the constructor, which creates a 'cache' directory under config_root. Without this it would
+    # default to './' and leak a ./cache directory into the repo before we overwrite the backend.
+    predbat.config_root = temp_dir
     storage = StorageComponent(predbat)
     storage.backend = StorageLocalFiles(temp_dir, predbat.log)
     predbat.components = _MockComponents(storage)
@@ -70,6 +74,7 @@ def test_octopus_free(my_predbat):
     print("**** Running Octopus free electricity test ****")
 
     temp_dir = tempfile.mkdtemp()
+    original_config_root = getattr(my_predbat, "config_root", None)
     try:
         # --- Test 1: no storage (components=None) — no exception, returns sessions ---
         _reset_free_cache(my_predbat)
@@ -179,9 +184,33 @@ def test_octopus_free(my_predbat):
         else:
             print("PASS: Both URLs restored from storage with no HTTP calls")
 
+        # --- Test 8: entries older than 2 days are pruned on save (in-memory and storage) ---
+        storage = _attach_storage(my_predbat, temp_dir)
+        _reset_free_cache(my_predbat)
+        now = datetime.now()
+        my_predbat.octopus_url_cache = {
+            "https://octopus.energy/old": {"stamp": now - timedelta(days=3), "midnight_utc": my_predbat.midnight_utc, "data": sessions},
+            "https://octopus.energy/edge": {"stamp": now - timedelta(days=2, minutes=1), "midnight_utc": my_predbat.midnight_utc, "data": sessions},
+            "https://octopus.energy/legacy": {"data": sessions},  # malformed: no stamp
+            _URL: {"stamp": now, "midnight_utc": my_predbat.midnight_utc, "data": sessions},  # fresh, must survive
+        }
+        my_predbat._save_octopus_url_cache_to_storage()
+        if set(my_predbat.octopus_url_cache) != {_URL}:
+            print("FAIL: Stale/malformed entries not pruned in memory, left {}".format(sorted(my_predbat.octopus_url_cache)))
+            failed = True
+        else:
+            print("PASS: Stale and malformed entries pruned from in-memory cache")
+        saved_pruned = run_async(storage.load("octopus_free", "url_cache"))
+        if not saved_pruned or set(saved_pruned) != {_URL}:
+            print("FAIL: Pruned cache not persisted correctly, storage has {}".format(sorted(saved_pruned) if saved_pruned else saved_pruned))
+            failed = True
+        else:
+            print("PASS: Only fresh entry persisted to storage after prune")
+
     finally:
         shutil.rmtree(temp_dir)
         my_predbat.components = None
+        my_predbat.config_root = original_config_root
         _reset_free_cache(my_predbat)
 
     if not failed:
