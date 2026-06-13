@@ -1143,8 +1143,16 @@ class SolarAPI(ComponentBase):
         pv_estimate10 = {}
         pv_estimate90 = {}
         # The after scaling cap will be applied, but remember that the input data is
-        capped_data = max(max_pv_power_hist, max_pv_power_forecast) / 60 * self.plan_interval_minutes
-        capped_data = min(max_kwh / 60 * self.plan_interval_minutes, capped_data)
+        # When we have a valid observed peak (from history or forecast history) cap to the lower of
+        # the inverter rating and that observed peak. With no valid history (e.g. all days excluded
+        # as "down days") the observed peak is 0 - fall back to the inverter rating alone, otherwise
+        # the cap would zero out the entire calibrated/10/90 forecast.
+        observed_cap = max(max_pv_power_hist, max_pv_power_forecast) / 60 * self.plan_interval_minutes
+        max_kwh_cap = max_kwh / 60 * self.plan_interval_minutes
+        if observed_cap > 0:
+            capped_data = min(max_kwh_cap, observed_cap)
+        else:
+            capped_data = max_kwh_cap
         for minute in range(0, max(pv_forecast_minute.keys()) + 1, self.plan_interval_minutes):
             pv_value = 0
             for offset in range(0, self.plan_interval_minutes, 1):
