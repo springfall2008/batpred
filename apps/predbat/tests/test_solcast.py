@@ -2595,6 +2595,69 @@ def test_pv_calibration_capped_data_clamp(my_predbat):
     return failed
 
 
+def test_pv_calibration_no_history_not_zeroed(my_predbat):
+    """
+    Regression test: when there is no valid historical data (e.g. all days excluded as
+    "down days") both max_pv_power_hist and max_pv_power_forecast are 0. The capped_data
+    clamp must NOT then zero out the calibrated/10/90 forecast - it should fall back to
+    the inverter rating (max_kwh) cap instead. Previously capped_data became 0 and every
+    pv_estimateCL / pv_estimate10 / pv_estimate90 was clamped to 0, so the published PV
+    forecast sensors all reported 0 kWh despite a valid raw forecast.
+    """
+    print("  - test_pv_calibration_no_history_not_zeroed")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        solar = test_api.solar
+        base = test_api.mock_base
+        plan_interval = base.plan_interval_minutes  # 5
+
+        # No historical actual production and no forecast history at all → no valid days,
+        # so max_pv_power_hist = max_pv_power_forecast = 0 and calibration is disabled.
+        def mock_minute_data_import_export(max_days_previous, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True):
+            return {}
+
+        base.minute_data_import_export = mock_minute_data_import_export
+        solar.get_history_wrapper = lambda entity_id, days, required=False: []
+
+        # Future forecast: 1 kW constant
+        total_minutes = 4 * 24 * 60
+        pv_forecast_minute = {m: 1.0 / 60 for m in range(total_minutes)}  # kWh per minute
+        pv_forecast_minute10 = {m: 0.7 / 60 for m in range(total_minutes)}
+
+        from datetime import timedelta
+        import pytz
+
+        midnight = base.midnight_utc.replace(tzinfo=pytz.utc)
+        pv_forecast_data = []
+        for slot in range(0, 24 * 60, plan_interval):
+            ts = midnight + timedelta(minutes=slot)
+            pv_forecast_data.append({"period_start": ts.strftime("%Y-%m-%dT%H:%M:%S+0000"), "pv_estimate": 1.0 * plan_interval / 60})
+
+        max_kwh = 3.0  # inverter rating - the cap should fall back to this
+        solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=True, divide_by=1.0, max_kwh=max_kwh, forecast_days=solar.forecast_days)
+
+        # At least one calibrated value should be non-zero where the input forecast was non-zero.
+        any_nonzero_cl = any(entry.get("pv_estimateCL", 0) > 0 for entry in pv_forecast_data)
+        any_nonzero_10 = any(entry.get("pv_estimate10", 0) > 0 for entry in pv_forecast_data)
+        any_nonzero_90 = any(entry.get("pv_estimate90", 0) > 0 for entry in pv_forecast_data)
+        if not any_nonzero_cl:
+            print("ERROR: all pv_estimateCL values were zeroed despite a valid forecast and no history")
+            failed = True
+        if not any_nonzero_10:
+            print("ERROR: all pv_estimate10 values were zeroed despite a valid forecast and no history")
+            failed = True
+        if not any_nonzero_90:
+            print("ERROR: all pv_estimate90 values were zeroed despite a valid forecast and no history")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
 def test_pv_calibration_synthetic_values(my_predbat):
     """
     Test pv_calibration with fully controlled synthetic data and verify all key
@@ -3396,6 +3459,7 @@ def run_solcast_tests(my_predbat):
     # Calibration tests
     failed |= test_pv_calibration_power_conversion(my_predbat)
     failed |= test_pv_calibration_capped_data_clamp(my_predbat)
+    failed |= test_pv_calibration_no_history_not_zeroed(my_predbat)
     failed |= test_pv_calibration_partial_history(my_predbat)
     failed |= test_pv_calibration_synthetic_values(my_predbat)
     failed |= test_pv_calibration_60min_period(my_predbat)

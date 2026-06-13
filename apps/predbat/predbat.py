@@ -36,7 +36,7 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.40.6"
+THIS_VERSION = "v8.40.7"
 
 from download import predbat_update_move, predbat_update_download, check_install, resolve_predbat_repository, DEFAULT_PREDBAT_REPOSITORY
 from const import MINUTE_WATT
@@ -719,6 +719,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.octopus_last_joined_try = None
         self.calculate_savings_max_charge_slots = 1
         self.inverter_data_last_fetch = None
+        self.octopus_url_cache_loaded = False
 
         for root in CONFIG_ROOTS:
             if os.path.exists(root):

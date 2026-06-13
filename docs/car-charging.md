@@ -101,8 +101,8 @@ If you are on the Octopus Intelligent Tariff set the following entries in `apps.
 - **octopus_slot_low_rate** - Default is `true`, meaning any Octopus Intelligent Slot reported will be at the lowest rate if at home. If `false` the existing rates only will be used which is only suitable for tariffs other than IOG.
 
 - **octopus_slot_max** - Default is 48 (disabled). Sets the maximum number of 30-minute cheap rate slots per 24-hour period.
-Octopus Intelligent users maybe from March 2026 limited to 6 hours of cheap charging per day. Slots beyond this limit will use standard rates.
-Its recommended you set this to 12 (for 6 hours) once Octopus enforce this Octopus Intelligent limit.
+Octopus Intelligent users may be from March 2026 limited to 6 hours of cheap charging per day. Slots beyond this limit will use standard rates.
+It's recommended you set this to 12 (for 6 hours) once Octopus enforce this Octopus Intelligent limit.
 
 If you are using Octopus-led charging with the [Octopus Energy integration](energy-rates.md#octopus-energy-home-assistant-integration):
 
@@ -556,7 +556,7 @@ Predbat will plan and charge the car with the kW that are needed to reach the ta
 
 Predbat provides **predbat.cost_today_car** and **predbat.cost_total_car** which give the cost today and total accumulated cost for all car charging.
 
-If you have multiple cars with a single EV charger then its not possible to segregate the cost per car.
+If you have multiple cars with a single EV charger then it's not possible to segregate the cost per car.
 
 The following solution will accumulate individual charging costs for each car.
 

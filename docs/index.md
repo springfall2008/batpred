@@ -72,7 +72,7 @@ Power charts can show you how the prediction maps to your inverter:
 ![image](https://github.com/springfall2008/batpred/assets/48591903/a84c8de0-4f6a-48a6-81c8-09b0f7828563)
 
 You can model iBoost or similar solar diverters, this will be shown on your plan and you can even use it to trigger smart devices e.g.
-an emersion heater based on energy rates.
+an immersion heater based on energy rates.
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/758d380c-4cfa-4e92-b53a-167496bf888c)
 

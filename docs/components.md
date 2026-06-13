@@ -603,8 +603,8 @@ In `apps.yaml`:
 ```yaml
   sigenergy_app_key: !secret sigenergy_app_key
   sigenergy_app_secret: !secret sigenergy_app_secret
-  sigenergy_ca_cert: !secret sigenergy_ca_pem
-  sigenergy_client_cert: !secret sigenergy_client_pem
+  sigenergy_ca_pem: !secret sigenergy_ca_pem
+  sigenergy_client_pem: !secret sigenergy_client_pem
   sigenergy_client_key: !secret sigenergy_client_key
   sigenergy_automatic: true
   sigenergy_system_id: MY_SYSTEM_ID
@@ -723,7 +723,7 @@ This temperature data is used by the ML Load Prediction component to improve loa
 - Publishes data to `sensor.predbat_temperature` with forecasts in the `results` attribute
 - Automatically retries on API failures with exponential backoff
 
-**Important**: This component is **recommended** when using ML Load Prediction, as temperature data cam improve prediction accuracy for households with electric/heat-pump heating.
+**Important**: This component is **recommended** when using ML Load Prediction, as temperature data can improve prediction accuracy for households with electric/heat-pump heating.
 
 #### Configuration Options (temperature)
 
