@@ -209,6 +209,12 @@ class TestHAInterface:
                 print("Warn: Service for entity {} not a time".format(entity_id))
             elif entity_id in self.dummy_items:
                 self.dummy_items[entity_id] = kwargs.get("time", None)
+        elif service == "input_datetime/set_datetime":
+            entity_id = kwargs.get("entity_id", None)
+            if not entity_id.startswith("input_datetime."):
+                print("Warn: Service for entity {} not an input_datetime".format(entity_id))
+            elif entity_id in self.dummy_items:
+                self.dummy_items[entity_id] = kwargs.get("time", kwargs.get("datetime", kwargs.get("date", None)))
         return None
 
     def set_state(self, entity_id, state, attributes=None):
