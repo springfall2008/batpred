@@ -939,6 +939,13 @@ class Output:
                 export_type, self.duration_string(self.export_window_best[export_window_n_next]["start"] - self.minutes_now), self.get_rate_text(self.export_window_best[export_window_n_next]["start"], export=True, with_value=True)
             )
 
+        # Clipping summary
+        predict_clipped_best = getattr(self, "predict_clipped_best", {})
+        if predict_clipped_best:
+            clipping_total = predict_clipped_best.get(max(predict_clipped_best.keys()), 0.0)
+            if clipping_total > 0.01:
+                sentence += "- Forecast {} kWh clipping, plan penalized to mitigate.\n".format(dp2(clipping_total))
+
         if publish:
             self.text_plan = self.get_text_plan_html(sentence)
 
@@ -2436,6 +2443,48 @@ class Output:
                 "version": THIS_VERSION,
                 "error": (had_errors or self.had_errors),
                 "error_count": error_count,
+            },
+        )
+
+        # Clipping Status
+        clipping_status_text = "No clipping forecast."
+        clipping_mode = getattr(self, "clipping_limit_mode", "Unknown")
+        clipping_total = 0.0
+
+        predict_clipped_best = getattr(self, "predict_clipped_best", {})
+        if predict_clipped_best:
+            clipping_total = predict_clipped_best.get(max(predict_clipped_best.keys()), 0.0)
+            if clipping_total > 0.01:
+                start_str = ""
+                end_str = ""
+                start_stamp = None
+                end_stamp = None
+                
+                # Find start time (first increase)
+                prev_val = 0.0
+                for min_key, val in sorted(predict_clipped_best.items()):
+                    if val > prev_val + 0.001:
+                        if start_stamp is None:
+                            start_stamp = self.midnight_utc + timedelta(minutes=min_key)
+                        end_stamp = self.midnight_utc + timedelta(minutes=min_key)
+                    prev_val = val
+                
+                if start_stamp and end_stamp:
+                    start_str = start_stamp.strftime("%H:%M")
+                    end_str = end_stamp.strftime("%H:%M")
+                
+                clipping_status_text = "Forecast {} kWh clipping, exceeding {} limit from {} to {}. Plan penalized to mitigate.".format(
+                    dp2(clipping_total), clipping_mode, start_str, end_str
+                )
+
+        self.dashboard_item(
+            self.prefix + ".clipping_status",
+            state=clipping_status_text,
+            attributes={
+                "friendly_name": "Clipping Status",
+                "icon": "mdi:solar-power",
+                "clipping_mode": clipping_mode,
+                "expected_total_kwh": dp2(clipping_total)
             },
         )
 

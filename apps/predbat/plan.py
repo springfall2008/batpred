@@ -964,26 +964,44 @@ class Plan:
         # Scaled by amplification factor for safety margin
         pv_forecast_peak_step = None
         clipping_limit_effective = 0
+        clipping_limit_mode = "Unknown"
         if self.clipping_peak_enable:
             pv_forecast_peak_step = self.step_data_history(
                 self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=None
             )
-            # Apply amplification factor
-            if self.clipping_peak_amplification != 1.0:
+            
+            # Apply ClearSky or Amplification factor
+            if getattr(self, "clipping_use_clearsky_peaks", False):
+                pv_clearsky_step = self.step_data_history(
+                    getattr(self, "pv_forecast_minuteCS", {}), self.minutes_now, forward=True, cloud_factor=None
+                )
+                pv_forecast_peak_step = {
+                    k: max(v, pv_clearsky_step.get(k, 0)) for k, v in pv_forecast_peak_step.items()
+                }
+            elif self.clipping_peak_amplification != 1.0:
                 pv_forecast_peak_step = {k: v * self.clipping_peak_amplification for k, v in pv_forecast_peak_step.items()}
 
             # Calculate effective clipping limit: most restrictive hardware constraint
             if self.clipping_limit_override > 0:
                 clipping_limit_effective = self.clipping_limit_override
+                clipping_limit_mode = "Manual Override"
             else:
                 limits = []
                 if self.inverter_limit > 0:
-                    limits.append(self.inverter_limit)
+                    limits.append((self.inverter_limit, "Inverter AC Capacity"))
                 if self.export_limit > 0:
-                    limits.append(self.export_limit)
-                if self.pv_ac_limit > 0:
-                    limits.append(self.pv_ac_limit)
-                clipping_limit_effective = min(limits) if limits else 0
+                    limits.append((self.export_limit, "DNO Export Limit"))
+                if getattr(self, "pv_ac_limit", 0) > 0:
+                    limits.append((self.pv_ac_limit, "PV AC Limit"))
+                
+                if limits:
+                    clipping_limit_effective, clipping_limit_mode = min(limits, key=lambda x: x[0])
+                else:
+                    clipping_limit_effective = 0
+                    clipping_limit_mode = "No Limit"
+            
+            self.clipping_limit_effective = clipping_limit_effective
+            self.clipping_limit_mode = clipping_limit_mode
 
         # Save step data for debug
         self.load_minutes_step = load_minutes_step
