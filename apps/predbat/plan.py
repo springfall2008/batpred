@@ -976,7 +976,7 @@ class Plan:
                     getattr(self, "pv_forecast_minuteCS", {}), self.minutes_now, forward=True, cloud_factor=None
                 )
                 pv_forecast_peak_step = {
-                    k: max(v, pv_clearsky_step.get(k, 0)) for k, v in pv_forecast_peak_step.items()
+                    k: max(v, pv_clearsky_step.get(k, 0) * self.clipping_peak_amplification) for k, v in pv_forecast_peak_step.items()
                 }
             elif self.clipping_peak_amplification != 1.0:
                 pv_forecast_peak_step = {k: v * self.clipping_peak_amplification for k, v in pv_forecast_peak_step.items()}
