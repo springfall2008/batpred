@@ -92,7 +92,7 @@ class Prediction:
     Class to hold prediction input and output data and the run function
     """
 
-    def __init__(self, base=None, pv_forecast_minute_step=None, pv_forecast_minute10_step=None, load_minutes_step=None, load_minutes_step10=None, soc_kw=None, soc_max=None):
+    def __init__(self, base=None, pv_forecast_minute_step=None, pv_forecast_minute10_step=None, load_minutes_step=None, load_minutes_step10=None, soc_kw=None, soc_max=None, pv_forecast_peak_step=None, clipping_limit=0, clipping_cost_weight=0):
         global PRED_GLOBAL
         if base:
             self.minutes_now = base.minutes_now
@@ -195,6 +195,9 @@ class Prediction:
             self.prediction_cache = {}
             self.plan_interval_minutes = base.plan_interval_minutes
             self.charge_scaling10 = base.charge_scaling10
+            self.pv_forecast_peak_step = pv_forecast_peak_step
+            self.clipping_limit = clipping_limit
+            self.clipping_cost_weight = clipping_cost_weight
 
             # Store this dictionary in global so we can reconstruct it in the thread without passing the data
             PRED_GLOBAL["dict"] = self.__dict__.copy()
@@ -481,6 +484,7 @@ class Prediction:
         first_charge = end_record
         export_to_first_charge = 0
         clipped_today = 0
+        clipping_penalty_total = 0
         predict_soc = {}
         car_charging_soc_next = self.car_charging_soc_next[:]
         iboost_next = self.iboost_next
@@ -516,6 +520,10 @@ class Prediction:
         pv_ac_limit = self.pv_ac_limit * step
         set_charge_low_power = self.set_charge_window and self.set_charge_low_power and (save in ["best", "best10", "test"])
         carbon_enable = self.carbon_enable
+        pv_forecast_peak_step = self.pv_forecast_peak_step
+        clipping_limit = self.clipping_limit
+        clipping_limit_step = clipping_limit * step if clipping_limit else 0
+        clipping_cost_weight = self.clipping_cost_weight
         reserve = self.reserve
         soc_max = self.soc_max
         reserve_percent = calc_percent_limit(reserve, soc_max)
@@ -657,6 +665,24 @@ class Prediction:
             # Get load and pv forecast, total up for all values in the step
             pv_now = pv_forecast_minute_step_flat[minute]
             load_yesterday = load_minutes_step_flat[minute]
+
+            # Clipping peak cost penalty: check if worst-case PV would exceed the clipping limit
+            # and add a cost to the metric if the battery can't absorb the excess.
+            # This makes the optimizer prefer plans that leave battery headroom during peak solar.
+            if pv_forecast_peak_step and clipping_limit_step > 0 and clipping_cost_weight > 0:
+                peak_pv = pv_forecast_peak_step.get(minute, 0)
+                if peak_pv > clipping_limit_step:
+                    potential_clip = peak_pv - clipping_limit_step
+                    # How much could the battery absorb right now?
+                    battery_headroom = max(soc_max - soc, 0) * battery_loss
+                    # Cap by max charge rate (conservative — doesn't account for curve, but safe)
+                    max_charge_step = battery_rate_max_charge * battery_rate_max_scaling * step
+                    absorbable = min(battery_headroom, max_charge_step)
+                    unmitigated_clip = max(potential_clip - absorbable, 0)
+                    if unmitigated_clip > 0:
+                        clipping_penalty = unmitigated_clip * export_rate * clipping_cost_weight
+                        metric += clipping_penalty
+                        clipping_penalty_total += clipping_penalty
 
             # Count PV kWh
             pv_kwh += pv_now

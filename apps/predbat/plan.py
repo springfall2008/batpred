@@ -959,6 +959,32 @@ class Plan:
         pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
         pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=min(self.metric_cloud_coverage + 0.2, 1.0) if self.metric_cloud_coverage else None, flip=True)
 
+        # Clipping peak: create a peak PV stream for clipping cost detection
+        # Uses raw forecast WITHOUT cloud model (no energy-conserving oscillation that smooths peaks)
+        # Scaled by amplification factor for safety margin
+        pv_forecast_peak_step = None
+        clipping_limit_effective = 0
+        if self.clipping_peak_enable:
+            pv_forecast_peak_step = self.step_data_history(
+                self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=None
+            )
+            # Apply amplification factor
+            if self.clipping_peak_amplification != 1.0:
+                pv_forecast_peak_step = {k: v * self.clipping_peak_amplification for k, v in pv_forecast_peak_step.items()}
+
+            # Calculate effective clipping limit: most restrictive hardware constraint
+            if self.clipping_limit_override > 0:
+                clipping_limit_effective = self.clipping_limit_override
+            else:
+                limits = []
+                if self.inverter_limit > 0:
+                    limits.append(self.inverter_limit)
+                if self.export_limit > 0:
+                    limits.append(self.export_limit)
+                if self.pv_ac_limit > 0:
+                    limits.append(self.pv_ac_limit)
+                clipping_limit_effective = min(limits) if limits else 0
+
         # Save step data for debug
         self.load_minutes_step = load_minutes_step
         self.load_minutes_step10 = load_minutes_step10
@@ -970,7 +996,12 @@ class Plan:
             self.calculate_yesterday()
 
         # Creation prediction object
-        self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10)
+        self.prediction = Prediction(
+            self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10,
+            pv_forecast_peak_step=pv_forecast_peak_step,
+            clipping_limit=clipping_limit_effective,
+            clipping_cost_weight=self.clipping_cost_weight if self.clipping_peak_enable else 0,
+        )
 
         # Check if LoadML is active and disable thread pools as it causes lockup due to race conditions with NumPy
         load_ml_comp = self.components.get_component("load_ml") if self.components else None
