@@ -12,7 +12,7 @@ import pytz
 import aiohttp
 import json
 from unittest.mock import MagicMock, patch, AsyncMock
-from fox import validate_schedule, minutes_to_schedule_time, end_minute_inclusive_to_exclusive, FoxAPI, schedules_are_equal
+from fox import validate_schedule, minutes_to_schedule_time, end_minute_inclusive_to_exclusive, FoxAPI, schedules_are_equal, FOX_CACHE_KEYS, FOX_REFRESH_SETTINGS, FOX_REFRESH_REALTIME
 from tests.test_infra import run_async, create_aiohttp_mock_response, create_aiohttp_mock_session
 
 
@@ -74,6 +74,7 @@ class MockFoxAPIWithRequests(FoxAPI):
         self.fdpwr_max = {}
         self.fdsoc_min = {}
         self.device_scheduler_count = {}
+        self.data_age = {}
         self.local_tz = pytz.timezone("Europe/London")
         self.inverter_sn_filter = []
 
@@ -3583,50 +3584,133 @@ def test_run_first_call_no_devices(my_predbat):
 
 def test_run_subsequent_call(my_predbat):
     """
-    Test run() with first=False only updates real-time data (not at hourly boundary)
+    Test run() only refreshes data that has aged out, leaving fresh data alone
     """
     print("  - test_run_subsequent_call")
+
+    from datetime import datetime, timezone
 
     fox = MockFoxAPIWithRunTracking()
     fox.device_list = [{"deviceSN": "TEST123"}]
 
-    # seconds=300 (5 minutes), not an hourly boundary, first=False
+    # Mark all cached data as freshly updated except the real-time values, which are absent
+    now = datetime.now(timezone.utc)
+    for key in FOX_CACHE_KEYS:
+        fox.data_age[key] = now
+    del fox.data_age["device_values"]  # Force a real-time refresh only
+
     result = run_async(fox.run(300, first=False))
 
     assert result == True
-    # Should NOT call initialisation methods
+    # Fresh data should NOT be re-fetched
     assert "get_device_list" not in fox.method_calls
     assert "get_device_detail:TEST123" not in fox.method_calls
-    # Should call real-time data update
+    assert "get_device_settings:TEST123" not in fox.method_calls
+    # Aged-out real-time data should be refreshed and published
     assert "get_real_time_data:TEST123" in fox.method_calls
     assert "publish_data" in fox.method_calls
-    # Should NOT call hourly methods (since 300 % 3600 != 0)
-    assert "get_device_settings:TEST123" not in fox.method_calls
 
     return False
 
 
-def test_run_hourly_update(my_predbat):
+def test_run_settings_refresh_on_age(my_predbat):
     """
-    Test run() with first=False at hourly boundary updates settings and scheduler
+    Test run() refreshes settings and scheduler once that cached data has aged out
     """
-    print("  - test_run_hourly_update")
+    print("  - test_run_settings_refresh_on_age")
+
+    from datetime import datetime, timedelta, timezone
 
     fox = MockFoxAPIWithRunTracking()
     fox.device_list = [{"deviceSN": "TEST123"}]
 
-    # seconds=3600 (1 hour), first=False
-    result = run_async(fox.run(3600, first=False))
+    # All data fresh except the device settings, which are older than FOX_REFRESH_SETTINGS
+    now = datetime.now(timezone.utc)
+    for key in FOX_CACHE_KEYS:
+        fox.data_age[key] = now
+    fox.data_age["device_settings"] = now - timedelta(minutes=FOX_REFRESH_SETTINGS + 1)
+
+    result = run_async(fox.run(120, first=False))
 
     assert result == True
-    # Should call hourly methods
+    # Should refresh settings and scheduler
     assert "get_device_settings:TEST123" in fox.method_calls
     assert "get_schedule_settings_ha:TEST123" in fox.method_calls
     assert "get_scheduler:TEST123" in fox.method_calls
     assert "compute_schedule:TEST123" in fox.method_calls
-    # Should call real-time data update
+    assert "publish_data" in fox.method_calls
+    # Fresh real-time data should not be re-fetched
+    assert "get_real_time_data:TEST123" not in fox.method_calls
+
+    return False
+
+
+def test_run_realtime_refresh_after_cache_expires(my_predbat):
+    """
+    Test run() leaves fresh real-time data alone but re-fetches it once the cache expires,
+    proving the age-based refresh actually fires after the staleness threshold is crossed
+    """
+    print("  - test_run_realtime_refresh_after_cache_expires")
+
+    from datetime import datetime, timedelta, timezone
+
+    fox = MockFoxAPIWithRunTracking()
+    fox.device_list = [{"deviceSN": "TEST123"}]
+
+    # All categories fresh, including real-time data updated just now
+    now = datetime.now(timezone.utc)
+    for key in FOX_CACHE_KEYS:
+        fox.data_age[key] = now
+
+    # First run while real-time data is fresh: it must NOT be re-fetched
+    result = run_async(fox.run(60, first=False))
+    assert result == True
+    assert "get_real_time_data:TEST123" not in fox.method_calls
+
+    # Age the real-time cache past its threshold and run again: it must be re-fetched
+    fox.method_calls = []
+    fox.data_age["device_values"] = now - timedelta(minutes=FOX_REFRESH_REALTIME + 1)
+
+    result = run_async(fox.run(120, first=False))
+    assert result == True
     assert "get_real_time_data:TEST123" in fox.method_calls
     assert "publish_data" in fox.method_calls
+
+    # And after refreshing, the cache age is reset so a subsequent run does not re-fetch
+    fox.method_calls = []
+    result = run_async(fox.run(180, first=False))
+    assert result == True
+    assert "get_real_time_data:TEST123" not in fox.method_calls
+
+    return False
+
+
+def test_run_first_refreshes_device_list_despite_fresh_cache(my_predbat):
+    """
+    Test run() always re-fetches the device list and detail on first start, even when the
+    cached data is still fresh, so a new inverter or changed serial number is picked up
+    """
+    print("  - test_run_first_refreshes_device_list_despite_fresh_cache")
+
+    from datetime import datetime, timezone
+
+    fox = MockFoxAPIWithRunTracking()
+    fox.device_list = [{"deviceSN": "TEST123"}]
+
+    # Mark every cache category as freshly updated
+    now = datetime.now(timezone.utc)
+    for key in FOX_CACHE_KEYS:
+        fox.data_age[key] = now
+
+    result = run_async(fox.run(0, first=True))
+
+    assert result == True
+    # Device list and detail must always refresh on first start regardless of cache age
+    assert "get_device_list" in fox.method_calls
+    assert "get_device_detail:TEST123" in fox.method_calls
+    # Age-based categories with fresh data should NOT be re-fetched on first start
+    assert "get_real_time_data:TEST123" not in fox.method_calls
+    assert "get_device_settings:TEST123" not in fox.method_calls
 
     return False
 
@@ -5404,6 +5488,11 @@ def test_fox_rate_limiting_midnight_reset(my_predbat):
     # Update the base object's midnight_utc to simulate day change
     my_predbat.midnight_utc = day2_midnight
 
+    # Mark all cached data as fresh so the age-based refresh does not trigger any API polling
+    fox.device_list = [{"deviceSN": "TEST"}]
+    for key in FOX_CACHE_KEYS:
+        fox.data_age[key] = day2_time
+
     with patch("fox.datetime") as mock_datetime, patch.object(fox, "log") as mock_log, patch.object(fox, "should_allow_retry", return_value=True):
         # Mock datetime.now() to return day2_time
         mock_datetime.now.return_value = day2_time
@@ -5746,7 +5835,9 @@ def run_fox_api_tests(my_predbat):
         failed |= test_run_first_call_with_devices(my_predbat)
         failed |= test_run_first_call_no_devices(my_predbat)
         failed |= test_run_subsequent_call(my_predbat)
-        failed |= test_run_hourly_update(my_predbat)
+        failed |= test_run_settings_refresh_on_age(my_predbat)
+        failed |= test_run_realtime_refresh_after_cache_expires(my_predbat)
+        failed |= test_run_first_refreshes_device_list_despite_fresh_cache(my_predbat)
         failed |= test_run_with_automatic_config(my_predbat)
         failed |= test_run_without_automatic_config(my_predbat)
         failed |= test_run_midnight_reset(my_predbat)
