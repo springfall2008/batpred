@@ -80,6 +80,7 @@ dateutil
 dayname
 daynumber
 daysymbol
+deadband
 dedup
 dend
 denorm

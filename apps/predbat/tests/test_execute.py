@@ -210,6 +210,16 @@ def run_execute_test(
     car_soc=0,
     battery_temperature=20,
     assert_button_push=False,
+    car_charging_solar_surplus=False,
+    car_charging_solar_surplus_threshold=500,
+    car_charging_solar_surplus_limit=100,
+    car_charging_planned=None,
+    car_battery_size=100.0,
+    car_surplus_prev=None,
+    grid_power=0,
+    battery_power=0,
+    assert_solar_surplus_active=None,
+    assert_solar_surplus_power=None,
 ):
     print("Run scenario {}".format(name))
     my_predbat.log("Run scenario {}".format(name))
@@ -299,6 +309,21 @@ def run_execute_test(
     my_predbat.car_energy_reported_load = car_energy_reported_load
     my_predbat.car_charging_soc[0] = car_soc
 
+    # Solar surplus car charging setup
+    my_predbat.car_charging_solar_surplus = car_charging_solar_surplus
+    my_predbat.car_charging_solar_surplus_threshold = car_charging_solar_surplus_threshold
+    my_predbat.car_charging_solar_surplus_limit = car_charging_solar_surplus_limit
+    my_predbat.car_charging_solar_surplus_active = [False] * max(my_predbat.num_cars, 1)
+    my_predbat._car_surplus_prev = list(car_surplus_prev) if car_surplus_prev is not None else [False] * max(my_predbat.num_cars, 1)
+    my_predbat.car_charging_rate = [7.4] * max(my_predbat.num_cars, 1)
+    my_predbat.car_charging_battery_size = [car_battery_size] * max(my_predbat.num_cars, 1)
+    if car_charging_planned is not None:
+        my_predbat.car_charging_planned = car_charging_planned
+    else:
+        my_predbat.car_charging_planned = [False] * my_predbat.num_cars
+    my_predbat.grid_power = grid_power
+    my_predbat.battery_power = battery_power
+
     # Shift on plan?
     if update_plan:
         my_predbat.plan_last_updated = my_predbat.now_utc
@@ -355,7 +380,8 @@ def run_execute_test(
 
         assert_soc_target_force = (
             assert_immediate_soc_target
-            if assert_status in ["Charging", "Charging, Hold for car", "Hold charging", "Freeze charging", "Hold charging, Hold for iBoost", "Hold charging, Hold for car", "Freeze charging, Hold for iBoost", "Hold for car", "Hold for iBoost"]
+            if assert_status
+            in ["Charging", "Charging, Hold for car", "Hold charging", "Freeze charging", "Hold charging, Hold for iBoost", "Hold charging, Hold for car", "Freeze charging, Hold for iBoost", "Hold for car", "Hold for iBoost", "Hold for car (solar)"]
             else 0
         )
         if not set_charge_window:
@@ -389,6 +415,20 @@ def run_execute_test(
     if my_predbat.isExporting != expected_is_exporting:
         print("ERROR: isExporting should be {} for status '{}' got {}".format(expected_is_exporting, assert_status, my_predbat.isExporting))
         failed = True
+
+    # Validate solar surplus active state
+    if assert_solar_surplus_active is not None:
+        actual = my_predbat.car_charging_solar_surplus_active
+        if actual != assert_solar_surplus_active:
+            print("ERROR: car_charging_solar_surplus_active should be {} got {}".format(assert_solar_surplus_active, actual))
+            failed = True
+
+    # Validate solar surplus power sensor value
+    if assert_solar_surplus_power is not None:
+        actual_power = my_predbat.car_charging_solar_surplus_power
+        if actual_power != assert_solar_surplus_power:
+            print("ERROR: car_charging_solar_surplus_power should be {} got {}".format(assert_solar_surplus_power, actual_power))
+            failed = True
 
     my_predbat.minutes_now = 12 * 60
     return failed
@@ -2489,4 +2529,529 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
+    # Solar surplus car charging tests
+    print("**** Solar surplus car charging tests ****\n")
+
+    # Surplus activates when grid export exceeds threshold
+    failed |= run_execute_test(
+        my_predbat,
+        "solar_surplus_activates",
+        set_charge_window=True,
+        set_export_window=True,
+        car_charging_solar_surplus=True,
+        car_charging_planned=[True],
+        grid_power=7500,  # Exporting 7500W
+        battery_power=0,  # Battery idle
+        car_charging_from_battery=False,
+        assert_status="Hold for car (solar)",
+        assert_pause_discharge=True,
+        assert_immediate_soc_target=0,
+        assert_solar_surplus_active=[True],
+        assert_solar_surplus_power=7500,
+    )
+    if failed:
+        return failed
+
+    # Surplus does NOT activate during force export
+    failed |= run_execute_test(
+        my_predbat,
+        "solar_surplus_blocked_during_export",
+        set_charge_window=True,
+        set_export_window=True,
+        export_window_best=export_window_best,
+        export_limits_best=export_limits_best,
+        soc_kw=100,
+        car_charging_solar_surplus=True,
+        car_charging_planned=[True],
+        car_charging_from_battery=True,
+        car_slot=charge_window_best_slot,
+        grid_power=7500,
+        battery_power=0,
+        assert_status="Exporting",
+        assert_force_export=True,
+        assert_discharge_start_time_minutes=my_predbat.minutes_now,
+        assert_discharge_end_time_minutes=my_predbat.minutes_now + 61,
+        assert_immediate_soc_target=0,
+        assert_solar_surplus_active=[False],
+    )
+    if failed:
+        return failed
+
+    # Surplus does NOT activate when export is below threshold
+    failed |= run_execute_test(
+        my_predbat,
+        "solar_surplus_below_threshold",
+        set_charge_window=True,
+        set_export_window=True,
+        car_charging_solar_surplus=True,
+        car_charging_planned=[True],
+        grid_power=3000,  # Only 3kW export, car needs ~7kW
+        battery_power=0,
+        assert_status="Demand",
+        assert_solar_surplus_active=[False],
+        assert_solar_surplus_power=3000,
+    )
+    if failed:
+        return failed
+
+    # Surplus does NOT activate when car is not plugged in
+    failed |= run_execute_test(
+        my_predbat,
+        "solar_surplus_car_not_plugged_in",
+        set_charge_window=True,
+        set_export_window=True,
+        car_charging_solar_surplus=True,
+        car_charging_planned=[False],
+        grid_power=7500,
+        battery_power=0,
+        assert_status="Demand",
+        assert_solar_surplus_active=[False],
+    )
+    if failed:
+        return failed
+
+    # Surplus does NOT activate when battery is discharging
+    failed |= run_execute_test(
+        my_predbat,
+        "solar_surplus_battery_discharging",
+        set_charge_window=True,
+        set_export_window=True,
+        car_charging_solar_surplus=True,
+        car_charging_planned=[True],
+        grid_power=7500,
+        battery_power=500,  # Battery discharging 500W (above hysteresis)
+        assert_status="Demand",
+        assert_solar_surplus_active=[False],
+    )
+    if failed:
+        return failed
+
+    # Surplus activates when car SoC is below the surplus limit (allowing over Predbat's target)
+    # 75 kWh battery, 60 kWh == 80% SoC, cap at 90% == 67.5 kWh — under the cap, should activate
+    failed |= run_execute_test(
+        my_predbat,
+        "solar_surplus_limit_allows_over_target",
+        set_charge_window=True,
+        set_export_window=True,
+        car_charging_solar_surplus=True,
+        car_charging_solar_surplus_limit=90,
+        car_charging_planned=[True],
+        car_battery_size=75.0,
+        car_soc=60.0,
+        grid_power=7500,
+        battery_power=0,
+        car_charging_from_battery=False,
+        assert_status="Hold for car (solar)",
+        assert_pause_discharge=True,
+        assert_immediate_soc_target=0,
+        assert_solar_surplus_active=[True],
+    )
+    if failed:
+        return failed
+
+    # Surplus stops when car SoC reaches the surplus limit
+    # 75 kWh battery, 67.5 kWh == 90% SoC, cap at 90% — at the cap, should not activate
+    failed |= run_execute_test(
+        my_predbat,
+        "solar_surplus_stops_at_surplus_limit",
+        set_charge_window=True,
+        set_export_window=True,
+        car_charging_solar_surplus=True,
+        car_charging_solar_surplus_limit=90,
+        car_charging_planned=[True],
+        car_battery_size=75.0,
+        car_soc=67.5,
+        grid_power=7500,
+        battery_power=0,
+        assert_status="Demand",
+        assert_solar_surplus_active=[False],
+    )
+    if failed:
+        return failed
+
+    # Default surplus limit of 100 allows charging up to full
+    # 75 kWh battery, 74.25 kWh == 99% SoC, cap at 100% (default) — under the cap, should activate
+    failed |= run_execute_test(
+        my_predbat,
+        "solar_surplus_limit_default_100",
+        set_charge_window=True,
+        set_export_window=True,
+        car_charging_solar_surplus=True,
+        car_charging_planned=[True],
+        car_battery_size=75.0,
+        car_soc=74.25,
+        grid_power=7500,
+        battery_power=0,
+        car_charging_from_battery=False,
+        assert_status="Hold for car (solar)",
+        assert_pause_discharge=True,
+        assert_immediate_soc_target=0,
+        assert_solar_surplus_active=[True],
+    )
+    if failed:
+        return failed
+
+    # Hysteresis: when car was already surplus-charging, it stays on even though grid_power alone
+    # is below the turn-on threshold (car load is masking the real available export).
+    # car_rate=7400W, threshold=500W, hysteresis=200W → stay-on threshold on effective export is 6700W.
+    # grid_power=0 + car_rate 7400 = 7400 effective → >= 6700, battery idle, stays on.
+    failed |= run_execute_test(
+        my_predbat,
+        "solar_surplus_hysteresis_stays_on",
+        set_charge_window=True,
+        set_export_window=True,
+        car_charging_solar_surplus=True,
+        car_charging_planned=[True],
+        car_surplus_prev=[True],
+        grid_power=0,
+        battery_power=0,
+        car_charging_from_battery=False,
+        assert_status="Hold for car (solar)",
+        assert_pause_discharge=True,
+        assert_immediate_soc_target=0,
+        assert_solar_surplus_active=[True],
+        assert_solar_surplus_power=7400,
+    )
+    if failed:
+        return failed
+
+    # Stay-on branch must drop off when the home battery is being drained to feed the car.
+    # grid_power=0 + car_rate 7400 = 7400 effective (passes export check), but battery_power=600
+    # exceeds the 500W stay-on battery discharge limit, so surplus deactivates.
+    failed |= run_execute_test(
+        my_predbat,
+        "solar_surplus_drains_battery_drops_off",
+        set_charge_window=True,
+        set_export_window=True,
+        car_charging_solar_surplus=True,
+        car_charging_planned=[True],
+        car_surplus_prev=[True],
+        grid_power=0,
+        battery_power=600,
+        assert_status="Demand",
+        assert_solar_surplus_active=[False],
+    )
+    if failed:
+        return failed
+
+    # Stay-on branch tolerates small transient battery discharge under the 500W gate.
+    failed |= run_execute_test(
+        my_predbat,
+        "solar_surplus_battery_idle_stays_on",
+        set_charge_window=True,
+        set_export_window=True,
+        car_charging_solar_surplus=True,
+        car_charging_planned=[True],
+        car_surplus_prev=[True],
+        grid_power=0,
+        battery_power=200,
+        car_charging_from_battery=False,
+        assert_status="Hold for car (solar)",
+        assert_pause_discharge=True,
+        assert_immediate_soc_target=0,
+        assert_solar_surplus_active=[True],
+    )
+    if failed:
+        return failed
+
+    # Hysteresis: when real surplus is gone (we're importing from grid even accounting for car load),
+    # surplus charging deactivates. grid_power=-1000 + car_rate 7400 = 6400 effective → < 6700, drops off.
+    failed |= run_execute_test(
+        my_predbat,
+        "solar_surplus_hysteresis_drops_off",
+        set_charge_window=True,
+        set_export_window=True,
+        car_charging_solar_surplus=True,
+        car_charging_planned=[True],
+        car_surplus_prev=[True],
+        grid_power=-1000,
+        battery_power=0,
+        assert_status="Demand",
+        assert_solar_surplus_active=[False],
+    )
+    if failed:
+        return failed
+
+    # Surplus does NOT activate when feature is disabled
+    failed |= run_execute_test(
+        my_predbat,
+        "solar_surplus_feature_disabled",
+        set_charge_window=True,
+        set_export_window=True,
+        car_charging_solar_surplus=False,
+        car_charging_planned=[True],
+        grid_power=7500,
+        battery_power=0,
+        assert_status="Demand",
+        assert_solar_surplus_active=[False],
+    )
+    if failed:
+        return failed
+
+    # Discharge-pause must fire even when car_energy_reported_load is False. The carHolding
+    # gate at execute_plan would otherwise block surplus pause-discharge when the user has
+    # not configured a separate car-energy sensor. Same setup as solar_surplus_activates.
+    failed |= run_execute_test(
+        my_predbat,
+        "solar_surplus_pauses_without_car_energy_sensor",
+        set_charge_window=True,
+        set_export_window=True,
+        car_charging_solar_surplus=True,
+        car_charging_planned=[True],
+        car_energy_reported_load=False,
+        grid_power=7500,
+        battery_power=0,
+        car_charging_from_battery=False,
+        assert_status="Hold for car (solar)",
+        assert_pause_discharge=True,
+        assert_immediate_soc_target=0,
+        assert_solar_surplus_active=[True],
+    )
+    if failed:
+        return failed
+
+    # Read-only mode skips surplus detection entirely. Predbat cannot enforce battery
+    # discharge protection while read-only, so we don't trigger the HA automation either.
+    # The inverter loop early-continues in read-only and skips its resetPause path,
+    # so clear pause flags from prior tests before running.
+    for inv in my_predbat.inverters:
+        inv.pause_discharge = False
+        inv.pause_charge = False
+    failed |= run_execute_test(
+        my_predbat,
+        "solar_surplus_read_only_skipped",
+        set_charge_window=True,
+        set_export_window=True,
+        car_charging_solar_surplus=True,
+        car_charging_planned=[True],
+        read_only=True,
+        grid_power=7500,
+        battery_power=0,
+        assert_status="Read-Only",
+        assert_solar_surplus_active=[False],
+    )
+    if failed:
+        return failed
+
+    # Multi-car priority — only the first eligible car activates per cycle (loop break).
+    failed |= run_solar_surplus_multi_car_test(my_predbat)
+    if failed:
+        return failed
+
+    # Multi-inverter — the carHolding status accumulates correctly across multiple inverters
+    # without double-appending (the "Hold for car" not in status substring check).
+    failed |= run_solar_surplus_multi_inverter_test(my_predbat)
+    if failed:
+        return failed
+
+    # Surplus eligible during a planned slot — eligibility stays True (so hysteresis state
+    # survives the planned slot ending) but the published cars_active suppresses it
+    # because the planned slot is what's actually driving the car right now.
+    failed |= run_solar_surplus_planned_slot_display_test(my_predbat)
+    if failed:
+        return failed
+
+    # Verify the numeric power sensor is published with correct value and attributes
+    failed |= run_solar_surplus_power_sensor_test(my_predbat)
+    if failed:
+        return failed
+
+    return failed
+
+
+def run_solar_surplus_multi_car_test(my_predbat):
+    """With two cars planned, only the first eligible activates (the loop break).
+    When the first car is ineligible, the second car wins instead."""
+    print("Run scenario solar_surplus_multi_car_priority")
+    my_predbat.log("Run scenario solar_surplus_multi_car_priority")
+    reset_inverter(my_predbat)
+    my_predbat.set_read_only = False
+    my_predbat.num_cars = 2
+    my_predbat.car_charging_slots = [[], []]
+    my_predbat.car_charging_solar_surplus = True
+    my_predbat.car_charging_solar_surplus_threshold = 500
+    my_predbat.car_charging_solar_surplus_limit = 100
+    my_predbat.car_charging_solar_surplus_active = [False, False]
+    my_predbat._car_surplus_prev = [False, False]
+    my_predbat.car_charging_planned = [True, True]
+    my_predbat.car_charging_battery_size = [75.0, 75.0]
+    my_predbat.car_charging_soc = [0, 0]
+    my_predbat.car_charging_rate = [7.4, 7.4]
+    my_predbat.grid_power = 7500
+    my_predbat.battery_power = 0
+
+    my_predbat.detect_car_solar_surplus(False)
+    failed = False
+    if my_predbat.car_charging_solar_surplus_active != [True, False]:
+        print("ERROR: multi-car priority — expected [True, False], got {}".format(my_predbat.car_charging_solar_surplus_active))
+        failed = True
+
+    # Now make car 0 not eligible, expect car 1 to win.
+    my_predbat.car_charging_planned = [False, True]
+    my_predbat._car_surplus_prev = [False, False]
+    my_predbat.detect_car_solar_surplus(False)
+    if my_predbat.car_charging_solar_surplus_active != [False, True]:
+        print("ERROR: multi-car priority fallback — expected [False, True], got {}".format(my_predbat.car_charging_solar_surplus_active))
+        failed = True
+    return failed
+
+
+def run_solar_surplus_multi_inverter_test(my_predbat):
+    """Status string accumulates correctly across multiple inverters."""
+    print("Run scenario solar_surplus_multi_inverter")
+    my_predbat.log("Run scenario solar_surplus_multi_inverter")
+    reset_inverter(my_predbat)
+    inverters = [ActiveTestInverter(0, 0, 10.0, my_predbat.now_utc), ActiveTestInverter(1, 0, 10.0, my_predbat.now_utc)]
+    my_predbat.inverters = inverters
+    my_predbat.args["num_inverters"] = 2
+    my_predbat.num_inverters = 2
+
+    failed = run_execute_test(
+        my_predbat,
+        "solar_surplus_multi_inverter",
+        set_charge_window=True,
+        set_export_window=True,
+        car_charging_solar_surplus=True,
+        car_charging_planned=[True],
+        grid_power=7500,
+        battery_power=0,
+        car_charging_from_battery=False,
+        assert_status="Hold for car (solar)",
+        assert_pause_discharge=True,
+        assert_immediate_soc_target=0,
+        assert_solar_surplus_active=[True],
+    )
+
+    # Restore single-inverter state for any subsequent tests.
+    my_predbat.inverters = [ActiveTestInverter(0, 0, 10.0, my_predbat.now_utc)]
+    my_predbat.args["num_inverters"] = 1
+    my_predbat.num_inverters = 1
+    return failed
+
+
+def run_solar_surplus_planned_slot_display_test(my_predbat):
+    """When a planned slot is active for the same car, the published cars_active
+    suppresses that car (planned slot is the real driver), but the underlying
+    eligibility flag stays True so hysteresis memory survives the planned slot ending."""
+    print("Run scenario solar_surplus_eligible_during_planned_slot_not_displayed")
+    my_predbat.log("Run scenario solar_surplus_eligible_during_planned_slot_not_displayed")
+    my_predbat.inverters = [ActiveTestInverter(0, 0, 10.0, my_predbat.now_utc)]
+    my_predbat.args["num_inverters"] = 1
+    my_predbat.num_inverters = 1
+
+    car_slot = [{"start": my_predbat.minutes_now - 10, "end": my_predbat.minutes_now + 50, "kwh": 5.0, "average": 7.0, "cost": 35.0}]
+    failed = run_execute_test(
+        my_predbat,
+        "solar_surplus_eligible_during_planned_slot_not_displayed",
+        set_charge_window=True,
+        set_export_window=True,
+        car_charging_solar_surplus=True,
+        car_charging_planned=[True],
+        car_slot=car_slot,
+        grid_power=7500,
+        battery_power=0,
+        car_charging_from_battery=False,
+        assert_status="Hold for car",
+        assert_pause_discharge=True,
+        assert_immediate_soc_target=0,
+        assert_solar_surplus_active=[True],
+    )
+
+    # Inspect the published surplus sensor: cars_active must be empty because the
+    # planned slot is what's actually driving the car right now.
+    sensor_id = "binary_sensor." + my_predbat.prefix + "_car_charging_solar_surplus"
+    sensor = my_predbat.ha_interface.dummy_items.get(sensor_id, {})
+    if isinstance(sensor, dict):
+        cars_active = sensor.get("cars_active", None)
+        state = sensor.get("state", None)
+    else:
+        cars_active, state = None, sensor
+    if cars_active != []:
+        print("ERROR: planned-slot suppression — expected cars_active=[], got {}".format(cars_active))
+        failed = True
+    if state != "off":
+        print("ERROR: planned-slot suppression — expected surplus sensor state='off', got {}".format(state))
+        failed = True
+
+    # The power sensor should still report real surplus even during a planned slot
+    power_sensor_id = my_predbat.prefix + ".car_charging_solar_surplus_power"
+    power_sensor = my_predbat.ha_interface.dummy_items.get(power_sensor_id, {})
+    if isinstance(power_sensor, dict):
+        power_state = power_sensor.get("state", None)
+    else:
+        power_state = power_sensor
+    if power_state != 7.5:
+        print("ERROR: planned-slot power sensor — expected state=7.5 (kW), got {}".format(power_state))
+        failed = True
+    return failed
+
+
+def run_solar_surplus_power_sensor_test(my_predbat):
+    """Verify the numeric power sensor is published with correct value and attributes."""
+    print("Run scenario solar_surplus_power_sensor")
+    my_predbat.log("Run scenario solar_surplus_power_sensor")
+    my_predbat.inverters = [ActiveTestInverter(0, 0, 10.0, my_predbat.now_utc)]
+    my_predbat.args["num_inverters"] = 1
+    my_predbat.num_inverters = 1
+
+    failed = run_execute_test(
+        my_predbat,
+        "solar_surplus_power_sensor_active",
+        set_charge_window=True,
+        set_export_window=True,
+        car_charging_solar_surplus=True,
+        car_charging_planned=[True],
+        grid_power=7500,
+        battery_power=100,
+        car_charging_from_battery=False,
+        assert_status="Hold for car (solar)",
+        assert_pause_discharge=True,
+        assert_immediate_soc_target=0,
+        assert_solar_surplus_active=[True],
+        assert_solar_surplus_power=7500,
+    )
+
+    power_sensor_id = my_predbat.prefix + ".car_charging_solar_surplus_power"
+    power_sensor = my_predbat.ha_interface.dummy_items.get(power_sensor_id, {})
+    if not isinstance(power_sensor, dict):
+        print("ERROR: power sensor not published as dict, got {}".format(type(power_sensor)))
+        return True
+    if power_sensor.get("state") != 7.5:
+        print("ERROR: power sensor state should be 7.5 (kW), got {}".format(power_sensor.get("state")))
+        failed = True
+    if power_sensor.get("unit_of_measurement") != "kW":
+        print("ERROR: power sensor unit should be 'kW', got {}".format(power_sensor.get("unit_of_measurement")))
+        failed = True
+    if power_sensor.get("state_class") != "measurement":
+        print("ERROR: power sensor state_class should be 'measurement', got {}".format(power_sensor.get("state_class")))
+        failed = True
+    if power_sensor.get("threshold") != 500:
+        print("ERROR: power sensor threshold should be 500, got {}".format(power_sensor.get("threshold")))
+        failed = True
+    if power_sensor.get("surplus_active") is not True:
+        print("ERROR: power sensor surplus_active should be True, got {}".format(power_sensor.get("surplus_active")))
+        failed = True
+
+    # When car doesn't qualify but there's still export, sensor shows raw export
+    failed |= run_execute_test(
+        my_predbat,
+        "solar_surplus_power_sensor_inactive",
+        set_charge_window=True,
+        set_export_window=True,
+        car_charging_solar_surplus=True,
+        car_charging_planned=[True],
+        grid_power=3000,
+        battery_power=0,
+        assert_status="Demand",
+        assert_solar_surplus_active=[False],
+        assert_solar_surplus_power=3000,
+    )
+    power_sensor = my_predbat.ha_interface.dummy_items.get(power_sensor_id, {})
+    if isinstance(power_sensor, dict):
+        if power_sensor.get("state") != 3.0:
+            print("ERROR: power sensor state should be 3.0 (kW) when car inactive, got {}".format(power_sensor.get("state")))
+            failed = True
+        if power_sensor.get("surplus_active") is not False:
+            print("ERROR: power sensor surplus_active should be False when inactive, got {}".format(power_sensor.get("surplus_active")))
+            failed = True
     return failed
