@@ -1553,6 +1553,9 @@ These are described in detail in [Energy Rates](energy-rates.md) and are listed 
 - **futurerate_adjust_import** and **futurerate_adjust_export** - Whether tomorrow's predicted import or export prices should be adjusted based on market prices or not
 - **futurerate_adjust_auto** - Auto-detect which of import/export are Agile and calibrate only those rates; overrides `futurerate_adjust_import` / `futurerate_adjust_export`; requires the Octopus Energy integration or Predbat's Octopus Component
 - **futurerate_peak_start** and **futurerate_peak_end** - start/end times for peak-rate adjustment
+- **rate_history_days_average** - Number of days of historical rate data to build a half-hour-of-day mean for filling gaps in the forward rate window. Set to `0` (default) to disable.
+- **rate_history_source_import** and **rate_history_source_export** - Home Assistant entity to query for historical rate data. If not set, falls back to `metric_octopus_import` / `metric_octopus_export`
+- **rate_history_scaling_import** and **rate_history_scaling_export** - Multiplier to convert sensor rate values to Predbat's internal rate units (e.g. `100.0` to convert $/kWh to c/kWh). Defaults to `1.0`
 - **carbon_postcode** - Postcode to retrieve Carbon intensity grid information for
 - **carbon_automatic** - Retrieve Carbon intensity information automatically based upon postcode
 - **carbon_intensity** - Carbon intensity of the grid in half-hour slots from an integration.
