@@ -55,7 +55,7 @@ class MinuteArray:
 
     def __contains__(self, key):
         """True when key is a valid in-bounds index."""
-        return 0 <= key < len(self._data)
+        return isinstance(key, int) and 0 <= key < len(self._data)
 
     def __bool__(self):
         """True when the array is non-empty."""
