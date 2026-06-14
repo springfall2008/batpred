@@ -604,7 +604,8 @@ class Fetch:
                     self.log("Warn: Unable to fetch history for {}".format(entity_id))
 
         if import_today and smoothing:
-            return MinuteArray(import_today, (max_days_previous if pad else age_days) * 24 * 60 + 2)
+            size = (max_days_previous * 24 * 60 + 2) if pad else (max(import_today.keys()) + 2)
+            return MinuteArray(import_today, size)
         return import_today
 
     def minute_data_load(self, now_utc, entity_name, max_days_previous, load_scaling=1.0, required_unit=None, interpolate=False, pad=True, clean_increment=True):
@@ -671,7 +672,8 @@ class Fetch:
         if age_days is None:
             age_days = 0
         if load_minutes:
-            load_minutes = MinuteArray(load_minutes, (max_days_previous if pad else age_days) * 24 * 60 + 2)
+            size = (max_days_previous * 24 * 60 + 2) if pad else (max(load_minutes.keys()) + 2)
+            load_minutes = MinuteArray(load_minutes, size)
         return load_minutes, age_days
 
     def fetch_sensor_data(self, save=True):
