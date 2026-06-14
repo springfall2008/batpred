@@ -914,6 +914,40 @@ class Execute:
             },
         )
 
+        # Individual inverter data
+        if self.inverters:
+            for inverter in self.inverters:
+                self.dashboard_item(
+                    self.prefix + ".pv_power_{}".format(inverter.id),
+                    state=dp3(inverter.pv_power / 1000.0),
+                    attributes={
+                        "friendly_name": "Current PV Power Inverter {}".format(inverter.id),
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kW",
+                        "icon": "mdi:solar-power",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".load_power_{}".format(inverter.id),
+                    state=dp3(inverter.load_power / 1000.0),
+                    attributes={
+                        "friendly_name": "Current Load Power Inverter {}".format(inverter.id),
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kW",
+                        "icon": "mdi:home-lightning-bolt",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".battery_power_{}".format(inverter.id),
+                    state=dp3(inverter.battery_power / 1000.0),
+                    attributes={
+                        "friendly_name": "Current Battery Power Inverter {}".format(inverter.id),
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kW",
+                        "icon": "mdi:battery",
+                    },
+                )
+
     def balance_inverters(self, test_mode=False):
         """
         Attempt to balance multiple inverters

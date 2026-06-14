@@ -100,6 +100,7 @@ class LoadMLComponent(ComponentBase):
         # Data state
         self.load_data = None
         self.load_data_age_days = 0
+        self.load_minutes_now = 0
         self.pv_data = None
         self.temperature_data = None
         self.import_rates_data = None
@@ -404,7 +405,7 @@ class LoadMLComponent(ComponentBase):
                 energy = self.get_from_incrementing(pv_data_cumulative, m, PREDICT_STEP, backwards=True)
                 pv_data[m] = dp4(energy)
 
-            pv_forecast_minute, pv_forecast_minute10 = self.base.fetch_pv_forecast()
+            pv_forecast_minute, pv_forecast_minute10, _, _, _ = self.base.fetch_pv_forecast()
             # Add future PV forecast as per-5-min energy with negative keys (negative = future)
             # key -5 = first future step, -10 = second, etc.
             if pv_forecast_minute:
