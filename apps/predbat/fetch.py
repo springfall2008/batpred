@@ -2310,6 +2310,12 @@ class Fetch:
         self.carbon_enable = self.get_arg("carbon_enable")
         self.carbon_metric = self.get_arg("carbon_metric")
 
+        # Clipping peak cost penalty model
+        self.clipping_peak_enable = self.get_arg("clipping_peak_enable")
+        self.clipping_cost_weight = self.get_arg("clipping_cost_weight")
+        self.clipping_peak_amplification = self.get_arg("clipping_peak_amplification")
+        self.clipping_limit_override = self.get_arg("clipping_limit_override") / MINUTE_WATT if self.get_arg("clipping_limit_override") else 0
+
         # iBoost solar diverter model
         self.iboost_enable = self.get_arg("iboost_enable")
         self.iboost_gas = self.get_arg("iboost_gas")
