@@ -335,7 +335,7 @@ class SolarAPI(ComponentBase):
                     else:
                         self.log("Warn: SolarAPI: Postcode {} could not be resolved to latitude and longitude, using default".format(postcode))
 
-            url = "https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=global_tilted_irradiance,clear_sky_gti,temperature_2m,wind_speed_10m&wind_speed_unit=ms&tilt={tilt}&azimuth={az}&forecast_days=4&timezone=UTC".format(
+            url = "https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=global_tilted_irradiance,temperature_2m,wind_speed_10m&wind_speed_unit=ms&tilt={tilt}&azimuth={az}&forecast_days=4&timezone=UTC".format(
                 lat=lat, lon=lon, tilt=tilt, az=az
             )
             data = await self.cache_get_url(url, params={}, max_age=self.open_meteo_forecast_max_age * 60)
