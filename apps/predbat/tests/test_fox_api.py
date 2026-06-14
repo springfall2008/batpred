@@ -3506,31 +3506,39 @@ class MockFoxAPIWithRunTracking(MockFoxAPIWithRequests):
         return self.device_list
 
     async def get_device_detail(self, deviceSN):
+        # Return a truthy result to mirror a successful poll (real method returns the data)
         self.method_calls.append(f"get_device_detail:{deviceSN}")
+        return {"deviceSN": deviceSN}
 
     async def get_device_history(self, deviceSN):
         self.method_calls.append(f"get_device_history:{deviceSN}")
 
     async def get_battery_charging_time(self, deviceSN):
         self.method_calls.append(f"get_battery_charging_time:{deviceSN}")
-        return {}
+        return {"enable1": True}
 
     async def get_device_settings(self, deviceSN):
         self.method_calls.append(f"get_device_settings:{deviceSN}")
+        return {"WorkMode": {}}
 
     async def get_schedule_settings_ha(self, deviceSN):
         self.method_calls.append(f"get_schedule_settings_ha:{deviceSN}")
 
     async def get_scheduler(self, deviceSN):
         self.method_calls.append(f"get_scheduler:{deviceSN}")
-        return {}
+        return {"enable": 0}
 
     async def compute_schedule(self, deviceSN):
         self.method_calls.append(f"compute_schedule:{deviceSN}")
         return {}
 
+    async def get_device_production_month(self, deviceSN):
+        self.method_calls.append(f"get_device_production_month:{deviceSN}")
+        return [{"variable": "generation"}]
+
     async def get_real_time_data(self, deviceSN):
         self.method_calls.append(f"get_real_time_data:{deviceSN}")
+        return [{"datas": []}]
 
     async def publish_data(self):
         self.method_calls.append("publish_data")
@@ -3681,6 +3689,29 @@ def test_run_realtime_refresh_after_cache_expires(my_predbat):
     result = run_async(fox.run(180, first=False))
     assert result == True
     assert "get_real_time_data:TEST123" not in fox.method_calls
+
+    return False
+
+
+def test_run_device_list_failure_does_not_mark_cache_fresh(my_predbat):
+    """
+    Test that a failed device list poll does not reset the refresh timer, so the next run
+    retries instead of being suppressed for 24h by a falsely-fresh cache entry
+    """
+    print("  - test_run_device_list_failure_does_not_mark_cache_fresh")
+
+    fox = MockFoxAPIWithRequests()
+    # No mock response set for the device list path, so request_get returns None (poll fails)
+
+    # A failed poll must report None (not an empty list) and leave the device list untouched
+    result = run_async(fox.get_device_list())
+    assert result is None
+    assert fox.device_list == []
+
+    # After a failed refresh in run(), the cache age must remain unset so a retry can happen
+    fox.device_list = [{"deviceSN": "TEST123"}]  # Pretend we still have a cached list
+    run_async(fox.run(0, first=False))
+    assert "device_list" not in fox.data_age, "Failed device list poll must not mark the cache fresh"
 
     return False
 
@@ -5837,6 +5868,7 @@ def run_fox_api_tests(my_predbat):
         failed |= test_run_subsequent_call(my_predbat)
         failed |= test_run_settings_refresh_on_age(my_predbat)
         failed |= test_run_realtime_refresh_after_cache_expires(my_predbat)
+        failed |= test_run_device_list_failure_does_not_mark_cache_fresh(my_predbat)
         failed |= test_run_first_refreshes_device_list_despite_fresh_cache(my_predbat)
         failed |= test_run_with_automatic_config(my_predbat)
         failed |= test_run_without_automatic_config(my_predbat)

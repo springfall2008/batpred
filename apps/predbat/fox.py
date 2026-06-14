@@ -321,9 +321,12 @@ class FoxAPI(ComponentBase, OAuthMixin):
 
         # Device list rarely changes - refresh based on the age of the cached data
         if first or self._needs_refresh("device_list", FOX_REFRESH_STATIC):
-            await self.get_device_list()
+            devices = await self.get_device_list()
             self.log("Fox API: Found {} devices".format(len(self.device_list)))
-            await self._save_cache("device_list", self.device_list)
+            # Only persist and reset the 24h refresh timer when the poll actually succeeded; on a
+            # transient API failure we keep any cached list and retry on the next cycle
+            if devices is not None:
+                await self._save_cache("device_list", self.device_list)
 
         if not self.device_list:
             self.log("Error: FoxAPI: No devices found, unable to start API")
@@ -334,10 +337,10 @@ class FoxAPI(ComponentBase, OAuthMixin):
             for device in self.device_list:
                 sn = device.get("deviceSN", None)
                 if sn:
-                    await self.get_device_detail(sn)
-                    await self.get_battery_charging_time(sn)
-            await self._save_cache("device_detail", self.device_detail)
-            await self._save_cache("battery_charging_time", self.device_battery_charging_time)
+                    if await self.get_device_detail(sn):
+                        await self._save_cache("device_detail", self.device_detail)
+                    if await self.get_battery_charging_time(sn):
+                        await self._save_cache("battery_charging_time", self.device_battery_charging_time)
 
         # Seed device values from history only on a cold start where we have nothing cached
         if first and not self.device_values:
@@ -352,10 +355,10 @@ class FoxAPI(ComponentBase, OAuthMixin):
             for device in self.device_list:
                 sn = device.get("deviceSN", None)
                 if sn:
-                    await self.get_device_settings(sn)
-                    await self.get_scheduler(sn)
-            await self._save_cache("device_settings", self.device_settings)
-            await self._save_cache("scheduler_state", self._scheduler_state())
+                    if await self.get_device_settings(sn):
+                        await self._save_cache("device_settings", self.device_settings)
+                    if await self.get_scheduler(sn):
+                        await self._save_cache("scheduler_state", self._scheduler_state())
 
         # Recompute the local schedule (cheap, no API calls) on first start or after a refresh
         if first or settings_refresh:
@@ -371,8 +374,8 @@ class FoxAPI(ComponentBase, OAuthMixin):
             for device in self.device_list:
                 sn = device.get("deviceSN", None)
                 if sn:
-                    await self.get_device_production_month(sn)
-            await self._save_cache("device_production_month", self.device_production_month)
+                    if await self.get_device_production_month(sn):
+                        await self._save_cache("device_production_month", self.device_production_month)
 
         # Real time monitoring data - refresh based on age
         realtime_refresh = self._needs_refresh("device_values", FOX_REFRESH_REALTIME)
@@ -380,8 +383,8 @@ class FoxAPI(ComponentBase, OAuthMixin):
             for device in self.device_list:
                 sn = device.get("deviceSN", None)
                 if sn:
-                    await self.get_real_time_data(sn)
-            await self._save_cache("device_values", self.device_values)
+                    if await self.get_real_time_data(sn):
+                        await self._save_cache("device_values", self.device_values)
 
         # Publish to HA whenever we have refreshed data (or on first start to populate entities)
         if first or settings_refresh or production_refresh or realtime_refresh:
@@ -665,6 +668,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
                             if deviceSN not in self.device_values:
                                 self.device_values[deviceSN] = {}
                             self.device_values[deviceSN][variable] = {"timestamp": timestamp, "value": value, "unit": unit, "name": name}
+        return result
 
     async def get_device_history(self, deviceSN):
         """
@@ -727,6 +731,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
         result = await self.request_get(GET_DEVICE_INFO, post=False, datain=query)
         if result is not None:
             self.device_detail[deviceSN] = result
+        return result
 
     async def get_device_settings(self, deviceSN, checkBattery=True):
         """
@@ -936,6 +941,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
         result = await self.request_get(GET_DEVICE_PRODUCTION, datain={"sn": deviceSN, "year": year, "month": month, "dimension": "month", "variables": variables}, post=True)
         if result is not None:
             self.device_production_month[deviceSN] = result
+        return result
 
     async def get_device_power_generation(self, deviceSN):
         """
@@ -945,6 +951,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
         result = await self.request_get(GET_DEVICE_POWER, datain={"sn": deviceSN})
         if result is not None:
             self.device_power_generation[deviceSN] = result
+        return result
 
     async def set_scheduler_enabled(self, deviceSN, enabled):
         """
@@ -1206,13 +1213,15 @@ class FoxAPI(ComponentBase, OAuthMixin):
         GET_DEVICE_LIST = "/op/v0/device/list"
         query = {"pageSize": 100, "currentPage": 1}
         result = await self.request_get(GET_DEVICE_LIST, post=True, datain=query)
-        devices = []
-        if result is not None:
-            devices = result.get("data", [])
-            # If self.inverter_sn_filter is set, keep only devices whose deviceSN is in that filter
-            if self.inverter_sn_filter:
-                devices = [device for device in devices if device.get("deviceSN", "") in self.inverter_sn_filter]
-            self.device_list = devices
+        # Return None on API failure so callers can distinguish a failed poll (keep cached
+        # data) from a successful poll that genuinely returned no devices
+        if result is None:
+            return None
+        devices = result.get("data", [])
+        # If self.inverter_sn_filter is set, keep only devices whose deviceSN is in that filter
+        if self.inverter_sn_filter:
+            devices = [device for device in devices if device.get("deviceSN", "") in self.inverter_sn_filter]
+        self.device_list = devices
         return devices
 
     def get_headers(self, path):
