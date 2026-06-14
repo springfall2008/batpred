@@ -1339,7 +1339,9 @@ class SolarAPI(ComponentBase):
         max_kwh = 9999
         using_ha_data = False
 
-        if self.forecast_solar:
+        pv_forecast_primary = self.get_arg("pv_forecast_primary", "auto", indirect=False)
+
+        if (pv_forecast_primary == "forecast_solar") or (pv_forecast_primary == "auto" and self.forecast_solar):
             self.log("SolarAPI: Obtaining solar forecast from Forecast Solar API")
             pv_forecast_data, max_kwh = await self.download_forecast_solar_data()
             divide_by = 30.0
@@ -1348,12 +1350,12 @@ class SolarAPI(ComponentBase):
                 self.log("SolarAPI: Forecast Solar returned no data, falling back to Open-Meteo backup")
                 backup_configs = self.open_meteo_forecast if self.open_meteo_forecast else self.forecast_solar
                 pv_forecast_data, max_kwh = await self.download_open_meteo_data(configs=backup_configs)
-        elif self.open_meteo_forecast:
+        elif (pv_forecast_primary == "openmeteo") or (pv_forecast_primary == "auto" and self.open_meteo_forecast):
             self.log("SolarAPI: Obtaining solar forecast from Open-Meteo API")
             pv_forecast_data, max_kwh = await self.download_open_meteo_data()
             divide_by = 30.0
             create_pv10 = True
-        elif self.solcast_host and self.solcast_api_key:
+        elif (pv_forecast_primary == "solcast_api") or (pv_forecast_primary == "auto" and self.solcast_host and self.solcast_api_key):
             self.log("SolarAPI: Obtaining solar forecast from Solcast API")
             pv_forecast_data = await self.download_solcast_data()
             divide_by = 30.0
@@ -1389,6 +1391,29 @@ class SolarAPI(ComponentBase):
                 self.log("SolarAPI: PV Forecast today adds up to {} kWh, and total sensors add up to {} kWh, factor is {}".format(pv_forecast_total_data, pv_forecast_total_sensor, factor))
 
         if pv_forecast_data:
+            # Optional overlay of ClearSky data from a secondary source
+            clipping_clearsky_source = self.get_arg("clipping_clearsky_source", "auto", indirect=False)
+            if clipping_clearsky_source == "openmeteo" and self.open_meteo_forecast:
+                self.log("SolarAPI: Overlaying ClearSky data from Open-Meteo API")
+                om_data, _ = await self.download_open_meteo_data()
+                if om_data:
+                    om_lookup = {item["period_start"]: item.get("pv_clearsky", item.get("pv_estimate90", 0)) for item in om_data}
+                    for item in pv_forecast_data:
+                        ts = item.get("period_start")
+                        if ts in om_lookup:
+                            item["pv_clearsky"] = om_lookup[ts]
+            elif clipping_clearsky_source == "solcast_api" and self.solcast_api_key:
+                self.log("SolarAPI: Overlaying ClearSky data from Solcast API")
+                sol_data = await self.download_solcast_data()
+                if sol_data:
+                    sol_lookup = {item["period_start"]: item.get("pv_clearsky", item.get("pv_estimate90", 0)) for item in sol_data}
+                    for item in pv_forecast_data:
+                        ts = item.get("period_start")
+                        if ts in sol_lookup:
+                            item["pv_clearsky"] = sol_lookup[ts]
+            elif clipping_clearsky_source not in ["auto", "base", ""]:
+                self.log("Warn: SolarAPI: clipping_clearsky_source '{}' not configured properly, using base data".format(clipping_clearsky_source))
+
             # Detect the actual period of the forecast data (e.g. 15 or 30 minutes)
             # by examining the time difference between consecutive entries.
             # This ensures 15-minute resolution data is handled correctly.
