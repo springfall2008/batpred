@@ -1003,6 +1003,47 @@ class Plan:
             self.clipping_limit_effective = clipping_limit_effective
             self.clipping_limit_mode = clipping_limit_mode
 
+            # Hybrid Clipping: Read Manual Overrides
+            self.clipping_buffer_kwh = float(self.get_arg("clipping_buffer_max_kwh", default=0.0))
+            
+            start_time_str = self.get_arg("clipping_buffer_start_time", default="None")
+            end_time_str = self.get_arg("clipping_buffer_end_time", default="None")
+            
+            self.clipping_buffer_start = None
+            if start_time_str and start_time_str != "None":
+                self.clipping_buffer_start = self.time_to_minutes(start_time_str)
+                
+            self.clipping_buffer_end = None
+            if end_time_str and end_time_str != "None":
+                self.clipping_buffer_end = self.time_to_minutes(end_time_str)
+
+            # Calculate Implicit Buffer (Physics-based Decay Curve)
+            self.clipping_buffer_forecast_kwh = {}
+            self.clipping_remaining_today = 0.0
+            self.clipping_tomorrow = 0.0
+            
+            if self.clipping_peak_enable and pv_forecast_peak_step and clipping_limit_effective > 0:
+                step_size = getattr(self, "plan_interval_minutes", 30)
+                # Accumulate potential clipping loss per interval
+                for minute in range(0, self.forecast_minutes, step_size):
+                    kwh_loss = 0.0
+                    for m in range(minute, min(minute + step_size, self.forecast_minutes)):
+                        pv_power = pv_forecast_peak_step.get(m, 0)
+                        if pv_power > clipping_limit_effective:
+                            kwh_loss += (pv_power - clipping_limit_effective) / 60.0
+                    
+                    if kwh_loss > 0:
+                        self.clipping_buffer_forecast_kwh[minute] = kwh_loss
+                        # Add to totals
+                        if minute < 1440:
+                            self.clipping_remaining_today += kwh_loss
+                        else:
+                            self.clipping_tomorrow += kwh_loss
+
+            # If manual override is active, reflect it in the UI totals
+            if self.clipping_buffer_kwh > 0:
+                 self.clipping_remaining_today = max(self.clipping_remaining_today, self.clipping_buffer_kwh)
+
         # Save step data for debug
         self.load_minutes_step = load_minutes_step
         self.load_minutes_step10 = load_minutes_step10
@@ -3859,6 +3900,79 @@ class Plan:
                         "state_class": "measurement",
                         "unit_of_measurement": self.currency_symbols[1],
                         "icon": "mdi:currency-usd",
+                    },
+                )
+
+                # Add Clipping Summary Dashboard Items
+                self.dashboard_item(
+                    self.prefix + ".clipping_remaining_today",
+                    state=dp2(self.clipping_remaining_today),
+                    attributes={
+                        "friendly_name": "Clipping Remaining Today",
+                        "unit_of_measurement": "kWh",
+                        "device_class": "energy",
+                        "icon": "mdi:solar-power-variant",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".clipping_tomorrow",
+                    state=dp2(self.clipping_tomorrow),
+                    attributes={
+                        "friendly_name": "Clipping Forecast Tomorrow",
+                        "unit_of_measurement": "kWh",
+                        "device_class": "energy",
+                        "icon": "mdi:solar-power-variant-outline",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".clipping_mitigated_today",
+                    state=dp2(getattr(self, "clipping_mitigated_today", 0.0)),
+                    attributes={
+                        "friendly_name": "Clipping Mitigated Today",
+                        "unit_of_measurement": "kWh",
+                        "device_class": "energy",
+                        "icon": "mdi:battery-check",
+                    },
+                )
+                
+                clipping_status_text = "No clipping forecast."
+                clipping_start_iso = None
+                clipping_end_iso = None
+                
+                if self.clipping_buffer_kwh > 0:
+                    def format_time_human(minute):
+                        if minute is None:
+                            return "N/A"
+                        target_dt = self.midnight + timedelta(minutes=minute)
+                        if target_dt.date() == self.midnight.date():
+                            return target_dt.strftime("%H:%M")
+                        else:
+                            return target_dt.strftime("Tomorrow %H:%M")
+                    start_str = format_time_human(self.clipping_buffer_start)
+                    end_str = format_time_human(self.clipping_buffer_end)
+                    if self.clipping_buffer_start is not None:
+                        clipping_start_iso = (self.midnight_utc + timedelta(minutes=self.clipping_buffer_start)).isoformat()
+                    if self.clipping_buffer_end is not None:
+                        clipping_end_iso = (self.midnight_utc + timedelta(minutes=self.clipping_buffer_end)).isoformat()
+                    
+                    if self.clipping_buffer_start is not None and self.clipping_buffer_end is not None:
+                        clipping_status_text = "{} kWh clipping forecast ({}) between {} and {}.".format(dp2(self.clipping_buffer_kwh), self.clipping_mode, start_str, end_str)
+                    else:
+                        clipping_status_text = "{} kWh manual clipping buffer override active.".format(dp2(self.clipping_buffer_kwh))
+                
+                self.dashboard_item(
+                    self.prefix + ".clipping_status",
+                    state=clipping_status_text,
+                    attributes={
+                        "friendly_name": "Clipping Buffer Status",
+                        "icon": "mdi:information-outline",
+                        "results": self.filtered_times(self.clipping_buffer_forecast_kwh),
+                        "clipping_start": clipping_start_iso,
+                        "clipping_end": clipping_end_iso,
+                        "clipping_mode": self.clipping_mode,
+                        "clipping_remaining_today": dp2(self.clipping_remaining_today),
+                        "clipping_tomorrow": dp2(self.clipping_tomorrow),
+                        "clipping_mitigated_today": dp2(getattr(self, "clipping_mitigated_today", 0.0)),
                     },
                 )
                 self.dashboard_item(self.prefix + ".record", state=0.0, attributes={"results": self.filtered_times(record_time), "friendly_name": "Prediction window", "state_class": "measurement"})
