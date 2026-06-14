@@ -1436,6 +1436,14 @@ CONFIG_ITEMS = [
         "icon": "mdi:chart-bell-curve-cumulative",
     },
     {
+        "name": "clipping_use_clearsky_peaks",
+        "friendly_name": "Clipping Use ClearSky Peaks",
+        "type": "switch",
+        "default": True,
+        "icon": "mdi:weather-sunny-alert",
+        "enable": "clipping_peak_enable",
+    },
+    {
         "name": "clipping_cost_weight",
         "friendly_name": "Clipping Cost Weight",
         "type": "input_number",
@@ -2271,4 +2279,9 @@ APPS_SCHEMA = {
     "gateway_mqtt_host": {"type": "string", "empty": False},
     "gateway_mqtt_port": {"type": "integer", "zero": False},
     "gateway_mqtt_token": {"type": "string", "empty": False},
+    "clipping_peak_enable": {"type": "boolean"},
+    "clipping_use_clearsky_peaks": {"type": "boolean"},
+    "clipping_cost_weight": {"type": "float"},
+    "clipping_peak_amplification": {"type": "float"},
+    "clipping_limit_override": {"type": "integer"},
 }

@@ -2979,6 +2979,86 @@ chart.render();
                 {"name": "PV Actual", "data": pv_actual, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": "#f5c43d"},
             ]
             text += self.render_chart(series_data, "kWh", "PV Forecast vs Actual", now_str)
+        elif chart == "Clipping":
+            clipping_mode = getattr(self.base, "clipping_limit_mode", "Unknown")
+            clipping_limit_effective = getattr(self.base, "clipping_limit_effective", 0)
+            inverter_ac_limit_kw = getattr(self.base, "inverter_limit", 0)
+
+            # Re-fetch PV actuals for overlay
+            pv_power_hist = history_attribute(self.get_history_wrapper(self.prefix + ".pv_power", 7, required=False))
+            pv_power = prune_today(pv_power_hist, self.now_utc, self.midnight_utc, prune=False)
+
+            axis_max = 12.0
+            if self.base.soc_max > 12.0 or inverter_ac_limit_kw > 12.0:
+                axis_max = max(self.base.soc_max, inverter_ac_limit_kw, 12.0)
+            axis_ticks = 6
+
+            annotations = []
+            if clipping_limit_effective > 0:
+                annotations.append({"y": clipping_limit_effective, "text": "{} ({} kW)".format(clipping_mode, round(clipping_limit_effective, 2)), "color": "#FF0000"})
+            if inverter_ac_limit_kw > 0 and abs(inverter_ac_limit_kw - clipping_limit_effective) > 0.1:
+                annotations.append({"y": inverter_ac_limit_kw, "text": "Inverter Capacity ({} kW)".format(round(inverter_ac_limit_kw, 2)), "color": "#999999"})
+
+            # Data series parsing for per-minute data
+            step_size = getattr(self.base, "plan_interval_minutes", 30)
+            clipping_forecast_series = {}
+            if getattr(self.base, "predict_clipped_best", None):
+                for minute, kwh in self.base.predict_clipped_best.items():
+                    if minute % step_size == 0:
+                        minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
+                        stamp = minute_timestamp.strftime(TIME_FORMAT)
+                        clipping_forecast_series[stamp] = round(kwh, 2)
+
+            # Raw PV forecast (ClearSky if used, else regular)
+            raw_pv_series = {}
+            if getattr(self.base, "clipping_use_clearsky_peaks", False):
+                raw_pv_data = getattr(self.base, "pv_forecast_minuteCS", {})
+                raw_pv_name = "ClearSky Forecast"
+            else:
+                raw_pv_data = getattr(self.base, "pv_forecast_minute", {})
+                raw_pv_name = "Base Forecast"
+            if raw_pv_data:
+                for minute, kw in raw_pv_data.items():
+                    if minute % step_size == 0:
+                        minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
+                        stamp = minute_timestamp.strftime(TIME_FORMAT)
+                        raw_pv_series[stamp] = round(kw, 2)
+
+            series_data = [
+                {"name": "Actual SOC", "data": soc_kw_h0, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "color": "#3291a8", "unit": "kWh"},
+                {"name": "Target SOC", "data": soc_kw_best, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": "#9b23eb", "unit": "kWh"},
+                {"name": "PV Power Actual", "data": pv_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#f5c43d", "unit": "kW"},
+                {"name": raw_pv_name, "data": raw_pv_series, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#a8a8a7", "unit": "kW"},
+                {"name": "Forecast Clipping Total", "data": clipping_forecast_series, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#FF0000", "unit": "kWh"},
+            ]
+
+            secondary_axis = [
+                {
+                    "title": "kW",
+                    "series_name": "PV Power Actual",
+                    "decimals": 1,
+                    "opposite": True,
+                    "min": 0,
+                    "max": axis_max,
+                    "tickAmount": axis_ticks,
+                },
+                {
+                    "title": "kW",
+                    "series_name": raw_pv_name,
+                    "show": False,
+                    "min": 0,
+                    "max": axis_max,
+                    "tickAmount": axis_ticks,
+                },
+            ]
+
+            clipping_total = 0
+            if getattr(self.base, "predict_clipped_best", None):
+                clipping_total = self.base.predict_clipped_best.get(max(self.base.predict_clipped_best.keys()), 0.0)
+
+            chart_title = "Clipping Analysis (Expected Total Clipping: {:.2f} kWh)".format(clipping_total)
+
+            text += self.render_chart(series_data, "kWh", chart_title, now_str, yaxis_annotations=annotations, extra_yaxis=secondary_axis, yaxis_min=0, yaxis_max=axis_max, yaxis_tick_amount=axis_ticks)
         elif chart == "LoadML":
             load_today_history = self.get_history_with_now_attrs("sensor." + self.prefix + "_load_ml_stats", 7)
             # Get historical load data for last 24 hours
@@ -3280,6 +3360,7 @@ chart.render();
         text += f'<a href="./charts?chart=PV" class="{"active" if chart == "PV" else ""}">PV</a>'
         text += f'<a href="./charts?chart=PV7" class="{"active" if chart == "PV7" else ""}">PV7</a>'
         text += f'<a href="./charts?chart=PVAccuracy" class="{"active" if chart == "PVAccuracy" else ""}">PVAccuracy</a>'
+        text += f'<a href="./charts?chart=Clipping" class="{"active" if chart == "Clipping" else ""}">Clipping</a>'
         text += f'<a href="./charts?chart=Savings" class="{"active" if chart == "Savings" else ""}">Savings</a>'
         text += f'<a href="./charts?chart=BatteryDegradation" class="{"active" if chart == "BatteryDegradation" else ""}">BatteryDegradation</a>'
         text += f'<a href="./charts?chart=MarginalCosts" class="{"active" if chart == "MarginalCosts" else ""}">MarginalCosts</a>'
