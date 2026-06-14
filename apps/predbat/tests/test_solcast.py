@@ -62,6 +62,8 @@ class MockBase:
         self.mock_history = {}
         self.fatal_error = False
         self.args = {}
+        # Mirror the real PredBat default used by pv_calibration's negative-export-price curtailment exclusion.
+        self.curtail_on_negative_export_price = "off"
         self.currency_symbols = ["p", "£"]
         self.arg_errors = []
         self.components = MockComponents(StorageLocalFiles(self.config_root, self.log))
@@ -2345,9 +2347,16 @@ def test_pv_calibration_power_conversion(my_predbat):
 
         base.minute_data_import_export = mock_minute_data_import_export
 
-        # No forecast history → enabled_calibration will be False (< 3 days), but power
-        # conversion and capped_data paths still execute.
-        solar.get_history_wrapper = lambda entity_id, days, required=False: []
+        # No forecast history → enabled_calibration will be False (< 3 days), but power conversion and capped_data
+        # paths still execute. Record which entities are queried so we can assert the historical export rate is
+        # fetched from the correct entity (issue #3986 regression guard - a wrong name silently disables it).
+        requested_history = []
+
+        def mock_get_history(entity_id, days, required=False):
+            requested_history.append(entity_id)
+            return []
+
+        solar.get_history_wrapper = mock_get_history
 
         # Build a simple pv_forecast_minute: constant 0.05 kW per minute for 4 days
         total_minutes = 4 * 24 * 60
@@ -2356,6 +2365,12 @@ def test_pv_calibration_power_conversion(my_predbat):
         pv_forecast_data = [{"period_start": base.midnight_utc.strftime("%Y-%m-%dT%H:%M:%S+0000"), "pv_estimate": 0.05}]
 
         adj_minute, adj_minute10, adj_data = solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
+
+        # The historical export rate must be read from the predbat.rates_export entity so curtailed slots can be
+        # excluded from calibration; a wrong entity name would silently disable the exclusion (issue #3986).
+        if (base.prefix + ".rates_export") not in requested_history:
+            print("ERROR: pv_calibration did not query {}.rates_export for curtailment exclusion; queried {}".format(base.prefix, requested_history))
+            failed = True
 
         # Returned minute data must be non-negative
         if any(v < 0 for v in adj_minute.values()):
@@ -2513,6 +2528,51 @@ def test_pv_calibration_partial_history(my_predbat):
 
         finally:
             test_api.cleanup()
+
+    return failed
+
+
+def test_pv_calibration_curtailment_exclusion(my_predbat):
+    """
+    Test slot_export_curtailed, which decides whether a slot (given its historical export rate) was curtailed
+    on a negative export price and must therefore be excluded from PV calibration (issue #3986).
+
+    Verifies: with the feature off nothing is curtailed; in the curtail_excess and solar_production_off modes
+    only genuinely negative export rates are curtailed (strict <, so exactly 0 is kept); and slots with no known
+    historical rate (None) are kept (conservative).
+    """
+    print("  - test_pv_calibration_curtailment_exclusion")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        solar = test_api.solar
+        base = test_api.mock_base
+
+        # Feature off: nothing is curtailed, whatever the rate.
+        base.curtail_on_negative_export_price = "off"
+        for rate in (-5.0, 0.0, 3.0, None):
+            if solar.slot_export_curtailed(rate):
+                print("ERROR: rate {} flagged curtailed with the feature off".format(rate))
+                failed = True
+
+        # Both active modes curtail exactly the negative-price slots.
+        for mode in ("curtail_excess", "solar_production_off"):
+            base.curtail_on_negative_export_price = mode
+            if not solar.slot_export_curtailed(-5.0):
+                print("ERROR: -5 should be curtailed in mode {}".format(mode))
+                failed = True
+            if solar.slot_export_curtailed(0.0):
+                print("ERROR: 0 should NOT be curtailed in mode {} (strict <)".format(mode))
+                failed = True
+            if solar.slot_export_curtailed(3.0):
+                print("ERROR: 3 should NOT be curtailed in mode {}".format(mode))
+                failed = True
+            if solar.slot_export_curtailed(None):
+                print("ERROR: a slot with no known historical rate should NOT be curtailed in mode {}".format(mode))
+                failed = True
+    finally:
+        test_api.cleanup()
 
     return failed
 
@@ -3458,6 +3518,7 @@ def run_solcast_tests(my_predbat):
 
     # Calibration tests
     failed |= test_pv_calibration_power_conversion(my_predbat)
+    failed |= test_pv_calibration_curtailment_exclusion(my_predbat)
     failed |= test_pv_calibration_capped_data_clamp(my_predbat)
     failed |= test_pv_calibration_no_history_not_zeroed(my_predbat)
     failed |= test_pv_calibration_partial_history(my_predbat)

@@ -955,6 +955,8 @@ approval was lower than your maximum inverter power (check your install informat
 
 If you do not set an export limit then it is assumed to be unlimited (and thus limited by your inverter or PV system).
 
+If your export is curtailed when the export price is negative, see [curtailment on a negative export price](energy-rates.md#curtailment-on-a-negative-export-price), which models that curtailment without affecting the normal export limit.
+
 ### **inverter_limit_charge** and **inverter_limit_discharge**
 
 An optional list of values with one entry per inverter.

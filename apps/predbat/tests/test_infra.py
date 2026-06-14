@@ -553,6 +553,7 @@ def simple_scenario(
     battery_soc=0.0,
     hybrid=False,
     export_limit=10.0,
+    curtail_on_negative_export_price="off",
     inverter_limit=1.0,
     reserve=0.0,
     charge=0,
@@ -666,6 +667,7 @@ def simple_scenario(
     my_predbat.soc_kw = battery_soc
     my_predbat.inverter_hybrid = hybrid
     my_predbat.export_limit = export_limit / 60.0
+    my_predbat.curtail_on_negative_export_price = curtail_on_negative_export_price
     my_predbat.inverter_limit = inverter_limit / 60.0
     my_predbat.pv_ac_limit = pv_ac_limit / 60.0
     my_predbat.reserve = reserve
