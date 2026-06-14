@@ -944,7 +944,27 @@ class Output:
         if predict_clipped_best:
             clipping_total = predict_clipped_best.get(max(predict_clipped_best.keys()), 0.0)
             if clipping_total > 0.01:
-                sentence += "- Forecast {} kWh clipping, plan penalized to mitigate.\n".format(dp2(clipping_total))
+                clipping_mode = getattr(self, "clipping_limit_mode", "Unknown")
+                start_str = ""
+                end_str = ""
+                start_stamp = None
+                end_stamp = None
+                
+                prev_val = 0.0
+                for min_key, val in sorted(predict_clipped_best.items()):
+                    if val > prev_val + 0.001:
+                        if start_stamp is None:
+                            start_stamp = self.midnight_utc + timedelta(minutes=min_key)
+                        end_stamp = self.midnight_utc + timedelta(minutes=min_key)
+                    prev_val = val
+                
+                if start_stamp and end_stamp:
+                    start_str = start_stamp.strftime("%H:%M")
+                    end_str = end_stamp.strftime("%H:%M")
+                
+                sentence += "- Forecast {} kWh clipping, exceeding {} limit from {} to {}. Plan penalized to mitigate.\n".format(
+                    dp2(clipping_total), clipping_mode, start_str, end_str
+                )
 
         if publish:
             self.text_plan = self.get_text_plan_html(sentence)
