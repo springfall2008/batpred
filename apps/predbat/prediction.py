@@ -92,7 +92,7 @@ class Prediction:
     Class to hold prediction input and output data and the run function
     """
 
-    def __init__(self, base=None, pv_forecast_minute_step=None, pv_forecast_minute10_step=None, load_minutes_step=None, load_minutes_step10=None, soc_kw=None, soc_max=None, pv_forecast_peak_step=None, clipping_limit=0, clipping_cost_weight=0):
+    def __init__(self, base=None, pv_forecast_minute_step=None, pv_forecast_minute10_step=None, load_minutes_step=None, load_minutes_step10=None, soc_kw=None, soc_max=None, pv_forecast_peak_step=None, clipping_limit=0, clipping_cost_weight=0, clipping_buffer_kwh=0, clipping_buffer_start=None, clipping_buffer_end=None):
         global PRED_GLOBAL
         if base:
             self.minutes_now = base.minutes_now
@@ -181,6 +181,12 @@ class Prediction:
             self.rate_export = base.rate_export
             self.io_adjusted = base.io_adjusted
             self.rate_max = base.rate_max
+            self.clipping_limit = clipping_limit
+            self.clipping_cost_weight = clipping_cost_weight
+            self.clipping_buffer_kwh = clipping_buffer_kwh
+            self.clipping_buffer_start = clipping_buffer_start
+            self.clipping_buffer_end = clipping_buffer_end
+            self.pv_forecast_peak_step = pv_forecast_peak_step
             self.pv_forecast_minute_step = pv_forecast_minute_step
             self.pv_forecast_minute10_step = pv_forecast_minute10_step
             self.load_minutes_step = load_minutes_step
@@ -195,9 +201,6 @@ class Prediction:
             self.prediction_cache = {}
             self.plan_interval_minutes = base.plan_interval_minutes
             self.charge_scaling10 = base.charge_scaling10
-            self.pv_forecast_peak_step = pv_forecast_peak_step
-            self.clipping_limit = clipping_limit
-            self.clipping_cost_weight = clipping_cost_weight
 
             # Store this dictionary in global so we can reconstruct it in the thread without passing the data
             PRED_GLOBAL["dict"] = self.__dict__.copy()
@@ -669,7 +672,22 @@ class Prediction:
             # Clipping peak cost penalty: check if worst-case PV would exceed the clipping limit
             # and add a cost to the metric if the battery can't absorb the excess.
             # This makes the optimizer prefer plans that leave battery headroom during peak solar.
-            if pv_forecast_peak_step and clipping_limit_step > 0 and clipping_cost_weight > 0:
+            manual_buffer_active = False
+            if self.clipping_buffer_kwh > 0:
+                if self.clipping_buffer_start is None or self.clipping_buffer_end is None:
+                    manual_buffer_active = True
+                elif self.clipping_buffer_start <= minute_absolute < self.clipping_buffer_end:
+                    manual_buffer_active = True
+
+            if manual_buffer_active:
+                target_headroom = self.clipping_buffer_kwh
+                battery_headroom = max(soc_max - soc, 0) * battery_loss
+                if battery_headroom < target_headroom:
+                    # Apply a severe penalty to force the optimizer to respect the manual buffer limit
+                    clipping_penalty = (target_headroom - battery_headroom) * export_rate * clipping_cost_weight * 5
+                    metric += clipping_penalty
+                    clipping_penalty_total += clipping_penalty
+            elif pv_forecast_peak_step and clipping_limit_step > 0 and clipping_cost_weight > 0:
                 peak_pv = pv_forecast_peak_step.get(minute, 0)
                 if peak_pv > clipping_limit_step:
                     potential_clip = peak_pv - clipping_limit_step
