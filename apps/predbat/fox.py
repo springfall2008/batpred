@@ -314,8 +314,8 @@ class FoxAPI(ComponentBase, OAuthMixin):
             retry_allowed = self.should_allow_retry()
             self.log(f"Fox: API usage: {self.requests_today} requests over {elapsed_minutes:.1f} minutes " f"({hourly_rate:.1f}/hour), retry_allowed={retry_allowed}")
 
-        # On first start, restore cached device data from storage so that a quick reboot does
-        # not need to re-poll the Fox cloud API for data that is still fresh
+        # On first start, restore cached device data from storage so that a quick reboot can
+        # avoid re-polling the Fox cloud API for settings/production/realtime data that is still fresh
         if first:
             await self.load_cached_data()
 
