@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>Random Scenario Benchmarking - Predbat Documentation</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Random Scenario Benchmarking";
+        var mkdocs_page_input_path = "random-scenarios.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">Random Scenario Benchmarking</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#overview">Overview</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#prerequisites">Prerequisites</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#step-1-generate-scenarios">Step 1 — Generate Scenarios</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#step-2-run-scenarios">Step 2 — Run Scenarios</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#results-json-format">Results JSON format</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#step-3-compare-two-result-sets">Step 3 — Compare Two Result Sets</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#step-4-profile-a-single-scenario">Step 4 — Profile a Single Scenario</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#sorting-options">Sorting options</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#using-an-external-profiler">Using an external profiler</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#quick-reference">Quick Reference</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Predbat development</li>
+      <li class="breadcrumb-item active">Random Scenario Benchmarking</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="random-scenario-benchmarking">Random Scenario Benchmarking</h1>
+<p>The random scenario framework lets you generate reproducible synthetic test cases, run them through the optimisation engine, compare two result sets, and profile performance — all from the <code>coverage/</code> directory.</p>
+<hr />
+<h2 id="overview">Overview</h2>
+<p>A <em>scenario</em> is a fully self-contained synthetic energy environment: battery size, charge/discharge limits, load profile, PV profile, import/export rates, and initial SOC. Each scenario is deterministically generated from an integer seed, so the same seed always produces the same scenario regardless of when you run it.</p>
+<p>The workflow is:</p>
+<ol>
+<li><strong>Generate</strong> a set of scenarios and save them to YAML.</li>
+<li><strong>Run</strong> the scenarios against a template debug YAML, saving metric/cost/runtime results to JSON.</li>
+<li>Make a code change.</li>
+<li><strong>Run</strong> the same scenarios again to a second JSON file.</li>
+<li><strong>Compare</strong> the two JSON files to see which scenarios improved or regressed.</li>
+<li>Optionally <strong>profile</strong> a single scenario to find performance hotspots.</li>
+</ol>
+<hr />
+<h2 id="prerequisites">Prerequisites</h2>
+<p>All commands are run from the <code>coverage/</code> directory with the project virtual environment active:</p>
+<pre><code class="language-bash">cd coverage
+source venv/bin/activate   # or: source setup.csh
+</code></pre>
+<p>A <strong>template debug YAML</strong> is required for the run and profile steps. This is any <code>predbat_debug_*.yaml</code> file that provides the HA entity state and configuration baseline. The random scenario data (rates, load, PV, battery) is overlaid on top of it.</p>
+<p>Example template files already present:</p>
+<ul>
+<li><code>cases/predbat_debug_agile1.yaml</code></li>
+<li><code>predbat_debug_plan.yaml</code></li>
+</ul>
+<hr />
+<h2 id="step-1-generate-scenarios">Step 1 — Generate Scenarios</h2>
+<pre><code class="language-bash">python3 ../apps/predbat/unit_test.py \
+  --random-generate \
+  --random-count 50 \
+  --random-seed 0 \
+  --random-output random_scenarios.yaml
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--random-count N</code></td>
+<td>100</td>
+<td>Number of scenarios to generate</td>
+</tr>
+<tr>
+<td><code>--random-seed N</code></td>
+<td>0</td>
+<td>Seed for the first scenario; scenario <code>i</code> uses seed <code>start + i</code></td>
+</tr>
+<tr>
+<td><code>--random-output PATH</code></td>
+<td><code>random_scenarios.yaml</code></td>
+<td>Output YAML file</td>
+</tr>
+</tbody>
+</table>
+<p>The YAML file contains the full generated time-series data (rates, load, PV) embedded in each scenario entry so the file is entirely self-contained — regenerating from the same seed always produces identical data.</p>
+<hr />
+<h2 id="step-2-run-scenarios">Step 2 — Run Scenarios</h2>
+<pre><code class="language-bash">python3 ../apps/predbat/unit_test.py \
+  --random-run \
+  --random-template cases/predbat_debug_agile1.yaml \
+  --random-scenarios random_scenarios.yaml \
+  --random-results random_results_before.json
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--random-template PATH</code></td>
+<td><em>(required)</em></td>
+<td>Template debug YAML to load as the baseline configuration</td>
+</tr>
+<tr>
+<td><code>--random-scenarios PATH</code></td>
+<td><code>random_scenarios.yaml</code></td>
+<td>Scenarios YAML file to read</td>
+</tr>
+<tr>
+<td><code>--random-results PATH</code></td>
+<td><code>random_results.json</code></td>
+<td>Output JSON file for results</td>
+</tr>
+<tr>
+<td><code>--random-scenario N</code></td>
+<td><em>(all)</em></td>
+<td>Run only the scenario with this id number</td>
+</tr>
+<tr>
+<td><code>--full-debug</code></td>
+<td>off</td>
+<td>Save a <code>plan_scenario{id}.html</code> plan visualisation for each scenario</td>
+</tr>
+</tbody>
+</table>
+<p>Each scenario prints a progress line:</p>
+<pre><code class="language-text">Scenario 3/50 seed=2 metric=541.6 cost=726.1 runtime=0.462s [ok]
+</code></pre>
+<p>The <code>metric</code> is the full optimisation metric (cost + battery value adjustment + PV10 weighting + carbon). The <code>cost</code> is the raw import/export money with no adjustments. <code>runtime_s</code> measures the wall-clock time of <code>calculate_plan()</code> alone.</p>
+<h3 id="results-json-format">Results JSON format</h3>
+<pre><code class="language-json">{
+  &quot;run_info&quot;: {
+    &quot;template_yaml&quot;: &quot;cases/predbat_debug_agile1.yaml&quot;,
+    &quot;scenarios_file&quot;: &quot;random_scenarios.yaml&quot;,
+    &quot;timestamp&quot;: &quot;2026-05-04T10:00:00+00:00&quot;
+  },
+  &quot;results&quot;: [
+    {
+      &quot;id&quot;: 0,
+      &quot;seed&quot;: 0,
+      &quot;metric&quot;: 541.6327,
+      &quot;cost&quot;: 726.0931,
+      &quot;import_kwh_battery&quot;: 1.23,
+      &quot;import_kwh_house&quot;: 5.67,
+      &quot;export_kwh&quot;: 0.45,
+      &quot;soc_min&quot;: 0.5,
+      &quot;soc_final&quot;: 2.4,
+      &quot;battery_cycles&quot;: 0.8,
+      &quot;carbon_g&quot;: 1234.5,
+      &quot;runtime_s&quot;: 0.462,
+      &quot;failed&quot;: false,
+      &quot;error&quot;: null
+    }
+  ]
+}
+</code></pre>
+<hr />
+<h2 id="step-3-compare-two-result-sets">Step 3 — Compare Two Result Sets</h2>
+<p>After making a code change, run the scenarios again to a different output file, then compare:</p>
+<pre><code class="language-bash"># Run with the new code
+python3 ../apps/predbat/unit_test.py \
+  --random-run \
+  --random-template cases/predbat_debug_agile1.yaml \
+  --random-results random_results_after.json
+
+# Compare
+python3 ../apps/predbat/unit_test.py \
+  --random-compare random_results_before.json random_results_after.json
+</code></pre>
+<p>The compare output is a per-scenario table followed by summary statistics:</p>
+<pre><code class="language-text">Comparing results:
+  A: random_results_before.json (2026-05-04T09:00:00+00:00)
+  B: random_results_after.json  (2026-05-04T10:00:00+00:00)
+
+  ID      metric_A      metric_B    met_diff        cost_A        cost_B   cost_diff    time_A    time_B    status
+------------------------------------------------------------------------------------------------------------------
+   0      541.6327      541.6327     +0.0000      726.0931      726.0931     +0.0000    0.462s    0.389s
+   1      481.6034      482.7461     +1.1427      564.8907      564.7083     -0.1824    0.451s    0.401s
+...
+------------------------------------------------------------------------------------------------------------------
+
+Metric summary (50 scenarios compared):
+  Average diff : +0.2341  (+ = B worse, - = B better)
+  Min diff     : -8.9576
+  Max diff     : +20.5438
+  B worse      : 5
+  B better     : 4
+  Unchanged    : 41
+
+Cost summary (raw import/export, no battery value adjustment):
+  Average diff : +0.1234
+  ...
+
+Runtime summary (optimisation wall-clock time):
+  Average A    : 0.461s
+  Average B    : 0.395s
+  Average diff : -0.066s  (+ = B slower, - = B faster)
+  Min diff     : -0.120s
+  Max diff     : +0.015s
+</code></pre>
+<p><strong>Interpreting metric diff</strong>: a positive value means B (the new code) produced a <em>worse</em> plan — the optimiser is spending more money or leaving less battery value. A negative value is an improvement.</p>
+<hr />
+<h2 id="step-4-profile-a-single-scenario">Step 4 — Profile a Single Scenario</h2>
+<p>Profile scenario 0 and print the top 30 hotspot functions ordered by cumulative time:</p>
+<pre><code class="language-bash">python3 ../apps/predbat/unit_test.py \
+  --random-profile \
+  --random-template cases/predbat_debug_agile1.yaml \
+  --random-scenario 0
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--random-profile-lines N</code></td>
+<td>30</td>
+<td>Number of top functions to display</td>
+</tr>
+<tr>
+<td><code>--random-profile-sort KEY</code></td>
+<td><code>cumulative</code></td>
+<td>Sort order: <code>cumulative</code>, <code>tottime</code>, <code>calls</code></td>
+</tr>
+<tr>
+<td><code>--random-profile-output PATH</code></td>
+<td><em>(none)</em></td>
+<td>Also write a <code>.prof</code> binary file for use with external tools</td>
+</tr>
+</tbody>
+</table>
+<h3 id="sorting-options">Sorting options</h3>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Shows</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cumulative</code></td>
+<td>Total time spent in function + all callees — best for finding the slow <em>path</em></td>
+</tr>
+<tr>
+<td><code>tottime</code></td>
+<td>Time spent only inside the function body — best for finding the slow <em>work</em></td>
+</tr>
+<tr>
+<td><code>calls</code></td>
+<td>Number of calls — best for finding hot loops</td>
+</tr>
+</tbody>
+</table>
+<h3 id="using-an-external-profiler">Using an external profiler</h3>
+<p>Save the raw <code>.prof</code> file and open it with <a href="https://jiffyclub.github.io/snakeviz/">snakeviz</a> for an interactive flame graph:</p>
+<pre><code class="language-bash">python3 ../apps/predbat/unit_test.py \
+  --random-profile \
+  --random-template cases/predbat_debug_agile1.yaml \
+  --random-scenario 0 \
+  --random-profile-output profile.prof
+
+pip install snakeviz
+snakeviz profile.prof
+</code></pre>
+<hr />
+<h2 id="quick-reference">Quick Reference</h2>
+<pre><code class="language-bash"># Generate 20 scenarios from seed 42
+python3 ../apps/predbat/unit_test.py --random-generate --random-count 20 --random-seed 42 --random-output my_scenarios.yaml
+
+# Run all scenarios, save baseline
+python3 ../apps/predbat/unit_test.py --random-run --random-template cases/predbat_debug_agile1.yaml \
+  --random-scenarios my_scenarios.yaml --random-results baseline.json
+
+# Run a single scenario for quick iteration
+python3 ../apps/predbat/unit_test.py --random-run --random-template cases/predbat_debug_agile1.yaml \
+  --random-scenarios my_scenarios.yaml --random-scenario 3 --random-results new.json
+
+# Compare baseline vs new
+python3 ../apps/predbat/unit_test.py --random-compare baseline.json new.json
+
+# Profile scenario 3, sort by self-time
+python3 ../apps/predbat/unit_test.py --random-profile --random-template cases/predbat_debug_agile1.yaml \
+  --random-scenario 3 --random-profile-sort tottime --random-profile-lines 40
+</code></pre>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../developing/" class="btn btn-neutral float-left" title="Developing on Predbat"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../rest_api/" class="btn btn-neutral float-right" title="Predbat REST API">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../developing/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../rest_api/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>
