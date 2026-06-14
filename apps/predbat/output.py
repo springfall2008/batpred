@@ -2488,6 +2488,21 @@ class Output:
             },
         )
 
+        pv_forecast_peak_step = getattr(self, "pv_forecast_peak_step", {})
+        if pv_forecast_peak_step:
+            self.dashboard_item(
+                self.prefix + ".pv_forecast_peak",
+                state=dp2(pv_forecast_peak_step.get(self.minutes_now, 0)),
+                attributes={
+                    "results": self.filtered_times(pv_forecast_peak_step),
+                    "friendly_name": "Solar peak forecast",
+                    "state_class": "measurement",
+                    "unit_of_measurement": "kW",
+                    "icon": "mdi:solar-power",
+                },
+            )
+
+
         if had_errors:
             self.log("Warn: record_status {}".format(message + extra))
         else:

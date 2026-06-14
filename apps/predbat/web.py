@@ -2961,19 +2961,25 @@ chart.render();
             ]
             text += self.render_chart(series_data, "kW", "Solar Forecast", now_str)
         elif chart == "Clipping":
-            pv_power = prune_today(self.get_history_wrapper("sensor." + self.prefix + "_pv_power", 2, "state_class", "measurement"), self.now_utc, self.midnight_utc)
-            clipping_limit_kw = getattr(self.base, "clipping_limit_effective", 0.0) / 1000.0
-            clipping_mode = getattr(self.base, "clipping_limit_mode", "Unknown")
-            inverter_ac_limit_kw = self.base.inverter_limit / 1000.0 if self.base.inverter_limit else clipping_limit_kw
+            try:
+                pv_power = prune_today(self.get_history_wrapper("sensor." + self.prefix + "_pv_power", 2, "state_class", "measurement"), self.now_utc, self.midnight_utc)
+                clipping_limit_kw = getattr(self.base, "clipping_limit_effective", 0.0) / 1000.0
+                clipping_mode = getattr(self.base, "clipping_limit_mode", "Unknown")
+                inverter_ac_limit_kw = self.base.inverter_limit / 1000.0 if self.base.inverter_limit else clipping_limit_kw
 
-            soc_kw_best_raw = history_attribute(self.get_history_wrapper(self.prefix + ".soc_kw_best", 2))
-            soc_kw_best = prune_today(soc_kw_best_raw, self.now_utc, self.midnight_utc)
+                soc_kw_best_raw = history_attribute(self.get_history_wrapper(self.prefix + ".soc_kw_best", 2))
+                soc_kw_best = prune_today(soc_kw_best_raw, self.now_utc, self.midnight_utc)
 
-            clipping_forecast_raw = history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_peak", 2, "state_class", "measurement"))
-            clipping_forecast = prune_today(clipping_forecast_raw, self.now_utc, self.midnight_utc, prune=False, intermediate=True)
-            clipping_forecast_type = getattr(self.base, "pv_forecast_primary", "unknown")
-            if getattr(self.base, "clipping_use_clearsky_peaks", False):
-                clipping_forecast_type = getattr(self.base, "clipping_clearsky_source", "ClearSky")
+                clipping_forecast_raw = history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_peak", 2, "state_class", "measurement"))
+                clipping_forecast = prune_today(clipping_forecast_raw, self.now_utc, self.midnight_utc, prune=False, intermediate=True)
+                clipping_forecast_type = getattr(self.base, "pv_forecast_primary", "unknown")
+                if getattr(self.base, "clipping_use_clearsky_peaks", False):
+                    clipping_forecast_type = getattr(self.base, "clipping_clearsky_source", "ClearSky")
+            except Exception as e:
+                import traceback
+                self.log("ERROR IN CLIPPING CHART: " + str(e))
+                self.log(traceback.format_exc())
+                raise e
 
             # Ceiling for both axes (kWh and kW) to ensure ticks line up
             axis_max = 12.0
