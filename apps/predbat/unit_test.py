@@ -63,6 +63,7 @@ from tests.test_manual_api import run_test_manual_api
 from tests.test_manual_soc import run_test_manual_soc
 from tests.test_manual_times import run_test_manual_times
 from tests.test_manual_select import run_test_manual_select
+from tests.test_minute_array import test_minute_array
 from tests.test_minute_data import test_minute_data, test_minute_data_load, test_minute_data_no_smoothing_backwards, test_minute_data_no_smoothing_forward
 from tests.test_minute_data_import_export import test_minute_data_import_export
 from tests.test_minute_data_state import test_minute_data_state
@@ -186,6 +187,7 @@ def main():
         ("window_sort", run_window_sort_tests, "Window sort tests", False),
         ("window2minutes", test_window2minutes, "Window to minutes tests", False),
         ("compute_metric", run_compute_metric_tests, "Compute metric tests", False),
+        ("minute_array", test_minute_array, "MinuteArray class tests", False),
         ("minute_data", test_minute_data, "Minute data tests", False),
         ("minute_data_load", test_minute_data_load, "Minute data load tests", False),
         ("minute_data_import_export", test_minute_data_import_export, "Minute data import/export tests", False),
