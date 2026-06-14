@@ -326,7 +326,7 @@ class GatewayMQTT(ComponentBase):
             self.log("Info: GatewayMQTT: MQTT listener task started")
             # Wait up to a minute for first connection attempt before declaring started
             for _ in range(60 * 2):
-                if self._first_connection_attempted:
+                if self._first_connection_attempted or self.api_stop:
                     break
                 await asyncio.sleep(0.5)
             else:
