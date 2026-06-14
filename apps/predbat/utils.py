@@ -16,12 +16,68 @@ dictionaries, time string parsing, data filtering/pruning, rounding,
 and historical data extraction from incrementing energy counters.
 """
 
+import array
 from datetime import datetime, timedelta, timezone, time
 from functools import lru_cache
 from const import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, MAX_INCREMENT, TIME_FORMAT_DAILY
 import copy
 
 DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+
+
+class MinuteArray:
+    """Dense array-backed replacement for dict[int, float] keyed by contiguous minute indices.
+
+    Stores values in a stdlib array.array('d') to reduce memory ~29x versus a Python dict
+    (8 bytes per entry instead of ~232 bytes). Exposes the same get/[] interface used by
+    get_from_incrementing and get_now_from_cumulative so no callers need updating.
+
+    Only suitable when the key range is contiguous from 0 to size-1 (i.e. after smoothing).
+    """
+
+    def __init__(self, data, size):
+        """Initialise from an existing dense dict, pre-allocated to size entries."""
+        self._data = array.array("d", (data.get(i, 0.0) for i in range(size)))
+
+    def get(self, key, default=0.0):
+        """Return the value at key, or default if key is out of range."""
+        if 0 <= key < len(self._data):
+            return self._data[key]
+        return default
+
+    def __getitem__(self, key):
+        """Return the value at key (no bounds check — callers are responsible)."""
+        return self._data[key]
+
+    def __len__(self):
+        """Return the number of entries in the array."""
+        return len(self._data)
+
+    def __contains__(self, key):
+        """True when key is a valid in-bounds index."""
+        return isinstance(key, int) and 0 <= key < len(self._data)
+
+    def __bool__(self):
+        """True when the array is non-empty."""
+        return len(self._data) > 0
+
+    def __setitem__(self, key, value):
+        """Set the value at key."""
+        self._data[key] = float(value)
+
+    def __iter__(self):
+        """Iterate over all valid indices, mirroring dict iteration over keys."""
+        return iter(range(len(self._data)))
+
+    def keys(self):
+        """Return a range covering all valid indices, mirroring dict.keys() for dense data."""
+        return range(len(self._data))
+
+    def copy(self):
+        """Return a shallow copy of this MinuteArray."""
+        new = MinuteArray.__new__(MinuteArray)
+        new._data = array.array("d", self._data)
+        return new
 
 
 # Helper to make dict hashable for caching

@@ -2747,7 +2747,7 @@ class Output:
             entity_id_list = []
 
         # re-load car charging slots for yesterday (for octopus if enabled).
-        for car_n in range(min(len(entity_id_list), self.num_cars)):
+        for car_n in range(min(len(entity_id_list), self.num_cars, len(self.octopus_slots))):
             self.car_charging_slots[car_n] = self.load_octopus_slots(car_n, self.octopus_slots[car_n], self.octopus_intelligent_consider_full)
 
         # re-construct car charging slots from non-octopus using the car energy sensor
