@@ -19,7 +19,7 @@ dictionaries for use by the prediction engine.
 """
 
 from datetime import datetime, timedelta
-from utils import minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative
+from utils import minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative, MinuteArray
 from const import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_CONTROL_SOC, PREDBAT_MODE_CONTROL_CHARGEDISCHARGE, PREDBAT_MODE_CONTROL_CHARGE, PREDBAT_MODE_MONITOR
 from predbat_metrics import metrics
 from futurerate import FutureRate
@@ -603,6 +603,8 @@ class Fetch:
                 else:
                     self.log("Warn: Unable to fetch history for {}".format(entity_id))
 
+        if smoothing and pad and import_today:
+            return MinuteArray(import_today, max_days_previous * 24 * 60 + 2)
         return import_today
 
     def minute_data_load(self, now_utc, entity_name, max_days_previous, load_scaling=1.0, required_unit=None, interpolate=False, pad=True, clean_increment=True):
@@ -668,6 +670,8 @@ class Fetch:
 
         if age_days is None:
             age_days = 0
+        if load_minutes:
+            load_minutes = MinuteArray(load_minutes, max_days_previous * 24 * 60 + 2)
         return load_minutes, age_days
 
     def fetch_sensor_data(self, save=True):
