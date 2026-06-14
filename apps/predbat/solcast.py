@@ -255,21 +255,22 @@ class SolarAPI(ComponentBase):
 
     async def download_open_meteo_ensemble_data(self, lat, lon, tilt, az, kwp, system_loss):
         """
-        Download Open-Meteo ensemble data for P10 solar estimate.
-        Returns a dict mapping ISO timestamp strings to P10 kW values.
+        Download Open-Meteo ensemble data for P10 and P90 solar estimates.
+        Returns a tuple of (p10_dict, p90_dict) mapping ISO timestamp strings to kW values.
         """
         url = "https://ensemble-api.open-meteo.com/v1/ensemble?models=icon_seamless&latitude={lat}&longitude={lon}&hourly=global_tilted_irradiance&tilt={tilt}&azimuth={az}&forecast_days=4&timezone=UTC".format(lat=lat, lon=lon, tilt=tilt, az=az)
         data = await self.cache_get_url(url, params={}, max_age=self.open_meteo_forecast_max_age * 60)
         if not data:
-            return {}
+            return {}, {}
 
         hourly = data.get("hourly", {})
         times = hourly.get("time", [])
         member_keys = [k for k in hourly if k.startswith("global_tilted_irradiance_member")]
         if not member_keys or not times:
-            return {}
+            return {}, {}
 
-        result = {}
+        result_p10 = {}
+        result_p90 = {}
         for idx, ts in enumerate(times):
             values = []
             for k in member_keys:
@@ -277,13 +278,17 @@ class SolarAPI(ComponentBase):
                 if val is not None:
                     values.append(val)
             if not values:
-                result[ts] = 0.0
+                result_p10[ts] = 0.0
+                result_p90[ts] = 0.0
                 continue
             values.sort()
             p10_idx = max(0, math.ceil(len(values) * 0.10) - 1)
+            p90_idx = min(len(values) - 1, math.floor(len(values) * 0.90))
             gti_p10 = values[p10_idx]
-            result[ts] = dp4((gti_p10 / 1000.0) * kwp * (1.0 - system_loss))
-        return result
+            gti_p90 = values[p90_idx]
+            result_p10[ts] = dp4((gti_p10 / 1000.0) * kwp * (1.0 - system_loss))
+            result_p90[ts] = dp4((gti_p90 / 1000.0) * kwp * (1.0 - system_loss))
+        return result_p10, result_p90
 
     async def download_open_meteo_data(self, configs=None):
         """
@@ -349,7 +354,7 @@ class SolarAPI(ComponentBase):
                 self.log("Warn: SolarAPI: Open-Meteo data for lat {} lon {} has no hourly data".format(lat, lon))
                 continue
 
-            ensemble_p10 = await self.download_open_meteo_ensemble_data(lat, lon, tilt, az, kwp, system_loss)
+            ensemble_p10, ensemble_p90 = await self.download_open_meteo_ensemble_data(lat, lon, tilt, az, kwp, system_loss)
 
             # Pass 1: compute instantaneous kW at each UTC timestamp sample.
             # Open-Meteo returns point-in-time irradiance (W/m²) at the start of each hour,
@@ -362,7 +367,6 @@ class SolarAPI(ComponentBase):
                 gti = gti_values[idx]
                 if gti is None:
                     gti = 0.0
-                cs_gti = cs_gti_values[idx] if idx < len(cs_gti_values) and cs_gti_values[idx] is not None else gti
                 temp = temp_values[idx] if idx < len(temp_values) and temp_values[idx] is not None else 25.0
                 wind = wind_values[idx] if idx < len(wind_values) and wind_values[idx] is not None else 1.0
                 # Cell temperature via SAPM/PVWatts model: irradiance heats the cell above ambient
@@ -372,10 +376,18 @@ class SolarAPI(ComponentBase):
                 # Cap at 1.1 (10% above STC) to prevent unrealistic gains at very cold temperatures.
                 eta_temp = max(0.5, min(1.1, 1.0 - 0.004 * (t_cell - 25.0)))
                 pv50_inst = dp4((gti / 1000.0) * kwp * eta_temp * (1.0 - system_loss))
-                pv_cs_inst = dp4((cs_gti / 1000.0) * kwp * eta_temp * (1.0 - system_loss))
+                
                 raw_p10 = ensemble_p10.get(ts)
-                # ensemble_p10 was computed without temperature derating; apply eta_temp now
+                raw_p90 = ensemble_p90.get(ts)
+                # ensemble_p10/p90 were computed without temperature derating; apply eta_temp now
                 pv10_inst = dp4(min(raw_p10 * eta_temp, pv50_inst) if raw_p10 is not None else pv50_inst * 0.7)
+                
+                if idx < len(cs_gti_values) and cs_gti_values[idx] is not None:
+                    cs_gti = cs_gti_values[idx]
+                    pv_cs_inst = dp4((cs_gti / 1000.0) * kwp * eta_temp * (1.0 - system_loss))
+                else:
+                    # Fallback to P90 ensemble if Clear Sky GTI is unavailable (which is always true for Open-Meteo right now)
+                    pv_cs_inst = dp4(max(raw_p90 * eta_temp, pv50_inst) if raw_p90 is not None else pv50_inst * 1.3)
                 try:
                     stamp = datetime.strptime(ts, "%Y-%m-%dT%H:%M")
                     stamp = stamp.replace(tzinfo=pytz.utc)
