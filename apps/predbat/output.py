@@ -3267,7 +3267,6 @@ class Output:
         self.export_today_now = export_today_now
         self.carbon_today_sofar = carbon_today_sofar
         self.pv_today_now = pv_today_now
-        self.soc_kw = soc_kw
         self.car_charging_hold = car_charging_hold
         self.iboost_energy_subtract = iboost_energy_subtract
         self.load_minutes_now = load_minutes_now

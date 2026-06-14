@@ -525,7 +525,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.octopus_saving_slots = []
         self.car_charging_slots = []
         self.reserve = 0
+        self.reserve_percent = 0.0
         self.reserve_current = 0
+        self.reserve_current_percent = 0.0
         self.battery_loss = 1.0
         self.battery_loss_discharge = 1.0
         self.inverter_loss = 1.0
@@ -575,6 +577,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.grid_power = 0
         self.io_adjusted = {}
         self.current_charge_limit = 0.0
+        self.current_charge_limit_kwh = 0.0
+        self.inverter_limit = 0.0
+        self.export_limit = 0.0
         self.charge_limit = []
         self.charge_limit_best = []
         self.charge_window = []
