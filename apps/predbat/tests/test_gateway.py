@@ -2773,6 +2773,103 @@ class TestCheckInverterResets:
         assert gw.log.call_count == 2
 
 
+class TestRunStartupWait:
+    """Tests for run(first=True) — verifies it waits for the first MQTT connection attempt."""
+
+    def _make_gateway(self):
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.log = MagicMock()
+        gw.gateway_device_id = "pbgw_test"
+        gw.mqtt_host = "mqtt.test.local"
+        gw.api_stop = False
+        gw._first_connection_attempted = False
+        gw._mqtt_task = None
+        return gw
+
+    def _run(self, coro):
+        import asyncio
+
+        return asyncio.run(coro)
+
+    def test_returns_true_without_sleeping_when_flag_already_set(self):
+        """When _first_connection_attempted is pre-set, run() returns True without sleeping."""
+        if not HAS_AIOMQTT:
+            return
+        from unittest.mock import patch, AsyncMock
+
+        gw = self._make_gateway()
+        gw._first_connection_attempted = True
+
+        async def run_test():
+            async def fake_mqtt_loop():
+                pass
+
+            gw._mqtt_loop = fake_mqtt_loop
+            with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+                result = await gw.run(0, True)
+            return result, mock_sleep.call_count
+
+        result, sleep_count = self._run(run_test())
+        assert result is True
+        assert sleep_count == 0
+
+    def test_returns_true_after_flag_set_on_first_sleep(self):
+        """run() exits the wait loop as soon as the flag is set, after a single sleep."""
+        if not HAS_AIOMQTT:
+            return
+        from unittest.mock import patch
+
+        gw = self._make_gateway()
+        sleep_count = [0]
+
+        async def run_test():
+            async def fake_sleep(t):
+                sleep_count[0] += 1
+                gw._first_connection_attempted = True  # Simulates MQTT loop completing first attempt
+
+            async def fake_mqtt_loop():
+                pass
+
+            gw._mqtt_loop = fake_mqtt_loop
+            with patch("asyncio.sleep", side_effect=fake_sleep):
+                result = await gw.run(0, True)
+            return result
+
+        result = self._run(run_test())
+        assert result is True
+        assert sleep_count[0] == 1
+
+    def test_returns_true_with_warning_when_timeout_expires(self):
+        """run() returns True and logs a Warn when the flag is never set within the timeout."""
+        if not HAS_AIOMQTT:
+            return
+        from unittest.mock import patch
+
+        gw = self._make_gateway()
+        sleep_count = [0]
+
+        async def run_test():
+            async def fast_sleep(t):
+                sleep_count[0] += 1
+
+            async def fake_mqtt_loop():
+                pass  # Never sets _first_connection_attempted
+
+            gw._mqtt_loop = fake_mqtt_loop
+            with patch("asyncio.sleep", side_effect=fast_sleep):
+                result = await gw.run(0, True)
+            return result
+
+        result = self._run(run_test())
+        assert result is True
+        assert sleep_count[0] == 120  # 60 * 2 iterations of 0.5s each = 60s total
+        warn_logged = any("Warn" in str(c) and "not yet complete" in str(c) for c in gw.log.call_args_list)
+        assert warn_logged, "Expected a Warn log when the first connection attempt times out"
+
+
 def run_gateway_tests(my_predbat=None):
     """Run all GatewayMQTT tests. Returns True on failure, False on success."""
     test_classes = [
@@ -2791,6 +2888,7 @@ def run_gateway_tests(my_predbat=None):
         TestPublishPredbatData,
         TestIanaToPosixTz,
         TestCheckInverterResets,
+        TestRunStartupWait,
     ]
     for cls in test_classes:
         instance = cls()
