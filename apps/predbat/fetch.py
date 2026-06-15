@@ -457,6 +457,7 @@ class Fetch:
                 self.log("Gap starting at {} ({} minutes) for {} minutes".format(gap_start_timestamp.strftime(TIME_FORMAT), gap_start, gap_length))
 
         # Do the filling
+        len_data = len(data) if isinstance(data, MinuteArray) else 99999999
         for gap in gap_list:
             gap_start_minute_previous = gap[0]
             gap_minutes = gap[1]
@@ -467,7 +468,7 @@ class Fetch:
             # gap_start_minute_previous is the highest index (earliest in gap)
             # We fill from there down to the end of the gap
 
-            minute_previous = gap_end_minute_previous
+            minute_previous = min(gap_end_minute_previous, len_data - 1)
             gap_day = None
             while minute_previous > gap_start_minute_previous and minute_previous >= 0:
                 # Change of day?
@@ -2184,7 +2185,7 @@ class Fetch:
         self.inverter_loss = 1.0 - self.get_arg("inverter_loss")
         self.inverter_hybrid = self.get_arg("inverter_hybrid")
         self.pv_ac_limit = self.get_arg("pv_ac_limit", 0.0) / MINUTE_WATT
-        self.base_load = self.get_arg("base_load", 0) / 1000.0
+        self.base_load = self.get_arg("base_load", 100) / 1000.0
 
         # Charge curve
         if self.args.get("battery_charge_power_curve", "") == "auto":

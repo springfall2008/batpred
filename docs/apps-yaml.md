@@ -1698,7 +1698,7 @@ weirdness you may have from your inverter and battery setup.
 Sometimes the load predictions can yield near zero data due to inaccuracy of data (e.g. a second PV system not tracked, car data being unreliable, poor sensors).
 In order to not get unrealistically low values you can set a base load value (in watts) which Predbat will use as a minimum load for a slot duration.
 
-To set a base load set **base_load** as an integer value in watts.
+To set a base load set **base_load** as an integer value in watts. The default is 100 watts if not specified.
 
 ```yaml
    base_load: 300
