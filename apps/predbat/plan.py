@@ -3980,7 +3980,7 @@ class Plan:
                 predict_clipping_remaining_best = {}
                 predict_clipping_ceiling_best = {}
                 
-                clipping_limit_step = self.clipping_limit * (self.minutes_now_step / 60)
+                clipping_limit_step = getattr(self, "clipping_limit_effective", 0) * (self.minutes_now_step / 60.0)
                 pv_forecast_peak_step = getattr(self, 'pv_forecast_minute_stepCS', getattr(self, 'pv_forecast_minute_step90', None))
                 
                 manual_buffer_active = False
