@@ -494,7 +494,7 @@ Growatt has two popular series of inverters, SPA and SPH. Copy the template that
 
 Copy the Huawei template over your existing `apps.yaml` and modify all entity IDs, battery capacity and power limits for your own system:
 
-https://github.com/springfall2008/batpred/blob/main/templates/huawei.yaml
+<https://github.com/springfall2008/batpred/blob/main/templates/huawei.yaml>
 
 Configure the Huawei inverter operating mode according to your installation. The example setup linked below has been tested using **Maximise self-consumption**.
 
@@ -549,8 +549,7 @@ Start in Monitor or Read Only mode and test all Huawei service calls manually be
 
 A more complete working example, including Home Assistant package sensors, EV charging and Manual API automations, is available here:
 
-https://github.com/JohanAlvedal/Predbat-setup
-
+<https://github.com/JohanAlvedal/Predbat-setup>
 
 ## Kostal Plenticore
 
