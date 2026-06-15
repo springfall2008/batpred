@@ -2588,27 +2588,27 @@ Now create an automation to populate the access token:
       target:
         entity_id: input_text.tesla_access_token_part1
       data:
-        value: "{{ token_response.stdout[0:220] }}"
+        value: "{{ token_response.stdout[0:250] }}"
     - action: input_text.set_value
       target:
         entity_id: input_text.tesla_access_token_part2
       data:
-        value: "{{ token_response.stdout[220:440] }}"
+        value: "{{ token_response.stdout[250:500] }}"
     - action: input_text.set_value
       target:
         entity_id: input_text.tesla_access_token_part3
       data:
-        value: "{{ token_response.stdout[440:660] }}"
+        value: "{{ token_response.stdout[500:750] }}"
     - action: input_text.set_value
       target:
         entity_id: input_text.tesla_access_token_part4
       data:
-        value: "{{ token_response.stdout[660:880] }}"
+        value: "{{ token_response.stdout[750:1000] }}"
     - action: input_text.set_value
       target:
         entity_id: input_text.tesla_access_token_part5
       data:
-        value: "{{ token_response.stdout[880:] }}"
+        value: "{{ token_response.stdout[1000:] }}"
   mode: single
   ```
 
