@@ -4023,13 +4023,25 @@ class Plan:
 
                 # Add Clipping Summary Dashboard Items
                 self.dashboard_item(
-                    self.prefix + ".clipping_remaining_today",
+                    self.prefix + ".clipping_remaining",
                     state=dp2(self.clipping_remaining_today),
                     attributes={
-                        "friendly_name": "Clipping Remaining Today",
+                        "results": self.filtered_times(self.predict_clipping_remaining_best),
+                        "friendly_name": "Clipping Remaining",
                         "unit_of_measurement": "kWh",
                         "device_class": "energy",
                         "icon": "mdi:solar-power-variant",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".clipping_ceiling",
+                    state=dp2(self.predict_clipping_ceiling_best.get(0, self.soc_max)),
+                    attributes={
+                        "results": self.filtered_times(self.predict_clipping_ceiling_best),
+                        "friendly_name": "Clipping Ceiling",
+                        "unit_of_measurement": "kWh",
+                        "device_class": "energy",
+                        "icon": "mdi:arrow-collapse-up",
                     },
                 )
                 self.dashboard_item(
