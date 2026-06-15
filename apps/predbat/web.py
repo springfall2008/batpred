@@ -3008,11 +3008,7 @@ chart.render();
                 axis_max = max(self.base.soc_max, inverter_ac_limit_kw, 12.0)
             axis_ticks = 6
 
-            annotations = []
-            if clipping_limit_effective > 0:
-                annotations.append({"y": clipping_limit_effective, "text": "{} ({} kW)".format(clipping_mode, round(clipping_limit_effective, 2)), "color": "#FF0000"})
-            if inverter_ac_limit_kw > 0 and abs(inverter_ac_limit_kw - clipping_limit_effective) > 0.1:
-                annotations.append({"y": inverter_ac_limit_kw, "text": "Inverter Capacity ({} kW)".format(round(inverter_ac_limit_kw, 2)), "color": "#999999"})
+
 
             # Data series parsing for per-minute data
             step_size = getattr(self.base, "plan_interval_minutes", 30)
@@ -3073,7 +3069,7 @@ chart.render();
 
             chart_title = "Clipping Analysis (Expected Total Clipping: {:.2f} kWh)".format(clipping_total)
 
-            text += self.render_chart(series_data, "kWh", chart_title, now_str, yaxis_annotations=annotations, extra_yaxis=secondary_axis, yaxis_min=0, yaxis_max=axis_max, yaxis_tick_amount=axis_ticks)
+            text += self.render_chart(series_data, "kWh", chart_title, now_str, extra_yaxis=secondary_axis)
         elif chart == "LoadML":
             load_today_history = self.get_history_with_now_attrs("sensor." + self.prefix + "_load_ml_stats", 7)
             # Get historical load data for last 24 hours
