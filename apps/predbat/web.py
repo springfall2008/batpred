@@ -3046,16 +3046,19 @@ chart.render();
 
             # Data series parsing for per-minute data
             step_size = getattr(self.base, "plan_interval_minutes", 30)
-            clipping_remaining_series = {}
-            if getattr(self.base, "predict_clipping_remaining_best", None):
+            clipping_remaining_raw = history_attribute(self.get_history_wrapper(self.prefix + ".clipping_remaining", 3))
+            clipping_remaining_series = prune_today(clipping_remaining_raw, self.now_utc, self.midnight_utc, prune_past_days=2)
+            # If history is missing/empty, fallback to the base predictor
+            if not clipping_remaining_series and getattr(self.base, "predict_clipping_remaining_best", None):
                 for minute, kwh in self.base.predict_clipping_remaining_best.items():
                     if minute % step_size == 0:
                         minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
                         stamp = minute_timestamp.strftime(TIME_FORMAT)
                         clipping_remaining_series[stamp] = round(kwh, 2)
                         
-            clipping_ceiling_series = {}
-            if getattr(self.base, "predict_clipping_ceiling_best", None):
+            clipping_ceiling_raw = history_attribute(self.get_history_wrapper(self.prefix + ".clipping_ceiling", 3))
+            clipping_ceiling_series = prune_today(clipping_ceiling_raw, self.now_utc, self.midnight_utc, prune_past_days=2)
+            if not clipping_ceiling_series and getattr(self.base, "predict_clipping_ceiling_best", None):
                 for minute, kwh in self.base.predict_clipping_ceiling_best.items():
                     if minute % step_size == 0:
                         minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
