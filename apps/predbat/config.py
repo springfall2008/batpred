@@ -1444,6 +1444,14 @@ CONFIG_ITEMS = [
         "enable": "clipping_peak_enable",
     },
     {
+        "name": "clipping_peak_auto_tune",
+        "friendly_name": "Clipping Peak Auto-Tune",
+        "type": "switch",
+        "default": True,
+        "icon": "mdi:auto-fix",
+        "enable": "clipping_peak_enable",
+    },
+    {
         "name": "clipping_cost_weight",
         "friendly_name": "Clipping Cost Weight",
         "type": "input_number",

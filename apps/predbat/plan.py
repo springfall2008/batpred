@@ -970,16 +970,73 @@ class Plan:
                 self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=None
             )
             
+            # Apply Auto-Tuning if enabled
+            auto_amp = 1.0
+            if getattr(self, "clipping_peak_auto_tune", False):
+                import os
+                import json
+                auto_tune_file = os.path.join(self.config_root, "clipping_auto_tune.json")
+                last_tune_day = None
+                if os.path.exists(auto_tune_file):
+                    try:
+                        with open(auto_tune_file, "r") as f:
+                            data = json.load(f)
+                            auto_amp = data.get("auto_amp", 1.0)
+                            last_tune_day = data.get("last_tune_day", None)
+                    except Exception:
+                        pass
+                
+                # Check if we should tune today (only once per day)
+                current_day = self.now_utc.strftime("%Y-%m-%d")
+                if current_day != last_tune_day:
+                    # Retrieve last 24h of pv_power
+                    days = 1
+                    pv_today_hist = self.base.minute_data_import_export(days, self.now_utc, "pv_today", required_unit="kWh", pad=False)
+                    max_pv_power = 0.0
+                    if pv_today_hist:
+                        pv_today_hist_max_minute = max(pv_today_hist.keys())
+                        current_value = None
+                        for minute in range(pv_today_hist_max_minute - 5, -5, -5):
+                            current_value = pv_today_hist.get(minute, current_value)
+                            next_value = pv_today_hist.get(minute - 5, current_value)
+                            if current_value is not None and next_value is not None:
+                                power_amount = max(0, next_value - current_value) * 60.0 / 5.0
+                                if power_amount > max_pv_power:
+                                    max_pv_power = power_amount
+                    
+                    # Check inverter limit
+                    limit = 0.0
+                    if self.inverter_limit > 0:
+                        limit = self.inverter_limit / MINUTE_WATT
+                    
+                    if limit > 0:
+                        if max_pv_power >= limit * 0.98:
+                            auto_amp = min(2.5, auto_amp + 0.05)
+                            self.log("Clipping auto-tuner: Real clipping detected (max PV {} kW >= limit {} kW). Increased auto_amp to {}".format(dp2(max_pv_power), dp2(limit), auto_amp))
+                        else:
+                            auto_amp = max(1.0, auto_amp - 0.01)
+                            self.log("Clipping auto-tuner: No clipping detected. Decreased auto_amp to {}".format(auto_amp))
+                        
+                        try:
+                            with open(auto_tune_file, "w") as f:
+                                json.dump({"auto_amp": auto_amp, "last_tune_day": current_day}, f)
+                        except Exception:
+                            pass
+                
+                self.dashboard_item(self.prefix + ".clipping_auto_amplification", state=dp2(auto_amp), attributes={"friendly_name": "Clipping Auto Amplification Factor", "icon": "mdi:auto-fix"})
+            
+            effective_amplification = self.clipping_peak_amplification * auto_amp
+
             # Apply ClearSky or Amplification factor
             if getattr(self, "clipping_use_clearsky_peaks", False):
                 pv_clearsky_step = self.step_data_history(
                     getattr(self, "pv_forecast_minuteCS", {}), self.minutes_now, forward=True, cloud_factor=None
                 )
                 pv_forecast_peak_step = {
-                    k: max(v, pv_clearsky_step.get(k, 0) * self.clipping_peak_amplification) for k, v in pv_forecast_peak_step.items()
+                    k: max(v, pv_clearsky_step.get(k, 0) * effective_amplification) for k, v in pv_forecast_peak_step.items()
                 }
-            elif self.clipping_peak_amplification != 1.0:
-                pv_forecast_peak_step = {k: v * self.clipping_peak_amplification for k, v in pv_forecast_peak_step.items()}
+            elif effective_amplification != 1.0:
+                pv_forecast_peak_step = {k: v * effective_amplification for k, v in pv_forecast_peak_step.items()}
 
             # Calculate effective clipping limit: most restrictive hardware constraint
             if self.clipping_limit_override > 0:
@@ -3902,6 +3959,23 @@ class Plan:
                         "icon": "mdi:currency-usd",
                     },
                 )
+
+                # Calculate legacy clipping entities from the cloud model's clipping curve
+                midnight_today_minute = 24 * 60 - self.minutes_now
+                clipping_today = 0.0
+                clipping_tomorrow = 0.0
+                
+                if hasattr(self, "predict_clipped_best") and self.predict_clipped_best:
+                    # Find closest key <= midnight_today_minute for clipping_today
+                    keys = sorted(self.predict_clipped_best.keys())
+                    key_today = next((k for k in reversed(keys) if k <= midnight_today_minute), 0)
+                    clipping_today = self.predict_clipped_best.get(key_today, 0.0)
+                    clipping_total = self.predict_clipped_best.get(keys[-1], 0.0)
+                    clipping_tomorrow = max(0.0, clipping_total - clipping_today)
+                    
+                self.clipping_remaining_today = clipping_today
+                self.clipping_tomorrow = clipping_tomorrow
+                self.clipping_mitigated_today = clipping_today
 
                 # Add Clipping Summary Dashboard Items
                 self.dashboard_item(
