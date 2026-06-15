@@ -3043,25 +3043,7 @@ chart.render();
                 {"name": "Forecast Clipping Total", "data": clipping_forecast_series, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#FF0000", "unit": "kWh"},
             ]
 
-            secondary_axis = [
-                {
-                    "title": "kW",
-                    "series_name": "PV Power Actual",
-                    "decimals": 1,
-                    "opposite": True,
-                    "min": 0,
-                    "max": axis_max,
-                    "tickAmount": axis_ticks,
-                },
-                {
-                    "title": "kW",
-                    "series_name": raw_pv_name,
-                    "show": False,
-                    "min": 0,
-                    "max": axis_max,
-                    "tickAmount": axis_ticks,
-                },
-            ]
+
 
             clipping_total = 0
             if getattr(self.base, "predict_clipped_best", None):
@@ -3069,7 +3051,7 @@ chart.render();
 
             chart_title = "Clipping Analysis (Expected Total Clipping: {:.2f} kWh)".format(clipping_total)
 
-            text += self.render_chart(series_data, "kWh", chart_title, now_str, extra_yaxis=secondary_axis)
+            text += self.render_chart(series_data, "kWh", chart_title, now_str)
         elif chart == "LoadML":
             load_today_history = self.get_history_with_now_attrs("sensor." + self.prefix + "_load_ml_stats", 7)
             # Get historical load data for last 24 hours
