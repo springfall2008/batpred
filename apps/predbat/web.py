@@ -2991,9 +2991,9 @@ chart.render();
 
             # Fetch Actual SOC history
             soc_kw_h0 = {}
-            hist = self.base.soc_kw_h0
-            if hist:
-                for minute in hist:
+            if self.base.soc_kwh_history:
+                hist = self.base.soc_kwh_history
+                for minute in range(0, self.minutes_now, self.plan_interval_minutes):
                     minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
                     stamp = minute_timestamp.strftime(TIME_FORMAT)
                     soc_kw_h0[stamp] = hist.get(self.minutes_now - minute, 0)
