@@ -2985,6 +2985,20 @@ chart.render();
             clipping_limit_effective = getattr(self.base, "clipping_limit_effective", 0)
             inverter_ac_limit_kw = getattr(self.base, "inverter_limit", 0)
 
+            # Fetch Target SOC (Best Plan)
+            soc_kw_best_raw = history_attribute(self.get_history_wrapper(self.prefix + ".soc_kw_best", 2))
+            soc_kw_best = prune_today(soc_kw_best_raw, self.now_utc, self.midnight_utc)
+
+            # Fetch Actual SOC history
+            soc_kw_h0 = {}
+            hist = self.base.soc_kw_h0
+            if hist:
+                for minute in hist:
+                    minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
+                    stamp = minute_timestamp.strftime(TIME_FORMAT)
+                    soc_kw_h0[stamp] = hist.get(self.minutes_now - minute, 0)
+            soc_kw_h0[now_str] = self.base.soc_kw
+
             # Re-fetch PV actuals for overlay
             pv_power_hist = history_attribute(self.get_history_wrapper(self.prefix + ".pv_power", 7, required=False))
             pv_power = prune_today(pv_power_hist, self.now_utc, self.midnight_utc, prune=False)
