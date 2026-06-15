@@ -492,63 +492,64 @@ Growatt has two popular series of inverters, SPA and SPH. Copy the template that
 
 ## Huawei
 
-The discussion ticket is here: <https://github.com/springfall2008/batpred/issues/684>
+Copy the Huawei template over your existing `apps.yaml` and modify all entity IDs, battery capacity and power limits for your own system:
 
-- Please copy the template <https://github.com/springfall2008/batpred/blob/main/templates/huawei.yaml> over the top of your `apps.yaml`, and modify it for your system
+<https://github.com/springfall2008/batpred/blob/main/templates/huawei.yaml>
 
-- Ensure you set **input_number.predbat_set_reserve_min** to the minimum value for your system which may be 12%
+Configure the Huawei inverter operating mode according to your installation. The example setup linked below has been tested using **Maximise self-consumption**.
 
-- Huawei inverters can charge the battery from DC solar and discharge at one power level (e.g. 5kWh), but have a lower limit (e.g. 3kWh) for AC charging.
-  At present Predbat doesn't have the ability to model separate DC and AC charging limits,
-  so battery_rate_max is set to the lower limit in watts (e.g. 3000) in the template `apps.yaml` to ensure that Predbat correctly plans AC charging of the battery at the right rate.
+Set `input_number.predbat_set_reserve_min` to a suitable minimum value for your battery system. This may be 12%, but some installations use a lower reserve.
 
-- However this means Predbat will also limit DC solar charging to this lower limit and to avoid that an automation is used to overwrite the **inverter_limit_charge** during the hours of sunrise and sunset:
+Huawei systems may have different limits for AC grid charging, DC solar charging and battery discharge. Predbat can model these separately:
 
 ```yaml
-alias: Predbat change inverter charge rate at sunrise and sunset
-description: Using predbat_manual_api
-triggers:
-    - trigger: time
-    at:
-      entity_id: sensor.sun_next_rising
-    id: sunrise
-    - trigger: time
-    at:
-      entity_id: sensor.sun_next_setting
-    id: sunset
-conditions: []
-actions:
-    - choose:
-      - conditions:
-          - condition: trigger
-            alias: Sunrise
-            id:
-              - sunrise
-        sequence:
-          - action: select.select_option
-            alias: set inverter charge rate to 5000W at sunrise for maximum DC solar charging
-            target:
-              entity_id:
-                - select.predbat_manual_api
-            data:
-              option: inverter_limit_charge(0)=5000
-      - conditions:
-          - condition: trigger
-            alias: Sunset
-            id:
-              - sunset
-        sequence:
-          - action: select.select_option
-            alias: set inverter charge rate to 1500W at sunset for reduced AC charging rate
-            target:
-              entity_id:
-                - select.predbat_manual_api
-            data:
-              option: inverter_limit_charge(0)=3000
-mode: single
+  inverter_limit:
+  - 11000
+
+  battery_rate_max:
+  - 5000
+
+  inverter_limit_charge:
+  - 5000
+
+  inverter_limit_discharge:
+  - 5000
+
+  inverter_limit_charge_dc:
+  - 5000
 ```
 
-- Set the Huawei inverter work mode to 'TOU' (Time Of Use).
+All values are in watts.
+
+The tested Huawei Solar setup uses:
+
+```yaml
+  charge_start_service:
+    service: huawei_solar.forcible_charge_soc
+    device_id: YOUR_HUAWEI_DEVICE_ID
+    target_soc: "{target_soc}"
+    power: "{power}"
+
+  charge_stop_service:
+    service: huawei_solar.stop_forcible_charge
+    device_id: YOUR_HUAWEI_DEVICE_ID
+
+  discharge_start_service:
+    service: huawei_solar.forcible_discharge_soc
+    device_id: YOUR_HUAWEI_DEVICE_ID
+    target_soc: "{target_soc}"
+    power: "{power}"
+
+  discharge_stop_service:
+    service: huawei_solar.stop_forcible_charge
+    device_id: YOUR_HUAWEI_DEVICE_ID
+```
+
+Start in Monitor or Read Only mode and test all Huawei service calls manually before enabling active control.
+
+A more complete working example, including Home Assistant package sensors, EV charging and Manual API automations, is available here:
+
+<https://github.com/JohanAlvedal/Predbat-setup>
 
 ## Kostal Plenticore
 
