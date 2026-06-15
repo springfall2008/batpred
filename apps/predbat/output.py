@@ -940,6 +940,10 @@ class Output:
             )
 
         # Clipping summary
+        if getattr(self, "clipping_peak_enable", False):
+            clipping_status = getattr(self, "clipping_status", "No clipping forecast.")
+            sentence += "- Clipping status: {}\n".format(clipping_status)
+
         predict_clipped_best = getattr(self, "predict_clipped_best", {})
         if predict_clipped_best:
             clipping_total = predict_clipped_best.get(max(predict_clipped_best.keys()), 0.0)
