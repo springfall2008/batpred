@@ -8,7 +8,7 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-from utils import dp2, dp4
+from utils import dp2, dp4, MinuteArray
 from const import PREDICT_STEP
 
 
@@ -330,6 +330,47 @@ def test_previous_days_modal_filter(my_predbat):
         failed = True
     else:
         print("Partial day (<16h gaps) correctly filled from {} kWh to {} kWh (proportional)".format(dp2(initial_day2_total), dp2(day2_filled_total)))
+
+    # Test 6: MinuteArray with a gap whose end falls beyond the array boundary
+    # Regression test for IndexError: array assignment index out of range.
+    # The gap-detection loop checks minute_previous + PREDICT_STEP beyond max_minute,
+    # so a gap near the end of the array gets an end index that exceeds len(array).
+    print("Test 6: MinuteArray gap whose end overshoots array boundary (regression)")
+
+    my_predbat.days_previous = [1, 2]
+    my_predbat.days_previous_weight = [1.0, 1.0]
+    my_predbat.load_minutes_age = 2
+    my_predbat.load_filter_modal = False
+
+    # Build 2 days of data as a plain dict, with a gap at the very end of day 2
+    # (i.e. near index max(data.keys())) so the gap-detection look-ahead lands
+    # one PREDICT_STEP beyond the array boundary.
+    dict_data = {}
+    day_kwh = 20.0
+    step_inc = day_kwh / (24 * 60)
+    for day in range(1, 3):
+        running_total = 0
+        for minute in range(0, 24 * 60):
+            running_total += step_inc
+            dict_data[day * 24 * 60 - minute] = dp4(running_total)
+
+    # Erase the last PREDICT_STEP worth of entries in day 2 to create a trailing gap
+    # that the look-ahead will extend one step beyond the array end.
+    max_key = max(dict_data.keys())
+    for k in range(max_key - PREDICT_STEP * 10, max_key + 1):
+        dict_data.pop(k, None)
+
+    # Convert to MinuteArray sized exactly to the remaining max key + 2,
+    # mirroring what minute_data_load does (pad=False path).
+    size = max(dict_data.keys()) + 2
+    minute_array = MinuteArray(dict_data, size)
+
+    try:
+        my_predbat.previous_days_modal_filter(minute_array)
+        print("MinuteArray boundary gap filled without error")
+    except IndexError as exc:
+        print("ERROR: IndexError raised during MinuteArray gap filling: {}".format(exc))
+        failed = True
 
     # Restore original get_arg method
     my_predbat.get_arg = original_get_arg
