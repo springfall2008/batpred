@@ -58,7 +58,7 @@ class MockGECloudDirect(GECloudDirect):
         self.gateway_device = None
         self._now_utc_exact = datetime.now(timezone.utc)
         self.settings_from_cache = False
-        self.default_options_done = False
+        self.default_options_stamp = None
         self._read_only = False
 
         class MockHAInterface:
@@ -239,6 +239,7 @@ def test_ge_cloud(my_predbat=None):
         ("enable_defaults", _test_enable_default_options, "Enable default options"),
         ("enable_defaults_read_only", _test_run_read_only_skips_reset, "Enable defaults skipped in read-only mode"),
         ("enable_defaults_after_read_only", _test_run_enables_reset_after_read_only, "Enable defaults on first non-read-only run"),
+        ("enable_defaults_24h", _test_run_enables_reset_after_24h, "Enable defaults re-runs after 24 hours"),
         ("download_single", _test_download_ge_data_single_day, "Download single day"),
         ("download_multi", _test_download_ge_data_multi_day, "Download multi-day"),
         ("download_pagination", _test_download_ge_data_pagination, "Download pagination"),
@@ -3646,8 +3647,8 @@ def _test_run_read_only_skips_reset(my_predbat):
             print("ERROR: enable_default_options should NOT be called in read-only mode, got calls for: {}".format(enable_default_calls))
             return 1
 
-        if ge_cloud.default_options_done:
-            print("ERROR: default_options_done should remain False when skipped due to read-only mode")
+        if ge_cloud.default_options_stamp is not None:
+            print("ERROR: default_options_stamp should remain None when skipped due to read-only mode")
             return 1
 
         return 0
@@ -3675,8 +3676,8 @@ def _test_run_enables_reset_after_read_only(my_predbat):
         if enable_default_calls:
             print("ERROR: enable_default_options should NOT be called in read-only mode, got: {}".format(enable_default_calls))
             return 1
-        if ge_cloud.default_options_done:
-            print("ERROR: default_options_done should be False after read-only first run")
+        if ge_cloud.default_options_stamp is not None:
+            print("ERROR: default_options_stamp should be None after read-only first run")
             return 1
 
         # Disable read-only — next 10-minute settings tick should trigger the reset
@@ -3692,15 +3693,62 @@ def _test_run_enables_reset_after_read_only(my_predbat):
         if enable_default_calls != ["inv001"]:
             print("ERROR: Expected enable_default_options called for inv001, got: {}".format(enable_default_calls))
             return 1
-        if not ge_cloud.default_options_done:
-            print("ERROR: default_options_done should be True after reset ran")
+        if ge_cloud.default_options_stamp is None:
+            print("ERROR: default_options_stamp should be set after reset ran")
             return 1
 
-        # Verify the reset does not run again on subsequent ticks
+        # Verify the reset does not run again on subsequent ticks within 24 hours
         enable_default_calls.clear()
         await ge_cloud.run(seconds=1200, first=False)
         if enable_default_calls:
-            print("ERROR: enable_default_options should not be called again after default_options_done=True")
+            print("ERROR: enable_default_options should not be called again within 24 hours")
+            return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_run_enables_reset_after_24h(my_predbat):
+    """enable_default_options re-runs after 24 hours have elapsed"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.automatic = False
+        ge_cloud._read_only = False
+
+        enable_default_calls = []
+        _make_run_mocks(ge_cloud, enable_default_calls)
+
+        # First run — should call enable_default_options
+        result = await ge_cloud.run(seconds=0, first=True)
+        if not result:
+            print("ERROR: run() should return True on first run")
+            return 1
+        if not enable_default_calls:
+            print("ERROR: enable_default_options should be called on first run")
+            return 1
+
+        # Subsequent run within 24 hours — should NOT call again
+        enable_default_calls.clear()
+        ge_cloud._now_utc_exact = ge_cloud.default_options_stamp + timedelta(hours=23, minutes=59)
+        await ge_cloud.run(seconds=600, first=False)
+        if enable_default_calls:
+            print("ERROR: enable_default_options should not be called again within 24 hours")
+            return 1
+
+        # Run after 24 hours have elapsed — should call again
+        enable_default_calls.clear()
+        ge_cloud._now_utc_exact = ge_cloud.default_options_stamp + timedelta(hours=24)
+        result = await ge_cloud.run(seconds=1200, first=False)
+        if not result:
+            print("ERROR: run() should return True on 24h run")
+            return 1
+        if not enable_default_calls:
+            print("ERROR: enable_default_options should be called again after 24 hours")
+            return 1
+        if enable_default_calls != ["inv001"]:
+            print("ERROR: Expected enable_default_options called for inv001, got: {}".format(enable_default_calls))
             return 1
 
         return 0
