@@ -971,7 +971,7 @@ class Plan:
             )
             
             # Auto-Tuner: Always runs to gather data and recommend a factor
-            auto_amp = 1.0
+            auto_amp = getattr(self, "clipping_peak_amplification", 1.0)
             import os
             import json
             auto_tune_file = os.path.join(self.config_root, "clipping_auto_tune.json")
