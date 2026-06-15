@@ -1660,6 +1660,77 @@ def test_time_entity_hour_write(test_name, ha, inv, dummy_rest, direction, new_s
     return failed
 
 
+def test_input_datetime_charge_window(test_name, ha, inv, dummy_rest, direction, new_start, new_end):
+    """
+    Regression test for issue #4048: when charge_start_time / discharge_start_time are
+    input_datetime entities, write_and_poll_option must call input_datetime/set_datetime
+    (not the non-existent input_datetime/set_value service).
+    """
+    failed = False
+    print("Test: {} direction={}".format(test_name, direction))
+
+    inv.rest_data = None
+    inv.inv_charge_time_format = "H M"
+
+    new_start_ts = datetime.strptime(new_start, "%H:%M:%S")
+    new_end_ts = datetime.strptime(new_end, "%H:%M:%S")
+
+    if direction == "charge":
+        ha.dummy_items["input_datetime.charge_start_time"] = "00:00:00"
+        ha.dummy_items["input_datetime.charge_end_time"] = "00:00:00"
+        ha.dummy_items["switch.scheduled_charge_enable"] = "off"
+        ha.dummy_items["switch.inverter_button"] = "off"
+
+        inv.base.args["charge_start_time"] = "input_datetime.charge_start_time"
+        inv.base.args["charge_end_time"] = "input_datetime.charge_end_time"
+        inv.base.args.pop("charge_start_hour", None)
+        inv.base.args.pop("charge_end_hour", None)
+        inv.base.args.pop("charge_start_minute", None)
+        inv.base.args.pop("charge_end_minute", None)
+
+        try:
+            inv.adjust_charge_window(new_start_ts, new_end_ts, inv.base.minutes_now)
+        except TypeError as e:
+            print("ERROR: TypeError raised: {}".format(e))
+            return True
+
+        if ha.dummy_items.get("input_datetime.charge_start_time") != new_start:
+            print("ERROR: charge_start_time should be {} got {}".format(new_start, ha.dummy_items.get("input_datetime.charge_start_time")))
+            failed = True
+        if ha.dummy_items.get("input_datetime.charge_end_time") != new_end:
+            print("ERROR: charge_end_time should be {} got {}".format(new_end, ha.dummy_items.get("input_datetime.charge_end_time")))
+            failed = True
+    else:
+        ha.dummy_items["input_datetime.discharge_start_time"] = "00:00:00"
+        ha.dummy_items["input_datetime.discharge_end_time"] = "00:00:00"
+        ha.dummy_items["sensor.predbat_GE_0_scheduled_discharge_enable"] = "off"
+        ha.dummy_items["number.discharge_target_soc"] = inv.reserve_percent
+        ha.dummy_items["select.inverter_mode"] = "Eco"
+        ha.dummy_items["switch.inverter_button"] = "off"
+
+        inv.base.args["discharge_start_time"] = "input_datetime.discharge_start_time"
+        inv.base.args["discharge_end_time"] = "input_datetime.discharge_end_time"
+        inv.base.args.pop("discharge_start_hour", None)
+        inv.base.args.pop("discharge_end_hour", None)
+        inv.base.args.pop("discharge_start_minute", None)
+        inv.base.args.pop("discharge_end_minute", None)
+
+        try:
+            inv.adjust_force_export(True, new_start_ts, new_end_ts)
+        except TypeError as e:
+            print("ERROR: TypeError raised: {}".format(e))
+            return True
+
+        if ha.dummy_items.get("input_datetime.discharge_start_time") != new_start:
+            print("ERROR: discharge_start_time should be {} got {}".format(new_start, ha.dummy_items.get("input_datetime.discharge_start_time")))
+            failed = True
+        if ha.dummy_items.get("input_datetime.discharge_end_time") != new_end:
+            print("ERROR: discharge_end_time should be {} got {}".format(new_end, ha.dummy_items.get("input_datetime.discharge_end_time")))
+            failed = True
+
+    return failed
+
+
 def test_rest_battery_capacity_fallback(test_name, my_predbat):
     """
     Verify that when V3 REST data omits Battery_Capacity_kWh and battery_nominal_capacity,
@@ -2491,6 +2562,14 @@ charge_start_service:
     if failed:
         return failed
     failed |= test_time_entity_hour_write("time_entity_charge_hour2", ha, inv, dummy_rest, "charge", "23:00:00", "23:59:00")
+    if failed:
+        return failed
+
+    # Regression tests for issue #4048: input_datetime entities must use set_datetime not set_value
+    failed |= test_input_datetime_charge_window("input_datetime_charge1", ha, inv, dummy_rest, "charge", "12:30:00", "16:00:00")
+    if failed:
+        return failed
+    failed |= test_input_datetime_charge_window("input_datetime_discharge1", ha, inv, dummy_rest, "discharge", "22:00:00", "23:59:00")
     if failed:
         return failed
 

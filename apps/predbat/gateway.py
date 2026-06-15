@@ -206,6 +206,9 @@ class GatewayMQTT(ComponentBase):
         # Track which inverter serials have received an inverter_reset command
         self._inverter_reset_done = set()
 
+        # Set once the first MQTT connection attempt has completed (success or failure)
+        self._first_connection_attempted = False
+
         # Register for plan execution hook so we receive plan updates generically
         if hasattr(self.base, "register_hook"):
             self.base.register_hook("on_plan_executed", self._on_plan_executed)
@@ -321,6 +324,13 @@ class GatewayMQTT(ComponentBase):
             # Start MQTT listener as a background task
             self._mqtt_task = asyncio.ensure_future(self._mqtt_loop())
             self.log("Info: GatewayMQTT: MQTT listener task started")
+            # Wait up to a minute for first connection attempt before declaring started
+            for _ in range(60 * 2):
+                if self._first_connection_attempted or self.api_stop:
+                    break
+                await asyncio.sleep(0.5)
+            else:
+                self.log("Warn: GatewayMQTT: First connection attempt not yet complete, continuing startup")
             return True
 
         # Housekeeping on subsequent runs
@@ -392,6 +402,7 @@ class GatewayMQTT(ComponentBase):
                 ) as client:
                     self._mqtt_client = client
                     self._mqtt_connected = True
+                    self._first_connection_attempted = True
                     backoff = 5  # Reset backoff on successful connection
                     self.log(f"Info: GatewayMQTT: Connected to {self.mqtt_host}:{self.mqtt_port}")
 
@@ -413,6 +424,7 @@ class GatewayMQTT(ComponentBase):
                 self.log(f"Warn: GatewayMQTT: MQTT connection error: {e}")
                 self._mqtt_connected = False
                 self._mqtt_client = None
+                self._first_connection_attempted = True
 
                 if self.api_stop:
                     break

@@ -19,7 +19,7 @@ dictionaries for use by the prediction engine.
 """
 
 from datetime import datetime, timedelta
-from utils import minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative
+from utils import minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative, MinuteArray
 from const import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_CONTROL_SOC, PREDBAT_MODE_CONTROL_CHARGEDISCHARGE, PREDBAT_MODE_CONTROL_CHARGE, PREDBAT_MODE_MONITOR
 from predbat_metrics import metrics
 from futurerate import FutureRate
@@ -308,7 +308,7 @@ class Fetch:
 
                 amount_to_fill = 0
                 for minute in range(period_end, period_start, -1):
-                    power = load_power_data.get(minute, 0)
+                    power = max(load_power_data.get(minute, 0), 0)
                     energy = power / 60.0 / 1000.0
                     amount_to_fill += energy
                     new_load_minutes[minute] = new_load_minutes.get(minute, 0) + amount_to_fill
@@ -355,7 +355,7 @@ class Fetch:
                 running_total = load_at_start
                 for minute in range(period_start, period_end + 1):
                     new_load_minutes[minute] = dp4(running_total)
-                    power = load_power_data.get(minute, 0)
+                    power = max(load_power_data.get(minute, 0), 0)
                     energy_decrement = (power / 60.0 / 1000.0) * scale_factor
                     running_total -= energy_decrement
             elif load_total > 0:
@@ -457,6 +457,7 @@ class Fetch:
                 self.log("Gap starting at {} ({} minutes) for {} minutes".format(gap_start_timestamp.strftime(TIME_FORMAT), gap_start, gap_length))
 
         # Do the filling
+        len_data = len(data) if isinstance(data, MinuteArray) else 99999999
         for gap in gap_list:
             gap_start_minute_previous = gap[0]
             gap_minutes = gap[1]
@@ -467,7 +468,7 @@ class Fetch:
             # gap_start_minute_previous is the highest index (earliest in gap)
             # We fill from there down to the end of the gap
 
-            minute_previous = gap_end_minute_previous
+            minute_previous = min(gap_end_minute_previous, len_data - 1)
             gap_day = None
             while minute_previous > gap_start_minute_previous and minute_previous >= 0:
                 # Change of day?
@@ -603,6 +604,9 @@ class Fetch:
                 else:
                     self.log("Warn: Unable to fetch history for {}".format(entity_id))
 
+        if import_today and smoothing:
+            size = (max_days_previous * 24 * 60 + 2) if pad else (max(import_today.keys()) + 2)
+            return MinuteArray(import_today, size)
         return import_today
 
     def minute_data_load(self, now_utc, entity_name, max_days_previous, load_scaling=1.0, required_unit=None, interpolate=False, pad=True, clean_increment=True):
@@ -668,6 +672,9 @@ class Fetch:
 
         if age_days is None:
             age_days = 0
+        if load_minutes:
+            size = (max_days_previous * 24 * 60 + 2) if pad else (max(load_minutes.keys()) + 2)
+            load_minutes = MinuteArray(load_minutes, size)
         return load_minutes, age_days
 
     def fetch_sensor_data(self, save=True):
@@ -2178,7 +2185,7 @@ class Fetch:
         self.inverter_loss = 1.0 - self.get_arg("inverter_loss")
         self.inverter_hybrid = self.get_arg("inverter_hybrid")
         self.pv_ac_limit = self.get_arg("pv_ac_limit", 0.0) / MINUTE_WATT
-        self.base_load = self.get_arg("base_load", 0) / 1000.0
+        self.base_load = self.get_arg("base_load", 100) / 1000.0
 
         # Charge curve
         if self.args.get("battery_charge_power_curve", "") == "auto":

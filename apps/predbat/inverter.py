@@ -2038,7 +2038,7 @@ class Inverter:
             return False
         entity_base = entity_id.split(".")[0]
 
-        if entity_base not in ["input_select", "select", "time"]:
+        if entity_base not in ["input_select", "select", "time", "input_datetime"]:
             return self.write_and_poll_value(name, entity_id, new_value, ignore_fail=ignore_fail)
 
         old_value = self.base.get_state_wrapper(entity_id, refresh=True)
@@ -2055,6 +2055,9 @@ class Inverter:
             if entity_base == "time":
                 service = entity_base + "/set_value"
                 self.base.call_service_wrapper(service, time=new_value, entity_id=entity_id)
+            elif entity_base == "input_datetime":
+                # input_datetime uses set_datetime (not set_value) with a time= parameter for time-only entities
+                self.base.call_service_wrapper("input_datetime/set_datetime", time=new_value, entity_id=entity_id)
             else:
                 service = entity_base + "/select_option"
                 self.base.call_service_wrapper(service, option=new_value, entity_id=entity_id)

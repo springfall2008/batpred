@@ -707,32 +707,33 @@ class Execute:
         """
         # Find the inverters
         self.num_inverters = int(self.get_arg("num_inverters", 1))
-        self.inverter_limit = 0.0
-        self.export_limit = 0.0
         self.charge_window = []
         self.export_window = []
         self.export_limits = []
-        self.current_charge_limit_kwh = 0.0
-        self.soc_kw = 0.0
-        self.soc_max = 0.0
-        self.reserve = 0.0
-        self.reserve_percent = 0.0
-        self.reserve_current = 0.0
-        self.reserve_current_percent = 0.0
-        self.battery_rate_max_charge = 0.0
-        self.battery_rate_max_charge_dc = 0.0
-        self.battery_rate_max_discharge = 0.0
-        self.battery_rate_max_export = 0.0
-        self.battery_rate_min = 0
-        self.charge_rate_now = 0.0
-        self.discharge_rate_now = 0.0
-        self.pv_power = 0
-        self.load_power = 0
-        self.battery_power = 0
-        self.battery_temperature = 0
-        self.grid_power = 0
         self.inverter_data_last_fetch = datetime.now()
         found_first = False
+
+        # Accumulate inverter totals into locals; only write to self.* once the loop
+        # is complete so the web server never observes a partial (mid-loop) sum.
+        current_charge_limit_kwh = 0.0
+        soc_kw = 0.0
+        soc_max = 0.0
+        reserve = 0.0
+        reserve_current = 0.0
+        battery_rate_max_charge = 0.0
+        battery_rate_max_charge_dc = 0.0
+        battery_rate_max_discharge = 0.0
+        battery_rate_max_export = 0.0
+        battery_rate_min = 0
+        charge_rate_now = 0.0
+        discharge_rate_now = 0.0
+        pv_power = 0
+        load_power = 0
+        battery_power = 0
+        battery_temperature = 0
+        grid_power = 0
+        inverter_limit = 0.0
+        export_limit = 0.0
 
         # Create inverters list if needed
         if create or (not self.inverters) or (len(self.inverters) != self.num_inverters):
@@ -798,26 +799,47 @@ class Execute:
                     self.set_reserve_enable = False
                     self.set_reserve_hold = False
                     self.set_discharge_during_charge = True
-            self.current_charge_limit_kwh += dp2(inverter.current_charge_limit * inverter.soc_max / 100.0)
-            self.soc_max += inverter.soc_max
-            self.soc_kw += inverter.soc_kw
-            self.reserve += inverter.reserve
-            self.reserve_current += inverter.reserve_current
-            self.battery_rate_max_charge += inverter.battery_rate_max_charge
-            self.battery_rate_max_charge_dc += inverter.battery_rate_max_charge_dc
-            self.battery_rate_max_discharge += inverter.battery_rate_max_discharge
-            self.battery_rate_max_export += inverter.battery_rate_max_export
-            self.charge_rate_now += inverter.charge_rate_now
-            self.discharge_rate_now += inverter.discharge_rate_now
-            self.battery_rate_min += inverter.battery_rate_min
-            self.inverter_limit += inverter.inverter_limit
-            self.export_limit += inverter.export_limit
-            self.pv_power += inverter.pv_power
-            self.load_power += inverter.load_power
-            self.battery_power += inverter.battery_power
-            self.grid_power += inverter.grid_power
-            self.current_charge_limit = calc_percent_limit(self.current_charge_limit_kwh, self.soc_max)
-            self.battery_temperature += inverter.battery_temperature
+            current_charge_limit_kwh += dp2(inverter.current_charge_limit * inverter.soc_max / 100.0)
+            soc_max += inverter.soc_max
+            soc_kw += inverter.soc_kw
+            reserve += inverter.reserve
+            reserve_current += inverter.reserve_current
+            battery_rate_max_charge += inverter.battery_rate_max_charge
+            battery_rate_max_charge_dc += inverter.battery_rate_max_charge_dc
+            battery_rate_max_discharge += inverter.battery_rate_max_discharge
+            battery_rate_max_export += inverter.battery_rate_max_export
+            charge_rate_now += inverter.charge_rate_now
+            discharge_rate_now += inverter.discharge_rate_now
+            battery_rate_min += inverter.battery_rate_min
+            inverter_limit += inverter.inverter_limit
+            export_limit += inverter.export_limit
+            pv_power += inverter.pv_power
+            load_power += inverter.load_power
+            battery_power += inverter.battery_power
+            grid_power += inverter.grid_power
+            battery_temperature += inverter.battery_temperature
+
+        # Atomically publish all accumulated totals so the web server never reads partial sums
+        self.current_charge_limit_kwh = current_charge_limit_kwh
+        self.soc_max = dp3(soc_max)
+        self.soc_kw = dp3(soc_kw)
+        self.reserve = dp3(reserve)
+        self.reserve_current = dp3(reserve_current)
+        self.battery_rate_max_charge = battery_rate_max_charge
+        self.battery_rate_max_charge_dc = battery_rate_max_charge_dc
+        self.battery_rate_max_discharge = battery_rate_max_discharge
+        self.battery_rate_max_export = battery_rate_max_export
+        self.battery_rate_min = battery_rate_min
+        self.charge_rate_now = charge_rate_now
+        self.discharge_rate_now = discharge_rate_now
+        self.inverter_limit = inverter_limit
+        self.export_limit = export_limit
+        self.pv_power = pv_power
+        self.load_power = load_power
+        self.battery_power = battery_power
+        self.grid_power = grid_power
+        self.battery_temperature = int(dp0(battery_temperature / self.num_inverters))
+        self.current_charge_limit = calc_percent_limit(self.current_charge_limit_kwh, self.soc_max)
 
         # Additional PVs without inverters
         pv_power_sensors = self.get_arg("pv_power", [], indirect=False)
@@ -830,16 +852,8 @@ class Execute:
                     except (TypeError, ValueError):
                         self.log("Warn: Invalid PV power value for sensor {}".format(pv_power_sensors[idx]))
 
-        # Work out battery temperature
-        self.battery_temperature = int(dp0(self.battery_temperature / self.num_inverters))
-
-        # Remove extra decimals
-        self.soc_max = dp3(self.soc_max)
-        self.soc_kw = dp3(self.soc_kw)
         self.soc_percent = calc_percent_limit(self.soc_kw, self.soc_max)
-        self.reserve = dp3(self.reserve)
         self.reserve_percent = calc_percent_limit(self.reserve, self.soc_max)
-        self.reserve_current = dp3(self.reserve_current)
         self.reserve_current_percent = calc_percent_limit(self.reserve_current, self.soc_max)
 
         if self.debug_enable:

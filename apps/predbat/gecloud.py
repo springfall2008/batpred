@@ -248,7 +248,7 @@ class GECloudDirect(ComponentBase):
         self.evc_devices_dict = {}
         self.evc_device_list = []
         self.settings_from_cache = False
-        self.default_options_done = False
+        self.default_options_stamp = None
 
         # API request metrics for monitoring
         self.requests_total = 0
@@ -1093,8 +1093,10 @@ class GECloudDirect(ComponentBase):
                 if self.automatic:
                     await self.async_automatic_config(self.devices_dict)
 
-            if not self.default_options_done and self.get_state_wrapper(f"switch.{self.prefix}_set_read_only", default="off") != "on":
-                self.default_options_done = True
+            now_utc = self.now_utc_exact
+            options_due = self.default_options_stamp is None or (now_utc - self.default_options_stamp) >= timedelta(hours=24)
+            if options_due and self.get_state_wrapper(f"switch.{self.prefix}_set_read_only", default="off") != "on":
+                self.default_options_stamp = now_utc
                 for device in self.device_list:
                     await self.enable_default_options(device, self.settings[device])
 
