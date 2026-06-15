@@ -524,25 +524,25 @@ All values are in watts.
 The tested Huawei Solar setup uses:
 
 ```yaml
-charge_start_service:
-  service: huawei_solar.forcible_charge_soc
-  device_id: "YOUR_HUAWEI_DEVICE_ID"
-  target_soc: "{target_soc}"
-  power: "{power}"
+  charge_start_service:
+    service: huawei_solar.forcible_charge_soc
+    device_id: YOUR_HUAWEI_DEVICE_ID
+    target_soc: "{target_soc}"
+    power: "{power}"
 
-charge_stop_service:
-  service: huawei_solar.stop_forcible_charge
-  device_id: "YOUR_HUAWEI_DEVICE_ID"
+  charge_stop_service:
+    service: huawei_solar.stop_forcible_charge
+    device_id: YOUR_HUAWEI_DEVICE_ID
 
-discharge_start_service:
-  service: huawei_solar.forcible_discharge_soc
-  device_id: "YOUR_HUAWEI_DEVICE_ID"
-  target_soc: "{target_soc}"
-  power: "{power}"
+  discharge_start_service:
+    service: huawei_solar.forcible_discharge_soc
+    device_id: YOUR_HUAWEI_DEVICE_ID
+    target_soc: "{target_soc}"
+    power: "{power}"
 
-discharge_stop_service:
-  service: huawei_solar.stop_forcible_charge
-  device_id: "YOUR_HUAWEI_DEVICE_ID"
+  discharge_stop_service:
+    service: huawei_solar.stop_forcible_charge
+    device_id: YOUR_HUAWEI_DEVICE_ID
 ```
 
 Start in Monitor or Read Only mode and test all Huawei service calls manually before enabling active control.
