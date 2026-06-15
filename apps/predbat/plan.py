@@ -990,7 +990,7 @@ class Plan:
             if current_day != last_tune_day:
                 # Retrieve last 24h of pv_power
                 days = 1
-                pv_today_hist = self.base.minute_data_import_export(days, self.now_utc, "pv_today", required_unit="kWh", pad=False)
+                pv_today_hist = self.minute_data_import_export(days, self.now_utc, "pv_today", required_unit="kWh", pad=False)
                 max_pv_power = 0.0
                 if pv_today_hist:
                     pv_today_hist_max_minute = max(pv_today_hist.keys())
