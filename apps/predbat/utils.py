@@ -1144,10 +1144,7 @@ def find_charge_rate(
     # Real achieved max rate
     max_rate_real = get_charge_rate_curve_cached(round(soc, 1), max_rate, soc_max, max_rate, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple) * battery_rate_max_scaling
 
-    min_battery_rate = 400
-
-    if set_charge_low_power:
-        minutes_left = window["end"] - minutes_now - margin
+    min_battery_rate = max(400, int(round(battery_rate_min * MINUTE_WATT)))
         abs_minutes_left = window["end"] - minutes_now
 
         # If we don't have enough minutes left go to max
