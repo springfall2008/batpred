@@ -1564,7 +1564,7 @@ class WebInterface(ComponentBase):
         text += "  }\n"
         return text
 
-    def render_chart(self, series_data, yaxis_name, chart_name, now_str, tagname="chart", daily_chart=True, extra_yaxis=None):
+    def render_chart(self, series_data, yaxis_name, chart_name, now_str, tagname="chart", daily_chart=True, extra_yaxis=None, xaxis_annotations=None, yaxis_annotations=None):
         """
         Render a chart
         """
@@ -1744,6 +1744,22 @@ var options = {
         text += "  },\n"
         text += "  annotations: {\n"
         text += "   xaxis: [\n"
+        if xaxis_annotations:
+            for item in xaxis_annotations:
+                text += "    {\n"
+                text += "       x: new Date('{}').getTime(),\n".format(item.get("x", ""))
+                text += "       borderColor: '{}',\n".format(item.get("borderColor", "#000000"))
+                text += "       strokeDashArray: {},\n".format(item.get("strokeDashArray", 0))
+                text += "       textAnchor: '{}',\n".format(item.get("textAnchor", "middle"))
+                text += "       label: {\n"
+                text += "          text: '{}',\n".format(item.get("text", ""))
+                text += "          orientation: '{}',\n".format(item.get("orientation", "horizontal"))
+                text += "          style: {\n"
+                text += "             color: '{}',\n".format(item.get("textColor", "#fff"))
+                text += "             background: '{}',\n".format(item.get("backgroundColor", "#775DD0"))
+                text += "          }\n"
+                text += "       }\n"
+                text += "    },\n"
         text += "    {\n"
         text += "       x: new Date('{}').getTime(),\n".format(now_str)
         text += "       borderColor: '#775DD0',\n"
@@ -1760,6 +1776,22 @@ var options = {
         text += "          text: 'midnight'\n"
         text += "       }\n"
         text += "    }\n"
+        text += "   ],\n"
+        text += "   yaxis: [\n"
+        if yaxis_annotations:
+            for item in yaxis_annotations:
+                text += "    {\n"
+                text += "       y: {},\n".format(item.get("y", 0))
+                text += "       borderColor: '{}',\n".format(item.get("borderColor", "#000000"))
+                text += "       strokeDashArray: {},\n".format(item.get("strokeDashArray", 0))
+                text += "       label: {\n"
+                text += "          text: '{}',\n".format(item.get("text", ""))
+                text += "          style: {\n"
+                text += "             color: '{}',\n".format(item.get("textColor", "#fff"))
+                text += "             background: '{}',\n".format(item.get("backgroundColor", "#FF0000"))
+                text += "          }\n"
+                text += "       }\n"
+                text += "    },\n"
         text += "   ]\n"
         text += "  }\n"
         text += "}\n"
@@ -3012,13 +3044,21 @@ chart.render();
 
             # Data series parsing for per-minute data
             step_size = getattr(self.base, "plan_interval_minutes", 30)
-            clipping_forecast_series = {}
-            if getattr(self.base, "predict_clipped_best", None):
-                for minute, kwh in self.base.predict_clipped_best.items():
+            clipping_remaining_series = {}
+            if getattr(self.base, "predict_clipping_remaining_best", None):
+                for minute, kwh in self.base.predict_clipping_remaining_best.items():
                     if minute % step_size == 0:
                         minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
                         stamp = minute_timestamp.strftime(TIME_FORMAT)
-                        clipping_forecast_series[stamp] = round(kwh, 2)
+                        clipping_remaining_series[stamp] = round(kwh, 2)
+                        
+            clipping_ceiling_series = {}
+            if getattr(self.base, "predict_clipping_ceiling_best", None):
+                for minute, kwh in self.base.predict_clipping_ceiling_best.items():
+                    if minute % step_size == 0:
+                        minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
+                        stamp = minute_timestamp.strftime(TIME_FORMAT)
+                        clipping_ceiling_series[stamp] = round(kwh, 2)
 
             # Raw PV forecast (ClearSky if used, else regular)
             raw_pv_series = {}
@@ -3036,14 +3076,47 @@ chart.render();
                         raw_pv_series[stamp] = round(kw, 2)
 
             series_data = [
+                {"name": "Clipping Remaining", "data": clipping_remaining_series, "opacity": "0.5", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#1877f2", "unit": "kWh"},
                 {"name": "Actual SOC", "data": soc_kw_h0, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "color": "#3291a8", "unit": "kWh"},
                 {"name": "Target SOC", "data": soc_kw_best, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": "#9b23eb", "unit": "kWh"},
+                {"name": "Clipping Ceiling", "data": clipping_ceiling_series, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline", "color": "#eb3434", "unit": "kWh"},
                 {"name": "PV Power Actual", "data": pv_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#f5c43d", "unit": "kW"},
-                {"name": raw_pv_name, "data": raw_pv_series, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#a8a8a7", "unit": "kW"},
-                {"name": "Forecast Clipping Total", "data": clipping_forecast_series, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#FF0000", "unit": "kWh"},
+                {"name": "Clipping Forecast ({})".format(raw_pv_name), "data": raw_pv_series, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#a8a8a7", "unit": "kW"},
             ]
 
-
+            yaxis_annotations = []
+            if inverter_ac_limit_kw > 0:
+                yaxis_annotations.append({
+                    "y": inverter_ac_limit_kw,
+                    "borderColor": "#FF0000",
+                    "strokeDashArray": 4,
+                    "text": "Inverter AC Capacity ({} kW)".format(inverter_ac_limit_kw),
+                    "textColor": "#fff",
+                    "backgroundColor": "#FF0000"
+                })
+            
+            xaxis_annotations = []
+            buffer_start = getattr(self.base, "clipping_buffer_start", None)
+            buffer_end = getattr(self.base, "clipping_buffer_end", None)
+            if getattr(self.base, "clipping_buffer_kwh", 0) > 0 and buffer_start is not None and buffer_end is not None:
+                start_stamp = (self.midnight_utc + timedelta(minutes=buffer_start)).strftime(TIME_FORMAT)
+                end_stamp = (self.midnight_utc + timedelta(minutes=buffer_end)).strftime(TIME_FORMAT)
+                xaxis_annotations.append({
+                    "x": start_stamp,
+                    "borderColor": "#ffa500",
+                    "strokeDashArray": 4,
+                    "text": "Today Buffer Start",
+                    "orientation": "vertical",
+                    "backgroundColor": "#ffa500"
+                })
+                xaxis_annotations.append({
+                    "x": end_stamp,
+                    "borderColor": "#ffa500",
+                    "strokeDashArray": 4,
+                    "text": "Today Buffer End",
+                    "orientation": "vertical",
+                    "backgroundColor": "#ffa500"
+                })
 
             clipping_total = 0
             if getattr(self.base, "predict_clipped_best", None):
@@ -3051,7 +3124,7 @@ chart.render();
 
             chart_title = "Clipping Analysis (Expected Total Clipping: {:.2f} kWh)".format(clipping_total)
 
-            text += self.render_chart(series_data, "kWh", chart_title, now_str)
+            text += self.render_chart(series_data, "kWh", chart_title, now_str, xaxis_annotations=xaxis_annotations, yaxis_annotations=yaxis_annotations)
         elif chart == "LoadML":
             load_today_history = self.get_history_with_now_attrs("sensor." + self.prefix + "_load_ml_stats", 7)
             # Get historical load data for last 24 hours

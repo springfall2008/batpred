@@ -3976,6 +3976,47 @@ class Plan:
                     clipping_total = self.predict_clipped_best.get(keys[-1], 0.0)
                     clipping_tomorrow = max(0.0, clipping_total - clipping_today)
                     
+                # Generate Clipping Visual Series (Remaining and Ceiling) for web.py charts
+                predict_clipping_remaining_best = {}
+                predict_clipping_ceiling_best = {}
+                
+                clipping_limit_step = self.clipping_limit * (self.minutes_now_step / 60)
+                pv_forecast_peak_step = getattr(self, 'pv_forecast_minute_stepCS', getattr(self, 'pv_forecast_minute_step90', None))
+                
+                manual_buffer_active = False
+                if self.clipping_buffer_kwh > 0:
+                    if self.clipping_buffer_start is None or self.clipping_buffer_end is None:
+                        manual_buffer_active = True
+                
+                cumulative_clip = 0.0
+                max_minute = self.forecast_minutes
+                
+                buffer_start = self.clipping_buffer_start if self.clipping_buffer_start else 0
+                buffer_end = self.clipping_buffer_end if self.clipping_buffer_end else 24 * 60
+                
+                for minute in range(max_minute, -self.minutes_now_step, -self.minutes_now_step):
+                    remaining = 0.0
+                    minute_absolute = minute + self.minutes_now
+                    
+                    if manual_buffer_active or (self.clipping_buffer_kwh > 0 and buffer_start <= minute_absolute < buffer_end):
+                        # Calculate linear decay for manual mode visual graph
+                        if buffer_end > buffer_start:
+                            progress = max(0.0, min(1.0, (minute_absolute - buffer_start) / (buffer_end - buffer_start)))
+                            remaining = self.clipping_buffer_kwh * (1.0 - progress)
+                        else:
+                            remaining = self.clipping_buffer_kwh
+                    elif pv_forecast_peak_step and clipping_limit_step > 0 and self.clipping_cost_weight > 0:
+                        peak_pv = pv_forecast_peak_step.get(minute, 0)
+                        if peak_pv > clipping_limit_step:
+                            cumulative_clip += (peak_pv - clipping_limit_step)
+                        remaining = cumulative_clip
+                        
+                    predict_clipping_remaining_best[minute] = round(remaining, 4)
+                    predict_clipping_ceiling_best[minute] = round(self.soc_max - remaining, 4)
+                
+                self.predict_clipping_remaining_best = predict_clipping_remaining_best
+                self.predict_clipping_ceiling_best = predict_clipping_ceiling_best
+                
                 self.clipping_remaining_today = clipping_today
                 self.clipping_tomorrow = clipping_tomorrow
                 self.clipping_mitigated_today = clipping_today
