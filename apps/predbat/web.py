@@ -3018,22 +3018,24 @@ chart.render();
             inverter_ac_limit_kw = getattr(self.base, "inverter_limit", 0)
 
             # Fetch Target SOC (Best Plan)
-            soc_kw_best_raw = history_attribute(self.get_history_wrapper(self.prefix + ".soc_kw_best", 2))
-            soc_kw_best = prune_today(soc_kw_best_raw, self.now_utc, self.midnight_utc)
+            soc_kw_best_raw = history_attribute(self.get_history_wrapper(self.prefix + ".soc_kw_best", 3))
+            soc_kw_best = prune_today(soc_kw_best_raw, self.now_utc, self.midnight_utc, prune_past_days=2)
 
-            # Fetch Actual SOC history
+            # Fetch Actual SOC history (48 hours into the past)
             soc_kw_h0 = {}
             hist = getattr(self.base, "soc_kwh_history", {})
             if hist:
-                for minute in range(0, self.minutes_now, self.plan_interval_minutes):
-                    minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
-                    stamp = minute_timestamp.strftime(TIME_FORMAT)
-                    soc_kw_h0[stamp] = hist.get(self.minutes_now - minute, 0)
-            soc_kw_h0[now_str] = self.base.soc_kw
+                for minute in range(-2 * 24 * 60, self.minutes_now, self.plan_interval_minutes):
+                    val = hist.get(self.minutes_now - minute, None)
+                    if val is not None:
+                        minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
+                        stamp = minute_timestamp.strftime(TIME_FORMAT)
+                        soc_kw_h0[stamp] = round(val, 2)
+            soc_kw_h0[now_str] = round(self.base.soc_kw, 2)
 
-            # Re-fetch PV actuals for overlay
-            pv_power_hist = history_attribute(self.get_history_wrapper(self.prefix + ".pv_power", 7, required=False))
-            pv_power = prune_today(pv_power_hist, self.now_utc, self.midnight_utc, prune=False)
+            # Re-fetch PV actuals for overlay (48 hours into the past)
+            pv_power_hist = history_attribute(self.get_history_wrapper(self.prefix + ".pv_power", 3, required=False))
+            pv_power = prune_today(pv_power_hist, self.now_utc, self.midnight_utc, prune=True, prune_past_days=2)
 
             axis_max = 12.0
             if self.base.soc_max > 12.0 or inverter_ac_limit_kw > 12.0:
