@@ -3747,6 +3747,80 @@ def test_run_first_refreshes_device_list_despite_fresh_cache(my_predbat):
     return False
 
 
+def test_run_new_device_invalidates_detail_cache(my_predbat):
+    """
+    Test that when the device list changes (new inverter added), the device_detail cache is
+    invalidated so the new device's detail is fetched immediately rather than waiting 24 hours.
+    """
+    print("  - test_run_new_device_invalidates_detail_cache")
+
+    from datetime import datetime, timezone
+
+    fox = MockFoxAPIWithRunTracking()
+    # Start with one device and a fully fresh cache
+    fox.device_list = [{"deviceSN": "TEST123"}]
+    now = datetime.now(timezone.utc)
+    for key in FOX_CACHE_KEYS:
+        fox.data_age[key] = now
+
+    # Simulate get_device_list returning a second, new device
+    async def get_device_list_with_new_device():
+        fox.method_calls.append("get_device_list")
+        fox.device_list = [{"deviceSN": "TEST123"}, {"deviceSN": "NEW456"}]
+        return fox.device_list
+
+    fox.get_device_list = get_device_list_with_new_device
+
+    result = run_async(fox.run(0, first=True))
+
+    assert result == True
+    assert "get_device_list" in fox.method_calls
+    # All per-device caches must be refetched for both old and new devices
+    assert "get_device_detail:TEST123" in fox.method_calls
+    assert "get_device_detail:NEW456" in fox.method_calls
+    assert "get_device_settings:TEST123" in fox.method_calls
+    assert "get_device_settings:NEW456" in fox.method_calls
+    assert "get_real_time_data:TEST123" in fox.method_calls
+    assert "get_real_time_data:NEW456" in fox.method_calls
+
+    return False
+
+
+def test_run_unchanged_device_list_preserves_cache(my_predbat):
+    """
+    Test that when the device list is re-fetched but the set of serial numbers is unchanged,
+    per-device caches are not invalidated and no redundant API calls are made.
+    """
+    print("  - test_run_unchanged_device_list_preserves_cache")
+
+    from datetime import datetime, timezone
+
+    fox = MockFoxAPIWithRunTracking()
+    fox.device_list = [{"deviceSN": "TEST123"}]
+    now = datetime.now(timezone.utc)
+    for key in FOX_CACHE_KEYS:
+        fox.data_age[key] = now
+
+    # get_device_list returns the same device SN as before
+    async def get_device_list_same():
+        fox.method_calls.append("get_device_list")
+        fox.device_list = [{"deviceSN": "TEST123"}]
+        return fox.device_list
+
+    fox.get_device_list = get_device_list_same
+
+    result = run_async(fox.run(0, first=True))
+
+    assert result == True
+    assert "get_device_list" in fox.method_calls
+    # Cache is still fresh and device set unchanged — no per-device fetches should happen
+    assert "get_device_detail:TEST123" not in fox.method_calls
+    assert "get_device_settings:TEST123" not in fox.method_calls
+    assert "get_real_time_data:TEST123" not in fox.method_calls
+
+    return False
+
+
 def test_run_with_automatic_config(my_predbat):
     """
     Test run() with automatic=True calls automatic_config
@@ -5871,6 +5945,8 @@ def run_fox_api_tests(my_predbat):
         failed |= test_run_realtime_refresh_after_cache_expires(my_predbat)
         failed |= test_run_device_list_failure_does_not_mark_cache_fresh(my_predbat)
         failed |= test_run_first_refreshes_device_list_despite_fresh_cache(my_predbat)
+        failed |= test_run_new_device_invalidates_detail_cache(my_predbat)
+        failed |= test_run_unchanged_device_list_preserves_cache(my_predbat)
         failed |= test_run_with_automatic_config(my_predbat)
         failed |= test_run_without_automatic_config(my_predbat)
         failed |= test_run_midnight_reset(my_predbat)
