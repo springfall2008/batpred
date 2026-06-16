@@ -2470,61 +2470,8 @@ class Output:
             },
         )
 
-        # Clipping Status
-        clipping_status_text = "No clipping forecast."
-        clipping_mode = getattr(self, "clipping_limit_mode", "Unknown")
-        clipping_total = 0.0
-
-        predict_clipped_best = getattr(self, "predict_clipped_best", {})
-        if predict_clipped_best:
-            clipping_total = predict_clipped_best.get(max(predict_clipped_best.keys()), 0.0)
-            if clipping_total > 0.01:
-                start_str = ""
-                end_str = ""
-                start_stamp = None
-                end_stamp = None
-                
-                # Find start time (first increase)
-                prev_val = 0.0
-                for min_key, val in sorted(predict_clipped_best.items()):
-                    if val > prev_val + 0.001:
-                        if start_stamp is None:
-                            start_stamp = self.midnight_utc + timedelta(minutes=min_key)
-                        end_stamp = self.midnight_utc + timedelta(minutes=min_key)
-                    prev_val = val
-                
-                if start_stamp and end_stamp:
-                    start_str = start_stamp.strftime("%H:%M")
-                    end_str = end_stamp.strftime("%H:%M")
-                
-                clipping_status_text = "Forecast {} kWh clipping, exceeding {} limit from {} to {}. Plan penalized to mitigate.".format(
-                    dp2(clipping_total), clipping_mode, start_str, end_str
-                )
-
-        self.dashboard_item(
-            self.prefix + ".clipping_status",
-            state=clipping_status_text,
-            attributes={
-                "friendly_name": "Clipping Status",
-                "icon": "mdi:solar-power",
-                "clipping_mode": clipping_mode,
-                "expected_total_kwh": dp2(clipping_total)
-            },
-        )
-
-        pv_forecast_peak_step = getattr(self, "pv_forecast_peak_step", {})
-        if pv_forecast_peak_step:
-            self.dashboard_item(
-                self.prefix + ".pv_forecast_peak",
-                state=dp2(pv_forecast_peak_step.get(self.minutes_now, 0)),
-                attributes={
-                    "results": self.filtered_times(pv_forecast_peak_step),
-                    "friendly_name": "Solar peak forecast",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kW",
-                    "icon": "mdi:solar-power",
-                },
-            )
+        # Clipping Status and PV Peak Forecast sensors are published in plan.py run_prediction(save="best")
+        # to avoid duplicate dashboard_item writes to the same sensor.
 
 
         if had_errors:

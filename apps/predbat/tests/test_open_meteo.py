@@ -76,17 +76,17 @@ def test_ensemble_returns_p10_values(my_predbat):
         kwp = 3.0
         system_loss = 0.0  # simplify: 0% loss so kW = GTI_kWm2 * kwp
         with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
-            result = run_async(test_api.solar.download_open_meteo_ensemble_data(51.5, -0.1, 35, 0, kwp, system_loss))
+            result_p10, result_p90 = run_async(test_api.solar.download_open_meteo_ensemble_data(51.5, -0.1, 35, 0, kwp, system_loss))
 
         # For 3 members at 2025-06-15T12:00: [400, 450, 480] sorted
         # p10_idx = max(0, int(3 * 0.1) - 1) = 0  -> gti_p10 = 400
         # kW = (400 / 1000) * 3.0 * (1 - 0.0) = 1.2
         expected_12 = round((400.0 / 1000.0) * kwp * (1.0 - system_loss), 4)
-        if "2025-06-15T12:00" not in result:
-            print("ERROR: Expected key '2025-06-15T12:00' in ensemble result")
+        if "2025-06-15T12:00" not in result_p10:
+            print("ERROR: Expected key '2025-06-15T12:00' in ensemble result_p10")
             failed = True
-        elif abs(result["2025-06-15T12:00"] - expected_12) > 0.001:
-            print(f"ERROR: ensemble p10 at 12:00: expected {expected_12}, got {result['2025-06-15T12:00']}")
+        elif abs(result_p10["2025-06-15T12:00"] - expected_12) > 0.001:
+            print(f"ERROR: ensemble p10 at 12:00: expected {expected_12}, got {result_p10['2025-06-15T12:00']}")
             failed = True
     finally:
         test_api.cleanup()
@@ -114,8 +114,8 @@ def test_ensemble_empty_on_no_members(my_predbat):
         with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
             result = run_async(test_api.solar.download_open_meteo_ensemble_data(51.5, -0.1, 35, 0, 3.0, 0.14))
 
-        if result != {}:
-            print(f"ERROR: Expected empty dict, got {result}")
+        if result != ({}, {}):
+            print(f"ERROR: Expected empty dict tuple, got {result}")
             failed = True
     finally:
         test_api.cleanup()
@@ -141,8 +141,8 @@ def test_ensemble_empty_on_http_failure(my_predbat):
         with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
             result = run_async(test_api.solar.download_open_meteo_ensemble_data(51.5, -0.1, 35, 0, 3.0, 0.14))
 
-        if result != {}:
-            print(f"ERROR: Expected empty dict on HTTP failure, got {result}")
+        if result != ({}, {}):
+            print(f"ERROR: Expected empty dict tuple on HTTP failure, got {result}")
             failed = True
     finally:
         test_api.cleanup()
