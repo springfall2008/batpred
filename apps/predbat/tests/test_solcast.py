@@ -3096,7 +3096,7 @@ def test_pv_calibration_15min_period(my_predbat):
             pv_forecast_hist[minutes_ago] = float(FORECAST_KW)
 
     with patch("solcast.history_attribute_to_minute_data", return_value=(pv_forecast_hist, days)):
-        adj_m, adj_m10, adj_data = solar.pv_calibration(pv_m, pv_m10, pv_data, create_pv10=True, divide_by=divide_by_factor, max_kwh=10.0, forecast_days=solar.forecast_days, period=FORECAST_PERIOD)
+        adj_m, adj_m10, adj_data, _ = solar.pv_calibration(pv_m, pv_m10, pv_data, create_pv10=True, divide_by=divide_by_factor, max_kwh=10.0, forecast_days=solar.forecast_days, period=FORECAST_PERIOD)
 
     # Each 15-min entry should be annotated with the single 30-min plan slot that
     # starts at the entry timestamp.  slots_per_period=max(1,round(15/30))=1, so

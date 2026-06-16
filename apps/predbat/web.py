@@ -2970,26 +2970,32 @@ chart.render();
             pv_power = prune_today(pv_power_hist, self.now_utc, self.midnight_utc, prune=chart == "PV")
             pv_forecast_hist = history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", 7, required=False))
             pv_forecast_histCL = history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", 7, required=False), attributes=True, state_key="nowCL")
+            pv_forecast_histCS = history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", 7, required=False), attributes=True, state_key="nowCS")
 
             pv_forecast = prune_today(pv_forecast_hist, self.now_utc, self.midnight_utc, prune=chart == "PV", intermediate=True)
             pv_forecastCL = prune_today(pv_forecast_histCL, self.now_utc, self.midnight_utc, prune=chart == "PV", intermediate=True)
+            pv_forecastCS = prune_today(pv_forecast_histCS, self.now_utc, self.midnight_utc, prune=chart == "PV", intermediate=True)
             pv_today_forecast = prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_today", "pv_estimate"), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
             pv_today_forecast10 = prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_today", "pv_estimate10"), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
             pv_today_forecast90 = prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_today", "pv_estimate90"), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
             pv_today_forecastCL = prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_today", "pv_estimateCL"), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
+            pv_today_forecastCS = prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_today", "pv_clearsky"), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
             pv_today_forecast.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_tomorrow", "pv_estimate"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
             pv_today_forecast10.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_tomorrow", "pv_estimate10"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
             pv_today_forecast90.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_tomorrow", "pv_estimate90"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
             pv_today_forecastCL.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_tomorrow", "pv_estimateCL"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
+            pv_today_forecastCS.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_tomorrow", "pv_clearsky"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
 
             series_data = [
                 {"name": "PV Power", "data": pv_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#f5c43d"},
                 {"name": "Forecast History", "data": pv_forecast, "opacity": "0.3", "stroke_width": "3", "stroke_curve": "smooth", "color": "#a8a8a7", "chart_type": "area"},
                 {"name": "Forecast History CL", "data": pv_forecastCL, "opacity": "0.3", "stroke_width": "3", "stroke_curve": "smooth", "color": "#e90a0a", "chart_type": "area"},
+                {"name": "Forecast History CS", "data": pv_forecastCS, "opacity": "0.3", "stroke_width": "3", "stroke_curve": "smooth", "color": "#1877f2", "chart_type": "area"},
                 {"name": "Forecast", "data": pv_today_forecast, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#a8a8a7"},
                 {"name": "Forecast 10%", "data": pv_today_forecast10, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#6b6b6b"},
                 {"name": "Forecast 90%", "data": pv_today_forecast90, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#cccccc"},
                 {"name": "Forecast CL", "data": pv_today_forecastCL, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#e90a0a"},
+                {"name": "Forecast CS", "data": pv_today_forecastCS, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#1877f2"},
             ]
             text += self.render_chart(series_data, "kW", "Solar Forecast", now_str)
 
@@ -3041,8 +3047,6 @@ chart.render();
             if self.base.soc_max > 12.0 or inverter_ac_limit_kw > 12.0:
                 axis_max = max(self.base.soc_max, inverter_ac_limit_kw, 12.0)
             axis_ticks = 6
-
-
 
             # Data series parsing for per-minute data
             step_size = getattr(self.base, "plan_interval_minutes", 30)

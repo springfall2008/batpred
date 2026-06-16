@@ -1120,6 +1120,9 @@ class Plan:
             pv_forecast_peak_step=pv_forecast_peak_step,
             clipping_limit=clipping_limit_effective,
             clipping_cost_weight=self.clipping_cost_weight if self.clipping_peak_enable else 0,
+            clipping_buffer_kwh=self.clipping_buffer_kwh,
+            clipping_buffer_start=self.clipping_buffer_start,
+            clipping_buffer_end=self.clipping_buffer_end,
         )
 
         # Check if LoadML is active and disable thread pools as it causes lockup due to race conditions with NumPy
