@@ -155,6 +155,11 @@ class LoadMLComponent(ComponentBase):
                     self.model_valid = True
                     self.model_status = "active"
                     self.initial_training_done = True
+                    try:
+                        mtime = os.path.getmtime(self.model_filepath)
+                        self.last_train_time = datetime.fromtimestamp(mtime, timezone.utc)
+                    except Exception as e:
+                        self.log("Warn: ML Component: Failed to get model file time: {}".format(e))
                 else:
                     self.log("ML Component: Loaded model is invalid ({}), will retrain".format(reason))
                     self.model_status = "fallback_" + reason
