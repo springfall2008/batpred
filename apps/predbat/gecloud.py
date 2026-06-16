@@ -1003,11 +1003,11 @@ class GECloudDirect(ComponentBase):
                     self.device_list.append(self.ems_device)
 
             self.gateway_device = None
-            if not self.ems_device and self.devices_dict["gateway"] and len(self.device_list) > 1:
+            if not self.ems_device and self.devices_dict["gateway"] and len(self.devices_dict["battery"]) > 1:
                 self.gateway_device = self.devices_dict["gateway"]
                 self.log("GECloud: Found Gateway device {} and multiple batteries, using only the gateway device".format(self.gateway_device))
                 self.device_list = [self.gateway_device] + self.devices_dict["pv"][:]
-            elif not self.ems_device and self.devices_dict["gateway"] and len(self.device_list) == 1:
+            elif not self.ems_device and self.devices_dict["gateway"] and len(self.devices_dict["battery"]) <= 1:
                 self.log("GECloud: Found Gateway device {} but only one battery, using the battery device for polling".format(self.devices_dict["gateway"]))
 
             self.evc_device_list = []
@@ -1610,8 +1610,6 @@ class GECloudDirect(ComponentBase):
         # 429, 5xx) clears the flag so a transient failure after an auth failure is not reported as an
         # ongoing access-denied condition.
         self.api_auth_failed = status in [401, 403]
-
-        self.log("GECloud: Request to {} returned status {} with data {}".format(endpoint, status, data))
 
         if status in [200, 201]:
             if data is None:

@@ -3775,7 +3775,7 @@ def test_run_new_device_invalidates_detail_cache(my_predbat):
 
     assert result == True
     assert "get_device_list" in fox.method_calls
-    # All per-device caches must be refetched for both old and new devices
+    # All per-device caches must be re-fetched for both old and new devices
     assert "get_device_detail:TEST123" in fox.method_calls
     assert "get_device_detail:NEW456" in fox.method_calls
     assert "get_device_settings:TEST123" in fox.method_calls
