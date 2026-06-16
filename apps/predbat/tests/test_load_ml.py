@@ -2931,10 +2931,7 @@ def _test_component_init_predictor_sets_last_train_time():
         component = LoadMLComponent(MockBase(config_root=tmpdir), load_ml_enable=True)
 
         assert component.last_train_time is not None, "last_train_time should be set after loading a cached model"
-        assert component.last_train_time == known_timestamp, (
-            "last_train_time should equal the model's embedded training_timestamp (not filesystem mtime); "
-            "got {} expected {}".format(component.last_train_time, known_timestamp)
-        )
+        assert component.last_train_time == known_timestamp, "last_train_time should equal the model's embedded training_timestamp (not filesystem mtime); " "got {} expected {}".format(component.last_train_time, known_timestamp)
         assert component.model_valid is True, "Model should be marked valid"
         assert component.initial_training_done is True, "initial_training_done should be True"
 
