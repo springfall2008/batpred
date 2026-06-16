@@ -3718,8 +3718,9 @@ def test_run_device_list_failure_does_not_mark_cache_fresh(my_predbat):
 
 def test_run_first_refreshes_device_list_despite_fresh_cache(my_predbat):
     """
-    Test run() always re-fetches the device list and detail on first start, even when the
-    cached data is still fresh, so a new inverter or changed serial number is picked up
+    Test run() always re-fetches the device list on first start, even when the cached data
+    is still fresh, so a new inverter or changed serial number is picked up.  Device detail
+    and all other age-gated categories are skipped while the cache is fresh.
     """
     print("  - test_run_first_refreshes_device_list_despite_fresh_cache")
 
@@ -3736,10 +3737,10 @@ def test_run_first_refreshes_device_list_despite_fresh_cache(my_predbat):
     result = run_async(fox.run(0, first=True))
 
     assert result == True
-    # Device list and detail must always refresh on first start regardless of cache age
+    # Device list must always refresh on first start regardless of cache age
     assert "get_device_list" in fox.method_calls
-    assert "get_device_detail:TEST123" in fox.method_calls
     # Age-based categories with fresh data should NOT be re-fetched on first start
+    assert "get_device_detail:TEST123" not in fox.method_calls
     assert "get_real_time_data:TEST123" not in fox.method_calls
     assert "get_device_settings:TEST123" not in fox.method_calls
 

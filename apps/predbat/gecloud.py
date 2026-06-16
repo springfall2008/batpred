@@ -793,6 +793,7 @@ class GECloudDirect(ComponentBase):
         batteries = devices["battery"]
         batteries_real = devices["battery"]
         num_inverters = len(batteries)
+        pvs = devices.get("pv", [])
 
         if not devices["ems"] and devices["gateway"] and len(batteries) > 1:
             # Only use gateway as main control if we have multiple batteries
@@ -856,12 +857,10 @@ class GECloudDirect(ComponentBase):
             self.set_arg("load_today", [f"sensor.{self.prefix}_gecloud_{device}_consumption_total" for device in batteries])
         self.set_arg("import_today", [f"sensor.{self.prefix}_gecloud_{device}_grid_import_total" for device in batteries])
         self.set_arg("export_today", [f"sensor.{self.prefix}_gecloud_{device}_grid_export_total" for device in batteries])
-        self.set_arg("pv_today", [f"sensor.{self.prefix}_gecloud_{device}_solar_total" for device in batteries])
         self.set_arg("charge_rate", build_entities("number", ["battery_charge_power"]))
         self.set_arg("battery_rate_max", [f"sensor.{self.prefix}_gecloud_{device}_max_charge_rate" for device in batteries])
         self.set_arg("discharge_rate", build_entities("number", ["battery_discharge_power"]))
         self.set_arg("battery_power", [f"sensor.{self.prefix}_gecloud_{device}_battery_power" for device in batteries])
-        self.set_arg("pv_power", [f"sensor.{self.prefix}_gecloud_{device}_solar_power" for device in batteries])
         self.set_arg("load_power", [f"sensor.{self.prefix}_gecloud_{device}_consumption_power" for device in batteries])
         self.set_arg("grid_power", [f"sensor.{self.prefix}_gecloud_{device}_grid_power" for device in batteries])
         self.set_arg("soc_percent", [f"sensor.{self.prefix}_gecloud_{device}_battery_percent" for device in batteries])
@@ -879,6 +878,9 @@ class GECloudDirect(ComponentBase):
         self.set_arg("battery_temperature", [f"sensor.{self.prefix}_gecloud_{device}_battery_temperature" for device in batteries])
         self.set_arg("battery_scaling", [f"sensor.{self.prefix}_gecloud_{device}_battery_dod_soh" for device in batteries])
         self.set_arg("inverter_limit", [f"sensor.{self.prefix}_gecloud_{device}_max_inverter_rate" for device in batteries])
+
+        self.set_arg("pv_today", [f"sensor.{self.prefix}_gecloud_{device}_solar_total" for device in batteries + pvs])
+        self.set_arg("pv_power", [f"sensor.{self.prefix}_gecloud_{device}_solar_power" for device in batteries + pvs])
 
         if len(batteries):
             self.set_arg("battery_temperature_history", f"sensor.{self.prefix}_gecloud_{batteries[0]}_battery_temperature")
@@ -990,7 +992,7 @@ class GECloudDirect(ComponentBase):
 
             # Build a list of devices to poll:
             # Use all battery inverter serials and also add the EMS device if it's distinct.
-            self.device_list = self.devices_dict["battery"][:]
+            self.device_list = self.devices_dict["battery"][:] + self.devices_dict["pv"][:]
 
             self.ems_device = None
             if self.devices_dict["ems"]:
@@ -1004,7 +1006,7 @@ class GECloudDirect(ComponentBase):
             if not self.ems_device and self.devices_dict["gateway"] and len(self.device_list) > 1:
                 self.gateway_device = self.devices_dict["gateway"]
                 self.log("GECloud: Found Gateway device {} and multiple batteries, using only the gateway device".format(self.gateway_device))
-                self.device_list = [self.gateway_device]
+                self.device_list = [self.gateway_device] + self.devices_dict["pv"][:]
             elif not self.ems_device and self.devices_dict["gateway"] and len(self.device_list) == 1:
                 self.log("GECloud: Found Gateway device {} but only one battery, using the battery device for polling".format(self.devices_dict["gateway"]))
 
@@ -1484,7 +1486,7 @@ class GECloudDirect(ComponentBase):
         """
 
         device_list = await self.async_get_inverter_data_retry(GE_API_DEVICES)
-        result = {"gateway": None, "ems": None, "battery": [], "battery_meters": {}}
+        result = {"gateway": None, "ems": None, "battery": [], "battery_meters": {}, "pv": []}
         if device_list is None:
             return result
 
@@ -1505,6 +1507,8 @@ class GECloudDirect(ComponentBase):
                     result["ems"] = serial
                 elif "gateway" in model or "gw2" in model:
                     result["gateway"] = serial
+                elif "giv-pv" in model:
+                    result["pv"].append(serial)
                 elif batteries or info.get("battery"):
                     result["battery"].append(serial)
                     result["battery_meters"][serial] = meter_serials
@@ -1606,6 +1610,8 @@ class GECloudDirect(ComponentBase):
         # 429, 5xx) clears the flag so a transient failure after an auth failure is not reported as an
         # ongoing access-denied condition.
         self.api_auth_failed = status in [401, 403]
+
+        self.log("GECloud: Request to {} returned status {} with data {}".format(endpoint, status, data))
 
         if status in [200, 201]:
             if data is None:

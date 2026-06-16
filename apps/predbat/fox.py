@@ -333,7 +333,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
             return False
 
         # Device detail and battery charging times rarely change - refresh based on age
-        if first or self._needs_refresh("device_detail", FOX_REFRESH_STATIC):
+        if self._needs_refresh("device_detail", FOX_REFRESH_STATIC):
             detail_updated = False
             battery_updated = False
             for device in self.device_list:
