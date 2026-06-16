@@ -26,6 +26,8 @@ def configure_additional_load_test(my_predbat):
     my_predbat.house_load_additional_forecast_entities = set()
     my_predbat.house_load_additional_forecasts = {}
     my_predbat.house_load_additional_forecast_adjust = {}
+    my_predbat.house_load_additional_history = []
+    my_predbat.house_load_additional_history_loaded = True
 
 
 def configure_additional_load_rates(my_predbat, cheap_start, cheap_end):
@@ -963,6 +965,128 @@ def test_additional_load_textual_plan_summary(my_predbat):
     return failed
 
 
+def test_additional_load_history_archives_expired_api(my_predbat):
+    """Test expired one-shot API loads are archived before removal."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.minutes_now = 10 * 60
+    my_predbat.api_select("load_forecast_delta_api", "dishwasher?start_time=09:00&duration=1.0&energy=1.2&_expires_at=" + my_predbat.additional_load_minutes_to_stamp(10 * 60))
+    my_predbat.house_load_additional_history_loaded = True
+
+    my_predbat.refresh_additional_load_forecast_api()
+
+    records = my_predbat.house_load_additional_history
+    if len(records) != 2:
+        print("ERROR: Expired API load should archive 2 completed slots, got {}".format(records))
+        failed = 1
+    if my_predbat.api_select_update("load_forecast_delta_api"):
+        print("ERROR: Expired API load should be removed after archive")
+        failed = 1
+    history_sensor = my_predbat.dashboard_values.get("sensor.predbat_load_forecast_delta_history", {})
+    if history_sensor.get("state") != 2:
+        print("ERROR: History sensor should publish record count 2, got {}".format(history_sensor))
+        failed = 1
+    return failed
+
+
+def test_additional_load_history_deduplicates_completed_slots(my_predbat):
+    """Test repeated archiving does not duplicate completed slots."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    changed = my_predbat.archive_additional_load_slot("dishwasher", "api", "fixed", 9 * 60, 9 * 60 + 30, 0.6, 30)
+    changed_again = my_predbat.archive_additional_load_slot("dishwasher", "api", "fixed", 9 * 60, 9 * 60 + 30, 0.6, 30)
+    if not changed or changed_again or len(my_predbat.house_load_additional_history) != 1:
+        print("ERROR: History archive should deduplicate identical slots, got changed {} changed_again {} records {}".format(changed, changed_again, my_predbat.house_load_additional_history))
+        failed = 1
+    return failed
+
+
+def test_additional_load_history_filters_historical_load(my_predbat):
+    """Test archived additional load is subtracted from learned historical load."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.days_previous = [1]
+    my_predbat.days_previous_weight = [1]
+    my_predbat.load_minutes_age = 2
+    my_predbat.car_charging_hold = False
+    my_predbat.iboost_energy_subtract = False
+    my_predbat.archive_additional_load_slot("dishwasher", "api", "fixed", 9 * 60 - 24 * 60, 9 * 60 + 30 - 24 * 60, 0.4, 30)
+    load_minutes = {1500: 1.0, 1530: 0.0}
+
+    load_filtered, load_raw = my_predbat.get_filtered_load_minute(load_minutes, 9 * 60 - my_predbat.minutes_now, historical=True, step=30)
+    if load_raw != 1.0 or load_filtered != 0.6:
+        print("ERROR: Historical load should subtract archived additional load, got filtered {} raw {}".format(load_filtered, load_raw))
+        failed = 1
+    return failed
+
+
+def test_additional_load_history_does_not_archive_future_slots(my_predbat):
+    """Test future slots are not archived, allowing cancellation without history pollution."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.minutes_now = 10 * 60
+    changed = my_predbat.archive_completed_additional_load_item({"name": "dishwasher", "_source": "api", "start_time": "11:00", "duration": 1.0, "energy": 1.2}, minutes_now_slot=10 * 60)
+    if changed or my_predbat.house_load_additional_history:
+        print("ERROR: Future additional load slots should not be archived, got {}".format(my_predbat.house_load_additional_history))
+        failed = 1
+    return failed
+
+
+def test_additional_load_history_prunes_old_records(my_predbat):
+    """Test additional load history prunes records outside the history lookback."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.max_days_previous = 2
+    old_start = my_predbat.midnight_utc - timedelta(days=4)
+    recent_start = my_predbat.midnight_utc - timedelta(days=1)
+    my_predbat.house_load_additional_history = [
+        {"id": "old", "name": "old", "source": "api", "mode": "fixed", "start": old_start.isoformat(), "end": (old_start + timedelta(minutes=30)).isoformat(), "energy": 0.3},
+        {"id": "recent", "name": "recent", "source": "api", "mode": "fixed", "start": recent_start.isoformat(), "end": (recent_start + timedelta(minutes=30)).isoformat(), "energy": 0.3},
+    ]
+    my_predbat.prune_additional_load_history()
+    if [record.get("id") for record in my_predbat.house_load_additional_history] != ["recent"]:
+        print("ERROR: Additional load history should prune old records, got {}".format(my_predbat.house_load_additional_history))
+        failed = 1
+    return failed
+
+
+def test_additional_load_history_restores_from_sensor(my_predbat):
+    """Test additional load history is restored from the persisted HA sensor attribute."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    start = my_predbat.midnight_utc - timedelta(days=1, hours=-9)
+    record = {
+        "id": "dishwasher:{}:{}".format(start.isoformat(), (start + timedelta(minutes=30)).isoformat()),
+        "name": "dishwasher",
+        "source": "api",
+        "mode": "fixed",
+        "start": start.isoformat(),
+        "end": (start + timedelta(minutes=30)).isoformat(),
+        "energy": "0.4",
+    }
+    my_predbat.ha_interface.dummy_items["sensor.predbat_load_forecast_delta_history"] = {"state": 1, "records": [record]}
+    my_predbat.house_load_additional_history = []
+    my_predbat.house_load_additional_history_loaded = False
+
+    my_predbat.load_additional_load_history()
+
+    if len(my_predbat.house_load_additional_history) != 1 or my_predbat.house_load_additional_history[0].get("energy") != 0.4:
+        print("ERROR: Additional load history should restore valid sensor records, got {}".format(my_predbat.house_load_additional_history))
+        failed = 1
+    return failed
+
+
+def test_additional_load_history_archives_end_time_without_duration(my_predbat):
+    """Test completed end_time-only additional loads can be archived."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    changed = my_predbat.archive_completed_additional_load_item({"name": "dishwasher", "_source": "api", "start_time": "09:00", "end_time": "10:00", "energy": 1.2}, minutes_now_slot=10 * 60)
+    if not changed or len(my_predbat.house_load_additional_history) != 2:
+        print("ERROR: End-time-only completed load should archive two slots, got changed {} records {}".format(changed, my_predbat.house_load_additional_history))
+        failed = 1
+    return failed
+
+
 def run_additional_load_forecast_tests(my_predbat):
     """Run additional load forecast tests."""
     failed = 0
@@ -998,4 +1122,11 @@ def run_additional_load_forecast_tests(my_predbat):
     failed |= test_additional_load_flexible_yaml_omitted_start_rolls(my_predbat)
     failed |= test_additional_load_flexible_prediction_metric_selection(my_predbat)
     failed |= test_additional_load_textual_plan_summary(my_predbat)
+    failed |= test_additional_load_history_archives_expired_api(my_predbat)
+    failed |= test_additional_load_history_deduplicates_completed_slots(my_predbat)
+    failed |= test_additional_load_history_filters_historical_load(my_predbat)
+    failed |= test_additional_load_history_does_not_archive_future_slots(my_predbat)
+    failed |= test_additional_load_history_prunes_old_records(my_predbat)
+    failed |= test_additional_load_history_restores_from_sensor(my_predbat)
+    failed |= test_additional_load_history_archives_end_time_without_duration(my_predbat)
     return failed
