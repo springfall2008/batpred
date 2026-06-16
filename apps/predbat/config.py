@@ -1138,7 +1138,7 @@ CONFIG_ITEMS = [
         "friendly_name": "Load forecast delta API controls",
         "type": "select",
         "options": ["off"],
-        "icon": "mdi:dishwasher",
+        "icon": "mdi:home-lightning-bolt",
         "default": "off",
         "restore": False,
         "api": True,

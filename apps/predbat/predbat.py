@@ -481,6 +481,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Marginal, Exec
         self.house_load_additional_forecast_adjust = {}
         self.house_load_additional_forecasts = {}
         self.house_load_additional_forecast_overrides = {}
+        self.house_load_additional_history = []
+        self.house_load_additional_history_loaded = False
         self.config_index = {}
         self.dashboard_index = []
         self.dashboard_index_app = {}

@@ -548,15 +548,21 @@ class Fetch:
             name, args = self.additional_load_command_args(value)
             expires_minutes = self.additional_load_stamp_to_minutes(args.get("_expires_at", None)) if "_expires_at" in args else None
             if expires_minutes is not None and expires_minutes <= minutes_now_slot:
+                override = self.parse_additional_load_api_command(value)
+                if override:
+                    self.archive_completed_additional_load_item(override, minutes_now_slot=minutes_now_slot)
                 expired_names.append(name)
         for name, override in list(self.house_load_additional_forecast_overrides.items()):
             expires_minutes = override.get("_expires_minutes", None)
             if expires_minutes is not None and expires_minutes <= minutes_now_slot:
+                self.archive_completed_additional_load_item(override, minutes_now_slot=minutes_now_slot)
                 expired_names.append(name)
         for name in set(expired_names):
             self.log("Expired additional load forecast {}".format(name))
             self.house_load_additional_forecast_overrides.pop(name, None)
             self.remove_additional_load_api_command(name)
+        if expired_names:
+            self.publish_additional_load_history()
 
     def get_additional_load_api_overrides(self):
         """
@@ -577,6 +583,203 @@ class Fetch:
         self.load_forecast_delta_api = self.api_select_update("load_forecast_delta_api") if "load_forecast_delta_api" in self.config_index else []
         self.house_load_additional_forecast_adjust, self.house_load_additional_forecasts = self.fetch_additional_load_forecast()
         self.publish_additional_load_forecasts()
+
+    def additional_load_history_entity(self):
+        """
+        Return the entity used to persist completed additional load exclusions.
+        """
+        return "sensor." + self.prefix + "_load_forecast_delta_history"
+
+    def additional_load_history_record_minutes(self, record):
+        """
+        Return record start/end minutes relative to the current midnight.
+        """
+        try:
+            start = datetime.fromisoformat(record.get("start"))
+            end = datetime.fromisoformat(record.get("end"))
+        except (TypeError, ValueError):
+            return None, None
+        return int((start - self.midnight_utc).total_seconds() / 60), int((end - self.midnight_utc).total_seconds() / 60)
+
+    def load_additional_load_history(self):
+        """
+        Load completed additional load exclusion records from the persisted HA sensor.
+        """
+        if getattr(self, "house_load_additional_history_loaded", False):
+            return
+        records = self.get_state_wrapper(entity_id=self.additional_load_history_entity(), attribute="records", default=[])
+        if not isinstance(records, list):
+            records = []
+        self.house_load_additional_history = []
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            start_minutes, end_minutes = self.additional_load_history_record_minutes(record)
+            if start_minutes is None or end_minutes is None or end_minutes <= start_minutes:
+                continue
+            try:
+                energy = float(record.get("energy", 0.0))
+            except (TypeError, ValueError):
+                continue
+            if energy <= 0:
+                continue
+            record = record.copy()
+            record["energy"] = dp4(energy)
+            self.house_load_additional_history.append(record)
+        self.house_load_additional_history_loaded = True
+        self.prune_additional_load_history()
+
+    def prune_additional_load_history(self):
+        """
+        Prune completed additional load exclusion records outside the load-history lookback.
+        """
+        keep_after = self.now_utc - timedelta(days=getattr(self, "max_days_previous", max(self.days_previous) + 1))
+        pruned = []
+        seen = set()
+        for record in getattr(self, "house_load_additional_history", []):
+            record_id = record.get("id")
+            if not record_id or record_id in seen:
+                continue
+            seen.add(record_id)
+            try:
+                end = datetime.fromisoformat(record.get("end"))
+            except (TypeError, ValueError):
+                continue
+            if end >= keep_after:
+                pruned.append(record)
+        self.house_load_additional_history = sorted(pruned, key=lambda record: record.get("start", ""))[-1000:]
+
+    def publish_additional_load_history(self):
+        """
+        Publish completed additional load exclusion records for restart persistence.
+        """
+        self.prune_additional_load_history()
+        self.dashboard_item(
+            self.additional_load_history_entity(),
+            state=len(self.house_load_additional_history),
+            attributes={
+                "friendly_name": "Predbat load forecast delta history",
+                "icon": "mdi:history",
+                "records": self.house_load_additional_history,
+            },
+        )
+
+    def archive_additional_load_slot(self, name, source, mode, slot_start, slot_end, energy, plan_interval):
+        """
+        Archive one completed additional load slot for future historical load filtering.
+        """
+        if energy <= 0 or slot_end <= slot_start:
+            return False
+        self.load_additional_load_history()
+        start = self.midnight_utc + timedelta(minutes=slot_start)
+        end = self.midnight_utc + timedelta(minutes=slot_end)
+        record_id = "{}:{}:{}".format(name, start.isoformat(), end.isoformat())
+        if any(record.get("id") == record_id for record in self.house_load_additional_history):
+            return False
+        self.house_load_additional_history.append(
+            {
+                "id": record_id,
+                "name": name,
+                "source": source,
+                "mode": mode,
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "start_minutes": slot_start,
+                "end_minutes": slot_end,
+                "energy": dp4(energy),
+                "plan_interval_minutes": plan_interval,
+            }
+        )
+        self.prune_additional_load_history()
+        return True
+
+    def archive_completed_additional_load_item(self, load_item, minutes_now_slot=None):
+        """
+        Archive completed slots for one additional load item before it is removed.
+        """
+        if minutes_now_slot is None:
+            plan_interval_now = self.get_arg("plan_interval_minutes", 30)
+            minutes_now_slot = int(self.minutes_now / plan_interval_now) * plan_interval_now
+        name = str(load_item.get("name", ""))
+        if not name:
+            return False
+        plan_interval = self.get_arg("plan_interval_minutes", 30)
+        mode = str(self.resolve_arg("mode", load_item.get("mode", "fixed"), "fixed")).lower()
+        duration = self.get_additional_load_float(load_item, "duration", 0.0)
+        slot_energy = self.get_additional_load_float(load_item, "slot_energy", 0.0)
+        energy_total = self.get_additional_load_float(load_item, "energy", 0.0) if "energy" in load_item else None
+        if (energy_total is None and slot_energy == 0) or energy_total == 0:
+            return False
+        start_minutes = load_item.get("_selected_start_minutes", None)
+        if start_minutes is None:
+            start_minutes = self.get_additional_load_time_minutes(load_item, "start_time") if "start_time" in load_item else load_item.get("_requested_start_minutes", None)
+        if start_minutes is None:
+            return False
+        start_minutes = int(start_minutes)
+        end_minutes = load_item.get("_expires_minutes", None)
+        if end_minutes is None:
+            end_minutes = self.get_additional_load_time_minutes(load_item, "end_time") if "end_time" in load_item else None
+        if end_minutes is None:
+            end_minutes = start_minutes + int(duration * 60)
+        end_minutes = int(end_minutes)
+        if end_minutes <= start_minutes:
+            end_minutes += 24 * 60
+        if duration <= 0:
+            duration = (end_minutes - start_minutes) / 60.0
+        if duration <= 0:
+            return False
+        periods = int((int(duration * 60) + plan_interval - 1) / plan_interval)
+        weights = self.parse_additional_load_weighting(self.resolve_arg("weighting", load_item.get("weighting", None), None), periods)
+        weight_total = sum(weights)
+        source = load_item.get("_source", "yaml")
+        changed = False
+        for period in range(periods):
+            slot_start = start_minutes + period * plan_interval
+            slot_end = min(slot_start + plan_interval, end_minutes)
+            if slot_end > minutes_now_slot:
+                continue
+            slot_minutes = slot_end - slot_start
+            energy, _ = self.additional_load_slot_energies(energy_total, slot_energy, weights, weight_total, period, slot_minutes, plan_interval)
+            changed |= self.archive_additional_load_slot(name, source, mode, slot_start, slot_end, energy, plan_interval)
+        return changed
+
+    def get_additional_load_history_energy(self, minute_previous, historical, step=1):
+        """
+        Return completed additional load energy to exclude from historical load.
+        """
+        self.load_additional_load_history()
+        if not self.house_load_additional_history:
+            return 0
+
+        subtract_energy = 0
+        if historical:
+            for this_point, days in enumerate(self.days_previous):
+                use_days = max(min(days, self.load_minutes_age), 1)
+                weight = self.days_previous_weight[this_point]
+                total_weight = sum(self.days_previous_weight)
+                if total_weight == 0:
+                    continue
+                sample_start = self.minutes_now + minute_previous - (24 * 60 * use_days)
+                sample_end = sample_start + step
+                for record in self.house_load_additional_history:
+                    start_minutes, end_minutes = self.additional_load_history_record_minutes(record)
+                    if start_minutes is None:
+                        continue
+                    overlap = max(0, min(sample_end, end_minutes) - max(sample_start, start_minutes))
+                    if overlap:
+                        subtract_energy += float(record.get("energy", 0.0)) * overlap / float(end_minutes - start_minutes) * weight / float(total_weight)
+        else:
+            sample_end = self.minutes_now - minute_previous
+            sample_start = sample_end - step
+            for record in self.house_load_additional_history:
+                start_minutes, end_minutes = self.additional_load_history_record_minutes(record)
+                if start_minutes is None:
+                    continue
+                overlap = max(0, min(sample_end, end_minutes) - max(sample_start, start_minutes))
+                if overlap:
+                    subtract_energy += float(record.get("energy", 0.0)) * overlap / float(end_minutes - start_minutes)
+
+        return dp4(subtract_energy)
 
     def get_additional_load_forecast_config(self):
         """
@@ -620,10 +823,12 @@ class Fetch:
         """
         Build per-minute additional load adjustments from named forecast config.
         """
+        self.load_additional_load_history()
         if selected_flexible is None:
             selected_flexible = {}
         load_adjust = {}
         forecasts = {}
+        history_changed = False
         plan_interval = self.get_arg("plan_interval_minutes", 30)
         minutes_now_slot = int(self.minutes_now / plan_interval) * plan_interval
 
@@ -677,6 +882,7 @@ class Fetch:
                 expires_minutes = end_minutes
             if auto_expire and source != "yaml" and expires_minutes is not None:
                 self.house_load_additional_forecast_overrides.setdefault(name, {"name": name})["_expires_minutes"] = expires_minutes
+                self.update_additional_load_api_command_metadata(name, {"_expires_at": self.additional_load_minutes_to_stamp(expires_minutes)})
 
             if source == "yaml" and energy_total is None and slot_energy == 0 and duration == 0 and not duration_configured:
                 continue
@@ -763,11 +969,12 @@ class Fetch:
                 slot_start = start_minutes + period * plan_interval
                 slot_end = min(slot_start + plan_interval, end_minutes)
                 slot_minutes = slot_end - slot_start
+                energy, adjustment_energy = self.additional_load_slot_energies(energy_total, slot_energy, weights, weight_total, period, slot_minutes, plan_interval)
                 if slot_end <= minutes_now_slot:
+                    history_changed |= self.archive_additional_load_slot(name, source, mode, slot_start, slot_end, energy, plan_interval)
                     continue
                 if (slot_start - minutes_now_slot) >= self.forecast_minutes:
                     continue
-                energy, adjustment_energy = self.additional_load_slot_energies(energy_total, slot_energy, weights, weight_total, period, slot_minutes, plan_interval)
                 total_energy += energy
                 for minute in range(slot_start, slot_end):
                     load_adjust[minute] = dp4(load_adjust.get(minute, 0.0) + adjustment_energy)
@@ -808,6 +1015,8 @@ class Fetch:
                 selection_locked=load_item.get("_selection_locked", False) or selection_locked,
             )
 
+        if history_changed:
+            self.publish_additional_load_history()
         return load_adjust, forecasts
 
     def publish_additional_load_forecasts(self):
@@ -820,7 +1029,7 @@ class Fetch:
         for name, forecast in self.house_load_additional_forecasts.items():
             attributes = {
                 "friendly_name": "Predbat load forecast delta {}".format(name),
-                "icon": "mdi:dishwasher",
+                "icon": "mdi:home-lightning-bolt",
                 "name": name,
                 "enabled": forecast.get("enabled", False),
                 "mode": forecast.get("mode", "fixed"),
@@ -1013,6 +1222,7 @@ class Fetch:
                     subtract_energy += self.get_from_incrementing(self.car_charging_energy, minute_previous + offset)
                 if self.iboost_energy_subtract and self.iboost_energy_today:
                     subtract_energy += self.get_from_incrementing(self.iboost_energy_today, minute_previous + offset)
+        subtract_energy += self.get_additional_load_history_energy(minute_previous, historical, step=step)
         load_yesterday = max(0, load_yesterday - subtract_energy)
 
         if self.car_charging_hold and (not self.car_charging_energy) and (load_yesterday >= (self.car_charging_threshold * step)):
