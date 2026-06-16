@@ -1634,6 +1634,7 @@ var options = {
         opacity = []
         stroke_width = []
         stroke_curve = []
+        stroke_dasharray = []
         series_units = []
         for series in series_data:
             name = series.get("name")
@@ -1641,6 +1642,7 @@ var options = {
             opacity_value = series.get("opacity", "1.0")
             stroke_width_value = series.get("stroke_width", "1")
             stroke_curve_value = series.get("stroke_curve", "smooth")
+            stroke_dasharray_value = series.get("stroke_dasharray", "0")
             chart_type = series.get("chart_type", "line")
             color = series.get("color", "")
             unit_name = series.get("unit", yaxis_name) or ""
@@ -1653,6 +1655,7 @@ var options = {
                 opacity.append(opacity_value)
                 stroke_width.append(stroke_width_value)
                 stroke_curve.append("'{}'".format(stroke_curve_value))
+                stroke_dasharray.append(stroke_dasharray_value)
                 series_units.append(unit_name)
 
         units_array = ",".join("'{}'".format(unit) for unit in series_units)
@@ -1664,6 +1667,7 @@ var options = {
         text += "  stroke: {\n"
         text += "     width: [{}],\n".format(",".join(stroke_width))
         text += "     curve: [{}],\n".format(",".join(stroke_curve))
+        text += "     dashArray: [{}],\n".format(",".join(stroke_dasharray))
         text += "  },\n"
         text += "  xaxis: {\n"
         text += "    type: 'datetime',\n"
@@ -3021,7 +3025,7 @@ chart.render();
         elif chart == "Clipping":
             clipping_mode = getattr(self.base, "clipping_limit_mode", "Unknown")
             clipping_limit_effective = getattr(self.base, "clipping_limit_effective", 0)
-            inverter_ac_limit_kw = getattr(self.base, "inverter_limit", 0)
+            inverter_ac_limit_kw = getattr(self.base, "inverter_limit", 0) * 60.0 / 1000.0
 
             # Fetch Target SOC (Best Plan)
             soc_kw_best_raw = history_attribute(self.get_history_wrapper(self.prefix + ".soc_kw_best", 3))
@@ -3069,14 +3073,9 @@ chart.render();
                         stamp = minute_timestamp.strftime(TIME_FORMAT)
                         clipping_ceiling_series[stamp] = round(kwh, 2)
 
-            # Raw PV forecast (ClearSky if used, else regular)
+            # Raw PV forecast (Base)
             raw_pv_series = {}
-            if getattr(self.base, "clipping_use_clearsky_peaks", False):
-                raw_pv_data = getattr(self.base, "pv_forecast_minuteCS", {})
-                raw_pv_name = "ClearSky Forecast"
-            else:
-                raw_pv_data = getattr(self.base, "pv_forecast_minute", {})
-                raw_pv_name = "Base Forecast"
+            raw_pv_data = getattr(self.base, "pv_forecast_minute", {})
             if raw_pv_data:
                 for minute, kw in raw_pv_data.items():
                     if minute % step_size == 0:
@@ -3084,14 +3083,26 @@ chart.render();
                         stamp = minute_timestamp.strftime(TIME_FORMAT)
                         raw_pv_series[stamp] = round(kw, 2)
 
+            # ClearSky PV forecast
+            cs_pv_series = {}
+            cs_pv_data = getattr(self.base, "pv_forecast_minuteCS", {})
+            if cs_pv_data:
+                for minute, kw in cs_pv_data.items():
+                    if minute % step_size == 0:
+                        minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
+                        stamp = minute_timestamp.strftime(TIME_FORMAT)
+                        cs_pv_series[stamp] = round(kw, 2)
+
             series_data = [
-                {"name": "Clipping Remaining", "data": clipping_remaining_series, "opacity": "0.5", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#1877f2", "unit": "kWh"},
-                {"name": "Actual SOC", "data": soc_kw_h0, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "color": "#3291a8", "unit": "kWh"},
-                {"name": "Target SOC", "data": soc_kw_best, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": "#9b23eb", "unit": "kWh"},
-                {"name": "Clipping Ceiling", "data": clipping_ceiling_series, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline", "color": "#eb3434", "unit": "kWh"},
-                {"name": "PV Power Actual", "data": pv_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#f5c43d", "unit": "kW"},
-                {"name": "Clipping Forecast ({})".format(raw_pv_name), "data": raw_pv_series, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#a8a8a7", "unit": "kW"},
+                {"name": "Clipping Remaining", "data": clipping_remaining_series, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#FF1493", "unit": "kWh"},
+                {"name": "Actual SOC", "data": soc_kw_h0, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#00BFFF", "unit": "kWh"},
+                {"name": "Target SOC", "data": soc_kw_best, "opacity": "0.7", "stroke_width": "2", "stroke_curve": "stepline", "stroke_dasharray": "5", "color": "#1E90FF", "unit": "kWh"},
+                {"name": "Clipping Ceiling", "data": clipping_ceiling_series, "opacity": "0.7", "stroke_width": "2", "stroke_curve": "stepline", "stroke_dasharray": "5", "color": "#C71585", "unit": "kWh"},
+                {"name": "PV Power Actual", "data": pv_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#FFA500", "unit": "kW"},
+                {"name": "PV Forecast (Base)", "data": raw_pv_series, "opacity": "0.7", "stroke_width": "2", "stroke_curve": "smooth", "stroke_dasharray": "5", "color": "#FFD700", "unit": "kW"},
             ]
+            if cs_pv_series:
+                series_data.append({"name": "PV Forecast (ClearSky)", "data": cs_pv_series, "opacity": "0.7", "stroke_width": "2", "stroke_curve": "smooth", "stroke_dasharray": "5", "color": "#FF8C00", "unit": "kW"})
 
             yaxis_annotations = []
             if inverter_ac_limit_kw > 0:
