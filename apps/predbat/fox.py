@@ -321,19 +321,27 @@ class FoxAPI(ComponentBase, OAuthMixin):
 
         # Device list rarely changes - refresh based on the age of the cached data
         if first or self._needs_refresh("device_list", FOX_REFRESH_STATIC):
+            prev_sns = {d.get("deviceSN") for d in self.device_list}
             devices = await self.get_device_list()
             self.log("Fox API: Found {} devices".format(len(self.device_list)))
             # Only persist and reset the 24h refresh timer when the poll actually succeeded; on a
             # transient API failure we keep any cached list and retry on the next cycle
             if devices:
                 await self._save_cache("device_list", self.device_list)
+                # If the set of device serial numbers changed, drop all per-device caches so
+                # every category is re-fetched for the new device immediately
+                new_sns = {d.get("deviceSN") for d in self.device_list}
+                if new_sns != prev_sns:
+                    for key in FOX_CACHE_KEYS:
+                        if key != "device_list":
+                            self.data_age.pop(key, None)
 
         if not self.device_list:
             self.log("Error: FoxAPI: No devices found, unable to start API")
             return False
 
         # Device detail and battery charging times rarely change - refresh based on age
-        if first or self._needs_refresh("device_detail", FOX_REFRESH_STATIC):
+        if self._needs_refresh("device_detail", FOX_REFRESH_STATIC):
             detail_updated = False
             battery_updated = False
             for device in self.device_list:

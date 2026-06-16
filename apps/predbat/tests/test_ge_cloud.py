@@ -982,7 +982,7 @@ def _test_async_get_devices_empty(my_predbat):
 
             result = await ge_cloud.async_get_devices()
 
-            if result != {"gateway": None, "ems": None, "battery": [], "battery_meters": {}}:
+            if result != {"gateway": None, "ems": None, "battery": [], "battery_meters": {}, "pv": []}:
                 print("ERROR: Expected empty result dict, got {}".format(result))
                 return 1
         return 0
@@ -1817,7 +1817,7 @@ def _test_settings_saved_to_storage(my_predbat):
         expected_settings = {"sid-1": {"name": "Battery Reserve", "value": 4, "validation_rules": ["between:0,100"], "validation": ""}}
 
         async def mock_get_devices():
-            return {"battery": ["inv001"], "ems": None, "gateway": None}
+            return {"battery": ["inv001"], "ems": None, "gateway": None, "pv": [], "battery_meters": {}}
 
         async def mock_get_evc_devices():
             return []
@@ -1899,7 +1899,7 @@ def _test_settings_restored_from_fresh_cache(my_predbat):
         poll_calls = []
 
         async def mock_get_devices():
-            return {"battery": ["inv001"], "ems": None, "gateway": None}
+            return {"battery": ["inv001"], "ems": None, "gateway": None, "pv": [], "battery_meters": {}}
 
         async def mock_get_evc_devices():
             return []
@@ -1978,7 +1978,7 @@ def _test_run_method(my_predbat):
         # Mock all the async functions called by run()
         async def mock_get_devices():
             call_order.append("async_get_devices")
-            return {"battery": ["inv001"], "ems": None, "gateway": None}
+            return {"battery": ["inv001"], "ems": None, "gateway": None, "pv": [], "battery_meters": {}}
 
         async def mock_get_evc_devices():
             call_order.append("async_get_evc_devices")
@@ -3577,7 +3577,7 @@ def _make_run_mocks(ge_cloud, enable_default_calls=None):
     """Attach minimal async mocks to ge_cloud so run() can execute without real I/O."""
 
     async def mock_get_devices():
-        return {"battery": ["inv001"], "ems": None, "gateway": None}
+        return {"battery": ["inv001"], "ems": None, "gateway": None, "pv": [], "battery_meters": {}}
 
     async def mock_get_evc_devices():
         return []
