@@ -429,6 +429,11 @@ class GatewayMQTT(ComponentBase):
                 if self.api_stop:
                     break
 
+                # If the broker rejected our credentials (e.g. the MQTT JWT expired),
+                # refresh the token before reconnecting — otherwise we would retry the
+                # same rejected token forever and lose all gateway control.
+                await self._maybe_refresh_on_auth_error(e)
+
                 self.log(f"Info: GatewayMQTT: Reconnecting in {backoff}s")
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, max_backoff)
@@ -1306,11 +1311,11 @@ class GatewayMQTT(ComponentBase):
         self.log("Info: GatewayMQTT: Finalized")
 
     async def _check_token_refresh(self):
-        """Check if the MQTT JWT token needs refreshing and refresh if needed.
+        """Proactively refresh the MQTT JWT when it nears expiry (housekeeping path).
 
-        Uses the oauth-refresh edge function (same pattern as OAuthMixin) to
-        obtain a new access token before the current one expires. The refresh
-        token is held server-side in instance secrets.
+        Runs every cycle from run(); only triggers a refresh once the token is
+        within token_needs_refresh() of expiry. The reconnect loop additionally
+        forces a refresh on broker auth-failure via _maybe_refresh_on_auth_error().
         """
         if not HAS_AIOHTTP:
             return
@@ -1326,14 +1331,69 @@ class GatewayMQTT(ComponentBase):
                 self.log("Warn: GatewayMQTT: could not extract JWT expiry, token refresh disabled")
                 return
 
-        if self.mqtt_token_expires_at and self.mqtt_token_expires_at > 0 and not self.token_needs_refresh(self.mqtt_token_expires_at):
-            return
-
         if self.mqtt_token_expires_at == -1:
             return
 
-        if self._refresh_in_progress:
+        if self.mqtt_token_expires_at and self.mqtt_token_expires_at > 0 and not self.token_needs_refresh(self.mqtt_token_expires_at):
             return
+
+        await self._do_token_refresh()
+
+    @staticmethod
+    def _is_auth_failure(error):
+        """True if a broker error means our MQTT credentials were rejected.
+
+        Matches MQTT CONNACK auth reason codes 134 (bad user name or password) and
+        135 (not authorized) plus their text. An expired MQTT JWT shows up as code
+        134, so the reconnect loop uses this to decide it must refresh the token
+        rather than retry the same rejected one forever.
+        """
+        text = str(error).lower()
+        return "bad user name or password" in text or "not authorized" in text or "not authorised" in text or "unauthorized" in text or "code:134" in text or "code:135" in text
+
+    async def _maybe_refresh_on_auth_error(self, error):
+        """Force an MQTT token refresh when the broker rejected authentication.
+
+        Returns True if a refresh was attempted and succeeded. Non-auth errors
+        (network drops, "Disconnected during message iteration") are ignored so we
+        don't hammer the refresh endpoint for problems a new token cannot fix.
+        """
+        if not self._is_auth_failure(error):
+            return False
+        self.log("Info: GatewayMQTT: Broker rejected auth — refreshing MQTT token before reconnect")
+        return await self._do_token_refresh()
+
+    def _apply_refresh_response(self, data):
+        """Apply an oauth-refresh JSON reply to the in-memory token. Returns success."""
+        if not data.get("success"):
+            self.log(f"Warn: GatewayMQTT: Token refresh failed: {data.get('error', 'unknown')}")
+            return False
+
+        self.mqtt_token = data["access_token"]
+        if data.get("expires_at"):
+            try:
+                if isinstance(data["expires_at"], (int, float)):
+                    self.mqtt_token_expires_at = float(data["expires_at"])
+                else:
+                    dt = datetime.datetime.fromisoformat(data["expires_at"].replace("Z", "+00:00"))
+                    self.mqtt_token_expires_at = dt.timestamp()
+            except (ValueError, AttributeError):
+                self.mqtt_token_expires_at = 0
+        self.log("Info: GatewayMQTT: MQTT token refreshed")
+        return True
+
+    async def _do_token_refresh(self):
+        """Refresh the MQTT JWT via the oauth-refresh edge function, unconditionally.
+
+        Shared by the proactive near-expiry check and the auth-failure reconnect
+        path. The refresh token is held server-side in instance secrets. Returns
+        True if a new access token was obtained and applied.
+        """
+        if not HAS_AIOHTTP:
+            return False
+
+        if self._refresh_in_progress:
+            return False
 
         self._refresh_in_progress = True
         try:
@@ -1343,7 +1403,7 @@ class GatewayMQTT(ComponentBase):
 
             if not supabase_url or not supabase_key or not instance_id:
                 self.log("Warn: GatewayMQTT: Token refresh skipped — missing env vars or instance_id")
-                return
+                return False
 
             url = f"{supabase_url}/functions/v1/oauth-refresh"
             headers = {
@@ -1362,29 +1422,18 @@ class GatewayMQTT(ComponentBase):
                 async with session.post(url, headers=headers, json=payload) as response:
                     if response.status != 200:
                         self.log(f"Warn: GatewayMQTT: Token refresh HTTP {response.status}")
-                        return
+                        return False
 
                     data = await response.json()
 
-            if data.get("success"):
-                self.mqtt_token = data["access_token"]
-                if data.get("expires_at"):
-                    try:
-                        if isinstance(data["expires_at"], (int, float)):
-                            self.mqtt_token_expires_at = float(data["expires_at"])
-                        else:
-                            dt = datetime.datetime.fromisoformat(data["expires_at"].replace("Z", "+00:00"))
-                            self.mqtt_token_expires_at = dt.timestamp()
-                    except (ValueError, AttributeError):
-                        self.mqtt_token_expires_at = 0
-                self.log("Info: GatewayMQTT: MQTT token refreshed")
-            else:
-                self.log(f"Warn: GatewayMQTT: Token refresh failed: {data.get('error', 'unknown')}")
+            return self._apply_refresh_response(data)
 
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             self.log(f"Warn: GatewayMQTT: Token refresh network error: {e}")
+            return False
         except Exception as e:
             self.log(f"Warn: GatewayMQTT: Token refresh error: {e}")
+            return False
         finally:
             self._refresh_in_progress = False
 

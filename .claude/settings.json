@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C /Users/treforsouthwell/source/batpred diff HEAD -- apps/predbat/predbat.py)",
+      "Bash(python3 -c ' *)"
+    ]
+  }
+}

@@ -2872,6 +2872,8 @@ class TestRunStartupWait:
 
 def run_gateway_tests(my_predbat=None):
     """Run all GatewayMQTT tests. Returns True on failure, False on success."""
+    from tests.test_gateway_token_refresh import TestIsAuthFailure, TestApplyRefreshResponse, TestMaybeRefreshOnAuthError
+
     test_classes = [
         TestProtobufDecode,
         TestPlanSerialization,
@@ -2889,6 +2891,9 @@ def run_gateway_tests(my_predbat=None):
         TestIanaToPosixTz,
         TestCheckInverterResets,
         TestRunStartupWait,
+        TestIsAuthFailure,
+        TestApplyRefreshResponse,
+        TestMaybeRefreshOnAuthError,
     ]
     for cls in test_classes:
         instance = cls()
