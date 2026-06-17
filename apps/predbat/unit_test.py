@@ -118,6 +118,7 @@ from tests.test_fox_oauth import run_fox_oauth_tests
 from tests.test_band_rate_text import test_band_rate_text
 from tests.test_kraken import run_kraken_tests
 from tests.test_kraken_auth_mixin import run_kraken_auth_mixin_tests
+from tests.test_clipping import run_clipping_tests
 from tests.test_clip_export_slots import run_clip_export_slots_tests
 from tests.test_clip_charge_slots import run_clip_charge_slots_tests
 from tests.test_discard_unused_charge_slots import run_discard_unused_charge_slots_tests
@@ -301,6 +302,7 @@ def main():
         # Kraken Energy (EDF/E.ON) tests
         ("kraken", run_kraken_tests, "Kraken API tests (init, GraphQL, tariff discovery, rate fetching, run lifecycle)", False),
         ("kraken_auth", run_kraken_auth_mixin_tests, "Kraken auth mixin tests (API key, email, refresh, 401 handling)", False),
+        ("clipping", run_clipping_tests, "Clipping logic tests", False),
         ("clip_export_slots", run_clip_export_slots_tests, "Clip export slots tests", False),
         ("clip_charge_slots", run_clip_charge_slots_tests, "Clip charge slots tests", False),
         ("discard_unused_charge_slots", run_discard_unused_charge_slots_tests, "Discard unused charge slots tests", False),

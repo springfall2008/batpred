@@ -572,7 +572,7 @@ class Fetch:
             if history and len(history) > 0 and len(history[0]) > 0:
                 item = history[0][0]
                 try:
-                    last_updated_time = str2time(item["last_updated"])
+                    last_updated_time = str2time(item.get("last_updated", item.get("state_class", "")))
                 except (ValueError, TypeError):
                     last_updated_time = now_utc
                 age_days = max_days_previous
@@ -639,7 +639,7 @@ class Fetch:
             if isinstance(history, list) and history and history[0]:
                 item = history[0][0]
                 try:
-                    last_updated_time = str2time(item["last_updated"])
+                    last_updated_time = str2time(item.get("last_updated", item.get("state_class", "")))
                 except (ValueError, TypeError):
                     last_updated_time = now_utc
                 age = now_utc - last_updated_time

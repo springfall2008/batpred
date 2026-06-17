@@ -74,6 +74,10 @@ class SolarAPI(ComponentBase):
         pv_forecast_tomorrow,
         pv_forecast_d3,
         pv_forecast_d4,
+        pv_clearsky_today,
+        pv_clearsky_tomorrow,
+        pv_clearsky_d3,
+        pv_clearsky_d4,
         pv_scaling,
         open_meteo_forecast,
         open_meteo_forecast_max_age,
@@ -90,6 +94,10 @@ class SolarAPI(ComponentBase):
         self.pv_forecast_tomorrow = pv_forecast_tomorrow
         self.pv_forecast_d3 = pv_forecast_d3
         self.pv_forecast_d4 = pv_forecast_d4
+        self.pv_clearsky_today = pv_clearsky_today
+        self.pv_clearsky_tomorrow = pv_clearsky_tomorrow
+        self.pv_clearsky_d3 = pv_clearsky_d3
+        self.pv_clearsky_d4 = pv_clearsky_d4
         self.pv_scaling = pv_scaling
         self.open_meteo_forecast = open_meteo_forecast
         self.open_meteo_forecast_max_age = open_meteo_forecast_max_age
@@ -1423,6 +1431,24 @@ class SolarAPI(ComponentBase):
                         ts = item.get("period_start")
                         if ts in sol_lookup:
                             item["pv_clearsky"] = sol_lookup[ts]
+            elif clipping_clearsky_source == "ha_solcast_clearsky":
+                self.log("SolarAPI: Overlaying ClearSky data from Home Assistant integration")
+                ha_data = []
+                for argname in ["pv_clearsky_today", "pv_clearsky_tomorrow", "pv_clearsky_d3", "pv_clearsky_d4"]:
+                    entity_id = getattr(self, argname, None)
+                    if entity_id:
+                        data, _, _ = self.fetch_pv_datapoints(argname, entity_id)
+                        if data:
+                            ha_data += data
+                if ha_data:
+                    # Apply factor and divide_by logic like the main PV fetcher
+                    ha_lookup = {item["period_start"]: (item.get("pv_estimate", 0) * factor / divide_by) for item in ha_data}
+                    for item in pv_forecast_data:
+                        ts = item.get("period_start")
+                        if ts in ha_lookup:
+                            item["pv_clearsky"] = ha_lookup[ts]
+            elif clipping_clearsky_source == "pv90_scaled":
+                self.log("SolarAPI: Overlaying ClearSky data explicitly disabled, PV90 will be scaled and used as base for clipping mitigation")
             elif clipping_clearsky_source not in ["auto", "base", ""]:
                 self.log("Warn: SolarAPI: clipping_clearsky_source '{}' not configured properly, using base data".format(clipping_clearsky_source))
 

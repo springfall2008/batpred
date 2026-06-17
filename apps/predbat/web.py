@@ -3023,9 +3023,7 @@ chart.render();
             ]
             text += self.render_chart(series_data, "kWh", "PV Forecast vs Actual", now_str)
         elif chart == "Clipping":
-            clipping_mode = getattr(self.base, "clipping_limit_mode", "Unknown")
-            clipping_limit_effective = getattr(self.base, "clipping_limit_effective", 0)
-            inverter_ac_limit_kw = getattr(self.base, "inverter_limit", 0) * 60.0 / 1000.0
+            inverter_ac_limit_kw = getattr(self.base, "inverter_limit", 0) / 1000.0
 
             # Fetch Target SOC (Best Plan)
             soc_kw_best_raw = history_attribute(self.get_history_wrapper(self.prefix + ".soc_kw_best", 3))
@@ -3081,7 +3079,7 @@ chart.render();
                     if minute % step_size == 0:
                         minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
                         stamp = minute_timestamp.strftime(TIME_FORMAT)
-                        raw_pv_series[stamp] = round(kw, 2)
+                        raw_pv_series[stamp] = round(kw * 60.0, 2)
 
             # ClearSky PV forecast
             cs_pv_series = {}
@@ -3091,7 +3089,7 @@ chart.render();
                     if minute % step_size == 0:
                         minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
                         stamp = minute_timestamp.strftime(TIME_FORMAT)
-                        cs_pv_series[stamp] = round(kw, 2)
+                        cs_pv_series[stamp] = round(kw * 60.0, 2)
 
             series_data = [
                 {"name": "Clipping Remaining", "data": clipping_remaining_series, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#FF1493", "unit": "kWh"},
