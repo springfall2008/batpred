@@ -19,9 +19,13 @@ from tests.test_infra import run_async
 def configure_additional_load_test(my_predbat):
     """Configure deterministic clock and plan settings for additional load tests."""
     my_predbat.minutes_now = 10 * 60
+    my_predbat.now_utc = my_predbat.midnight_utc + timedelta(minutes=my_predbat.minutes_now)
     my_predbat.plan_interval_minutes = 30
     my_predbat.forecast_minutes = 24 * 60
     my_predbat.args["plan_interval_minutes"] = 30
+    my_predbat.days_previous = [1]
+    my_predbat.days_previous_weight = [1]
+    my_predbat.max_days_previous = 2
     my_predbat.house_load_additional_forecast_overrides = {}
     my_predbat.house_load_additional_forecast_entities = set()
     my_predbat.house_load_additional_forecasts = {}
@@ -926,6 +930,54 @@ def test_additional_load_flexible_candidate_energy_conserved(my_predbat):
     return failed
 
 
+def test_additional_load_flexible_unchanged_selection_not_marked_changed(my_predbat):
+    """Test unchanged flexible selection does not request another optimisation pass."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.minutes_now = 16 * 60
+    my_predbat.forecast_minutes = 24 * 60
+    my_predbat.args["house_load_additional_forecast"] = [
+        {"name": "dishwasher", "mode": "flexible", "end_time": "07:00", "duration": 2.0, "energy": 1.2},
+    ]
+    my_predbat.house_load_additional_forecast_adjust, my_predbat.house_load_additional_forecasts = my_predbat.fetch_additional_load_forecast(
+        selected_flexible={"dishwasher": {"_selected_start_minutes": 25 * 60, "_selection_reason": "prediction_metric"}}
+    )
+    my_predbat.charge_limit_best = []
+    my_predbat.charge_window_best = []
+    my_predbat.export_window_best = []
+    my_predbat.export_limits_best = []
+    my_predbat.end_record = my_predbat.forecast_minutes
+
+    original_prediction = plan_module.Prediction
+
+    class FakePrediction:
+        """Fake prediction scores the existing 01:00 selection as cheapest."""
+
+        def __init__(self, base, pv_step, pv10_step, load_step, load10_step):
+            """Store load step data."""
+            self.load_step = load_step
+
+        def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv10, end_record):
+            """Return a metric based on when the injected load appears."""
+            first_load_minute = None
+            for minute, load in self.load_step.items():
+                if load > 0:
+                    first_load_minute = my_predbat.minutes_now + minute if first_load_minute is None else min(first_load_minute, my_predbat.minutes_now + minute)
+            metric = abs(first_load_minute - 25 * 60) if first_load_minute is not None else 1000.0
+            return (metric, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+
+    try:
+        plan_module.Prediction = FakePrediction
+        selected, _, _ = my_predbat.select_flexible_additional_loads({}, {}, {}, {})
+    finally:
+        plan_module.Prediction = original_prediction
+
+    if not selected or my_predbat.house_load_additional_flexible_selection_changed:
+        print("ERROR: Unchanged flexible selection should not be marked changed, selected {} changed {}".format(selected, my_predbat.house_load_additional_flexible_selection_changed))
+        failed = 1
+    return failed
+
+
 def test_additional_load_textual_plan_summary(my_predbat):
     """Test textual plan includes confirmed and suggested additional load forecasts only."""
     failed = 0
@@ -1144,6 +1196,7 @@ def run_additional_load_forecast_tests(my_predbat):
     failed |= test_additional_load_flexible_yaml_omitted_start_rolls(my_predbat)
     failed |= test_additional_load_flexible_prediction_metric_selection(my_predbat)
     failed |= test_additional_load_flexible_candidate_energy_conserved(my_predbat)
+    failed |= test_additional_load_flexible_unchanged_selection_not_marked_changed(my_predbat)
     failed |= test_additional_load_textual_plan_summary(my_predbat)
     failed |= test_additional_load_history_archives_expired_api(my_predbat)
     failed |= test_additional_load_history_deduplicates_completed_slots(my_predbat)
