@@ -3023,7 +3023,7 @@ chart.render();
             ]
             text += self.render_chart(series_data, "kWh", "PV Forecast vs Actual", now_str)
         elif chart == "Clipping":
-            inverter_ac_limit_kw = getattr(self.base, "inverter_limit", 0) / 1000.0
+            inverter_ac_limit_kw = getattr(self.base, "inverter_limit", 0) * 60.0
 
             # Fetch Target SOC (Best Plan)
             soc_kw_best_raw = history_attribute(self.get_history_wrapper(self.prefix + ".soc_kw_best", 3))
