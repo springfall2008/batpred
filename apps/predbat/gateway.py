@@ -304,7 +304,7 @@ class GatewayMQTT(ComponentBase):
 
         if first:
             # Start MQTT listener as a background task
-            self._mqtt_task = asyncio.ensure_future(self._mqtt_loop())
+            self._start_mqtt_task()
             self.log("Info: GatewayMQTT: MQTT listener task started")
             return True
 
@@ -316,7 +316,7 @@ class GatewayMQTT(ComponentBase):
                 if exc:
                     self.log(f"Warn: GatewayMQTT: MQTT task died with: {exc}")
                 self.log("Info: GatewayMQTT: Restarting MQTT listener task")
-                self._mqtt_task = asyncio.ensure_future(self._mqtt_loop())
+                self._start_mqtt_task()
 
             # Publish any queued plan from on_plan_executed hook
             if self._pending_plan:
@@ -347,6 +347,29 @@ class GatewayMQTT(ComponentBase):
 
         return True
 
+    def _mqtt_client_id(self):
+        """Return a stable MQTT client id for this instance.
+
+        Using a fixed id (rather than a fresh UUID per connection) means a
+        reconnect cleanly takes over the previous broker session instead of
+        leaving a ghost session behind, so connections cannot pile up.
+        """
+        return f"predbat-{self.gateway_device_id}"
+
+    def _start_mqtt_task(self):
+        """Start the MQTT listener task, cancelling any existing one first.
+
+        The component health-monitor can call api_start(first=True) again on a
+        restart. Spawning a new _mqtt_loop without cancelling the previous one
+        leaks parallel tasks that share — and starve — the asyncio event loop,
+        causing keepalive timeouts, endless reconnect churn, and telemetry never
+        being processed. Guaranteeing a single task keeps the connection stable.
+        """
+        if self._mqtt_task and not self._mqtt_task.done():
+            self.log("Info: GatewayMQTT: cancelling existing MQTT task before (re)start")
+            self._mqtt_task.cancel()
+        self._mqtt_task = asyncio.ensure_future(self._mqtt_loop())
+
     async def _mqtt_loop(self):
         """Continuous MQTT listener with automatic reconnection.
 
@@ -361,7 +384,7 @@ class GatewayMQTT(ComponentBase):
             try:
                 tls_context = ssl.create_default_context()
 
-                client_id = f"predbat-{self.gateway_device_id}-{uuid.uuid4().hex[:8]}"
+                client_id = self._mqtt_client_id()
 
                 async with aiomqtt.Client(
                     hostname=self.mqtt_host,

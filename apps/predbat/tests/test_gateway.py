@@ -2169,6 +2169,65 @@ class TestIanaToPosixTz:
         assert plan.timezone == "GMT0BST,M3.5.0/1,M10.5.0", f"Got {plan.timezone!r}"  # cspell:disable-line
 
 
+class TestMqttTaskLifecycle:
+    """Tests for the single-task MQTT lifecycle (no leaked _mqtt_loop tasks)."""
+
+    def _make_gateway(self):
+        """Build a bare GatewayMQTT with a mocked _mqtt_loop coroutine factory."""
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.log = MagicMock()
+        gw.gateway_device_id = "pbgw_test123"
+        gw._mqtt_task = None
+        gw._mqtt_loop = MagicMock(return_value="coro")  # avoid creating a real coroutine
+        return gw
+
+    def test_client_id_is_stable(self):
+        """Client id is fixed per instance so reconnects reuse one broker session."""
+        gw = self._make_gateway()
+        assert gw._mqtt_client_id() == "predbat-pbgw_test123"
+        assert gw._mqtt_client_id() == gw._mqtt_client_id()
+
+    def test_start_cancels_existing_live_task(self):
+        """A live task is cancelled before a new one is spawned, preventing leaks."""
+        from unittest.mock import MagicMock, patch
+
+        gw = self._make_gateway()
+        old = MagicMock()
+        old.done.return_value = False
+        gw._mqtt_task = old
+        with patch("gateway.asyncio.ensure_future", return_value="NEW") as ef:
+            gw._start_mqtt_task()
+        old.cancel.assert_called_once()
+        ef.assert_called_once()
+        assert gw._mqtt_task == "NEW"
+
+    def test_start_does_not_cancel_finished_task(self):
+        """A finished task needs no cancel, but a fresh task is still spawned."""
+        from unittest.mock import MagicMock, patch
+
+        gw = self._make_gateway()
+        old = MagicMock()
+        old.done.return_value = True
+        gw._mqtt_task = old
+        with patch("gateway.asyncio.ensure_future", return_value="NEW") as ef:
+            gw._start_mqtt_task()
+        old.cancel.assert_not_called()
+        ef.assert_called_once()
+
+    def test_start_with_no_existing_task(self):
+        """First start spawns exactly one task."""
+        from unittest.mock import patch
+
+        gw = self._make_gateway()
+        with patch("gateway.asyncio.ensure_future", return_value="NEW") as ef:
+            gw._start_mqtt_task()
+        ef.assert_called_once()
+        assert gw._mqtt_task == "NEW"
+
+
 def run_gateway_tests(my_predbat=None):
     """Run all GatewayMQTT tests. Returns True on failure, False on success."""
     test_classes = [
@@ -2186,6 +2245,7 @@ def run_gateway_tests(my_predbat=None):
         TestMQTTIntegration,
         TestPublishPredbatData,
         TestIanaToPosixTz,
+        TestMqttTaskLifecycle,
     ]
     for cls in test_classes:
         instance = cls()
