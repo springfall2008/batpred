@@ -939,9 +939,7 @@ def test_additional_load_flexible_unchanged_selection_not_marked_changed(my_pred
     my_predbat.args["house_load_additional_forecast"] = [
         {"name": "dishwasher", "mode": "flexible", "end_time": "07:00", "duration": 2.0, "energy": 1.2},
     ]
-    my_predbat.house_load_additional_forecast_adjust, my_predbat.house_load_additional_forecasts = my_predbat.fetch_additional_load_forecast(
-        selected_flexible={"dishwasher": {"_selected_start_minutes": 25 * 60, "_selection_reason": "prediction_metric"}}
-    )
+    my_predbat.house_load_additional_forecast_adjust, my_predbat.house_load_additional_forecasts = my_predbat.fetch_additional_load_forecast(selected_flexible={"dishwasher": {"_selected_start_minutes": 25 * 60, "_selection_reason": "prediction_metric"}})
     my_predbat.charge_limit_best = []
     my_predbat.charge_window_best = []
     my_predbat.export_window_best = []
