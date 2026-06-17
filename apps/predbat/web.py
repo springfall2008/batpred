@@ -3028,6 +3028,7 @@ chart.render();
             # Fetch Target SOC (Best Plan)
             soc_kw_best_raw = history_attribute(self.get_history_wrapper(self.prefix + ".soc_kw_best", 3))
             soc_kw_best = prune_today(soc_kw_best_raw, self.now_utc, self.midnight_utc, prune_past_days=2)
+            soc_kw_best.update(self.get_entity_results(self.prefix + ".soc_kw_best"))
 
             # Fetch Actual SOC history (48 hours into the past)
             soc_kw_h0 = {}
@@ -3054,19 +3055,20 @@ chart.render();
             step_size = getattr(self.base, "plan_interval_minutes", 30)
             clipping_remaining_raw = history_attribute(self.get_history_wrapper(self.prefix + ".clipping_remaining", 3))
             clipping_remaining_series = prune_today(clipping_remaining_raw, self.now_utc, self.midnight_utc, prune_past_days=2)
-            # If history is missing/empty, fallback to the base predictor
-            if not clipping_remaining_series and getattr(self.base, "predict_clipping_remaining_best", None):
+            
+            if getattr(self.base, "predict_clipping_remaining_best", None):
                 for minute, kwh in self.base.predict_clipping_remaining_best.items():
-                    if minute % step_size == 0:
+                    if minute % step_size == 0 and minute >= self.minutes_now:
                         minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
                         stamp = minute_timestamp.strftime(TIME_FORMAT)
                         clipping_remaining_series[stamp] = round(kwh, 2)
                         
             clipping_ceiling_raw = history_attribute(self.get_history_wrapper(self.prefix + ".clipping_ceiling", 3))
             clipping_ceiling_series = prune_today(clipping_ceiling_raw, self.now_utc, self.midnight_utc, prune_past_days=2)
-            if not clipping_ceiling_series and getattr(self.base, "predict_clipping_ceiling_best", None):
+            
+            if getattr(self.base, "predict_clipping_ceiling_best", None):
                 for minute, kwh in self.base.predict_clipping_ceiling_best.items():
-                    if minute % step_size == 0:
+                    if minute % step_size == 0 and minute >= self.minutes_now:
                         minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
                         stamp = minute_timestamp.strftime(TIME_FORMAT)
                         clipping_ceiling_series[stamp] = round(kwh, 2)
