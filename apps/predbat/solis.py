@@ -271,6 +271,11 @@ class SolisAPI(ComponentBase, OAuthMixin):
         # the mixin and refreshed via the oauth-refresh edge function (provider "solis").
         self._init_oauth(auth_method, access_token, token_expires_at, "solis")
         self.token_hash = token_hash or ""
+        # Require api_key+api_secret unless using OAuth — restores the startup guard lost
+        # when these became optional in components.py, so a misconfigured api-key instance
+        # fails clearly here instead of crashing later on None.encode() in _build_headers.
+        if self.auth_method != "oauth" and (not self.api_key or not self.api_secret):
+            raise SolisAPIError("Solis api_key and api_secret are required when not using OAuth")
         # OAuth reads/control use the OAuth host; api-key uses the HMAC host (or override).
         self.base_url = SOLIS_OAUTH_BASE_URL if self.auth_method == "oauth" else base_url
         self.automatic = automatic
@@ -370,8 +375,11 @@ class SolisAPI(ComponentBase, OAuthMixin):
         """Execute HTTP POST request to Solis API"""
         url = f"{self.base_url}{endpoint}"
         # OAuth: proactively refresh the token before the call (no-op for api-key mode).
+        # If the token can't be obtained (refresh failed / needs reauth), fail fast — the
+        # oauth_failed flag below makes _with_retry abort instead of looping with a bad token.
         if getattr(self, "auth_method", "api_key") == "oauth":
-            await self.check_and_refresh_oauth_token()
+            if not await self.check_and_refresh_oauth_token():
+                raise SolisAPIError("Solis OAuth token unavailable — reconnect required", status_code=401)
         headers = self._build_headers(endpoint, payload)
 
         try:
@@ -425,6 +433,10 @@ class SolisAPI(ComponentBase, OAuthMixin):
             try:
                 return await operation()
             except SolisAPIError as err:
+                # OAuth permanently failed (needs reauth) — abort immediately rather than
+                # burning the full retry window hitting the API with a known-bad token.
+                if getattr(self, "oauth_failed", False):
+                    raise err
                 elapsed_time = time.monotonic() - start_time
                 if elapsed_time >= max_retry_time:
                     raise err
