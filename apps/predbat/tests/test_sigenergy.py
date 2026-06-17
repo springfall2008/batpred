@@ -1661,6 +1661,30 @@ def test_sigenergy_offboard_toggle_switch_event(my_predbat):
 # ---------------------------------------------------------------------------
 
 
+def test_sigenergy_onboard_status(my_predbat):
+    """onboard_systems records the user-facing onboarding status per result code."""
+    failed = False
+    api = MockSigenergyAPI()
+    assert api.onboard_status == {}, "onboard_status starts empty"
+
+    # Pending approval (1116) → pending_approval, returns None
+    api._request = AsyncMock(return_value=None)
+    api._last_api_code = SIGENERGY_CODE_SYSTEM_PENDING_REVIEW
+    result = asyncio.run(api.onboard_systems(["sys-1"]))
+    assert result is None, "pending review returns None"
+    assert api.onboard_status["sys-1"] == "pending_approval", "pending_approval status set"
+
+    # Registered to another VPP (1103) → in_other_vpp, returns False
+    api2 = MockSigenergyAPI()
+    api2._request = AsyncMock(return_value=None)
+    api2._last_api_code = SIGENERGY_CODE_IN_OTHER_VPP
+    result2 = asyncio.run(api2.onboard_systems("sys-2"))
+    assert result2 is False, "in-other-vpp returns False"
+    assert api2.onboard_status["sys-2"] == "in_other_vpp", "in_other_vpp status set"
+
+    return failed
+
+
 def run_sigenergy_tests(my_predbat):
     """Run all Sigenergy API unit tests.
 
@@ -1671,6 +1695,7 @@ def run_sigenergy_tests(my_predbat):
     tests = [
         ("helper_functions", test_sigenergy_helper_functions),
         ("initialize", test_sigenergy_initialize),
+        ("onboard_status", test_sigenergy_onboard_status),
         ("system_slug", test_sigenergy_system_slug),
         ("battery_capacity", test_sigenergy_battery_capacity),
         ("publish_system_entities", test_sigenergy_publish_system_entities),
