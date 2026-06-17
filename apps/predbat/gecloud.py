@@ -604,6 +604,8 @@ class GECloudDirect(ComponentBase):
                         self.dashboard_item(entity_name + "_grid_export_total", state=meter[key][subkey].get("export", 0), attributes=attribute_table.get("grid_export_total", {}), app="gecloud")
 
     async def enable_default_options(self, device, registers):
+        """Enable default options for the device."""
+        changed = False
         for key in registers:
             reg_name = registers[key].get("name", "")
             value = registers[key].get("value", None)
@@ -616,10 +618,9 @@ class GECloudDirect(ComponentBase):
                     if result and ("value" in result):
                         registers[key]["value"] = result["value"]
                         await self.publish_registers(device, self.settings[device], select_key=key)
-                        return True
+                        changed = True
                     else:
                         self.log("GECloud: Warn: Failed to set {} for {}".format(ha_name, device))
-                        return False
             if ("inverter_max_output_active_power_percent" in ha_name) or ("ac_charge_upper_percent_limit" in ha_name) or ("_upper_soc_percent_limit" in ha_name):
                 if "enable_" in ha_name:
                     continue
@@ -630,10 +631,9 @@ class GECloudDirect(ComponentBase):
                     if result and ("value" in result):
                         registers[key]["value"] = result["value"]
                         await self.publish_registers(device, self.settings[device], select_key=key)
-                        return True
+                        changed = True
                     else:
                         self.log("GECloud: Warn: Failed to set {} for {}".format(ha_name, device))
-                        return False
             if "charge_up_to_percent" in ha_name:
                 if not value or value < 100:
                     self.log("GECloud: Setting {} to 100% for {}, previous value was {}".format(ha_name, device, value))
@@ -641,10 +641,9 @@ class GECloudDirect(ComponentBase):
                     if result and ("value" in result):
                         registers[key]["value"] = result["value"]
                         await self.publish_registers(device, self.settings[device], select_key=key)
-                        return True
+                        changed = True
                     else:
                         self.log("GECloud: Warn: Failed to set {} for {}".format(ha_name, device))
-                        return False
             if "discharge_down_to_percent" in ha_name:
                 if not value or value > 4:
                     self.log("GECloud: Setting {} to 4% for {}, previous value was {}".format(ha_name, device, value))
@@ -652,10 +651,9 @@ class GECloudDirect(ComponentBase):
                     if result and ("value" in result):
                         registers[key]["value"] = result["value"]
                         await self.publish_registers(device, self.settings[device], select_key=key)
-                        return True
+                        changed = True
                     else:
                         self.log("GECloud: Warn: Failed to set {} for {}".format(ha_name, device))
-                        return False
             # Reset AC charge start and end times to 00:00 to disable
             for charge_id in range(2, 11):
                 if (
@@ -670,25 +668,24 @@ class GECloudDirect(ComponentBase):
                         if result and ("value" in result):
                             registers[key]["value"] = result["value"]
                             await self.publish_registers(device, self.settings[device], select_key=key)
-                            return True
+                            changed = True
                         else:
                             self.log("GECloud: Warn: Failed to set {} for {}".format(ha_name, device))
-                            return False
             if "real_time_control" in ha_name:
                 if value:
                     self.log("GECloud: Real-time control already enabled for {}".format(device))
-                    return True
+                    changed = True
+                    continue
                 else:
                     self.log("GECloud: Enabling real-time control for {} as current value is {}".format(device, value))
                 result = await self.async_write_inverter_setting(device, key, True)
                 if result and ("value" in result):
                     registers[key]["value"] = result["value"]
                     await self.publish_registers(device, self.settings[device], select_key=key)
-                    return True
+                    changed = True
                 else:
                     self.log("GECloud: Warn: Failed to enable real-time control for {}".format(device))
-                    return False
-        return False
+        return changed
 
     async def publish_registers(self, device, registers, select_key=None):
         """

@@ -3401,7 +3401,7 @@ def _test_enable_default_options(my_predbat):
             print("ERROR: enable_default_options should return False when write fails")
             return 1
 
-        # Test 10: Multiple settings - should process first match only
+        # Test 10: Multiple settings - should process all matching settings
         write_calls = []
         registers = {100: {"name": "Export_SOC_Percent_Limit", "value": 10, "validation_rules": []}, 102: {"name": "AC_Charge_Upper_Percent_Limit", "value": 80, "validation_rules": []}}
 
@@ -3410,14 +3410,11 @@ def _test_enable_default_options(my_predbat):
         result = await ge_cloud.enable_default_options("test123", registers)
 
         if not result:
-            print("ERROR: enable_default_options should return True after processing first match")
+            print("ERROR: enable_default_options should return True after processing all matches")
             return 1
-        # Should only process the first matching setting (export SOC limit)
-        if len(write_calls) != 1:
-            print("ERROR: Should only process first matching setting, got {} calls".format(len(write_calls)))
-            return 1
-        if write_calls[0]["key"] != 100:
-            print("ERROR: Should process first setting (key 100), got key {}".format(write_calls[0]["key"]))
+        # Should process all matching settings
+        if len(write_calls) != 2:
+            print("ERROR: Should process all matching settings, got {} calls".format(len(write_calls)))
             return 1
 
         # Test 11: AC charge slot 2 start time needs resetting
