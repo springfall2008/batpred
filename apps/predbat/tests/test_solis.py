@@ -664,6 +664,38 @@ async def test_run_read_only_skips_write():
     return False
 
 
+def test_oauth_bearer_headers():
+    """OAuth mode builds a Bearer header (no HMAC); api-key mode keeps the HMAC header."""
+    failed = False
+
+    # OAuth mode — Bearer, no Content-MD5
+    api = MockSolisAPI()
+    api.auth_method = "oauth"
+    api.access_token = "tok123"
+    headers = api._build_headers("/v2/api/atRead", {"inverterSn": "X", "cid": 636})
+    if headers.get("Authorization") != "Bearer tok123":
+        print("ERROR: OAuth _build_headers should set Bearer Authorization, got {}".format(headers.get("Authorization")))
+        failed = True
+    if "Content-MD5" in headers:
+        print("ERROR: OAuth _build_headers should not include Content-MD5")
+        failed = True
+
+    # API-key mode (default mock has no auth_method) — HMAC 'API <key>:<sig>'
+    api2 = MockSolisAPI()
+    headers2 = api2._build_headers("/v2/api/atRead", {"inverterSn": "X", "cid": 636})
+    auth2 = headers2.get("Authorization", "")
+    if not auth2.startswith("API test_key:"):
+        print("ERROR: api-key _build_headers should set 'API <key>:<sig>', got {}".format(auth2))
+        failed = True
+    if "Content-MD5" not in headers2:
+        print("ERROR: api-key _build_headers should include Content-MD5")
+        failed = True
+
+    if not failed:
+        print("PASSED: OAuth/HMAC header selection")
+    return failed
+
+
 def run_solis_tests(my_predbat):
     """
     Run all Solis API tests
@@ -673,6 +705,7 @@ def run_solis_tests(my_predbat):
 
     try:
         # Run tests
+        failed |= test_oauth_bearer_headers()
         failed |= asyncio.run(test_read_cid())
         failed |= asyncio.run(test_read_batch())
         failed |= asyncio.run(test_read_and_write_cid())

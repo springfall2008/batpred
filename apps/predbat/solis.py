@@ -17,10 +17,14 @@ import copy
 from datetime import datetime, timedelta, UTC
 from predbat_metrics import record_api_call
 from component_base import ComponentBase
+from oauth_mixin import OAuthMixin
 
 
 # API Endpoints
 SOLIS_BASE_URL = "https://www.soliscloud.com:13333"
+# OAuth 2.0 host (Bearer auth). Used when auth_method == "oauth"; reads/control use the
+# same cid/value payloads as the HMAC path, just at this host (design #366, approach 1).
+SOLIS_OAUTH_BASE_URL = "https://api-oauth2.soliscloud.com"
 SOLIS_READ_ENDPOINT = "/v2/api/atRead"
 SOLIS_READ_BATCH_ENDPOINT = "/v2/api/atReadBatch"
 SOLIS_CONTROL_ENDPOINT = "/v2/api/control"
@@ -256,14 +260,19 @@ class SolisAPIError(Exception):
         super().__init__(final_message)
 
 
-class SolisAPI(ComponentBase):
+class SolisAPI(ComponentBase, OAuthMixin):
     """Solis Cloud API integration component"""
 
-    def initialize(self, api_key, api_secret, inverter_sn=None, automatic=False, base_url=SOLIS_BASE_URL, control_enable=True):
+    def initialize(self, api_key=None, api_secret=None, inverter_sn=None, automatic=False, base_url=SOLIS_BASE_URL, control_enable=True, auth_method=None, access_token=None, token_expires_at=None, token_hash=None):
         """Initialise the Solis API component"""
         self.api_key = api_key
         self.api_secret = api_secret
-        self.base_url = base_url
+        # OAuth (Bearer) vs HMAC api-key auth. In OAuth mode the access_token is held by
+        # the mixin and refreshed via the oauth-refresh edge function (provider "solis").
+        self._init_oauth(auth_method, access_token, token_expires_at, "solis")
+        self.token_hash = token_hash or ""
+        # OAuth reads/control use the OAuth host; api-key uses the HMAC host (or override).
+        self.base_url = SOLIS_OAUTH_BASE_URL if self.auth_method == "oauth" else base_url
         self.automatic = automatic
         self.session = None
         self.nominal_voltage = 48.0  # Default nominal battery voltage
@@ -325,7 +334,12 @@ class SolisAPI(ComponentBase):
         return dt.strftime("%a, %d %b %Y %H:%M:%S GMT")
 
     def _build_headers(self, endpoint, payload):
-        """Build HTTP headers with HMAC-SHA1 authorization"""
+        """Build HTTP headers — Bearer (OAuth) or HMAC-SHA1 (api-key)"""
+        if getattr(self, "auth_method", "api_key") == "oauth":
+            return {
+                "Authorization": f"Bearer {self.access_token}",
+                "Content-Type": "application/json",
+            }
         body = json.dumps(payload)
         payload_digest = self._digest(body)
         content_type = "application/json"
@@ -355,6 +369,9 @@ class SolisAPI(ComponentBase):
     async def _execute_request(self, endpoint, payload):
         """Execute HTTP POST request to Solis API"""
         url = f"{self.base_url}{endpoint}"
+        # OAuth: proactively refresh the token before the call (no-op for api-key mode).
+        if getattr(self, "auth_method", "api_key") == "oauth":
+            await self.check_and_refresh_oauth_token()
         headers = self._build_headers(endpoint, payload)
 
         try:
@@ -363,6 +380,9 @@ class SolisAPI(ComponentBase):
                     # Check HTTP status
                     if response.status != 200:
                         error_text = await response.text()
+                        if response.status in (401, 403) and getattr(self, "auth_method", "api_key") == "oauth":
+                            # Force a token refresh; _with_retry re-issues the request with the new token.
+                            await self.handle_oauth_401()
                         reason = "auth_error" if response.status in (401, 403) else "server_error"
                         record_api_call("solis", False, reason)
                         raise SolisAPIError(f"HTTP error: {error_text}", status_code=response.status)

@@ -390,8 +390,13 @@ COMPONENT_LIST = {
         "name": "Solis Cloud API",
         "event_filter": "predbat_solis_",
         "args": {
-            "api_key": {"required": True, "config": "solis_api_key"},
-            "api_secret": {"required": True, "config": "solis_api_secret"},
+            # api_key/api_secret (HMAC) OR auth_method=oauth+access_token must be supplied.
+            "api_key": {"required": False, "config": "solis_api_key"},
+            "api_secret": {"required": False, "config": "solis_api_secret"},
+            "auth_method": {"required": False, "config": "solis_auth_method", "default": "api_key"},
+            "access_token": {"required": False, "config": "solis_access_token"},
+            "token_expires_at": {"required": False, "config": "solis_token_expires_at"},
+            "token_hash": {"required": False, "config": "solis_token_hash"},
             "inverter_sn": {"required": False, "config": "solis_inverter_sn"},
             "automatic": {"required": False, "config": "solis_automatic", "default": False},
             "base_url": {"required": False, "config": "solis_base_url", "default": "https://www.soliscloud.com:13333"},
