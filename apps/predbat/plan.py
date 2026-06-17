@@ -844,6 +844,81 @@ class Plan:
             window_n += 1
         return -1
 
+    def inject_clipping_export_windows(self):
+        """
+        Inject candidate export windows before predicted clipping to allow the optimizer to evaluate forced exports to create headroom.
+        """
+        if not getattr(self, "clipping_peak_enable", False):
+            self.log("inject_clipping_export_windows: Aborting because clipping_peak_enable is False")
+            return
+            
+        forecast = getattr(self, "clipping_buffer_forecast_kwh", {})
+        if not forecast:
+            self.log("inject_clipping_export_windows: Aborting because clipping_buffer_forecast_kwh is empty")
+            return
+            
+        self.log("inject_clipping_export_windows: Proceeding with clipping blocks: {}".format(forecast))
+
+        # Find contiguous blocks of clipping in the forecast
+        clipping_blocks = []
+        current_block = None
+        for minute, kwh_loss in sorted(forecast.items()):
+            if kwh_loss > 0:
+                if current_block is None:
+                    current_block = {"start": minute, "end": minute + 30}
+                elif minute <= current_block["end"] + 60:
+                    current_block["end"] = max(current_block["end"], minute + 30)
+                else:
+                    clipping_blocks.append(current_block)
+                    current_block = {"start": minute, "end": minute + 30}
+        if current_block:
+            clipping_blocks.append(current_block)
+
+        # Helper to check if a window intersects the target range
+        def intersects(w, start, end):
+            return not (w["end"] <= start or w["start"] >= end)
+
+        for block in clipping_blocks:
+            peak_start, peak_end = block["start"], block["end"]
+            
+            # Start the continuous export window from around 08:00 to catch morning export rates,
+            # but no more than 12 hours before the peak, and never in the past.
+            morning_start = max(self.minutes_now, min(peak_start - 300, max(self.minutes_now, peak_start - 720)))
+            morning_start = int(morning_start / 30) * 30  # Align to nearest 30 mins
+            
+            if morning_start >= peak_start:
+                continue
+
+            new_window = {
+                "start": morning_start,
+                "end": peak_end,
+                "average": self.export_rate.get(morning_start, 0.0)
+            }
+            
+            # We MUST remove any fragmented export windows within this period to ensure a single, continuous
+            # target SOC can be applied across the entire morning and peak, allowing the battery to slowly 
+            # absorb the clipped excess without resetting its target.
+            
+            # Clean export_window_best
+            for w in [w for w in self.export_window_best if intersects(w, morning_start, peak_end)]:
+                self.log("Dropped fragmented export window {} to {} in favor of unified spillover window".format(self.time_abs_str(w["start"]), self.time_abs_str(w["end"])))
+                
+            self.export_window_best = [w for w in self.export_window_best if not intersects(w, morning_start, peak_end)]
+            
+            # Clean high_export_rates
+            if getattr(self, "high_export_rates", None) is not None:
+                self.high_export_rates = [w for w in self.high_export_rates if not intersects(w, morning_start, peak_end)]
+            
+            # Inject our new unified window
+            if not any(w.get("start") <= new_window["start"] and w.get("end") >= new_window["end"] for w in self.export_window_best):
+                self.export_window_best.append(new_window)
+                if getattr(self, "high_export_rates", None) is not None:
+                    self.high_export_rates.append(copy.deepcopy(new_window))
+                
+                # Regenerate export limits
+                self.export_limits_best = [100.0] * len(self.export_window_best)
+                self.log("Injected continuous anti-clipping candidate export window {} to {} to allow spillover absorption".format(self.time_abs_str(morning_start), self.time_abs_str(peak_end)))
+
     def calculate_plan(self, recompute=True, debug_mode=False, publish=True):
         """
         Calculate the new plan (best)
@@ -921,6 +996,9 @@ class Plan:
 
             # Pre-fill best export enable with Off
             self.export_limits_best = [100.0 for i in range(len(self.export_window_best))]
+
+            # Inject export windows to create headroom for clipping peaks
+            self.inject_clipping_export_windows()
 
             self.end_record = self.forecast_minutes
         # Show best windows

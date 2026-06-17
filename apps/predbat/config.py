@@ -2325,4 +2325,8 @@ APPS_SCHEMA = {
     "clipping_buffer_max_kwh": {"type": "float"},
     "clipping_buffer_start_time": {"type": "string"},
     "clipping_buffer_end_time": {"type": "string"},
+    "pv_clearsky_today": {"type": "sensor", "sensor_type": "float"},
+    "pv_clearsky_tomorrow": {"type": "sensor", "sensor_type": "float"},
+    "pv_clearsky_d3": {"type": "sensor", "sensor_type": "float"},
+    "pv_clearsky_d4": {"type": "sensor", "sensor_type": "float"},
 }
