@@ -104,12 +104,16 @@ class Plan:
         Add absolute-minute additional load adjustment into prediction step data.
         """
         modified_load = copy.deepcopy(load_minutes_step)
-        for minute_absolute, energy in load_adjust.items():
-            minute_relative = minute_absolute - self.minutes_now
-            if minute_relative < 0 or minute_relative >= self.forecast_minutes:
+        if not load_adjust:
+            return modified_load
+        for minute_relative in range(0, self.forecast_minutes, PREDICT_STEP):
+            minute_absolute = self.minutes_now + minute_relative
+            bucket_energy = 0
+            for offset in range(PREDICT_STEP):
+                bucket_energy += load_adjust.get(minute_absolute + offset, 0.0) / float(self.plan_interval_minutes)
+            if bucket_energy <= 0:
                 continue
-            step_minute = int(minute_relative / PREDICT_STEP) * PREDICT_STEP
-            modified_load[step_minute] = dp4(modified_load.get(step_minute, 0.0) + energy * PREDICT_STEP / float(self.plan_interval_minutes))
+            modified_load[minute_relative] = dp4(modified_load.get(minute_relative, 0.0) + bucket_energy)
         return modified_load
 
     def select_flexible_additional_loads(self, load_minutes_step, load_minutes_step10, pv_forecast_minute_step, pv_forecast_minute10_step):
