@@ -155,6 +155,7 @@ class LoadMLComponent(ComponentBase):
                     self.model_valid = True
                     self.model_status = "active"
                     self.initial_training_done = True
+                    self.last_train_time = self.predictor.training_timestamp
                 else:
                     self.log("ML Component: Loaded model is invalid ({}), will retrain".format(reason))
                     self.model_status = "fallback_" + reason
