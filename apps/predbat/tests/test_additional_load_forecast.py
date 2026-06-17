@@ -904,6 +904,28 @@ def test_additional_load_flexible_prediction_metric_selection(my_predbat):
     return failed
 
 
+def test_additional_load_flexible_candidate_energy_conserved(my_predbat):
+    """Test flexible candidate scoring adds the configured energy exactly once."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.plan_interval_minutes = 15
+    my_predbat.args["plan_interval_minutes"] = 15
+    my_predbat.args["house_load_additional_forecast"] = [
+        {"name": "dishwasher", "mode": "flexible", "start_time": "10:15", "end_time": "11:00", "duration": 0.25, "energy": 0.15},
+    ]
+
+    _, forecasts = my_predbat.fetch_additional_load_forecast()
+    forecast = forecasts.get("dishwasher", {})
+    candidate_adjust, _, total_energy = my_predbat.additional_load_candidate_profile(forecast, 10 * 60 + 15)
+    load_step = my_predbat.add_additional_load_to_step_data({}, candidate_adjust)
+    step_total = round(sum(load_step.values()), 4)
+
+    if total_energy != 0.15 or step_total != 0.15:
+        print("ERROR: Flexible candidate should add exactly 0.15kWh, got profile {} step {} data {}".format(total_energy, step_total, load_step))
+        failed = 1
+    return failed
+
+
 def test_additional_load_textual_plan_summary(my_predbat):
     """Test textual plan includes confirmed and suggested additional load forecasts only."""
     failed = 0
@@ -1121,6 +1143,7 @@ def run_additional_load_forecast_tests(my_predbat):
     failed |= test_additional_load_flexible_api_omitted_start_is_frozen(my_predbat)
     failed |= test_additional_load_flexible_yaml_omitted_start_rolls(my_predbat)
     failed |= test_additional_load_flexible_prediction_metric_selection(my_predbat)
+    failed |= test_additional_load_flexible_candidate_energy_conserved(my_predbat)
     failed |= test_additional_load_textual_plan_summary(my_predbat)
     failed |= test_additional_load_history_archives_expired_api(my_predbat)
     failed |= test_additional_load_history_deduplicates_completed_slots(my_predbat)
