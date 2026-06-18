@@ -667,6 +667,44 @@ class GatewayMQTT(ComponentBase):
             return True
         return False
 
+    def lattice_fragment(self):
+        """Export a Lattice fragment for the inverters this gateway reaches locally over Modbus.
+
+        Thin adapter over lattice.inverter_fragment: pulls the battery inverters from the
+        latest gateway status and offers charge/discharge-rate control on a high-preference
+        local access path. The merge/resolve logic lives in (and is unit-tested via) lattice.py.
+        """
+        from lattice import inverter_fragment
+
+        inverters = []
+        status = getattr(self, "_last_status", None)
+        for inv in status.inverters if status else []:
+            if inv.battery.ByteSize() > 0 or inv.battery.capacity_wh > 0:
+                inverters.append({"serial": inv.serial, "device_type": self._lattice_device_type(inv.type)})
+        return inverter_fragment(inverters, provider="local-gateway", name="Local gateway", transport="modbus", preference=10, locality="local", controllable=("charge_rate", "discharge_rate"))
+
+    @staticmethod
+    def _lattice_device_type(type_value):
+        """Best-effort readable device type from the gateway proto inverter-type enum (e.g. 'givenergy_aio')."""
+        try:
+            return pb.InverterType.Name(type_value).replace("INVERTER_TYPE_", "").lower()
+        except Exception:
+            return "inverter"
+
+    async def lattice_control(self, node_id, capability, value):
+        """Execute a Lattice-resolved control write on an inverter via an MQTT command.
+
+        Maps the capability to a gateway command (charge/discharge rate) and publishes it
+        for the given serial. Returns True on publish, False if the capability is unsupported
+        or MQTT is not connected (so the projection falls back to another provider).
+        """
+        commands = {"charge_rate": "set_charge_rate", "discharge_rate": "set_discharge_rate"}
+        command = commands.get(capability)
+        if command is None or not getattr(self, "_mqtt_connected", False):
+            return False
+        await self.publish_command(command, power_w=int(value), serial=node_id)
+        return True
+
     def automatic_config(self):
         """Register gateway entities with PredBat's inverter model.
 
@@ -827,6 +865,8 @@ class GatewayMQTT(ComponentBase):
         self.set_arg("scheduled_discharge_enable", discharge_enable_entities)
         self.set_arg("export_limit", export_limit_entities)
         self.set_arg("inverter_limit", inverter_limit_entities)
+        # Per-index real serials so inverter.py can correlate each inverter with its Lattice node.
+        self.set_arg("inverter_serial", [inv.serial for inv in inverters])
 
         # Energy counters (first inverter)
         suffix0 = inverters[0].serial[-6:].lower()
