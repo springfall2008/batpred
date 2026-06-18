@@ -21,6 +21,7 @@ from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate
 from predbat_metrics import metrics
 from inverter import Inverter
 import time
+import asyncio
 
 """
 Execute Predbat plan
@@ -34,6 +35,49 @@ class Execute:
     control actions including window programming, rate setting, reserve
     adjustment, and multi-inverter balancing.
     """
+
+    def lattice_express_control(self, serial, capability, value):
+        """Site control plane: express a control intent and let the Lattice projection fulfil it.
+
+        The inverter layer calls this INSTEAD of writing the inverter itself, handing up the intent
+        (capability + which battery + target). If the projection is enabled and can route it, the
+        intent is dispatched (async — best provider, with gateway/cloud fallback) and True returned.
+        ANY problem returns False so the caller performs its normal per-inverter write: cross-provider
+        routing lives here at the site layer, but control is never lost if Lattice cannot act.
+        """
+        try:
+            registry = getattr(self, "components", None)
+            component = registry.get_component("lattice") if registry else None
+            projection = getattr(component, "projection", None)
+            if projection is None or not serial or serial == "Unknown":
+                return False
+            if not projection.would_handle(capability, "battery-system", serial):
+                return False
+            task = asyncio.get_running_loop().create_task(projection.apply(capability, "battery-system", serial, int(value)))
+            # Hold a strong reference (the loop only keeps a weak one — a fire-and-forget task can be
+            # GC'd mid-flight) and surface async failures, since the inverter has already skipped its
+            # own write. NOTE: a provider dropping between would_handle() and apply() means a one-cycle
+            # skip that self-corrects on the next ~5-min planner pass — it is logged, not silently lost.
+            tasks = getattr(self, "_lattice_tasks", None)
+            if tasks is None:
+                tasks = self._lattice_tasks = set()
+            tasks.add(task)
+
+            def _on_done(finished, cap=capability, sn=serial):
+                tasks.discard(finished)
+                try:
+                    result = finished.result()
+                    if result is not None and not getattr(result, "ok", True):
+                        self.log("Warn: Lattice: {} for {} NOT applied ({}) — will retry next cycle".format(cap, sn, getattr(result, "reason", "")))
+                except Exception as exc:
+                    self.log("Warn: Lattice: {} apply task failed for {}: {}".format(cap, sn, exc))
+
+            task.add_done_callback(_on_done)
+            self.log("Lattice: routed {} for {} = {}W via projection".format(capability, serial, int(value)))
+            return True
+        except Exception as e:
+            self.log("Warn: Lattice: {} handoff failed for {} ({}); using normal write".format(capability, serial, e))
+            return False
 
     def execute_plan(self):
         status_extra = ""  # extra status text added to Predbat notifications
