@@ -1,7 +1,7 @@
 # -----------------------------------------------------------------------------
 # Clipping Approach Comparison: Cloud-Model Penalty vs Baseline
 #
-# Runs identical scenarios with and without clipping_peak_enable and compares
+# Runs identical scenarios with and without clipping_buffer_enable and compares
 # the optimizer metrics, final SoC, and clipping amounts.
 #
 # Usage: python apps\predbat\tests\compare_clipping.py
@@ -162,7 +162,7 @@ def run_comparison(my_predbat):
             my_predbat,
             assert_final_metric=0,
             assert_final_soc=0,
-            clipping_peak_enable=False,
+            clipping_buffer_enable=False,
             **common_args,
         )
         time_a = time.perf_counter() - t_start
@@ -177,9 +177,9 @@ def run_comparison(my_predbat):
             my_predbat,
             assert_final_metric=0,
             assert_final_soc=0,
-            clipping_peak_enable=True,
+            clipping_buffer_enable=True,
             clipping_cost_weight=1.0,
-            clipping_peak_amplification=1.0,
+            clipping_amplification=1.0,
             **common_args,
         )
         time_b = time.perf_counter() - t_start

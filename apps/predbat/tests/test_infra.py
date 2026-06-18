@@ -354,9 +354,9 @@ class MockConfigProvider:
             "load_filter_modal": True,
             "carbon_enable": False,
             "carbon_metric": 0,
-            "clipping_peak_enable": False,
+            "clipping_buffer_enable": False,
             "clipping_cost_weight": 1.0,
-            "clipping_peak_amplification": 1.0,
+            "clipping_amplification": 1.0,
             "clipping_limit_override": 0,
             "iboost_enable": False,
             "iboost_gas": 4.0,
@@ -521,9 +521,9 @@ def reset_inverter(my_predbat):
     my_predbat.set_export_window = True
     my_predbat.set_charge_freeze = True
     my_predbat.set_export_freeze = True
-    my_predbat.clipping_peak_enable = False
+    my_predbat.clipping_buffer_enable = False
     my_predbat.clipping_cost_weight = 0
-    my_predbat.clipping_peak_amplification = 1.0
+    my_predbat.clipping_amplification = 1.0
     my_predbat.clipping_limit_override = 0
 
 
@@ -617,9 +617,9 @@ def simple_scenario(
     calculate_export_on_pv=True,
     assert_clipped=0,
     pv_ac_limit=0,
-    clipping_peak_enable=False,
+    clipping_buffer_enable=False,
     clipping_cost_weight=0,
-    clipping_peak_amplification=1.0,
+    clipping_amplification=1.0,
     clipping_limit_override=0,
 ):
     """
@@ -719,9 +719,9 @@ def simple_scenario(
     my_predbat.charge_scaling10 = charge_scaling10
 
     # Clipping peak penalty settings
-    my_predbat.clipping_peak_enable = clipping_peak_enable
+    my_predbat.clipping_buffer_enable = clipping_buffer_enable
     my_predbat.clipping_cost_weight = clipping_cost_weight
-    my_predbat.clipping_peak_amplification = clipping_peak_amplification
+    my_predbat.clipping_amplification = clipping_amplification
     my_predbat.clipping_limit_override = clipping_limit_override
 
     if my_predbat.iboost_enable and (((not iboost_solar) and (not iboost_charging)) or iboost_smart):
@@ -762,8 +762,8 @@ def simple_scenario(
     # Build peak PV step data for clipping tests
     pv_peak_step = None
     clipping_limit_eff = 0
-    if clipping_peak_enable:
-        pv_peak_step = {k: v * clipping_peak_amplification for k, v in pv_step.items()}
+    if clipping_buffer_enable:
+        pv_peak_step = {k: v * clipping_amplification for k, v in pv_step.items()}
         if clipping_limit_override > 0:
             clipping_limit_eff = clipping_limit_override
         else:
@@ -783,7 +783,7 @@ def simple_scenario(
             my_predbat, pv_step, pv10_step, load_step, load10_step,
             pv_forecast_peak_step=pv_peak_step,
             clipping_limit=clipping_limit_eff,
-            clipping_cost_weight=clipping_cost_weight if clipping_peak_enable else 0,
+            clipping_cost_weight=clipping_cost_weight if clipping_buffer_enable else 0,
         )
 
     compute_charge_limit = False

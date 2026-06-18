@@ -848,8 +848,8 @@ class Plan:
         """
         Inject candidate export windows before predicted clipping to allow the optimizer to evaluate forced exports to create headroom.
         """
-        if not getattr(self, "clipping_peak_enable", False):
-            self.log("inject_clipping_export_windows: Aborting because clipping_peak_enable is False")
+        if not getattr(self, "clipping_buffer_enable", False):
+            self.log("inject_clipping_export_windows: Aborting because clipping_buffer_enable is False")
             return
             
         forecast = getattr(self, "clipping_buffer_forecast_kwh", {})
@@ -1043,7 +1043,7 @@ class Plan:
         pv_forecast_peak_step = None
         clipping_limit_effective = 0
         clipping_limit_mode = "Unknown"
-        if self.clipping_peak_enable:
+        if self.clipping_buffer_enable:
             pv_forecast_peak_step = self.step_data_history(
                 self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=None
             )
@@ -1054,7 +1054,7 @@ class Plan:
             auto_tune_file = os.path.join(self.config_root, "clipping_auto_tune.json")
             
             if not hasattr(self, "clipping_auto_amp"):
-                self.clipping_auto_amp = getattr(self, "clipping_peak_amplification", 1.0)
+                self.clipping_auto_amp = getattr(self, "clipping_amplification", 1.0)
                 self.clipping_last_tune_day = None
                 if os.path.exists(auto_tune_file):
                     try:
@@ -1110,10 +1110,10 @@ class Plan:
             self.dashboard_item(self.prefix + ".clipping_recommended_amplification", state=dp2(auto_amp), attributes={"friendly_name": "Clipping Recommended Amplification", "icon": "mdi:auto-fix"})
             
             # Apply Manual vs Auto Factor
-            if getattr(self, "clipping_peak_auto_tune", False):
+            if getattr(self, "clipping_auto_tune", False):
                 effective_amplification = auto_amp
             else:
-                effective_amplification = self.clipping_peak_amplification
+                effective_amplification = self.clipping_amplification
 
             # Apply ClearSky or Amplification factor
             if getattr(self, "clipping_use_clearsky_peaks", False):
@@ -1167,7 +1167,7 @@ class Plan:
             self.clipping_remaining_today = 0.0
             self.clipping_tomorrow = 0.0
             
-            if self.clipping_peak_enable and pv_forecast_peak_step and clipping_limit_effective > 0:
+            if self.clipping_buffer_enable and pv_forecast_peak_step and clipping_limit_effective > 0:
                 step_size = getattr(self, "plan_interval_minutes", 30)
                 # Accumulate potential clipping loss per interval
                 for minute in range(0, self.forecast_minutes, step_size):
@@ -1204,7 +1204,7 @@ class Plan:
             self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10,
             pv_forecast_peak_step=pv_forecast_peak_step,
             clipping_limit=clipping_limit_effective,
-            clipping_cost_weight=self.clipping_cost_weight if self.clipping_peak_enable else 0,
+            clipping_cost_weight=self.clipping_cost_weight if self.clipping_buffer_enable else 0,
             clipping_buffer_kwh=self.clipping_buffer_kwh,
             clipping_buffer_start=self.clipping_buffer_start,
             clipping_buffer_end=self.clipping_buffer_end,
