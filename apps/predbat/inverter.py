@@ -189,6 +189,13 @@ class Inverter:
 
         self.inverter_type = self.base.get_arg("inverter_type", "GE", indirect=False, index=self.id)
 
+        # Lattice node identity: producers (gateway/cloud) publish the real serial per index so the
+        # projection can correlate this inverter with its merged-graph node. REST "GE" overrides this
+        # later from rest_data; for GWMQTT/cloud it is the only serial source.
+        lattice_serial = self.base.get_arg("inverter_serial", default=None, indirect=False, index=self.id)
+        if lattice_serial:
+            self.serial_number = str(lattice_serial)
+
         # Read user defined inverter type
         if "inverter" in self.base.args:
             if self.inverter_type not in INVERTER_DEF:
@@ -1735,6 +1742,8 @@ class Inverter:
             self.base.log("Inverter {} Current Reserve is {}% and new target is {}%".format(self.id, dp0(current_reserve), dp0(reserve)))
             if self.rest_data:
                 self.rest_setReserve(reserve)
+            elif self._lattice_expresses("reserve_soc", reserve):
+                pass  # intent handed to the site control plane (Lattice owns provider + fallback)
             else:
                 self.write_and_poll_value("reserve", self.base.get_arg("reserve", indirect=False, index=self.id, required_unit="%"), reserve)
             if self.base.set_inverter_notify:
@@ -1783,6 +1792,16 @@ class Inverter:
 
         return current_rate
 
+    def _lattice_expresses(self, capability, value):
+        """Hand this control intent up to the site control plane (execute.lattice_express_control).
+
+        Returns True if the Lattice projection took ownership of the write (best provider + fallback);
+        False (incl. when the host has no site control plane) so the caller does its normal write.
+        Cross-provider routing lives at the site layer, not in this single-inverter class.
+        """
+        express = getattr(self.base, "lattice_express_control", None)
+        return bool(express and express(self.serial_number, capability, value))
+
     def adjust_charge_rate(self, new_rate, notify=True):
         """
         Adjust charging rate
@@ -1811,6 +1830,8 @@ class Inverter:
             self.base.log("Inverter {} current charge rate is {}W and new target is {}W".format(self.id, current_rate, new_rate))
             if self.rest_data:
                 self.rest_setChargeRate(new_rate)
+            elif self._lattice_expresses("charge_rate", new_rate):
+                pass  # intent handed to the site control plane (Lattice owns provider + fallback)
             else:
                 if "charge_rate" in self.base.args:
                     self.write_and_poll_value("charge_rate", self.base.get_arg("charge_rate", indirect=False, index=self.id, required_unit="W"), new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 20), required_unit="W")
@@ -1849,6 +1870,8 @@ class Inverter:
             self.base.log("Inverter {} current discharge rate is {}W and new target is {}W".format(self.id, current_rate, new_rate))
             if self.rest_data:
                 self.rest_setDischargeRate(new_rate)
+            elif self._lattice_expresses("discharge_rate", new_rate):
+                pass  # intent handed to the site control plane (Lattice owns provider + fallback)
             else:
                 if "discharge_rate" in self.base.args:
                     self.write_and_poll_value("discharge_rate", self.base.get_arg("discharge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 20), required_unit="W")
@@ -1896,6 +1919,8 @@ class Inverter:
             self.current_charge_limit = soc
             if self.rest_data:
                 self.rest_setChargeTarget(soc)
+            elif self._lattice_expresses("target_soc", soc):
+                pass  # intent handed to the site control plane (Lattice owns provider + fallback)
             else:
                 self.write_and_poll_value("charge_limit", self.base.get_arg("charge_limit", indirect=False, index=self.id, required_unit="%"), soc)
 
