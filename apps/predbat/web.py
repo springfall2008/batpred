@@ -3058,8 +3058,8 @@ chart.render();
             
             if getattr(self.base, "predict_clipping_remaining_best", None):
                 for minute, kwh in self.base.predict_clipping_remaining_best.items():
-                    if minute % step_size == 0 and minute >= self.minutes_now:
-                        minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
+                    if minute % step_size == 0 and minute >= 0:
+                        minute_timestamp = self.now_utc + timedelta(minutes=minute)
                         stamp = minute_timestamp.strftime(TIME_FORMAT)
                         clipping_remaining_series[stamp] = round(kwh, 2)
                         
@@ -3068,30 +3068,22 @@ chart.render();
             
             if getattr(self.base, "predict_clipping_ceiling_best", None):
                 for minute, kwh in self.base.predict_clipping_ceiling_best.items():
-                    if minute % step_size == 0 and minute >= self.minutes_now:
-                        minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
+                    if minute % step_size == 0 and minute >= 0:
+                        minute_timestamp = self.now_utc + timedelta(minutes=minute)
                         stamp = minute_timestamp.strftime(TIME_FORMAT)
                         clipping_ceiling_series[stamp] = round(kwh, 2)
 
-            # Raw PV forecast (Base)
-            raw_pv_series = {}
-            raw_pv_data = getattr(self.base, "pv_forecast_minute", {})
-            if raw_pv_data:
-                for minute, kw in raw_pv_data.items():
-                    if minute % step_size == 0:
-                        minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
-                        stamp = minute_timestamp.strftime(TIME_FORMAT)
-                        raw_pv_series[stamp] = round(kw * 60.0, 2)
+            # PV Forecast (Base) - historical and future
+            pv_forecast_hist = history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", 3, required=False))
+            raw_pv_series = prune_today(pv_forecast_hist, self.now_utc, self.midnight_utc, prune=False, prune_past_days=2, intermediate=True)
+            raw_pv_series.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_today", "pv_estimate"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
+            raw_pv_series.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_tomorrow", "pv_estimate"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
 
-            # ClearSky PV forecast
-            cs_pv_series = {}
-            cs_pv_data = getattr(self.base, "pv_forecast_minuteCS", {})
-            if cs_pv_data:
-                for minute, kw in cs_pv_data.items():
-                    if minute % step_size == 0:
-                        minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
-                        stamp = minute_timestamp.strftime(TIME_FORMAT)
-                        cs_pv_series[stamp] = round(kw * 60.0, 2)
+            # PV Forecast (ClearSky) - historical and future
+            pv_forecast_histCS = history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", 3, required=False), attributes=True, state_key="nowCS")
+            cs_pv_series = prune_today(pv_forecast_histCS, self.now_utc, self.midnight_utc, prune=False, prune_past_days=2, intermediate=True)
+            cs_pv_series.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_today", "pv_clearsky"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
+            cs_pv_series.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_tomorrow", "pv_clearsky"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
 
             series_data = [
                 {"name": "Clipping Remaining", "data": clipping_remaining_series, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#FF1493", "unit": "kWh"},
