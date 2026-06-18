@@ -13,6 +13,7 @@ nav:
     - energy-rates.md
     - components.md
     - load-ml.md
+    - clipping.md
     - car-charging.md
     - configuration-guide.md
     - customisation.md
