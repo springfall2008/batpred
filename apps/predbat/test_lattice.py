@@ -8,6 +8,7 @@ These run standalone (no PredBat / Home Assistant), like test_oo_utils.py.
 import unittest
 
 from lattice import Fragment, Node, Capability, AccessPath, merge_fragments, resolve_control, resolve_read, inverter_fragment, control_candidates
+from lattice_projection import entity_for, projection_entries, LatticeProjection
 
 
 class TestModel(unittest.TestCase):
@@ -274,6 +275,230 @@ class TestControlCandidates(unittest.TestCase):
         )
         candidates = control_candidates(site, "charge_rate", "N", 9999, {"p"})
         self.assertEqual([c[0] for c in candidates], ["p"])  # resolved without raising
+
+
+class TestProjection(unittest.TestCase):
+    """The curated table maps (capability, scope) to a predbat.* entity and direction."""
+
+    def test_charge_rate_entry(self):
+        """charge_rate (battery-system) maps to predbat.charge_rate, read+write."""
+        ent = entity_for("charge_rate", "battery-system")
+        self.assertEqual(ent.entity, "predbat.charge_rate")
+        self.assertTrue(ent.write)
+
+    def test_unknown_capability_not_projected(self):
+        """A capability not in the table returns None (behaves as today)."""
+        self.assertIsNone(entity_for("does_not_exist", "plant"))
+
+    def test_entries_are_unique(self):
+        """No duplicate (capability, scope) keys in the curated table."""
+        keys = [(e.capability, e.scope) for e in projection_entries()]
+        self.assertEqual(len(keys), len(set(keys)))
+
+    def test_target_and_reserve_entries(self):
+        """target_soc and reserve_soc are projected controls."""
+        self.assertEqual(entity_for("target_soc", "battery-system").entity, "predbat.target_soc")
+        self.assertTrue(entity_for("reserve_soc", "battery-system").write)
+
+
+class _FakeComp:
+    """A stand-in producer component exposing lattice_fragment() and is_alive()."""
+
+    def __init__(self, fragment, alive=True):
+        """Hold a pre-built fragment dict and a liveness flag."""
+        self._fragment = fragment
+        self._alive = alive
+
+    def lattice_fragment(self):
+        """Return the canned fragment dict."""
+        return self._fragment
+
+    def is_alive(self):
+        """Return whether this producer is currently reachable."""
+        return self._alive
+
+
+class _FakeComponents:
+    """A stand-in component registry mapping name to component."""
+
+    def __init__(self, mapping):
+        """Hold the name -> component mapping."""
+        self._mapping = mapping
+
+    def get_component(self, name):
+        """Return the component for name, or None."""
+        return self._mapping.get(name)
+
+    def get_all(self):
+        """Return all registered component names."""
+        return list(self._mapping.keys())
+
+
+class _FakeBase:
+    """A minimal PredBat base for dependency-injected projection tests."""
+
+    def __init__(self, components, args=None):
+        """Hold a components registry and an args dict (+ ComponentBase init attrs)."""
+        self.components = components
+        self._args = args or {}
+        self.args = self._args
+        self.logs = []
+        self.local_tz = None
+        self.prefix = "predbat"
+
+    def get_arg(self, name, default=None):
+        """Return a config arg from the fake args dict."""
+        return self._args.get(name, default)
+
+    def log(self, message):
+        """Capture a log line."""
+        self.logs.append(message)
+
+
+class TestLatticeProjection(unittest.TestCase):
+    """End-to-end: collect producers, merge, and route charge_rate with gateway->cloud fallback."""
+
+    def _proj(self, gw_alive=True, cloud_alive=True, args=None):
+        """Build a LatticeProjection over fake gateway + gecloud producers and refresh it."""
+        gw = inverter_fragment([{"serial": "CH-1", "rated_w": 6000}], provider="local-gateway", name="GW", transport="modbus", preference=10, locality="local")
+        cloud = inverter_fragment([{"serial": "CH-1"}], provider="ge-cloud", name="Cloud", transport="https", preference=1, locality="cloud")
+        comps = _FakeComponents({"gateway": _FakeComp(gw, gw_alive), "gecloud": _FakeComp(cloud, cloud_alive)})
+        proj = LatticeProjection(_FakeBase(comps, args))
+        proj.refresh()
+        return proj
+
+    def test_refresh_merges_producers(self):
+        """refresh() collects both producers and merges them by serial into one node."""
+        proj = self._proj()
+        self.assertEqual(len(proj.site.nodes), 1)
+        self.assertEqual(len(proj.site.nodes[0].access_paths), 2)
+
+    def test_write_prefers_gateway(self):
+        """With both producers alive, charge_rate write resolves to the gateway."""
+        r = self._proj().write("charge_rate", "battery-system", "CH-1", 3000)
+        self.assertTrue(r.ok)
+        self.assertEqual(r.provider, "local-gateway")
+        self.assertEqual(r.value, 3000)
+
+    def test_write_falls_back_when_gateway_down(self):
+        """Gateway component not alive => write falls back to GE-Cloud (the Phil scenario)."""
+        r = self._proj(gw_alive=False).write("charge_rate", "battery-system", "CH-1", 3000)
+        self.assertTrue(r.ok)
+        self.assertEqual(r.provider, "ge-cloud")
+
+    def test_write_capability_not_in_table(self):
+        """A capability not in the projection table is not routed."""
+        r = self._proj().write("does_not_exist", "plant", "CH-1", 1)
+        self.assertFalse(r.ok)
+
+    def test_enabled_default_off(self):
+        """The projection is switched off unless lattice_projection_enable is set."""
+        self.assertFalse(self._proj().enabled())
+        self.assertTrue(self._proj(args={"lattice_projection_enable": True}).enabled())
+
+    def test_would_handle(self):
+        """would_handle gates the live write path: enabled + projected + an available provider."""
+        off = self._proj()  # flag off by default
+        self.assertFalse(off.would_handle("charge_rate", "battery-system", "CH-1"))
+        on = self._proj(args={"lattice_projection_enable": True})
+        self.assertTrue(on.would_handle("charge_rate", "battery-system", "CH-1"))
+        self.assertFalse(on.would_handle("does_not_exist", "plant", "CH-1"))
+        self.assertFalse(on.would_handle("charge_rate", "battery-system", "NOPE"))  # no such node
+
+    def test_would_handle_false_when_no_provider_live(self):
+        """No reachable provider => would_handle is False (caller keeps the normal write)."""
+        on = self._proj(gw_alive=False, cloud_alive=False, args={"lattice_projection_enable": True})
+        self.assertFalse(on.would_handle("charge_rate", "battery-system", "CH-1"))
+
+    def test_discovers_any_brand_producer(self):
+        """A third brand (Fox) that publishes a fragment is auto-discovered — no projection change."""
+        gw = inverter_fragment([{"serial": "GE-1", "rated_w": 6000}], provider="local-gateway", name="GW", transport="modbus", preference=10, locality="local")
+        fox = inverter_fragment([{"serial": "FOX-1", "rated_w": 3600}], provider="fox-cloud", name="Fox", transport="https", preference=1, locality="cloud")
+        comps = _FakeComponents({"gateway": _FakeComp(gw), "fox": _FakeComp(fox)})
+        proj = LatticeProjection(_FakeBase(comps))
+        proj.refresh()
+        self.assertEqual({n.id for n in proj.site.nodes}, {"GE-1", "FOX-1"})
+        # the Fox-only node resolves to the fox-cloud provider with no central registration
+        r = proj.write("charge_rate", "battery-system", "FOX-1", 2000)
+        self.assertTrue(r.ok)
+        self.assertEqual(r.provider, "fox-cloud")
+
+
+class _FakeAsyncComp:
+    """A producer whose lattice_control records calls and can simulate failure/liveness."""
+
+    def __init__(self, fragment, alive=True, succeed=True):
+        """Hold a fragment, a liveness flag, and whether writes succeed."""
+        self._fragment = fragment
+        self._alive = alive
+        self._succeed = succeed
+        self.calls = []
+
+    def lattice_fragment(self):
+        """Return the canned fragment dict."""
+        return self._fragment
+
+    def is_alive(self):
+        """Return whether this producer is reachable."""
+        return self._alive
+
+    async def lattice_control(self, node_id, capability, value):
+        """Record the control call and return the configured success flag."""
+        self.calls.append((node_id, capability, value))
+        return self._succeed
+
+
+class TestLatticeApply(unittest.IsolatedAsyncioTestCase):
+    """apply() resolves AND executes, trying providers in order and falling back on failure."""
+
+    def _build(self, gw_alive=True, gw_ok=True, cloud_alive=True, cloud_ok=True):
+        """Wire a projection over fake async gateway + gecloud producers for INV-1."""
+        gw_frag = inverter_fragment([{"serial": "INV-1", "rated_w": 6000}], provider="local-gateway", name="GW", transport="modbus", preference=10, locality="local")
+        cloud_frag = inverter_fragment([{"serial": "INV-1"}], provider="ge-cloud", name="Cloud", transport="https", preference=1, locality="cloud")
+        gw = _FakeAsyncComp(gw_frag, gw_alive, gw_ok)
+        cloud = _FakeAsyncComp(cloud_frag, cloud_alive, cloud_ok)
+        proj = LatticeProjection(_FakeBase(_FakeComponents({"gateway": gw, "gecloud": cloud})))
+        proj.refresh()
+        return proj, gw, cloud
+
+    async def test_executes_on_gateway(self):
+        """Both up + gateway write succeeds => executed on the gateway with the clamped value."""
+        proj, gw, cloud = self._build()
+        r = await proj.apply("charge_rate", "battery-system", "INV-1", 3000)
+        self.assertTrue(r.ok)
+        self.assertEqual(r.provider, "local-gateway")
+        self.assertEqual(gw.calls, [("INV-1", "charge_rate", 3000)])
+        self.assertEqual(cloud.calls, [])
+
+    async def test_falls_back_when_gateway_write_fails(self):
+        """Gateway write returns False => fall back and execute on GE-Cloud."""
+        proj, gw, cloud = self._build(gw_ok=False)
+        r = await proj.apply("charge_rate", "battery-system", "INV-1", 3000)
+        self.assertTrue(r.ok)
+        self.assertEqual(r.provider, "ge-cloud")
+        self.assertEqual(len(gw.calls), 1)  # tried first
+        self.assertEqual(len(cloud.calls), 1)  # then fell back
+
+    async def test_gateway_down_uses_cloud(self):
+        """Gateway not alive => only GE-Cloud is a candidate."""
+        proj, gw, cloud = self._build(gw_alive=False)
+        r = await proj.apply("charge_rate", "battery-system", "INV-1", 3000)
+        self.assertTrue(r.ok)
+        self.assertEqual(r.provider, "ge-cloud")
+        self.assertEqual(gw.calls, [])
+
+    async def test_all_providers_fail(self):
+        """Every provider's write fails => not ok."""
+        proj, gw, cloud = self._build(gw_ok=False, cloud_ok=False)
+        r = await proj.apply("charge_rate", "battery-system", "INV-1", 3000)
+        self.assertFalse(r.ok)
+
+    async def test_capability_not_in_table_not_applied(self):
+        """A capability not in the table is not executed."""
+        proj, gw, cloud = self._build()
+        r = await proj.apply("does_not_exist", "plant", "INV-1", 1)
+        self.assertFalse(r.ok)
+        self.assertEqual(gw.calls, [])
 
 
 if __name__ == "__main__":
