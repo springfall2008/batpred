@@ -254,6 +254,40 @@ class GECloudDirect(ComponentBase):
         self.requests_total = 0
         self.failures_total = 0
 
+    def lattice_fragment(self):
+        """Export a Lattice fragment for the inverter(s) controllable via the GivEnergy Cloud API.
+
+        Emits the same battery serials the cloud polls (self.device_list) on a LOW-preference
+        cloud access path, so the merge yields one node with [gateway(preferred), GE-Cloud(fallback)].
+        """
+        from lattice import inverter_fragment
+
+        inverters = [{"serial": serial, "device_type": "ge-aio"} for serial in getattr(self, "device_list", []) or []]
+        # READ-ONLY: lattice_control below keys writes by register NAME, but self.settings is keyed by
+        # numeric setting id — so it can't execute yet. Declaring control would over-promise (the
+        # gateway->cloud fallback would silently no-op). Flip controllable once name->sid resolution
+        # is implemented + verified (see lattice_control). The local-gateway path is the GE executor today.
+        return inverter_fragment(inverters, provider="ge-cloud", name="GivEnergy Cloud", transport="https", preference=1, locality="cloud", controllable=())
+
+    async def lattice_control(self, node_id, capability, value):
+        """Execute a Lattice-resolved control write via the GivEnergy Cloud setting API.
+
+        Maps the capability to a GE setting key and writes it for the serial. Writes only when
+        that serial actually exposes the setting; returns False otherwise so the projection can
+        fall back. KNOWN GAP (why the fragment is read-only): self.settings is keyed by NUMERIC
+        setting id, but these are register NAMES, so the guard never matches and this can't execute
+        yet. Resolve name->setting-id (via the device's settings) + verify live before declaring control.
+        """
+        keys = {"charge_rate": "battery_charge_power", "discharge_rate": "battery_discharge_power"}
+        key = keys.get(capability)
+        if key is None:
+            return False
+        if key not in self.settings.get(node_id, {}):
+            self.log("GECloud: lattice_control: setting {} not available for {}".format(key, node_id))
+            return False
+        result = await self.async_write_inverter_setting(node_id, key, int(value))
+        return bool(result)
+
     async def switch_event(self, entity_id, service):
         """
         Switch event
