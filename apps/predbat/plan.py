@@ -892,7 +892,7 @@ class Plan:
             new_window = {
                 "start": morning_start,
                 "end": peak_end,
-                "average": self.export_rate.get(morning_start, 0.0)
+                "average": self.rate_export.get(morning_start, 0.0)
             }
             
             # We MUST remove any fragmented export windows within this period to ensure a single, continuous
