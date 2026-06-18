@@ -45,6 +45,12 @@ CONFIG_ITEMS = [
         "default": False,
     },
     {
+        "name": "lattice_projection_enable",
+        "friendly_name": "Lattice Projection (experimental)",
+        "type": "switch",
+        "default": False,
+    },
+    {
         "name": "active",
         "friendly_name": "Predbat Active",
         "type": "switch",

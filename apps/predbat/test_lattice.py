@@ -501,5 +501,36 @@ class TestLatticeApply(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(gw.calls, [])
 
 
+class TestLatticeComponent(unittest.IsolatedAsyncioTestCase):
+    """The live component refreshes + logs the merged graph when enabled, and is a no-op when off."""
+
+    def _base(self, enabled):
+        """A fake base with a gateway + gecloud producer; flag on/off."""
+        gw = inverter_fragment([{"serial": "INV-1", "rated_w": 6000}], provider="local-gateway", name="GW", transport="modbus", preference=10, locality="local")
+        cloud = inverter_fragment([{"serial": "INV-1"}], provider="ge-cloud", name="Cloud", transport="https", preference=1, locality="cloud")
+        comps = _FakeComponents({"gateway": _FakeComp(gw), "gecloud": _FakeComp(cloud)})
+        return _FakeBase(comps, args={"lattice_projection_enable": True} if enabled else None)
+
+    async def test_run_noop_when_disabled(self):
+        """Flag off: run() returns True, does not refresh, and logs nothing."""
+        from lattice_component import LatticeComponent
+
+        comp = LatticeComponent(self._base(enabled=False))
+        ok = await comp.run(0, True)
+        self.assertTrue(ok)
+        self.assertIsNone(comp.projection.site)
+        self.assertEqual(comp.base.logs, [])
+
+    async def test_run_logs_graph_when_enabled(self):
+        """Flag on: run() merges producers and logs the graph."""
+        from lattice_component import LatticeComponent
+
+        comp = LatticeComponent(self._base(enabled=True))
+        ok = await comp.run(0, True)
+        self.assertTrue(ok)
+        self.assertEqual(len(comp.projection.site.nodes), 1)  # merged by serial
+        self.assertTrue(any("merged site graph" in m for m in comp.base.logs))
+
+
 if __name__ == "__main__":
     unittest.main()
