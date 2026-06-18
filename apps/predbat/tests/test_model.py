@@ -1907,7 +1907,7 @@ def run_model_tests(my_predbat):
         assert_final_soc=0,
         with_battery=False,
         inverter_limit=1.0,
-        clipping_peak_enable=True,
+        clipping_buffer_enable=True,
         clipping_cost_weight=1.0,
     )
 
@@ -1925,7 +1925,7 @@ def run_model_tests(my_predbat):
         assert_final_soc=0,
         with_battery=False,
         inverter_limit=1.0,
-        clipping_peak_enable=False,
+        clipping_buffer_enable=False,
         return_prediction_handle=True,
     )
     failed |= failed_no_penalty
@@ -1939,7 +1939,7 @@ def run_model_tests(my_predbat):
         assert_final_soc=0,
         with_battery=False,
         inverter_limit=1.0,
-        clipping_peak_enable=True,
+        clipping_buffer_enable=True,
         clipping_cost_weight=1.0,
         return_prediction_handle=True,
         ignore_failed=True,
@@ -1966,7 +1966,7 @@ def run_model_tests(my_predbat):
         battery_soc=0.0,
         battery_size=100.0,
         inverter_limit=1.0,
-        clipping_peak_enable=True,
+        clipping_buffer_enable=True,
         clipping_cost_weight=1.0,
     )
 

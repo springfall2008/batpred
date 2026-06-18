@@ -940,7 +940,7 @@ class Output:
             )
 
         # Clipping summary
-        if getattr(self, "clipping_peak_enable", False):
+        if getattr(self, "clipping_buffer_enable", False):
             clipping_status = getattr(self, "clipping_status", "No clipping forecast.")
             sentence += "- Clipping status: {}\n".format(clipping_status)
 

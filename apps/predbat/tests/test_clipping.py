@@ -23,7 +23,7 @@ def run_clipping_tests(my_predbat):
 
 def setup(my_predbat):
     reset_inverter(my_predbat)
-    my_predbat.clipping_peak_enable = True
+    my_predbat.clipping_buffer_enable = True
     my_predbat.clipping_buffer_forecast_kwh = {}
     my_predbat.minutes_now = 0
     my_predbat.export_rate = {}
@@ -39,7 +39,7 @@ def test_inject_aborts_if_disabled(my_predbat):
     print("**** test_inject_aborts_if_disabled ****")
     failed = False
     setup(my_predbat)
-    my_predbat.clipping_peak_enable = False
+    my_predbat.clipping_buffer_enable = False
     my_predbat.clipping_buffer_forecast_kwh = {720: 1.0}
     
     my_predbat.inject_clipping_export_windows()
@@ -55,7 +55,7 @@ def test_inject_aborts_if_empty_forecast(my_predbat):
     print("**** test_inject_aborts_if_empty_forecast ****")
     failed = False
     setup(my_predbat)
-    my_predbat.clipping_peak_enable = True
+    my_predbat.clipping_buffer_enable = True
     my_predbat.clipping_buffer_forecast_kwh = {}
     
     my_predbat.inject_clipping_export_windows()
