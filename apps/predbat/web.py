@@ -2989,6 +2989,12 @@ chart.render();
             pv_today_forecast90.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_tomorrow", "pv_estimate90"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
             pv_today_forecastCL.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_tomorrow", "pv_estimateCL"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
             pv_today_forecastCS.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_tomorrow", "pv_clearsky"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
+            for d in ["d2", "d3", "d4", "d5", "d6"]:
+                pv_today_forecast.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + f"_pv_{d}", "pv_estimate"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
+                pv_today_forecast10.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + f"_pv_{d}", "pv_estimate10"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
+                pv_today_forecast90.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + f"_pv_{d}", "pv_estimate90"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
+                pv_today_forecastCL.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + f"_pv_{d}", "pv_estimateCL"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
+                pv_today_forecastCS.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + f"_pv_{d}", "pv_clearsky"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
 
             series_data = [
                 {"name": "PV Power", "data": pv_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#f5c43d"},
@@ -3075,15 +3081,19 @@ chart.render();
 
             # PV Forecast (Base) - historical and future
             pv_forecast_hist = history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", 3, required=False))
-            raw_pv_series = prune_today(pv_forecast_hist, self.now_utc, self.midnight_utc, prune=False, prune_past_days=2, intermediate=True)
-            raw_pv_series.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_today", "pv_estimate"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
-            raw_pv_series.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_tomorrow", "pv_estimate"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
+            raw_pv_series = prune_today(pv_forecast_hist, self.now_utc, self.midnight_utc, prune=True, prune_past_days=2, intermediate=True)
+            raw_pv_series.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_today", "pv_estimate"), self.now_utc, self.midnight_utc, prune=True, intermediate=True))
+            raw_pv_series.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_tomorrow", "pv_estimate"), self.now_utc, self.midnight_utc, prune=True, intermediate=True))
+            for d in ["d2", "d3"]:
+                raw_pv_series.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + f"_pv_{d}", "pv_estimate"), self.now_utc, self.midnight_utc, prune=True, intermediate=True))
 
             # PV Forecast (ClearSky) - historical and future
             pv_forecast_histCS = history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", 3, required=False), attributes=True, state_key="nowCS")
-            cs_pv_series = prune_today(pv_forecast_histCS, self.now_utc, self.midnight_utc, prune=False, prune_past_days=2, intermediate=True)
-            cs_pv_series.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_today", "pv_clearsky"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
-            cs_pv_series.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_tomorrow", "pv_clearsky"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
+            cs_pv_series = prune_today(pv_forecast_histCS, self.now_utc, self.midnight_utc, prune=True, prune_past_days=2, intermediate=True)
+            cs_pv_series.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_today", "pv_clearsky"), self.now_utc, self.midnight_utc, prune=True, intermediate=True))
+            cs_pv_series.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_tomorrow", "pv_clearsky"), self.now_utc, self.midnight_utc, prune=True, intermediate=True))
+            for d in ["d2", "d3"]:
+                cs_pv_series.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + f"_pv_{d}", "pv_clearsky"), self.now_utc, self.midnight_utc, prune=True, intermediate=True))
 
             series_data = [
                 {"name": "Clipping Remaining", "data": clipping_remaining_series, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#FF1493", "unit": "kWh"},
