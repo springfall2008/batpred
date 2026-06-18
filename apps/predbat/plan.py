@@ -1049,19 +1049,24 @@ class Plan:
             )
             
             # Auto-Tuner: Always runs to gather data and recommend a factor
-            auto_amp = getattr(self, "clipping_peak_amplification", 1.0)
             import os
             import json
             auto_tune_file = os.path.join(self.config_root, "clipping_auto_tune.json")
-            last_tune_day = None
-            if os.path.exists(auto_tune_file):
-                try:
-                    with open(auto_tune_file, "r") as f:
-                        data = json.load(f)
-                        auto_amp = data.get("auto_amp", 1.0)
-                        last_tune_day = data.get("last_tune_day", None)
-                except Exception:
-                    pass
+            
+            if not hasattr(self, "clipping_auto_amp"):
+                self.clipping_auto_amp = getattr(self, "clipping_peak_amplification", 1.0)
+                self.clipping_last_tune_day = None
+                if os.path.exists(auto_tune_file):
+                    try:
+                        with open(auto_tune_file, "r") as f:
+                            data = json.load(f)
+                            self.clipping_auto_amp = data.get("auto_amp", self.clipping_auto_amp)
+                            self.clipping_last_tune_day = data.get("last_tune_day", None)
+                    except Exception:
+                        pass
+            
+            auto_amp = self.clipping_auto_amp
+            last_tune_day = self.clipping_last_tune_day
             
             # Check if we should tune today (only once per day)
             current_day = self.now_utc.strftime("%Y-%m-%d")
@@ -1097,6 +1102,8 @@ class Plan:
                     try:
                         with open(auto_tune_file, "w") as f:
                             json.dump({"auto_amp": auto_amp, "last_tune_day": current_day}, f)
+                        self.clipping_auto_amp = auto_amp
+                        self.clipping_last_tune_day = current_day
                     except Exception:
                         pass
             

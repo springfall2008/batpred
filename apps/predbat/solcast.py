@@ -1442,7 +1442,7 @@ class SolarAPI(ComponentBase):
                             ha_data += data
                 if ha_data:
                     # Apply factor and divide_by logic like the main PV fetcher
-                    ha_lookup = {item["period_start"]: (item.get("pv_estimate", 0) * factor / divide_by) for item in ha_data}
+                    ha_lookup = {item["period_start"]: (float(item.get("pv_estimate") or 0.0) * factor / divide_by) for item in ha_data}
                     for item in pv_forecast_data:
                         ts = item.get("period_start")
                         if ts in ha_lookup:
