@@ -199,6 +199,7 @@ class GatewayMQTT(ComponentBase):
         self._last_published_plan = None
         self._pending_plan = None
         self._suffix_to_serial = {}  # maps entity suffix (last 6 chars of serial) -> full serial string
+        self._command_id = 0  # incrementing counter included in every published command
 
         # Predbat data publish state (price/timeline for device display)
         self._last_predbat_data = None
@@ -1122,11 +1123,14 @@ class GatewayMQTT(ComponentBase):
             command: Command name (set_mode, set_charge_rate, etc.)
             **kwargs: Command-specific fields (mode, power_w, target_soc).
         """
-        cmd_json = self.build_command(command, **kwargs)
+        self._command_id += 1
+        cmd_json = self.build_command(command, command_id=self._command_id, **kwargs)
+
+        self.log("Info: GatewayMQTT: publish_command: command={}, payload={}".format(command, cmd_json))
 
         if self._mqtt_connected:
             await self._publish_raw(self.topic_command, cmd_json.encode("utf-8"))
-            self.log(f"Info: GatewayMQTT: Published command: {command}")
+            self.log(f"Info: GatewayMQTT: Published command: {command} payload={cmd_json}")
         else:
             self.log(f"Warn: GatewayMQTT: Not connected — cannot publish command: {command}")
 
@@ -1172,6 +1176,7 @@ class GatewayMQTT(ComponentBase):
         """Extract the full inverter serial from a gateway entity_id.
 
         Entity IDs follow the pattern {domain}.{prefix}_gateway_{suffix}_{attribute}
+        e.g. select.predbat_gateway_30g499_charge_slot1_start
         where suffix is the last 6 chars of the inverter serial, lowercased.
         Returns the full serial string, or None if the suffix is not in the map.
         """
@@ -1198,10 +1203,13 @@ class GatewayMQTT(ComponentBase):
 
         self.log("Info: GatewayMQTT: select_event: entity_id={}, value={}".format(entity_id, value))
         serial = self._serial_from_entity_id(entity_id)
+        if serial is None:
+            self.log(f"Warn: GatewayMQTT: select_event: cannot resolve serial for entity '{entity_id}' — command not sent")
+            return
         # Operating mode selector
         if "_mode_select" in entity_id:
             mode_int = GATEWAY_OPERATING_MODE_VALUES.get(str(value).strip(), 0)
-            await self.publish_command("set_mode", mode=mode_int, **({"serial": serial} if serial else {}))
+            await self.publish_command("set_mode", mode=mode_int, serial=serial)
             self.log(f"Info: GatewayMQTT: Operating mode set to {value} ({mode_int})")
             return
 
@@ -1220,23 +1228,23 @@ class GatewayMQTT(ComponentBase):
                 # Read current charge slot times to send both start and end
                 await self._update_charge_slot(entity_id, hhmm, serial=serial)
 
-    async def _update_charge_slot(self, entity_id, hhmm, serial=None):
+    async def _update_charge_slot(self, entity_id, hhmm, serial):
         """Send set_charge_slot command with updated start or end time."""
         # Determine which field changed
         if "_start" in entity_id:
             schedule = {"start": hhmm}
         else:
             schedule = {"end": hhmm}
-        await self.publish_command("set_charge_slot", schedule_json=json.dumps(schedule), **({"serial": serial} if serial else {}))
+        await self.publish_command("set_charge_slot", schedule_json=json.dumps(schedule), serial=serial)
         self.log(f"Info: GatewayMQTT: Charge slot update: {schedule}")
 
-    async def _update_discharge_slot(self, entity_id, hhmm, serial=None):
+    async def _update_discharge_slot(self, entity_id, hhmm, serial):
         """Send set_discharge_slot command with updated start or end time."""
         if "_start" in entity_id:
             schedule = {"start": hhmm}
         else:
             schedule = {"end": hhmm}
-        await self.publish_command("set_discharge_slot", schedule_json=json.dumps(schedule), **({"serial": serial} if serial else {}))
+        await self.publish_command("set_discharge_slot", schedule_json=json.dumps(schedule), serial=serial)
         self.log(f"Info: GatewayMQTT: Discharge slot update: {schedule}")
 
     async def number_event(self, entity_id, value):
@@ -1255,15 +1263,17 @@ class GatewayMQTT(ComponentBase):
             return
 
         serial = self._serial_from_entity_id(entity_id)
-        serial_kwarg = {"serial": serial} if serial else {}
+        if serial is None:
+            self.log(f"Warn: GatewayMQTT: number_event: cannot resolve serial for entity '{entity_id}' — command not sent")
+            return
         if "_discharge_rate" in entity_id:
-            await self.publish_command("set_discharge_rate", power_w=val, **serial_kwarg)
+            await self.publish_command("set_discharge_rate", power_w=val, serial=serial)
         elif "_charge_rate" in entity_id:
-            await self.publish_command("set_charge_rate", power_w=val, **serial_kwarg)
+            await self.publish_command("set_charge_rate", power_w=val, serial=serial)
         elif "_reserve" in entity_id:
-            await self.publish_command("set_reserve", target_soc=val, **serial_kwarg)
+            await self.publish_command("set_reserve", target_soc=val, serial=serial)
         elif "_target_soc" in entity_id:
-            await self.publish_command("set_target_soc", target_soc=val, **serial_kwarg)
+            await self.publish_command("set_target_soc", target_soc=val, serial=serial)
 
     async def switch_event(self, entity_id, service):
         """Handle switch entity service calls (charge/discharge enable).
@@ -1288,12 +1298,14 @@ class GatewayMQTT(ComponentBase):
             return
 
         serial = self._serial_from_entity_id(entity_id)
-        serial_kwarg = {"serial": serial} if serial else {}
+        if serial is None:
+            self.log(f"Warn: GatewayMQTT: switch_event: cannot resolve serial for entity '{entity_id}' — command not sent")
+            return
         if "_charge_enabled" in entity_id:
-            await self.publish_command("set_charge_enable", enable=is_on, **serial_kwarg)
+            await self.publish_command("set_charge_enable", enable=is_on, serial=serial)
             self.log(f"Info: GatewayMQTT: Charge {'enabled' if is_on else 'disabled'}")
         elif "_discharge_enabled" in entity_id:
-            await self.publish_command("set_discharge_enable", enable=is_on, **serial_kwarg)
+            await self.publish_command("set_discharge_enable", enable=is_on, serial=serial)
             self.log(f"Info: GatewayMQTT: Discharge {'enabled' if is_on else 'disabled'}")
 
     async def final(self):
@@ -1578,7 +1590,7 @@ class GatewayMQTT(ComponentBase):
         """
         cmd = {
             "command": command,
-            "command_id": str(uuid.uuid4()),
+            "command_id": "PBAT" + str(kwargs.get("command_id", 0)),
         }
 
         if "mode" in kwargs:
@@ -1592,6 +1604,6 @@ class GatewayMQTT(ComponentBase):
         if "enable" in kwargs:
             cmd["enable"] = bool(kwargs["enable"])
         if "serial" in kwargs:
-            cmd["serial"] = kwargs["serial"]
+            cmd["dongle_serial"] = kwargs["serial"]
 
         return json.dumps(cmd)

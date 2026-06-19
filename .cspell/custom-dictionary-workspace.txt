@@ -274,6 +274,7 @@ openweathermap
 overfitting
 overvoltage
 ownerapi
+pbat
 pbgw
 pdata
 pdetails
