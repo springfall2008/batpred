@@ -578,6 +578,13 @@ class SolisAPI(ComponentBase):
         self.log("Solis API: Decoded time windows v2 for {}: {}".format(inverter_sn, result))  # Debug log
         return result
 
+    def lattice_fragment(self):
+        """Read-only Lattice fragment: Solis cloud inverters (topology + sensor inventory)."""
+        from lattice import device_fragment
+
+        devices = [{"serial": str(s), "device_type": "solis", "sensors": [{"capability": "soc", "unit": "%"}, {"capability": "battery_power", "unit": "W"}]} for s in getattr(self, "inverter_sn", []) or []]
+        return device_fragment(devices, provider="solis-cloud", name="Solis Cloud", transport="https", preference=1, locality="cloud")
+
     async def reset_charge_windows_if_needed(self, inverter_sn):
         """
         Predbat only uses 1 slot so disable the others to avoid conflicts.
