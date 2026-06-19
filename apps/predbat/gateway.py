@@ -648,6 +648,33 @@ class GatewayMQTT(ComponentBase):
             self.dashboard_item(f"sensor.{pfx}_battery_charge_today", round(energy.battery_charge_today_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_charge_today", {}), app="gateway")
             self.dashboard_item(f"sensor.{pfx}_battery_discharge_today", round(energy.battery_discharge_today_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_discharge_today", {}), app="gateway")
 
+    def lattice_fragment(self):
+        """Read-only Lattice fragment: the inverters this gateway sees, plus their sensors.
+
+        Maps each battery inverter (identity + type) on a local-Modbus access path and references
+        the gateway sensor entities that already exist for it. Read-only — no control.
+        """
+        from lattice import device_fragment
+
+        sensor_suffixes = [("soc", "%", "soc"), ("battery_power", "W", "battery_power"), ("pv_power", "W", "pv_power"), ("grid_power", "W", "grid_power"), ("load_power", "W", "load_power"), ("temperature", "C", "battery_temperature")]
+        devices = []
+        status = getattr(self, "_last_status", None)
+        for inv in status.inverters if status else []:
+            if not (inv.battery.ByteSize() > 0 or inv.battery.capacity_wh > 0):
+                continue
+            base = "{}_gateway_{}".format(self.prefix, inv.serial[-6:].lower())
+            sensors = [{"capability": cap, "unit": unit, "entity": "sensor.{}_{}".format(base, suffix)} for cap, unit, suffix in sensor_suffixes]
+            devices.append({"serial": inv.serial, "device_type": self._lattice_device_type(inv.type), "sensors": sensors})
+        return device_fragment(devices, provider="local-gateway", name="Local gateway", transport="modbus", preference=10, locality="local")
+
+    @staticmethod
+    def _lattice_device_type(type_value):
+        """Best-effort readable device type from the gateway proto inverter-type enum (e.g. 'givenergy_aio')."""
+        try:
+            return pb.InverterType.Name(type_value).replace("INVERTER_TYPE_", "").lower()
+        except Exception:
+            return "inverter"
+
     def _needs_reconfigure(self, status):
         """Whether automatic_config should (re-)run for this status.
 
