@@ -57,6 +57,7 @@ from tests.test_hainterface_service import run_hainterface_service_tests
 from tests.test_hainterface_lifecycle import run_hainterface_lifecycle_tests
 from tests.test_hainterface_websocket import run_hainterface_websocket_tests
 from tests.test_web_if import run_test_web_if
+from tests.test_web_functions import run_web_functions_tests
 from tests.test_window import run_window_sort_tests, run_intersect_window_tests
 from tests.test_find_charge_rate import test_find_charge_rate, test_find_charge_rate_string_temperature, test_find_charge_rate_string_charge_curve
 from tests.test_manual_api import run_test_manual_api
@@ -107,6 +108,8 @@ from tests.test_find_charge_window import test_find_charge_window
 from tests.test_random_scenarios import generate_scenarios, save_scenarios, run_scenarios_from_file, compare_results, profile_scenario
 from tests.test_carbon import test_carbon
 from tests.test_storage import test_storage
+from tests.test_plan_persistence import test_plan_persistence
+from tests.test_github import test_github
 from tests.test_download import test_download
 from tests.test_ohme import test_ohme
 from tests.test_component_base import test_component_base_all
@@ -229,6 +232,7 @@ def main():
         ("manual_times", run_test_manual_times, "Manual times tests", False),
         ("manual_select", run_test_manual_select, "Manual select tests", False),
         ("web_if", run_test_web_if, "Web interface tests", False),
+        ("web_functions", run_web_functions_tests, "Web function unit tests", False),
         ("nordpool", run_nordpool_test, "Nordpool tests", False),
         ("futurerate_auto", test_futurerate_auto, "FutureRate auto Agile detection tests", False),
         ("octopus_slots", run_load_octopus_slots_tests, "Load Octopus slots tests", False),
@@ -286,6 +290,8 @@ def main():
         ("carbon", test_carbon, "Carbon Intensity API comprehensive tests (fetch, cache, publish, config)", False),
         # Storage component unit tests
         ("storage", test_storage, "Storage component tests (yaml/json/text round-trip, expiry, cleanup)", False),
+        ("plan_persistence", test_plan_persistence, "Plan persistence tests (save/load round-trip, expiry, missing storage)", False),
+        ("github", test_github, "GitHub mixin tests (cache hit/miss/stale, HTTP errors, release parsing, auto-update)", False),
         # Ohme EV charger API unit tests
         ("ohme", test_ohme, "Ohme EV charger comprehensive tests (helper functions, client methods, API operations, event handlers)", False),
         # ComponentBase lifecycle tests
