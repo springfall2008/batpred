@@ -402,6 +402,10 @@ COMPONENT_LIST = {
             "base_url": {"required": False, "config": "solis_base_url", "default": "https://www.soliscloud.com:13333"},
             "control_enable": {"required": False, "config": "solis_control_enable", "default": True},
         },
+        # Gate activation on having at least one auth path — HMAC (api_key) OR OAuth
+        # (access_token). Without this the component would start for every instance
+        # since all individual args are optional to allow either auth mode.
+        "required_or": ["api_key", "access_token"],
         "phase": 1,
         "can_restart": True,
     },

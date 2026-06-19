@@ -340,7 +340,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
     def _build_headers(self, endpoint, payload):
         """Build HTTP headers — Bearer (OAuth) or HMAC-SHA1 (api-key)"""
-        if getattr(self, "auth_method", "api_key") == "oauth":
+        if self.auth_method == "oauth":
             return {
                 "Authorization": f"Bearer {self.access_token}",
                 "Content-Type": "application/json",
@@ -377,9 +377,14 @@ class SolisAPI(ComponentBase, OAuthMixin):
         # OAuth: proactively refresh the token before the call (no-op for api-key mode).
         # If the token can't be obtained (refresh failed / needs reauth), fail fast — the
         # oauth_failed flag below makes _with_retry abort instead of looping with a bad token.
-        if getattr(self, "auth_method", "api_key") == "oauth":
+        if self.auth_method == "oauth":
             if not await self.check_and_refresh_oauth_token():
                 raise SolisAPIError("Solis OAuth token unavailable — reconnect required", status_code=401)
+            # check_and_refresh can report success while leaving access_token unset (e.g. refresh
+            # skipped because SUPABASE_* env / instance_id missing). Fail fast rather than sending
+            # an "Authorization: Bearer None" header and burning the retry window.
+            if not self.access_token:
+                raise SolisAPIError("Solis OAuth access_token unavailable — reconnect required", status_code=401)
         headers = self._build_headers(endpoint, payload)
 
         try:
@@ -388,7 +393,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
                     # Check HTTP status
                     if response.status != 200:
                         error_text = await response.text()
-                        if response.status in (401, 403) and getattr(self, "auth_method", "api_key") == "oauth":
+                        if response.status in (401, 403) and self.auth_method == "oauth":
                             # Force a token refresh; _with_retry re-issues the request with the new token.
                             await self.handle_oauth_401()
                         reason = "auth_error" if response.status in (401, 403) else "server_error"
@@ -435,7 +440,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
             except SolisAPIError as err:
                 # OAuth permanently failed (needs reauth) — abort immediately rather than
                 # burning the full retry window hitting the API with a known-bad token.
-                if getattr(self, "oauth_failed", False):
+                if self.oauth_failed:
                     raise err
                 elapsed_time = time.monotonic() - start_time
                 if elapsed_time >= max_retry_time:
