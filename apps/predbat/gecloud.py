@@ -924,7 +924,7 @@ class GECloudDirect(ComponentBase):
                 has_shared_ct = True
                 reason = "duplicate meter serials"
             else:
-                reason = "no dedicated meters"
+                reason = "meters are not duplicated"
             if self.get_arg("ge_cloud_automatic_split_ct", default=False):
                 has_shared_ct = False
                 reason = "split CT override"
@@ -940,7 +940,7 @@ class GECloudDirect(ComponentBase):
                 if not self.get_arg("ge_cloud_load_today_ignore", default=False):
                     self.set_arg("load_today", [f"sensor.{self.prefix}_gecloud_{batteries[0]}_consumption_total"])
             else:
-                self.log("GECloud: Multiple inverters detected, using all inverters for grid and load measurements({})".format(reason))
+                self.log("GECloud: Multiple inverters detected, using all inverters for grid and load measurements ({})".format(reason))
 
         # reconfigure for EMS
         if devices["ems"]:
