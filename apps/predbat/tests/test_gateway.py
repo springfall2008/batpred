@@ -2788,7 +2788,7 @@ class TestCheckInverterResets:
 
 
 class TestRunStartupWait:
-    """Tests for run(first=True) — verifies it waits for the first MQTT connection attempt."""
+    """Tests for run(first=True) — verifies it waits for auto-config before declaring started."""
 
     def _make_gateway(self):
         from gateway import GatewayMQTT
@@ -2799,7 +2799,7 @@ class TestRunStartupWait:
         gw.gateway_device_id = "pbgw_test"
         gw.mqtt_host = "mqtt.test.local"
         gw.api_stop = False
-        gw._first_connection_attempted = False
+        gw._auto_configured = False
         gw._mqtt_task = None
         return gw
 
@@ -2809,13 +2809,13 @@ class TestRunStartupWait:
         return asyncio.run(coro)
 
     def test_returns_true_without_sleeping_when_flag_already_set(self):
-        """When _first_connection_attempted is pre-set, run() returns True without sleeping."""
+        """When _auto_configured is pre-set, run() returns True without sleeping."""
         if not HAS_AIOMQTT:
             return
         from unittest.mock import patch, AsyncMock
 
         gw = self._make_gateway()
-        gw._first_connection_attempted = True
+        gw._auto_configured = True
 
         async def run_test():
             async def fake_mqtt_loop():
@@ -2831,7 +2831,7 @@ class TestRunStartupWait:
         assert sleep_count == 0
 
     def test_returns_true_after_flag_set_on_first_sleep(self):
-        """run() exits the wait loop as soon as the flag is set, after a single sleep."""
+        """run() exits the wait loop as soon as auto-config completes, after a single sleep."""
         if not HAS_AIOMQTT:
             return
         from unittest.mock import patch
@@ -2842,7 +2842,7 @@ class TestRunStartupWait:
         async def run_test():
             async def fake_sleep(t):
                 sleep_count[0] += 1
-                gw._first_connection_attempted = True  # Simulates MQTT loop completing first attempt
+                gw._auto_configured = True  # Simulates telemetry arriving and auto-config completing
 
             async def fake_mqtt_loop():
                 pass
@@ -2857,7 +2857,7 @@ class TestRunStartupWait:
         assert sleep_count[0] == 1
 
     def test_returns_true_with_warning_when_timeout_expires(self):
-        """run() returns True and logs a Warn when the flag is never set within the timeout."""
+        """run() returns True and logs a Warn when auto-config never completes within the timeout."""
         if not HAS_AIOMQTT:
             return
         from unittest.mock import patch
@@ -2870,7 +2870,7 @@ class TestRunStartupWait:
                 sleep_count[0] += 1
 
             async def fake_mqtt_loop():
-                pass  # Never sets _first_connection_attempted
+                pass  # Never sets _auto_configured
 
             gw._mqtt_loop = fake_mqtt_loop
             with patch("asyncio.sleep", side_effect=fast_sleep):
@@ -2879,9 +2879,9 @@ class TestRunStartupWait:
 
         result = self._run(run_test())
         assert result is True
-        assert sleep_count[0] == 120  # 60 * 2 iterations of 0.5s each = 60s total
-        warn_logged = any("Warn" in str(c) and "not yet complete" in str(c) for c in gw.log.call_args_list)
-        assert warn_logged, "Expected a Warn log when the first connection attempt times out"
+        assert sleep_count[0] == 240  # 120 * 2 iterations of 0.5s each = 120s total
+        warn_logged = any("Warn" in str(c) and "not auto-configured" in str(c) for c in gw.log.call_args_list)
+        assert warn_logged, "Expected a Warn log when auto-config times out"
 
 
 class TestSetChargeSlotPayload:

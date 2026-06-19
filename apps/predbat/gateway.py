@@ -325,13 +325,16 @@ class GatewayMQTT(ComponentBase):
             # Start MQTT listener as a background task
             self._mqtt_task = asyncio.ensure_future(self._mqtt_loop())
             self.log("Info: GatewayMQTT: MQTT listener task started")
-            # Wait up to a minute for first connection attempt before declaring started
-            for _ in range(60 * 2):
-                if self._first_connection_attempted or self.api_stop:
+            # Wait for auto-config (first telemetry received and entity mappings set) before
+            # declaring started — this prevents update_pred() from running before load_today
+            # and other args are populated by automatic_config().  Token refresh + reconnect
+            # typically completes in <10 s; the 2-minute cap ensures we never hang forever.
+            for _ in range(120 * 2):
+                if self._auto_configured or self.api_stop:
                     break
                 await asyncio.sleep(0.5)
             else:
-                self.log("Warn: GatewayMQTT: First connection attempt not yet complete, continuing startup")
+                self.log("Warn: GatewayMQTT: Gateway not auto-configured within timeout, continuing startup")
             return True
 
         # Housekeeping on subsequent runs
@@ -425,15 +428,18 @@ class GatewayMQTT(ComponentBase):
                 self.log(f"Warn: GatewayMQTT: MQTT connection error: {e}")
                 self._mqtt_connected = False
                 self._mqtt_client = None
-                self._first_connection_attempted = True
 
                 if self.api_stop:
+                    self._first_connection_attempted = True
                     break
 
                 # If the broker rejected our credentials (e.g. the MQTT JWT expired),
                 # refresh the token before reconnecting — otherwise we would retry the
                 # same rejected token forever and lose all gateway control.
+                # Set _first_connection_attempted AFTER the refresh so that run()'s startup
+                # wait loop does not unblock while the refresh is still in flight.
                 await self._maybe_refresh_on_auth_error(e)
+                self._first_connection_attempted = True
 
                 self.log(f"Info: GatewayMQTT: Reconnecting in {backoff}s")
                 await asyncio.sleep(backoff)
