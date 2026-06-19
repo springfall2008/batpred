@@ -1554,7 +1554,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
             self.ha_interface.update_states()
             self.auto_config()
-            self.load_user_config(quiet=False, register=False)
+            self.load_user_config(quiet=False, register=False, load_config=True)
             self.comparison = Compare(self)
 
             self.components.initialize(phase=1)
