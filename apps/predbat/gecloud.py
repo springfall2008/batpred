@@ -918,11 +918,20 @@ class GECloudDirect(ComponentBase):
             all_meter_serials = []
             for bat in batteries:
                 all_meter_serials.extend(battery_meters.get(bat, []))
-            no_dedicated_meters = len(all_meter_serials) == 0
             has_duplicate_serials = len(all_meter_serials) != len(set(all_meter_serials))
-            has_shared_ct = no_dedicated_meters or has_duplicate_serials
+            has_shared_ct = False
+            if has_duplicate_serials:
+                has_shared_ct = True
+                reason = "duplicate meter serials"
+            else:
+                reason = "meters are not duplicated"
+            if self.get_arg("ge_cloud_automatic_split_ct", default=False):
+                has_shared_ct = False
+                reason = "split CT override"
+            elif self.get_arg("ge_cloud_automatic_shared_ct", default=False):
+                has_shared_ct = True
+                reason = "shared CT override"
             if has_shared_ct:
-                reason = "no dedicated meters" if no_dedicated_meters else "duplicate meter serials"
                 self.log("GECloud: Multiple inverters sharing a single CT clamp detected ({}) — using first inverter only for grid and load measurements".format(reason))
                 self.set_arg("grid_power", [f"sensor.{self.prefix}_gecloud_{batteries[0]}_grid_power"] + [0 for _ in range(num_inverters - 1)])
                 self.set_arg("load_power", [f"sensor.{self.prefix}_gecloud_{batteries[0]}_consumption_power"] + [0 for _ in range(num_inverters - 1)])
@@ -930,6 +939,8 @@ class GECloudDirect(ComponentBase):
                 self.set_arg("export_today", [f"sensor.{self.prefix}_gecloud_{batteries[0]}_grid_export_total"])
                 if not self.get_arg("ge_cloud_load_today_ignore", default=False):
                     self.set_arg("load_today", [f"sensor.{self.prefix}_gecloud_{batteries[0]}_consumption_total"])
+            else:
+                self.log("GECloud: Multiple inverters detected, using all inverters for grid and load measurements ({})".format(reason))
 
         # reconfigure for EMS
         if devices["ems"]:
@@ -1491,7 +1502,7 @@ class GECloudDirect(ComponentBase):
             self.log("GECloud: Found device {}".format(device))
             inverter = device.get("inverter", {}) or {}
             serial = inverter.get("serial", None)
-            # last_updated = inverter.get("last_updated", None)
+            last_updated = inverter.get("last_updated", None)
             info = inverter.get("info", {}) or {}
             model = info.get("model", "").lower()
             # battery = info.get("battery_type", {})
@@ -1500,6 +1511,15 @@ class GECloudDirect(ComponentBase):
             meter_serials = [m.get("serial_number") for m in meters if m.get("serial_number") is not None]
             if serial:
                 serial = serial.lower()
+                if last_updated:
+                    try:
+                        updated_dt = datetime.fromisoformat(last_updated.replace("Z", "+00:00"))
+                        age_days = (datetime.now(timezone.utc) - updated_dt).days
+                        if age_days > 5:
+                            self.log("GECloud: Warn: Skipping device {} as last_updated {} is {} days ago (>5), assuming non-functional".format(serial, last_updated, age_days))
+                            continue
+                    except (ValueError, TypeError):
+                        self.log("GECloud: Warn: Could not parse last_updated {} for device {}, skipping age check".format(last_updated, serial))
                 if "plant ems" in model:
                     result["ems"] = serial
                 elif "gateway" in model or "gw2" in model:
