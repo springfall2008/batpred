@@ -173,32 +173,44 @@ class TestCommandFormat:
         assert parsed["command"] == "set_reserve"
         assert parsed["target_soc"] == 10
 
-    def test_serial_included_when_provided(self):
-        """serial kwarg is included verbatim in the JSON payload."""
+    def test_command_id_has_pbat_prefix(self):
+        """command_id is a PBAT-prefixed string with the incrementing counter."""
+        from gateway import GatewayMQTT
+        import json
+
+        cmd = GatewayMQTT.build_command("set_mode", mode=1, command_id=7)
+        parsed = json.loads(cmd)
+        assert parsed["command_id"] == "PBAT7"
+        assert isinstance(parsed["command_id"], str)
+
+    def test_serial_included_as_dongle_serial(self):
+        """serial kwarg is serialised as dongle_serial in the JSON payload."""
         from gateway import GatewayMQTT
         import json
 
         cmd = GatewayMQTT.build_command("set_mode", mode=1, serial="CE123456789")
         parsed = json.loads(cmd)
-        assert parsed["serial"] == "CE123456789"
+        assert parsed["dongle_serial"] == "CE123456789"
+        assert "serial" not in parsed
 
-    def test_serial_preserves_original_case(self):
-        """Serial is stored as-is (uppercase) even though entity suffixes are lowercased."""
+    def test_dongle_serial_preserves_original_case(self):
+        """dongle_serial is stored as-is (uppercase) even though entity suffixes are lowercased."""
         from gateway import GatewayMQTT
         import json
 
         cmd = GatewayMQTT.build_command("set_charge_rate", power_w=3000, serial="CE123456789")
         parsed = json.loads(cmd)
-        assert parsed["serial"] == "CE123456789"
-        assert parsed["serial"] != parsed["serial"].lower()
+        assert parsed["dongle_serial"] == "CE123456789"
+        assert parsed["dongle_serial"] != parsed["dongle_serial"].lower()
 
-    def test_serial_omitted_when_not_provided(self):
-        """serial key is absent from the JSON when no serial kwarg is given."""
+    def test_dongle_serial_omitted_when_not_provided(self):
+        """dongle_serial key is absent from the JSON when no serial kwarg is given."""
         from gateway import GatewayMQTT
         import json
 
         cmd = GatewayMQTT.build_command("set_mode", mode=1)
         parsed = json.loads(cmd)
+        assert "dongle_serial" not in parsed
         assert "serial" not in parsed
 
 
@@ -1345,7 +1357,7 @@ class TestSelectEvent:
         gw = GatewayMQTT.__new__(GatewayMQTT)
         gw.log = MagicMock()
         gw.prefix = "predbat"
-        gw._suffix_to_serial = {}
+        gw._suffix_to_serial = {"456789": "CE123456789"}
         gw._mqtt_connected = True
         gw._mqtt_client = MagicMock()
         gw.topic_command = "predbat/devices/pbgw_test/command"
@@ -1459,13 +1471,13 @@ class TestSelectEvent:
         _, kwargs = gw._published[0]
         assert kwargs.get("serial") == "CE123456789"
 
-    def test_serial_omitted_when_suffix_not_in_map(self):
-        """serial is absent from kwargs when the suffix has no entry in _suffix_to_serial."""
+    def test_no_command_when_suffix_not_in_map(self):
+        """No command is sent when the entity suffix cannot be resolved to a serial."""
         gw = self._make_gateway()
-        # _suffix_to_serial is empty — suffix "456789" unknown
+        gw._suffix_to_serial = {}  # clear — suffix "456789" unknown
         self._run(gw.select_event("select.predbat_gateway_456789_mode_select", "Eco"))
-        _, kwargs = gw._published[0]
-        assert "serial" not in kwargs
+        assert gw._published == []
+        gw.log.assert_called()
 
 
 class TestNumberEvent:
@@ -1478,7 +1490,7 @@ class TestNumberEvent:
         gw = GatewayMQTT.__new__(GatewayMQTT)
         gw.log = MagicMock()
         gw.prefix = "predbat"
-        gw._suffix_to_serial = {}
+        gw._suffix_to_serial = {"456789": "CE123456789"}
         gw._mqtt_connected = True
         gw._mqtt_client = MagicMock()
         gw.topic_command = "predbat/devices/pbgw_test/command"
@@ -1503,25 +1515,25 @@ class TestNumberEvent:
         """charge_rate entity → set_charge_rate with power_w."""
         gw = self._make_gateway()
         self._run(gw.number_event("number.predbat_gateway_456789_charge_rate", "3000"))
-        assert gw._published == [("set_charge_rate", {"power_w": 3000})]
+        assert gw._published == [("set_charge_rate", {"power_w": 3000, "serial": "CE123456789"})]
 
     def test_discharge_rate_routes_correctly(self):
         """discharge_rate entity → set_discharge_rate with power_w (not charge_rate)."""
         gw = self._make_gateway()
         self._run(gw.number_event("number.predbat_gateway_456789_discharge_rate", "2500"))
-        assert gw._published == [("set_discharge_rate", {"power_w": 2500})]
+        assert gw._published == [("set_discharge_rate", {"power_w": 2500, "serial": "CE123456789"})]
 
     def test_reserve_soc_routes_correctly(self):
         """reserve_soc entity → set_reserve with target_soc."""
         gw = self._make_gateway()
         self._run(gw.number_event("number.predbat_gateway_456789_reserve_soc", "10"))
-        assert gw._published == [("set_reserve", {"target_soc": 10})]
+        assert gw._published == [("set_reserve", {"target_soc": 10, "serial": "CE123456789"})]
 
     def test_target_soc_routes_correctly(self):
         """target_soc entity → set_target_soc with target_soc."""
         gw = self._make_gateway()
         self._run(gw.number_event("number.predbat_gateway_456789_target_soc", "100"))
-        assert gw._published == [("set_target_soc", {"target_soc": 100})]
+        assert gw._published == [("set_target_soc", {"target_soc": 100, "serial": "CE123456789"})]
 
     # ------------------------------------------------------------------
     # Value coercion
@@ -1531,19 +1543,19 @@ class TestNumberEvent:
         """Float string values are truncated to int before publishing."""
         gw = self._make_gateway()
         self._run(gw.number_event("number.predbat_gateway_456789_charge_rate", "3000.9"))
-        assert gw._published == [("set_charge_rate", {"power_w": 3000})]
+        assert gw._published == [("set_charge_rate", {"power_w": 3000, "serial": "CE123456789"})]
 
     def test_integer_value_accepted(self):
         """Plain integer values are accepted directly."""
         gw = self._make_gateway()
         self._run(gw.number_event("number.predbat_gateway_456789_reserve_soc", 4))
-        assert gw._published == [("set_reserve", {"target_soc": 4})]
+        assert gw._published == [("set_reserve", {"target_soc": 4, "serial": "CE123456789"})]
 
     def test_zero_value_sent(self):
         """Zero is a valid value and is sent as-is."""
         gw = self._make_gateway()
         self._run(gw.number_event("number.predbat_gateway_456789_charge_rate", 0))
-        assert gw._published == [("set_charge_rate", {"power_w": 0})]
+        assert gw._published == [("set_charge_rate", {"power_w": 0, "serial": "CE123456789"})]
 
     # ------------------------------------------------------------------
     # Invalid input
@@ -1589,12 +1601,13 @@ class TestNumberEvent:
         _, kwargs = gw._published[0]
         assert kwargs.get("serial") == "CE123456789"
 
-    def test_serial_omitted_when_suffix_not_in_map(self):
-        """serial is absent from kwargs when the suffix has no entry in _suffix_to_serial."""
+    def test_no_command_when_suffix_not_in_map(self):
+        """No command is sent when the entity suffix cannot be resolved to a serial."""
         gw = self._make_gateway()
+        gw._suffix_to_serial = {}  # clear — suffix "456789" unknown
         self._run(gw.number_event("number.predbat_gateway_456789_charge_rate", "3000"))
-        _, kwargs = gw._published[0]
-        assert "serial" not in kwargs
+        assert gw._published == []
+        gw.log.assert_called()
 
 
 class TestSwitchEvent:
@@ -1607,7 +1620,7 @@ class TestSwitchEvent:
         gw = GatewayMQTT.__new__(GatewayMQTT)
         gw.log = MagicMock()
         gw.prefix = "predbat"
-        gw._suffix_to_serial = {}
+        gw._suffix_to_serial = {"456789": "CE123456789"}
         gw._mqtt_connected = True
         gw._mqtt_client = MagicMock()
         gw.topic_command = "predbat/devices/pbgw_test/command"
@@ -1638,13 +1651,13 @@ class TestSwitchEvent:
         """Turning charge_enabled on sends set_charge_enable enable=True."""
         gw = self._make_gateway()
         self._run(gw.switch_event("switch.predbat_gateway_456789_charge_enabled", "turn_on"))
-        assert gw._published == [("set_charge_enable", {"enable": True})]
+        assert gw._published == [("set_charge_enable", {"enable": True, "serial": "CE123456789"})]
 
     def test_charge_enabled_turn_off(self):
         """Turning charge_enabled off sends set_charge_enable enable=False."""
         gw = self._make_gateway()
         self._run(gw.switch_event("switch.predbat_gateway_456789_charge_enabled", "turn_off"))
-        assert gw._published == [("set_charge_enable", {"enable": False})]
+        assert gw._published == [("set_charge_enable", {"enable": False, "serial": "CE123456789"})]
 
     def test_charge_enabled_toggle(self):
         """Toggling charge_enabled flips based on current state from get_state_wrapper."""
@@ -1652,7 +1665,7 @@ class TestSwitchEvent:
         # currently on → toggle → off
         gw._state["switch.predbat_gateway_456789_charge_enabled"] = True
         self._run(gw.switch_event("switch.predbat_gateway_456789_charge_enabled", "toggle"))
-        assert gw._published == [("set_charge_enable", {"enable": False})]
+        assert gw._published == [("set_charge_enable", {"enable": False, "serial": "CE123456789"})]
 
     # ------------------------------------------------------------------
     # discharge_enabled switch
@@ -1662,20 +1675,20 @@ class TestSwitchEvent:
         """Turning discharge_enabled on sends set_discharge_enable enable=True."""
         gw = self._make_gateway()
         self._run(gw.switch_event("switch.predbat_gateway_456789_discharge_enabled", "turn_on"))
-        assert gw._published == [("set_discharge_enable", {"enable": True})]
+        assert gw._published == [("set_discharge_enable", {"enable": True, "serial": "CE123456789"})]
 
     def test_discharge_enabled_turn_off(self):
         """Turning discharge_enabled off sends set_discharge_enable enable=False."""
         gw = self._make_gateway()
         self._run(gw.switch_event("switch.predbat_gateway_456789_discharge_enabled", "turn_off"))
-        assert gw._published == [("set_discharge_enable", {"enable": False})]
+        assert gw._published == [("set_discharge_enable", {"enable": False, "serial": "CE123456789"})]
 
     def test_discharge_enabled_toggle(self):
         """Toggling discharge_enabled flips based on current state from get_state_wrapper."""
         gw = self._make_gateway()
         # currently off → toggle → on (get_state_wrapper returns False by default)
         self._run(gw.switch_event("switch.predbat_gateway_456789_discharge_enabled", "toggle"))
-        assert gw._published == [("set_discharge_enable", {"enable": True})]
+        assert gw._published == [("set_discharge_enable", {"enable": True, "serial": "CE123456789"})]
 
     # ------------------------------------------------------------------
     # Substring safety: discharge_enabled must not match _charge_enabled branch
@@ -1723,12 +1736,13 @@ class TestSwitchEvent:
         _, kwargs = gw._published[0]
         assert kwargs.get("serial") == "CE123456789"
 
-    def test_serial_omitted_when_suffix_not_in_map(self):
-        """serial is absent from kwargs when the suffix has no entry in _suffix_to_serial."""
+    def test_no_command_when_suffix_not_in_map(self):
+        """No command is sent when the entity suffix cannot be resolved to a serial."""
         gw = self._make_gateway()
+        gw._suffix_to_serial = {}  # clear — suffix "456789" unknown
         self._run(gw.switch_event("switch.predbat_gateway_456789_charge_enabled", "turn_on"))
-        _, kwargs = gw._published[0]
-        assert "serial" not in kwargs
+        assert gw._published == []
+        gw.log.assert_called()
 
 
 class TestPublishPredbatData:
@@ -2870,6 +2884,64 @@ class TestRunStartupWait:
         assert warn_logged, "Expected a Warn log when the first connection attempt times out"
 
 
+class TestSetChargeSlotPayload:
+    """Diagnostic test — captures the raw MQTT JSON for set_charge_slot and prints it.
+
+    Expected hub format:
+      {"command": "set_charge_slot", "dongle_serial": "<serial>", "schedule_json": "{\"start\":200}"}
+    """
+
+    def _make_gateway(self):
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.log = MagicMock()
+        gw.prefix = "predbat"
+        gw._suffix_to_serial = {"30g499": "CH2330G499"}
+        gw._command_id = 0
+        gw._mqtt_connected = True
+        gw._mqtt_client = MagicMock()
+        gw.topic_command = "predbat/devices/pbgw_test/command"
+        gw._raw_published = []
+
+        async def fake_publish_raw(topic, payload, retain=False):
+            gw._raw_published.append(payload)
+
+        gw._publish_raw = fake_publish_raw
+        return gw
+
+    def _run(self, coro):
+        import asyncio
+
+        return asyncio.run(coro)
+
+    def test_set_charge_slot_start_raw_payload(self):
+        """Print the raw JSON sent for a charge slot start update so the format can be verified."""
+        import json
+
+        gw = self._make_gateway()
+        # 02:00:00 → HHMM 200, matching the expected {"start":200} in the hub spec
+        self._run(gw.select_event("select.predbat_gateway_30g499_charge_slot1_start", "02:00:00"))
+
+        assert gw._raw_published, "No payload was published — serial lookup may have failed"
+        actual = json.loads(gw._raw_published[0].decode("utf-8"))
+
+        expected = {
+            "command": "set_charge_slot",
+            "command_id": "PBAT1",
+            "dongle_serial": "CH2330G499",
+            "schedule_json": '{"start": 200}',
+        }
+
+        print("\n--- set_charge_slot raw payload ---")
+        print(f"  actual:   {json.dumps(actual)}")
+        print(f"  expected: {json.dumps(expected)}")
+        print("---")
+
+        assert actual == expected, f"Payload mismatch:\n  actual:   {actual}\n  expected: {expected}"
+
+
 def run_gateway_tests(my_predbat=None):
     """Run all GatewayMQTT tests. Returns True on failure, False on success."""
     from tests.test_gateway_token_refresh import TestIsAuthFailure, TestApplyRefreshResponse, TestMaybeRefreshOnAuthError
@@ -2891,6 +2963,7 @@ def run_gateway_tests(my_predbat=None):
         TestIanaToPosixTz,
         TestCheckInverterResets,
         TestRunStartupWait,
+        TestSetChargeSlotPayload,
         TestIsAuthFailure,
         TestApplyRefreshResponse,
         TestMaybeRefreshOnAuthError,
