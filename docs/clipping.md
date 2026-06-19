@@ -7,11 +7,13 @@ Historically, Predbat's standard planning lacked visibility into the precise mag
 The **Clipping Buffer** feature introduces an intelligent mitigation layer that calculates the exact energy expected to be lost to inverter clipping, and automatically schedules preemptive battery exports to create the necessary buffer before the peak hits.
 
 ## Key Features
+
 * **Dynamic Clipping Prediction**: Analyzes the raw PV forecast curve against the user's configured `inverter_limit` to calculate the exact volume of energy (in kWh) that will exceed AC capacity.
 * **Preemptive Export Scheduling**: Automatically forces battery export windows prior to peak generation periods, guaranteeing the battery has precisely enough headroom to soak up the excess energy.
 * **Clear-Sky Cloud Modeling**: Includes an optional integration for clear-sky data (e.g., `ha_solcast_clearsky`) and an auto-tuning amplification factor. This generates a theoretical maximum generation envelope, ensuring the clipping buffer is sized safely even when standard forecasts fluctuate due to unpredictable cloud cover.
 
 ## Configuration Settings
+
 These settings can be found in the Home Assistant Predbat Configuration panel, directly beneath the Cloud Model settings.
 
 * **`clipping_buffer_enable`**: The master switch. Turns the entire clipping buffer feature on or off.
@@ -23,7 +25,9 @@ These settings can be found in the Home Assistant Predbat Configuration panel, d
 * **`clipping_limit_override`**: Manually define your inverter's AC ceiling in Watts (e.g., `5000W`). If left at `0`, Predbat auto-detects it from your inverter entity.
 
 ### Manual Overrides
+
 If you do not want to use the dynamic cloud-based tracking, you can manually force a static buffer size and time window:
+
 * **`clipping_buffer_max_kwh`**: Manually force the maximum size of the clipping buffer (e.g. `3.0` kWh).
 * **`clipping_buffer_start_time`**: The start time for the fixed buffer window.
 * **`clipping_buffer_end_time`**: The end time for the fixed buffer window.

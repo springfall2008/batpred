@@ -384,12 +384,12 @@ class SolarAPI(ComponentBase):
                 # Cap at 1.1 (10% above STC) to prevent unrealistic gains at very cold temperatures.
                 eta_temp = max(0.5, min(1.1, 1.0 - 0.004 * (t_cell - 25.0)))
                 pv50_inst = dp4((gti / 1000.0) * kwp * eta_temp * (1.0 - system_loss))
-                
+
                 raw_p10 = ensemble_p10.get(ts)
                 raw_p90 = ensemble_p90.get(ts)
                 # ensemble_p10/p90 were computed without temperature derating; apply eta_temp now
                 pv10_inst = dp4(min(raw_p10 * eta_temp, pv50_inst) if raw_p10 is not None else pv50_inst * 0.7)
-                
+
                 if idx < len(cs_gti_values) and cs_gti_values[idx] is not None:
                     cs_gti = cs_gti_values[idx]
                     pv_cs_inst = dp4((cs_gti / 1000.0) * kwp * eta_temp * (1.0 - system_loss))
