@@ -3061,17 +3061,17 @@ chart.render();
             step_size = getattr(self.base, "plan_interval_minutes", 30)
             clipping_remaining_raw = history_attribute(self.get_history_wrapper(self.prefix + ".clipping_remaining", 3))
             clipping_remaining_series = prune_today(clipping_remaining_raw, self.now_utc, self.midnight_utc, prune_past_days=2)
-            
+
             if getattr(self.base, "predict_clipping_remaining_best", None):
                 for minute, kwh in self.base.predict_clipping_remaining_best.items():
                     if minute % step_size == 0 and minute >= 0:
                         minute_timestamp = self.now_utc + timedelta(minutes=minute)
                         stamp = minute_timestamp.strftime(TIME_FORMAT)
                         clipping_remaining_series[stamp] = round(kwh, 2)
-                        
+
             clipping_ceiling_raw = history_attribute(self.get_history_wrapper(self.prefix + ".clipping_ceiling", 3))
             clipping_ceiling_series = prune_today(clipping_ceiling_raw, self.now_utc, self.midnight_utc, prune_past_days=2)
-            
+
             if getattr(self.base, "predict_clipping_ceiling_best", None):
                 for minute, kwh in self.base.predict_clipping_ceiling_best.items():
                     if minute % step_size == 0 and minute >= 0:
@@ -3108,37 +3108,16 @@ chart.render();
 
             yaxis_annotations = []
             if inverter_ac_limit_kw > 0:
-                yaxis_annotations.append({
-                    "y": inverter_ac_limit_kw,
-                    "borderColor": "#FF0000",
-                    "strokeDashArray": 4,
-                    "text": "Inverter AC Capacity ({} kW)".format(inverter_ac_limit_kw),
-                    "textColor": "#fff",
-                    "backgroundColor": "#FF0000"
-                })
-            
+                yaxis_annotations.append({"y": inverter_ac_limit_kw, "borderColor": "#FF0000", "strokeDashArray": 4, "text": "Inverter AC Capacity ({} kW)".format(inverter_ac_limit_kw), "textColor": "#fff", "backgroundColor": "#FF0000"})
+
             xaxis_annotations = []
             buffer_start = getattr(self.base, "clipping_buffer_start", None)
             buffer_end = getattr(self.base, "clipping_buffer_end", None)
             if getattr(self.base, "clipping_buffer_kwh", 0) > 0 and buffer_start is not None and buffer_end is not None:
                 start_stamp = (self.midnight_utc + timedelta(minutes=buffer_start)).strftime(TIME_FORMAT)
                 end_stamp = (self.midnight_utc + timedelta(minutes=buffer_end)).strftime(TIME_FORMAT)
-                xaxis_annotations.append({
-                    "x": start_stamp,
-                    "borderColor": "#ffa500",
-                    "strokeDashArray": 4,
-                    "text": "Today Buffer Start",
-                    "orientation": "vertical",
-                    "backgroundColor": "#ffa500"
-                })
-                xaxis_annotations.append({
-                    "x": end_stamp,
-                    "borderColor": "#ffa500",
-                    "strokeDashArray": 4,
-                    "text": "Today Buffer End",
-                    "orientation": "vertical",
-                    "backgroundColor": "#ffa500"
-                })
+                xaxis_annotations.append({"x": start_stamp, "borderColor": "#ffa500", "strokeDashArray": 4, "text": "Today Buffer Start", "orientation": "vertical", "backgroundColor": "#ffa500"})
+                xaxis_annotations.append({"x": end_stamp, "borderColor": "#ffa500", "strokeDashArray": 4, "text": "Today Buffer End", "orientation": "vertical", "backgroundColor": "#ffa500"})
 
             clipping_total = 0
             if getattr(self.base, "predict_clipped_best", None):

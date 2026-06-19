@@ -780,7 +780,11 @@ def simple_scenario(
         prediction = prediction_handle
     else:
         prediction = Prediction(
-            my_predbat, pv_step, pv10_step, load_step, load10_step,
+            my_predbat,
+            pv_step,
+            pv10_step,
+            load_step,
+            load10_step,
             pv_forecast_peak_step=pv_peak_step,
             clipping_limit=clipping_limit_eff,
             clipping_cost_weight=clipping_cost_weight if clipping_buffer_enable else 0,

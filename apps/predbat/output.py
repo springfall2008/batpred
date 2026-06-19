@@ -953,7 +953,7 @@ class Output:
                 end_str = ""
                 start_stamp = None
                 end_stamp = None
-                
+
                 prev_val = 0.0
                 for min_key, val in sorted(predict_clipped_best.items()):
                     if val > prev_val + 0.001:
@@ -961,14 +961,12 @@ class Output:
                             start_stamp = self.midnight_utc + timedelta(minutes=min_key)
                         end_stamp = self.midnight_utc + timedelta(minutes=min_key)
                     prev_val = val
-                
+
                 if start_stamp and end_stamp:
                     start_str = start_stamp.strftime("%H:%M")
                     end_str = end_stamp.strftime("%H:%M")
-                
-                sentence += "- Forecast {} kWh clipping, exceeding {} limit from {} to {}. Plan penalized to mitigate.\n".format(
-                    dp2(clipping_total), clipping_mode, start_str, end_str
-                )
+
+                sentence += "- Forecast {} kWh clipping, exceeding {} limit from {} to {}. Plan penalized to mitigate.\n".format(dp2(clipping_total), clipping_mode, start_str, end_str)
 
         if publish:
             self.text_plan = self.get_text_plan_html(sentence)
@@ -2472,7 +2470,6 @@ class Output:
 
         # Clipping Status and PV Peak Forecast sensors are published in plan.py run_prediction(save="best")
         # to avoid duplicate dashboard_item writes to the same sensor.
-
 
         if had_errors:
             self.log("Warn: record_status {}".format(message + extra))

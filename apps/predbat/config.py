@@ -494,15 +494,15 @@ CONFIG_ITEMS = [
         "default": False,
         "icon": "mdi:chart-bell-curve-cumulative",
     },
-      {
-          "name": "clipping_clearsky_source",
-          "friendly_name": "Clipping Clear-Sky Source",
-          "type": "select",
-          "options": ["auto", "ha_solcast_clearsky", "solcast_api", "openmeteo"],
-          "icon": "mdi:cloud-search",
-          "default": "auto",
-          "enable": "clipping_buffer_enable",
-      },
+    {
+        "name": "clipping_clearsky_source",
+        "friendly_name": "Clipping Clear-Sky Source",
+        "type": "select",
+        "options": ["auto", "ha_solcast_clearsky", "solcast_api", "openmeteo"],
+        "icon": "mdi:cloud-search",
+        "default": "auto",
+        "enable": "clipping_buffer_enable",
+    },
     {
         "name": "clipping_use_clearsky_peaks",
         "friendly_name": "Clipping Use ClearSky Peaks",
@@ -585,7 +585,6 @@ CONFIG_ITEMS = [
         "default": "None",
         "enable": "clipping_buffer_enable",
     },
-
     {
         "name": "metric_pv_calibration_enable",
         "friendly_name": "Enable use of Calibrated PV data",
@@ -707,7 +706,6 @@ CONFIG_ITEMS = [
         "type": "switch",
         "default": True,
     },
-
     {
         "name": "car_energy_reported_load",
         "friendly_name": "Car energy is reported in load data (inside CT clamp)",

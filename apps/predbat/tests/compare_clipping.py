@@ -11,14 +11,13 @@
 
 import sys
 import os
-import math
 import time
 
 # Add parent dirs to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from tests.test_infra import reset_rates, reset_inverter, simple_scenario, Prediction
+from tests.test_infra import reset_rates, reset_inverter, simple_scenario
 
 
 # ---------------------------------------------------------------------------

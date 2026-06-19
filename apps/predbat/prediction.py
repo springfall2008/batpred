@@ -92,7 +92,22 @@ class Prediction:
     Class to hold prediction input and output data and the run function
     """
 
-    def __init__(self, base=None, pv_forecast_minute_step=None, pv_forecast_minute10_step=None, load_minutes_step=None, load_minutes_step10=None, soc_kw=None, soc_max=None, pv_forecast_peak_step=None, clipping_limit=0, clipping_cost_weight=0, clipping_buffer_kwh=0, clipping_buffer_start=None, clipping_buffer_end=None):
+    def __init__(
+        self,
+        base=None,
+        pv_forecast_minute_step=None,
+        pv_forecast_minute10_step=None,
+        load_minutes_step=None,
+        load_minutes_step10=None,
+        soc_kw=None,
+        soc_max=None,
+        pv_forecast_peak_step=None,
+        clipping_limit=0,
+        clipping_cost_weight=0,
+        clipping_buffer_kwh=0,
+        clipping_buffer_start=None,
+        clipping_buffer_end=None,
+    ):
         global PRED_GLOBAL
         if base:
             self.minutes_now = base.minutes_now
