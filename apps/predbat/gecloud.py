@@ -254,6 +254,13 @@ class GECloudDirect(ComponentBase):
         self.requests_total = 0
         self.failures_total = 0
 
+    def lattice_fragment(self):
+        """Read-only Lattice fragment: GE-Cloud devices (topology + sensor inventory)."""
+        from lattice import device_fragment
+
+        devices = [{"serial": str(s), "device_type": "ge-aio", "sensors": [{"capability": "soc", "unit": "%"}, {"capability": "battery_power", "unit": "W"}]} for s in getattr(self, "device_list", []) or []]
+        return device_fragment(devices, provider="ge-cloud", name="GivEnergy Cloud", transport="https", preference=1, locality="cloud")
+
     async def switch_event(self, entity_id, service):
         """
         Switch event
