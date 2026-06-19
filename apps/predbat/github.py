@@ -40,9 +40,11 @@ class GitHub:
         try:
             self.github_url_cache_loaded = True
             data = run_async(storage.load("predbat", "github_url_cache"))
-            if data:
+            if isinstance(data, dict):
                 self.github_url_cache = data
                 self.log("Loaded GitHub URL cache from storage ({} entries)".format(len(data)))
+            elif data is not None:
+                self.log("Warn: GitHub URL cache in storage has unexpected type {}, ignoring".format(type(data).__name__))
         except Exception as e:
             self.log("Warn: Failed to load GitHub URL cache from storage: {}".format(e))
 
@@ -53,7 +55,7 @@ class GitHub:
         if not storage:
             return
         now = datetime.now()
-        stale = [url for url, entry in self.github_url_cache.items() if not isinstance(entry, dict) or not entry.get("stamp") or (now - entry["stamp"]) > timedelta(hours=24)]
+        stale = [url for url, entry in self.github_url_cache.items() if not isinstance(entry, dict) or not isinstance(entry.get("stamp"), datetime) or (now - entry["stamp"]) > timedelta(hours=24)]
         for url in stale:
             del self.github_url_cache[url]
         if stale:
@@ -72,12 +74,14 @@ class GitHub:
         # Check the cache first
         now = datetime.now()
         if url in self.github_url_cache:
-            stamp = self.github_url_cache[url]["stamp"]
-            pdata = self.github_url_cache[url]["data"]
-            age = now - stamp
-            if age.seconds < (120 * 60):
-                self.log("Using cached GitHub data for {} age {} minutes".format(url, dp1(age.seconds / 60)))
-                return pdata
+            entry = self.github_url_cache[url]
+            stamp = entry.get("stamp")
+            pdata = entry.get("data")
+            if stamp is not None and pdata is not None:
+                age = now - stamp
+                if age.total_seconds() < (120 * 60):
+                    self.log("Using cached GitHub data for {} age {} minutes".format(url, dp1(age.total_seconds() / 60)))
+                    return pdata
 
         try:
             r = requests.get(url)

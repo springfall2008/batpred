@@ -75,6 +75,33 @@ def test_github(my_predbat):
         print("  FAILED: cache should be updated with fresh data after stale hit")
         failed += 1
 
+    print("  Test 2b: cache entry older than 24h is treated as stale (timedelta.seconds wrap bug)")
+    _setup(my_predbat)
+    # 25 hours old: timedelta.seconds == 3600 (would wrongly appear fresh with age.seconds < 7200)
+    old_stamp = datetime.now() - timedelta(hours=25)
+    old_data = [{"tag_name": "v0.1"}]
+    fresh_data2 = [{"tag_name": "v1.2"}]
+    my_predbat.github_url_cache[test_url] = {"stamp": old_stamp, "data": old_data}
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = fresh_data2
+    with patch("requests.get", return_value=mock_resp):
+        result = my_predbat.download_predbat_releases_url(test_url)
+    if result != fresh_data2:
+        print("  FAILED: 25h-old cache entry should be treated as stale, got {}".format(result))
+        failed += 1
+
+    print("  Test 2c: corrupted cache entry (missing stamp/data) falls through to HTTP fetch")
+    _setup(my_predbat)
+    my_predbat.github_url_cache[test_url] = {"unexpected_key": "garbage"}
+    fetched = [{"tag_name": "v1.3"}]
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = fetched
+    with patch("requests.get", return_value=mock_resp):
+        result = my_predbat.download_predbat_releases_url(test_url)
+    if result != fetched:
+        print("  FAILED: corrupted cache entry should fall through to HTTP fetch, got {}".format(result))
+        failed += 1
+
     print("  Test 3: HTTP exception returns empty list and does not populate cache")
     _setup(my_predbat)
     with patch("requests.get", side_effect=Exception("network error")):
@@ -197,5 +224,83 @@ def test_github(my_predbat):
     if download_calls:
         print("  FAILED: download_predbat_version should NOT be called when auto_update is off")
         failed += 1
+
+    print("  Test 11: _save_github_url_cache_to_storage prunes entries with non-datetime stamp without raising")
+    import shutil
+    import tempfile
+    from storage import StorageComponent, StorageLocalFiles
+
+    class _MockComponentsWithStorage:
+        """Minimal components mock returning a real storage instance."""
+
+        def __init__(self, storage):
+            """Initialise with storage."""
+            self._storage = storage
+
+        def get_component(self, name):
+            """Return storage for 'storage' key."""
+            return self._storage if name == "storage" else None
+
+    tmpdir = tempfile.mkdtemp()
+    try:
+        storage = StorageComponent(my_predbat)
+        storage.backend = StorageLocalFiles(tmpdir, my_predbat.log)
+        my_predbat.components = _MockComponentsWithStorage(storage)
+        my_predbat.github_url_cache = {
+            "https://good.example/": {"stamp": datetime.now(), "data": [1]},
+            "https://string-stamp.example/": {"stamp": "2024-01-01T00:00:00", "data": [2]},
+            "https://missing-stamp.example/": {"data": [3]},
+            "https://not-a-dict.example/": "corrupted",
+        }
+        try:
+            my_predbat._save_github_url_cache_to_storage()
+        except Exception as exc:
+            print("  FAILED: _save_github_url_cache_to_storage raised unexpectedly: {}".format(exc))
+            failed += 1
+        else:
+            remaining = list(my_predbat.github_url_cache.keys())
+            if "https://good.example/" not in remaining:
+                print("  FAILED: valid entry should survive pruning, remaining: {}".format(remaining))
+                failed += 1
+            if "https://string-stamp.example/" in remaining:
+                print("  FAILED: string-stamp entry should be pruned, remaining: {}".format(remaining))
+                failed += 1
+            if "https://missing-stamp.example/" in remaining:
+                print("  FAILED: missing-stamp entry should be pruned, remaining: {}".format(remaining))
+                failed += 1
+            if "https://not-a-dict.example/" in remaining:
+                print("  FAILED: non-dict entry should be pruned, remaining: {}".format(remaining))
+                failed += 1
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    print("  Test 12: _load_github_url_cache_from_storage ignores non-dict data without crashing")
+    import shutil
+    import tempfile
+    from storage import StorageComponent, StorageLocalFiles
+    from tests.test_infra import run_async as _run_async
+
+    tmpdir2 = tempfile.mkdtemp()
+    try:
+        storage2 = StorageComponent(my_predbat)
+        storage2.backend = StorageLocalFiles(tmpdir2, my_predbat.log)
+        my_predbat.components = _MockComponentsWithStorage(storage2)
+
+        # Write a non-dict value directly into storage
+        _run_async(storage2.save("predbat", "github_url_cache", ["not", "a", "dict"], format="json"))
+
+        my_predbat.github_url_cache = {}
+        my_predbat.github_url_cache_loaded = False
+        try:
+            my_predbat._load_github_url_cache_from_storage()
+        except Exception as exc:
+            print("  FAILED: _load raised unexpectedly on bad stored type: {}".format(exc))
+            failed += 1
+        else:
+            if my_predbat.github_url_cache:
+                print("  FAILED: non-dict storage value should not be loaded into cache")
+                failed += 1
+    finally:
+        shutil.rmtree(tmpdir2, ignore_errors=True)
 
     return failed

@@ -109,6 +109,25 @@ def test_plan_persistence(my_predbat):
         finally:
             shutil.rmtree(tmpdir2, ignore_errors=True)
 
+        # 2b. load_plan() with a non-dict stored value is a safe no-op
+        print("  Test 2b: load_plan() ignores non-dict stored plan")
+        tmpdir2b = tempfile.mkdtemp()
+        try:
+            storage2b = _make_storage(my_predbat, tmpdir2b)
+            my_predbat.components = _MockComponents(storage2b)
+            run_async(storage2b.save("predbat", "plan", ["not", "a", "dict"], format="json"))
+            my_predbat.plan_valid = False
+            try:
+                my_predbat.load_plan()
+            except Exception as exc:
+                print("  FAILED: load_plan() raised unexpectedly on non-dict stored data: {}".format(exc))
+                failed += 1
+            if my_predbat.plan_valid:
+                print("  FAILED: plan_valid should remain False for non-dict stored plan")
+                failed += 1
+        finally:
+            shutil.rmtree(tmpdir2b, ignore_errors=True)
+
         # 3. load_plan() with storage component unavailable is a safe no-op
         print("  Test 3: load_plan() with storage unavailable")
         my_predbat.components = _MockComponents(None)

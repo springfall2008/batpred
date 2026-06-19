@@ -704,6 +704,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.log("No saved plan found in storage")
             return
 
+        if not isinstance(plan_data, dict):
+            self.log("Warning: Saved plan has unexpected type {}, ignoring".format(type(plan_data).__name__))
+            return
+
         saved_updated = plan_data.get("plan_last_updated")
         if not saved_updated:
             self.log("Saved plan has no timestamp, ignoring")
