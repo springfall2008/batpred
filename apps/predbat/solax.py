@@ -453,6 +453,13 @@ class SolaxAPI(ComponentBase):
         if "_battery_schedule_" in entity_id:
             await self.write_battery_schedule_event(entity_id, service)
 
+    def lattice_fragment(self):
+        """Read-only Lattice fragment: Solax cloud plants (topology + sensor inventory)."""
+        from lattice import device_fragment
+
+        devices = [{"serial": str(p), "device_type": "solax", "sensors": [{"capability": "soc", "unit": "%"}]} for p in getattr(self, "plant_list", []) or []]
+        return device_fragment(devices, provider="solax-cloud", name="Solax Cloud", transport="https", preference=1, locality="cloud")
+
     async def write_battery_schedule_event(self, entity_id, value):
         """
         Write a battery schedule based on an event
