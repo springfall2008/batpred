@@ -1618,6 +1618,14 @@ class FoxAPI(ComponentBase, OAuthMixin):
 
                 self.dashboard_item(entity_id, state=state, attributes=attributes, app="fox")
 
+    def lattice_fragment(self):
+        """Read-only Lattice fragment: FoxESS cloud devices (topology + sensor inventory)."""
+        from lattice import device_fragment
+
+        serials = [d.get("deviceSN") for d in (getattr(self, "device_list", None) or []) if isinstance(d, dict) and d.get("deviceSN")]
+        devices = [{"serial": str(s), "device_type": "fox", "sensors": [{"capability": "soc", "unit": "%"}, {"capability": "battery_power", "unit": "W"}]} for s in serials]
+        return device_fragment(devices, provider="fox-cloud", name="FoxESS Cloud", transport="https", preference=1, locality="cloud")
+
     async def write_setting_from_event(self, entity_id, value, is_number=False):
         """
         Handle write events
