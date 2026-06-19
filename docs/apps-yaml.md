@@ -432,6 +432,15 @@ you will need to wait until you have a few days of history established (at least
 - **ge_cloud_load_today_ignore** - Optional, defaults to false. When set to `true`, Predbat will override the **ge_cloud_automatic** setting and use the **load_today** sensor configured in `apps.yaml`.
 This can be useful if the **load_today** data in the GivEnergy Cloud does not accurately reflect your house load (e.g. multiple inverters that share load) and you want to use a custom load_today sensor.  All other sensors will use either the `apps.yaml` entries or the GivEnergy Cloud entities depending upon **ge_cloud_automatic**.
 
+- **ge_cloud_automatic_shared_ct** - Optional, defaults to false. When set to `true`, Predbat will treat multiple inverters as sharing a single physical CT clamp for grid and load measurement.
+In this mode only the first inverter's grid and load readings are used (the rest are zeroed out), preventing double-counting of grid import/export and house load.
+Use this if you have two or more inverters connected to a single CT clamp and Predbat is not detecting the shared CT automatically (i.e. your inverters have no external dedicated meters with duplicate serial numbers).
+See also **ge_cloud_automatic_split_ct** which takes priority over this setting if both are set.
+
+- **ge_cloud_automatic_split_ct** - Optional, defaults to false. When set to `true`, Predbat will treat each inverter as having its own independent CT clamp, summing all inverters' grid and load readings.
+Use this to override automatic shared-CT detection if Predbat incorrectly identifies your system as sharing a CT clamp (e.g. when duplicate meter serials are reported by the cloud API but the inverters actually have separate CT clamps).
+This setting takes priority over **ge_cloud_automatic_shared_ct** if both are set.
+
 ### SolaX Cloud Direct
 
 Predbat supports direct communication with the SolaX Cloud API to control SolaX inverters and batteries without requiring local integrations.
