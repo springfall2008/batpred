@@ -5,6 +5,7 @@
 import unittest
 
 from lattice import Fragment, Sensor, AccessPath, merge_fragments, resolve_sensor, device_fragment
+from lattice_projection import LatticeProjection
 
 
 class TestModel(unittest.TestCase):
@@ -116,6 +117,103 @@ class TestDeviceFragment(unittest.TestCase):
     def test_skips_without_serial(self):
         """Devices with no serial are skipped (cannot be identity-keyed)."""
         self.assertEqual(device_fragment([{"device_type": "x"}], provider="p", name="n", transport="t", preference=1, locality="local")["nodes"], [])
+
+
+class _FakeComp:
+    """A stand-in producer component exposing lattice_fragment() and is_alive()."""
+
+    def __init__(self, fragment, alive=True):
+        self._fragment = fragment
+        self._alive = alive
+
+    def lattice_fragment(self):
+        return self._fragment
+
+    def is_alive(self):
+        return self._alive
+
+
+class _FakeComponents:
+    """A stand-in component registry."""
+
+    def __init__(self, mapping):
+        self._mapping = mapping
+
+    def get_component(self, name):
+        return self._mapping.get(name)
+
+    def get_all(self):
+        return list(self._mapping.keys())
+
+
+class _FakeBase:
+    """A minimal PredBat base for dependency-injected tests."""
+
+    def __init__(self, components, args=None):
+        self.components = components
+        self._args = args or {}
+        self.args = self._args
+        self.logs = []
+        self.local_tz = None
+        self.prefix = "predbat"
+
+    def get_arg(self, name, default=None):
+        return self._args.get(name, default)
+
+    def log(self, message):
+        self.logs.append(message)
+
+
+class TestLatticeProjection(unittest.TestCase):
+    """The projection discovers producers, merges them, and resolves sensors — read-only."""
+
+    def _proj(self, **args):
+        gw = device_fragment([{"serial": "INV-1", "sensors": [{"capability": "soc", "entity": "sensor.gw_soc"}]}], provider="local-gateway", name="GW", transport="modbus", preference=10, locality="local")
+        cloud = device_fragment([{"serial": "INV-1", "sensors": [{"capability": "soc", "entity": "sensor.cloud_soc"}]}], provider="ge-cloud", name="Cloud", transport="https", preference=1, locality="cloud")
+        fox = device_fragment([{"serial": "FOX-1", "sensors": []}], provider="fox-cloud", name="Fox", transport="https", preference=1, locality="cloud")
+        comps = _FakeComponents({"gateway": _FakeComp(gw), "gecloud": _FakeComp(cloud), "fox": _FakeComp(fox)})
+        proj = LatticeProjection(_FakeBase(comps, args or None))
+        proj.refresh()
+        return proj
+
+    def test_merges_and_discovers_any_brand(self):
+        """All producers (incl. a third brand) auto-merge into the device map."""
+        proj = self._proj()
+        self.assertEqual({n.id for n in proj.site.nodes}, {"INV-1", "FOX-1"})
+
+    def test_sensor_entity_prefers_gateway(self):
+        """A device seen via gateway + cloud resolves soc to the gateway entity."""
+        self.assertEqual(self._proj().sensor_entity("soc", "INV-1"), "sensor.gw_soc")
+
+    def test_enabled_default_off(self):
+        """Mapping is off unless lattice_projection_enable is set."""
+        self.assertFalse(self._proj().enabled())
+        self.assertTrue(self._proj(lattice_projection_enable=True).enabled())
+
+
+class TestLatticeComponent(unittest.IsolatedAsyncioTestCase):
+    """The component builds + logs the device map when enabled; no-op when off."""
+
+    def _base(self, enabled):
+        gw = device_fragment([{"serial": "INV-1", "sensors": [{"capability": "soc", "entity": "sensor.gw_soc"}]}], provider="local-gateway", name="GW", transport="modbus", preference=10, locality="local")
+        comps = _FakeComponents({"gateway": _FakeComp(gw)})
+        return _FakeBase(comps, {"lattice_projection_enable": True} if enabled else None)
+
+    async def test_noop_when_disabled(self):
+        from lattice_component import LatticeComponent
+
+        comp = LatticeComponent(self._base(enabled=False))
+        self.assertTrue(await comp.run(0, True))
+        self.assertIsNone(comp.projection.site)
+        self.assertEqual(comp.base.logs, [])
+
+    async def test_logs_map_when_enabled(self):
+        from lattice_component import LatticeComponent
+
+        comp = LatticeComponent(self._base(enabled=True))
+        self.assertTrue(await comp.run(0, True))
+        self.assertEqual(len(comp.projection.site.nodes), 1)
+        self.assertTrue(any("device map" in m for m in comp.base.logs))
 
 
 if __name__ == "__main__":

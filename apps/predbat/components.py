@@ -44,6 +44,7 @@ except (ImportError, Exception):
     HAS_GATEWAY = False
     GatewayMQTT = None
 from load_ml_component import LoadMLComponent
+from lattice_component import LatticeComponent
 from datetime import datetime, timezone, timedelta
 import asyncio
 import os
@@ -51,6 +52,7 @@ import os
 
 COMPONENT_LIST = {
     "storage": {"class": StorageComponent, "name": "Storage", "args": {}, "can_restart": True, "phase": 0},
+    "lattice": {"class": LatticeComponent, "name": "Lattice Device Map", "args": {}, "can_restart": True, "phase": 2},
     "db": {
         "class": DatabaseManager,
         "name": "Database Manager",
