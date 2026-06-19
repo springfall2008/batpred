@@ -15,6 +15,7 @@ from download import DEFAULT_PREDBAT_REPOSITORY, resolve_predbat_repository
 from utils import dp1
 from predbat import THIS_VERSION
 
+
 class GitHub:
     """GitHub Mixin for Predbat self-update and release discovery."""
 

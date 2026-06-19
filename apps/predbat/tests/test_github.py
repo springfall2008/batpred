@@ -8,8 +8,6 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-import shutil
-import tempfile
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
