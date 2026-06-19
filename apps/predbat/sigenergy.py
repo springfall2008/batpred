@@ -282,6 +282,7 @@ class SigenergyAPI(ComponentBase):
         self.system_status = {}   # systemId → latest systemStatus dict
         self.daily_summary = {}   # systemId → latest summary dict
         self.current_mode = {}    # systemId → energyStorageOperationMode int
+        self.onboard_status = {}  # systemId → onboarding status string (published for the SaaS UI)
 
         # Control state keyed by systemId
         self.controls = {}        # systemId → {charge: {…}, export: {…}, reserve: …}
@@ -824,13 +825,24 @@ class SigenergyAPI(ComponentBase):
                     code = item_codes[0]
 
         if code == SIGENERGY_CODE_SYSTEM_PENDING_REVIEW:
+            for sid in system_ids:
+                self.onboard_status[str(sid)] = "pending_approval"
             self.log("Warn: SigenergyAPI: Onboard for {} pending user approval in the Sigenergy app — approve to enable controls".format(system_ids))
             return None
         if code in (SIGENERGY_CODE_IN_OTHER_VPP, SIGENERGY_CODE_IN_OTHER_VPP_EVERGEN):
+            for sid in system_ids:
+                self.onboard_status[str(sid)] = "in_other_vpp"
             self.log("Warn: SigenergyAPI: Onboard failed — system {} is registered to another VPP (code={})".format(system_ids, code))
             return False
         if code == SIGENERGY_CODE_SOFTWARE_NO_VPP:
-            self.log("Warn: SigenergyAPI: Onboard failed — system {} firmware does not support VPP (code=1105)".format(system_ids))
+            for sid in system_ids:
+                self.onboard_status[str(sid)] = "firmware_no_vpp"
+            self.log("Warn: SigenergyAPI: Onboard failed — system {} firmware does not support VPP (code={})".format(system_ids, code))
+            return False
+        if code in (SIGENERGY_CODE_NO_PERMISSION_STATION, SIGENERGY_CODE_STATION_NOT_PERMITTED):
+            for sid in system_ids:
+                self.onboard_status[str(sid)] = "no_permission"
+            self.log("Warn: SigenergyAPI: Onboard failed — no permission for system {} (code={})".format(system_ids, code))
             return False
         if result is None:
             self.log("Warn: SigenergyAPI: Onboard request failed for systems {} (code={})".format(system_ids, code))
@@ -2058,6 +2070,26 @@ class SigenergyAPI(ComponentBase):
 
         return in_vpp
 
+    def _publish_onboard_status(self):
+        """Publish onboarding-status sensors for all expected system IDs.
+
+        Iterates system_id_filter (or visible systems as a fallback) so that a
+        system still pending approval gets a sensor state even before it appears
+        in the authorised-system list.
+        """
+        for sid in (self.system_id_filter or set(self.systems.keys())):
+            slug = self._system_slug(sid)
+            self.dashboard_item(
+                "sensor.{}_sigenergy_{}_onboard_status".format(self.prefix, slug),
+                state=self.onboard_status.get(str(sid), "not_onboarded"),
+                attributes={
+                    "friendly_name": "Sigenergy {} Onboarding Status".format(sid),
+                    "system_id": sid,
+                    "in_vpp": self.current_mode.get(sid) == SIGENERGY_MODE_VPP,
+                },
+                app="sigenergy",
+            )
+
     # -----------------------------------------------------------------------
     # Main run loop
     # -----------------------------------------------------------------------
@@ -2089,6 +2121,7 @@ class SigenergyAPI(ComponentBase):
             # For each expected system ID not yet visible, attempt onboarding
             missing_ids = self.system_id_filter - set(self.systems.keys()) if self.system_id_filter else set()
             for sid in missing_ids:
+                self.onboard_status.setdefault(str(sid), "not_onboarded")
                 slug = self._system_slug(sid)
                 is_offboard_at_start = self.get_state_wrapper("switch.{}_sigenergy_{}_offboard".format(self.prefix, slug), default="off") == "on"
                 if is_offboard_at_start:
@@ -2097,6 +2130,8 @@ class SigenergyAPI(ComponentBase):
                 self.log("SigenergyAPI: System {} not found in authorised list — attempting onboard".format(sid))
                 result = await self.onboard_systems([sid])
                 if result is not True:
+                    # Publish status before exiting — run() won't reach the normal publish block.
+                    self._publish_onboard_status()
                     return False
                 await self.fetch_system_list()
 
@@ -2136,6 +2171,17 @@ class SigenergyAPI(ComponentBase):
                 slug = self._system_slug(sid)
                 is_offboard = self.get_state_wrapper("switch.{}_sigenergy_{}_offboard".format(self.prefix, slug), default="off") == "on"
                 await self._manage_vpp_registration(sid, is_readonly_vpp, is_offboard)
+                # Derive the user-facing onboarding status for the visible system.
+                if is_offboard:
+                    self.onboard_status[str(sid)] = "offboarded"
+                elif self.current_mode.get(sid) == SIGENERGY_MODE_VPP:
+                    self.onboard_status[str(sid)] = "active"
+                else:
+                    self.onboard_status[str(sid)] = "pending_approval"
+
+        # Publish onboarding status for the SaaS UI.
+        if first or seconds % SIGENERGY_POLL_INTERVAL == 0:
+            self._publish_onboard_status()
 
         # Fetch controls from HA on first run only
         if first:
