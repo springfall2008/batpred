@@ -837,7 +837,7 @@ class SigenergyAPI(ComponentBase):
         if code == SIGENERGY_CODE_SOFTWARE_NO_VPP:
             for sid in system_ids:
                 self.onboard_status[str(sid)] = "firmware_no_vpp"
-            self.log("Warn: SigenergyAPI: Onboard failed — system {} firmware does not support VPP (code=1105)".format(system_ids))
+            self.log("Warn: SigenergyAPI: Onboard failed — system {} firmware does not support VPP (code={})".format(system_ids, code))
             return False
         if code in (SIGENERGY_CODE_NO_PERMISSION_STATION, SIGENERGY_CODE_STATION_NOT_PERMITTED):
             for sid in system_ids:
@@ -2070,6 +2070,26 @@ class SigenergyAPI(ComponentBase):
 
         return in_vpp
 
+    def _publish_onboard_status(self):
+        """Publish onboarding-status sensors for all expected system IDs.
+
+        Iterates system_id_filter (or visible systems as a fallback) so that a
+        system still pending approval gets a sensor state even before it appears
+        in the authorised-system list.
+        """
+        for sid in (self.system_id_filter or set(self.systems.keys())):
+            slug = self._system_slug(sid)
+            self.dashboard_item(
+                "sensor.{}_sigenergy_{}_onboard_status".format(self.prefix, slug),
+                state=self.onboard_status.get(str(sid), "not_onboarded"),
+                attributes={
+                    "friendly_name": "Sigenergy {} Onboarding Status".format(sid),
+                    "system_id": sid,
+                    "in_vpp": self.current_mode.get(sid) == SIGENERGY_MODE_VPP,
+                },
+                app="sigenergy",
+            )
+
     # -----------------------------------------------------------------------
     # Main run loop
     # -----------------------------------------------------------------------
@@ -2110,6 +2130,8 @@ class SigenergyAPI(ComponentBase):
                 self.log("SigenergyAPI: System {} not found in authorised list — attempting onboard".format(sid))
                 result = await self.onboard_systems([sid])
                 if result is not True:
+                    # Publish status before exiting — run() won't reach the normal publish block.
+                    self._publish_onboard_status()
                     return False
                 await self.fetch_system_list()
 
@@ -2157,21 +2179,9 @@ class SigenergyAPI(ComponentBase):
                 else:
                     self.onboard_status[str(sid)] = "pending_approval"
 
-        # Publish onboarding status for the SaaS UI. Iterates the expected system IDs
-        # (not just visible ones) so a system still pending approval still gets a sensor.
+        # Publish onboarding status for the SaaS UI.
         if first or seconds % SIGENERGY_POLL_INTERVAL == 0:
-            for sid in (self.system_id_filter or set(self.systems.keys())):
-                slug = self._system_slug(sid)
-                self.dashboard_item(
-                    "sensor.{}_sigenergy_{}_onboard_status".format(self.prefix, slug),
-                    state=self.onboard_status.get(str(sid), "not_onboarded"),
-                    attributes={
-                        "friendly_name": "Sigenergy {} Onboarding Status".format(sid),
-                        "system_id": sid,
-                        "in_vpp": self.current_mode.get(sid) == SIGENERGY_MODE_VPP,
-                    },
-                    app="sigenergy",
-                )
+            self._publish_onboard_status()
 
         # Fetch controls from HA on first run only
         if first:

@@ -1670,7 +1670,7 @@ def test_sigenergy_onboard_status(my_predbat):
     # Pending approval (1116) → pending_approval, returns None
     api._request = AsyncMock(return_value=None)
     api._last_api_code = SIGENERGY_CODE_SYSTEM_PENDING_REVIEW
-    result = asyncio.run(api.onboard_systems(["sys-1"]))
+    result = run_async(api.onboard_systems(["sys-1"]))
     assert result is None, "pending review returns None"
     assert api.onboard_status["sys-1"] == "pending_approval", "pending_approval status set"
 
@@ -1678,9 +1678,126 @@ def test_sigenergy_onboard_status(my_predbat):
     api2 = MockSigenergyAPI()
     api2._request = AsyncMock(return_value=None)
     api2._last_api_code = SIGENERGY_CODE_IN_OTHER_VPP
-    result2 = asyncio.run(api2.onboard_systems("sys-2"))
+    result2 = run_async(api2.onboard_systems("sys-2"))
     assert result2 is False, "in-other-vpp returns False"
     assert api2.onboard_status["sys-2"] == "in_other_vpp", "in_other_vpp status set"
+
+    return failed
+
+
+def test_sigenergy_publish_onboard_status_sensors(my_predbat):
+    """_publish_onboard_status publishes the correct sensor state for each status value."""
+    failed = False
+
+    # active — system in VPP mode
+    api = MockSigenergyAPI()
+    api.system_id_filter = {"SIG001"}
+    api.onboard_status = {"SIG001": "active"}
+    api.current_mode = {"SIG001": SIGENERGY_MODE_VPP}
+    api._publish_onboard_status()
+    key = "sensor.predbat_sigenergy_sig001_onboard_status"
+    assert api.dashboard_items[key]["state"] == "active", "active state published"
+    assert api.dashboard_items[key]["attributes"]["in_vpp"] is True, "in_vpp True for VPP mode"
+    assert api.dashboard_items[key]["attributes"]["system_id"] == "SIG001", "system_id in attributes"
+
+    # offboarded — system present but toggled off
+    api2 = MockSigenergyAPI()
+    api2.system_id_filter = {"SIG002"}
+    api2.onboard_status = {"SIG002": "offboarded"}
+    api2.current_mode = {"SIG002": SIGENERGY_MODE_MSC}
+    api2._publish_onboard_status()
+    key2 = "sensor.predbat_sigenergy_sig002_onboard_status"
+    assert api2.dashboard_items[key2]["state"] == "offboarded", "offboarded state published"
+    assert api2.dashboard_items[key2]["attributes"]["in_vpp"] is False, "in_vpp False for MSC mode"
+
+    # pending_approval — visible system not yet in VPP
+    api3 = MockSigenergyAPI()
+    api3.system_id_filter = {"SIG003"}
+    api3.onboard_status = {"SIG003": "pending_approval"}
+    api3.current_mode = {}
+    api3._publish_onboard_status()
+    key3 = "sensor.predbat_sigenergy_sig003_onboard_status"
+    assert api3.dashboard_items[key3]["state"] == "pending_approval", "pending_approval state published"
+
+    # not_onboarded — system in filter but onboard_status not yet set
+    api4 = MockSigenergyAPI()
+    api4.system_id_filter = {"SIG004"}
+    api4.onboard_status = {}
+    api4.current_mode = {}
+    api4._publish_onboard_status()
+    key4 = "sensor.predbat_sigenergy_sig004_onboard_status"
+    assert api4.dashboard_items[key4]["state"] == "not_onboarded", "missing status defaults to not_onboarded"
+
+    return failed
+
+
+def test_sigenergy_run_derives_onboard_status(my_predbat):
+    """run() correctly derives and publishes onboard_status for visible systems on each poll cycle."""
+    failed = False
+    sid = "SIG001"
+
+    def _make_api(mode, offboard_on=False):
+        api = MockSigenergyAPI()
+        api.systems = {sid: {"deviceList": []}}
+        api.current_mode = {sid: mode}
+        api.system_id_filter = {sid}
+        # Fake a running MQTT task so run() does not try to start one
+        task = MagicMock()
+        task.done = MagicMock(return_value=False)
+        api._mqtt_task = task
+        if offboard_on:
+            slug = api._system_slug(sid)
+            api.dashboard_items["switch.predbat_sigenergy_{}_offboard".format(slug)] = {"state": "on"}
+        # Stub async helpers called by run()
+        api._manage_vpp_registration = AsyncMock(return_value=True)
+        api.fetch_inverter_realtime = AsyncMock(return_value=True)
+        api.fetch_daily_summary = AsyncMock()
+        api.publish_system_entities = AsyncMock()
+        api.apply_controls = AsyncMock()
+        return api
+
+    # System in VPP mode → active
+    api_active = _make_api(SIGENERGY_MODE_VPP)
+    ok = run_async(api_active.run(seconds=300, first=False))
+    assert ok is True, "run() returns True on success"
+    assert api_active.onboard_status[sid] == "active", "active derived from VPP mode"
+    sensor_key = "sensor.predbat_sigenergy_sig001_onboard_status"
+    assert api_active.dashboard_items[sensor_key]["state"] == "active", "active sensor published"
+    assert api_active.dashboard_items[sensor_key]["attributes"]["in_vpp"] is True
+
+    # System in MSC mode, not offboarded → pending_approval
+    api_pending = _make_api(SIGENERGY_MODE_MSC)
+    run_async(api_pending.run(seconds=300, first=False))
+    assert api_pending.onboard_status[sid] == "pending_approval", "pending_approval derived from MSC mode"
+    assert api_pending.dashboard_items[sensor_key]["state"] == "pending_approval"
+
+    # Offboard toggle on → offboarded regardless of mode
+    api_offboard = _make_api(SIGENERGY_MODE_VPP, offboard_on=True)
+    run_async(api_offboard.run(seconds=300, first=False))
+    assert api_offboard.onboard_status[sid] == "offboarded", "offboarded when toggle is on"
+    assert api_offboard.dashboard_items[sensor_key]["state"] == "offboarded"
+
+    return failed
+
+
+def test_sigenergy_run_pending_publishes_before_early_exit(my_predbat):
+    """When onboard_systems returns None (pending approval), sensor is published before run() returns False."""
+    failed = False
+    sid = "SIG001"
+
+    api = MockSigenergyAPI()
+    api.system_id_filter = {sid}
+    api.get_access_token = AsyncMock(return_value="tok")
+    api.fetch_system_list = AsyncMock()  # leaves self.systems empty (system not yet visible)
+    api.onboard_systems = AsyncMock(return_value=None)
+
+    result = run_async(api.run(seconds=0, first=True))
+
+    assert result is False, "run() returns False when onboarding is pending"
+    sensor_key = "sensor.predbat_sigenergy_sig001_onboard_status"
+    assert sensor_key in api.dashboard_items, "sensor published before early return"
+    # Status was set to not_onboarded by the setdefault call in run() before onboard_systems
+    assert api.dashboard_items[sensor_key]["state"] in ("not_onboarded", "pending_approval"), "sensor has a known status value"
 
     return failed
 
@@ -1741,6 +1858,9 @@ def run_sigenergy_tests(my_predbat):
         ("offboard_toggle_in_vpp", test_sigenergy_offboard_toggle_in_vpp),
         ("offboard_toggle_not_in_vpp", test_sigenergy_offboard_toggle_not_in_vpp),
         ("offboard_toggle_switch_event", test_sigenergy_offboard_toggle_switch_event),
+        ("publish_onboard_status_sensors", test_sigenergy_publish_onboard_status_sensors),
+        ("run_derives_onboard_status", test_sigenergy_run_derives_onboard_status),
+        ("run_pending_publishes_before_early_exit", test_sigenergy_run_pending_publishes_before_early_exit),
     ]
 
     for name, fn in tests:
