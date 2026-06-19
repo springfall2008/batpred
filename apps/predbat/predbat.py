@@ -36,7 +36,7 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.40.13"
+THIS_VERSION = "v8.40.14"
 
 from download import predbat_update_move, predbat_update_download, check_install, resolve_predbat_repository, DEFAULT_PREDBAT_REPOSITORY
 from const import MINUTE_WATT
@@ -1616,7 +1616,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.ha_interface.update_states()
             self.auto_config()
             self.load_user_config(quiet=False, register=False)
-            self.validate_config()
             self.comparison = Compare(self)
 
             self.components.initialize(phase=1)
@@ -1631,6 +1630,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
             self.load_user_config(quiet=False, register=True)
             self.auto_config(final=True)
+            self.validate_config()
 
         except Exception as e:
             self.log("Error: Exception raised {}".format(e))
