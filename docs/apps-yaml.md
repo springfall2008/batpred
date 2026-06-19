@@ -434,7 +434,7 @@ This can be useful if the **load_today** data in the GivEnergy Cloud does not ac
 
 - **ge_cloud_automatic_shared_ct** - Optional, defaults to false. When set to `true`, Predbat will treat multiple inverters as sharing a single physical CT clamp for grid and load measurement.
 In this mode only the first inverter's grid and load readings are used (the rest are zeroed out), preventing double-counting of grid import/export and house load.
-Use this if you have two or more inverters connected to a single CT clamp and Predbat is not detecting the shared CT automatically (i.e. your inverters have no external dedicated meters with duplicate serial numbers).
+Use this if you have two or more inverters connected to a single CT clamp and Predbat is not detecting the shared CT automatically (e.g. your inverters have no external dedicated meters, so the cloud API does not report duplicate meter serials).
 See also **ge_cloud_automatic_split_ct** which takes priority over this setting if both are set.
 
 - **ge_cloud_automatic_split_ct** - Optional, defaults to false. When set to `true`, Predbat will treat each inverter as having its own independent CT clamp, summing all inverters' grid and load readings.
