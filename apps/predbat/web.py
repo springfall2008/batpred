@@ -4234,9 +4234,16 @@ chart.render();
         if not self.base.dashboard_index:
             return '<span class="mdi mdi-battery-sync"></span>'
 
-        percent = calc_percent_limit(self.base.soc_kw, self.base.soc_max)
+        soc_now = self.get_state_wrapper(self.prefix + ".soc_kw", attribute="soc_now", default=None)
+        soc_max = self.get_state_wrapper(self.prefix + ".soc_kw", attribute="soc_max", default=None)
+        if soc_now is None or not soc_max:
+            return '<span class="mdi mdi-battery-sync"></span>'
+
+        percent = calc_percent_limit(soc_now, soc_max)
         percent_rounded_to_nearest_10 = round(float(percent) / 10) * 10
-        if self.base.isCharging:
+        is_charging = self.get_state_wrapper("binary_sensor." + self.prefix + "_charging", default="off") == "on"
+        is_exporting = self.get_state_wrapper("binary_sensor." + self.prefix + "_exporting", default="off") == "on"
+        if is_charging:
             if percent_rounded_to_nearest_10 == 0:
                 icon_text = "battery-charging-outline"
             else:
@@ -4252,7 +4259,7 @@ chart.render();
         text = '<span class="mdi mdi-{}"></span>'.format(icon_text)
         text += str(dp2(percent)) + "%"
 
-        if self.base.isExporting:
+        if is_exporting:
             text += '<span class="mdi mdi-transmission-tower-export"></span>'
         return text
 
