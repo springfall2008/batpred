@@ -227,13 +227,23 @@ class GatewayMQTT(ComponentBase):
         """
         plan_entries = []
 
+        # Reserve as a percentage — used to detect freeze charge (charge limit == reserve)
+        reserve_percent = calc_percent_limit(reserve, soc_max)
+
         # Convert charge windows to plan entries
         for i, window in enumerate(charge_windows or []):
             limit_kwh = charge_limits[i] if i < len(charge_limits or []) else soc_max
             if limit_kwh <= 0:
                 continue
-            # XXX: If limit_khw == reserve then its a hold charge, need logic for this to be added
             limit = calc_percent_limit(limit_kwh, soc_max)
+            charge_power_w = charge_rate_w
+            # Freeze charge (charge limit == reserve): hold the current SoC rather than
+            # charge to a target. There is no freeze mode, so express it as a charge entry
+            # with rate 0 and target 100% — the inverter holds (won't discharge) and solar
+            # may still charge it, but no grid charging happens.
+            if limit == reserve_percent:
+                limit = 100
+                charge_power_w = 0
             start_minutes = window.get("start", 0)
             end_minutes = window.get("end", 0)
             # Work out hours and minutes
@@ -253,7 +263,7 @@ class GatewayMQTT(ComponentBase):
                     "end_hour": end_hour,
                     "end_minute": end_minute,
                     "mode": PLAN_MODE_CHARGE,  # charge
-                    "power_w": charge_rate_w,
+                    "power_w": charge_power_w,
                     "target_soc": int(limit),
                     "days_of_week": 0x7F,
                     "use_native": True,
@@ -265,6 +275,14 @@ class GatewayMQTT(ComponentBase):
             limit = export_limits[i] if i < len(export_limits or []) else 0
             if limit >= 100:
                 continue
+            target_soc = int(limit)
+            export_power_w = discharge_rate_w
+            # Freeze export (export limit == 99): hold SoC and export only surplus PV
+            # rather than force-discharge. There is no freeze mode, so express it as a
+            # discharge entry with rate 0 and target = reserve.
+            if int(limit) == 99:
+                target_soc = reserve_percent
+                export_power_w = 0
             start_minutes = window.get("start", 0)
             end_minutes = window.get("end", 0)
             # Work out hours and minutes
@@ -284,8 +302,8 @@ class GatewayMQTT(ComponentBase):
                     "end_hour": end_hour,
                     "end_minute": end_minute,
                     "mode": PLAN_MODE_DISCHARGE,  # discharge
-                    "power_w": discharge_rate_w,
-                    "target_soc": int(limit),
+                    "power_w": export_power_w,
+                    "target_soc": int(target_soc),
                     "days_of_week": 0x7F,
                     "use_native": True,
                 }
