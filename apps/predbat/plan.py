@@ -1124,11 +1124,11 @@ class Plan:
             else:
                 limits = []
                 if self.inverter_limit > 0:
-                    limits.append((self.inverter_limit / 1000.0, "Inverter AC Capacity"))
+                    limits.append((self.inverter_limit * 60.0, "Inverter AC Capacity"))
                 if self.export_limit > 0:
-                    limits.append((self.export_limit / 1000.0, "DNO Export Limit"))
+                    limits.append((self.export_limit * 60.0, "DNO Export Limit"))
                 if getattr(self, "pv_ac_limit", 0) > 0:
-                    limits.append((self.pv_ac_limit / 1000.0, "PV AC Limit"))
+                    limits.append((self.pv_ac_limit * 60.0, "PV AC Limit"))
 
                 if limits:
                     clipping_limit_effective, clipping_limit_mode = min(limits, key=lambda x: x[0])
