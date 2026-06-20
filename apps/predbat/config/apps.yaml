@@ -267,7 +267,6 @@ pred_bat:
   # Only use this for workarounds if your inverter time is correct but Predbat is somehow wrong (AppDaemon issue)
   # 1 means add 1 minute to AppDaemon time, -1 takes it away
   clock_skew: 0
-
   # Solcast cloud interface, set this or the local interface below
   #solcast_host: 'https://api.solcast.com.au/'
   #solcast_api_key: !secret solcast_api_key
@@ -280,7 +279,25 @@ pred_bat:
   #  azimuth: 180
   #  declination: 10
   #  api_key: !secret forecast_solar_api_key
-  #  azimuth_zero_south: false  # Set to true if azimuth is already in Forecast.solar/Open-Meteo convention (0=South) rather than Predbat convention (0=North)
+
+  # Open-Meteo interface (used for primary PV forecast OR for ClearSky baseline)
+  #open_meteo_forecast:
+  #  - latitude: 55.9711067
+  #    longitude: -3.1925157
+  #    declination: 35
+  #    azimuth: 180
+  #    kwp: 4.0
+
+  # Determines which source Predbat uses for the primary PV forecast.
+  # Options: "auto" (default), "ha", "forecast_solar", "openmeteo", "solcast_api"
+  # If you are using Open-Meteo ONLY for the ClearSky baseline below, it's recommended to explicitly set this to "ha" if using the HA integration.
+  #pv_forecast_primary: "auto"
+
+  # --- Automated Solar Clipping Mitigation ---
+  # Enable clipping mitigation to automatically force exports prior to peaks
+  #clipping_buffer_enable: True
+  # Set the source for the theoretical ClearSky maximum (e.g. "openmeteo", "ha_solcast_clearsky", "solcast_api")
+  #clipping_clearsky_source: "ha_solcast_clearsky"
 
   # Set these to match solcast sensor names if not using the cloud interface
   # The regular expression (re:) makes the solcast bit optional
@@ -289,6 +306,12 @@ pred_bat:
   pv_forecast_tomorrow: re:(sensor.(solcast_|)(pv_forecast_|)forecast_tomorrow)
   pv_forecast_d3: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_3|d3))
   pv_forecast_d4: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_4|d4))
+
+  # ClearSky sensors (Required if clipping_clearsky_source is set to ha_solcast_clearsky)
+  #pv_clearsky_today: re:(sensor.(solcast_|)(pv_forecast_|)clearsky_today)
+  #pv_clearsky_tomorrow: re:(sensor.(solcast_|)(pv_forecast_|)clearsky_tomorrow)
+  #pv_clearsky_d3: re:(sensor.(solcast_|)(pv_forecast_|)clearsky_(day_3|d3))
+  #pv_clearsky_d4: re:(sensor.(solcast_|)(pv_forecast_|)clearsky_(day_4|d4))
 
   # Ohme EV charger cloud direct integration
   #ohme_login: !secret ohme_login
