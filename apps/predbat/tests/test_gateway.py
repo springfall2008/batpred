@@ -819,6 +819,52 @@ class TestPlanHookConversion:
         entries, _ = gw._pending_plan
         assert len(entries) == 0
 
+    def test_entries_sorted_chronologically(self):
+        """Charge and export entries are interleaved into time order (earliest first)."""
+        gw = self._make_gateway()
+
+        # Times deliberately out of order across the two passes:
+        #   charge 06:00 and 22:00; export 02:00 and 16:00
+        gw._on_plan_executed(
+            charge_windows=[{"start": 360, "end": 420}, {"start": 1320, "end": 1380}],
+            charge_limits=[80, 80],
+            export_windows=[{"start": 120, "end": 180}, {"start": 960, "end": 1020}],
+            export_limits=[10, 10],
+            charge_rate_w=3000,
+            discharge_rate_w=2500,
+            soc_max=10,
+            reserve=1,
+            timezone="Europe/London",
+        )
+
+        entries, _ = gw._pending_plan
+        starts = [(e["start_hour"], e["start_minute"]) for e in entries]
+        assert starts == sorted(starts)
+        # Expected order: 02:00 (exp), 06:00 (chg), 16:00 (exp), 22:00 (chg)
+        assert starts == [(2, 0), (6, 0), (16, 0), (22, 0)]
+
+    def test_tomorrow_window_keeps_hours_above_24(self):
+        """Tomorrow's windows (minutes >= 1440) keep hours >= 24 so they stay distinct from today's."""
+        gw = self._make_gateway()
+
+        # today 22:00 charge (1320-1380), tomorrow 01:00-03:00 charge (1500-1620)
+        gw._on_plan_executed(
+            charge_windows=[{"start": 1500, "end": 1620}, {"start": 1320, "end": 1380}],
+            charge_limits=[80, 80],
+            export_windows=[],
+            export_limits=[],
+            charge_rate_w=3000,
+            discharge_rate_w=2500,
+            soc_max=10,
+            reserve=1,
+            timezone="Europe/London",
+        )
+
+        entries, _ = gw._pending_plan
+        # Chronological: today's 22:00 first, then tomorrow's slot kept at hour 25 (not wrapped)
+        assert [(e["start_hour"], e["start_minute"]) for e in entries] == [(22, 0), (25, 0)]
+        assert entries[1]["end_hour"] == 27  # tomorrow 03:00, kept as hour 27
+
     def test_freeze_charge_holds_at_rate_zero(self):
         """Freeze charge (charge limit == reserve) becomes a charge entry at rate 0, target 100%."""
         gw = self._make_gateway()

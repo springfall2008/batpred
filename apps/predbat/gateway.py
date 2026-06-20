@@ -309,6 +309,14 @@ class GatewayMQTT(ComponentBase):
                 }
             )
 
+        # Sort entries chronologically (earliest start first) — charge and export windows
+        # are appended in separate passes above, so without this the gateway would receive
+        # them grouped by type rather than in time order. Sorting before the cap also keeps
+        # the earliest slots when there are more than the firmware can hold. Tomorrow's
+        # windows keep hours >= 24 deliberately so they stay distinct from today's and don't
+        # overlap, and so the sort orders today's 22:00 before tomorrow's 06:00 (hour 30).
+        plan_entries.sort(key=lambda e: (e["start_hour"], e["start_minute"]))
+
         # Cap at 6 entries (firmware PlanEntry entries[6] fixed array)
         MAX_PLAN_ENTRIES = 6
         if len(plan_entries) > MAX_PLAN_ENTRIES:
