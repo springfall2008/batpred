@@ -881,9 +881,56 @@ class Plan:
         for block in clipping_blocks:
             peak_start, peak_end = block["start"], block["end"]
 
-            # Start the continuous export window from around 08:00 to catch morning export rates,
-            # but no more than 12 hours before the peak, and never in the past.
-            morning_start = max(self.minutes_now, min(peak_start - 300, max(self.minutes_now, peak_start - 720)))
+            # Calculate the dynamically sized export window required to create the needed headroom.
+            # We walk backwards from the peak minute by minute to account for the fact that
+            # solar generation (PV) during the export window consumes inverter capacity and
+            # reduces the effective battery discharge rate.
+            max_kwh_loss = max(kwh_loss for m, kwh_loss in forecast.items() if peak_start <= m <= peak_end)
+            
+            # Cap the requested headroom by the physical capacity of the battery.
+            # We cannot create more headroom than the battery can physically hold.
+            battery_capacity_kwh = self.soc_max - getattr(self, "best_soc_min", 0.0)
+            max_kwh_loss = min(max_kwh_loss, battery_capacity_kwh)
+            
+            hybrid = getattr(self, "inverter_hybrid", False)
+            inverter_limit_kw = getattr(self, "set_inverter_limit", 0) / 1000.0
+            export_limit_kw = getattr(self, "export_limit", 0)
+            pv_forecast = getattr(self, "pv_forecast_minute_step", {})
+            
+            accumulated_kwh = 0.0
+            minutes_needed = 0
+            
+            for m in range(peak_start, max(self.minutes_now, peak_start - 360), -1):
+                # Start with raw battery maximum discharge
+                discharge_kw = self.battery_rate_max_discharge * getattr(self, "battery_rate_max_scaling_discharge", 1.0)
+                
+                # Retrieve PV forecast for this minute (kW)
+                pv_kw = pv_forecast.get(m, 0.0)
+                
+                # Hybrid inverters share the AC limit between battery and PV
+                if hybrid and inverter_limit_kw > 0:
+                    discharge_kw = min(discharge_kw, max(0.0, inverter_limit_kw - pv_kw))
+                    
+                # The total site export limit also restricts combined PV + Battery export
+                if export_limit_kw > 0:
+                    discharge_kw = min(discharge_kw, max(0.0, export_limit_kw - pv_kw))
+                    
+                # Safety minimum to prevent infinite loops if limits are misconfigured (0.5 kW)
+                discharge_kw = max(0.5, discharge_kw)
+                
+                accumulated_kwh += discharge_kw * (1.0 / 60.0)
+                minutes_needed += 1
+                
+                if accumulated_kwh >= max_kwh_loss:
+                    break
+
+            # Add 30 mins safety margin
+            minutes_needed += 30
+            
+            # Clamp the window between 60 minutes and 360 minutes (6 hours)
+            minutes_needed = max(60, min(360, minutes_needed))
+            
+            morning_start = max(self.minutes_now, peak_start - minutes_needed)
             morning_start = int(morning_start / 30) * 30  # Align to nearest 30 mins
 
             if morning_start >= peak_start:
@@ -891,19 +938,8 @@ class Plan:
 
             new_window = {"start": morning_start, "end": peak_end, "average": self.rate_export.get(morning_start, 0.0)}
 
-            # We MUST remove any fragmented export windows within this period to ensure a single, continuous
-            # target SOC can be applied across the entire morning and peak, allowing the battery to slowly
-            # absorb the clipped excess without resetting its target.
-
-            # Clean export_window_best
-            for w in [w for w in self.export_window_best if intersects(w, morning_start, peak_end)]:
-                self.log("Dropped fragmented export window {} to {} in favor of unified spillover window".format(self.time_abs_str(w["start"]), self.time_abs_str(w["end"])))
-
-            self.export_window_best = [w for w in self.export_window_best if not intersects(w, morning_start, peak_end)]
-
-            # Clean high_export_rates
-            if getattr(self, "high_export_rates", None) is not None:
-                self.high_export_rates = [w for w in self.high_export_rates if not intersects(w, morning_start, peak_end)]
+            # Do NOT delete fragmented windows. Allow the optimizer to evaluate our focused 3-hour window 
+            # alongside any native high-rate export windows it already found.
 
             # Inject our new unified window
             if not any(w.get("start") <= new_window["start"] and w.get("end") >= new_window["end"] for w in self.export_window_best):
@@ -4067,14 +4103,16 @@ class Plan:
                 predict_clipping_ceiling_best = {}
 
                 clipping_limit_step = getattr(self, "clipping_limit_effective", 0) * (step / 60.0)
-                pv_forecast_peak_step = getattr(self, "pv_forecast_minute_stepCS", getattr(self, "pv_forecast_minute_step90", None))
+                # Ensure the chart uses the exact same peak dataset as the planning engine
+                # which already includes clipping_amplification.
+                pv_forecast_peak_step = getattr(pred, "pv_forecast_peak_step", None)
 
                 manual_buffer_active = False
                 if self.clipping_buffer_kwh > 0:
                     if self.clipping_buffer_start is None or self.clipping_buffer_end is None:
                         manual_buffer_active = True
 
-                cumulative_clip = 0.0
+                daily_cumulative_clip = {}
                 max_minute = self.forecast_minutes
 
                 buffer_start = self.clipping_buffer_start if self.clipping_buffer_start else 0
@@ -4083,6 +4121,13 @@ class Plan:
                 for minute in range(max_minute, -step, -step):
                     remaining = 0.0
                     minute_absolute = minute + self.minutes_now
+                    
+                    if minute <= midnight_today_minute:
+                        day_index = 0
+                    elif minute <= midnight_today_minute + 24 * 60:
+                        day_index = 1
+                    else:
+                        day_index = 2
 
                     if manual_buffer_active or (self.clipping_buffer_kwh > 0 and buffer_start <= minute_absolute < buffer_end):
                         # Calculate linear decay for manual mode visual graph
@@ -4094,14 +4139,15 @@ class Plan:
                     elif pv_forecast_peak_step and clipping_limit_step > 0 and self.clipping_cost_weight > 0:
                         peak_pv = pv_forecast_peak_step.get(minute, 0)
                         if peak_pv > clipping_limit_step:
-                            cumulative_clip += peak_pv - clipping_limit_step
-                        remaining = cumulative_clip
+                            daily_cumulative_clip[day_index] = daily_cumulative_clip.get(day_index, 0.0) + (peak_pv - clipping_limit_step)
+                        remaining = daily_cumulative_clip.get(day_index, 0.0)
 
                     predict_clipping_remaining_best[minute] = round(remaining, 4)
                     predict_clipping_ceiling_best[minute] = round(self.soc_max - remaining, 4)
 
-                self.predict_clipping_remaining_best = predict_clipping_remaining_best
-                self.predict_clipping_ceiling_best = predict_clipping_ceiling_best
+                # Sort dictionaries to ensure forwards time order for ApexCharts rendering
+                self.predict_clipping_remaining_best = dict(sorted(predict_clipping_remaining_best.items()))
+                self.predict_clipping_ceiling_best = dict(sorted(predict_clipping_ceiling_best.items()))
 
                 self.clipping_remaining_today = clipping_today
                 self.clipping_tomorrow = clipping_tomorrow
