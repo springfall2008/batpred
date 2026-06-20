@@ -279,8 +279,9 @@ class GatewayMQTT(ComponentBase):
             export_power_w = discharge_rate_w
             # Freeze export (export limit == 99): hold SoC and export only surplus PV
             # rather than force-discharge. There is no freeze mode, so express it as a
-            # discharge entry with rate 0 and target = reserve.
-            if limit == 99 or limit == 99.0:
+            # discharge entry with rate 0 and target = reserve. Match core's exact == 99
+            # check — a fractional limit (e.g. 99.5) is a normal export, not a freeze.
+            if limit == 99:
                 target_soc = reserve_percent
                 export_power_w = 0
             start_minutes = window.get("start", 0)

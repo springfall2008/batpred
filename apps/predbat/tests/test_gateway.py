@@ -956,6 +956,48 @@ class TestPlanHookConversion:
         assert entry["power_w"] == 2500
         assert entry["target_soc"] == 10
 
+    def test_fractional_export_limit_not_freeze(self):
+        """A fractional export limit (99.5) is a normal export, not a freeze — only exact 99 holds."""
+        gw = self._make_gateway()
+
+        gw._on_plan_executed(
+            charge_windows=[],
+            charge_limits=[],
+            export_windows=[{"start": 960, "end": 1140}],
+            export_limits=[99.5],
+            charge_rate_w=3000,
+            discharge_rate_w=2500,
+            soc_max=10,
+            reserve=1,
+            timezone="Europe/London",
+        )
+
+        entry = gw._pending_plan[0][0]
+        assert entry["mode"] == 2  # discharge
+        assert entry["power_w"] == 2500  # configured rate, NOT 0 — not a freeze
+        assert entry["target_soc"] == 99  # int(99.5), not reserve
+
+    def test_exact_float_99_export_is_freeze(self):
+        """An export limit of 99.0 (float) is still treated as freeze export."""
+        gw = self._make_gateway()
+
+        gw._on_plan_executed(
+            charge_windows=[],
+            charge_limits=[],
+            export_windows=[{"start": 960, "end": 1140}],
+            export_limits=[99.0],
+            charge_rate_w=3000,
+            discharge_rate_w=2500,
+            soc_max=10,
+            reserve=1,
+            timezone="Europe/London",
+        )
+
+        entry = gw._pending_plan[0][0]
+        assert entry["mode"] == 2
+        assert entry["power_w"] == 0  # freeze: rate 0
+        assert entry["target_soc"] == 10  # reserve percent
+
 
 class TestMQTTIntegration:
     """Integration tests for MQTT plan publishing format."""
