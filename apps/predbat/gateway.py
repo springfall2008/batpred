@@ -284,6 +284,12 @@ class GatewayMQTT(ComponentBase):
             if limit == 99:
                 target_soc = reserve_percent
                 export_power_w = 0
+            else:
+                # Low-power export: the planner encodes the chosen export rate in the
+                # fractional part of the limit (e.g. 5.3 -> 70% of max), and execute applies
+                # rate_scale = 1 - frac (see plan.py / execute.py). With low power off there
+                # is no fraction, so this is full rate.
+                export_power_w = round(discharge_rate_w * (1 - (limit - int(limit))))
             start_minutes = window.get("start", 0)
             end_minutes = window.get("end", 0)
             # Work out hours and minutes

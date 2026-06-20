@@ -974,8 +974,31 @@ class TestPlanHookConversion:
 
         entry = gw._pending_plan[0][0]
         assert entry["mode"] == 2  # discharge
-        assert entry["power_w"] == 2500  # configured rate, NOT 0 — not a freeze
+        assert entry["power_w"] != 0  # NOT a freeze (freeze would be 0)
+        assert entry["power_w"] == 1250  # low-power rate: 2500 * (1 - 0.5)
         assert entry["target_soc"] == 99  # int(99.5), not reserve
+
+    def test_export_low_power_rate_from_fraction(self):
+        """The fractional part of the export limit sets the export power (rate_scale = 1 - frac)."""
+        gw = self._make_gateway()
+
+        # limit 5.3 -> rate_scale 0.7 -> 2500 * 0.7 = 1750W, target 5%
+        gw._on_plan_executed(
+            charge_windows=[],
+            charge_limits=[],
+            export_windows=[{"start": 960, "end": 1140}],
+            export_limits=[5.3],
+            charge_rate_w=3000,
+            discharge_rate_w=2500,
+            soc_max=10,
+            reserve=1,
+            timezone="Europe/London",
+        )
+
+        entry = gw._pending_plan[0][0]
+        assert entry["mode"] == 2
+        assert entry["power_w"] == 1750  # round(2500 * (1 - 0.3))
+        assert entry["target_soc"] == 5
 
     def test_exact_float_99_export_is_freeze(self):
         """An export limit of 99.0 (float) is still treated as freeze export."""
