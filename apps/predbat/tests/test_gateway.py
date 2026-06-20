@@ -183,35 +183,35 @@ class TestCommandFormat:
         assert parsed["command_id"] == "PBAT7"
         assert isinstance(parsed["command_id"], str)
 
-    def test_serial_included_as_dongle_serial(self):
-        """serial kwarg is serialised as dongle_serial in the JSON payload."""
+    def test_serial_included_as_serial(self):
+        """serial kwarg is serialised under the "serial" key (the value is the inverter serial)."""
         from gateway import GatewayMQTT
         import json
 
         cmd = GatewayMQTT.build_command("set_mode", mode=1, serial="CE123456789")
         parsed = json.loads(cmd)
-        assert parsed["dongle_serial"] == "CE123456789"
-        assert "serial" not in parsed
+        assert parsed["serial"] == "CE123456789"
+        assert "dongle_serial" not in parsed
 
-    def test_dongle_serial_preserves_original_case(self):
-        """dongle_serial is stored as-is (uppercase) even though entity suffixes are lowercased."""
+    def test_serial_preserves_original_case(self):
+        """serial is stored as-is (uppercase) even though entity suffixes are lowercased."""
         from gateway import GatewayMQTT
         import json
 
         cmd = GatewayMQTT.build_command("set_charge_rate", power_w=3000, serial="CE123456789")
         parsed = json.loads(cmd)
-        assert parsed["dongle_serial"] == "CE123456789"
-        assert parsed["dongle_serial"] != parsed["dongle_serial"].lower()
+        assert parsed["serial"] == "CE123456789"
+        assert parsed["serial"] != parsed["serial"].lower()
 
-    def test_dongle_serial_omitted_when_not_provided(self):
-        """dongle_serial key is absent from the JSON when no serial kwarg is given."""
+    def test_serial_omitted_when_not_provided(self):
+        """serial key is absent from the JSON when no serial kwarg is given."""
         from gateway import GatewayMQTT
         import json
 
         cmd = GatewayMQTT.build_command("set_mode", mode=1)
         parsed = json.loads(cmd)
-        assert "dongle_serial" not in parsed
         assert "serial" not in parsed
+        assert "dongle_serial" not in parsed
 
 
 class TestScheduleSlotCommand:
@@ -2888,7 +2888,7 @@ class TestSetChargeSlotPayload:
     """Diagnostic test — captures the raw MQTT JSON for set_charge_slot and prints it.
 
     Expected hub format:
-      {"command": "set_charge_slot", "dongle_serial": "<serial>", "schedule_json": "{\"start\":200}"}
+      {"command": "set_charge_slot", "serial": "<serial>", "schedule_json": "{\"start\":200}"}
     """
 
     def _make_gateway(self):
@@ -2930,7 +2930,7 @@ class TestSetChargeSlotPayload:
         expected = {
             "command": "set_charge_slot",
             "command_id": "PBAT1",
-            "dongle_serial": "CH2330G499",
+            "serial": "CH2330G499",
             "schedule_json": '{"start": 200}',
         }
 

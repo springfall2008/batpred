@@ -1604,6 +1604,11 @@ class GatewayMQTT(ComponentBase):
         if "enable" in kwargs:
             cmd["enable"] = bool(kwargs["enable"])
         if "serial" in kwargs:
-            cmd["dongle_serial"] = kwargs["serial"]
+            # The value here is the inverter serial (e.g. "CH2330G499"), not the
+            # dongle serial, so the wire key is "serial". The gateway resolver
+            # matches either the dongle or the inverter serial, and firmware
+            # accepts both "serial" and "dongle_serial" — do not rename this to
+            # "dongle_serial" (it would mislabel an inverter serial).
+            cmd["serial"] = kwargs["serial"]
 
         return json.dumps(cmd)
