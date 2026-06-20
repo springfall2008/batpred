@@ -1370,7 +1370,7 @@ class SolarAPI(ComponentBase):
                 self.log("SolarAPI: Forecast Solar returned no data, falling back to Open-Meteo backup")
                 backup_configs = self.open_meteo_forecast if self.open_meteo_forecast else self.forecast_solar
                 pv_forecast_data, max_kwh = await self.download_open_meteo_data(configs=backup_configs)
-        elif (pv_forecast_primary == "openmeteo") or (pv_forecast_primary == "auto" and self.open_meteo_forecast):
+        elif (pv_forecast_primary == "openmeteo") or (pv_forecast_primary == "auto" and self.open_meteo_forecast and self.get_arg("clipping_clearsky_source", "auto", indirect=False) != "openmeteo"):
             self.log("SolarAPI: Obtaining solar forecast from Open-Meteo API")
             pv_forecast_data, max_kwh = await self.download_open_meteo_data()
             divide_by = 30.0
