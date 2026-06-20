@@ -207,6 +207,10 @@ class GatewayMQTT(ComponentBase):
         # Track which inverter serials have received an inverter_reset command
         self._inverter_reset_done = set()
 
+        # Last read-only state sent to the gateway (None until the first send,
+        # so the current state is always pushed once on startup)
+        self._last_read_only = None
+
         # Set once the first MQTT connection attempt has completed (success or failure)
         self._first_connection_attempted = False
 
@@ -349,6 +353,9 @@ class GatewayMQTT(ComponentBase):
                 plan_entries, tz = self._pending_plan
                 self._pending_plan = None
                 await self.publish_plan(plan_entries, tz)
+
+            # Tell the gateway the current read-only state (once on startup, then on every change)
+            await self._check_read_only_state()
 
             # Send inverter_reset for any inverter not yet reset when not in read-only mode
             await self._check_inverter_resets()
@@ -1072,6 +1079,25 @@ class GatewayMQTT(ComponentBase):
 
         except Exception as e:
             self.log(f"Warn: Failed to publish predbat_data: {e}")
+
+    async def _check_read_only_state(self):
+        """Publish a set_read_only command whenever PredBat's read-only mode changes.
+
+        Called on every run() cycle. Sends the current state once on startup (when
+        _last_read_only is still None) and again on each subsequent transition, so the
+        gateway firmware always knows whether PredBat is permitted to control the
+        inverter. The command is gateway-wide, so it carries no inverter serial. Gated
+        only on an active MQTT connection — it does not depend on auto-config, so the
+        state is established as early as possible.
+        """
+        if not self._mqtt_connected:
+            return
+        read_only = bool(self.get_arg("set_read_only", False))
+        if read_only == self._last_read_only:
+            return
+        await self.publish_command("set_read_only", enable=read_only)
+        self._last_read_only = read_only
+        self.log(f"Info: GatewayMQTT: set_read_only command sent (read_only={read_only})")
 
     async def _check_inverter_resets(self):
         """Send inverter_reset for each configured inverter not yet reset in control mode.
