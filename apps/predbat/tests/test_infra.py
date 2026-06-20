@@ -774,7 +774,7 @@ def simple_scenario(
                 limits.append(my_predbat.export_limit)
             if my_predbat.pv_ac_limit > 0:
                 limits.append(my_predbat.pv_ac_limit)
-            clipping_limit_eff = min(limits) if limits else 0
+            clipping_limit_eff = (min(limits) * 60.0) if limits else 0
 
     if prediction_handle:
         prediction = prediction_handle
