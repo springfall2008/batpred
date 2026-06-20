@@ -1091,6 +1091,8 @@ class GatewayMQTT(ComponentBase):
         state is established as early as possible.
         """
         if not self._mqtt_connected:
+            # Force a re-send after reconnect (command is not retained).
+            self._last_read_only = None
             return
         read_only = bool(self.get_arg("set_read_only", False))
         if read_only == self._last_read_only:
