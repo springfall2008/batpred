@@ -819,6 +819,208 @@ class TestPlanHookConversion:
         entries, _ = gw._pending_plan
         assert len(entries) == 0
 
+    def test_entries_sorted_chronologically(self):
+        """Charge and export entries are interleaved into time order (earliest first)."""
+        gw = self._make_gateway()
+
+        # Times deliberately out of order across the two passes:
+        #   charge 06:00 and 22:00; export 02:00 and 16:00
+        gw._on_plan_executed(
+            charge_windows=[{"start": 360, "end": 420}, {"start": 1320, "end": 1380}],
+            charge_limits=[80, 80],
+            export_windows=[{"start": 120, "end": 180}, {"start": 960, "end": 1020}],
+            export_limits=[10, 10],
+            charge_rate_w=3000,
+            discharge_rate_w=2500,
+            soc_max=10,
+            reserve=1,
+            timezone="Europe/London",
+        )
+
+        entries, _ = gw._pending_plan
+        starts = [(e["start_hour"], e["start_minute"]) for e in entries]
+        assert starts == sorted(starts)
+        # Expected order: 02:00 (exp), 06:00 (chg), 16:00 (exp), 22:00 (chg)
+        assert starts == [(2, 0), (6, 0), (16, 0), (22, 0)]
+
+    def test_tomorrow_window_keeps_hours_above_24(self):
+        """Tomorrow's windows (minutes >= 1440) keep hours >= 24 so they stay distinct from today's."""
+        gw = self._make_gateway()
+
+        # today 22:00 charge (1320-1380), tomorrow 01:00-03:00 charge (1500-1620)
+        gw._on_plan_executed(
+            charge_windows=[{"start": 1500, "end": 1620}, {"start": 1320, "end": 1380}],
+            charge_limits=[80, 80],
+            export_windows=[],
+            export_limits=[],
+            charge_rate_w=3000,
+            discharge_rate_w=2500,
+            soc_max=10,
+            reserve=1,
+            timezone="Europe/London",
+        )
+
+        entries, _ = gw._pending_plan
+        # Chronological: today's 22:00 first, then tomorrow's slot kept at hour 25 (not wrapped)
+        assert [(e["start_hour"], e["start_minute"]) for e in entries] == [(22, 0), (25, 0)]
+        assert entries[1]["end_hour"] == 27  # tomorrow 03:00, kept as hour 27
+
+    def test_freeze_charge_holds_at_rate_zero(self):
+        """Freeze charge (charge limit == reserve) becomes a charge entry at rate 0, target 100%."""
+        gw = self._make_gateway()
+
+        # soc_max=10kWh, reserve=1kWh -> reserve_percent=10%; charge limit 1kWh -> 10% == reserve
+        gw._on_plan_executed(
+            charge_windows=[{"start": 90, "end": 270}],
+            charge_limits=[1],
+            export_windows=[],
+            export_limits=[],
+            charge_rate_w=3000,
+            discharge_rate_w=2500,
+            soc_max=10,
+            reserve=1,
+            timezone="Europe/London",
+        )
+
+        entries, _ = gw._pending_plan
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["mode"] == 1  # charge
+        assert entry["power_w"] == 0  # held at rate 0
+        assert entry["target_soc"] == 100
+
+    def test_non_freeze_charge_uses_charge_rate(self):
+        """A charge limit above reserve is a normal charge at the configured rate."""
+        gw = self._make_gateway()
+
+        # charge limit 8kWh -> 80% != reserve 10%
+        gw._on_plan_executed(
+            charge_windows=[{"start": 90, "end": 270}],
+            charge_limits=[8],
+            export_windows=[],
+            export_limits=[],
+            charge_rate_w=3000,
+            discharge_rate_w=2500,
+            soc_max=10,
+            reserve=1,
+            timezone="Europe/London",
+        )
+
+        entry = gw._pending_plan[0][0]
+        assert entry["mode"] == 1
+        assert entry["power_w"] == 3000
+        assert entry["target_soc"] == 80
+
+    def test_freeze_export_holds_at_rate_zero(self):
+        """Freeze export (export limit == 99) becomes a discharge entry at rate 0, target reserve."""
+        gw = self._make_gateway()
+
+        # soc_max=10kWh, reserve=1kWh -> reserve_percent=10%
+        gw._on_plan_executed(
+            charge_windows=[],
+            charge_limits=[],
+            export_windows=[{"start": 960, "end": 1140}],
+            export_limits=[99],
+            charge_rate_w=3000,
+            discharge_rate_w=2500,
+            soc_max=10,
+            reserve=1,
+            timezone="Europe/London",
+        )
+
+        entries, _ = gw._pending_plan
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["mode"] == 2  # discharge
+        assert entry["power_w"] == 0  # held at rate 0
+        assert entry["target_soc"] == 10  # reserve percent
+
+    def test_non_freeze_export_uses_discharge_rate(self):
+        """An export limit below 99 is a normal forced export at the configured rate."""
+        gw = self._make_gateway()
+
+        gw._on_plan_executed(
+            charge_windows=[],
+            charge_limits=[],
+            export_windows=[{"start": 960, "end": 1140}],
+            export_limits=[10],
+            charge_rate_w=3000,
+            discharge_rate_w=2500,
+            soc_max=10,
+            reserve=1,
+            timezone="Europe/London",
+        )
+
+        entry = gw._pending_plan[0][0]
+        assert entry["mode"] == 2
+        assert entry["power_w"] == 2500
+        assert entry["target_soc"] == 10
+
+    def test_fractional_export_limit_not_freeze(self):
+        """A fractional export limit (99.5) is a normal export, not a freeze — only exact 99 holds."""
+        gw = self._make_gateway()
+
+        gw._on_plan_executed(
+            charge_windows=[],
+            charge_limits=[],
+            export_windows=[{"start": 960, "end": 1140}],
+            export_limits=[99.5],
+            charge_rate_w=3000,
+            discharge_rate_w=2500,
+            soc_max=10,
+            reserve=1,
+            timezone="Europe/London",
+        )
+
+        entry = gw._pending_plan[0][0]
+        assert entry["mode"] == 2  # discharge
+        assert entry["power_w"] != 0  # NOT a freeze (freeze would be 0)
+        assert entry["power_w"] == 1250  # low-power rate: 2500 * (1 - 0.5)
+        assert entry["target_soc"] == 99  # int(99.5), not reserve
+
+    def test_export_low_power_rate_from_fraction(self):
+        """The fractional part of the export limit sets the export power (rate_scale = 1 - frac)."""
+        gw = self._make_gateway()
+
+        # limit 5.3 -> rate_scale 0.7 -> 2500 * 0.7 = 1750W, target 5%
+        gw._on_plan_executed(
+            charge_windows=[],
+            charge_limits=[],
+            export_windows=[{"start": 960, "end": 1140}],
+            export_limits=[5.3],
+            charge_rate_w=3000,
+            discharge_rate_w=2500,
+            soc_max=10,
+            reserve=1,
+            timezone="Europe/London",
+        )
+
+        entry = gw._pending_plan[0][0]
+        assert entry["mode"] == 2
+        assert entry["power_w"] == 1750  # round(2500 * (1 - 0.3))
+        assert entry["target_soc"] == 5
+
+    def test_exact_float_99_export_is_freeze(self):
+        """An export limit of 99.0 (float) is still treated as freeze export."""
+        gw = self._make_gateway()
+
+        gw._on_plan_executed(
+            charge_windows=[],
+            charge_limits=[],
+            export_windows=[{"start": 960, "end": 1140}],
+            export_limits=[99.0],
+            charge_rate_w=3000,
+            discharge_rate_w=2500,
+            soc_max=10,
+            reserve=1,
+            timezone="Europe/London",
+        )
+
+        entry = gw._pending_plan[0][0]
+        assert entry["mode"] == 2
+        assert entry["power_w"] == 0  # freeze: rate 0
+        assert entry["target_soc"] == 10  # reserve percent
+
 
 class TestMQTTIntegration:
     """Integration tests for MQTT plan publishing format."""

@@ -227,13 +227,23 @@ class GatewayMQTT(ComponentBase):
         """
         plan_entries = []
 
+        # Reserve as a percentage — used to detect freeze charge (charge limit == reserve)
+        reserve_percent = calc_percent_limit(reserve, soc_max)
+
         # Convert charge windows to plan entries
         for i, window in enumerate(charge_windows or []):
             limit_kwh = charge_limits[i] if i < len(charge_limits or []) else soc_max
             if limit_kwh <= 0:
                 continue
-            # XXX: If limit_khw == reserve then its a hold charge, need logic for this to be added
             limit = calc_percent_limit(limit_kwh, soc_max)
+            charge_power_w = charge_rate_w
+            # Freeze charge (charge limit == reserve): hold the current SoC rather than
+            # charge to a target. There is no freeze mode, so express it as a charge entry
+            # with rate 0 and target 100% — the inverter holds (won't discharge) and solar
+            # may still charge it, but no grid charging happens.
+            if limit == reserve_percent:
+                limit = 100
+                charge_power_w = 0
             start_minutes = window.get("start", 0)
             end_minutes = window.get("end", 0)
             # Work out hours and minutes
@@ -253,7 +263,7 @@ class GatewayMQTT(ComponentBase):
                     "end_hour": end_hour,
                     "end_minute": end_minute,
                     "mode": PLAN_MODE_CHARGE,  # charge
-                    "power_w": charge_rate_w,
+                    "power_w": charge_power_w,
                     "target_soc": int(limit),
                     "days_of_week": 0x7F,
                     "use_native": True,
@@ -265,6 +275,21 @@ class GatewayMQTT(ComponentBase):
             limit = export_limits[i] if i < len(export_limits or []) else 0
             if limit >= 100:
                 continue
+            target_soc = int(limit)
+            export_power_w = discharge_rate_w
+            # Freeze export (export limit == 99): hold SoC and export only surplus PV
+            # rather than force-discharge. There is no freeze mode, so express it as a
+            # discharge entry with rate 0 and target = reserve. Match core's exact == 99
+            # check — a fractional limit (e.g. 99.5) is a normal export, not a freeze.
+            if limit == 99:
+                target_soc = reserve_percent
+                export_power_w = 0
+            else:
+                # Low-power export: the planner encodes the chosen export rate in the
+                # fractional part of the limit (e.g. 5.3 -> 70% of max), and execute applies
+                # rate_scale = 1 - frac (see plan.py / execute.py). With low power off there
+                # is no fraction, so this is full rate.
+                export_power_w = round(discharge_rate_w * (1 - (limit - int(limit))))
             start_minutes = window.get("start", 0)
             end_minutes = window.get("end", 0)
             # Work out hours and minutes
@@ -284,12 +309,20 @@ class GatewayMQTT(ComponentBase):
                     "end_hour": end_hour,
                     "end_minute": end_minute,
                     "mode": PLAN_MODE_DISCHARGE,  # discharge
-                    "power_w": discharge_rate_w,
-                    "target_soc": int(limit),
+                    "power_w": export_power_w,
+                    "target_soc": int(target_soc),
                     "days_of_week": 0x7F,
                     "use_native": True,
                 }
             )
+
+        # Sort entries chronologically (earliest start first) — charge and export windows
+        # are appended in separate passes above, so without this the gateway would receive
+        # them grouped by type rather than in time order. Sorting before the cap also keeps
+        # the earliest slots when there are more than the firmware can hold. Tomorrow's
+        # windows keep hours >= 24 deliberately so they stay distinct from today's and don't
+        # overlap, and so the sort orders today's 22:00 before tomorrow's 06:00 (hour 30).
+        plan_entries.sort(key=lambda e: (e["start_hour"], e["start_minute"]))
 
         # Cap at 6 entries (firmware PlanEntry entries[6] fixed array)
         MAX_PLAN_ENTRIES = 6
