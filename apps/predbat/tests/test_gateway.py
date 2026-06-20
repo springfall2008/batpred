@@ -2787,6 +2787,92 @@ class TestCheckInverterResets:
         assert gw.log.call_count == 2
 
 
+class TestCheckReadOnlyState:
+    """Tests for GatewayMQTT._check_read_only_state()."""
+
+    def _make_gateway(self, read_only=False, connected=True):
+        """Build a minimal GatewayMQTT stub for _check_read_only_state() tests."""
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.log = MagicMock()
+        gw._mqtt_connected = connected
+        gw._last_read_only = None
+        gw._published = []
+
+        self._read_only = read_only
+
+        def fake_get_arg(key, default=None):
+            if key == "set_read_only":
+                return self._read_only
+            return default
+
+        gw.get_arg = fake_get_arg
+
+        async def fake_publish_command(command, **kwargs):
+            gw._published.append((command, kwargs))
+
+        gw.publish_command = fake_publish_command
+        return gw
+
+    def _run(self, coro):
+        import asyncio
+
+        return asyncio.run(coro)
+
+    def test_sends_current_state_on_startup(self):
+        """The current read-only state is published on the first call (startup)."""
+        gw = self._make_gateway(read_only=False)
+        self._run(gw._check_read_only_state())
+        assert len(gw._published) == 1
+        cmd, kwargs = gw._published[0]
+        assert cmd == "set_read_only"
+        assert kwargs["enable"] is False
+        assert "serial" not in kwargs
+        assert gw._last_read_only is False
+
+    def test_sends_read_only_true_on_startup(self):
+        """Startup with read-only enabled publishes enable=True."""
+        gw = self._make_gateway(read_only=True)
+        self._run(gw._check_read_only_state())
+        assert gw._published == [("set_read_only", {"enable": True})]
+        assert gw._last_read_only is True
+
+    def test_no_resend_when_unchanged(self):
+        """A second call with the same state does not re-publish."""
+        gw = self._make_gateway(read_only=False)
+        self._run(gw._check_read_only_state())
+        self._run(gw._check_read_only_state())
+        assert len(gw._published) == 1
+
+    def test_sends_on_change(self):
+        """A change in read-only state publishes the new value."""
+        gw = self._make_gateway(read_only=False)
+        self._run(gw._check_read_only_state())
+        self._read_only = True
+        self._run(gw._check_read_only_state())
+        assert len(gw._published) == 2
+        assert gw._published[1] == ("set_read_only", {"enable": True})
+        assert gw._last_read_only is True
+
+    def test_not_connected_skips_send(self):
+        """Nothing is published while MQTT is disconnected, and state is not latched."""
+        gw = self._make_gateway(read_only=True, connected=False)
+        self._run(gw._check_read_only_state())
+        assert gw._published == []
+        assert gw._last_read_only is None
+
+    def test_disconnected_then_connected_sends(self):
+        """Once connected, the state pending from a disconnected cycle is sent."""
+        gw = self._make_gateway(read_only=True, connected=False)
+        self._run(gw._check_read_only_state())
+        assert gw._published == []
+        gw._mqtt_connected = True
+        self._run(gw._check_read_only_state())
+        assert gw._published == [("set_read_only", {"enable": True})]
+
+
 class TestRunStartupWait:
     """Tests for run(first=True) — verifies it waits for the first MQTT connection attempt."""
 
@@ -2962,6 +3048,7 @@ def run_gateway_tests(my_predbat=None):
         TestPublishPredbatData,
         TestIanaToPosixTz,
         TestCheckInverterResets,
+        TestCheckReadOnlyState,
         TestRunStartupWait,
         TestSetChargeSlotPayload,
         TestIsAuthFailure,
