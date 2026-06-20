@@ -540,7 +540,8 @@ class Prediction:
         carbon_enable = self.carbon_enable
         pv_forecast_peak_step = self.pv_forecast_peak_step
         clipping_limit = self.clipping_limit
-        clipping_limit_step = clipping_limit * step if clipping_limit else 0
+        # clipping_limit is in kW. We need the energy limit in kWh for the given step.
+        clipping_limit_step = clipping_limit * (step / 60.0) if clipping_limit else 0
         clipping_cost_weight = self.clipping_cost_weight
         reserve = self.reserve
         soc_max = self.soc_max

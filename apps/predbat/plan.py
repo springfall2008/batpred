@@ -1163,10 +1163,13 @@ class Plan:
                 # Accumulate potential clipping loss per interval
                 for minute in range(0, self.forecast_minutes, step_size):
                     kwh_loss = 0.0
-                    for m in range(minute, min(minute + step_size, self.forecast_minutes)):
-                        pv_power = pv_forecast_peak_step.get(m, 0)
-                        if pv_power > clipping_limit_effective:
-                            kwh_loss += (pv_power - clipping_limit_effective) / 60.0
+                    for m in range(minute, min(minute + step_size, self.forecast_minutes), PREDICT_STEP):
+                        step_kwh = pv_forecast_peak_step.get(m, 0)
+                        # step_kwh is energy over PREDICT_STEP minutes
+                        # clipping_limit_effective is in kW. Convert it to max allowed energy in PREDICT_STEP.
+                        max_kwh_allowed = clipping_limit_effective * (PREDICT_STEP / 60.0)
+                        if step_kwh > max_kwh_allowed:
+                            kwh_loss += (step_kwh - max_kwh_allowed)
 
                     if kwh_loss > 0:
                         self.clipping_buffer_forecast_kwh[minute] = kwh_loss
