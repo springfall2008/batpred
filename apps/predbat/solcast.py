@@ -1442,7 +1442,7 @@ class SolarAPI(ComponentBase):
                             ha_data += data
                 if ha_data:
                     # Apply factor and divide_by logic like the main PV fetcher
-                    ha_lookup = {item["period_start"]: (float(item.get("pv_estimate") or 0.0) * factor / divide_by) for item in ha_data}
+                    ha_lookup = {item["period_start"]: float(item.get("pv_estimate", 0.0)) for item in ha_data}
                     for item in pv_forecast_data:
                         ts = item.get("period_start")
                         if ts in ha_lookup:
@@ -1478,6 +1478,12 @@ class SolarAPI(ComponentBase):
 
             if period != 30:
                 self.log("SolarAPI: PV Forecast data has {} minute resolution, adjusting calculations".format(period))
+
+            # Universal fallback for ClearSky data
+            # Ensure every item has a clearsky value before we pass to minute_data
+            for item in pv_forecast_data:
+                if "pv_clearsky" not in item:
+                    item["pv_clearsky"] = item.get("pv_estimate90", item.get("pv_estimate", 0.0))
 
             pv_forecast_minute, _ = minute_data(
                 pv_forecast_data,
