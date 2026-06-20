@@ -36,6 +36,7 @@ from tests.test_nordpool import run_nordpool_test
 from tests.test_futurerate_auto import test_futurerate_auto
 from tests.test_car_charging_smart import run_car_charging_smart_tests
 from tests.test_plugin_startup import test_plugin_startup_order
+from tests.test_active_flag import test_active_flag
 from tests.test_optimise_levels import run_optimise_levels_tests
 from tests.test_energydataservice import run_energydataservice_tests
 from tests.test_iboost import run_iboost_smart_tests
@@ -225,6 +226,7 @@ def main():
         ("load_free_slot", test_load_free_slot, "Load free slot tests", False),
         ("add_now_to_octopus_slot", test_add_now_to_octopus_slot, "Add now to Octopus slot tests", False),
         ("plugin_startup", test_plugin_startup_order, "Plugin startup order tests", False),
+        ("active_flag", test_active_flag, "Active flag cleared on exception tests", False),
         ("dynamic_load_car", test_dynamic_load_car_slot_cancellation, "Dynamic load car slot cancellation tests", False),
         ("units", run_test_units, "Unit tests", False),
         ("manual_api", run_test_manual_api, "Manual API tests", False),

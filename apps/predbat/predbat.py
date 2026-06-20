@@ -1666,6 +1666,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 raise e
             finally:
                 self.prediction_started = False
+                # Always clear the active flag, even on early return or exception, so the
+                # web spinner and predbat.active switch don't get stuck on
+                self.expose_config("active", False)
                 self.cleanup_pool()
         elif not self.prediction_started:
             time_now = datetime.now()
@@ -1745,6 +1748,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 raise e
             finally:
                 self.prediction_started = False
+                # Always clear the active flag, even on early return or exception, so the
+                # web spinner and predbat.active switch don't get stuck on
+                self.expose_config("active", False)
                 self.cleanup_pool()
 
     def run_time_loop_balance(self, cb_args):
