@@ -862,7 +862,9 @@ class Plan:
         # Find contiguous blocks of clipping in the forecast
         clipping_blocks = []
         current_block = None
-        for minute, kwh_loss in sorted(forecast.items()):
+        for minute_relative, kwh_loss in sorted(forecast.items()):
+            # forecast uses relative minutes from now, convert to absolute
+            minute = minute_relative + self.minutes_now
             if kwh_loss > 0:
                 if current_block is None:
                     current_block = {"start": minute, "end": minute + 30}
@@ -936,20 +938,31 @@ class Plan:
             if morning_start >= peak_start:
                 continue
 
-            new_window = {"start": morning_start, "end": peak_end, "average": self.rate_export.get(morning_start, 0.0)}
+            # Calculate the precise export limit (Target SOC percentage) required to create this headroom
+            target_soc_kwh = max(0.0, self.soc_max - max_kwh_loss)
+            target_soc_pct = max(0.0, min(100.0, target_soc_kwh / self.soc_max * 100.0))
+            target_soc_pct = float(int(target_soc_pct))
 
-            # Do NOT delete fragmented windows. Allow the optimizer to evaluate our focused 3-hour window 
-            # alongside any native high-rate export windows it already found.
+            new_window = {
+                "start": morning_start, 
+                "end": peak_end, 
+                "average": self.rate_export.get(morning_start, 0.0),
+                "clipping_ceiling_pct": target_soc_pct
+            }
+
+            # Tag any overlapping native export windows with the ceiling so they don't dump below it
+            for w in self.export_window_best:
+                if (w.get("start") >= morning_start and w.get("start") < peak_end) or (w.get("end") > morning_start and w.get("end") <= peak_end):
+                    w["clipping_ceiling_pct"] = target_soc_pct
 
             # Inject our new unified window
             if not any(w.get("start") <= new_window["start"] and w.get("end") >= new_window["end"] for w in self.export_window_best):
                 self.export_window_best.append(new_window)
+                self.export_limits_best.append(target_soc_pct)
                 if getattr(self, "high_export_rates", None) is not None:
                     self.high_export_rates.append(copy.deepcopy(new_window))
 
-                # Regenerate export limits
-                self.export_limits_best = [100.0] * len(self.export_window_best)
-                self.log("Injected continuous anti-clipping candidate export window {} to {} to allow spillover absorption".format(self.time_abs_str(morning_start), self.time_abs_str(peak_end)))
+                self.log("Injected continuous anti-clipping candidate export window {} to {} to allow spillover absorption (Target SOC: {}%)".format(self.time_abs_str(morning_start), self.time_abs_str(peak_end), target_soc_pct))
 
     def calculate_plan(self, recompute=True, debug_mode=False, publish=True):
         """
@@ -1210,7 +1223,9 @@ class Plan:
                     if kwh_loss > 0:
                         self.clipping_buffer_forecast_kwh[minute] = kwh_loss
                         # Add to totals
-                        if minute < 1440:
+                        minute_absolute = minute + self.minutes_now
+                        midnight_today_minute = int(self.minutes_now / 1440) * 1440
+                        if minute_absolute < midnight_today_minute + 1440:
                             self.clipping_remaining_today += kwh_loss
                         else:
                             self.clipping_tomorrow += kwh_loss
@@ -1907,6 +1922,10 @@ class Plan:
             loop_options = [100.0, 0.0]
             if self.set_export_low_power:
                 loop_options.extend([0.3, 0.5, 0.7])
+
+        # Ensure any pre-assigned fractional limits (like clipping thresholds) are evaluated
+        if try_export[window_n] not in loop_options and try_export[window_n] > 0.0 and try_export[window_n] < 99.0:
+            loop_options.append(try_export[window_n])
 
         # Collect all options
         results = []
@@ -4223,6 +4242,43 @@ class Plan:
                         clipping_status_text = "{} kWh clipping forecast ({}) between {} and {}.".format(dp2(self.clipping_buffer_kwh), self.clipping_mode, start_str, end_str)
                     else:
                         clipping_status_text = "{} kWh manual clipping buffer override active.".format(dp2(self.clipping_buffer_kwh))
+                
+                elif getattr(self, "clipping_buffer_enable", False) and getattr(self, "clipping_buffer_forecast_kwh", {}):
+                    def format_time_human_abs(minute_absolute):
+                        target_dt = self.midnight + timedelta(minutes=minute_absolute)
+                        return target_dt.strftime("%H:%M")
+
+                    today_start = None
+                    today_end = None
+                    tomorrow_start = None
+                    tomorrow_end = None
+
+                    midnight_today_minute = int(self.minutes_now / 1440) * 1440
+                    for minute_relative, kwh_loss in sorted(self.clipping_buffer_forecast_kwh.items()):
+                        minute_absolute = minute_relative + self.minutes_now
+                        if minute_absolute < midnight_today_minute + 1440:
+                            if today_start is None: today_start = minute_absolute
+                            today_end = minute_absolute + 30
+                        else:
+                            if tomorrow_start is None: tomorrow_start = minute_absolute
+                            tomorrow_end = minute_absolute + 30
+                    
+                    status_parts = []
+                    if self.clipping_remaining_today > 0 and today_start is not None:
+                        status_parts.append("{} kWh clipping buffer remaining between {} and {} today".format(
+                            dp2(self.clipping_remaining_today), 
+                            format_time_human_abs(today_start), 
+                            format_time_human_abs(today_end)
+                        ))
+                    if self.clipping_tomorrow > 0 and tomorrow_start is not None:
+                        status_parts.append("{} kWh clipping buffer forecast between {} and {} tomorrow".format(
+                            dp2(self.clipping_tomorrow), 
+                            format_time_human_abs(tomorrow_start), 
+                            format_time_human_abs(tomorrow_end)
+                        ))
+                    
+                    if status_parts:
+                        clipping_status_text = ". ".join(status_parts) + "."
 
                 self.dashboard_item(
                     self.prefix + ".clipping_status",
