@@ -205,6 +205,7 @@ def test_ge_cloud(my_predbat=None):
         ("devices_batteries", _test_async_get_devices_with_batteries, "Get devices with batteries"),
         ("devices_legacy_battery", _test_async_get_devices_legacy_battery, "Get devices with legacy battery (empty connections)"),
         ("devices_empty", _test_async_get_devices_empty, "Get empty devices"),
+        ("devices_stale_last_updated", _test_async_get_devices_stale_last_updated, "Devices with stale last_updated are skipped"),
         ("evc_devices", _test_async_get_evc_devices, "Get EV charger devices"),
         ("smart_devices", _test_async_get_smart_devices, "Get smart devices"),
         ("evc_commands", _test_async_get_evc_commands, "Get EV charger commands"),
@@ -984,6 +985,55 @@ def _test_async_get_devices_empty(my_predbat):
 
             if result != {"gateway": None, "ems": None, "battery": [], "battery_meters": {}, "pv": []}:
                 print("ERROR: Expected empty result dict, got {}".format(result))
+                return 1
+        return 0
+
+    return run_async(test())
+
+
+def _test_async_get_devices_stale_last_updated(my_predbat):
+    """Test that devices with last_updated older than 5 days are excluded from device discovery"""
+
+    async def test():
+        from datetime import datetime, timezone, timedelta
+
+        ge_cloud = MockGECloudDirect()
+
+        recent = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        stale = (datetime.now(timezone.utc) - timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        mock_devices = [
+            # Recent battery — should be included
+            {"inverter": {"serial": "fresh001", "last_updated": recent, "info": {"model": "All-In-One"}, "connections": {"batteries": [{"serial": "bat1"}], "meters": []}}},
+            # Stale battery (10 days old) — should be skipped
+            {"inverter": {"serial": "stale001", "last_updated": stale, "info": {"model": "All-In-One"}, "connections": {"batteries": [{"serial": "bat2"}], "meters": []}}},
+            # Stale EMS — should be skipped
+            {"inverter": {"serial": "stale_ems", "last_updated": stale, "info": {"model": "Plant EMS"}, "connections": {"batteries": [], "meters": []}}},
+            # Recent gateway — should be included
+            {"inverter": {"serial": "fresh_gw", "last_updated": recent, "info": {"model": "Gateway"}, "connections": {"batteries": [], "meters": []}}},
+            # No last_updated field — should be included (age check skipped)
+            {"inverter": {"serial": "nots001", "info": {"model": "Hybrid"}, "connections": {"batteries": [{"serial": "bat3"}], "meters": []}}},
+        ]
+
+        async def mock_retry(*args, **kwargs):
+            return mock_devices
+
+        with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+            ge_cloud.async_get_inverter_data_retry = mock_retry
+
+            result = await ge_cloud.async_get_devices()
+
+            if result["battery"] != ["fresh001", "nots001"]:
+                print("ERROR: Expected battery=['fresh001', 'nots001'], got {}".format(result["battery"]))
+                return 1
+            if "stale001" in result["battery"]:
+                print("ERROR: stale001 should have been excluded (last_updated 10 days ago)")
+                return 1
+            if result["ems"] is not None:
+                print("ERROR: stale EMS should have been excluded, got ems={}".format(result["ems"]))
+                return 1
+            if result["gateway"] != "fresh_gw":
+                print("ERROR: Expected gateway='fresh_gw', got {}".format(result["gateway"]))
                 return 1
         return 0
 
@@ -2984,9 +3034,9 @@ def _test_async_automatic_config(my_predbat):
         assert ge.config_args.get("discharge_rate_percent") is None, "discharge_rate_percent should be None"
         assert ge.config_args.get("inverter_mode") is None, "inverter_mode should be None when eco toggle switch is not available"
 
-        # Test 3: Multiple batteries with no battery_meters (default: shared CT — no dedicated meters detected)
-        # When battery_meters is absent or all batteries have empty meters, shared CT is assumed and
-        # grid/load sensors should use only the first battery to avoid double-counting.
+        # Test 3: Multiple batteries with no battery_meters (default: split CT — no duplicate serials detected)
+        # When battery_meters is absent, there are no duplicate serials, so has_shared_ct stays False
+        # and all inverters' grid/load readings are used independently.
         ge.config_args = {}
         ge.settings = {"battery001": {"reg1": {"name": "Enable_Eco_Mode"}}, "battery002": {"reg1": {"name": "Enable_Eco_Mode"}}}
 
@@ -2996,14 +3046,13 @@ def _test_async_automatic_config(my_predbat):
 
         assert ge.config_args.get("num_inverters") == 2, "num_inverters should be 2"
         assert ge.config_args.get("inverter_type") == ["GEC", "GEC"], "inverter_type should have 2 entries"
-        # Shared CT: load_today, import_today, export_today use first battery only to avoid double-counting
-        assert ge.config_args.get("load_today") == ["sensor.predbat_gecloud_battery001_consumption_total"], "load_today should use first battery only (shared CT)"
-        assert ge.config_args.get("import_today") == ["sensor.predbat_gecloud_battery001_grid_import_total"], "import_today should use first battery only (shared CT)"
-        assert ge.config_args.get("export_today") == ["sensor.predbat_gecloud_battery001_grid_export_total"], "export_today should use first battery only (shared CT)"
-        # Shared CT: grid_power and load_power use first battery + zeros
-        assert ge.config_args.get("grid_power") == ["sensor.predbat_gecloud_battery001_grid_power", 0], "grid_power should use first battery + zero (shared CT)"
-        assert ge.config_args.get("load_power") == ["sensor.predbat_gecloud_battery001_consumption_power", 0], "load_power should use first battery + zero (shared CT)"
-        # Per-inverter sensors should still use all batteries
+        # Split CT: all batteries used for grid and load sensors
+        assert ge.config_args.get("load_today") == ["sensor.predbat_gecloud_battery001_consumption_total", "sensor.predbat_gecloud_battery002_consumption_total"], "load_today should use all batteries (split CT)"
+        assert ge.config_args.get("import_today") == ["sensor.predbat_gecloud_battery001_grid_import_total", "sensor.predbat_gecloud_battery002_grid_import_total"], "import_today should use all batteries (split CT)"
+        assert ge.config_args.get("export_today") == ["sensor.predbat_gecloud_battery001_grid_export_total", "sensor.predbat_gecloud_battery002_grid_export_total"], "export_today should use all batteries (split CT)"
+        assert ge.config_args.get("grid_power") == ["sensor.predbat_gecloud_battery001_grid_power", "sensor.predbat_gecloud_battery002_grid_power"], "grid_power should use all batteries (split CT)"
+        assert ge.config_args.get("load_power") == ["sensor.predbat_gecloud_battery001_consumption_power", "sensor.predbat_gecloud_battery002_consumption_power"], "load_power should use all batteries (split CT)"
+        # Per-inverter sensors should also use all batteries
         assert ge.config_args.get("pv_today") == ["sensor.predbat_gecloud_battery001_solar_total", "sensor.predbat_gecloud_battery002_solar_total"], "pv_today should use all batteries"
         assert ge.config_args.get("battery_power") == ["sensor.predbat_gecloud_battery001_battery_power", "sensor.predbat_gecloud_battery002_battery_power"], "battery_power should use all batteries"
         assert ge.config_args.get("inverter_mode") == ["switch.predbat_gecloud_battery001_enable_eco_mode", "switch.predbat_gecloud_battery002_enable_eco_mode"], "inverter_mode should have 2 eco toggle entries"
@@ -3043,6 +3092,59 @@ def _test_async_automatic_config(my_predbat):
 
         assert ge.config_args.get("grid_power") == ["sensor.predbat_gecloud_battery001_grid_power", 0], "grid_power should use first battery + zero when meter serial is shared"
         assert ge.config_args.get("import_today") == ["sensor.predbat_gecloud_battery001_grid_import_total"], "import_today should use first battery only when meter serial is shared"
+
+        # Test 3e: ge_cloud_automatic_shared_ct=True forces shared CT even with no duplicate meter serials
+        ge.config_args = {"ge_cloud_automatic_shared_ct": True}
+        ge.settings = {"battery001": {"reg1": {"name": "Enable_Eco_Mode"}}, "battery002": {"reg1": {"name": "Enable_Eco_Mode"}}}
+
+        devices = {
+            "ems": None,
+            "gateway": None,
+            "battery": ["battery001", "battery002"],
+            "battery_meters": {"battery001": [1001], "battery002": [1002]},  # unique serials — would normally be split CT
+        }
+
+        await ge.async_automatic_config(devices)
+
+        assert ge.config_args.get("grid_power") == ["sensor.predbat_gecloud_battery001_grid_power", 0], "grid_power should use first battery + zero when ge_cloud_automatic_shared_ct overrides"
+        assert ge.config_args.get("load_power") == ["sensor.predbat_gecloud_battery001_consumption_power", 0], "load_power should use first battery + zero when ge_cloud_automatic_shared_ct overrides"
+        assert ge.config_args.get("import_today") == ["sensor.predbat_gecloud_battery001_grid_import_total"], "import_today should use first battery only when ge_cloud_automatic_shared_ct overrides"
+        assert ge.config_args.get("export_today") == ["sensor.predbat_gecloud_battery001_grid_export_total"], "export_today should use first battery only when ge_cloud_automatic_shared_ct overrides"
+        assert ge.config_args.get("load_today") == ["sensor.predbat_gecloud_battery001_consumption_total"], "load_today should use first battery only when ge_cloud_automatic_shared_ct overrides"
+
+        # Test 3f: ge_cloud_automatic_split_ct=True forces split CT even with duplicate meter serials
+        ge.config_args = {"ge_cloud_automatic_split_ct": True}
+        ge.settings = {"battery001": {"reg1": {"name": "Enable_Eco_Mode"}}, "battery002": {"reg1": {"name": "Enable_Eco_Mode"}}}
+
+        devices = {
+            "ems": None,
+            "gateway": None,
+            "battery": ["battery001", "battery002"],
+            "battery_meters": {"battery001": [9999], "battery002": [9999]},  # duplicate serials — would normally be shared CT
+        }
+
+        await ge.async_automatic_config(devices)
+
+        assert ge.config_args.get("grid_power") == ["sensor.predbat_gecloud_battery001_grid_power", "sensor.predbat_gecloud_battery002_grid_power"], "grid_power should use all batteries when ge_cloud_automatic_split_ct overrides"
+        assert ge.config_args.get("import_today") == ["sensor.predbat_gecloud_battery001_grid_import_total", "sensor.predbat_gecloud_battery002_grid_import_total"], "import_today should use all batteries when ge_cloud_automatic_split_ct overrides"
+        assert ge.config_args.get("export_today") == ["sensor.predbat_gecloud_battery001_grid_export_total", "sensor.predbat_gecloud_battery002_grid_export_total"], "export_today should use all batteries when ge_cloud_automatic_split_ct overrides"
+        assert ge.config_args.get("load_today") == ["sensor.predbat_gecloud_battery001_consumption_total", "sensor.predbat_gecloud_battery002_consumption_total"], "load_today should use all batteries when ge_cloud_automatic_split_ct overrides"
+
+        # Test 3g: both override flags set — ge_cloud_automatic_split_ct takes priority
+        ge.config_args = {"ge_cloud_automatic_shared_ct": True, "ge_cloud_automatic_split_ct": True}
+        ge.settings = {"battery001": {"reg1": {"name": "Enable_Eco_Mode"}}, "battery002": {"reg1": {"name": "Enable_Eco_Mode"}}}
+
+        devices = {
+            "ems": None,
+            "gateway": None,
+            "battery": ["battery001", "battery002"],
+            "battery_meters": {"battery001": [1001], "battery002": [1002]},
+        }
+
+        await ge.async_automatic_config(devices)
+
+        assert ge.config_args.get("grid_power") == ["sensor.predbat_gecloud_battery001_grid_power", "sensor.predbat_gecloud_battery002_grid_power"], "split CT should win when both overrides are set"
+        assert ge.config_args.get("import_today") == ["sensor.predbat_gecloud_battery001_grid_import_total", "sensor.predbat_gecloud_battery002_grid_import_total"], "import_today should use all batteries when split CT wins"
 
         # Test 3d: Three-phase alternative names should be auto-selected when default names do not exist
         ge.config_args = {}

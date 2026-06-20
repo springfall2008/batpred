@@ -20,7 +20,7 @@ single orchestrator that runs the main prediction/optimisation loop every 5 minu
 import copy
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import traceback
 import sys
 import gc
@@ -33,12 +33,11 @@ IS_COMPILED = getattr(sys, "frozen", False)
 
 import hass as hass
 import pytz
-import requests
 import asyncio
 
-THIS_VERSION = "v8.40.12"
+THIS_VERSION = "v8.40.14"
 
-from download import predbat_update_move, predbat_update_download, check_install, resolve_predbat_repository, DEFAULT_PREDBAT_REPOSITORY
+from download import predbat_update_move, predbat_update_download, check_install, DEFAULT_PREDBAT_REPOSITORY
 from const import MINUTE_WATT
 
 # Only do the self-install/self-update logic if we are NOT compiled.
@@ -84,9 +83,11 @@ from output import Output
 from userinterface import UserInterface
 from compare import Compare
 from plugin_system import PluginSystem
+from github import GitHub
+from ha import run_async
 
 
-class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, Marginal, Execute, Output, UserInterface):
+class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, Marginal, Execute, Output, UserInterface, GitHub):
     """Main PredBat orchestrator combining all subsystems via multiple inheritance.
 
     Inherits from Hass (HA interface), Octopus (rate loading), Energidataservice, Stromligning,
@@ -94,142 +95,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
     Output (sensor publishing), and UserInterface (config management).
     Runs the main prediction/optimisation loop every 5 minutes via update_pred().
     """
-
-    def get_predbat_repository(self):
-        """Return the GitHub repository used for main-branch self-update operations.
-
-        This override is applied to ``download_predbat_version('main')`` only.
-        Release discovery and tagged-version updates remain pinned to
-        ``DEFAULT_PREDBAT_REPOSITORY``.
-        """
-        repository = self.get_arg("predbat_repository", default="", indirect=False)
-        if isinstance(repository, str):
-            repository = repository.strip()
-        return resolve_predbat_repository(repository=repository)
-
-    def download_predbat_releases_url(self, url):
-        """
-        Download release data from GitHub, but use the cache for 2 hours
-        """
-        # Check the cache first
-        now = datetime.now()
-        if url in self.github_url_cache:
-            stamp = self.github_url_cache[url]["stamp"]
-            pdata = self.github_url_cache[url]["data"]
-            age = now - stamp
-            if age.seconds < (120 * 60):
-                self.log("Using cached GitHub data for {} age {} minutes".format(url, dp1(age.seconds / 60)))
-                return pdata
-
-        try:
-            r = requests.get(url)
-        except Exception:
-            self.log("Warn: Unable to load data from GitHub URL: {}".format(url))
-            return []
-
-        try:
-            pdata = r.json()
-        except requests.exceptions.JSONDecodeError:
-            self.log("Warn: Unable to decode data from GitHub URL: {}".format(url))
-            return []
-
-        # Save to cache
-        self.github_url_cache[url] = {}
-        self.github_url_cache[url]["stamp"] = now
-        self.github_url_cache[url]["data"] = pdata
-
-        return pdata
-
-    def download_predbat_releases(self):
-        """
-        Download release data
-        """
-        global PREDBAT_UPDATE_OPTIONS
-        auto_update = self.get_arg("auto_update")
-        repository = DEFAULT_PREDBAT_REPOSITORY
-        url = "https://api.github.com/repos/{}/releases".format(repository)
-        data = self.download_predbat_releases_url(url)
-        self.releases = {}
-        if data and isinstance(data, list):
-            found_latest = False
-            found_latest_beta = False
-
-            release = data[0]
-            self.releases["this"] = THIS_VERSION
-            self.releases["latest"] = "Unknown"
-            self.releases["latest_beta"] = "Unknown"
-
-            for release in data:
-                if release.get("tag_name", "Unknown") == THIS_VERSION:
-                    self.releases["this_name"] = release.get("name", "Unknown")
-                    self.releases["this_body"] = release.get("body", "Unknown")
-
-                if not found_latest and not release.get("prerelease", True):
-                    self.releases["latest"] = release.get("tag_name", "Unknown")
-                    self.releases["latest_name"] = release.get("name", "Unknown")
-                    self.releases["latest_body"] = release.get("body", "Unknown")
-                    found_latest = True
-
-                if not found_latest_beta:
-                    self.releases["latest_beta"] = release.get("tag_name", "Unknown")
-                    self.releases["latest_beta_name"] = release.get("name", "Unknown")
-                    self.releases["latest_beta_body"] = release.get("body", "Unknown")
-                    found_latest_beta = True
-
-            self.log("Predbat {} repository {} version {} currently running, latest version is {}, latest beta is {}".format(__file__, repository, self.releases["this"], self.releases["latest"], self.releases["latest_beta"]))
-            PREDBAT_UPDATE_OPTIONS = ["main"]
-            this_tag = THIS_VERSION
-            new_version = False
-
-            # Find all versions for the dropdown menu
-            for release in data:
-                prerelease = release.get("prerelease", True)
-                tag = release.get("tag_name", None)
-                if tag:
-                    if prerelease:
-                        full_name = tag + " (beta) " + release.get("name", "")
-                    else:
-                        full_name = tag + " " + release.get("name", "")
-                    PREDBAT_UPDATE_OPTIONS.append(full_name)
-                    if this_tag == tag:
-                        this_tag = full_name
-                if len(PREDBAT_UPDATE_OPTIONS) >= 25:
-                    break
-
-            # Update the drop down menu
-            item = self.config_index.get("update", None)
-            if item:
-                item["options"] = PREDBAT_UPDATE_OPTIONS
-                item["value"] = None
-
-            # See what version we are on and auto-update
-            if this_tag not in PREDBAT_UPDATE_OPTIONS:
-                this_tag = this_tag + " (?)"
-                PREDBAT_UPDATE_OPTIONS.append(this_tag)
-                self.log("Autoupdate: Currently on unknown version {}".format(this_tag))
-            else:
-                if self.releases["this"] == self.releases["latest"]:
-                    self.log("Autoupdate: Currently up to date")
-                elif self.releases["this"] == self.releases["latest_beta"]:
-                    self.log("Autoupdate: Currently on latest beta")
-                else:
-                    latest_version = self.releases["latest"] + " " + self.releases["latest_name"]
-                    if auto_update:
-                        self.log("Autoupdate: There is an update pending {} - auto update triggered!".format(latest_version))
-                        self.download_predbat_version(latest_version)
-                    else:
-                        self.log("Autoupdate: There is an update pending {} - auto update is off".format(latest_version))
-                        new_version = True
-
-            # Refresh the list
-            self.expose_config("update", this_tag)
-            self.expose_config("version", new_version, force=True)
-
-        else:
-            self.log("Warn: Unable to download Predbat version information from GitHub, return code: {}".format(data))
-            self.expose_config("version", False, force=True)
-
-        return self.releases
 
     def unit_conversion(self, entity_id, state, units, required_unit, going_to=False):
         """
@@ -733,6 +598,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.calculate_savings_max_charge_slots = 1
         self.inverter_data_last_fetch = None
         self.octopus_url_cache_loaded = False
+        self.github_url_cache_loaded = False
 
         for root in CONFIG_ROOTS:
             if os.path.exists(root):
@@ -808,6 +674,73 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         if self.had_errors:
             m.errors_total.labels(type="general").inc()
 
+    def save_plan(self):
+        """Save the current best plan via the storage component so it can be restored on next startup."""
+        storage = self.components.get_component("storage") if self.components else None
+        if not storage:
+            self.log("Warning: Storage component unavailable, cannot save plan")
+            return
+        plan_data = {
+            "charge_window_best": self.charge_window_best,
+            "charge_limit_best": self.charge_limit_best,
+            "export_window_best": self.export_window_best,
+            "export_limits_best": self.export_limits_best,
+            "plan_last_updated": self.plan_last_updated.isoformat() if self.plan_last_updated else None,
+            "plan_last_updated_minutes": self.plan_last_updated_minutes,
+        }
+        try:
+            expiry = self.now_utc + timedelta(hours=8)
+            run_async(storage.save("predbat", "plan", plan_data, format="json", expiry=expiry))
+            self.log("Saved plan to storage")
+        except Exception as e:
+            self.log("Warning: Failed to save plan: {}".format(e))
+
+    def load_plan(self):
+        """Restore a previously saved plan from storage if it is recent enough."""
+        storage = self.components.get_component("storage") if self.components else None
+        if not storage:
+            self.log("Warning: Storage component unavailable, cannot load plan")
+            return
+
+        try:
+            plan_data = run_async(storage.load("predbat", "plan"))
+        except Exception as e:
+            self.log("Warning: Failed to load saved plan: {}".format(e))
+            return
+
+        if not plan_data:
+            self.log("No saved plan found in storage")
+            return
+
+        if not isinstance(plan_data, dict):
+            self.log("Warning: Saved plan has unexpected type {}, ignoring".format(type(plan_data).__name__))
+            return
+
+        saved_updated = plan_data.get("plan_last_updated")
+        if not saved_updated:
+            self.log("Saved plan has no timestamp, ignoring")
+            return
+
+        try:
+            saved_dt = datetime.fromisoformat(saved_updated)
+        except (ValueError, TypeError):
+            self.log("Warning: Saved plan timestamp is invalid, ignoring")
+            return
+
+        if saved_dt.tzinfo is None:
+            saved_dt = saved_dt.replace(tzinfo=timezone.utc)
+
+        age_minutes = (self.now_utc - saved_dt).total_seconds() / 60
+
+        self.charge_window_best = plan_data.get("charge_window_best", [])
+        self.charge_limit_best = plan_data.get("charge_limit_best", [])
+        self.export_window_best = plan_data.get("export_window_best", [])
+        self.export_limits_best = plan_data.get("export_limits_best", [])
+        self.plan_last_updated = saved_dt
+        self.plan_last_updated_minutes = plan_data.get("plan_last_updated_minutes", 0)
+        self.plan_valid = True
+        self.log("Restored saved plan from {:.0f} minutes ago: {} charge windows, {} export windows".format(age_minutes, len(self.charge_window_best), len(self.export_window_best)))
+
     def update_pred(self, scheduled=True):
         """
         Update the prediction state, everything is called from here right now
@@ -819,9 +752,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.update_time()
         self.save_current_config()
 
-        # Check our version
-        self.download_predbat_releases()
+        # Check our version, don't check for cloud version which can't update directly
+        if not self.get_arg("user_id", None):
+            self.download_predbat_releases()
 
+        # Check if we are still running the template configuration, if so don't run the plan
         if self.get_arg("template", False):
             self.log("Error: You have not completed editing the apps.yaml template, Predbat cannot run. Please comment out 'Template: True' line in apps.yaml to start Predbat running")
             self.record_status("Error: Template Configuration, remove 'Template: True' line in apps.yaml to start predbat running", had_errors=True)
@@ -859,6 +794,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         # Calculate the new plan (or re-use existing)
         recompute = self.calculate_plan(recompute=recompute)
+
+        # Persist the plan so it can be restored immediately on next startup
+        if recompute and self.plan_valid:
+            self.save_plan()
 
         # Publish rate data
         self.publish_rate_and_threshold()
@@ -1623,8 +1562,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
             self.ha_interface.update_states()
             self.auto_config()
-            self.load_user_config(quiet=False, register=False)
-            self.validate_config()
+            self.load_user_config(quiet=False, register=False, load_config=True)
             self.comparison = Compare(self)
 
             self.components.initialize(phase=1)
@@ -1639,6 +1577,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
             self.load_user_config(quiet=False, register=True)
             self.auto_config(final=True)
+            self.validate_config()
+
+            # Restore the last saved plan so it is immediately active before the first calculation
+            self.load_plan()
 
         except Exception as e:
             self.log("Error: Exception raised {}".format(e))

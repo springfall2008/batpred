@@ -44,6 +44,11 @@ class MockSolisAPI(SolisAPI):
         self.prefix = prefix
         self.api_key = "test_key"
         self.api_secret = "test_secret"
+        # OAuth state — mirrors what SolisAPI.initialize()/_init_oauth sets for api-key mode,
+        # so tests exercise the same attributes the real component reads directly.
+        self.auth_method = "api_key"
+        self.access_token = None
+        self.oauth_failed = False
         self.base_url = "https://api.soliscloud.com"
         self.automatic = False
         self.session = None
@@ -664,6 +669,281 @@ async def test_run_read_only_skips_write():
     return False
 
 
+def test_oauth_bearer_headers():
+    """OAuth mode builds a Bearer header (no HMAC); api-key mode keeps the HMAC header."""
+    failed = False
+
+    # OAuth mode — Bearer, no Content-MD5
+    api = MockSolisAPI()
+    api.auth_method = "oauth"
+    api.access_token = "tok123"
+    headers = api._build_headers("/v2/api/atRead", {"inverterSn": "X", "cid": 636})
+    if headers.get("Authorization") != "Bearer tok123":
+        print("ERROR: OAuth _build_headers should set Bearer Authorization, got {}".format(headers.get("Authorization")))
+        failed = True
+    if "Content-MD5" in headers:
+        print("ERROR: OAuth _build_headers should not include Content-MD5")
+        failed = True
+
+    # API-key mode (mock defaults auth_method to "api_key", as initialize() does) — HMAC 'API <key>:<sig>'
+    api2 = MockSolisAPI()
+    headers2 = api2._build_headers("/v2/api/atRead", {"inverterSn": "X", "cid": 636})
+    auth2 = headers2.get("Authorization", "")
+    if not auth2.startswith("API test_key:"):
+        print("ERROR: api-key _build_headers should set 'API <key>:<sig>', got {}".format(auth2))
+        failed = True
+    if "Content-MD5" not in headers2:
+        print("ERROR: api-key _build_headers should include Content-MD5")
+        failed = True
+
+    if not failed:
+        print("PASSED: OAuth/HMAC header selection")
+    return failed
+
+
+# ---------------------------------------------------------------------------
+# Component activation gating (components.py required_or) — ensures Solis only
+# starts when credentials are present, never for every instance.
+# ---------------------------------------------------------------------------
+
+
+class _GatingBase:
+    """Minimal base object for driving Components.initialize() for the solis component."""
+
+    def __init__(self, config):
+        self._config = config
+        self.prefix = "predbat"
+        self.args = {}
+        self.local_tz = datetime.now().astimezone().tzinfo
+        self.log_messages = []
+
+    def log(self, message):
+        """Record log output."""
+        self.log_messages.append(message)
+
+    def get_arg(self, key, default=None, indirect=True, **kwargs):
+        """Return configured value for key, else default — mirrors PredBat.get_arg lookup."""
+        return self._config.get(key, default)
+
+
+def _init_solis_component(config):
+    """Run Components.initialize() for only the solis component (phase 1) with the given config.
+
+    Returns the constructed SolisAPI instance, or None if the component was not activated.
+    """
+    import components as components_module
+
+    base = _GatingBase(config)
+    manager = components_module.Components(base)
+    manager.initialize(only="solis", phase=1)
+    return manager.components.get("solis")
+
+
+def test_solis_not_activated_without_credentials():
+    """Solis must NOT activate when neither HMAC api_key nor OAuth access_token is configured.
+
+    Regression guard: making the auth args optional (to allow OAuth-only configs) would
+    otherwise start the Solis component for every instance with no credentials at all.
+    """
+    failed = False
+    try:
+        component = _init_solis_component({})  # no solis_* config supplied
+    except Exception as err:
+        print("ERROR: Solis init attempted to construct a component without credentials: {}".format(err))
+        return True
+    if component is not None:
+        print("ERROR: Solis should not activate without api_key or access_token, got {}".format(component))
+        failed = True
+    if not failed:
+        print("PASSED: Solis not activated without credentials")
+    return failed
+
+
+def test_solis_activated_with_api_key():
+    """Solis activates in HMAC mode when api_key + api_secret are configured."""
+    failed = False
+    component = _init_solis_component({"solis_api_key": "k", "solis_api_secret": "s"})
+    if component is None:
+        print("ERROR: Solis should activate with api_key + api_secret")
+        failed = True
+    elif component.auth_method != "api_key":
+        print("ERROR: expected api_key auth_method, got {}".format(component.auth_method))
+        failed = True
+    if not failed:
+        print("PASSED: Solis activated with HMAC api_key")
+    return failed
+
+
+def test_solis_activated_with_oauth_token():
+    """Solis activates in OAuth mode when auth_method=oauth + access_token are configured (no api_key)."""
+    failed = False
+    component = _init_solis_component({"solis_auth_method": "oauth", "solis_access_token": "tok"})
+    if component is None:
+        print("ERROR: Solis should activate with OAuth access_token")
+        failed = True
+    elif component.auth_method != "oauth":
+        print("ERROR: expected oauth auth_method, got {}".format(component.auth_method))
+        failed = True
+    if not failed:
+        print("PASSED: Solis activated with OAuth access_token")
+    return failed
+
+
+# ---------------------------------------------------------------------------
+# OAuth request paths (pre-call refresh, fail-fast on missing token, retry abort)
+# ---------------------------------------------------------------------------
+
+
+class _FakeResponse:
+    """Async-context-manager fake aiohttp response."""
+
+    def __init__(self, status=200, payload=None):
+        self.status = status
+        self._payload = payload or {}
+
+    async def __aenter__(self):
+        """Enter the async context, returning the response."""
+        return self
+
+    async def __aexit__(self, *exc):
+        """Exit the async context without suppressing exceptions."""
+        return False
+
+    async def json(self):
+        """Return the canned JSON payload."""
+        return self._payload
+
+    async def text(self):
+        """Return the payload as text."""
+        return str(self._payload)
+
+
+class _RecordingSession:
+    """Fake aiohttp session that records post() calls and returns a canned response."""
+
+    def __init__(self, response):
+        self._response = response
+        self.post_calls = []
+
+    def post(self, url, headers=None, json=None):
+        """Record the request and return the canned response context manager."""
+        self.post_calls.append({"url": url, "headers": headers, "json": json})
+        return self._response
+
+    async def close(self):
+        """Pretend to close the session."""
+        pass
+
+
+class _GuardSession:
+    """Fake session whose post() must never be called — asserts fail-fast before any HTTP."""
+
+    def post(self, *args, **kwargs):
+        """Fail loudly if an HTTP request is attempted."""
+        raise AssertionError("HTTP request should not be issued when OAuth token is missing")
+
+    async def close(self):
+        """Pretend to close the session."""
+        pass
+
+
+async def test_oauth_execute_request_refreshes_before_call():
+    """OAuth mode refreshes the token before issuing the request and uses the new Bearer header."""
+    failed = False
+    api = MockSolisAPI()
+    api.auth_method = "oauth"
+    api.access_token = "stale"
+    api.base_url = "https://solis.test"
+
+    refreshed = {"called": False}
+
+    async def fake_refresh():
+        """Pretend the refresh succeeded and install a fresh access token."""
+        refreshed["called"] = True
+        api.access_token = "fresh-token"
+        return True
+
+    api.check_and_refresh_oauth_token = fake_refresh
+
+    session = _RecordingSession(_FakeResponse(status=200, payload={"code": "0", "data": {"ok": 1}}))
+    api.session = session
+
+    result = await api._execute_request("/v2/api/atRead", {"inverterSn": "X", "cid": 636})
+
+    if not refreshed["called"]:
+        print("ERROR: check_and_refresh_oauth_token was not awaited before the request")
+        failed = True
+    if result != {"ok": 1}:
+        print("ERROR: expected data {{'ok': 1}}, got {}".format(result))
+        failed = True
+    if session.post_calls and session.post_calls[0]["headers"].get("Authorization") != "Bearer fresh-token":
+        print("ERROR: expected 'Bearer fresh-token' header, got {}".format(session.post_calls[0]["headers"].get("Authorization") if session.post_calls else "<no call>"))
+        failed = True
+    if not failed:
+        print("PASSED: OAuth _execute_request refreshes token and sends new Bearer header")
+    return failed
+
+
+async def test_oauth_execute_request_aborts_when_token_missing():
+    """In OAuth mode, _execute_request must fail fast (no HTTP) when no access_token is available,
+    even if check_and_refresh_oauth_token() reports success (e.g. refresh skipped — missing env)."""
+    failed = False
+    api = MockSolisAPI()
+    api.auth_method = "oauth"
+    api.access_token = None
+    api.base_url = "https://solis.test"
+    api.session = _GuardSession()
+
+    async def fake_refresh():
+        """Report success but leave access_token unset (mirrors the skipped-refresh path)."""
+        return True
+
+    api.check_and_refresh_oauth_token = fake_refresh
+
+    try:
+        await api._execute_request("/v2/api/atRead", {"inverterSn": "X", "cid": 636})
+        print("ERROR: expected SolisAPIError when access_token missing in OAuth mode")
+        failed = True
+    except solis_module.SolisAPIError as err:
+        if err.status_code != 401:
+            print("ERROR: expected status_code 401, got {}".format(err.status_code))
+            failed = True
+    except AssertionError:
+        print("ERROR: HTTP request was issued with a missing token (no fail-fast)")
+        failed = True
+
+    if not failed:
+        print("PASSED: OAuth _execute_request fails fast when token missing")
+    return failed
+
+
+async def test_with_retry_aborts_on_oauth_failed():
+    """_with_retry aborts immediately (single attempt, no backoff loop) once oauth_failed is set."""
+    failed = False
+    api = MockSolisAPI()
+    api.oauth_failed = True
+    attempts = {"n": 0}
+
+    async def operation():
+        """Always fail so the retry/abort decision is exercised."""
+        attempts["n"] += 1
+        raise solis_module.SolisAPIError("boom", status_code=500)
+
+    try:
+        await api._with_retry(operation, max_retry_time=5)
+        print("ERROR: expected SolisAPIError to propagate from _with_retry")
+        failed = True
+    except solis_module.SolisAPIError:
+        pass
+
+    if attempts["n"] != 1:
+        print("ERROR: expected a single attempt when oauth_failed, got {}".format(attempts["n"]))
+        failed = True
+    if not failed:
+        print("PASSED: _with_retry aborts immediately when oauth_failed")
+    return failed
+
+
 def run_solis_tests(my_predbat):
     """
     Run all Solis API tests
@@ -673,6 +953,13 @@ def run_solis_tests(my_predbat):
 
     try:
         # Run tests
+        failed |= test_oauth_bearer_headers()
+        failed |= test_solis_not_activated_without_credentials()
+        failed |= test_solis_activated_with_api_key()
+        failed |= test_solis_activated_with_oauth_token()
+        failed |= asyncio.run(test_oauth_execute_request_refreshes_before_call())
+        failed |= asyncio.run(test_oauth_execute_request_aborts_when_token_missing())
+        failed |= asyncio.run(test_with_retry_aborts_on_oauth_failed())
         failed |= asyncio.run(test_read_cid())
         failed |= asyncio.run(test_read_batch())
         failed |= asyncio.run(test_read_and_write_cid())
