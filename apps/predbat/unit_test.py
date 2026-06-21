@@ -412,7 +412,7 @@ def main():
         sys.exit(0)
 
     if args.debug_file:
-        run_single_debug(args.debug_file, my_predbat, args.debug_file, compare=args.compare, debug=args.full_debug, redo=args.noredo)
+        run_single_debug(args.debug_file, my_predbat, args.debug_file, compare=args.compare, debug=args.full_debug, redo=args.redo)
         sys.exit(0)
 
     # Collect tests to run based on arguments
