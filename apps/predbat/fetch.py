@@ -1050,12 +1050,14 @@ class Fetch:
         # Fetch PV forecast if enabled, today must be enabled, other days are optional
         self.pv_forecast_minute, self.pv_forecast_minute10 = self.fetch_pv_forecast()
 
-        if self.load_minutes and not self.load_forecast_only:
-            # Apply modal filter to historical data
+        if self.load_minutes and not self.load_forecast_only and not self.load_forecast_history:
+            # Apply modal filter to historical data. Skipped for days_previous_auto: the weighted-bucket
+            # forecast deliberately ignores missing-data buckets, so the gap-filling/padding the modal filter
+            # applies would mask exactly the gaps it is designed to exclude.
             self.previous_days_modal_filter(self.load_minutes)
             self.log("Historical days now {} weight {}".format(self.days_previous, self.days_previous_weight))
 
-        # Weighted-bucket historical load forecast (days_previous: all). Built here as it needs load_minutes
+        # Weighted-bucket historical load forecast (days_previous_auto). Built here as it needs load_minutes
         # after the power fill. load_ml takes precedence if it already set the forecast-only load source.
         if self.load_forecast_history and self.load_minutes and self.load_minutes_age >= 1 and not self.load_forecast_only:
             hist_forecast = self.compute_load_forecast_history(self.now_utc)
@@ -2090,11 +2092,13 @@ class Fetch:
                 sample, raw = self.get_filtered_load_minute(self.load_minutes, minute_previous, historical=False, step=PREDICT_STEP, base_in_raw=False)
                 if raw <= 0:
                     continue
-                # Match the holiday state at the moment this individual sample was recorded (per bucket)
-                if holiday_minutes is None:
+                # Match the holiday state at the moment this individual sample was recorded (per bucket). If
+                # the sample is older than the holiday history we have, treat it as matching today (neutral)
+                # rather than reusing the oldest known state.
+                if holiday_minutes is None or minute_previous > max_holiday_index:
                     holiday_active = today_holiday
                 else:
-                    holiday_active = holiday_minutes.get(min(minute_previous, max_holiday_index), 0) > 0
+                    holiday_active = holiday_minutes.get(minute_previous, 0) > 0
                 holiday_factor = 1.0 if (holiday_active == today_holiday) else 0.5
                 weight = day_static_weight[d] * holiday_factor
                 total += sample * weight

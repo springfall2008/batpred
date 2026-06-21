@@ -41,7 +41,7 @@ def _dump_state_before_plan(my_predbat, filename):
 
 def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, compare=False, debug=False, redo=False):
     print("**** Running debug test {} ****\n".format(debug_file))
-    # Always recompute the rates, load model and octopus slots so the interactive single (--debug) run and the
+    # Will recompute the rates, load model and octopus slots if redo is True. This is useful for debugging a single test case, but the
     # debug_cases regression suite exercise the same code path and produce the same result.
     re_do_rates = redo
     reset_load_model = redo
