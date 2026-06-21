@@ -220,7 +220,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     my_predbat.plan_valid = False
     # Dump the full predbat state just before calculate_plan so the same case can be compared across run
     # contexts (full ./run_all suite vs standalone) to find any leaked/uninitialised state.
-    #_dump_state_before_plan(my_predbat, test_name + ".state.json")
+    # _dump_state_before_plan(my_predbat, test_name + ".state.json")
     print("Re-calculate plan")
     my_predbat.calculate_plan(recompute=True, debug_mode=debug)
     print("Plan calculated")
