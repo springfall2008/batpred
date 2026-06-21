@@ -3001,6 +3001,7 @@ class TestCheckReadOnlyState:
         gw.log = MagicMock()
         gw._mqtt_connected = connected
         gw._last_read_only = None
+        gw._last_read_only_sent_time = 0
         gw._published = []
 
         self._read_only = read_only
@@ -3057,6 +3058,26 @@ class TestCheckReadOnlyState:
         assert len(gw._published) == 2
         assert gw._published[1] == ("set_read_only", {"enable": True})
         assert gw._last_read_only is True
+
+    def test_resends_when_stale(self):
+        """An unchanged state is re-published once more than 30 minutes have elapsed."""
+        gw = self._make_gateway(read_only=False)
+        self._run(gw._check_read_only_state())
+        assert len(gw._published) == 1
+        # Pretend the last send happened over 30 minutes ago.
+        gw._last_read_only_sent_time -= 30 * 60 + 1
+        self._run(gw._check_read_only_state())
+        assert len(gw._published) == 2
+        assert gw._published[1] == ("set_read_only", {"enable": False})
+
+    def test_no_resend_just_under_interval(self):
+        """An unchanged state is not re-published before the 30 minute interval."""
+        gw = self._make_gateway(read_only=False)
+        self._run(gw._check_read_only_state())
+        # Just under the re-send interval — no extra publish expected.
+        gw._last_read_only_sent_time -= 30 * 60 - 5
+        self._run(gw._check_read_only_state())
+        assert len(gw._published) == 1
 
     def test_not_connected_skips_send(self):
         """Nothing is published while MQTT is disconnected, and state is not latched."""
