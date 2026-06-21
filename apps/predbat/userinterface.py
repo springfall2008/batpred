@@ -460,8 +460,9 @@ class UserInterface:
         """
         if not unit:
             return unit
-        unit = unit.replace("£", self.currency_symbols[0])
-        unit = unit.replace("p", self.currency_symbols[1])
+        major = self.currency_symbols[0] if self.currency_symbols and len(self.currency_symbols) > 0 else "£"
+        minor = self.currency_symbols[1] if self.currency_symbols and len(self.currency_symbols) > 1 else "p"
+        unit = unit.replace("£", "%%CURR_MAJOR%%").replace("p", minor).replace("%%CURR_MAJOR%%", major)
         return unit
 
     async def async_expose_config(self, name, value, quiet=True, event=False, force=False, in_progress=False):
