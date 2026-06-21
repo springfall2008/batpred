@@ -14,6 +14,31 @@ from prediction import Prediction
 from tests.test_infra import reset_inverter
 
 
+def _dump_state_before_plan(my_predbat, filename):
+    """Dump a JSON-comparable snapshot of predbat's member variables for cross-run-context comparison.
+
+    Only cleanly JSON-serialisable values are recorded as-is; everything else is recorded as its type name
+    (without memory addresses) so two snapshots can be diffed without noise.
+    """
+    state = {}
+    for key in sorted(my_predbat.__dict__.keys()):
+        if key.startswith("__"):
+            continue
+        value = my_predbat.__dict__[key]
+        if callable(value):
+            continue
+        try:
+            json.dumps(value)
+            state[key] = value
+        except (TypeError, ValueError, OverflowError):
+            try:
+                state[key] = "<{} len={}>".format(type(value).__name__, len(value))
+            except (TypeError, AttributeError):
+                state[key] = "<{}>".format(type(value).__name__)
+    with open(filename, "w") as handle:
+        json.dump(state, handle, indent=2, sort_keys=True)
+
+
 def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, compare=False, debug=False, redo=False):
     print("**** Running debug test {} ****\n".format(debug_file))
     # Always recompute the rates, load model and octopus slots so the interactive single (--debug) run and the
@@ -193,6 +218,9 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
 
     ## Calculate the plan
     my_predbat.plan_valid = False
+    # Dump the full predbat state just before calculate_plan so the same case can be compared across run
+    # contexts (full ./run_all suite vs standalone) to find any leaked/uninitialised state.
+    #_dump_state_before_plan(my_predbat, test_name + ".state.json")
     print("Re-calculate plan")
     my_predbat.calculate_plan(recompute=True, debug_mode=debug)
     print("Plan calculated")
