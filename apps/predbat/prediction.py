@@ -833,11 +833,13 @@ class Prediction:
                                 )
                                 charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step
                                 # Hybrid charges from PV on the DC side (see pv_dc below), so the AC surplus maps
-                                # back to DC through the loss reciprocal.
-                                battery_draw = max(-reduce_by * inverter_loss_recp, -battery_to_min, -charge_rate_now_curve_dc_step)
+                                # back to DC through the loss reciprocal. Clamp by battery_to_max (remaining charge
+                                # headroom), not battery_to_min, otherwise a near-full battery is asked to absorb
+                                # more than it can hold and the surplus is mis-accounted instead of clipped.
+                                battery_draw = max(-reduce_by * inverter_loss_recp, -battery_to_max, -charge_rate_now_curve_dc_step)
                             else:
                                 # Non-hybrid charges from the grid (AC), so the DC charge is the AC surplus * loss.
-                                battery_draw = max(-reduce_by * inverter_loss, -battery_to_min, -charge_rate_now_curve_step)
+                                battery_draw = max(-reduce_by * inverter_loss, -battery_to_max, -charge_rate_now_curve_step)
                         else:
                             battery_draw = 0
                     else:
@@ -867,7 +869,9 @@ class Prediction:
                                     * battery_rate_max_scaling
                                 )
                                 charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step
-                                battery_draw = max(-reduce_by * inverter_loss, -battery_to_min, -charge_rate_now_curve_dc_step)
+                                # Clamp by battery_to_max (remaining charge headroom), not battery_to_min, so a
+                                # near-full battery is not asked to absorb more than it can hold.
+                                battery_draw = max(-reduce_by * inverter_loss, -battery_to_max, -charge_rate_now_curve_dc_step)
                         else:
                             battery_draw = battery_draw - reduce_by
 

@@ -476,6 +476,26 @@ def run_model_tests(my_predbat):
         inverter_can_charge_during_export=True,
         assert_clipped=0,
     )
+    # Full battery during a high-PV forced export. PV alone (2kW) exceeds the 0.5kW export limit so the charge
+    # path is entered, but the battery is already at 100% so it has no headroom to absorb anything. The charge
+    # must be clamped by battery_to_max (0 here) so all 1.5kW AC surplus is clipped. Clamping by battery_to_min
+    # instead would let the model "charge" a full battery and under-report the clipping (clip 12 instead of 36).
+    failed |= simple_scenario(
+        "export_pv_charge_full_battery",
+        my_predbat,
+        0,
+        2,
+        assert_final_metric=-export_rate * 24 * 0.5,
+        assert_final_soc=100,
+        battery_soc=100.0,
+        with_battery=True,
+        export_limit=0.5,
+        inverter_limit=10.0,
+        battery_rate_max_charge=1.0,
+        discharge=0,
+        inverter_can_charge_during_export=True,
+        assert_clipped=24 * 1.5,
+    )
     failed |= simple_scenario("load_pv", my_predbat, 1, 1, assert_final_metric=0, assert_final_soc=0, with_battery=False)
     failed |= simple_scenario("pv_only", my_predbat, 0, 1, assert_final_metric=-export_rate * 24, assert_final_soc=0, with_battery=False)
     failed |= simple_scenario("pv10_only", my_predbat, 0, 1, assert_final_metric=-export_rate * 24, assert_final_soc=0, with_battery=False, pv10=True)
