@@ -409,6 +409,50 @@ def run_model_tests(my_predbat):
     failed |= simple_scenario("load_discharge_reserve", my_predbat, 1, 0, assert_final_metric=import_rate * 15, assert_final_soc=1, battery_soc=10.0, with_battery=True, reserve=1.0)
     failed |= simple_scenario("load_discharge_reserve2", my_predbat, 1, 0, assert_final_metric=import_rate * 20, assert_final_soc=2, battery_soc=10.0, with_battery=True, reserve=2.0, battery_loss=0.5)
     failed |= simple_scenario("load_discharge_loss", my_predbat, 1, 0, assert_final_metric=import_rate * 19, assert_final_soc=0, battery_soc=10.0, with_battery=True, battery_loss=0.5)
+    # Forced export with PV on a lossy hybrid inverter. The battery exports through the inverter (DC->AC) so
+    # when battery + solar would exceed the export limit the battery discharge must be scaled back by the loss
+    # reciprocal to bring grid export down to the limit. Otherwise a small residual is left above the limit and
+    # gets clipped off the solar. Regression test: with the scale-back correct, no solar should be clipped.
+    # battery_draw(DC) = (export_limit - pv_ac) / inverter_loss = (3 - 2*0.8) / 0.8 = 1.75 kW, over 24h = 42 kWh.
+    failed |= simple_scenario(
+        "export_pv_clip_loss",
+        my_predbat,
+        0,
+        2,
+        assert_final_metric=-export_rate * 24 * 3,
+        assert_final_soc=100 - 42,
+        battery_soc=100.0,
+        with_battery=True,
+        hybrid=True,
+        inverter_loss=0.8,
+        export_limit=3.0,
+        inverter_limit=10.0,
+        battery_rate_max_charge=5.0,
+        discharge=0,
+        assert_clipped=0,
+    )
+    # Forced export with PV so large that even stopping the battery leaves the solar over the export limit. With
+    # inverter_can_charge_during_export the battery should charge from the surplus PV (DC side) to keep grid export
+    # at the limit, rather than clipping the solar. Regression test for the AC/DC unit mismatch in that charge branch.
+    # remaining_ac = pv_ac - export_limit = 2*0.8 - 1 = 0.6; hybrid DC charge = 0.6 / 0.8 = 0.75 kW, over 24h = 18 kWh.
+    failed |= simple_scenario(
+        "export_pv_charge_clip_loss",
+        my_predbat,
+        0,
+        2,
+        assert_final_metric=-export_rate * 24,
+        assert_final_soc=40 + 18,
+        battery_soc=40.0,
+        with_battery=True,
+        hybrid=True,
+        inverter_loss=0.8,
+        export_limit=1.0,
+        inverter_limit=10.0,
+        battery_rate_max_charge=1.0,
+        discharge=0,
+        inverter_can_charge_during_export=True,
+        assert_clipped=0,
+    )
     failed |= simple_scenario("load_pv", my_predbat, 1, 1, assert_final_metric=0, assert_final_soc=0, with_battery=False)
     failed |= simple_scenario("pv_only", my_predbat, 0, 1, assert_final_metric=-export_rate * 24, assert_final_soc=0, with_battery=False)
     failed |= simple_scenario("pv10_only", my_predbat, 0, 1, assert_final_metric=-export_rate * 24, assert_final_soc=0, with_battery=False, pv10=True)
@@ -1147,14 +1191,18 @@ def run_model_tests(my_predbat):
         0,
         2,
         assert_final_metric=-export_rate * 24 * 0.5,
-        assert_final_soc=50 + 1.0 * 24 * 0.5,
+        # 1.5kW AC PV surplus (2kW - 0.5kW export limit). AC-coupled charging stores AC * inverter_loss as DC,
+        # so absorbing all 1.5kW only needs 1.5 * 0.5 = 0.75kW DC, which is within the 1kW charge rate. The
+        # battery therefore soaks up all the surplus and nothing is clipped (was previously under-charging at
+        # 0.5kW DC and clipping the rest due to an AC/DC unit mismatch in the export-limit charge branch).
+        assert_final_soc=50 + 0.75 * 24,
         with_battery=True,
         discharge=0,
         battery_soc=50,
         export_limit=0.5,
         inverter_limit=2.0,
         inverter_loss=0.5,
-        assert_clipped=24 * 0.5,
+        assert_clipped=0,
     )
     failed |= simple_scenario(
         "battery_discharge_export_limit_ac_pv5",

@@ -818,7 +818,10 @@ class Prediction:
 
                     if reduce_by > battery_draw:
                         if self.inverter_can_charge_during_export:
-                            reduce_by = reduce_by - battery_draw
+                            # Stopping the battery only removes its AC export contribution (battery_draw is DC, so
+                            # that is battery_draw * inverter_loss). Whatever AC export is still over the limit has
+                            # to be absorbed by charging the battery.
+                            reduce_by = reduce_by - battery_draw * inverter_loss
 
                             if inverter_hybrid:
                                 charge_rate_now_curve_dc = (
@@ -826,13 +829,21 @@ class Prediction:
                                     * battery_rate_max_scaling
                                 )
                                 charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step
-                                battery_draw = max(-reduce_by * inverter_loss, -battery_to_min, -charge_rate_now_curve_dc_step)
+                                # Hybrid charges from PV on the DC side (see pv_dc below), so the AC surplus maps
+                                # back to DC through the loss reciprocal.
+                                battery_draw = max(-reduce_by * inverter_loss_recp, -battery_to_min, -charge_rate_now_curve_dc_step)
                             else:
+                                # Non-hybrid charges from the grid (AC), so the DC charge is the AC surplus * loss.
                                 battery_draw = max(-reduce_by * inverter_loss, -battery_to_min, -charge_rate_now_curve_step)
                         else:
                             battery_draw = 0
                     else:
-                        battery_draw = battery_draw - reduce_by
+                        # reduce_by is an AC over-export figure but battery_draw is DC and exports through
+                        # the inverter, so scale by the loss reciprocal to remove the right amount of grid
+                        # export. Subtracting the raw AC figure under-reduces the battery and leaves a small
+                        # residual that gets clipped off the solar later. Clamp at zero so we never flip to
+                        # charging here (that case is handled by the inverter_can_charge_during_export branch).
+                        battery_draw = max(battery_draw - reduce_by * inverter_loss_recp, 0)
 
                     if inverter_hybrid and battery_draw < 0:
                         pv_dc = min(abs(battery_draw), pv_now)
