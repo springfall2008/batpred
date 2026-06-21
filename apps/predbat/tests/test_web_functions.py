@@ -195,8 +195,12 @@ def run_currency_unit_tests(my_predbat, web):
 
         # Enable and locate the car charging max price config item
         entity = None
+        original_item_value = None
+        original_item_ref = None
         for item in my_predbat.CONFIG_ITEMS:
             if item.get("name") == "car_charging_plan_max_price":
+                original_item_ref = item
+                original_item_value = item.get("value", None)
                 item["value"] = 14
                 entity = item.get("entity")
                 break
@@ -218,6 +222,8 @@ def run_currency_unit_tests(my_predbat, web):
                 print(f"  ERROR: unexpected raw 'p' unit in config item HTML: {item_html}")
                 failed += 1
     finally:
+        if original_item_ref is not None:
+            original_item_ref["value"] = original_item_value
         my_predbat.currency_symbols = original_symbols
         my_predbat.num_cars = original_num_cars
 
