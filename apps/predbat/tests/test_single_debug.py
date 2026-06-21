@@ -14,16 +14,13 @@ from prediction import Prediction
 from tests.test_infra import reset_inverter
 
 
-def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, compare=False, debug=False):
+def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, compare=False, debug=False, redo=False):
     print("**** Running debug test {} ****\n".format(debug_file))
-    if not expected_file:
-        re_do_rates = True
-        reset_load_model = True
-        reload_octopus_slots = True
-    else:
-        reset_load_model = False
-        re_do_rates = False
-        reload_octopus_slots = False
+    # Always recompute the rates, load model and octopus slots so the interactive single (--debug) run and the
+    # debug_cases regression suite exercise the same code path and produce the same result.
+    re_do_rates = redo
+    reset_load_model = redo
+    reload_octopus_slots = redo
     load_override = 1.0
     my_predbat.load_user_config()
     failed = False
