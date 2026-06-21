@@ -155,5 +155,70 @@ def run_web_functions_tests(my_predbat):
 
     my_predbat.dashboard_index = original_dashboard_index
 
+    # -------------------------------------------------------------------------
+    # Currency unit display in the web config pages (issue #4071)
+    # The web UI must show the user's configured currency symbol, not the raw "p".
+    failed += run_currency_unit_tests(my_predbat, web)
+
     print("**** Web functions tests completed ****")
+    return failed
+
+
+def run_currency_unit_tests(my_predbat, web):
+    """Verify config item units are converted to the user's currency symbols in the web UI."""
+    failed = 0
+    print("Test: web config pages convert currency units (issue #4071)")
+
+    original_symbols = my_predbat.currency_symbols
+    original_num_cars = my_predbat.num_cars
+
+    try:
+        my_predbat.currency_symbols = ["€", "c"]
+        my_predbat.num_cars = 1
+
+        # convert_currency_unit helper
+        if my_predbat.convert_currency_unit("p") != "c":
+            print(f"  ERROR: 'p' should convert to 'c', got: {my_predbat.convert_currency_unit('p')}")
+            failed += 1
+        if my_predbat.convert_currency_unit("p/kWh") != "c/kWh":
+            print(f"  ERROR: 'p/kWh' should convert to 'c/kWh', got: {my_predbat.convert_currency_unit('p/kWh')}")
+            failed += 1
+        if my_predbat.convert_currency_unit("£") != "€":
+            print(f"  ERROR: '£' should convert to '€', got: {my_predbat.convert_currency_unit('£')}")
+            failed += 1
+        if my_predbat.convert_currency_unit("kWh") != "kWh":
+            print(f"  ERROR: 'kWh' should be unchanged, got: {my_predbat.convert_currency_unit('kWh')}")
+            failed += 1
+        if my_predbat.convert_currency_unit("") != "":
+            print(f"  ERROR: empty unit should stay empty, got: {my_predbat.convert_currency_unit('')}")
+            failed += 1
+
+        # Enable and locate the car charging max price config item
+        entity = None
+        for item in my_predbat.CONFIG_ITEMS:
+            if item.get("name") == "car_charging_plan_max_price":
+                item["value"] = 14
+                entity = item.get("entity")
+                break
+
+        if entity is None:
+            print("  ERROR: car_charging_plan_max_price config item not found")
+            return failed + 1
+
+        # html_config_item_text (shown on the /entity page) must use the converted unit
+        item_html = web.html_config_item_text(entity)
+        if item_html is None:
+            print("  ERROR: html_config_item_text returned None for car_charging_plan_max_price")
+            failed += 1
+        else:
+            if "14 c" not in item_html:
+                print(f"  ERROR: expected '14 c' in config item HTML, got: {item_html}")
+                failed += 1
+            if "14 p" in item_html:
+                print(f"  ERROR: unexpected raw 'p' unit in config item HTML: {item_html}")
+                failed += 1
+    finally:
+        my_predbat.currency_symbols = original_symbols
+        my_predbat.num_cars = original_num_cars
+
     return failed

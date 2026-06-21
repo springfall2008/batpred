@@ -453,6 +453,17 @@ class UserInterface:
             return value, default
         return None, default
 
+    def convert_currency_unit(self, unit):
+        """
+        Convert a config item unit string (using the default £/p symbols) into the
+        user's configured currency symbols so displayed units match the rates.
+        """
+        if not unit:
+            return unit
+        unit = unit.replace("£", self.currency_symbols[0])
+        unit = unit.replace("p", self.currency_symbols[1])
+        return unit
+
     async def async_expose_config(self, name, value, quiet=True, event=False, force=False, in_progress=False):
         return await self.run_in_executor(self.expose_config, name, value, quiet, event, force, in_progress)
 
@@ -482,9 +493,7 @@ class UserInterface:
                     if item["type"] == "input_number":
                         """INPUT_NUMBER"""
                         icon = item.get("icon", "mdi:numeric")
-                        unit = item["unit"]
-                        unit = unit.replace("£", self.currency_symbols[0])
-                        unit = unit.replace("p", self.currency_symbols[1])
+                        unit = self.convert_currency_unit(item["unit"])
                         self.set_state_wrapper(
                             entity_id=entity,
                             state=value,
