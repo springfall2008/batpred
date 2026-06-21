@@ -816,7 +816,10 @@ class Prediction:
                     over_limit = abs(diff) - export_limit
                     reduce_by = over_limit
 
-                    if reduce_by > battery_draw:
+                    # Compare the AC over-export against the battery's AC export contribution (battery_draw is DC,
+                    # so that is battery_draw * inverter_loss). If the surplus is larger then even stopping the
+                    # battery leaves PV over the limit, so we must charge to absorb it rather than clip the solar.
+                    if reduce_by > battery_draw * inverter_loss:
                         if self.inverter_can_charge_during_export:
                             # Stopping the battery only removes its AC export contribution (battery_draw is DC, so
                             # that is battery_draw * inverter_loss). Whatever AC export is still over the limit has

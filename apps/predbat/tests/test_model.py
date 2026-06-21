@@ -453,6 +453,29 @@ def run_model_tests(my_predbat):
         inverter_can_charge_during_export=True,
         assert_clipped=0,
     )
+    # Band case for the scale-back vs charge decision. The AC over-export (1.5kW) is larger than the battery's
+    # AC contribution (battery_draw 2kW DC * inverter_loss 0.5 = 1kW) but smaller than the raw DC discharge (2kW).
+    # The branch pivot must use the AC contribution: even after stopping the battery the 1kW AC PV is still over
+    # the 0.5kW export limit, so the battery should charge to absorb the 0.5kW surplus (0.25kW DC, 6kWh over 24h)
+    # instead of clipping it. Comparing against the raw DC value sends this to the scale-back path which just
+    # stops the battery and clips the solar.
+    failed |= simple_scenario(
+        "export_pv_charge_band_loss",
+        my_predbat,
+        0,
+        1,
+        assert_final_metric=-export_rate * 24 * 0.5,
+        assert_final_soc=50 + 0.25 * 24,
+        battery_soc=50.0,
+        with_battery=True,
+        inverter_loss=0.5,
+        export_limit=0.5,
+        inverter_limit=10.0,
+        battery_rate_max_charge=2.0,
+        discharge=0,
+        inverter_can_charge_during_export=True,
+        assert_clipped=0,
+    )
     failed |= simple_scenario("load_pv", my_predbat, 1, 1, assert_final_metric=0, assert_final_soc=0, with_battery=False)
     failed |= simple_scenario("pv_only", my_predbat, 0, 1, assert_final_metric=-export_rate * 24, assert_final_soc=0, with_battery=False)
     failed |= simple_scenario("pv10_only", my_predbat, 0, 1, assert_final_metric=-export_rate * 24, assert_final_soc=0, with_battery=False, pv10=True)
