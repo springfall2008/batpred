@@ -496,6 +496,31 @@ def run_model_tests(my_predbat):
         inverter_can_charge_during_export=True,
         assert_clipped=24 * 1.5,
     )
+    # Hybrid forced export where PV (4kW DC) exceeds the inverter limit (2kW) but the grid export limit is not
+    # binding, so the inverter-limit charge branch absorbs the surplus PV into the battery. total_inverted counts
+    # the battery and the DC-diverted PV 1:1, so the battery must charge by reduce_by = pv - inverter_limit = 2kW
+    # (not reduce_by * inverter_loss). Charging the full 2kW DC keeps total_inverted exactly on the 2kW limit with
+    # no clipping; charging only 1.6kW (the under-charge bug) leaves total_inverted at 2.4kW and clips 0.4kW of PV.
+    failed |= simple_scenario(
+        "export_pv_inverter_limit_charge",
+        my_predbat,
+        0,
+        4,
+        assert_final_metric=-export_rate * 1.6 * 24,
+        assert_final_soc=100 + 2.0 * 24,
+        battery_soc=100.0,
+        battery_size=200.0,
+        with_battery=True,
+        hybrid=True,
+        inverter_loss=0.8,
+        export_limit=100.0,
+        inverter_limit=2.0,
+        battery_rate_max_charge=1.0,
+        battery_rate_max_charge_dc=10.0,
+        discharge=0,
+        inverter_can_charge_during_export=True,
+        assert_clipped=0,
+    )
     failed |= simple_scenario("load_pv", my_predbat, 1, 1, assert_final_metric=0, assert_final_soc=0, with_battery=False)
     failed |= simple_scenario("pv_only", my_predbat, 0, 1, assert_final_metric=-export_rate * 24, assert_final_soc=0, with_battery=False)
     failed |= simple_scenario("pv10_only", my_predbat, 0, 1, assert_final_metric=-export_rate * 24, assert_final_soc=0, with_battery=False, pv10=True)
