@@ -224,8 +224,10 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
             print("ERROR: Expected file {} does not exist".format(expected_file))
         else:
             expected_data = json.loads(open(expected_file).read())
-            expected_json = json.dumps(expected_data)
-            if actual_json != expected_json:
+            # Compare the parsed contents by value rather than the raw JSON strings. The plan values are
+            # numpy floats whose json repr differs from a plain Python float's, so a byte-for-byte string
+            # compare reports spurious mismatches even when the numbers are identical.
+            if json.loads(actual_json) != expected_data:
                 print("ERROR: Actual plan does not match expected plan")
                 failed = True
     # Write actual plan

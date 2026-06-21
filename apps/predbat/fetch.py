@@ -20,7 +20,7 @@ dictionaries for use by the prediction engine.
 
 from datetime import datetime, timedelta
 from utils import minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative, MinuteArray
-from const import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_CONTROL_SOC, PREDBAT_MODE_CONTROL_CHARGEDISCHARGE, PREDBAT_MODE_CONTROL_CHARGE, PREDBAT_MODE_MONITOR
+from const import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_CONTROL_SOC, PREDBAT_MODE_CONTROL_CHARGEDISCHARGE, PREDBAT_MODE_CONTROL_CHARGE, PREDBAT_MODE_MONITOR, LOAD_FORECAST_HISTORY_MAX_DAYS
 from predbat_metrics import metrics
 from futurerate import FutureRate
 from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
@@ -172,45 +172,66 @@ class Fetch:
 
         return values
 
-    def get_filtered_load_minute(self, data, minute_previous, historical, step=1):
+    def get_filtered_load_window(self, data, indices, step):
         """
-        Gets a previous load minute after filtering for car charging
+        Compute the car-charging/iBoost-filtered load for a single window given its list of backwards minute
+        indices. Returns (filtered_load, raw_load) for that one window (no base-load applied).
         """
-        load_yesterday_raw = 0
+        raw = 0.0
+        subtract_energy = 0.0
+        for idx in indices:
+            raw += self.get_from_incrementing(data, idx)
+            if self.car_charging_hold and self.car_charging_energy:
+                subtract_energy += self.get_from_incrementing(self.car_charging_energy, idx)
+            if self.iboost_energy_subtract and self.iboost_energy_today:
+                subtract_energy += self.get_from_incrementing(self.iboost_energy_today, idx)
+        load = max(0.0, raw - subtract_energy)
+        if self.car_charging_hold and (not self.car_charging_energy) and (load >= (self.car_charging_threshold * step)):
+            # Car charging hold - ignore car charging in this window based on the threshold
+            load = max(load - (self.car_charging_rate[0] * step / 60.0), 0)
+        return load, raw
 
-        for offset in range(step):
-            if historical:
-                load_yesterday_raw += self.get_historical(data, minute_previous + offset)
+    def get_filtered_load_minute(self, data, minute_previous, historical, step=1, base_in_raw=True):
+        """
+        Gets a previous load minute after filtering for car charging.
+
+        For historical (days_previous) data the car-charging hold and car/iBoost subtraction are applied to
+        each previous day individually and only then weighted-averaged, so a single day's car charging is not
+        diluted below the hold threshold by averaging it with the other (lower-load) days first.
+
+        base_in_raw controls whether the base-load top-up is reflected in the returned raw value. Set it to
+        False to keep the raw value at the true measured load so callers can detect genuine zero/gap buckets.
+        """
+        if historical:
+            total = 0.0
+            total_raw = 0.0
+            total_weight = 0.0
+            for point, days in enumerate(self.days_previous):
+                use_days = max(min(days, self.load_minutes_age), 1)
+                weight = self.days_previous_weight[point]
+                full_days = 24 * 60 * (use_days - 1)
+                indices = [24 * 60 - (minute_previous + offset) + full_days for offset in range(step)]
+                day_load, day_raw = self.get_filtered_load_window(data, indices, step)
+                total += day_load * weight
+                total_raw += day_raw * weight
+                total_weight += weight
+            if total_weight > 0:
+                load_yesterday = total / total_weight
+                load_yesterday_raw = total_raw / total_weight
             else:
-                load_yesterday_raw += self.get_from_incrementing(data, minute_previous + offset)
-
-        load_yesterday = load_yesterday_raw
-
-        # Subtract car charging energy and iboost energy (if enabled)
-        subtract_energy = 0
-        for offset in range(step):
-            if historical:
-                if self.car_charging_hold and self.car_charging_energy:
-                    subtract_energy += self.get_historical(self.car_charging_energy, minute_previous + offset)
-                if self.iboost_energy_subtract and self.iboost_energy_today:
-                    subtract_energy += self.get_historical(self.iboost_energy_today, minute_previous + offset)
-            else:
-                if self.car_charging_hold and self.car_charging_energy:
-                    subtract_energy += self.get_from_incrementing(self.car_charging_energy, minute_previous + offset)
-                if self.iboost_energy_subtract and self.iboost_energy_today:
-                    subtract_energy += self.get_from_incrementing(self.iboost_energy_today, minute_previous + offset)
-        load_yesterday = max(0, load_yesterday - subtract_energy)
-
-        if self.car_charging_hold and (not self.car_charging_energy) and (load_yesterday >= (self.car_charging_threshold * step)):
-            # Car charging hold - ignore car charging in computation based on threshold
-            load_yesterday = max(load_yesterday - (self.car_charging_rate[0] * step / 60.0), 0)
+                load_yesterday = 0.0
+                load_yesterday_raw = 0.0
+        else:
+            indices = [minute_previous + offset for offset in range(step)]
+            load_yesterday, load_yesterday_raw = self.get_filtered_load_window(data, indices, step)
 
         # Apply base load
         base_load = self.base_load * step / 60.0
         if load_yesterday < base_load:
             add_to_base = base_load - load_yesterday
             load_yesterday += add_to_base
-            load_yesterday_raw += add_to_base
+            if base_in_raw:
+                load_yesterday_raw += add_to_base
 
         return load_yesterday, load_yesterday_raw
 
@@ -1033,6 +1054,17 @@ class Fetch:
             # Apply modal filter to historical data
             self.previous_days_modal_filter(self.load_minutes)
             self.log("Historical days now {} weight {}".format(self.days_previous, self.days_previous_weight))
+
+        # Weighted-bucket historical load forecast (days_previous: all). Built here as it needs load_minutes
+        # after the power fill. load_ml takes precedence if it already set the forecast-only load source.
+        if self.load_forecast_history and self.load_minutes and self.load_minutes_age >= 1 and not self.load_forecast_only:
+            hist_forecast = self.compute_load_forecast_history(self.now_utc)
+            if hist_forecast:
+                self.load_forecast_only = True
+                for minute, value in hist_forecast.items():
+                    self.load_forecast[minute] = self.load_forecast.get(minute, 0) + value
+                self.load_forecast_array.append(hist_forecast)
+                self.log("Using weighted-bucket historical load forecast over {} days".format(min(self.load_minutes_age, self.max_days_previous - 1)))
 
         # Load today vs actual
         if self.load_minutes:
@@ -1972,6 +2004,117 @@ class Fetch:
                     return load_forecast
         return {}
 
+    def get_holiday_minutes(self, now_utc, num_days):
+        """
+        Build a per-minute history of the holiday_days_left value (indexed by minutes-ago) from the recorded
+        entity history using minute_data, which holds each state forward until the next change.
+
+        Returns the minute_data dict, or None when no usable history is available.
+        """
+        item = self.config_index.get("holiday_days_left", None) if getattr(self, "config_index", None) else None
+        entity_id = item.get("entity") if item else ("input_number." + self.prefix + "_holiday_days_left")
+        if not entity_id:
+            return None
+
+        try:
+            history = self.get_history_wrapper(entity_id=entity_id, days=num_days, required=False)
+        except (ValueError, TypeError):
+            history = None
+
+        if not history or not isinstance(history, list) or not history[0]:
+            return None
+
+        holiday_minutes, _ = minute_data(history[0], num_days, now_utc, "state", "last_updated", backwards=True)
+        return holiday_minutes or None
+
+    def compute_load_forecast_history(self, now_utc):
+        """
+        Build a forward load estimate from all available history (up to LOAD_FORECAST_HISTORY_MAX_DAYS days)
+        using per-5-minute weighted-bucket averaging.
+
+        For each forward 5-minute slot the historical sample at the same time-of-day is gathered from each
+        available past day and combined as a weighted average, ignoring zero (missing-data) buckets entirely.
+        Per-sample weight = weekday_factor * holiday_factor * age_factor:
+          - weekday_factor: 1.0 if the historical day is the same weekday as today; else 0.7 if both are
+            weekend or both are weekday; else 0.5 (one weekday, one weekend).
+          - holiday_factor: 1.0 if the holiday state when that individual 5-minute sample was recorded matches
+            today's holiday state; else 0.5. This is matched per sample (not per whole day) so a mid-day change
+            of holiday mode is handled correctly.
+          - age_factor: 0.9 for yesterday, reducing by 0.03 per day down to a floor of 0.1.
+
+        Returns a cumulative-from-midnight kWh dict (same format as the ML load forecast), or {} if no data.
+        """
+        if not self.load_minutes or self.load_minutes_age < 1:
+            return {}
+        # Search window comes from max_days_previous (derived from days_previous), bounded by available history
+        num_days = min(self.load_minutes_age, self.max_days_previous - 1)
+        if num_days < 1:
+            return {}
+
+        today_dow = now_utc.weekday()
+        today_holiday = self.holiday_days_left > 0
+        holiday_minutes = self.get_holiday_minutes(now_utc, num_days)
+        max_holiday_index = num_days * 24 * 60 - 1
+
+        # Precompute the static per-day weight (weekday * age); the holiday factor is applied per 5-minute bucket
+        day_static_weight = {}
+        for d in range(1, num_days + 1):
+            hist_dow = (now_utc - timedelta(days=d)).weekday()
+            if hist_dow == today_dow:
+                weekday_factor = 1.0
+            elif (hist_dow >= 5) == (today_dow >= 5):
+                # Both weekend or both weekday
+                weekday_factor = 0.7
+            else:
+                weekday_factor = 0.5
+            # Age: 0.9 for yesterday (d=1), reducing by 0.03 per day down to a floor of 0.1
+            age_factor = max(0.1, 0.9 - (d - 1) * 0.03)
+            day_static_weight[d] = weekday_factor * age_factor
+
+        # Build the per-step (5-minute) weighted-average estimate keyed by minute-from-midnight
+        per_step = {}
+        for minute in range(0, self.forecast_minutes + self.plan_interval_minutes, PREDICT_STEP):
+            minute_absolute = minute + self.minutes_now
+            total = 0.0
+            total_weight = 0.0
+            for d in range(1, num_days + 1):
+                minute_previous = 24 * 60 - minute + 24 * 60 * (d - 1)
+                # Skip zero (missing-data) buckets entirely so gaps in the history do not drag the estimate down.
+                # base_in_raw=False keeps raw at the true measured load so genuine gaps are detected even when
+                # a base load is configured (the filtered sample still has the base load applied).
+                sample, raw = self.get_filtered_load_minute(self.load_minutes, minute_previous, historical=False, step=PREDICT_STEP, base_in_raw=False)
+                if raw <= 0:
+                    continue
+                # Match the holiday state at the moment this individual sample was recorded (per bucket)
+                if holiday_minutes is None:
+                    holiday_active = today_holiday
+                else:
+                    sample_minutes_ago = minute_previous
+                    while sample_minutes_ago < 0:
+                        sample_minutes_ago += 24 * 60
+                    holiday_active = holiday_minutes.get(min(sample_minutes_ago, max_holiday_index), 0) > 0
+                holiday_factor = 1.0 if (holiday_active == today_holiday) else 0.5
+                weight = day_static_weight[d] * holiday_factor
+                total += sample * weight
+                total_weight += weight
+            per_step[minute_absolute] = (total / total_weight) if total_weight > 0 else 0.0
+
+        # Convert per-step kWh buckets into a cumulative-from-midnight dict, filling every minute by linear
+        # interpolation across each 5-minute span so get_from_incrementing(..., backwards=False) reproduces
+        # the per-step energy exactly (mirroring the dense output of minute_data with smoothing).
+        load_forecast = {}
+        cumulative = 0.0
+        for minute in range(0, self.forecast_minutes + self.plan_interval_minutes, PREDICT_STEP):
+            minute_absolute = minute + self.minutes_now
+            step_energy = per_step[minute_absolute]
+            for offset in range(PREDICT_STEP):
+                load_forecast[minute_absolute + offset] = dp4(cumulative + step_energy * offset / PREDICT_STEP)
+            cumulative += step_energy
+        # Final boundary so the last span's increment is well defined
+        final_minute = self.forecast_minutes + self.plan_interval_minutes + self.minutes_now
+        load_forecast[final_minute] = dp4(cumulative)
+        return load_forecast
+
     def fetch_extra_load_forecast(self, now_utc, ml_forecast=None):
         """
         Fetch extra load forecast, this is future load data
@@ -2124,10 +2267,21 @@ class Fetch:
         if len(self.days_previous) > len(self.days_previous_weight):
             # Extend weights with 1 if required
             self.days_previous_weight += [1 for i in range(len(self.days_previous) - len(self.days_previous_weight))]
-        if self.holiday_days_left > 0:
+
+        # days_previous_auto enables the weighted-bucket historical load forecast. The number of days of history
+        # it searches comes from max(days_previous) (or 7 when days_previous is not set), capped to the history
+        # Predbat can hold (LOAD_FORECAST_HISTORY_MAX_DAYS).
+        self.load_forecast_history = self.get_arg("days_previous_auto", False)
+        if self.load_forecast_history:
+            window_days = min(max(self.days_previous) if self.days_previous else 7, LOAD_FORECAST_HISTORY_MAX_DAYS)
+            self.log("days_previous_auto enabled - using weighted-bucket historical load forecast over up to {} days".format(window_days))
+            self.max_days_previous = window_days + 1
+        elif self.holiday_days_left > 0:
             self.days_previous = [1]
             self.log("Holiday mode is active, {} days remaining, setting days previous to 1".format(self.holiday_days_left))
-        self.max_days_previous = max(self.days_previous) + 1
+            self.max_days_previous = max(self.days_previous) + 1
+        else:
+            self.max_days_previous = max(self.days_previous) + 1
 
         self.forecast_days = int((forecast_hours + 23) / 24)
         self.forecast_minutes = forecast_hours * 60

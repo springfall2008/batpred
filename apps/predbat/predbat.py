@@ -591,6 +591,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.inverter_data_last_fetch = None
         self.octopus_url_cache_loaded = False
         self.github_url_cache_loaded = False
+        self.load_forecast_history = {}
 
         for root in CONFIG_ROOTS:
             if os.path.exists(root):

@@ -33,6 +33,7 @@ backprop
 Backpropagate
 backpropagation
 backsteps
+backtest
 Basepath
 Batpred
 battemperature
@@ -164,6 +165,7 @@ heatingactive
 heatingtemp
 heatpump
 heatsink
+holdout
 homeassistant
 houseb
 htmlcov
