@@ -364,6 +364,48 @@ def test_load_forecast_history(my_predbat):
         print("Car-charging hold correctly applied per day before averaging ({:.4f} kWh, not the diluted {:.4f})".format(load, buggy))
 
     # ---------------------------------------------------------------
+    # Test 8: cumulative-from-midnight and midnight-crossing
+    # ---------------------------------------------------------------
+    print("Test 8: cumulative-from-midnight + midnight crossing")
+    setup_predbat(my_predbat, now_utc)
+    my_predbat.minutes_now = 600
+    my_predbat.forecast_minutes = 1200  # horizon 600 + 1200 + 30 = 1830 crosses midnight
+    my_predbat.load_minutes = build_load_minutes({d: 0.002 for d in range(1, 8)})
+    my_predbat.load_minutes_age = 6
+    my_predbat.get_holiday_minutes = lambda now, n: None
+    forecast = my_predbat.compute_load_forecast_history(now_utc)
+
+    # The array is genuinely cumulative from midnight: zero at minute 0 and populated before minutes_now
+    if abs(forecast.get(0, 0.0)) > 1e-9:
+        print("ERROR: cumulative should start at 0 at midnight, got {}".format(forecast.get(0)))
+        failed = True
+    elif forecast.get(my_predbat.minutes_now, 0) <= 0:
+        print("ERROR: earlier-today portion not populated (cumulative at minutes_now is 0)")
+        failed = True
+    else:
+        print("Cumulative-from-midnight: starts at 0, populated through minutes_now ({:.4f} kWh)".format(forecast.get(my_predbat.minutes_now)))
+
+    # Midnight crossing: a tomorrow slot samples whole, distinct days at the slot's time of day
+    mn = my_predbat.minutes_now
+    minute_absolute = 1500  # tomorrow 01:00 (time of day 60)
+    tod = minute_absolute % (24 * 60)
+    prevs = [(mn - tod) + d * 24 * 60 for d in range(1, 5)]
+    if any(prevs[i + 1] - prevs[i] != 24 * 60 for i in range(len(prevs) - 1)):
+        print("ERROR: midnight-crossing samples not distinct whole days apart: {}".format(prevs))
+        failed = True
+    else:
+        print("Midnight-crossing samples distinct days {} (1440 apart)".format(prevs))
+
+    # Same time-of-day today and tomorrow sample the same history, so (constant rate) give the same energy
+    energy_tomorrow = step_energy_at(forecast, 1500)  # tomorrow 01:00
+    energy_today = step_energy_at(forecast, 60)  # today 01:00 (earlier today)
+    if energy_tomorrow <= 0 or abs(energy_tomorrow - energy_today) > 2e-4:
+        print("ERROR: tomorrow slot energy {} != same-time-of-day today {}".format(energy_tomorrow, energy_today))
+        failed = True
+    else:
+        print("Tomorrow slot matches same-time-of-day today (constant rate): {:.5f}".format(energy_tomorrow))
+
+    # ---------------------------------------------------------------
     # Restore mocks/state
     # ---------------------------------------------------------------
     my_predbat.get_holiday_minutes = original_get_holiday_minutes

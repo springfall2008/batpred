@@ -2071,14 +2071,19 @@ class Fetch:
             age_factor = max(0.1, 0.9 - (d - 1) * 0.03)
             day_static_weight[d] = weekday_factor * age_factor
 
-        # Build the per-step (5-minute) weighted-average estimate keyed by minute-from-midnight
+        # Build the per-step (5-minute) weighted-average estimate, keyed by minute-from-midnight, across the
+        # whole horizon from midnight today through the end of the plan so the resulting array is genuinely
+        # cumulative-from-midnight (consumers such as load_today_comparison read minutes before minutes_now too).
+        horizon_end = self.minutes_now + self.forecast_minutes + self.plan_interval_minutes
         per_step = {}
-        for minute in range(0, self.forecast_minutes + self.plan_interval_minutes, PREDICT_STEP):
-            minute_absolute = minute + self.minutes_now
+        for minute_absolute in range(0, horizon_end, PREDICT_STEP):
+            tod = minute_absolute % (24 * 60)  # time of day of this slot
             total = 0.0
             total_weight = 0.0
             for d in range(1, num_days + 1):
-                minute_previous = 24 * 60 - minute + 24 * 60 * (d - 1)
+                # Sample d whole days ago at this slot's time of day. Counting in whole days from today keeps
+                # each day distinct and handles midnight crossings (the slot may be tomorrow or later).
+                minute_previous = (self.minutes_now - tod) + d * 24 * 60
                 # Skip zero (missing-data) buckets entirely so gaps in the history do not drag the estimate down.
                 # base_in_raw=False keeps raw at the true measured load so genuine gaps are detected even when
                 # a base load is configured (the filtered sample still has the base load applied).
@@ -2089,10 +2094,7 @@ class Fetch:
                 if holiday_minutes is None:
                     holiday_active = today_holiday
                 else:
-                    sample_minutes_ago = minute_previous
-                    while sample_minutes_ago < 0:
-                        sample_minutes_ago += 24 * 60
-                    holiday_active = holiday_minutes.get(min(sample_minutes_ago, max_holiday_index), 0) > 0
+                    holiday_active = holiday_minutes.get(min(minute_previous, max_holiday_index), 0) > 0
                 holiday_factor = 1.0 if (holiday_active == today_holiday) else 0.5
                 weight = day_static_weight[d] * holiday_factor
                 total += sample * weight
@@ -2104,15 +2106,13 @@ class Fetch:
         # the per-step energy exactly (mirroring the dense output of minute_data with smoothing).
         load_forecast = {}
         cumulative = 0.0
-        for minute in range(0, self.forecast_minutes + self.plan_interval_minutes, PREDICT_STEP):
-            minute_absolute = minute + self.minutes_now
+        for minute_absolute in range(0, horizon_end, PREDICT_STEP):
             step_energy = per_step[minute_absolute]
             for offset in range(PREDICT_STEP):
                 load_forecast[minute_absolute + offset] = dp4(cumulative + step_energy * offset / PREDICT_STEP)
             cumulative += step_energy
         # Final boundary so the last span's increment is well defined
-        final_minute = self.forecast_minutes + self.plan_interval_minutes + self.minutes_now
-        load_forecast[final_minute] = dp4(cumulative)
+        load_forecast[horizon_end] = dp4(cumulative)
         return load_forecast
 
     def fetch_extra_load_forecast(self, now_utc, ml_forecast=None):
