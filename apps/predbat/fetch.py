@@ -2368,6 +2368,8 @@ class Fetch:
         self.clipping_auto_tune = self.get_arg("clipping_auto_tune")
         self.clipping_cost_weight = self.get_arg("clipping_cost_weight")
         self.clipping_amplification = self.get_arg("clipping_amplification")
+        self.clipping_buffer_start_offset = self.get_arg("clipping_buffer_start_offset", default=0)
+        self.clipping_buffer_end_offset = self.get_arg("clipping_buffer_end_offset", default=0)
         self.clipping_limit_override = self.get_arg("clipping_limit_override") / MINUTE_WATT if self.get_arg("clipping_limit_override") else 0
 
         # iBoost solar diverter model

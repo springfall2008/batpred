@@ -1112,17 +1112,23 @@ class Plan:
 
             if not hasattr(self, "clipping_auto_amp"):
                 self.clipping_auto_amp = getattr(self, "clipping_amplification", 1.0)
+                self.clipping_auto_start_offset = getattr(self, "clipping_buffer_start_offset", 0)
+                self.clipping_auto_end_offset = getattr(self, "clipping_buffer_end_offset", 0)
                 self.clipping_last_tune_day = None
                 if os.path.exists(auto_tune_file):
                     try:
                         with open(auto_tune_file, "r") as f:
                             data = json.load(f)
                             self.clipping_auto_amp = data.get("auto_amp", self.clipping_auto_amp)
+                            self.clipping_auto_start_offset = data.get("auto_start_offset", self.clipping_auto_start_offset)
+                            self.clipping_auto_end_offset = data.get("auto_end_offset", self.clipping_auto_end_offset)
                             self.clipping_last_tune_day = data.get("last_tune_day", None)
                     except Exception:
                         pass
 
             auto_amp = self.clipping_auto_amp
+            auto_start_offset = self.clipping_auto_start_offset
+            auto_end_offset = self.clipping_auto_end_offset
             last_tune_day = self.clipping_last_tune_day
 
             # Check if we should tune today (only once per day)
@@ -1151,26 +1157,62 @@ class Plan:
                 if limit > 0:
                     if max_pv_power >= limit * 0.98:
                         auto_amp = min(2.5, auto_amp + 0.05)
-                        self.log("Clipping auto-tuner: Real clipping detected (max PV {} kW >= limit {} kW). Increased recommended auto_amp to {}".format(dp2(max_pv_power), dp2(limit), auto_amp))
+                        auto_start_offset = min(60, auto_start_offset + 5)
+                        auto_end_offset = min(60, auto_end_offset + 5)
+                        self.log("Clipping auto-tuner: Real clipping detected (max PV {} kW >= limit {} kW). Increased safety margins - amp: {}, start_offset: {}m, end_offset: {}m".format(dp2(max_pv_power), dp2(limit), auto_amp, auto_start_offset, auto_end_offset))
                     else:
                         auto_amp = max(1.0, auto_amp - 0.01)
-                        self.log("Clipping auto-tuner: No clipping detected. Decreased recommended auto_amp to {}".format(auto_amp))
+                        auto_start_offset = max(0, auto_start_offset - 5)
+                        auto_end_offset = max(0, auto_end_offset - 5)
+                        self.log("Clipping auto-tuner: No clipping detected. Decreased safety margins - amp: {}, start_offset: {}m, end_offset: {}m".format(auto_amp, auto_start_offset, auto_end_offset))
 
                     try:
                         with open(auto_tune_file, "w") as f:
-                            json.dump({"auto_amp": auto_amp, "last_tune_day": current_day}, f)
+                            json.dump({
+                                "auto_amp": auto_amp,
+                                "auto_start_offset": auto_start_offset,
+                                "auto_end_offset": auto_end_offset,
+                                "last_tune_day": current_day
+                            }, f)
                         self.clipping_auto_amp = auto_amp
+                        self.clipping_auto_start_offset = auto_start_offset
+                        self.clipping_auto_end_offset = auto_end_offset
                         self.clipping_last_tune_day = current_day
                     except Exception:
                         pass
 
-            self.dashboard_item(self.prefix + ".clipping_recommended_amplification", state=dp2(auto_amp), attributes={"friendly_name": "Clipping Recommended Amplification", "icon": "mdi:auto-fix"})
-
-            # Apply Manual vs Auto Factor
+            # If auto-tune is enabled, sync clipping configuration to the recommended values
             if getattr(self, "clipping_auto_tune", False):
-                effective_amplification = auto_amp
-            else:
-                effective_amplification = self.clipping_amplification
+                config_changed = False
+
+                current_amp = getattr(self, "clipping_amplification", 1.0)
+                if current_amp is None or abs(current_amp - auto_amp) > 1e-4:
+                    self.clipping_amplification = auto_amp
+                    if publish:
+                        self.expose_config("clipping_amplification", auto_amp)
+                    config_changed = True
+
+                current_start = getattr(self, "clipping_buffer_start_offset", 0)
+                if current_start is None or current_start != auto_start_offset:
+                    self.clipping_buffer_start_offset = auto_start_offset
+                    if publish:
+                        self.expose_config("clipping_buffer_start_offset", auto_start_offset)
+                    config_changed = True
+
+                current_end = getattr(self, "clipping_buffer_end_offset", 0)
+                if current_end is None or current_end != auto_end_offset:
+                    self.clipping_buffer_end_offset = auto_end_offset
+                    if publish:
+                        self.expose_config("clipping_buffer_end_offset", auto_end_offset)
+                    config_changed = True
+
+                if config_changed and publish:
+                    self.save_current_config()
+                    self.log("Clipping auto-tuner: Synced entities to HA and predbat_config.json")
+
+            effective_amplification = getattr(self, "clipping_amplification", 1.0)
+            if effective_amplification is None:
+                effective_amplification = 1.0
 
             # Apply ClearSky or Amplification factor
             # Check if ClearSky data is present and has non-zero values; otherwise fall back to amplified base peaks.
@@ -1181,6 +1223,24 @@ class Plan:
                 pv_forecast_peak_step = {k: max(v, pv_clearsky_step.get(k, 0)) for k, v in pv_forecast_peak_step.items()}
             elif effective_amplification != 1.0:
                 pv_forecast_peak_step = {k: v * effective_amplification for k, v in pv_forecast_peak_step.items()}
+
+            # Apply start/end offsets to widen the clipping risk window
+            start_offset = int(getattr(self, "clipping_buffer_start_offset", 0))
+            end_offset = int(getattr(self, "clipping_buffer_end_offset", 0))
+            if (start_offset > 0 or end_offset > 0) and pv_forecast_peak_step:
+                widened_peak_step = {}
+                for k, v in pv_forecast_peak_step.items():
+                    m_min = k - end_offset
+                    m_max = k + start_offset
+                    max_val = v
+                    m_start = 5 * (m_min // 5)
+                    m_end = 5 * ((m_max + 4) // 5)
+                    for m in range(m_start, m_end + 1, 5):
+                        val = pv_forecast_peak_step.get(m, 0.0)
+                        if val > max_val:
+                            max_val = val
+                    widened_peak_step[k] = max_val
+                pv_forecast_peak_step = widened_peak_step
 
             # Calculate effective clipping limit: most restrictive hardware constraint
             if self.clipping_limit_override > 0:
