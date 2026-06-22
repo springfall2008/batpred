@@ -1208,9 +1208,9 @@ class GatewayMQTT(ComponentBase):
         if time.time() - self._last_plan_publish_time <= _PLAN_REPUBLISH_INTERVAL:
             return
         data = self.build_execution_plan(self._last_plan_entries, plan_version=self._plan_version, timezone=self._last_plan_timezone)
+        await self._publish_raw(self.topic_schedule, data, retain=True)
         self._last_plan_data = data
         self._last_plan_publish_time = time.time()
-        await self._publish_raw(self.topic_schedule, data, retain=True)
         self.log("Info: GatewayMQTT: Re-published execution plan (refreshed timestamp)")
 
     async def publish_command(self, command, **kwargs):
