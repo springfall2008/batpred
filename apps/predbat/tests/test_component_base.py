@@ -301,6 +301,58 @@ def test_component_base_run_timeout(my_predbat):
     return asyncio.run(run_test())
 
 
+def test_component_base_first_cleared_when_run_presets_api_started(my_predbat):
+    """Regression: a component that sets api_started itself must still leave the startup path.
+
+    The gateway's MQTT background loop sets self.api_started = True before run(first=True)
+    returns. If start() only clears the `first` flag inside `if not self.api_started`, the
+    flag stays True forever and start() keeps re-running the first=True startup path on
+    backoff, never reaching the steady-state (first=False) housekeeping that publishes the
+    plan. This verifies start() transitions to first=False regardless of who set api_started.
+    """
+    print("\n*** Test: ComponentBase clears first when run() pre-sets api_started ***")
+
+    class PresetComponent(ComponentBase):
+        def __init__(self, base):
+            self.first_flags = []
+            super().__init__(base)
+
+        def initialize(self, **kwargs):
+            pass
+
+        async def run(self, seconds, first):
+            self.first_flags.append(first)
+            # Mimic a background task marking the component started before run() returns.
+            self.api_started = True
+            return True
+
+    async def run_test():
+        with patch("asyncio.sleep", side_effect=fast_sleep):
+            base = MockBase()
+            component = PresetComponent(base)
+
+            task = asyncio.create_task(component.start())
+
+            # Wait long enough (sped up 100x by fast_sleep → ~2s real) for the component
+            # loop to advance past simulated seconds=60 so a steady-state run can occur.
+            await asyncio.sleep(200)
+
+            assert component.api_started, "Component should be started"
+
+            await component.stop()
+            await task
+
+            assert component.first_flags, "run() should have been called"
+            assert component.first_flags[0] is True, "First run should be first=True"
+            assert any(f is False for f in component.first_flags), "Component must reach steady-state housekeeping (first=False); got first flags: {}".format(component.first_flags)
+            assert component.first_flags.count(True) == 1, "Startup run() should happen exactly once, got {}".format(component.first_flags)
+
+            print(f"PASS: first cleared despite self-set api_started (flags={component.first_flags})")
+        return False  # False = test passed
+
+    return asyncio.run(run_test())
+
+
 def test_component_base_all(my_predbat):
     """Run all component_base tests"""
     tests = [
@@ -310,6 +362,7 @@ def test_component_base_all(my_predbat):
         ("normal_operation", test_component_base_normal_operation_after_start, "Component runs every 60s after start"),
         ("exception_handling", test_component_base_exception_handling, "Component handles exceptions with backoff"),
         ("run_timeout", test_component_base_run_timeout, "Hung run() triggers timeout, stack trace, and error count"),
+        ("first_cleared_preset", test_component_base_first_cleared_when_run_presets_api_started, "first flag clears even when run() pre-sets api_started"),
     ]
 
     failed = []
