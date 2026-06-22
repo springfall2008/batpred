@@ -24,6 +24,7 @@ TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
 TIME_FORMAT_SOLIS = "%Y-%m-%d %H:%M:%S"
 PREDICT_STEP = 5
 RUN_EVERY = 5
+LOAD_FORECAST_HISTORY_MAX_DAYS = 30  # Max days of history used by the weighted-bucket load forecast (days_previous_auto)
 CONFIG_ROOTS = ["/config", "/conf", "/homeassistant", "./"]
 TIME_FORMAT_HA = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_HA_TZ = "%Y-%m-%dT%H:%M:%S.%f%z"

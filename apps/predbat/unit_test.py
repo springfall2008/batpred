@@ -36,6 +36,7 @@ from tests.test_nordpool import run_nordpool_test
 from tests.test_futurerate_auto import test_futurerate_auto
 from tests.test_car_charging_smart import run_car_charging_smart_tests
 from tests.test_plugin_startup import test_plugin_startup_order
+from tests.test_active_flag import test_active_flag
 from tests.test_optimise_levels import run_optimise_levels_tests
 from tests.test_energydataservice import run_energydataservice_tests
 from tests.test_iboost import run_iboost_smart_tests
@@ -72,6 +73,8 @@ from tests.test_format_time_ago import test_format_time_ago
 from tests.test_override_time import test_get_override_time_from_string
 from tests.test_units import run_test_units
 from tests.test_previous_days_modal import test_previous_days_modal_filter
+from tests.test_load_forecast_history import test_load_forecast_history
+from tests.test_filtered_load_minute import test_filtered_load_minute
 from tests.test_fill_load_from_power import run_all_tests as test_fill_load_from_power
 from tests.test_fetch_pv_forecast import run_all_tests as test_fetch_pv_forecast
 from tests.test_octopus_free import test_octopus_free
@@ -204,6 +207,8 @@ def main():
         ("format_time_ago", test_format_time_ago, "Format time ago tests", False),
         ("override_time", test_get_override_time_from_string, "Override time from string tests", False),
         ("previous_days_modal", test_previous_days_modal_filter, "Previous days modal filter tests", False),
+        ("load_forecast_history", test_load_forecast_history, "Weighted historical load forecast tests", False),
+        ("filtered_load_minute", test_filtered_load_minute, "Filtered load minute / window tests", False),
         ("fill_load_from_power", test_fill_load_from_power, "Fill load from power sensor tests", False),
         ("fetch_pv_forecast", test_fetch_pv_forecast, "Fetch PV forecast with relative_time offset tests", False),
         # Octopus Energy URL/API tests
@@ -226,6 +231,7 @@ def main():
         ("load_free_slot", test_load_free_slot, "Load free slot tests", False),
         ("add_now_to_octopus_slot", test_add_now_to_octopus_slot, "Add now to Octopus slot tests", False),
         ("plugin_startup", test_plugin_startup_order, "Plugin startup order tests", False),
+        ("active_flag", test_active_flag, "Active flag cleared on exception tests", False),
         ("dynamic_load_car", test_dynamic_load_car_slot_cancellation, "Dynamic load car slot cancellation tests", False),
         ("units", run_test_units, "Unit tests", False),
         ("manual_api", run_test_manual_api, "Manual API tests", False),
@@ -329,6 +335,7 @@ def main():
     parser = argparse.ArgumentParser(description="Predbat unit tests")
     parser.add_argument("--debug_file", action="store", help="Enable debug output")
     parser.add_argument("--full_debug", action="store_true", help="Enable full debug output")
+    parser.add_argument("--redo", action="store_true", help="Redo rates, load model and octopus slots for debug test")
     parser.add_argument("--compare", action="store_true", help="Run compare")
     parser.add_argument("--test", "-t", action="append", help="Run specific test(s) by name (can be used multiple times, use --list to see available tests)")
     parser.add_argument("--keyword", "-k", action="store", help="Run tests matching keyword pattern (e.g., -k carbon_ runs all carbon tests)")
@@ -407,7 +414,7 @@ def main():
         sys.exit(0)
 
     if args.debug_file:
-        run_single_debug(args.debug_file, my_predbat, args.debug_file, compare=args.compare, debug=args.full_debug)
+        run_single_debug(args.debug_file, my_predbat, args.debug_file, compare=args.compare, debug=args.full_debug, redo=args.redo)
         sys.exit(0)
 
     # Collect tests to run based on arguments

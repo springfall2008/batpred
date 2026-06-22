@@ -879,9 +879,15 @@ class Prediction:
                     over_limit = abs(diff) - export_limit
                     reduce_by = over_limit
 
-                    if reduce_by > battery_draw:
+                    # Compare the AC over-export against the battery's AC export contribution (battery_draw is DC,
+                    # so that is battery_draw * inverter_loss). If the surplus is larger then even stopping the
+                    # battery leaves PV over the limit, so we must charge to absorb it rather than clip the solar.
+                    if reduce_by > battery_draw * inverter_loss:
                         if self.inverter_can_charge_during_export:
-                            reduce_by = reduce_by - battery_draw
+                            # Stopping the battery only removes its AC export contribution (battery_draw is DC, so
+                            # that is battery_draw * inverter_loss). Whatever AC export is still over the limit has
+                            # to be absorbed by charging the battery.
+                            reduce_by = reduce_by - battery_draw * inverter_loss
 
                             if inverter_hybrid:
                                 charge_rate_now_curve_dc = (
@@ -889,13 +895,23 @@ class Prediction:
                                     * battery_rate_max_scaling
                                 )
                                 charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step
-                                battery_draw = max(-reduce_by * inverter_loss, -battery_to_min, -charge_rate_now_curve_dc_step)
+                                # Hybrid charges from PV on the DC side (see pv_dc below), so the AC surplus maps
+                                # back to DC through the loss reciprocal. Clamp by battery_to_max (remaining charge
+                                # headroom), not battery_to_min, otherwise a near-full battery is asked to absorb
+                                # more than it can hold and the surplus is mis-accounted instead of clipped.
+                                battery_draw = max(-reduce_by * inverter_loss_recp, -battery_to_max, -charge_rate_now_curve_dc_step)
                             else:
-                                battery_draw = max(-reduce_by * inverter_loss, -battery_to_min, -charge_rate_now_curve_step)
+                                # Non-hybrid charges from the grid (AC), so the DC charge is the AC surplus * loss.
+                                battery_draw = max(-reduce_by * inverter_loss, -battery_to_max, -charge_rate_now_curve_step)
                         else:
                             battery_draw = 0
                     else:
-                        battery_draw = battery_draw - reduce_by
+                        # reduce_by is an AC over-export figure but battery_draw is DC and exports through
+                        # the inverter, so scale by the loss reciprocal to remove the right amount of grid
+                        # export. Subtracting the raw AC figure under-reduces the battery and leaves a small
+                        # residual that gets clipped off the solar later. Clamp at zero so we never flip to
+                        # charging here (that case is handled by the inverter_can_charge_during_export branch).
+                        battery_draw = max(battery_draw - reduce_by * inverter_loss_recp, 0)
 
                     if inverter_hybrid and battery_draw < 0:
                         pv_dc = min(abs(battery_draw), pv_now)
@@ -916,7 +932,14 @@ class Prediction:
                                     * battery_rate_max_scaling
                                 )
                                 charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step
-                                battery_draw = max(-reduce_by * inverter_loss, -battery_to_min, -charge_rate_now_curve_dc_step)
+                                # reduce_by here is in the same DC-equivalent throughput units as total_inverted
+                                # (get_total_inverted counts the battery and the PV diverted to DC 1:1), so the
+                                # battery must charge by reduce_by directly to bring total_inverted onto the
+                                # inverter limit - no inverter_loss factor. Multiplying by inverter_loss under-
+                                # charges and leaves PV to be clipped that the battery could have absorbed. Clamp
+                                # by battery_to_max (remaining charge headroom) so a near-full battery is not
+                                # asked to absorb more than it can hold.
+                                battery_draw = max(-reduce_by, -battery_to_max, -charge_rate_now_curve_dc_step)
                         else:
                             battery_draw = battery_draw - reduce_by
 
