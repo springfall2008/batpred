@@ -1743,11 +1743,27 @@ class OctopusAPI(ComponentBase):
 
                                 dispatch = {"start": start, "end": end, "charge_in_kwh": delta, "source": meta.get("source", dispatch_type), "location": meta.get("location", None)}
                                 # Keep planned (flexPlannedDispatches) entries in the planned list only - do NOT promote
-                                # in-progress slots into completed_dispatches. flexPlannedDispatches is Octopus's optimiser
-                                # schedule and includes plug-independent SMART grid-flex events that Octopus routinely
-                                # withdraws on its next re-plan. Promoting them immortalised provisional slots as permanent
-                                # cheap "completed" slots that never had a matching real dispatch (see issue #4114). Genuine
-                                # charging is still cached below via the metered completedDispatches feed (location=AT_HOME).
+                                # in-progress slots into completed_dispatches (see issue #4114). flexPlannedDispatches is
+                                # Octopus's optimiser schedule and includes plug-independent SMART grid-flex events that
+                                # Octopus routinely withdraws on its next re-plan. Promoting them immortalised provisional
+                                # slots as permanent cheap "completed" slots that never had a matching real dispatch.
+                                # Genuine charging is still cached below via the metered completedDispatches feed
+                                # (location=AT_HOME).
+                                #
+                                # If the slot is already in progress, trim the elapsed portion before appending: advance
+                                # its start to now and scale charge_in_kwh to the remaining time. decode_octopus_slot does
+                                # not trim a started slot when charge_in_kwh > 0, so without this the already-delivered
+                                # energy would be double counted, inflating predicted car SoC/cost for the active window.
+                                start_date_time = parse_date_time(start)
+                                end_date_time = parse_date_time(end)
+                                if start_date_time and end_date_time and start_date_time < self.now_utc_exact < end_date_time:
+                                    total_minutes = (end_date_time - start_date_time).total_seconds() / 60
+                                    remaining_minutes = (end_date_time - self.now_utc_exact).total_seconds() / 60
+                                    if total_minutes > 0:
+                                        if delta is not None:
+                                            delta = dp4(delta * remaining_minutes / total_minutes)
+                                            dispatch["charge_in_kwh"] = delta
+                                        dispatch["start"] = self.now_utc_exact.strftime(DATE_TIME_STR_FORMAT)
                                 planned.append(dispatch)
                             for completedDispatch in completedDispatches:
                                 start = completedDispatch.get("start", None)
