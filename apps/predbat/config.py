@@ -504,14 +504,6 @@ CONFIG_ITEMS = [
         "enable": "clipping_buffer_enable",
     },
     {
-        "name": "clipping_use_clearsky_peaks",
-        "friendly_name": "Clipping Use ClearSky Peaks",
-        "type": "switch",
-        "default": True,
-        "icon": "mdi:weather-sunny-alert",
-        "enable": "clipping_buffer_enable",
-    },
-    {
         "name": "clipping_auto_tune",
         "friendly_name": "Clipping Auto-Tune",
         "type": "switch",

@@ -2365,7 +2365,6 @@ class Fetch:
 
         # Clipping peak cost penalty model
         self.clipping_buffer_enable = self.get_arg("clipping_buffer_enable")
-        self.clipping_use_clearsky_peaks = self.get_arg("clipping_use_clearsky_peaks")
         self.clipping_auto_tune = self.get_arg("clipping_auto_tune")
         self.clipping_cost_weight = self.get_arg("clipping_cost_weight")
         self.clipping_amplification = self.get_arg("clipping_amplification")

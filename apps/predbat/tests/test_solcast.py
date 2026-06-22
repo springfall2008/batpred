@@ -1889,6 +1889,82 @@ def test_fetch_pv_forecast_ha_sensors(my_predbat):
     return failed
 
 
+def test_fetch_pv_forecast_ha_clearsky(my_predbat):
+    """
+    Integration test: fetch_pv_forecast using HA sensors for clearsky forecast.
+    Ensures that:
+      - Regex pattern resolves sensor names (e.g. sensor.solcast_clear_sky_today).
+      - fetch_pv_datapoints does not raise KeyError for pv_clearsky key.
+      - overlay_clearsky_data correctly overlays pv_clearsky values.
+    """
+    print("  - test_fetch_pv_forecast_ha_clearsky")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        # Configure matching options
+        test_api.solar.solcast_host = None
+        test_api.solar.solcast_api_key = None
+        test_api.solar.forecast_solar = None
+        test_api.solar.pv_forecast_today = "sensor.solcast_pv_forecast_today"
+        test_api.solar.pv_forecast_tomorrow = None
+        
+        # Enable clearsky source as HA
+        test_api.mock_base.set_arg("clipping_clearsky_source", "ha_solcast_clearsky")
+        test_api.solar.pv_clearsky_today = "sensor.solcast_clear_sky_today"
+        test_api.solar.pv_clearsky_tomorrow = None
+        test_api.solar.pv_clearsky_d3 = None
+        test_api.solar.pv_clearsky_d4 = None
+
+        # Setup mock forecast sensor (base)
+        test_api.set_mock_ha_state(
+            "sensor.solcast_pv_forecast_today",
+            {
+                "state": "2.0",
+                "detailedForecast": [
+                    {"period_start": "2025-06-15T12:00:00+0000", "pv_estimate": 1.0},
+                    {"period_start": "2025-06-15T12:30:00+0000", "pv_estimate": 1.0},
+                ],
+            },
+        )
+        
+        # Setup mock clearsky sensor
+        test_api.set_mock_ha_state(
+            "sensor.solcast_clear_sky_today",
+            {
+                "state": "3.0",
+                "detailedForecast": [
+                    {"period_start": "2025-06-15T12:00:00+0000", "pv_clearsky": 1.5},
+                    {"period_start": "2025-06-15T12:30:00+0000", "pv_clearsky": 1.5},
+                ],
+            },
+        )
+
+        def create_mock_session(*args, **kwargs):
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
+
+        # Verify that clearsky was overlayed correctly and published
+        today_entity = f"sensor.{test_api.mock_base.prefix}_pv_today"
+        if today_entity not in test_api.dashboard_items:
+            print("ERROR: Expected pv_today entity to be published")
+            failed = True
+        else:
+            today_item = test_api.dashboard_items[today_entity]
+            total_cs = today_item["attributes"].get("totalCS", 0)
+            expected_total_cs = 3.0
+            if abs(total_cs - expected_total_cs) > 0.05:
+                print(f"ERROR: Expected totalCS ~{expected_total_cs} kWh, got {total_cs} kWh")
+                failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
 # ============================================================================
 # 15-minute resolution tests
 # ============================================================================
@@ -3454,6 +3530,7 @@ def run_solcast_tests(my_predbat):
     failed |= test_fetch_pv_forecast_forecast_solar_open_meteo_backup_on_failure(my_predbat)
     failed |= test_fetch_pv_forecast_forecast_solar_open_meteo_backup_not_used_on_success(my_predbat)
     failed |= test_fetch_pv_forecast_ha_sensors(my_predbat)
+    failed |= test_fetch_pv_forecast_ha_clearsky(my_predbat)
 
     # 15-minute resolution tests
     failed |= test_fetch_pv_forecast_ha_sensors_15min_kwh(my_predbat)

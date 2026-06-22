@@ -78,8 +78,8 @@ def test_inject_creates_contiguous_window(my_predbat):
     failed = False
     setup(my_predbat)
     my_predbat.minutes_now = 240  # 04:00
-    # Peak from 13:00 to 14:00 (780 to 840)
-    my_predbat.clipping_buffer_forecast_kwh = {780: 1.0, 810: 2.0}
+    # Peak from 13:00 to 14:00 (780 to 840). Keys must be relative: 780-240=540, 810-240=570.
+    my_predbat.clipping_buffer_forecast_kwh = {540: 1.0, 570: 2.0}
 
     my_predbat.inject_clipping_export_windows()
 
@@ -89,8 +89,12 @@ def test_inject_creates_contiguous_window(my_predbat):
 
     w = my_predbat.export_window_best[0]
 
-    if w["start"] != 240:
-        print("ERROR: Expected window start at 240, got {}".format(w["start"]))
+    # Correct calculation: peak at 780 to 840.
+    # To create 2.0 kWh headroom with 1.0 kW effective discharge rate requires 120 minutes of discharge.
+    # Plus 30 mins safety margin = 150 minutes.
+    # Start = max(240, 780 - 150) = 630.
+    if w["start"] != 630:
+        print("ERROR: Expected window start at 630, got {}".format(w["start"]))
         failed = True
 
     if w["end"] != 840:
@@ -107,34 +111,50 @@ def test_inject_cleans_fragmented_windows(my_predbat):
     failed = False
     setup(my_predbat)
     my_predbat.minutes_now = 0
-    # Peak from 780 to 810
+    # Peak from 780 to 810 (absolute and relative are same since minutes_now=0)
     my_predbat.clipping_buffer_forecast_kwh = {
         780: 1.0,
     }
 
     # Inject intersecting fragmented windows
     my_predbat.export_window_best = [
-        {"start": 30, "end": 50, "average": 0},  # Before morning_start (60) - should KEEP
-        {"start": 100, "end": 120, "average": 0},  # Inside the new window - should DROP
-        {"start": 700, "end": 800, "average": 0},  # Intersecting the new window - should DROP
-        {"start": 900, "end": 960, "average": 0},  # After peak_end - should KEEP
+        {"start": 30, "end": 50, "average": 0},  # Before morning_start (690) - should KEEP
+        {"start": 100, "end": 120, "average": 0},  # Before morning_start (690) - should KEEP
+        {"start": 700, "end": 800, "average": 0},  # Intersecting the new window [690, 810] - should DROP
+        {"start": 900, "end": 960, "average": 0},  # After peak_end (810) - should KEEP
     ]
+    my_predbat.export_limits_best = [10.0, 20.0, 30.0, 40.0]
 
     my_predbat.inject_clipping_export_windows()
 
-    # We expect 3 windows: 2 kept + 1 injected
-    if len(my_predbat.export_window_best) != 3:
-        print("ERROR: Expected 3 windows (2 kept + 1 new), got {}".format(len(my_predbat.export_window_best)))
+    # We expect 4 windows: 3 kept + 1 newly injected
+    if len(my_predbat.export_window_best) != 4:
+        print("ERROR: Expected 4 windows (3 kept + 1 new), got {}".format(len(my_predbat.export_window_best)))
         return True
 
+    if len(my_predbat.export_limits_best) != len(my_predbat.export_window_best):
+        print("ERROR: Length mismatch! export_window_best is {}, export_limits_best is {}".format(len(my_predbat.export_window_best), len(my_predbat.export_limits_best)))
+        failed = True
+
     starts = [w["start"] for w in my_predbat.export_window_best]
-    if 100 in starts or 700 in starts:
+    if 700 in starts:
         print("ERROR: Fragmented windows were not cleaned!")
         failed = True
 
-    if 60 not in starts:  # Injected window start
-        print("ERROR: Injected window not found!")
+    if 100 not in starts or 30 not in starts:
+        print("ERROR: Non-intersecting windows were incorrectly dropped!")
         failed = True
+
+    if 690 not in starts:  # Injected window start
+        print("ERROR: Injected window start 690 not found, got starts: {}".format(starts))
+        failed = True
+
+    # Check that limits are aligned: W0 (limit 10.0), W1 (limit 20.0), W3 (limit 40.0), and new window (target_soc_pct, e.g. 80.0)
+    expected_limits = [10.0, 20.0, 40.0]
+    for limit in expected_limits:
+        if limit not in my_predbat.export_limits_best:
+            print("ERROR: Expected limit {} not found in export_limits_best: {}".format(limit, my_predbat.export_limits_best))
+            failed = True
 
     if not failed:
         print("PASS")

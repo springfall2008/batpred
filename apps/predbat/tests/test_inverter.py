@@ -681,6 +681,7 @@ def test_inverter_self_test(test_name, my_predbat):
     # Call self test - doesn't really check much as such except the code isn't dead
     dummy_rest = DummyRestAPI()
     my_predbat.args["givtcp_rest"] = "dummy"
+    my_predbat.args["inverter_reserve_max"] = 100
 
     dummy_rest.rest_data = {}
     dummy_rest.rest_data["Control"] = {}
