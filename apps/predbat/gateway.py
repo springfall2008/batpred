@@ -1174,6 +1174,14 @@ class GatewayMQTT(ComponentBase):
         if not self._plan_changed(plan_entries):
             return  # No change, skip publish
 
+        if not self._mqtt_connected:
+            # Re-queue so the next run() cycle retries once reconnected. Crucially, none
+            # of the publish state (version, timestamp, cached plan) is mutated here, so
+            # the periodic re-publish gate stays armed and fires immediately on reconnect.
+            self._pending_plan = (plan_entries, timezone_str)
+            self.log("Warn: GatewayMQTT: Not connected — plan queued for next publish")
+            return
+
         self._plan_version += 1
         data = self.build_execution_plan(plan_entries, plan_version=self._plan_version, timezone=timezone_str)
         self._last_plan_data = data
@@ -1181,12 +1189,9 @@ class GatewayMQTT(ComponentBase):
         self._last_plan_timezone = timezone_str
         self._last_plan_publish_time = time.time()
 
-        if self._mqtt_connected:
-            await self._publish_raw(self.topic_schedule, data, retain=True)
-            self._last_published_plan = plan_entries
-            self.log(f"Info: GatewayMQTT: Published execution plan v{self._plan_version} ({len(plan_entries)} entries)")
-        else:
-            self.log("Warn: GatewayMQTT: Not connected — plan queued for next publish")
+        await self._publish_raw(self.topic_schedule, data, retain=True)
+        self._last_published_plan = plan_entries
+        self.log(f"Info: GatewayMQTT: Published execution plan v{self._plan_version} ({len(plan_entries)} entries)")
 
     async def _republish_plan_if_stale(self):
         """Re-publish the last plan periodically so its embedded timestamp stays fresh.

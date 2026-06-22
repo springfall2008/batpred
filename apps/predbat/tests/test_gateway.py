@@ -1092,6 +1092,7 @@ class TestPlanRepublish:
         gw._last_plan_publish_time = 0
         gw._plan_version = 0
         gw._last_published_plan = None
+        gw._pending_plan = None
         gw.topic_schedule = "predbat/schedule"
         gw._published = []
 
@@ -1163,6 +1164,40 @@ class TestPlanRepublish:
         gw = self._make_gateway()
         self._run(gw._republish_plan_if_stale())
         assert gw._published == []
+
+    def test_disconnected_publish_requeues_without_mutating_state(self):
+        """Publishing while disconnected re-queues and leaves the publish state untouched."""
+        gw = self._make_gateway()
+        gw._mqtt_connected = False
+        entries = self._entries()
+        self._run(gw.publish_plan(entries, "Europe/London"))
+
+        # Nothing went out and the plan is queued for the next cycle.
+        assert gw._published == []
+        assert gw._pending_plan == (entries, "Europe/London")
+        # Publish state is pristine so the re-publish gate fires immediately on reconnect.
+        assert gw._plan_version == 0
+        assert gw._last_plan_entries is None
+        assert gw._last_plan_publish_time == 0
+        assert gw._last_published_plan is None
+
+    def test_requeued_plan_publishes_on_reconnect(self):
+        """A plan queued while disconnected is sent once reconnected."""
+        gw = self._make_gateway()
+        gw._mqtt_connected = False
+        entries = self._entries()
+        self._run(gw.publish_plan(entries, "Europe/London"))
+        assert gw._published == []
+
+        # Reconnect and replay the queued plan (as the run() cycle would).
+        gw._mqtt_connected = True
+        pending, tz = gw._pending_plan
+        gw._pending_plan = None
+        self._run(gw.publish_plan(pending, tz))
+
+        assert len(gw._published) == 1
+        assert gw._plan_version == 1
+        assert gw._last_published_plan == entries
 
 
 class TestAutomaticConfig:
