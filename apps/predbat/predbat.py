@@ -35,7 +35,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v8.40.15"
+THIS_VERSION = "v8.41.1"
 
 from download import predbat_update_move, predbat_update_download, check_install, DEFAULT_PREDBAT_REPOSITORY
 from const import MINUTE_WATT
@@ -459,10 +459,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.export_limits = []
         self.export_limits_best = []
         self.export_window_best = []
-        self.battery_rate_max_charge = 0
+        self.battery_rate_max_charge = 0.0333
         self.battery_rate_max_charge_dc = 0
-        self.battery_rate_max_discharge = 0
-        self.battery_rate_max_export = 0
+        self.battery_rate_max_discharge = 0.0333
+        self.battery_rate_max_export = 0.0333
         self.battery_rate_min = 0
         self.battery_rate_max_scaling = 1.0
         self.battery_rate_max_scaling_discharge = 1.0
@@ -599,6 +599,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.inverter_data_last_fetch = None
         self.octopus_url_cache_loaded = False
         self.github_url_cache_loaded = False
+        self.load_forecast_history = False
 
         for root in CONFIG_ROOTS:
             if os.path.exists(root):
@@ -1674,6 +1675,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 raise e
             finally:
                 self.prediction_started = False
+                # Always clear the active flag, even on early return or exception, so the
+                # web spinner and predbat.active switch don't get stuck on
+                self.expose_config("active", False)
                 self.cleanup_pool()
         elif not self.prediction_started:
             time_now = datetime.now()
@@ -1753,6 +1757,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 raise e
             finally:
                 self.prediction_started = False
+                # Always clear the active flag, even on early return or exception, so the
+                # web spinner and predbat.active switch don't get stuck on
+                self.expose_config("active", False)
                 self.cleanup_pool()
 
     def run_time_loop_balance(self, cb_args):

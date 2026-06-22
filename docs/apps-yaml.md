@@ -355,6 +355,37 @@ Or if you want Predbat to take the average of the same day for the last two week
 
 Further details and worked examples of [how days_previous works](#understanding-how-days_previous-works) are covered at the end of this document.
 
+#### days_previous_auto (weighted historical load forecast)
+
+Setting **days_previous_auto** to `True` in `apps.yaml` switches house-load prediction from the fixed
+list/weighting approach above to a weighted-bucket forecast:
+
+```yaml
+  days_previous_auto: True
+```
+
+In this mode Predbat ignores the fixed averaging and instead builds a forward load forecast from **all** of
+the load history within the search window (without padding when fewer days exist). The window is taken from
+`max(days_previous)`, or 7 days when `days_previous` is not set, capped at 30 days. This is more robust when
+there are gaps in your history or when your usage pattern has changed (for example when returning from
+holiday), because it no longer depends on a small number of specific days all being present and
+representative.
+
+Each historical 5-minute sample is combined into a weighted average for the matching time-of-day, where the
+weight of every sample is the product of three factors:
+
+- **Weekday** - 1.0 if the historical day is the same day of the week as today; 0.7 if it is a different day
+  but both are weekdays or both are weekend days; 0.5 if one is a weekday and the other a weekend day.
+- **Holiday** - reduced by 50% if that historical day's [holiday mode](customisation.md#holiday-mode) state
+  does not match today's holiday mode state. The historical holiday state is reconstructed from the recorded
+  history of `holiday_days_left`.
+- **Age** - 0.9 for yesterday, reducing by 0.03 per day down to a floor of 0.1 (reached after about a
+  month), so recent days count for more.
+
+Buckets with no recorded data (zero) are ignored entirely so gaps in the history do not drag the estimate
+down. As with Load ML, this replaces the normal days_previous averaging; if [Load ML](load-ml.md) is enabled
+it takes precedence over `days_previous_auto`.
+
 Do keep in mind that Home Assistant only keeps 10 days of history by default, so if you want to access more than this for Predbat you might need to increase the number of days of history
 kept in HA before it is purged by editing and adding the following to the `/homeassistant/configuration.yaml` configuration file and restarting Home Assistant afterwards:
 

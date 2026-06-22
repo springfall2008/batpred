@@ -14,16 +14,38 @@ from prediction import Prediction
 from tests.test_infra import reset_inverter
 
 
-def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, compare=False, debug=False):
+def _dump_state_before_plan(my_predbat, filename):
+    """Dump a JSON-comparable snapshot of predbat's member variables for cross-run-context comparison.
+
+    Only cleanly JSON-serialisable values are recorded as-is; everything else is recorded as its type name
+    (without memory addresses) so two snapshots can be diffed without noise.
+    """
+    state = {}
+    for key in sorted(my_predbat.__dict__.keys()):
+        if key.startswith("__"):
+            continue
+        value = my_predbat.__dict__[key]
+        if callable(value):
+            continue
+        try:
+            json.dumps(value)
+            state[key] = value
+        except (TypeError, ValueError, OverflowError):
+            try:
+                state[key] = "<{} len={}>".format(type(value).__name__, len(value))
+            except (TypeError, AttributeError):
+                state[key] = "<{}>".format(type(value).__name__)
+    with open(filename, "w") as handle:
+        json.dump(state, handle, indent=2, sort_keys=True)
+
+
+def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, compare=False, debug=False, redo=False):
     print("**** Running debug test {} ****\n".format(debug_file))
-    if not expected_file:
-        re_do_rates = True
-        reset_load_model = True
-        reload_octopus_slots = True
-    else:
-        reset_load_model = False
-        re_do_rates = False
-        reload_octopus_slots = False
+    # Will recompute the rates, load model and octopus slots if redo is True. This is useful for debugging a single test case, but the
+    # debug_cases regression suite exercise the same code path and produce the same result.
+    re_do_rates = redo
+    reset_load_model = redo
+    reload_octopus_slots = redo
     load_override = 1.0
     my_predbat.load_user_config()
     failed = False
@@ -196,6 +218,9 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
 
     ## Calculate the plan
     my_predbat.plan_valid = False
+    # Dump the full predbat state just before calculate_plan so the same case can be compared across run
+    # contexts (full ./run_all suite vs standalone) to find any leaked/uninitialised state.
+    # _dump_state_before_plan(my_predbat, test_name + ".state.json")
     print("Re-calculate plan")
     my_predbat.calculate_plan(recompute=True, debug_mode=debug)
     print("Plan calculated")
@@ -224,8 +249,10 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
             print("ERROR: Expected file {} does not exist".format(expected_file))
         else:
             expected_data = json.loads(open(expected_file).read())
-            expected_json = json.dumps(expected_data)
-            if actual_json != expected_json:
+            # Compare the parsed contents by value rather than the raw JSON strings. The plan values are
+            # numpy floats whose json repr differs from a plain Python float's, so a byte-for-byte string
+            # compare reports spurious mismatches even when the numbers are identical.
+            if json.loads(actual_json) != expected_data:
                 print("ERROR: Actual plan does not match expected plan")
                 failed = True
     # Write actual plan

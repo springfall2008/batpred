@@ -762,7 +762,7 @@ class WebInterface(ComponentBase):
                 if self.base.user_config_item_enabled(item):
                     entity_id = item.get("entity", "")
                     entity_friendly_name = item.get("friendly_name", "")
-                    unit = item.get("unit", "")
+                    unit = self.base.convert_currency_unit(item.get("unit", ""))
                     if unit:
                         entity_friendly_name = f"{entity_friendly_name} ({unit})"
                     if entity_id:
@@ -3530,7 +3530,7 @@ chart.render();
         for arg in args:
             value = args[arg]
             raw_value = self.resolve_value_raw(arg, value)
-            if ("_key" in arg) or ("_password" in arg) or ("_secret" in arg) or ("_pem" in arg):
+            if isinstance(arg, str) and (("_key" in arg) or ("_password" in arg) or ("_secret" in arg) or ("_pem" in arg)):
                 value = '<span title = "{}"> (hidden)</span>'.format(value)
             arg_errors = self.base.arg_errors.get(arg, "")
 
@@ -3733,7 +3733,7 @@ chart.render();
                 itemtype = item.get("type", "")
                 default = item.get("default", "")
                 icon = self.icon2html(item.get("icon", ""))
-                unit = item.get("unit", "")
+                unit = self.base.convert_currency_unit(item.get("unit", ""))
                 text += "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td>".format(icon, friendly, entity, itemtype)
                 if value == default:
                     text += '<td class="cfg_default">{} {}</td><td>{} {}</td>\n'.format(value, unit, default, unit)
@@ -3784,7 +3784,7 @@ chart.render();
                 itemtype = item.get("type", "")
                 default = item.get("default", "")
                 useid = entity.replace(".", "__")
-                unit = item.get("unit", "")
+                unit = self.base.convert_currency_unit(item.get("unit", ""))
                 icon = self.icon2html(item.get("icon", ""))
 
                 if itemtype in ["input_number", "number"] and item.get("step", 1) == 1:
