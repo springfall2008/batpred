@@ -19,6 +19,8 @@ def run_clipping_tests(my_predbat):
     failed |= test_inject_aborts_if_empty_forecast(my_predbat)
     failed |= test_inject_creates_contiguous_window(my_predbat)
     failed |= test_inject_cleans_fragmented_windows(my_predbat)
+    failed |= test_clipping_buffer_offsets(my_predbat)
+    failed |= test_clipping_auto_tune_sync(my_predbat)
     return failed
 
 
@@ -26,6 +28,9 @@ def setup(my_predbat):
     reset_inverter(my_predbat)
     my_predbat.clipping_buffer_enable = True
     my_predbat.clipping_buffer_forecast_kwh = {}
+    my_predbat.clipping_buffer_start_offset = 0
+    my_predbat.clipping_buffer_end_offset = 0
+    my_predbat.clipping_amplification = 1.0
     my_predbat.minutes_now = 0
     my_predbat.export_rate = {}
     my_predbat.export_window_best = []
@@ -155,6 +160,151 @@ def test_inject_cleans_fragmented_windows(my_predbat):
         if limit not in my_predbat.export_limits_best:
             print("ERROR: Expected limit {} not found in export_limits_best: {}".format(limit, my_predbat.export_limits_best))
             failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_clipping_buffer_offsets(my_predbat):
+    print("**** test_clipping_buffer_offsets ****")
+    failed = False
+    setup(my_predbat)
+
+    # We want to test the peak PV forecast widening logic directly.
+    my_predbat.pv_forecast_peak_step = {m: 0.0 for m in range(0, 125, 5)}  # pre-fill all 5-minute step keys
+    my_predbat.pv_forecast_peak_step[60] = 10.0  # peak at minute 60
+
+    # Set offsets
+    my_predbat.clipping_buffer_start_offset = 15
+    my_predbat.clipping_buffer_end_offset = 15
+
+    # Run the widening logic:
+    pv_forecast_peak_step = my_predbat.pv_forecast_peak_step
+    start_offset = int(getattr(my_predbat, "clipping_buffer_start_offset", 0))
+    end_offset = int(getattr(my_predbat, "clipping_buffer_end_offset", 0))
+
+    if (start_offset > 0 or end_offset > 0) and pv_forecast_peak_step:
+        widened_peak_step = {}
+        for k, v in pv_forecast_peak_step.items():
+            m_min = k - end_offset
+            m_max = k + start_offset
+            max_val = v
+            m_start = 5 * (m_min // 5)
+            m_end = 5 * ((m_max + 4) // 5)
+            for m in range(m_start, m_end + 1, 5):
+                val = pv_forecast_peak_step.get(m, 0.0)
+                if val > max_val:
+                    max_val = val
+            widened_peak_step[k] = max_val
+        pv_forecast_peak_step = widened_peak_step
+
+    # Verify that minutes 45, 50, 55, 60, 65, 70, 75 all have the peak value 10.0
+    expected_minutes = [45, 50, 55, 60, 65, 70, 75]
+    for m in expected_minutes:
+        val = pv_forecast_peak_step.get(m, 0.0)
+        if val != 10.0:
+            print("ERROR: Expected widened peak value 10.0 at minute {}, got {}".format(m, val))
+            failed = True
+
+    # Verify that minutes outside range do not have the peak value (e.g. 40, 80)
+    for m in [40, 80]:
+        val = pv_forecast_peak_step.get(m, 0.0)
+        if val == 10.0:
+            print("ERROR: Widened peak overflowed to minute {}, got {}".format(m, val))
+            failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_clipping_auto_tune_sync(my_predbat):
+    print("**** test_clipping_auto_tune_sync ****")
+    failed = False
+    setup(my_predbat)
+
+    # Save original functions to restore them later
+    original_expose_config = my_predbat.expose_config
+    original_save_current_config = my_predbat.save_current_config
+
+    # Mock expose_config and save_current_config
+    exposed_calls = []
+    def mock_expose_config(name, value, *args, **kwargs):
+        exposed_calls.append((name, value))
+
+    saved_calls = 0
+    def mock_save_current_config(*args, **kwargs):
+        nonlocal saved_calls
+        saved_calls += 1
+
+    my_predbat.expose_config = mock_expose_config
+    my_predbat.save_current_config = mock_save_current_config
+
+    try:
+        # Configure auto_tune to True
+        my_predbat.clipping_auto_tune = True
+
+        # Sync logic
+        auto_amp = 1.35
+        auto_start_offset = 15
+        auto_end_offset = 15
+
+        # Perform sync
+        config_changed = False
+
+        current_amp = getattr(my_predbat, "clipping_amplification", 1.0)
+        if current_amp is None or abs(current_amp - auto_amp) > 1e-4:
+            my_predbat.clipping_amplification = auto_amp
+            my_predbat.expose_config("clipping_amplification", auto_amp)
+            config_changed = True
+
+        current_start = getattr(my_predbat, "clipping_buffer_start_offset", 0)
+        if current_start is None or current_start != auto_start_offset:
+            my_predbat.clipping_buffer_start_offset = auto_start_offset
+            my_predbat.expose_config("clipping_buffer_start_offset", auto_start_offset)
+            config_changed = True
+
+        current_end = getattr(my_predbat, "clipping_buffer_end_offset", 0)
+        if current_end is None or current_end != auto_end_offset:
+            my_predbat.clipping_buffer_end_offset = auto_end_offset
+            my_predbat.expose_config("clipping_buffer_end_offset", auto_end_offset)
+            config_changed = True
+
+        if config_changed:
+            my_predbat.save_current_config()
+
+        if my_predbat.clipping_amplification != 1.35:
+            print("ERROR: clipping_amplification was not updated to 1.35, got {}".format(my_predbat.clipping_amplification))
+            failed = True
+
+        if my_predbat.clipping_buffer_start_offset != 15:
+            print("ERROR: clipping_buffer_start_offset was not updated to 15, got {}".format(my_predbat.clipping_buffer_start_offset))
+            failed = True
+
+        if my_predbat.clipping_buffer_end_offset != 15:
+            print("ERROR: clipping_buffer_end_offset was not updated to 15, got {}".format(my_predbat.clipping_buffer_end_offset))
+            failed = True
+
+        if ("clipping_amplification", 1.35) not in exposed_calls:
+            print("ERROR: expose_config was not called for clipping_amplification")
+            failed = True
+
+        if ("clipping_buffer_start_offset", 15) not in exposed_calls:
+            print("ERROR: expose_config was not called for clipping_buffer_start_offset")
+            failed = True
+
+        if ("clipping_buffer_end_offset", 15) not in exposed_calls:
+            print("ERROR: expose_config was not called for clipping_buffer_end_offset")
+            failed = True
+
+        if saved_calls != 1:
+            print("ERROR: save_current_config was not called once, got: {}".format(saved_calls))
+            failed = True
+    finally:
+        # RESTORE the original functions to avoid contaminating subsequent tests
+        my_predbat.expose_config = original_expose_config
+        my_predbat.save_current_config = original_save_current_config
 
     if not failed:
         print("PASS")

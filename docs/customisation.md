@@ -477,10 +477,13 @@ The **Clipping Buffer** feature introduces an intelligent mitigation layer that 
 These settings can be found in the Home Assistant Predbat Configuration panel, directly beneath the Cloud Model settings.
 
 - **`clipping_buffer_enable`**: The master switch. Turns the entire clipping buffer feature on or off.
-- **`clipping_clearsky_source`**: Determines where Predbat gets its clear-sky (theoretical maximum) data. Options include `auto`, `ha_solcast_clearsky`, `solcast_api`, and `openmeteo`. This piggybacks on your existing Predbat/HA API integrations, requiring no extra YAML configuration.
-- **`clipping_use_clearsky_peaks`**: If enabled, Predbat uses the selected Clear-Sky source to size the buffer, rather than just the standard forecast. This is highly recommended to protect against cloud-edge spikes.
-- **`clipping_auto_tune`**: Automatically learns the scaling difference between your standard solar forecast and your hardware limits based on past clipping behavior, saving a tracking multiplier to `clipping_auto_tune.json`.
-- **`clipping_amplification`**: A manual multiplier (e.g., `1.5x`) to force the standard solar forecast higher to simulate a sunny spike. This is only utilized if Auto-Tune is disabled.
+- **`clipping_clearsky_source`**: Determines where Predbat gets its clear-sky (theoretical maximum) data. Options include:
+  * `auto`: Automatically select the best available source from the options below.
+  * `ha_solcast_clearsky`: Integrates with the HACS [Solcast Solar integration](https://github.com/BJReplay/ha-solcast-solar) (requires separate installation, but uses existing sensors).
+  * `solcast_api`: Direct native Solcast API integration (only works if your Solcast API key has clear-sky access).
+  * `openmeteo`: Uses the free Open-Meteo API as a fallback source.
+- **`clipping_auto_tune`**: Automatically learns the safety buffer margins from past clipping behavior. When enabled, it dynamically tunes and auto-populates `clipping_amplification`, `clipping_buffer_start_offset`, and `clipping_buffer_end_offset` directly on your dashboard entities.
+- **`clipping_amplification`**: A manual multiplier (e.g. `1.5x`) to scale the modeled solar forecast peak. Tuned dynamically if Auto-Tune is ON.
 - **`clipping_cost_weight`**: An internal optimizer multiplier (default `1.0`). If Predbat isn't dumping the battery aggressively enough before a peak, increasing this number adds a harsher financial penalty for clipping, forcing the optimizer to prioritize creating headroom.
 - **`clipping_limit_override`**: Manually define your inverter's AC ceiling in Watts (e.g., `5000W`). If left at `0`, Predbat auto-detects it from your inverter entity.
 
