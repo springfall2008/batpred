@@ -1,4 +1,6 @@
-"""Tests for GatewayMQTT component."""
+"""
+Tests for GatewayMQTT component.
+"""
 import sys
 import os
 import math
