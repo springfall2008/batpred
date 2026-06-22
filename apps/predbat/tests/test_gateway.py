@@ -1,4 +1,6 @@
-"""Tests for GatewayMQTT component."""
+"""
+Tests for GatewayMQTT component.
+"""
 import sys
 import os
 import math
@@ -1058,6 +1060,146 @@ class TestMQTTIntegration:
         plan2 = pb.ExecutionPlan()
         plan2.ParseFromString(data2)
         assert plan2.plan_version > plan.plan_version
+
+
+class TestPlanRepublish:
+    """Tests for the periodic plan re-publish that refreshes the embedded timestamp."""
+
+    def _entries(self):
+        return [
+            {
+                "enabled": True,
+                "start_hour": 1,
+                "start_minute": 30,
+                "end_hour": 4,
+                "end_minute": 30,
+                "mode": 1,
+                "power_w": 3000,
+                "target_soc": 100,
+                "days_of_week": 0x7F,
+                "use_native": True,
+            }
+        ]
+
+    def _make_gateway(self):
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.log = MagicMock()
+        gw._mqtt_connected = True
+        gw._last_plan_data = None
+        gw._last_plan_entries = None
+        gw._last_plan_timezone = None
+        gw._last_plan_publish_time = 0
+        gw._plan_version = 0
+        gw._last_published_plan = None
+        gw._pending_plan = None
+        gw.topic_schedule = "predbat/schedule"
+        gw._published = []
+
+        async def fake_publish_raw(topic, payload, retain=False):
+            gw._published.append((topic, payload, retain))
+
+        gw._publish_raw = fake_publish_raw
+        return gw
+
+    def _run(self, coro):
+        import asyncio
+
+        return asyncio.run(coro)
+
+    def test_publish_plan_stores_entries_and_timezone(self):
+        """publish_plan records the entries and timezone needed for a later rebuild."""
+        gw = self._make_gateway()
+        entries = self._entries()
+        self._run(gw.publish_plan(entries, "Europe/London"))
+        assert gw._last_plan_entries == entries
+        assert gw._last_plan_timezone == "Europe/London"
+        assert len(gw._published) == 1
+
+    def test_republish_refreshes_timestamp(self):
+        """Re-publishing a stale plan rebuilds it with a newer timestamp, same version."""
+        gw = self._make_gateway()
+        self._run(gw.publish_plan(self._entries(), "Europe/London"))
+        first_payload = gw._published[0][1]
+        first_plan = pb.ExecutionPlan()
+        first_plan.ParseFromString(first_payload)
+
+        # Pretend the first publish was long enough ago to exceed the re-publish interval.
+        from gateway import _PLAN_REPUBLISH_INTERVAL
+
+        gw._last_plan_publish_time -= _PLAN_REPUBLISH_INTERVAL + 60
+
+        self._run(gw._republish_plan_if_stale())
+
+        assert len(gw._published) == 2
+        second_payload = gw._published[1][1]
+        second_plan = pb.ExecutionPlan()
+        second_plan.ParseFromString(second_payload)
+
+        assert second_plan.timestamp >= first_plan.timestamp  # rebuilt with current clock
+        assert second_plan.plan_version == first_plan.plan_version  # content unchanged → same version
+        # The cached bytes are refreshed so subsequent reads reflect the new timestamp.
+        assert gw._last_plan_data == second_payload
+
+    def test_no_republish_before_interval(self):
+        """A plan younger than the re-publish interval is not re-sent."""
+        gw = self._make_gateway()
+        self._run(gw.publish_plan(self._entries(), "Europe/London"))
+        self._run(gw._republish_plan_if_stale())
+        assert len(gw._published) == 1
+
+    def test_no_republish_when_disconnected(self):
+        """Nothing is re-published while MQTT is disconnected."""
+        gw = self._make_gateway()
+        self._run(gw.publish_plan(self._entries(), "Europe/London"))
+        from gateway import _PLAN_REPUBLISH_INTERVAL
+
+        gw._last_plan_publish_time -= _PLAN_REPUBLISH_INTERVAL + 60
+        gw._mqtt_connected = False
+        self._run(gw._republish_plan_if_stale())
+        assert len(gw._published) == 1
+
+    def test_no_republish_without_prior_plan(self):
+        """With no plan ever built, the re-publish is a no-op."""
+        gw = self._make_gateway()
+        self._run(gw._republish_plan_if_stale())
+        assert gw._published == []
+
+    def test_disconnected_publish_requeues_without_mutating_state(self):
+        """Publishing while disconnected re-queues and leaves the publish state untouched."""
+        gw = self._make_gateway()
+        gw._mqtt_connected = False
+        entries = self._entries()
+        self._run(gw.publish_plan(entries, "Europe/London"))
+
+        # Nothing went out and the plan is queued for the next cycle.
+        assert gw._published == []
+        assert gw._pending_plan == (entries, "Europe/London")
+        # Publish state is pristine so the re-publish gate fires immediately on reconnect.
+        assert gw._plan_version == 0
+        assert gw._last_plan_entries is None
+        assert gw._last_plan_publish_time == 0
+        assert gw._last_published_plan is None
+
+    def test_requeued_plan_publishes_on_reconnect(self):
+        """A plan queued while disconnected is sent once reconnected."""
+        gw = self._make_gateway()
+        gw._mqtt_connected = False
+        entries = self._entries()
+        self._run(gw.publish_plan(entries, "Europe/London"))
+        assert gw._published == []
+
+        # Reconnect and replay the queued plan (as the run() cycle would).
+        gw._mqtt_connected = True
+        pending, tz = gw._pending_plan
+        gw._pending_plan = None
+        self._run(gw.publish_plan(pending, tz))
+
+        assert len(gw._published) == 1
+        assert gw._plan_version == 1
+        assert gw._last_published_plan == entries
 
 
 class TestAutomaticConfig:
@@ -3268,6 +3410,7 @@ def run_gateway_tests(my_predbat=None):
         TestTokenRefresh,
         TestPlanHookConversion,
         TestMQTTIntegration,
+        TestPlanRepublish,
         TestPublishPredbatData,
         TestIanaToPosixTz,
         TestCheckInverterResets,
