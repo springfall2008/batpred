@@ -887,7 +887,7 @@ class Plan:
             # We walk backwards from the peak minute by minute to account for the fact that
             # solar generation (PV) during the export window consumes inverter capacity and
             # reduces the effective battery discharge rate.
-            max_kwh_loss = max(kwh_loss for m, kwh_loss in forecast.items() if peak_start <= m <= peak_end)
+            max_kwh_loss = max(kwh_loss for m_rel, kwh_loss in forecast.items() if peak_start <= (m_rel + self.minutes_now) <= peak_end)
             
             # Cap the requested headroom by the physical capacity of the battery.
             # We cannot create more headroom than the battery can physically hold.
@@ -895,8 +895,11 @@ class Plan:
             max_kwh_loss = min(max_kwh_loss, battery_capacity_kwh)
             
             hybrid = getattr(self, "inverter_hybrid", False)
-            inverter_limit_kw = getattr(self, "set_inverter_limit", 0) / 1000.0
-            export_limit_kw = getattr(self, "export_limit", 0)
+            inverter_limit_kw = getattr(self, "inverter_limit", 0.0) * 60.0
+            user_inverter_limit = getattr(self, "set_inverter_limit", 0)
+            if user_inverter_limit > 0:
+                inverter_limit_kw = user_inverter_limit / 1000.0
+            export_limit_kw = getattr(self, "export_limit", 0.0) * 60.0
             pv_forecast = getattr(self, "pv_forecast_minute_step", {})
             
             accumulated_kwh = 0.0
@@ -904,10 +907,10 @@ class Plan:
             
             for m in range(peak_start, max(self.minutes_now, peak_start - 360), -1):
                 # Start with raw battery maximum discharge
-                discharge_kw = self.battery_rate_max_discharge * getattr(self, "battery_rate_max_scaling_discharge", 1.0)
+                discharge_kw = self.battery_rate_max_discharge * getattr(self, "battery_rate_max_scaling_discharge", 1.0) * 60.0
                 
-                # Retrieve PV forecast for this minute (kW)
-                pv_kw = pv_forecast.get(m, 0.0)
+                # Retrieve PV forecast for this minute (kW). Note pv_forecast uses relative minutes.
+                pv_kw = pv_forecast.get(m - self.minutes_now, 0.0)
                 
                 # Hybrid inverters share the AC limit between battery and PV
                 if hybrid and inverter_limit_kw > 0:
@@ -923,7 +926,7 @@ class Plan:
                 accumulated_kwh += discharge_kw * (1.0 / 60.0)
                 minutes_needed += 1
                 
-                if accumulated_kwh >= max_kwh_loss:
+                if accumulated_kwh >= max_kwh_loss - 1e-9:
                     break
 
             # Add 30 mins safety margin
@@ -954,6 +957,16 @@ class Plan:
             for w in self.export_window_best:
                 if (w.get("start") >= morning_start and w.get("start") < peak_end) or (w.get("end") > morning_start and w.get("end") <= peak_end):
                     w["clipping_ceiling_pct"] = target_soc_pct
+
+            # Remove any existing export windows that intersect our new window and keep export_limits_best aligned
+            new_export_windows = []
+            new_export_limits = []
+            for w, limit in zip(self.export_window_best, self.export_limits_best):
+                if not intersects(w, morning_start, peak_end):
+                    new_export_windows.append(w)
+                    new_export_limits.append(limit)
+            self.export_window_best = new_export_windows
+            self.export_limits_best = new_export_limits
 
             # Inject our new unified window
             if not any(w.get("start") <= new_window["start"] and w.get("end") >= new_window["end"] for w in self.export_window_best):
@@ -1160,9 +1173,12 @@ class Plan:
                 effective_amplification = self.clipping_amplification
 
             # Apply ClearSky or Amplification factor
-            if getattr(self, "clipping_use_clearsky_peaks", False):
-                pv_clearsky_step = self.step_data_history(getattr(self, "pv_forecast_minuteCS", {}), self.minutes_now, forward=True, cloud_factor=None)
-                pv_forecast_peak_step = {k: max(v, pv_clearsky_step.get(k, 0) * effective_amplification) for k, v in pv_forecast_peak_step.items()}
+            # Check if ClearSky data is present and has non-zero values; otherwise fall back to amplified base peaks.
+            pv_clearsky_step = self.step_data_history(getattr(self, "pv_forecast_minuteCS", {}), self.minutes_now, forward=True, cloud_factor=None)
+            has_clearsky = any(val > 0.001 for val in pv_clearsky_step.values()) if pv_clearsky_step else False
+
+            if has_clearsky:
+                pv_forecast_peak_step = {k: max(v, pv_clearsky_step.get(k, 0)) for k, v in pv_forecast_peak_step.items()}
             elif effective_amplification != 1.0:
                 pv_forecast_peak_step = {k: v * effective_amplification for k, v in pv_forecast_peak_step.items()}
 
@@ -1227,7 +1243,7 @@ class Plan:
                         midnight_today_minute = int(self.minutes_now / 1440) * 1440
                         if minute_absolute < midnight_today_minute + 1440:
                             self.clipping_remaining_today += kwh_loss
-                        else:
+                        elif minute_absolute < midnight_today_minute + 2880:
                             self.clipping_tomorrow += kwh_loss
 
             # If manual override is active, reflect it in the UI totals
@@ -4161,16 +4177,22 @@ class Plan:
                             daily_cumulative_clip[day_index] = daily_cumulative_clip.get(day_index, 0.0) + (peak_pv - clipping_limit_step)
                         remaining = daily_cumulative_clip.get(day_index, 0.0)
 
+                    best_soc_min = getattr(self, "best_soc_min", 0.0)
+                    max_headroom = self.soc_max - best_soc_min
+                    capped_remaining = min(remaining, max_headroom)
                     predict_clipping_remaining_best[minute] = round(remaining, 4)
-                    predict_clipping_ceiling_best[minute] = round(self.soc_max - remaining, 4)
+                    predict_clipping_ceiling_best[minute] = round(self.soc_max - capped_remaining, 4)
 
                 # Sort dictionaries to ensure forwards time order for ApexCharts rendering
                 self.predict_clipping_remaining_best = dict(sorted(predict_clipping_remaining_best.items()))
                 self.predict_clipping_ceiling_best = dict(sorted(predict_clipping_ceiling_best.items()))
 
-                self.clipping_remaining_today = clipping_today
-                self.clipping_tomorrow = clipping_tomorrow
-                self.clipping_mitigated_today = clipping_today
+                if not self.clipping_buffer_enable:
+                    self.clipping_remaining_today = clipping_today
+                    self.clipping_tomorrow = clipping_tomorrow
+                    self.clipping_mitigated_today = clipping_today
+                else:
+                    self.clipping_mitigated_today = self.clipping_remaining_today
 
                 # Add Clipping Summary Dashboard Items
                 self.dashboard_item(

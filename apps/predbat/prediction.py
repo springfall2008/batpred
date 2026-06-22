@@ -714,10 +714,7 @@ class Prediction:
                     absorbable = min(battery_headroom, max_charge_step)
                     unmitigated_clip = max(potential_clip - absorbable, 0)
 
-                    if absorbable > 0:
-                        # Actually route the absorbed free solar into the battery state of charge
-                        # taking into account the battery's charging efficiency loss
-                        soc += absorbable * battery_loss
+
 
                     if unmitigated_clip > 0:
                         clipping_penalty = unmitigated_clip * export_rate * clipping_cost_weight

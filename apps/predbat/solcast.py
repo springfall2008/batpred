@@ -753,7 +753,7 @@ class SolarAPI(ComponentBase):
             # check the total vs the sum of 30 minute slots and work out scale factor
             if data:
                 for entry in data:
-                    total_data += entry["pv_estimate"]
+                    total_data += entry.get("pv_estimate", entry.get("pv_clearsky", 0.0))
                 total_data = dp2(total_data)
                 total_sensor = self.get_state_wrapper(entity_id=entity_id, default=1.0)
                 try:
@@ -762,6 +762,57 @@ class SolarAPI(ComponentBase):
                     total_sensor = 1.0
 
         return data, total_data, total_sensor
+
+    def overlay_clearsky_data(self, pv_forecast_data, source_data, value_field, source_period, source_divide_by, target_divide_by, target_period):
+        """
+        Overlay clearsky data from source_data into pv_forecast_data,
+        correctly normalising units to kW and mapping between different time alignments/resolutions.
+        """
+        timeline = []
+        for item in source_data:
+            ts_str = item.get("period_start")
+            val = float(item.get(value_field, 0.0))
+            try:
+                start_dt = datetime.strptime(ts_str, TIME_FORMAT)
+                start_dt = start_dt.replace(tzinfo=pytz.utc)
+            except (ValueError, TypeError):
+                continue
+            
+            # Calculate source power in kW
+            power_kw = (val / source_divide_by) * 60.0
+            end_dt = start_dt + timedelta(minutes=source_period)
+            timeline.append((start_dt, end_dt, power_kw))
+
+        if not timeline:
+            return
+
+        timeline.sort(key=lambda x: x[0])
+
+        for target_item in pv_forecast_data:
+            ts_str = target_item.get("period_start")
+            try:
+                target_start = datetime.strptime(ts_str, TIME_FORMAT)
+                target_start = target_start.replace(tzinfo=pytz.utc)
+            except (ValueError, TypeError):
+                continue
+            target_end = target_start + timedelta(minutes=target_period)
+            
+            # Find all overlapping source intervals
+            weighted_power_sum = 0.0
+            total_overlap_mins = 0.0
+            for src_start, src_end, src_power in timeline:
+                # Check for overlap
+                overlap_start = max(target_start, src_start)
+                overlap_end = min(target_end, src_end)
+                if overlap_start < overlap_end:
+                    overlap_duration = (overlap_end - overlap_start).total_seconds() / 60.0
+                    weighted_power_sum += src_power * overlap_duration
+                    total_overlap_mins += overlap_duration
+            
+            if total_overlap_mins > 0:
+                clearsky_kw = weighted_power_sum / total_overlap_mins
+                # Convert clearsky_kw to target's raw unit
+                target_item["pv_clearsky"] = (clearsky_kw / 60.0) * target_divide_by
 
     def publish_pv_stats(self, pv_forecast_data, divide_by, period):
         """
@@ -1411,47 +1462,6 @@ class SolarAPI(ComponentBase):
                 self.log("SolarAPI: PV Forecast today adds up to {} kWh, and total sensors add up to {} kWh, factor is {}".format(pv_forecast_total_data, pv_forecast_total_sensor, factor))
 
         if pv_forecast_data:
-            # Optional overlay of ClearSky data from a secondary source
-            clipping_clearsky_source = self.get_arg("clipping_clearsky_source", "auto", indirect=False)
-            if clipping_clearsky_source == "openmeteo" and self.open_meteo_forecast:
-                self.log("SolarAPI: Overlaying ClearSky data from Open-Meteo API")
-                om_data, _ = await self.download_open_meteo_data()
-                if om_data:
-                    om_lookup = {item["period_start"]: item.get("pv_clearsky", item.get("pv_estimate90", 0)) for item in om_data}
-                    for item in pv_forecast_data:
-                        ts = item.get("period_start")
-                        if ts in om_lookup:
-                            item["pv_clearsky"] = om_lookup[ts]
-            elif clipping_clearsky_source == "solcast_api" and self.solcast_api_key:
-                self.log("SolarAPI: Overlaying ClearSky data from Solcast API")
-                sol_data = await self.download_solcast_data()
-                if sol_data:
-                    sol_lookup = {item["period_start"]: item.get("pv_clearsky", item.get("pv_estimate90", 0)) for item in sol_data}
-                    for item in pv_forecast_data:
-                        ts = item.get("period_start")
-                        if ts in sol_lookup:
-                            item["pv_clearsky"] = sol_lookup[ts]
-            elif clipping_clearsky_source == "ha_solcast_clearsky":
-                self.log("SolarAPI: Overlaying ClearSky data from Home Assistant integration")
-                ha_data = []
-                for argname in ["pv_clearsky_today", "pv_clearsky_tomorrow", "pv_clearsky_d3", "pv_clearsky_d4"]:
-                    entity_id = getattr(self, argname, None)
-                    if entity_id:
-                        data, _, _ = self.fetch_pv_datapoints(argname, entity_id)
-                        if data:
-                            ha_data += data
-                if ha_data:
-                    # Apply factor and divide_by logic like the main PV fetcher
-                    ha_lookup = {item["period_start"]: float(item.get("pv_estimate", 0.0)) for item in ha_data}
-                    for item in pv_forecast_data:
-                        ts = item.get("period_start")
-                        if ts in ha_lookup:
-                            item["pv_clearsky"] = ha_lookup[ts]
-            elif clipping_clearsky_source == "pv90_scaled":
-                self.log("SolarAPI: Overlaying ClearSky data explicitly disabled, PV90 will be scaled and used as base for clipping mitigation")
-            elif clipping_clearsky_source not in ["auto", "base", ""]:
-                self.log("Warn: SolarAPI: clipping_clearsky_source '{}' not configured properly, using base data".format(clipping_clearsky_source))
-
             # Detect the actual period of the forecast data (e.g. 15 or 30 minutes)
             # by examining the time difference between consecutive entries.
             # This ensures 15-minute resolution data is handled correctly.
@@ -1468,6 +1478,58 @@ class SolarAPI(ComponentBase):
                         period = detected_period
                 except (ValueError, TypeError, KeyError):
                     pass
+
+            # Optional overlay of ClearSky data from a secondary source
+            clipping_clearsky_source = self.get_arg("clipping_clearsky_source", "auto", indirect=False)
+            if clipping_clearsky_source == "openmeteo" and self.open_meteo_forecast:
+                self.log("SolarAPI: Overlaying ClearSky data from Open-Meteo API")
+                om_data, _ = await self.download_open_meteo_data()
+                if om_data:
+                    self.overlay_clearsky_data(
+                        pv_forecast_data,
+                        om_data,
+                        value_field="pv_clearsky",
+                        source_period=60,
+                        source_divide_by=60.0,
+                        target_divide_by=divide_by,
+                        target_period=period
+                    )
+            elif clipping_clearsky_source == "solcast_api" and self.solcast_api_key:
+                self.log("SolarAPI: Overlaying ClearSky data from Solcast API")
+                sol_data = await self.download_solcast_data()
+                if sol_data:
+                    self.overlay_clearsky_data(
+                        pv_forecast_data,
+                        sol_data,
+                        value_field="pv_clearsky",
+                        source_period=30,
+                        source_divide_by=30.0,
+                        target_divide_by=divide_by,
+                        target_period=period
+                    )
+            elif clipping_clearsky_source == "ha_solcast_clearsky":
+                self.log("SolarAPI: Overlaying ClearSky data from Home Assistant integration")
+                ha_data = []
+                for argname in ["pv_clearsky_today", "pv_clearsky_tomorrow", "pv_clearsky_d3", "pv_clearsky_d4"]:
+                    entity_id = getattr(self, argname, None)
+                    if entity_id:
+                        data, _, _ = self.fetch_pv_datapoints(argname, entity_id)
+                        if data:
+                            ha_data += data
+                if ha_data:
+                    self.overlay_clearsky_data(
+                        pv_forecast_data,
+                        ha_data,
+                        value_field="pv_clearsky",
+                        source_period=period,
+                        source_divide_by=divide_by,
+                        target_divide_by=divide_by,
+                        target_period=period
+                    )
+            elif clipping_clearsky_source == "pv90_scaled":
+                self.log("SolarAPI: Overlaying ClearSky data explicitly disabled, PV90 will be scaled and used as base for clipping mitigation")
+            elif clipping_clearsky_source not in ["auto", "base", ""]:
+                self.log("Warn: SolarAPI: clipping_clearsky_source '{}' not configured properly, using base data".format(clipping_clearsky_source))
 
             # For the HA sensor path the divide_by was computed assuming 30-minute periods;
             # recalculate it using the actual detected period so that the per-minute kWh
