@@ -27,6 +27,7 @@ async def test_octopus_intelligent_devices(my_predbat):
     - Test 5: Future planned dispatch is kept in planned list
     - Test 6: Completed dispatches are parsed correctly
     - Test 7: Planned dispatch with missing start/end is skipped
+    - Test 8: In-progress flex dispatch not promoted to completed (issue #4114)
     """
     print("**** Running Octopus intelligent devices tests ****")
     failed = 0
@@ -385,6 +386,58 @@ async def test_octopus_intelligent_devices(my_predbat):
     else:
         print("ERROR: device-abc not found in result")
         failed += 1
+
+    # ------------------------------------------------------------------
+    # Test 8: In-progress flex planned dispatch is NOT promoted to completed (issue #4114)
+    # A flexPlannedDispatches entry that started a few minutes ago must stay in the planned
+    # list and must NOT be fabricated into completed_dispatches. Octopus routinely withdraws
+    # such provisional SMART flex slots; promoting them left permanent phantom cheap slots
+    # with no matching real (metered) dispatch.
+    # ------------------------------------------------------------------
+    print("\n*** Test 8: In-progress flex dispatch not promoted to completed ***")
+    api = make_api()
+
+    in_progress_start = (ref_now - timedelta(minutes=10)).strftime(DATE_TIME_STR_FORMAT)
+    in_progress_end = (ref_now + timedelta(minutes=20)).strftime(DATE_TIME_STR_FORMAT)
+    dispatch_data_in_progress = {
+        "flexPlannedDispatches": [
+            {
+                "start": in_progress_start,
+                "end": in_progress_end,
+                "energyAddedKwh": "0.367",
+                "type": "smart-charge",
+                "meta": {"source": "SMART"},  # no location, as flexPlannedDispatches carries no location
+            }
+        ],
+        "completedDispatches": [],
+    }
+
+    async def mock_query_in_progress(query, context, ignore_errors=False, returns_data=True):
+        if "get-intelligent-devices" in context:
+            return device_data
+        elif "get-intelligent-dispatches" in context:
+            return dispatch_data_in_progress
+        elif "get-intelligent-settings" in context:
+            return settings_data
+        return None
+
+    api.async_graphql_query = AsyncMock(side_effect=mock_query_in_progress)
+    result = await api.async_get_intelligent_devices("test-account", "device-abc")
+
+    if "device-abc" not in result:
+        print("ERROR: device-abc not found in result")
+        failed += 1
+    else:
+        planned = result["device-abc"].get("planned_dispatches", [])
+        completed = result["device-abc"].get("completed_dispatches", [])
+        if len(completed) != 0:
+            print(f"ERROR: In-progress flex dispatch was promoted to completed (got {len(completed)} completed): {completed}")
+            failed += 1
+        elif len(planned) != 1:
+            print(f"ERROR: Expected 1 planned dispatch (kept in planned), got {len(planned)}")
+            failed += 1
+        else:
+            print("PASS: In-progress flex dispatch kept in planned and not promoted to completed")
 
     if failed == 0:
         print("\n**** All Octopus intelligent devices tests PASSED ****")
