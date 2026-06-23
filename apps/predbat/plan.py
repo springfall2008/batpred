@@ -2460,6 +2460,7 @@ class Plan:
         new_metric, new_battery_value, new_cost, new_keep, new_cycle, new_carbon, new_import, new_export = self.run_prediction_metric(
             self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
         )
+        self.plan_write_debug(debug_mode, "plan_more_solar.html", self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
 
         if (new_metric - best_metric) <= self.export_more_solar_threshold:
             self.log("Export more solar enabled freeze export on {} idle solar window(s), metric {}{} (was {}{}, threshold {}{}) - keeping plan".format(added, dp2(new_metric), curr, dp2(best_metric), curr, self.export_more_solar_threshold, curr))
