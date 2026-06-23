@@ -32,6 +32,7 @@ from tests.test_rate_min_forward_calc import test_rate_min_forward_calc
 from tests.test_find_charge_curve import run_find_charge_curve_tests
 from tests.test_find_battery_size import run_find_battery_size_tests
 from tests.test_optimise_all_windows import run_optimise_all_windows_tests
+from tests.test_optimise_solar import run_optimise_solar_tests
 from tests.test_nordpool import run_nordpool_test
 from tests.test_futurerate_auto import test_futurerate_auto
 from tests.test_car_charging_smart import run_car_charging_smart_tests
@@ -328,6 +329,7 @@ def main():
         ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", False),
         ("load_ml", test_load_ml, "ML Load Forecaster tests (MLP, training, persistence, validation)", True),
         ("optimise_windows", run_optimise_all_windows_tests, "Optimise all windows tests", True),
+        ("optimise_solar", run_optimise_solar_tests, "Optimise export more solar tests", False),
         ("debug_cases", run_debug_cases, "Debug case file tests", True),
     ]
 

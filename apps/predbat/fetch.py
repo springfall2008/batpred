@@ -2416,6 +2416,8 @@ class Fetch:
         self.set_export_freeze_only = self.get_arg("set_export_freeze_only")
         self.set_discharge_during_charge = self.get_arg("set_discharge_during_charge")
         self.set_freeze_export_during_demand = self.get_arg("set_freeze_export_during_demand")
+        self.export_more_solar = self.get_arg("export_more_solar")
+        self.export_more_solar_threshold = self.get_arg("export_more_solar_threshold")
         # Mode
         self.predbat_mode = self.get_arg("mode")
         if self.predbat_mode == PREDBAT_MODE_OPTIONS[PREDBAT_MODE_CONTROL_SOC]:

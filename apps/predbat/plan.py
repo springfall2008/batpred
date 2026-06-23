@@ -2407,6 +2407,68 @@ class Plan:
             self.charge_limit_best = orig_charge_limit_best
             return html_data, json_data
 
+    def optimise_solar(self, best_metric, record_export_windows, debug_mode=False):
+        """
+        Export more solar optimisation.
+
+        Enables freeze export (export limit 99) on every currently idle export window that has
+        predicted PV generation, then simulates the resulting plan. The new plan is only kept if it
+        does not increase the overall metric by more than export_more_solar_threshold, otherwise the
+        original export limits are restored. This is an optimiser only pass - execution is unchanged
+        as the resulting freeze export slots are handled by the normal freeze export logic.
+        """
+        curr = self.currency_symbols[1]
+
+        # Freeze export slots only have an effect when export freeze is enabled
+        if not self.calculate_best_export or not self.set_export_freeze or not self.export_window_best:
+            return best_metric
+
+        pv_forecast_minute_step = self.prediction.pv_forecast_minute_step
+
+        # Snapshot the current export limits so we can revert if the new plan is too expensive
+        orig_export_limits_best = copy.deepcopy(self.export_limits_best)
+
+        added = 0
+        for window_n in range(record_export_windows):
+            window_start = self.export_window_best[window_n]["start"]
+            window_end = self.export_window_best[window_n]["end"]
+
+            # Skip windows outside the record period or with a manual override
+            if window_start >= (self.minutes_now + self.end_record):
+                continue
+            if window_start in self.manual_all_times:
+                continue
+
+            # Only enable currently idle (disabled) export windows
+            if self.export_limits_best[window_n] != 100.0:
+                continue
+
+            # Only enable windows where we expect to generate any solar to export
+            pv_period = 0
+            for minute in range(window_start - self.minutes_now, window_end - self.minutes_now, PREDICT_STEP):
+                pv_period += pv_forecast_minute_step.get(minute, 0)
+            if pv_period < 0.001:
+                continue
+
+            self.export_limits_best[window_n] = 99.0
+            added += 1
+
+        if not added:
+            return best_metric
+
+        # Simulate the export more solar plan
+        new_metric, new_battery_value, new_cost, new_keep, new_cycle, new_carbon, new_import, new_export = self.run_prediction_metric(
+            self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
+        )
+
+        if (new_metric - best_metric) <= self.export_more_solar_threshold:
+            self.log("Export more solar enabled freeze export on {} idle solar window(s), metric {}{} (was {}{}, threshold {}{}) - keeping plan".format(added, dp2(new_metric), curr, dp2(best_metric), curr, self.export_more_solar_threshold, curr))
+            return new_metric
+
+        self.log("Export more solar rejected - metric {}{} exceeds {}{} by more than threshold {}{}, reverting".format(dp2(new_metric), curr, dp2(best_metric), curr, self.export_more_solar_threshold, curr))
+        self.export_limits_best = orig_export_limits_best
+        return best_metric
+
     def optimise_swap_export(self, record_charge_windows, record_export_windows, drop=False, debug_mode=False):
         """
         Swap optimisation tries to move export windows later
@@ -3240,6 +3302,10 @@ class Plan:
         else:
             # Tweak plan (faster)
             best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import = self.tweak_plan(self.end_record, best_metric, best_keep)
+
+        # Export more solar - enable freeze export on idle solar windows if it doesn't cost too much
+        if self.export_more_solar:
+            best_metric = self.optimise_solar(best_metric, record_export_windows, debug_mode=debug_mode)
 
         self.plan_write_debug(debug_mode, "plan_raw.html", self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
 
