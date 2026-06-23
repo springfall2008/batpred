@@ -185,6 +185,11 @@ class GatewayMQTT(ComponentBase):
         self._last_telemetry_time = 0
         self._last_plan_data = None
         self._last_plan_publish_time = 0
+        # Entries and timezone of the last built plan, kept so the periodic re-publish
+        # can rebuild the protobuf with a fresh timestamp (re-sending the cached bytes
+        # would keep the original timestamp and the device would think the plan is stale)
+        self._last_plan_entries = None
+        self._last_plan_timezone = None
         self._plan_version = 0
         self._refresh_in_progress = False
         self._error_count = 0
@@ -210,6 +215,9 @@ class GatewayMQTT(ComponentBase):
         # Last read-only state sent to the gateway (None until the first send,
         # so the current state is always pushed once on startup)
         self._last_read_only = None
+        # Monotonic-ish timestamp of the last set_read_only send, used to force a
+        # periodic re-send so the gateway re-syncs even if a command was missed
+        self._last_read_only_sent_time = 0
 
         # Set once the first MQTT connection attempt has completed (success or failure)
         self._first_connection_attempted = False
@@ -400,13 +408,8 @@ class GatewayMQTT(ComponentBase):
             # Token refresh check
             await self._check_token_refresh()
 
-            # Re-publish plan if stale
-            if self._last_plan_data and self._mqtt_connected:
-                elapsed = time.time() - self._last_plan_publish_time
-                if elapsed > _PLAN_REPUBLISH_INTERVAL:
-                    await self._publish_raw(self.topic_schedule, self._last_plan_data, retain=True)
-                    self._last_plan_publish_time = time.time()
-                    self.log("Info: GatewayMQTT: Re-published execution plan (stale)")
+            # Re-publish the plan periodically so its embedded timestamp stays fresh
+            await self._republish_plan_if_stale()
 
             # Mark component as alive on successful housekeeping
             self.update_success_timestamp()
@@ -1119,19 +1122,25 @@ class GatewayMQTT(ComponentBase):
         Called on every run() cycle. Sends the current state once on startup (when
         _last_read_only is still None) and again on each subsequent transition, so the
         gateway firmware always knows whether PredBat is permitted to control the
-        inverter. The command is gateway-wide, so it carries no inverter serial. Gated
-        only on an active MQTT connection — it does not depend on auto-config, so the
-        state is established as early as possible.
+        inverter. To guard against the gateway losing sync (the command is not retained,
+        so a single missed message would leave it stale), the state is also re-sent at
+        least every 30 minutes even when unchanged. The command is gateway-wide, so it
+        carries no inverter serial. Gated only on an active MQTT connection — it does not
+        depend on auto-config, so the state is established as early as possible.
         """
         if not self._mqtt_connected:
             # Force a re-send after reconnect (command is not retained).
             self._last_read_only = None
             return
         read_only = bool(self.get_arg("set_read_only", False))
-        if read_only == self._last_read_only:
+        now = time.time()
+        changed = read_only != self._last_read_only
+        stale = now - self._last_read_only_sent_time >= 30 * 60
+        if not changed and not stale:
             return
         await self.publish_command("set_read_only", enable=read_only)
         self._last_read_only = read_only
+        self._last_read_only_sent_time = now
         self.log(f"Info: GatewayMQTT: set_read_only command sent (read_only={read_only})")
 
     async def _check_inverter_resets(self):
@@ -1165,17 +1174,44 @@ class GatewayMQTT(ComponentBase):
         if not self._plan_changed(plan_entries):
             return  # No change, skip publish
 
+        if not self._mqtt_connected:
+            # Re-queue so the next run() cycle retries once reconnected. Crucially, none
+            # of the publish state (version, timestamp, cached plan) is mutated here, so
+            # the periodic re-publish gate stays armed and fires immediately on reconnect.
+            self._pending_plan = (plan_entries, timezone_str)
+            self.log("Warn: GatewayMQTT: Not connected — plan queued for next publish")
+            return
+
         self._plan_version += 1
         data = self.build_execution_plan(plan_entries, plan_version=self._plan_version, timezone=timezone_str)
         self._last_plan_data = data
+        self._last_plan_entries = plan_entries
+        self._last_plan_timezone = timezone_str
         self._last_plan_publish_time = time.time()
 
-        if self._mqtt_connected:
-            await self._publish_raw(self.topic_schedule, data, retain=True)
-            self._last_published_plan = plan_entries
-            self.log(f"Info: GatewayMQTT: Published execution plan v{self._plan_version} ({len(plan_entries)} entries)")
-        else:
-            self.log("Warn: GatewayMQTT: Not connected — plan queued for next publish")
+        await self._publish_raw(self.topic_schedule, data, retain=True)
+        self._last_published_plan = plan_entries
+        self.log(f"Info: GatewayMQTT: Published execution plan v{self._plan_version} ({len(plan_entries)} entries)")
+
+    async def _republish_plan_if_stale(self):
+        """Re-publish the last plan periodically so its embedded timestamp stays fresh.
+
+        Called on every run() cycle. When more than _PLAN_REPUBLISH_INTERVAL has elapsed
+        since the last publish, the plan protobuf is rebuilt (which stamps a fresh
+        timestamp) and re-published. Rebuilding is essential: re-sending the cached bytes
+        would carry the original timestamp, so the device would still treat the plan as
+        stale. The version is left unchanged because the plan content has not changed.
+        Gated on an active MQTT connection and a previously built plan.
+        """
+        if self._last_plan_entries is None or self._last_plan_timezone is None or not self._mqtt_connected:
+            return
+        if time.time() - self._last_plan_publish_time <= _PLAN_REPUBLISH_INTERVAL:
+            return
+        data = self.build_execution_plan(self._last_plan_entries, plan_version=self._plan_version, timezone=self._last_plan_timezone)
+        await self._publish_raw(self.topic_schedule, data, retain=True)
+        self._last_plan_data = data
+        self._last_plan_publish_time = time.time()
+        self.log("Info: GatewayMQTT: Re-published execution plan (refreshed timestamp)")
 
     async def publish_command(self, command, **kwargs):
         """Build and publish a JSON command to the gateway.

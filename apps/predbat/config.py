@@ -2196,6 +2196,7 @@ APPS_SCHEMA = {
     "rates_export_override": {"type": "dict_list"},
     "days_previous": {"type": "integer_list"},
     "days_previous_weight": {"type": "float_list"},
+    "days_previous_auto": {"type": "boolean"},
     "forecast_hours": {"type": "integer"},
     "notify_devices": {"type": "string_list"},
     "battery_scaling": {"type": "sensor_list", "sensor_type": "float", "entries": "num_inverters", "modify": False},
