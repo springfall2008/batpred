@@ -2523,12 +2523,12 @@ class Plan:
                 if not self.allow_this_export_window(window_n):
                     continue
 
-                best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon, best_import = self.optimise_export(
+                new_soc, new_start, new_metric, new_cost, new_soc_min, new_soc_min_minute, new_keep, new_cycle, new_carbon, new_import = self.optimise_export(
                     window_n, record_export_windows, self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
                 )
-                self.export_limits_best[window_n] = best_soc
+                self.export_limits_best[window_n] = new_soc
                 self.export_window_best[window_n]["start_orig"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
-                self.export_window_best[window_n]["start"] = best_start
+                self.export_window_best[window_n]["start"] = new_start
                 re_optimised += 1
 
             # Simulate the final plan for this day on top of any days already kept and decide on the
