@@ -3079,6 +3079,47 @@ class TestCheckInverterResets:
         assert gw._published == []
         assert "CE123456789" not in gw._inverter_reset_done
 
+    def test_read_only_clears_done_set(self):
+        """Enabling read-only clears _inverter_reset_done so resets re-send once it is disabled."""
+        gw = self._make_gateway(read_only=True)
+        gw._suffix_to_serial["456789"] = "CE123456789"
+        gw._inverter_reset_done.add("CE123456789")  # already reset before read-only was enabled
+        self._run(gw._check_inverter_resets())
+        assert gw._published == []
+        assert gw._inverter_reset_done == set()
+
+    def test_reset_resent_after_read_only_disabled(self):
+        """A serial reset, then cleared by read-only, is reset again once read-only is disabled."""
+        gw = self._make_gateway()
+        gw._suffix_to_serial["456789"] = "CE123456789"
+
+        read_only_state = {"value": False}
+
+        def fake_get_arg(key, default=None):
+            if key == "set_read_only":
+                return read_only_state["value"]
+            return default
+
+        gw.get_arg = fake_get_arg
+
+        # Initial control-mode reset.
+        self._run(gw._check_inverter_resets())
+        assert len(gw._published) == 1
+        assert "CE123456789" in gw._inverter_reset_done
+
+        # Read-only enabled — done set is cleared, nothing new sent.
+        read_only_state["value"] = True
+        self._run(gw._check_inverter_resets())
+        assert len(gw._published) == 1
+        assert gw._inverter_reset_done == set()
+
+        # Read-only disabled again — reset is re-sent.
+        read_only_state["value"] = False
+        self._run(gw._check_inverter_resets())
+        assert len(gw._published) == 2
+        assert gw._published[1][0] == "inverter_reset"
+        assert gw._published[1][1]["serial"] == "CE123456789"
+
     def test_not_alive_skips_reset(self):
         """No reset is sent when is_alive() returns False (MQTT disconnected)."""
         gw = self._make_gateway(alive=False)

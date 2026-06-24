@@ -1150,7 +1150,10 @@ class GatewayMQTT(ComponentBase):
         not yet run, or set_read_only is active. Each serial is reset at most once per
         process lifetime (tracked in _inverter_reset_done).
         """
-        if not self.is_alive() or not self._auto_configured or self.get_arg("set_read_only", False):
+        if self.get_arg("set_read_only", False):
+            self._inverter_reset_done.clear()  # allow re-send if read-only is later disabled
+            return
+        if not self.is_alive() or not self._auto_configured:
             return
         for suffix, serial in self._suffix_to_serial.items():
             if serial not in self._inverter_reset_done:
