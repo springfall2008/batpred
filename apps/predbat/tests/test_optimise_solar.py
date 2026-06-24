@@ -27,6 +27,9 @@ def run_optimise_solar(
     rate_export=15.0,
     battery_size=10.0,
     battery_soc=5.0,
+    charge_window_best=None,
+    charge_limit_best=None,
+    expect_export_start=None,
 ):
     print("Starting optimise solar test {}".format(name))
     failed = False
@@ -57,27 +60,39 @@ def run_optimise_solar(
     my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step)
     my_predbat.debug_enable = True
 
-    # Empty charge plan, the export windows we are testing
-    charge_window_best = []
-    charge_limit_best = []
+    # Charge plan defaults to empty, but a charge slot can be supplied to test overlap handling
+    charge_window_best = charge_window_best if charge_window_best is not None else []
+    charge_limit_best = charge_limit_best if charge_limit_best is not None else []
     my_predbat.charge_window_best = charge_window_best
     my_predbat.charge_limit_best = charge_limit_best
     my_predbat.export_window_best = export_window_best
     my_predbat.export_limits_best = list(export_limits_best)
 
     # Baseline metric of the current plan
-    best_metric = my_predbat.run_prediction_metric(charge_limit_best, charge_window_best, export_window_best, my_predbat.export_limits_best, end_record=end_record)[0]
+    best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export = my_predbat.run_prediction_metric(charge_limit_best, charge_window_best, export_window_best, my_predbat.export_limits_best, end_record=end_record)
 
     # Run the export more solar optimisation
-    my_predbat.optimise_solar(best_metric, len(export_window_best))
+    my_predbat.optimise_solar(best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import, len(export_window_best))
 
     if len(expect_export_limit) != len(my_predbat.export_limits_best):
         print("ERROR: Expected {} export limits but got {}".format(len(expect_export_limit), len(my_predbat.export_limits_best)))
         failed = True
     else:
         for n in range(len(expect_export_limit)):
+            # None means "don't care" - used where the re-optimised value is not deterministic
+            if expect_export_limit[n] is None:
+                continue
             if expect_export_limit[n] != my_predbat.export_limits_best[n]:
                 print("ERROR: Expected export limit {} is {} but got {}".format(n, expect_export_limit[n], my_predbat.export_limits_best[n]))
+                failed = True
+
+    if expect_export_start is not None:
+        for n in range(len(expect_export_start)):
+            # None means "don't care" for this window's start
+            if expect_export_start[n] is None:
+                continue
+            if expect_export_start[n] != my_predbat.export_window_best[n]["start"]:
+                print("ERROR: Expected export window {} start {} but got {}".format(n, expect_export_start[n], my_predbat.export_window_best[n]["start"]))
                 failed = True
 
     return failed
@@ -145,6 +160,79 @@ def run_optimise_solar_tests(my_predbat):
         export_window_best=export_window_best,
         export_limits_best=[0.0, 100.0, 100.0],
         expect_export_limit=[0.0, 99.0, 99.0],
+        pv_amount=3.0,
+        threshold=100.0,
+    )
+
+    # Windows spanning two calendar days are each considered independently
+    # minutes_now is midday so the plan horizon straddles two calendar days (day boundary at +720)
+    multi_day_window_best = [
+        {"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 30, "average": 15.0},
+        {"start": my_predbat.minutes_now + 30, "end": my_predbat.minutes_now + 60, "average": 15.0},
+        {"start": my_predbat.minutes_now + 720, "end": my_predbat.minutes_now + 750, "average": 15.0},
+        {"start": my_predbat.minutes_now + 750, "end": my_predbat.minutes_now + 780, "average": 15.0},
+    ]
+    failed |= run_optimise_solar(
+        "multi_day_keep",
+        my_predbat,
+        export_window_best=multi_day_window_best,
+        export_limits_best=[100.0, 100.0, 100.0, 100.0],
+        expect_export_limit=[99.0, 99.0, 99.0, 99.0],
+        pv_amount=3.0,
+        threshold=100.0,
+    )
+
+    # A force export slot that starts after the first solar of the day is re-optimised once the
+    # freeze export is added. The idle window becomes freeze export and the now-unprofitable force
+    # export is removed (limit goes from 0 back to 100), confirming the re-optimisation step trims it.
+    force_export_window_best = [
+        {"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 30, "average": 15.0},
+        {"start": my_predbat.minutes_now + 60, "end": my_predbat.minutes_now + 90, "average": 15.0},
+    ]
+    failed |= run_optimise_solar(
+        "force_export_after_solar",
+        my_predbat,
+        export_window_best=force_export_window_best,
+        export_limits_best=[100.0, 0.0],
+        expect_export_limit=[99.0, 100.0],
+        pv_amount=3.0,
+        threshold=100.0,
+        battery_soc=8.0,
+    )
+
+    # An idle export window that overlaps a planned charge slot must NOT be turned into freeze export
+    # (we can't charge and freeze export at the same time). The second window is free of charge.
+    overlap_window_best = [
+        {"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 30, "average": 15.0},
+        {"start": my_predbat.minutes_now + 30, "end": my_predbat.minutes_now + 60, "average": 15.0},
+    ]
+    overlap_charge_window_best = [
+        {"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 30, "average": 5.0},
+    ]
+    failed |= run_optimise_solar(
+        "skip_charge_overlap",
+        my_predbat,
+        export_window_best=overlap_window_best,
+        export_limits_best=[100.0, 100.0],
+        expect_export_limit=[100.0, 99.0],
+        pv_amount=3.0,
+        threshold=100.0,
+        charge_window_best=overlap_charge_window_best,
+        charge_limit_best=[my_predbat.soc_max],
+    )
+
+    # An export window that is already freeze export but was trimmed earlier (start moved later than
+    # start_orig) is restored to its full original size to cover the whole solar period.
+    trimmed_window_best = [
+        {"start": my_predbat.minutes_now + 30, "start_orig": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 15.0},
+    ]
+    failed |= run_optimise_solar(
+        "restore_trimmed_freeze",
+        my_predbat,
+        export_window_best=trimmed_window_best,
+        export_limits_best=[99.0],
+        expect_export_limit=[99.0],
+        expect_export_start=[my_predbat.minutes_now],
         pv_amount=3.0,
         threshold=100.0,
     )
