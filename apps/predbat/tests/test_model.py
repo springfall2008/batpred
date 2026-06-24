@@ -1986,6 +1986,173 @@ def run_model_tests(my_predbat):
         assert_iboost_running_solar=True,
     )
 
+    # Opportunistic solar (sun-following) car charging diversion model
+    reset_rates(my_predbat, import_rate, export_rate)
+    reset_inverter(my_predbat)
+    # Baseline: no solar car -> all PV charges the home battery (battery rate caps at 1kW => 24kWh/day)
+    failed |= simple_scenario("car_solar_off", my_predbat, 0, 1.0, assert_final_metric=0, assert_final_soc=24, with_battery=True, battery_size=100, battery_soc=0, battery_rate_max_charge=1.0)
+    # Solar car plugged in, capped at 1kW -> all PV diverted off the top to the car, home battery stays empty
+    failed |= simple_scenario(
+        "car_solar_divert",
+        my_predbat,
+        0,
+        1.0,
+        assert_final_metric=0,
+        assert_final_soc=0,
+        with_battery=True,
+        battery_size=100,
+        battery_soc=0,
+        battery_rate_max_charge=1.0,
+        car_charging_solar=True,
+        car_solar_max_power=1.0,
+        car_solar_limit=100,
+        assert_final_car_solar=24,
+    )
+    # No PV at night -> nothing diverted, behaves like the baseline-empty case
+    failed |= simple_scenario(
+        "car_solar_night",
+        my_predbat,
+        0,
+        0,
+        assert_final_metric=0,
+        assert_final_soc=0,
+        with_battery=True,
+        battery_size=100,
+        battery_soc=0,
+        battery_rate_max_charge=1.0,
+        car_charging_solar=True,
+        car_solar_max_power=1.0,
+        car_solar_limit=100,
+        assert_final_car_solar=0,
+    )
+    # Home battery priority threshold (min_soc 50%) not reached (battery only gets to 24%) -> no diversion
+    failed |= simple_scenario(
+        "car_solar_min_soc_block",
+        my_predbat,
+        0,
+        1.0,
+        assert_final_metric=0,
+        assert_final_soc=24,
+        with_battery=True,
+        battery_size=100,
+        battery_soc=0,
+        battery_rate_max_charge=1.0,
+        car_charging_solar=True,
+        car_solar_max_power=1.0,
+        car_solar_min_soc=50,
+        car_solar_limit=100,
+        assert_final_car_solar=0,
+    )
+    # Charger minimum start power (2kW) not reached by 1kW of surplus -> no diversion
+    failed |= simple_scenario(
+        "car_solar_min_power_block",
+        my_predbat,
+        0,
+        1.0,
+        assert_final_metric=0,
+        assert_final_soc=24,
+        with_battery=True,
+        battery_size=100,
+        battery_soc=0,
+        battery_rate_max_charge=1.0,
+        car_charging_solar=True,
+        car_solar_max_power=7.4,
+        car_solar_min_power=2.0,
+        car_solar_limit=100,
+        assert_final_car_solar=0,
+    )
+    # Limited by remaining car capacity to the limit (10 kWh) -> 10 kWh to car, the rest to the home battery
+    failed |= simple_scenario(
+        "car_solar_capacity_cap",
+        my_predbat,
+        0,
+        1.0,
+        assert_final_metric=0,
+        assert_final_soc=14,
+        with_battery=True,
+        battery_size=100,
+        battery_soc=0,
+        battery_rate_max_charge=1.0,
+        car_charging_solar=True,
+        car_solar_max_power=1.0,
+        car_solar_limit=10,
+        assert_final_car_solar=10,
+    )
+    # Only the surplus after the house load is diverted: 2kW PV - 1kW load = 1kW to the car (not the full 2kW)
+    failed |= simple_scenario(
+        "car_solar_load_subtracted",
+        my_predbat,
+        1.0,
+        2.0,
+        assert_final_metric=0,
+        assert_final_soc=0,
+        with_battery=True,
+        battery_size=100,
+        battery_soc=0,
+        battery_rate_max_charge=1.0,
+        car_charging_solar=True,
+        car_solar_max_power=2.0,
+        car_solar_limit=100,
+        assert_final_car_solar=24,
+    )
+    # Discrete charge steps (2kW): 9kW surplus -> charges at 8kW (4 + 2*2), leaving 1kW to the home battery.
+    # The 1kW remainder filling the battery to 24kWh is the robust proof of quantisation (continuous would give 0).
+    # car_solar reports the start-of-slot cumulative (one PREDICT_STEP behind the final car SoC, like predict_iboost_best).
+    failed |= simple_scenario(
+        "car_solar_power_step",
+        my_predbat,
+        0,
+        9.0,
+        assert_final_metric=0,
+        assert_final_soc=24,
+        with_battery=True,
+        battery_size=100,
+        battery_soc=0,
+        battery_rate_max_charge=1.0,
+        car_charging_solar=True,
+        car_solar_max_power=11.0,
+        car_solar_min_power=4.0,
+        car_solar_power_step=2.0,
+        car_solar_limit=1000,
+        assert_final_car_solar=191.33,
+    )
+    # Solar limit decoupled from the grid plan target: solar caps at car_solar_limit (60), NOT car_charging_limit (80)
+    failed |= simple_scenario(
+        "car_solar_limit_split",
+        my_predbat,
+        0,
+        3.0,
+        assert_final_metric=0,
+        assert_final_soc=12,
+        with_battery=True,
+        battery_size=100,
+        battery_soc=0,
+        battery_rate_max_charge=3.0,
+        inverter_limit=10.0,
+        car_charging_solar=True,
+        car_solar_max_power=3.0,
+        car_limit=80,
+        car_solar_limit=60,
+        assert_final_car_solar=60,
+    )
+    # Solar-first ordering: with a planned grid slot AND solar, the surplus is taken before the grid load is added,
+    # so solar gets the full 0.6kW surplus (=> 14.4 kWh). Grid-first would subtract the 0.3kW car load first (=> 7.2).
+    failed |= simple_scenario(
+        "car_solar_first_order",
+        my_predbat,
+        0,
+        0.6,
+        assert_final_metric=import_rate * 7.2,
+        assert_final_soc=0,
+        with_battery=False,
+        charge_car=0.3,
+        car_charging_solar=True,
+        car_solar_max_power=0.7,
+        car_limit=1000,
+        car_solar_limit=1000,
+        assert_final_car_solar=14.4,
+    )
+
     # PV AC limit tests (AC-coupled / non-hybrid inverters only)
     reset_rates(my_predbat, import_rate, export_rate)
     reset_inverter(my_predbat)

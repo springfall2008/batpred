@@ -566,6 +566,13 @@ def simple_scenario(
     charge_car=0,
     car_charging_from_battery=True,
     car_energy_reported_load=True,
+    car_charging_solar=False,
+    car_solar_max_power=7.4,
+    car_solar_min_power=0.0,
+    car_solar_power_step=0.0,
+    car_solar_min_soc=0.0,
+    car_solar_limit=100.0,
+    assert_final_car_solar=None,
     iboost_solar=False,
     iboost_solar_excess=False,
     iboost_gas=False,
@@ -703,6 +710,15 @@ def simple_scenario(
     my_predbat.best_soc_keep_weight = keep_weight
     my_predbat.car_charging_soc[0] = car_soc
     my_predbat.car_charging_limit[0] = car_limit
+    my_predbat.car_charging_solar[0] = car_charging_solar
+    my_predbat.car_charging_plugged[0] = car_charging_solar
+    my_predbat.car_charging_solar_max_power[0] = car_solar_max_power
+    my_predbat.car_charging_solar_min_power[0] = car_solar_min_power
+    my_predbat.car_charging_solar_power_step[0] = car_solar_power_step
+    my_predbat.car_charging_solar_min_soc = car_solar_min_soc
+    if car_charging_solar:
+        # Solar diversion cap (separate from car_charging_limit, the grid plan target)
+        my_predbat.car_charging_solar_limit[0] = car_solar_limit
     my_predbat.inverter_can_charge_during_export = inverter_can_charge_during_export
     my_predbat.charge_scaling10 = charge_scaling10
 
@@ -734,9 +750,14 @@ def simple_scenario(
         pv10_step[minute] = pv_amount / (60 / 5) if pv10 else 0
         load10_step[minute] = load_amount / (60 / 5) if pv10 else 0
 
-    if charge_car:
+    if charge_car or car_charging_solar:
         my_predbat.num_cars = 1
-        my_predbat.car_charging_slots[0] = [{"start": my_predbat.minutes_now, "end": my_predbat.forecast_minutes + my_predbat.minutes_now, "kwh": charge_car * my_predbat.forecast_minutes / 60.0}]
+        if charge_car:
+            # Planned (grid) charging slot spanning the horizon; combine with car_charging_solar to test coexistence
+            my_predbat.car_charging_slots[0] = [{"start": my_predbat.minutes_now, "end": my_predbat.forecast_minutes + my_predbat.minutes_now, "kwh": charge_car * my_predbat.forecast_minutes / 60.0}]
+        else:
+            # Opportunistic solar car with no planned grid slots, diversion modelled in the prediction
+            my_predbat.car_charging_slots[0] = []
     else:
         my_predbat.num_cars = 0
         my_predbat.car_charging_slots[0] = []
@@ -837,6 +858,13 @@ def simple_scenario(
         if not ignore_failed:
             print("ERROR: iBoost running full should be {}".format(assert_iboost_running_full))
         failed = True
+
+    if assert_final_car_solar is not None:
+        total_car_solar = prediction.predict_car_solar_best[max(prediction.predict_car_solar_best.keys())] if prediction.predict_car_solar_best else 0
+        if abs(total_car_solar - assert_final_car_solar) >= 0.1:
+            if not ignore_failed:
+                print("ERROR: Final car solar {} should be {}".format(total_car_solar, assert_final_car_solar))
+            failed = True
 
     if save != "none":
         total_clipped = prediction.predict_clipped_best[max(prediction.predict_clipped_best.keys())] if prediction.predict_clipped_best else 0
