@@ -2652,10 +2652,36 @@ class Octopus:
 
         return rate_data
 
-    def fetch_octopus_sessions(self):
+    def _saving_event_conflicts_axle(self, start_time, end_time, axle_sessions):
+        """
+        Return True if the saving session [start_time, end_time) overlaps any Axle VPP session
+        """
+        if not axle_sessions or start_time is None or end_time is None:
+            return False
+        for axle_session in axle_sessions:
+            axle_start = axle_session.get("start_time")
+            axle_end = axle_session.get("end_time")
+            if not axle_start or not axle_end:
+                continue
+            try:
+                axle_start = str2time(axle_start)
+                axle_end = str2time(axle_end)
+            except (ValueError, TypeError):
+                continue
+            # Standard half-open interval overlap test
+            if start_time < axle_end and axle_start < end_time:
+                return True
+        return False
+
+    def fetch_octopus_sessions(self, axle_sessions=None):
         """
         Fetch the Octopus saving/free sessions
+
+        Available saving session events that overlap an Axle VPP session are not auto-joined,
+        so Predbat does not commit to two conflicting events for the same period.
         """
+        if axle_sessions is None:
+            axle_sessions = []
 
         # Octopus free session
         octopus_free_slots = []
@@ -2720,6 +2746,10 @@ class Octopus:
 
                 available_events = self.get_state_wrapper(entity_id=entity_id, attribute="available_events")
 
+            if available_events and not self.get_arg("octopus_saving_auto_join", True):
+                self.log("Octopus: Saving session auto-join is disabled, not joining available events")
+                available_events = []
+
             if available_events:
                 # Only try to join every 2 hours to avoid spamming if it fails
                 if not self.octopus_last_joined_try or (self.now_utc - self.octopus_last_joined_try).total_seconds() > 2 * 60 * 60:
@@ -2734,6 +2764,10 @@ class Octopus:
                             saving_rate = octopoints_kwh / octopoints_per_penny  # Octopoints per pence
                         else:
                             saving_rate = saving_rate  # Use default if not specified
+                        # Do not auto-join a saving session that overlaps an Axle VPP session - we cannot honour both for the same period
+                        if self._saving_event_conflicts_axle(start_time, end_time, axle_sessions):
+                            self.log("Octopus: Skipping saving event code {} {}-{} - conflicts with an Axle VPP session".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M")))
+                            continue
                         if code:  # Join the new Octopus saving event and send an alert
                             self.log("Octopus: Joining Octopus saving event code {} {}-{} at rate {} p/kWh".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
                             entity_id_join = self.get_arg("octopus_saving_session_join", indirect=False)
