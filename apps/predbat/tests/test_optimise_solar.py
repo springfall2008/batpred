@@ -30,6 +30,8 @@ def run_optimise_solar(
     charge_window_best=None,
     charge_limit_best=None,
     expect_export_start=None,
+    car_charging_slots=None,
+    car_charging_from_battery=False,
 ):
     print("Starting optimise solar test {}".format(name))
     failed = False
@@ -44,6 +46,12 @@ def run_optimise_solar(
     my_predbat.soc_kw = battery_soc
     my_predbat.reserve = 0.5
     my_predbat.manual_all_times = set()
+
+    # Car charging defaults to none, but a car charging slot can be supplied to test overlap handling
+    car_charging_slots = car_charging_slots if car_charging_slots is not None else []
+    my_predbat.num_cars = 1 if car_charging_slots else 0
+    my_predbat.car_charging_slots = [car_charging_slots]
+    my_predbat.car_charging_from_battery = car_charging_from_battery
 
     reset_rates(my_predbat, rate_import, rate_export)
     update_rates_export(my_predbat, export_window_best)
@@ -219,6 +227,40 @@ def run_optimise_solar_tests(my_predbat):
         threshold=100.0,
         charge_window_best=overlap_charge_window_best,
         charge_limit_best=[my_predbat.soc_max],
+    )
+
+    # An idle export window that overlaps a car charging slot must NOT be turned into freeze export
+    # (freeze export disables charging so the battery can't be topped up for the car). The second
+    # window is free of any car charging slot and is still converted.
+    car_overlap_window_best = [
+        {"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 30, "average": 15.0},
+        {"start": my_predbat.minutes_now + 30, "end": my_predbat.minutes_now + 60, "average": 15.0},
+    ]
+    car_charging_slots = [
+        {"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 30, "kwh": 5.0},
+    ]
+    failed |= run_optimise_solar(
+        "skip_car_overlap",
+        my_predbat,
+        export_window_best=car_overlap_window_best,
+        export_limits_best=[100.0, 100.0],
+        expect_export_limit=[100.0, 99.0],
+        pv_amount=3.0,
+        threshold=100.0,
+        car_charging_slots=car_charging_slots,
+    )
+
+    # When the car is allowed to charge from the battery the car slot does not block freeze export
+    failed |= run_optimise_solar(
+        "car_overlap_allowed_from_battery",
+        my_predbat,
+        export_window_best=car_overlap_window_best,
+        export_limits_best=[100.0, 100.0],
+        expect_export_limit=[99.0, 99.0],
+        pv_amount=3.0,
+        threshold=100.0,
+        car_charging_slots=car_charging_slots,
+        car_charging_from_battery=True,
     )
 
     # An export window that is already freeze export but was trimmed earlier (start moved later than

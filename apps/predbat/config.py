@@ -706,6 +706,12 @@ CONFIG_ITEMS = [
         "default": True,
     },
     {
+        "name": "octopus_saving_auto_join",
+        "friendly_name": "Octopus Saving Session Auto Join",
+        "type": "switch",
+        "default": True,
+    },
+    {
         "name": "octopus_intelligent_ignore_unplugged",
         "friendly_name": "Ignore Intelligent slots when car is unplugged",
         "type": "switch",

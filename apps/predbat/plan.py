@@ -2648,6 +2648,11 @@ class Plan:
                 if hit_charge >= 0 and self.charge_limit_best[hit_charge] != 0:
                     continue
 
+                # Don't freeze export over a car charging slot - freeze export disables charging so the
+                # battery can't be topped up for the car, unless the car is allowed to charge from the battery
+                if not self.car_charging_from_battery and self.hit_car_window(window_start, window_end):
+                    continue
+
                 # Only enable windows where we expect to generate any solar to export
                 pv_period = 0
                 for minute in range(window_start - self.minutes_now, window_end - self.minutes_now, PREDICT_STEP):

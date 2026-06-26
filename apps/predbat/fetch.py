@@ -950,9 +950,10 @@ class Fetch:
             # Basic rates defined by user over time
             self.rate_export = self.basic_rates(self.get_arg("rates_export", [], indirect=False), "rates_export")
 
-        # Fetch octopus saving sessions and free sessions
-        self.octopus_free_slots, self.octopus_saving_slots = self.fetch_octopus_sessions()
+        # Fetch Axle sessions first so Octopus auto-join can skip saving sessions that overlap an Axle VPP session
         self.axle_sessions = fetch_axle_sessions(self)
+        # Fetch octopus saving sessions and free sessions
+        self.octopus_free_slots, self.octopus_saving_slots = self.fetch_octopus_sessions(self.axle_sessions)
 
         # Standing charge
         self.metric_standing_charge = self.get_arg("metric_standing_charge", 0.0) * 100.0
