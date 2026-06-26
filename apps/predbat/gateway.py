@@ -222,6 +222,10 @@ class GatewayMQTT(ComponentBase):
         # Set once the first MQTT connection attempt has completed (success or failure)
         self._first_connection_attempted = False
 
+        # Verbose telemetry/command logging for debugging. Enable by setting
+        # `gateway_debug: True` in apps.yaml; off by default to avoid log spam.
+        self._debug = bool(self.args.get("gateway_debug", False)) if isinstance(self.args, dict) else False
+
         # Register for plan execution hook so we receive plan updates generically
         if hasattr(self.base, "register_hook"):
             self.base.register_hook("on_plan_executed", self._on_plan_executed)
@@ -335,7 +339,6 @@ class GatewayMQTT(ComponentBase):
         # Cap at 6 entries (firmware PlanEntry entries[6] fixed array)
         MAX_PLAN_ENTRIES = 6
         if len(plan_entries) > MAX_PLAN_ENTRIES:
-            self.log(f"Warn: GatewayMQTT: Plan has {len(plan_entries)} entries, capping to {MAX_PLAN_ENTRIES}")
             plan_entries = plan_entries[:MAX_PLAN_ENTRIES]
 
         self.log(f"Info: GatewayMQTT: Plan entries ({len(plan_entries)}): " + ", ".join(f"mode={e['mode']} {e['start_hour']:02d}:{e['start_minute']:02d}-{e['end_hour']:02d}:{e['end_minute']:02d}" for e in plan_entries))
@@ -513,6 +516,30 @@ class GatewayMQTT(ComponentBase):
             self.log(f"Warn: GatewayMQTT: Error handling message on {topic}: {e}")
             self.log(f"Warn: {traceback.format_exc()}")
 
+    def _debug_dump(self, label, message=None, raw=None, message_type=None):
+        """Log a protobuf message as readable text when debug logging is enabled.
+
+        Pass an already-decoded `message`, or `raw` bytes plus a `message_type` to
+        decode them. The raw length is logged as a size reference when provided.
+
+        Args:
+            label: Short description of what is being dumped (e.g. "RX telemetry").
+            message: A decoded protobuf message to render as text (optional).
+            raw: Optional raw bytes, whose length is logged for size reference.
+            message_type: Protobuf class used to decode `raw` when `message` is None.
+        """
+        if not self._debug:
+            return
+        try:
+            if message is None and raw is not None and message_type is not None:
+                message = message_type()
+                message.ParseFromString(raw)
+            size = f" ({len(raw)} bytes)" if raw is not None else ""
+            text = str(message).strip()
+            self.log(f"Debug: GatewayMQTT: {label}{size}:\n{text}")
+        except Exception as e:
+            self.log(f"Warn: GatewayMQTT: failed to dump {label}: {e}")
+
     def _process_telemetry(self, data):
         """Decode telemetry protobuf and inject per-inverter entities.
 
@@ -526,6 +553,8 @@ class GatewayMQTT(ComponentBase):
             self._error_count += 1
             self.log(f"Warn: GatewayMQTT: Failed to decode telemetry: {e}")
             return
+
+        self._debug_dump("RX telemetry", status, raw=data)
 
         if len(status.inverters) == 0:
             return
@@ -579,9 +608,12 @@ class GatewayMQTT(ComponentBase):
             suffix = inv.serial[-6:].lower() if len(inv.serial) > 6 else inv.serial.lower()
             self._inject_inverter_entities(inv, suffix)
 
-        # EMS aggregate entities (when type is GIVENERGY_EMS)
-        inv0 = status.inverters[0]
-        if inv0.type == pb.INVERTER_TYPE_GIVENERGY_EMS and inv0.ems.num_inverters > 0:
+        # EMS aggregate entities (when a GIVENERGY_EMS unit is present). The EMS is not
+        # guaranteed to be status.inverters[0] — discovery order is unstable (see the
+        # 2026-06-04 incident note in automatic_config) — so locate it by type, mirroring
+        # the config path which binds inverters = ems_units[:1].
+        inv0 = next((inv for inv in status.inverters if inv.type == pb.INVERTER_TYPE_GIVENERGY_EMS), None)
+        if inv0 is not None and inv0.ems.num_inverters > 0:
             pfx = f"{self.prefix}_gateway"
             self.dashboard_item(f"sensor.{pfx}_ems_total_soc", inv0.ems.total_soc, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ems_total_soc", {}), app="gateway")
             self.dashboard_item(f"sensor.{pfx}_ems_total_charge", inv0.ems.total_charge_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ems_total_charge", {}), app="gateway")
@@ -1192,6 +1224,7 @@ class GatewayMQTT(ComponentBase):
         self._last_plan_timezone = timezone_str
         self._last_plan_publish_time = time.time()
 
+        self._debug_dump(f"TX execution plan v{self._plan_version}", raw=data, message_type=pb.ExecutionPlan)
         await self._publish_raw(self.topic_schedule, data, retain=True)
         self._last_published_plan = plan_entries
         self.log(f"Info: GatewayMQTT: Published execution plan v{self._plan_version} ({len(plan_entries)} entries)")
@@ -1211,6 +1244,7 @@ class GatewayMQTT(ComponentBase):
         if time.time() - self._last_plan_publish_time <= _PLAN_REPUBLISH_INTERVAL:
             return
         data = self.build_execution_plan(self._last_plan_entries, plan_version=self._plan_version, timezone=self._last_plan_timezone)
+        self._debug_dump("TX execution plan (re-publish)", raw=data, message_type=pb.ExecutionPlan)
         await self._publish_raw(self.topic_schedule, data, retain=True)
         self._last_plan_data = data
         self._last_plan_publish_time = time.time()
