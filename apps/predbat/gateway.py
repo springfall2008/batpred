@@ -224,7 +224,11 @@ class GatewayMQTT(ComponentBase):
 
         # Verbose telemetry/command logging for debugging. Enable by setting
         # `gateway_debug: True` in apps.yaml; off by default to avoid log spam.
-        self._debug = bool(self.args.get("gateway_debug", False)) if isinstance(self.args, dict) else False
+        if isinstance(self.args, dict):
+            debug_val = self.args.get("gateway_debug", False)
+            self._debug = str(debug_val).strip().lower() in ["on", "true", "yes", "enabled", "enable", "connected", "1"]
+        else:
+            self._debug = False
 
         # Register for plan execution hook so we receive plan updates generically
         if hasattr(self.base, "register_hook"):
