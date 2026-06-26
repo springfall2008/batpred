@@ -2748,8 +2748,9 @@ class Octopus:
 
             if available_events and not self.get_arg("octopus_saving_auto_join", True):
                 self.log("Octopus: Saving session auto-join is disabled, not joining available events")
+                # Clear the 2h throttle so re-enabling auto-join can take effect immediately
+                self.octopus_last_joined_try = None
                 available_events = []
-
             if available_events:
                 # Only try to join every 2 hours to avoid spamming if it fails
                 if not self.octopus_last_joined_try or (self.now_utc - self.octopus_last_joined_try).total_seconds() > 2 * 60 * 60:
