@@ -2404,6 +2404,9 @@ class Plan:
                     )
                 )
                 window["start"] = window_start_orig
+                rate_values = [self.rate_export[minute] for minute in range(window["start"], window["end"], PREDICT_STEP) if minute in self.rate_export]
+                if rate_values:
+                    window["average"] = dp2(sum(rate_values) / len(rate_values))
 
     def prune_export_windows_below_threshold(self, export_limits_best, export_window_best):
         """

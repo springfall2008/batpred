@@ -391,14 +391,14 @@ def test_restore_export_window_above_threshold(my_predbat):
     setup(my_predbat)
     my_predbat.rate_best_cost_threshold_export = 10.0
     my_predbat.rate_export = {
-        720: 12.0,
-        725: 12.0,
-        730: 12.0,
-        735: 12.0,
-        740: 12.0,
-        745: 12.0,
+        720: 11.0,
+        725: 13.0,
+        730: 15.0,
+        735: 17.0,
+        740: 19.0,
+        745: 21.0,
     }
-    my_predbat.export_window_best = [make_window(740, 750, average=12.0)]
+    my_predbat.export_window_best = [make_window(740, 750, average=20.0)]
     my_predbat.export_window_best[0]["start_orig"] = 720
     my_predbat.export_limits_best = [50.0]
 
@@ -406,6 +406,10 @@ def test_restore_export_window_above_threshold(my_predbat):
 
     if my_predbat.export_window_best[0]["start"] != 720:
         print("ERROR: Expected export window start to restore to 720 but got {}".format(my_predbat.export_window_best[0]["start"]))
+        failed = True
+
+    if my_predbat.export_window_best[0]["average"] != 16.0:
+        print("ERROR: Expected restored export window average to be 16.0 but got {}".format(my_predbat.export_window_best[0]["average"]))
         failed = True
 
     if not failed:
