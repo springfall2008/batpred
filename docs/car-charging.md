@@ -306,7 +306,7 @@ To have Predbat plan for the gateway charger as a car, enable it in `apps.yaml`:
   gateway_evc_automatic: true
 ```
 
-When enabled, Predbat registers the charger as a car and maps the EV entities above onto the standard `car_charging_*` settings, so the normal [Predbat-led car charging](#predbat-led-charging) planning applies. The charge rate tracks the `sensor.predbat_gateway_ev_charge_rate` capability sensor. The car's battery size and target charge level are taken from your existing `car_charging_battery_size` and `car_charging_limit` settings (the charger cannot report them). Registration is conservative: it only happens when no car is already configured (`num_cars` is 0) and never overwrites an existing car setup - if you already have a car configured, map the gateway charger to it manually instead.
+When enabled, Predbat registers the charger as a car and maps the EV entities above onto the standard `car_charging_*` settings, so the normal [Predbat-led car charging](#predbat-led-charging) planning applies. The charge rate tracks the `sensor.predbat_gateway_ev_charge_rate` capability sensor. The car's battery size and target charge level are taken from your existing `car_charging_battery_size` and `car_charging_limit` settings (the charger cannot report them).
 
 To also have Predbat send the plan to the charger (so the EVC charges according to Predbat's schedule), add a second flag:
 
@@ -315,7 +315,7 @@ To also have Predbat send the plan to the charger (so the EVC charges according 
   gateway_evc_control: true
 ```
 
-When `gateway_evc_control` is enabled, Predbat checks once per minute whether the current time falls inside one of the planned car-charging windows (from `binary_sensor.predbat_car_charging_slot`). On each state transition it sends a `SetChargingProfile` command to the EVC via MQTT — the configured max current to start charging, zero to stop. This means the charger responds within a minute of a window boundary rather than relying on a schedule that must be reprogrammed each time the plan changes.
+When `gateway_evc_control` is enabled, Predbat checks once per minute whether the current time falls inside one of the planned car-charging windows (from `binary_sensor.predbat_car_charging_slot`). On each state transition it sends OCPP commands to the EVC via MQTT — `SetChargingProfile` (at the configured max current) followed by `RemoteStartTransaction` to begin a session, or `RemoteStopTransaction` to end one. This means the charger responds within a minute of a window boundary rather than relying on a schedule that must be reprogrammed each time the plan changes.
 
 `car_charging_now` is omitted from the auto-config when `gateway_evc_control=True` to prevent a feedback loop (an active EVC session would otherwise force an extra slot at the current time, conflicting with the boundaries Predbat is trying to enforce).
 
