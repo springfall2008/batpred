@@ -159,10 +159,10 @@ class GatewayMQTT(ComponentBase):
             gateway_evc_automatic: When True, automatically register a connected OCPP EV charger as a
                 PredBat car so the optimizer plans for it. Off by default so existing gateway users are
                 unaffected. Set to ``true`` in apps.yaml to enable.
-            gateway_evc_control: When True (requires gateway_evc_automatic), read the PredBat car-charging
-                plan each cycle and send the charge windows as a schedule to the EVC via MQTT. The EVC
-                executes the schedule autonomously. When enabled, car_charging_now is omitted from
-                auto-config to prevent a feedback loop.
+            gateway_evc_control: When True (requires gateway_evc_automatic), check once per minute whether
+                the current time falls inside a planned car-charging window and send RemoteStartTransaction
+                plus SetChargingProfile on window entry, or RemoteStopTransaction on window exit. When
+                enabled, car_charging_now is omitted from auto-config to prevent a feedback loop.
             **kwargs: Additional keyword arguments (ignored).
         """
         self.gateway_device_id = gateway_device_id
