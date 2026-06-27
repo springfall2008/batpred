@@ -478,10 +478,10 @@ These settings can be found in the Home Assistant Predbat Configuration panel, d
 
 - **`clipping_buffer_enable`**: The master switch. Turns the entire clipping buffer feature on or off.
 - **`clipping_clearsky_source`**: Determines where Predbat gets its clear-sky (theoretical maximum) data. Options include:
-  * `auto`: Automatically select the best available source from the options below.
-  * `ha_solcast_clearsky`: Integrates with the HACS [Solcast Solar integration](https://github.com/BJReplay/ha-solcast-solar) (requires separate installation, but uses existing sensors).
-  * `solcast_api`: Direct native Solcast API integration (only works if your Solcast API key has clear-sky access).
-  * `openmeteo`: Uses the free Open-Meteo API as a fallback source.
+    - `auto`: Automatically select the best available source from the options below.
+    - `ha_solcast_clearsky`: Integrates with the HACS [Solcast Solar integration](https://github.com/BJReplay/ha-solcast-solar) (requires separate installation, but uses existing sensors).
+    - `solcast_api`: Direct native Solcast API integration (only works if your Solcast API key has clear-sky access).
+    - `openmeteo`: Uses the free Open-Meteo API as a fallback source.
 - **`clipping_auto_tune`**: Automatically learns the safety buffer margins from past clipping behavior. When enabled, it dynamically tunes and auto-populates `clipping_amplification`, `clipping_buffer_start_offset`, and `clipping_buffer_end_offset` directly on your dashboard entities.
 - **`clipping_amplification`**: A manual multiplier (e.g. `1.5x`) to scale the modeled solar forecast peak. Tuned dynamically if Auto-Tune is ON.
 - **`clipping_cost_weight`**: An internal optimizer multiplier (default `1.0`). If Predbat isn't dumping the battery aggressively enough before a peak, increasing this number adds a harsher financial penalty for clipping, forcing the optimizer to prioritize creating headroom.
