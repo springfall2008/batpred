@@ -384,26 +384,41 @@ class GatewayMQTT(ComponentBase):
         boundaries without polling HA every second.  The ``planned`` attribute of
         ``binary_sensor.<prefix>_car_charging_slot`` is a list of ``{start, end, ...}`` dicts
         with datetime strings in ``"%m-%d %H:%M:%S"`` format (produced by output.py).
+
+        Datetimes are localized using ``self.local_tz`` so comparisons respect the component
+        timezone and DST transitions.  Year boundaries are handled: if a parsed start is more
+        than 23 hours in the past (i.e. the plan was built on Dec 31 and contains Jan 1
+        windows), the year is bumped forward.  Similarly, if end falls before start after
+        localization the end year is incremented to handle windows that straddle midnight
+        on New Year's Eve.
         """
         planned = self.get_state_wrapper(f"binary_sensor.{self.prefix}_car_charging_slot", attribute="planned") or []
+        now = datetime.datetime.now(self.local_tz)
+        current_year = now.year
         windows = []
         for w in planned:
             try:
-                start_dt = datetime.datetime.strptime(w["start"], "%m-%d %H:%M:%S")
-                end_dt = datetime.datetime.strptime(w["end"], "%m-%d %H:%M:%S")
+                start_naive = datetime.datetime.strptime(w["start"], "%m-%d %H:%M:%S").replace(year=current_year)
+                end_naive = datetime.datetime.strptime(w["end"], "%m-%d %H:%M:%S").replace(year=current_year)
+                start_dt = self.local_tz.localize(start_naive)
+                end_dt = self.local_tz.localize(end_naive)
+                # If start is far in the past the plan crossed a year boundary (Dec 31 → Jan 1)
+                if start_dt < now - datetime.timedelta(hours=23):
+                    start_dt = start_dt.replace(year=start_dt.year + 1)
+                    end_dt = end_dt.replace(year=end_dt.year + 1)
+                elif end_dt < start_dt:
+                    # end crossed into the new year but start did not (e.g. 23:30 → 00:30)
+                    end_dt = end_dt.replace(year=end_dt.year + 1)
                 windows.append((start_dt, end_dt))
             except (KeyError, ValueError):
                 continue
         self._ev_windows = windows
 
     def _should_ev_charge_now(self):
-        """Return True if the current wall-clock time falls inside any planned charge window."""
-        now = datetime.datetime.now()
-        now_no_year = now.replace(year=1900)
+        """Return True if the current local time falls inside any planned charge window."""
+        now = datetime.datetime.now(self.local_tz)
         for start_dt, end_dt in self._ev_windows:
-            start = start_dt.replace(year=1900)
-            end = end_dt.replace(year=1900)
-            if start <= now_no_year < end:
+            if start_dt <= now < end_dt:
                 return True
         return False
 

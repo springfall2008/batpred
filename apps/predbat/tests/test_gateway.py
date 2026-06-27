@@ -3877,6 +3877,7 @@ class TestEvControl:
         gw._ev_max_current = ev_max_current if ev_max_current is not None else {"CP10000001": 32}
         gw._ev_windows = []
         gw._ev_charging_active = False
+        gw.local_tz = pytz.timezone("Europe/London")
         return gw
 
     def _planned(self, windows):
@@ -3914,7 +3915,7 @@ class TestEvControl:
         import datetime as dt_mod
 
         gw = self._make_gateway()
-        now = dt_mod.datetime.now()
+        now = dt_mod.datetime.now(gw.local_tz)
         start = now - dt_mod.timedelta(minutes=30)
         end = now + dt_mod.timedelta(minutes=30)
         gw._ev_windows = [(start, end)]
@@ -3926,7 +3927,7 @@ class TestEvControl:
         import datetime as dt_mod
 
         gw = self._make_gateway()
-        now = dt_mod.datetime.now()
+        now = dt_mod.datetime.now(gw.local_tz)
         start = now + dt_mod.timedelta(hours=2)
         end = now + dt_mod.timedelta(hours=4)
         gw._ev_windows = [(start, end)]
@@ -3938,6 +3939,27 @@ class TestEvControl:
         gw = self._make_gateway()
         gw._ev_windows = []
         assert gw._should_ev_charge_now() is False
+
+    def test_refresh_ev_windows_year_boundary(self):
+        """Windows whose parsed start would be >23 h in the past get their year bumped."""
+        import datetime as dt_mod
+
+        gw = self._make_gateway()
+        now = dt_mod.datetime.now(gw.local_tz)
+        # Simulate a Jan 1 window parsed with current_year when now is Dec 31
+        # by injecting a planned entry whose start, parsed with the current year, is 30 h in the past
+        stale = now - dt_mod.timedelta(hours=30)
+        future_end = stale + dt_mod.timedelta(hours=2)
+        # Format as MM-DD HH:MM:SS — these will be parsed with current year and end up in the past
+        planned = [{"start": stale.strftime("%m-%d %H:%M:%S"), "end": future_end.strftime("%m-%d %H:%M:%S"), "kwh": 5.0, "average": 20.0, "cost": 1.0}]
+        gw.get_state_wrapper = lambda entity, attribute=None: planned if attribute == "planned" else "on"
+
+        gw._refresh_ev_windows()
+
+        assert len(gw._ev_windows) == 1
+        start_dt, end_dt = gw._ev_windows[0]
+        # After year bump, start should be in the future (next year)
+        assert start_dt > now
 
     def test_apply_sends_start_on_transition(self):
         """_apply_ev_charging_state sends SetChargingProfile then RemoteStartTransaction when entering a window."""
@@ -3954,7 +3976,7 @@ class TestEvControl:
         gw._publish_raw = fake_publish_raw
         gw.topic_ev_command = "predbat/devices/test/ev/command"
 
-        now = dt_mod.datetime.now()
+        now = dt_mod.datetime.now(gw.local_tz)
         gw._ev_windows = [(now - dt_mod.timedelta(minutes=5), now + dt_mod.timedelta(hours=1))]
         gw._ev_charging_active = False
 
@@ -4021,7 +4043,7 @@ class TestEvControl:
         gw._publish_raw = fake_publish_raw
         gw.topic_ev_command = "predbat/devices/test/ev/command"
 
-        now = dt_mod.datetime.now()
+        now = dt_mod.datetime.now(gw.local_tz)
         gw._ev_windows = [(now - dt_mod.timedelta(minutes=5), now + dt_mod.timedelta(hours=1))]
         gw._ev_charging_active = False
 
