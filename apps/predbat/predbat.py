@@ -35,7 +35,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v8.41.3"
+THIS_VERSION = "v8.42.1"
 
 from download import predbat_update_move, predbat_update_download, check_install, DEFAULT_PREDBAT_REPOSITORY
 from const import MINUTE_WATT
@@ -366,6 +366,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.metric_min_improvement_export = 0.1
         self.metric_min_improvement_export_freeze = 0.1
         self.metric_min_improvement_plan = 2.0
+        self.export_more_solar = False
+        self.export_more_solar_threshold = 1.0
         self.metric_battery_cycle = 0.0
         self.metric_battery_value_scaling = 1.0
         self.metric_future_rate_offset_import = 0.0

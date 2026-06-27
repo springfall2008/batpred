@@ -29,14 +29,6 @@ pred_bat:
   # Can be auto for automatic, 0 for off or values 1-N for a fixed number
   threads: auto
 
-  # Set to the GivEnergy serial number and the EMS serial number
-  # GESerial - Your first inverter
-  # GESerial2 - Your second inverter
-  # GESerialE - Your EMS
-  geserial: 'cexxxx'
-  geserial2: 'ceyyyy'
-  geseriale: 'emszzzz'
-
   # Configure your GE Cloud API key for Predbat to control your EMS
   ge_cloud_key: 'xxxx'
   ge_cloud_direct: true

@@ -156,6 +156,12 @@ Like the electricity rates, this is set in the `apps.yaml` template to a regular
 
 When a saving session is available it will be automatically joined by Predbat and should then appear as a joined session within the next 30 minutes.
 
+Auto-joining is controlled by the **switch.predbat_octopus_saving_auto_join** switch (On by default). Turn it Off if you want to decide which saving sessions to join yourself
+(for example through the Octopus app). When auto-join is Off, Predbat still plans your battery activity for any sessions you have already joined - it just will not join
+available sessions on your behalf.
+
+If an available saving session overlaps an Axle VPP session (any overlap in time), Predbat will **not** auto-join the saving session, as the two events cannot both be honoured for the same period. The Axle session takes priority.
+
 In the Predbat plan, for joined saving sessions the energy rates for import and export will be overridden by adding the assumed saving rate to your normal rate.
 The assumed rate will be taken from the Octopus Energy integration and converted into pence
 using the **octopus_saving_session_octopoints_per_penny** configuration item in `apps.yaml` (default is 8).

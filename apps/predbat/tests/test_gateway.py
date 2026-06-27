@@ -591,6 +591,48 @@ class TestInjectEntities:
         _, attrs = gw._dashboard_calls[f"sensor.{pfx}_sub0_temp"]
         assert attrs == GATEWAY_ATTRIBUTE_TABLE.get("temp", {})
 
+    def test_ems_aggregate_entities_when_ems_not_first_inverter(self):
+        """EMS aggregates publish even when the EMS unit is not status.inverters[0].
+
+        Discovery order is unstable (see the 2026-06-04 incident), so the publish path
+        must locate the EMS by type rather than assuming index 0. A coordinator/AIO unit
+        ahead of the EMS in telemetry previously suppressed the entire aggregate block.
+        """
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_ems"
+        status.firmware = "1.0.0"
+        status.timestamp = 1741789200
+        status.schema_version = 1
+
+        # Non-EMS unit listed first (the historically-assumed "inverter 0").
+        aio = status.inverters.add()
+        aio.type = pb.INVERTER_TYPE_GIVENERGY
+        aio.serial = "AI000001"
+        aio.primary = True
+
+        # EMS unit listed second.
+        inv = status.inverters.add()
+        inv.type = pb.INVERTER_TYPE_GIVENERGY_EMS
+        inv.serial = "EM123456"
+        inv.primary = True
+        inv.ems.num_inverters = 2
+        inv.ems.total_soc = 70
+        inv.ems.total_charge_w = 4000
+        inv.ems.total_grid_w = -2000
+        inv.ems.total_pv_w = 6000
+        inv.ems.total_load_w = 5000
+
+        sub0 = inv.ems.sub_inverters.add()
+        sub0.soc = 65
+
+        gw = self._make_gateway()
+        gw._inject_entities(status)
+
+        pfx = "predbat_gateway"
+        assert gw._dashboard_calls[f"sensor.{pfx}_ems_total_soc"][0] == 70
+        assert gw._dashboard_calls[f"sensor.{pfx}_ems_total_grid"][0] == -2000
+        assert gw._dashboard_calls[f"sensor.{pfx}_sub0_soc"][0] == 65
+
     def test_inverter_rate_max_published_from_inverter(self):
         """inverter_rate_max sensor uses InverterData.rate_max_w when non-zero."""
         from gateway import GATEWAY_ATTRIBUTE_TABLE
@@ -631,6 +673,79 @@ class TestInjectEntities:
         assert entity in gw._dashboard_calls
         state, _ = gw._dashboard_calls[entity]
         assert state == 6000
+
+
+class TestDebugLogging:
+    """Tests for the gateway_debug verbose telemetry/plan dump helper."""
+
+    def _make_gateway(self, debug):
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.log = MagicMock()
+        gw._debug = debug
+        return gw
+
+    def test_dump_logs_decoded_message_when_enabled(self):
+        """With debug on, a decoded message is rendered as text with its byte size."""
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_dbg"
+        inv = status.inverters.add()
+        inv.type = pb.INVERTER_TYPE_GIVENERGY_EMS
+        inv.serial = "EM123456"
+        raw = status.SerializeToString()
+
+        gw = self._make_gateway(debug=True)
+        gw._debug_dump("RX telemetry", status, raw=raw)
+
+        assert gw.log.call_count == 1
+        msg = gw.log.call_args[0][0]
+        assert "Debug: GatewayMQTT: RX telemetry" in msg
+        assert f"({len(raw)} bytes)" in msg
+        assert "EM123456" in msg  # message body rendered as text
+
+    def test_dump_silent_when_disabled(self):
+        """With debug off, nothing is logged."""
+        status = pb.GatewayStatus()
+        gw = self._make_gateway(debug=False)
+        gw._debug_dump("RX telemetry", status, raw=status.SerializeToString())
+        assert gw.log.call_count == 0
+
+    def test_dump_decodes_raw_bytes_with_message_type(self):
+        """Raw bytes plus a message_type are decoded and rendered."""
+        plan = pb.ExecutionPlan()
+        plan.plan_version = 7
+        raw = plan.SerializeToString()
+
+        gw = self._make_gateway(debug=True)
+        gw._debug_dump("TX execution plan", raw=raw, message_type=pb.ExecutionPlan)
+
+        assert gw.log.call_count == 1
+        msg = gw.log.call_args[0][0]
+        assert "plan_version: 7" in msg
+
+    def test_initialize_reads_gateway_debug_arg(self):
+        """initialize() picks up the gateway_debug flag from apps.yaml args."""
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.base = MagicMock()
+        gw.args = {"gateway_debug": True}
+        gw.initialize(gateway_device_id="pbgw_test", mqtt_host="mqtt.example.com", mqtt_token="tok")
+        assert gw._debug is True
+
+    def test_initialize_debug_defaults_off(self):
+        """gateway_debug defaults to False when the arg is absent."""
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.base = MagicMock()
+        gw.args = {}
+        gw.initialize(gateway_device_id="pbgw_test", mqtt_host="mqtt.example.com", mqtt_token="tok")
+        assert gw._debug is False
 
 
 class TestTokenRefresh:
@@ -1087,6 +1202,7 @@ class TestPlanRepublish:
 
         gw = GatewayMQTT.__new__(GatewayMQTT)
         gw.log = MagicMock()
+        gw._debug = False
         gw._mqtt_connected = True
         gw._last_plan_data = None
         gw._last_plan_entries = None
@@ -1610,6 +1726,7 @@ class TestAutomaticConfig:
 
         gw = GatewayMQTT.__new__(GatewayMQTT)
         gw.base = MagicMock()
+        gw.args = {}
         gw.initialize(gateway_device_id="pbgw_test", mqtt_host="mqtt.example.com", mqtt_token="tok", gateway_inverter_serial="CE123456789")
         assert gw.gateway_inverter_serial == ["CE123456789"]
 
@@ -1620,6 +1737,7 @@ class TestAutomaticConfig:
 
         gw = GatewayMQTT.__new__(GatewayMQTT)
         gw.base = MagicMock()
+        gw.args = {}
         gw.initialize(gateway_device_id="pbgw_test", mqtt_host="mqtt.example.com", mqtt_token="tok", gateway_inverter_serial=None)
         assert gw.gateway_inverter_serial == []
 
@@ -1630,6 +1748,7 @@ class TestAutomaticConfig:
 
         gw = GatewayMQTT.__new__(GatewayMQTT)
         gw.base = MagicMock()
+        gw.args = {}
         gw.initialize(
             gateway_device_id="pbgw_test",
             mqtt_host="mqtt.example.com",
@@ -1645,6 +1764,7 @@ class TestAutomaticConfig:
 
         gw = GatewayMQTT.__new__(GatewayMQTT)
         gw.base = MagicMock()
+        gw.args = {}
         gw.initialize(
             gateway_device_id="pbgw_test",
             mqtt_host="mqtt.example.com",
@@ -1662,6 +1782,7 @@ class TestAutomaticConfig:
         raw = "[not valid json"
         gw = GatewayMQTT.__new__(GatewayMQTT)
         gw.base = MagicMock()
+        gw.args = {}
         gw.initialize(
             gateway_device_id="pbgw_test",
             mqtt_host="mqtt.example.com",
@@ -2702,6 +2823,7 @@ class TestGatewayUnitControlBinding:
         gw.base = MagicMock()
         gw.log = MagicMock()
         gw.prefix = "predbat"
+        gw._debug = False
         gw._last_status = None
         gw._auto_configured = False
         gw._configured_inverter_serials = frozenset()
@@ -3079,6 +3201,47 @@ class TestCheckInverterResets:
         assert gw._published == []
         assert "CE123456789" not in gw._inverter_reset_done
 
+    def test_read_only_clears_done_set(self):
+        """Enabling read-only clears _inverter_reset_done so resets re-send once it is disabled."""
+        gw = self._make_gateway(read_only=True)
+        gw._suffix_to_serial["456789"] = "CE123456789"
+        gw._inverter_reset_done.add("CE123456789")  # already reset before read-only was enabled
+        self._run(gw._check_inverter_resets())
+        assert gw._published == []
+        assert gw._inverter_reset_done == set()
+
+    def test_reset_resent_after_read_only_disabled(self):
+        """A serial reset, then cleared by read-only, is reset again once read-only is disabled."""
+        gw = self._make_gateway()
+        gw._suffix_to_serial["456789"] = "CE123456789"
+
+        read_only_state = {"value": False}
+
+        def fake_get_arg(key, default=None):
+            if key == "set_read_only":
+                return read_only_state["value"]
+            return default
+
+        gw.get_arg = fake_get_arg
+
+        # Initial control-mode reset.
+        self._run(gw._check_inverter_resets())
+        assert len(gw._published) == 1
+        assert "CE123456789" in gw._inverter_reset_done
+
+        # Read-only enabled — done set is cleared, nothing new sent.
+        read_only_state["value"] = True
+        self._run(gw._check_inverter_resets())
+        assert len(gw._published) == 1
+        assert gw._inverter_reset_done == set()
+
+        # Read-only disabled again — reset is re-sent.
+        read_only_state["value"] = False
+        self._run(gw._check_inverter_resets())
+        assert len(gw._published) == 2
+        assert gw._published[1][0] == "inverter_reset"
+        assert gw._published[1][1]["serial"] == "CE123456789"
+
     def test_not_alive_skips_reset(self):
         """No reset is sent when is_alive() returns False (MQTT disconnected)."""
         gw = self._make_gateway(alive=False)
@@ -3403,6 +3566,7 @@ def run_gateway_tests(my_predbat=None):
         TestCommandFormat,
         TestScheduleSlotCommand,
         TestInjectEntities,
+        TestDebugLogging,
         TestAutomaticConfig,
         TestSelectEvent,
         TestNumberEvent,

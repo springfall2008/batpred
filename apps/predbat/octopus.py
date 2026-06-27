@@ -1576,7 +1576,9 @@ class OctopusAPI(ComponentBase):
             payload = {"query": query}
             auth_prefix = "" if use_backend else "JWT "
             headers = {"Authorization": f"{auth_prefix}{self.graphql_token}", integration_context_header: request_context}
-            self.log("OctopusAPI: Making GraphQL request to {} payload {} headers {}".format(url, payload, headers))
+            # Redact the Authorization header so the JWT token is never written to the log
+            log_headers = {**headers, "Authorization": f"{auth_prefix}<redacted>"}
+            self.log("OctopusAPI: Making GraphQL request to {} payload {} headers {}".format(url, payload, log_headers))
             async with client.post(url, json=payload, headers=headers) as response:
                 # Check for HTTP-level 401/403 (transport-level auth failure) and retry once.
                 # This handles cases where the JWT has been revoked server-side and the server
@@ -1595,6 +1597,7 @@ class OctopusAPI(ComponentBase):
 
                 # Process response (which reads the text)
                 response_body = await self.async_read_response_retry(response, url, ignore_errors=ignore_errors)
+                self.log("OctopusAPI: GraphQL response for {} (status {}): {}".format(request_context, response.status, response_body))
 
                 # Check for auth errors and retry once
                 if response_body and "errors" in response_body and _retry_count == 0:
@@ -1739,73 +1742,29 @@ class OctopusAPI(ComponentBase):
                                     delta = None
 
                                 dispatch = {"start": start, "end": end, "charge_in_kwh": delta, "source": meta.get("source", dispatch_type), "location": meta.get("location", None)}
-                                keep = True
-                                if start and end:
-                                    start_date_time = parse_date_time(start)
-                                    end_date_time = parse_date_time(end)
-                                    minutes_now = self.minutes_now
-                                    if start_date_time and end_date_time and ((self.now_utc_exact - start_date_time) > timedelta(minutes=4)) and (end_date_time >= self.now_utc_exact):
-                                        # This slot has actually started at least 4 minutes ago, so move it to completed so its cached if withdrawn later
-                                        # Make end be the end of this slot only and scale delta to the relative minutes
-                                        start_minutes = (start_date_time - self.midnight_utc).total_seconds() / 60
-                                        # Only consider now onwards
-                                        start_minutes = max(minutes_now, start_minutes)
-
-                                        # Align start_minutes to 30 minute slot
-                                        start_minutes = (start_minutes // self.plan_interval_minutes) * self.plan_interval_minutes
-
-                                        # Work out end of this slot
-                                        end_minutes = start_minutes + self.plan_interval_minutes
-
-                                        # End minutes to end of this slot only
-                                        if end_date_time > self.now_utc_exact:
-                                            end_minutes = max(minutes_now, end_minutes)
-
-                                        # Round up end minutes to the next slot
-                                        end_minutes = ((end_minutes + self.plan_interval_minutes - 1) // self.plan_interval_minutes) * self.plan_interval_minutes
-
-                                        # Work out slot end time
-                                        completed_start_time = self.midnight_utc + timedelta(minutes=start_minutes)
-                                        completed_end_time = self.midnight_utc + timedelta(minutes=end_minutes)
-                                        total_minutes = (end_date_time - start_date_time).total_seconds() / 60
-                                        elapsed_minutes = (completed_end_time - completed_start_time).total_seconds() / 60
-                                        if total_minutes > 0 and delta is not None:
-                                            adjusted_delta = dp4((delta * elapsed_minutes) / total_minutes)
-                                        else:
-                                            adjusted_delta = delta
-                                        completed_dispatch = {
-                                            "start": completed_start_time.strftime(DATE_TIME_STR_FORMAT),
-                                            "end": completed_end_time.strftime(DATE_TIME_STR_FORMAT),
-                                            "charge_in_kwh": adjusted_delta,
-                                            "source": meta.get("source", dispatch_type),
-                                            "location": meta.get("location", None),
-                                        }
-
-                                        # Check if the dispatch is already in the completed list, if its already there then don't add it again
-                                        found = False
-                                        for cached in completed:
-                                            if cached.get("start") == completed_start_time.strftime(DATE_TIME_STR_FORMAT):
-                                                cached.update(completed_dispatch)
-                                                found = True
-                                                break
-                                        if not found:
-                                            completed.append(completed_dispatch)
-
-                                        # Now adjust the start to be only beyond the adjusted end time and scale delta accordingly
-                                        # Work out minutes between original start and new start
-                                        elapsed_minutes = (completed_end_time - start_date_time).total_seconds() / 60
-                                        # Used elapsed minutes as percentage of total_minutes to scale delta
-                                        if total_minutes > 0 and delta is not None:
-                                            delta = dp4((delta * (total_minutes - elapsed_minutes)) / total_minutes)
-                                        else:
-                                            delta = None
-                                        dispatch["start"] = completed_end_time.strftime(DATE_TIME_STR_FORMAT)
-                                        dispatch["charge_in_kwh"] = delta
-                                        # Check the remainder is not empty
-                                        if completed_end_time >= end_date_time:
-                                            keep = False
-                                if keep:
-                                    planned.append(dispatch)
+                                # Keep planned (flexPlannedDispatches) entries in the planned list only - do NOT promote
+                                # in-progress slots into completed_dispatches (see issue #4114). flexPlannedDispatches is
+                                # Octopus's optimiser schedule and includes plug-independent SMART grid-flex events that
+                                # Octopus routinely withdraws on its next re-plan. Promoting them immortalised provisional
+                                # slots as permanent cheap "completed" slots that never had a matching real dispatch.
+                                # Genuine charging is still cached below via the metered completedDispatches feed
+                                # (location=AT_HOME).
+                                #
+                                # If the slot is already in progress, trim the elapsed portion before appending: advance
+                                # its start to now and scale charge_in_kwh to the remaining time. decode_octopus_slot does
+                                # not trim a started slot when charge_in_kwh > 0, so without this the already-delivered
+                                # energy would be double counted, inflating predicted car SoC/cost for the active window.
+                                start_date_time = parse_date_time(start)
+                                end_date_time = parse_date_time(end)
+                                if start_date_time and end_date_time and start_date_time < self.now_utc_exact < end_date_time:
+                                    total_minutes = (end_date_time - start_date_time).total_seconds() / 60
+                                    remaining_minutes = (end_date_time - self.now_utc_exact).total_seconds() / 60
+                                    if total_minutes > 0:
+                                        if delta is not None:
+                                            delta = dp4(delta * remaining_minutes / total_minutes)
+                                            dispatch["charge_in_kwh"] = delta
+                                        dispatch["start"] = self.now_utc_exact.strftime(DATE_TIME_STR_FORMAT)
+                                planned.append(dispatch)
                             for completedDispatch in completedDispatches:
                                 start = completedDispatch.get("start", None)
                                 end = completedDispatch.get("end", None)
@@ -2693,10 +2652,36 @@ class Octopus:
 
         return rate_data
 
-    def fetch_octopus_sessions(self):
+    def _saving_event_conflicts_axle(self, start_time, end_time, axle_sessions):
+        """
+        Return True if the saving session [start_time, end_time) overlaps any Axle VPP session
+        """
+        if not axle_sessions or start_time is None or end_time is None:
+            return False
+        for axle_session in axle_sessions:
+            axle_start = axle_session.get("start_time")
+            axle_end = axle_session.get("end_time")
+            if not axle_start or not axle_end:
+                continue
+            try:
+                axle_start = str2time(axle_start)
+                axle_end = str2time(axle_end)
+            except (ValueError, TypeError):
+                continue
+            # Standard half-open interval overlap test
+            if start_time < axle_end and axle_start < end_time:
+                return True
+        return False
+
+    def fetch_octopus_sessions(self, axle_sessions=None):
         """
         Fetch the Octopus saving/free sessions
+
+        Available saving session events that overlap an Axle VPP session are not auto-joined,
+        so Predbat does not commit to two conflicting events for the same period.
         """
+        if axle_sessions is None:
+            axle_sessions = []
 
         # Octopus free session
         octopus_free_slots = []
@@ -2761,6 +2746,11 @@ class Octopus:
 
                 available_events = self.get_state_wrapper(entity_id=entity_id, attribute="available_events")
 
+            if available_events and not self.get_arg("octopus_saving_auto_join", True):
+                self.log("Octopus: Saving session auto-join is disabled, not joining available events")
+                # Clear the 2h throttle so re-enabling auto-join can take effect immediately
+                self.octopus_last_joined_try = None
+                available_events = []
             if available_events:
                 # Only try to join every 2 hours to avoid spamming if it fails
                 if not self.octopus_last_joined_try or (self.now_utc - self.octopus_last_joined_try).total_seconds() > 2 * 60 * 60:
@@ -2775,6 +2765,10 @@ class Octopus:
                             saving_rate = octopoints_kwh / octopoints_per_penny  # Octopoints per pence
                         else:
                             saving_rate = saving_rate  # Use default if not specified
+                        # Do not auto-join a saving session that overlaps an Axle VPP session - we cannot honour both for the same period
+                        if self._saving_event_conflicts_axle(start_time, end_time, axle_sessions):
+                            self.log("Octopus: Skipping saving event code {} {}-{} - conflicts with an Axle VPP session".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M")))
+                            continue
                         if code:  # Join the new Octopus saving event and send an alert
                             self.log("Octopus: Joining Octopus saving event code {} {}-{} at rate {} p/kWh".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
                             entity_id_join = self.get_arg("octopus_saving_session_join", indirect=False)

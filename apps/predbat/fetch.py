@@ -950,9 +950,10 @@ class Fetch:
             # Basic rates defined by user over time
             self.rate_export = self.basic_rates(self.get_arg("rates_export", [], indirect=False), "rates_export")
 
-        # Fetch octopus saving sessions and free sessions
-        self.octopus_free_slots, self.octopus_saving_slots = self.fetch_octopus_sessions()
+        # Fetch Axle sessions first so Octopus auto-join can skip saving sessions that overlap an Axle VPP session
         self.axle_sessions = fetch_axle_sessions(self)
+        # Fetch octopus saving sessions and free sessions
+        self.octopus_free_slots, self.octopus_saving_slots = self.fetch_octopus_sessions(self.axle_sessions)
 
         # Standing charge
         self.metric_standing_charge = self.get_arg("metric_standing_charge", 0.0) * 100.0
@@ -2462,6 +2463,8 @@ class Fetch:
         self.set_export_freeze_only = self.get_arg("set_export_freeze_only")
         self.set_discharge_during_charge = self.get_arg("set_discharge_during_charge")
         self.set_freeze_export_during_demand = self.get_arg("set_freeze_export_during_demand")
+        self.export_more_solar = self.get_arg("export_more_solar")
+        self.export_more_solar_threshold = self.get_arg("export_more_solar_threshold")
         # Mode
         self.predbat_mode = self.get_arg("mode")
         if self.predbat_mode == PREDBAT_MODE_OPTIONS[PREDBAT_MODE_CONTROL_SOC]:

@@ -820,6 +820,12 @@ CONFIG_ITEMS = [
         "default": True,
     },
     {
+        "name": "octopus_saving_auto_join",
+        "friendly_name": "Octopus Saving Session Auto Join",
+        "type": "switch",
+        "default": True,
+    },
+    {
         "name": "octopus_intelligent_ignore_unplugged",
         "friendly_name": "Ignore Intelligent slots when car is unplugged",
         "type": "switch",
@@ -1028,6 +1034,24 @@ CONFIG_ITEMS = [
         "enable": "expert_mode",
         "default": False,
         "reset_inverter": True,
+    },
+    {
+        "name": "export_more_solar",
+        "friendly_name": "Export more solar",
+        "type": "switch",
+        "default": False,
+    },
+    {
+        "name": "export_more_solar_threshold",
+        "friendly_name": "Export more solar threshold",
+        "type": "input_number",
+        "min": 0,
+        "max": 10.0,
+        "step": 0.1,
+        "unit": "p",
+        "icon": "mdi:currency-usd",
+        "enable": "expert_mode",
+        "default": 1.0,
     },
     {
         "name": "set_read_only",
