@@ -1908,7 +1908,7 @@ def test_fetch_pv_forecast_ha_clearsky(my_predbat):
         test_api.solar.forecast_solar = None
         test_api.solar.pv_forecast_today = "sensor.solcast_pv_forecast_today"
         test_api.solar.pv_forecast_tomorrow = None
-        
+
         # Enable clearsky source as HA
         test_api.mock_base.set_arg("clipping_clearsky_source", "ha_solcast_clearsky")
         test_api.solar.pv_clearsky_today = "sensor.solcast_clear_sky_today"
@@ -1927,7 +1927,7 @@ def test_fetch_pv_forecast_ha_clearsky(my_predbat):
                 ],
             },
         )
-        
+
         # Setup mock clearsky sensor
         test_api.set_mock_ha_state(
             "sensor.solcast_clear_sky_today",
@@ -1946,7 +1946,7 @@ def test_fetch_pv_forecast_ha_clearsky(my_predbat):
         with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
             run_async(test_api.solar.fetch_pv_forecast())
 
-        # Verify that clearsky was overlayed correctly and published
+        # Verify that clearsky was overlaid correctly and published
         today_entity = f"sensor.{test_api.mock_base.prefix}_pv_today"
         if today_entity not in test_api.dashboard_items:
             print("ERROR: Expected pv_today entity to be published")

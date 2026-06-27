@@ -888,12 +888,12 @@ class Plan:
             # solar generation (PV) during the export window consumes inverter capacity and
             # reduces the effective battery discharge rate.
             max_kwh_loss = max(kwh_loss for m_rel, kwh_loss in forecast.items() if peak_start <= (m_rel + self.minutes_now) <= peak_end)
-            
+
             # Cap the requested headroom by the physical capacity of the battery.
             # We cannot create more headroom than the battery can physically hold.
             battery_capacity_kwh = self.soc_max - getattr(self, "best_soc_min", 0.0)
             max_kwh_loss = min(max_kwh_loss, battery_capacity_kwh)
-            
+
             hybrid = getattr(self, "inverter_hybrid", False)
             inverter_limit_kw = getattr(self, "inverter_limit", 0.0) * 60.0
             user_inverter_limit = getattr(self, "set_inverter_limit", 0)
@@ -901,40 +901,40 @@ class Plan:
                 inverter_limit_kw = user_inverter_limit / 1000.0
             export_limit_kw = getattr(self, "export_limit", 0.0) * 60.0
             pv_forecast = getattr(self, "pv_forecast_minute_step", {})
-            
+
             accumulated_kwh = 0.0
             minutes_needed = 0
-            
+
             for m in range(peak_start, max(self.minutes_now, peak_start - 360), -1):
                 # Start with raw battery maximum discharge
                 discharge_kw = self.battery_rate_max_discharge * getattr(self, "battery_rate_max_scaling_discharge", 1.0) * 60.0
-                
+
                 # Retrieve PV forecast for this minute (kW). Note pv_forecast uses relative minutes.
                 pv_kw = pv_forecast.get(m - self.minutes_now, 0.0)
-                
+
                 # Hybrid inverters share the AC limit between battery and PV
                 if hybrid and inverter_limit_kw > 0:
                     discharge_kw = min(discharge_kw, max(0.0, inverter_limit_kw - pv_kw))
-                    
+
                 # The total site export limit also restricts combined PV + Battery export
                 if export_limit_kw > 0:
                     discharge_kw = min(discharge_kw, max(0.0, export_limit_kw - pv_kw))
-                    
+
                 # Safety minimum to prevent infinite loops if limits are misconfigured (0.5 kW)
                 discharge_kw = max(0.5, discharge_kw)
-                
+
                 accumulated_kwh += discharge_kw * (1.0 / 60.0)
                 minutes_needed += 1
-                
+
                 if accumulated_kwh >= max_kwh_loss - 1e-9:
                     break
 
             # Add 30 mins safety margin
             minutes_needed += 30
-            
+
             # Clamp the window between 60 minutes and 360 minutes (6 hours)
             minutes_needed = max(60, min(360, minutes_needed))
-            
+
             morning_start = max(self.minutes_now, peak_start - minutes_needed)
             morning_start = int(morning_start / 30) * 30  # Align to nearest 30 mins
 
@@ -946,17 +946,12 @@ class Plan:
             target_soc_pct = max(0.0, min(100.0, target_soc_kwh / self.soc_max * 100.0))
             target_soc_pct = float(int(target_soc_pct))
 
-            new_window = {
-                "start": morning_start, 
-                "end": peak_end, 
-                "average": self.rate_export.get(morning_start, 0.0),
-                "clipping_ceiling_pct": target_soc_pct
-            }
+            new_window = {"start": morning_start, "end": peak_end, "average": self.rate_export.get(morning_start, 0.0), "clipping_target_soc_pct": target_soc_pct}
 
-            # Tag any overlapping native export windows with the ceiling so they don't dump below it
+            # Tag any overlapping native export windows with the target SOC so they don't dump below it
             for w in self.export_window_best:
                 if (w.get("start") >= morning_start and w.get("start") < peak_end) or (w.get("end") > morning_start and w.get("end") <= peak_end):
-                    w["clipping_ceiling_pct"] = target_soc_pct
+                    w["clipping_target_soc_pct"] = target_soc_pct
 
             # Remove any existing export windows that intersect our new window and keep export_limits_best aligned
             new_export_windows = []
@@ -1159,7 +1154,11 @@ class Plan:
                         auto_amp = min(2.5, auto_amp + 0.05)
                         auto_start_offset = min(60, auto_start_offset + 5)
                         auto_end_offset = min(60, auto_end_offset + 5)
-                        self.log("Clipping auto-tuner: Real clipping detected (max PV {} kW >= limit {} kW). Increased safety margins - amp: {}, start_offset: {}m, end_offset: {}m".format(dp2(max_pv_power), dp2(limit), auto_amp, auto_start_offset, auto_end_offset))
+                        self.log(
+                            "Clipping auto-tuner: Real clipping detected (max PV {} kW >= limit {} kW). Increased safety margins - amp: {}, start_offset: {}m, end_offset: {}m".format(
+                                dp2(max_pv_power), dp2(limit), auto_amp, auto_start_offset, auto_end_offset
+                            )
+                        )
                     else:
                         auto_amp = max(1.0, auto_amp - 0.01)
                         auto_start_offset = max(0, auto_start_offset - 5)
@@ -1168,12 +1167,7 @@ class Plan:
 
                     try:
                         with open(auto_tune_file, "w") as f:
-                            json.dump({
-                                "auto_amp": auto_amp,
-                                "auto_start_offset": auto_start_offset,
-                                "auto_end_offset": auto_end_offset,
-                                "last_tune_day": current_day
-                            }, f)
+                            json.dump({"auto_amp": auto_amp, "auto_start_offset": auto_start_offset, "auto_end_offset": auto_end_offset, "last_tune_day": current_day}, f)
                         self.clipping_auto_amp = auto_amp
                         self.clipping_auto_start_offset = auto_start_offset
                         self.clipping_auto_end_offset = auto_end_offset
@@ -1294,7 +1288,7 @@ class Plan:
                         # clipping_limit_effective is in kW. Convert it to max allowed energy in PREDICT_STEP.
                         max_kwh_allowed = clipping_limit_effective * (PREDICT_STEP / 60.0)
                         if step_kwh > max_kwh_allowed:
-                            kwh_loss += (step_kwh - max_kwh_allowed)
+                            kwh_loss += step_kwh - max_kwh_allowed
 
                     if kwh_loss > 0:
                         self.clipping_buffer_forecast_kwh[minute] = kwh_loss
@@ -2781,7 +2775,7 @@ class Plan:
         swapped_target = {}
         curr = self.currency_symbols[1]
 
-        if self.calculate_best_export and record_export_windows >= 2:
+        if self.calculate_best_export and record_export_windows >= 1:
             swapped = True
             while swapped:
                 selected_metric, selected_battery_value, selected_cost, selected_keep, selected_cycle, selected_carbon, selected_import, select_export = self.run_prediction_metric(
@@ -2792,7 +2786,7 @@ class Plan:
                 )
                 swapped = False
 
-                for window_n_target in range(record_export_windows - 1, 0, -1):
+                for window_n_target in range(record_export_windows - 1, -1, -1):
                     previous_end_target = 0
                     if window_n_target > 0:
                         previous_end_target = self.export_window_best[window_n_target - 1]["end"]
@@ -3595,7 +3589,7 @@ class Plan:
             debug_mode=debug_mode,
         )
         # Swaps
-        self.optimise_swap_export(record_charge_windows, record_export_windows, debug_mode=debug_mode)
+        self.optimise_swap_export(record_charge_windows, record_export_windows, drop=True, debug_mode=debug_mode)
         self.plan_write_debug(debug_mode, "plan_swap_final.html", self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
 
         # Second pass optimisation
@@ -4193,9 +4187,9 @@ class Plan:
                     clipping_total = self.predict_clipped_best.get(keys[-1], 0.0)
                     clipping_tomorrow = max(0.0, clipping_total - clipping_today)
 
-                # Generate Clipping Visual Series (Remaining and Ceiling) for web.py charts
+                # Generate Clipping Visual Series (Remaining and Target SOC) for web.py charts
                 predict_clipping_remaining_best = {}
-                predict_clipping_ceiling_best = {}
+                predict_clipping_target_soc_best = {}
 
                 clipping_limit_step = getattr(self, "clipping_limit_effective", 0) * (step / 60.0)
                 # Ensure the chart uses the exact same peak dataset as the planning engine
@@ -4216,7 +4210,7 @@ class Plan:
                 for minute in range(max_minute, -step, -step):
                     remaining = 0.0
                     minute_absolute = minute + self.minutes_now
-                    
+
                     if minute <= midnight_today_minute:
                         day_index = 0
                     elif minute <= midnight_today_minute + 24 * 60:
@@ -4241,11 +4235,11 @@ class Plan:
                     max_headroom = self.soc_max - best_soc_min
                     capped_remaining = min(remaining, max_headroom)
                     predict_clipping_remaining_best[minute] = round(remaining, 4)
-                    predict_clipping_ceiling_best[minute] = round(self.soc_max - capped_remaining, 4)
+                    predict_clipping_target_soc_best[minute] = round(self.soc_max - capped_remaining, 4)
 
                 # Sort dictionaries to ensure forwards time order for ApexCharts rendering
                 self.predict_clipping_remaining_best = dict(sorted(predict_clipping_remaining_best.items()))
-                self.predict_clipping_ceiling_best = dict(sorted(predict_clipping_ceiling_best.items()))
+                self.predict_clipping_target_soc_best = dict(sorted(predict_clipping_target_soc_best.items()))
 
                 if not self.clipping_buffer_enable:
                     self.clipping_remaining_today = clipping_today
@@ -4267,11 +4261,11 @@ class Plan:
                     },
                 )
                 self.dashboard_item(
-                    self.prefix + ".clipping_ceiling",
-                    state=dp2(self.predict_clipping_ceiling_best.get(0, self.soc_max)),
+                    self.prefix + ".clipping_target_soc",
+                    state=dp2(self.predict_clipping_target_soc_best.get(0, self.soc_max)),
                     attributes={
-                        "results": self.filtered_times(self.predict_clipping_ceiling_best),
-                        "friendly_name": "Clipping Ceiling",
+                        "results": self.filtered_times(self.predict_clipping_target_soc_best),
+                        "friendly_name": "Clipping Target SOC",
                         "unit_of_measurement": "kWh",
                         "device_class": "energy",
                         "icon": "mdi:arrow-collapse-up",
@@ -4324,8 +4318,9 @@ class Plan:
                         clipping_status_text = "{} kWh clipping forecast ({}) between {} and {}.".format(dp2(self.clipping_buffer_kwh), self.clipping_mode, start_str, end_str)
                     else:
                         clipping_status_text = "{} kWh manual clipping buffer override active.".format(dp2(self.clipping_buffer_kwh))
-                
+
                 elif getattr(self, "clipping_buffer_enable", False) and getattr(self, "clipping_buffer_forecast_kwh", {}):
+
                     def format_time_human_abs(minute_absolute):
                         target_dt = self.midnight + timedelta(minutes=minute_absolute)
                         return target_dt.strftime("%H:%M")
@@ -4339,28 +4334,45 @@ class Plan:
                     for minute_relative, kwh_loss in sorted(self.clipping_buffer_forecast_kwh.items()):
                         minute_absolute = minute_relative + self.minutes_now
                         if minute_absolute < midnight_today_minute + 1440:
-                            if today_start is None: today_start = minute_absolute
+                            if today_start is None:
+                                today_start = minute_absolute
                             today_end = minute_absolute + 30
                         else:
-                            if tomorrow_start is None: tomorrow_start = minute_absolute
+                            if tomorrow_start is None:
+                                tomorrow_start = minute_absolute
                             tomorrow_end = minute_absolute + 30
-                    
+
                     status_parts = []
                     if self.clipping_remaining_today > 0 and today_start is not None:
-                        status_parts.append("{} kWh clipping buffer remaining between {} and {} today".format(
-                            dp2(self.clipping_remaining_today), 
-                            format_time_human_abs(today_start), 
-                            format_time_human_abs(today_end)
-                        ))
+                        status_parts.append("{} kWh clipping buffer remaining between {} and {} today".format(dp2(self.clipping_remaining_today), format_time_human_abs(today_start), format_time_human_abs(today_end)))
                     if self.clipping_tomorrow > 0 and tomorrow_start is not None:
-                        status_parts.append("{} kWh clipping buffer forecast between {} and {} tomorrow".format(
-                            dp2(self.clipping_tomorrow), 
-                            format_time_human_abs(tomorrow_start), 
-                            format_time_human_abs(tomorrow_end)
-                        ))
-                    
+                        status_parts.append("{} kWh clipping buffer forecast between {} and {} tomorrow".format(dp2(self.clipping_tomorrow), format_time_human_abs(tomorrow_start), format_time_human_abs(tomorrow_end)))
+
                     if status_parts:
                         clipping_status_text = ". ".join(status_parts) + "."
+
+                active_params_list = []
+                start_offset = int(getattr(self, "clipping_buffer_start_offset", 0))
+                end_offset = int(getattr(self, "clipping_buffer_end_offset", 0))
+                amplification = getattr(self, "clipping_amplification", 1.0)
+                limit_override = getattr(self, "clipping_limit_override", 0) * 60.0
+                max_kwh_override = getattr(self, "clipping_buffer_max_kwh", 0)
+
+                if start_offset > 0:
+                    active_params_list.append("{}m start offset".format(start_offset))
+                if end_offset > 0:
+                    active_params_list.append("{}m end offset".format(end_offset))
+                if amplification is not None and abs(amplification - 1.0) > 1e-4:
+                    active_params_list.append("{}x amplification".format(dp2(amplification)))
+                if limit_override > 0:
+                    active_params_list.append("{}kW limit override".format(dp2(limit_override)))
+                if max_kwh_override > 0:
+                    active_params_list.append("{}kWh max override".format(dp2(max_kwh_override)))
+
+                if active_params_list:
+                    if clipping_status_text.endswith("."):
+                        clipping_status_text = clipping_status_text[:-1]
+                    clipping_status_text += " ({} active).".format(", ".join(active_params_list))
 
                 self.dashboard_item(
                     self.prefix + ".clipping_status",
@@ -4375,6 +4387,12 @@ class Plan:
                         "clipping_remaining_today": dp2(self.clipping_remaining_today),
                         "clipping_tomorrow": dp2(self.clipping_tomorrow),
                         "clipping_mitigated_today": dp2(getattr(self, "clipping_mitigated_today", 0.0)),
+                        "clipping_buffer_start_offset": start_offset,
+                        "clipping_buffer_end_offset": end_offset,
+                        "clipping_amplification": dp2(amplification) if amplification is not None else 1.0,
+                        "clipping_limit_override_kw": dp2(limit_override),
+                        "clipping_buffer_max_kwh_override": dp2(max_kwh_override),
+                        "clipping_auto_tune": getattr(self, "clipping_auto_tune", False),
                     },
                 )
                 self.dashboard_item(self.prefix + ".record", state=0.0, attributes={"results": self.filtered_times(record_time), "friendly_name": "Prediction window", "state_class": "measurement"})

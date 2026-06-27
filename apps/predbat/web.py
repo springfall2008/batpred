@@ -3069,20 +3069,22 @@ chart.render();
                         stamp = minute_timestamp.strftime(TIME_FORMAT)
                         clipping_remaining_series[stamp] = round(kwh, 2)
 
-            clipping_ceiling_raw = history_attribute(self.get_history_wrapper(self.prefix + ".clipping_ceiling", 3))
-            clipping_ceiling_series = prune_today(clipping_ceiling_raw, self.now_utc, self.midnight_utc, prune_past_days=2)
+            clipping_target_soc_raw = history_attribute(self.get_history_wrapper(self.prefix + ".clipping_target_soc", 3))
+            clipping_target_soc_series = prune_today(clipping_target_soc_raw, self.now_utc, self.midnight_utc, prune_past_days=2)
 
-            if getattr(self.base, "predict_clipping_ceiling_best", None):
-                for minute, kwh in self.base.predict_clipping_ceiling_best.items():
+            if getattr(self.base, "predict_clipping_target_soc_best", None):
+                for minute, kwh in self.base.predict_clipping_target_soc_best.items():
                     if minute % step_size == 0 and minute >= 0:
                         minute_timestamp = self.now_utc + timedelta(minutes=minute)
                         stamp = minute_timestamp.strftime(TIME_FORMAT)
-                        clipping_ceiling_series[stamp] = round(kwh, 2)
+                        clipping_target_soc_series[stamp] = round(kwh, 2)
 
             # PV Forecast (Base) - historical and future
             pv_forecast_hist = history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", 3, required=False))
             raw_pv_series = prune_today(pv_forecast_hist, self.now_utc, self.midnight_utc, prune=True, prune_past_days=2, intermediate=True)
-            raw_pv_series.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_today", "pv_estimate"), self.now_utc, self.midnight_utc, prune=True, intermediate=True))
+            pv_today_est = self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_today", "pv_estimate")
+            pv_today_est_future = {k: v for k, v in pv_today_est.items() if str2time(k) >= self.now_utc - timedelta(minutes=30)}
+            raw_pv_series.update(prune_today(pv_today_est_future, self.now_utc, self.midnight_utc, prune=True, intermediate=True))
             raw_pv_series.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_tomorrow", "pv_estimate"), self.now_utc, self.midnight_utc, prune=True, intermediate=True))
             for d in ["d2", "d3"]:
                 raw_pv_series.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + f"_pv_{d}", "pv_estimate"), self.now_utc, self.midnight_utc, prune=True, intermediate=True))
@@ -3090,7 +3092,9 @@ chart.render();
             # PV Forecast (ClearSky) - historical and future
             pv_forecast_histCS = history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", 3, required=False), attributes=True, state_key="nowCS")
             cs_pv_series = prune_today(pv_forecast_histCS, self.now_utc, self.midnight_utc, prune=True, prune_past_days=2, intermediate=True)
-            cs_pv_series.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_today", "pv_clearsky"), self.now_utc, self.midnight_utc, prune=True, intermediate=True))
+            pv_today_cs = self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_today", "pv_clearsky")
+            pv_today_cs_future = {k: v for k, v in pv_today_cs.items() if str2time(k) >= self.now_utc - timedelta(minutes=30)}
+            cs_pv_series.update(prune_today(pv_today_cs_future, self.now_utc, self.midnight_utc, prune=True, intermediate=True))
             cs_pv_series.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_tomorrow", "pv_clearsky"), self.now_utc, self.midnight_utc, prune=True, intermediate=True))
             for d in ["d2", "d3"]:
                 cs_pv_series.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + f"_pv_{d}", "pv_clearsky"), self.now_utc, self.midnight_utc, prune=True, intermediate=True))
@@ -3099,7 +3103,7 @@ chart.render();
                 {"name": "Clipping Remaining", "data": clipping_remaining_series, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#FF1493", "unit": "kWh"},
                 {"name": "Actual SOC", "data": soc_kw_h0, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#00BFFF", "unit": "kWh"},
                 {"name": "Target SOC", "data": soc_kw_best, "opacity": "0.7", "stroke_width": "2", "stroke_curve": "stepline", "stroke_dasharray": "5", "color": "#1E90FF", "unit": "kWh"},
-                {"name": "Clipping Ceiling", "data": clipping_ceiling_series, "opacity": "0.7", "stroke_width": "2", "stroke_curve": "stepline", "stroke_dasharray": "5", "color": "#C71585", "unit": "kWh"},
+                {"name": "Clipping Target SOC", "data": clipping_target_soc_series, "opacity": "0.7", "stroke_width": "2", "stroke_curve": "stepline", "stroke_dasharray": "5", "color": "#C71585", "unit": "kWh"},
                 {"name": "PV Power Actual", "data": pv_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#FFA500", "unit": "kW"},
                 {"name": "PV Forecast (Base)", "data": raw_pv_series, "opacity": "0.7", "stroke_width": "2", "stroke_curve": "smooth", "stroke_dasharray": "5", "color": "#FFD700", "unit": "kW"},
             ]
@@ -3109,6 +3113,12 @@ chart.render();
             yaxis_annotations = []
             if inverter_ac_limit_kw > 0:
                 yaxis_annotations.append({"y": inverter_ac_limit_kw, "borderColor": "#FF0000", "strokeDashArray": 4, "text": "Inverter AC Capacity ({} kW)".format(inverter_ac_limit_kw), "textColor": "#fff", "backgroundColor": "#FF0000"})
+
+            clipping_limit_override_kw = getattr(self.base, "clipping_limit_override", 0) * 60.0
+            if clipping_limit_override_kw > 0:
+                yaxis_annotations.append(
+                    {"y": clipping_limit_override_kw, "borderColor": "#C71585", "strokeDashArray": 4, "text": "Clipping Limit Override ({} kW)".format(dp2(clipping_limit_override_kw)), "textColor": "#fff", "backgroundColor": "#C71585"}
+                )
 
             xaxis_annotations = []
             buffer_start = getattr(self.base, "clipping_buffer_start", None)
