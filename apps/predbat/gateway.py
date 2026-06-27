@@ -124,6 +124,18 @@ GATEWAY_ATTRIBUTE_TABLE = {
     "ems_total_load": {"friendly_name": "EMS Total Load Power", "icon": "mdi:flash", "unit_of_measurement": "W", "device_class": "power", "state_class": "measurement"},
     # Sub-inverter temperature (entity suffix is "_temp")
     "temp": {"friendly_name": "Sub-Inverter Temperature", "icon": "mdi:thermometer", "unit_of_measurement": "°C", "device_class": "temperature", "state_class": "measurement"},
+    # EV charger (OCPP) — device-level entities, present when a charge point is connected
+    "ev_connected": {"friendly_name": "EV Charger Connected", "icon": "mdi:ev-station", "device_class": "plug"},
+    "ev_session_active": {"friendly_name": "EV Charging Active", "icon": "mdi:ev-station", "device_class": "battery_charging"},
+    "ev_status": {"friendly_name": "EV Charger Status", "icon": "mdi:ev-station"},
+    "ev_power": {"friendly_name": "EV Charge Power", "icon": "mdi:ev-station", "unit_of_measurement": "W", "device_class": "power", "state_class": "measurement"},
+    "ev_session_energy": {"friendly_name": "EV Session Energy", "icon": "mdi:ev-station", "unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total"},
+    "ev_soc": {"friendly_name": "EV Battery SOC", "icon": "mdi:car-electric", "unit_of_measurement": "%", "device_class": "battery", "state_class": "measurement"},
+    "ev_current_limit": {"friendly_name": "EV Current Limit", "icon": "mdi:current-ac", "unit_of_measurement": "A", "device_class": "current"},
+    "ev_max_current": {"friendly_name": "EV Max Current", "icon": "mdi:current-ac", "unit_of_measurement": "A", "device_class": "current"},
+    "ev_voltage": {"friendly_name": "EV Supply Voltage", "icon": "mdi:flash", "unit_of_measurement": "V", "device_class": "voltage", "state_class": "measurement"},
+    "ev_eco_mode": {"friendly_name": "EV Eco Mode", "icon": "mdi:leaf"},
+    "ev_charge_rate": {"friendly_name": "EV Charge Rate", "icon": "mdi:ev-station", "unit_of_measurement": "kW", "device_class": "power"},
 }
 
 
@@ -134,7 +146,7 @@ class GatewayMQTT(ComponentBase):
     Instance methods handle MQTT lifecycle and ComponentBase integration.
     """
 
-    def initialize(self, gateway_device_id=None, mqtt_host=None, mqtt_port=8883, mqtt_token=None, gateway_inverter_serial=None, **kwargs):
+    def initialize(self, gateway_device_id=None, mqtt_host=None, mqtt_port=8883, mqtt_token=None, gateway_inverter_serial=None, gateway_evc_automatic=False, gateway_evc_control=False, **kwargs):
         """Initialize gateway configuration and build MQTT topic strings.
 
         Args:
@@ -144,9 +156,18 @@ class GatewayMQTT(ComponentBase):
             mqtt_token: JWT access token for MQTT authentication.
             gateway_inverter_serial: Optional serial number(s) to restrict which inverters are configured.
                 If not set, all inverters are used. May be a string or a list of strings.
+            gateway_evc_automatic: When True, automatically register a connected OCPP EV charger as a
+                PredBat car so the optimizer plans for it. Off by default so existing gateway users are
+                unaffected. Set to ``true`` in apps.yaml to enable.
+            gateway_evc_control: When True (requires gateway_evc_automatic), read the PredBat car-charging
+                plan each cycle and send the charge windows as a schedule to the EVC via MQTT. The EVC
+                executes the schedule autonomously. When enabled, car_charging_now is omitted from
+                auto-config to prevent a feedback loop.
             **kwargs: Additional keyword arguments (ignored).
         """
         self.gateway_device_id = gateway_device_id
+        self.gateway_evc_automatic = bool(gateway_evc_automatic)
+        self.gateway_evc_control = bool(gateway_evc_control)
         self.mqtt_host = mqtt_host
         self.mqtt_port = mqtt_port
         self.mqtt_token = mqtt_token
@@ -176,6 +197,7 @@ class GatewayMQTT(ComponentBase):
         self.topic_online = f"{self._topic_base}/online"
         self.topic_schedule = f"{self._topic_base}/schedule"
         self.topic_command = f"{self._topic_base}/command"
+        self.topic_ev_command = f"{self._topic_base}/ev/command"
 
         # Runtime state
         self._mqtt_client = None
@@ -201,8 +223,12 @@ class GatewayMQTT(ComponentBase):
         self._last_status = None
         self._auto_configured = False
         self._configured_inverter_serials = frozenset()  # serials discovered at the last auto-config
+        self._configured_ev_chargers = frozenset()  # EV charge point ids registered at the last auto-config
         self._last_published_plan = None
         self._pending_plan = None
+        self._ev_windows: list = []  # parsed (start_dt, end_dt) charge windows from HA plan attribute
+        self._ev_charging_active: bool = False  # last commanded state; avoids duplicate start/stop sends
+        self._ev_max_current: dict = {}  # charge_point_id → last known max_current_a from telemetry
         self._suffix_to_serial = {}  # maps entity suffix (last 6 chars of serial) -> full serial string
         self._command_id = 0  # incrementing counter included in every published command
 
@@ -351,6 +377,68 @@ class GatewayMQTT(ComponentBase):
         if self._plan_changed(plan_entries):
             self._pending_plan = (plan_entries, timezone)
 
+    def _refresh_ev_windows(self):
+        """Re-read the PredBat car-charging-slot planned windows from HA and cache them.
+
+        Called once per run() cycle so the minute-level check always has up-to-date window
+        boundaries without polling HA every second.  The ``planned`` attribute of
+        ``binary_sensor.<prefix>_car_charging_slot`` is a list of ``{start, end, ...}`` dicts
+        with datetime strings in ``"%m-%d %H:%M:%S"`` format (produced by output.py).
+        """
+        planned = self.get_state_wrapper(f"binary_sensor.{self.prefix}_car_charging_slot", attribute="planned") or []
+        windows = []
+        for w in planned:
+            try:
+                start_dt = datetime.datetime.strptime(w["start"], "%m-%d %H:%M:%S")
+                end_dt = datetime.datetime.strptime(w["end"], "%m-%d %H:%M:%S")
+                windows.append((start_dt, end_dt))
+            except (KeyError, ValueError):
+                continue
+        self._ev_windows = windows
+
+    def _should_ev_charge_now(self):
+        """Return True if the current wall-clock time falls inside any planned charge window."""
+        now = datetime.datetime.now()
+        now_no_year = now.replace(year=1900)
+        for start_dt, end_dt in self._ev_windows:
+            start = start_dt.replace(year=1900)
+            end = end_dt.replace(year=1900)
+            if start <= now_no_year < end:
+                return True
+        return False
+
+    async def _apply_ev_charging_state(self):
+        """Start or stop EVC charging when the window state transitions.
+
+        Called every run() cycle (once per minute).  On a start transition, sets the
+        charging profile to the configured max current then issues RemoteStartTransaction
+        so the charger begins a session at that rate.  On a stop transition, issues
+        RemoteStopTransaction; the firmware falls back to its internal transaction ID when
+        none is supplied.  No command is sent when the desired state already matches
+        ``self._ev_charging_active``.
+        """
+        should_charge = self._should_ev_charge_now()
+        if should_charge == self._ev_charging_active:
+            return
+        cp_id = next(iter(self._configured_ev_chargers), "")
+        if should_charge:
+            current_a = self._ev_max_current.get(cp_id, 32)
+            self.log(f"Info: GatewayMQTT: EVC start charging — current_a={current_a} for '{cp_id}'")
+            await self._send_ev_command({"action": "SetChargingProfile", "current_a": int(current_a)})
+            await self._send_ev_command({"action": "RemoteStartTransaction", "id_tag": "predbat"})
+        else:
+            self.log(f"Info: GatewayMQTT: EVC stop charging for '{cp_id}'")
+            await self._send_ev_command({"action": "RemoteStopTransaction"})
+        self._ev_charging_active = should_charge
+
+    async def _send_ev_command(self, command):
+        """Publish a single EV command dict as JSON to the EV command topic.
+
+        Args:
+            command: Dict with ``action`` key and any command-specific fields.
+        """
+        await self._publish_raw(self.topic_ev_command, json.dumps(command).encode())
+
     async def run(self, seconds, first):
         """Component run loop — called every 60 seconds by ComponentBase.start().
 
@@ -401,6 +489,11 @@ class GatewayMQTT(ComponentBase):
                 plan_entries, tz = self._pending_plan
                 self._pending_plan = None
                 await self.publish_plan(plan_entries, tz)
+
+            # EVC minute-level control: refresh windows from HA plan, then start/stop if needed
+            if self.gateway_evc_control and self.gateway_evc_automatic and self._auto_configured:
+                self._refresh_ev_windows()
+                await self._apply_ev_charging_state()
 
             # Tell the gateway the current read-only state (once on startup, then on every change)
             await self._check_read_only_state()
@@ -612,6 +705,9 @@ class GatewayMQTT(ComponentBase):
             suffix = inv.serial[-6:].lower() if len(inv.serial) > 6 else inv.serial.lower()
             self._inject_inverter_entities(inv, suffix)
 
+        # EV charger entities (device-level, present only when a charge point is connected)
+        self._inject_ev_entities(status)
+
         # EMS aggregate entities (when a GIVENERGY_EMS unit is present). The EMS is not
         # guaranteed to be status.inverters[0] — discovery order is unstable (see the
         # 2026-06-04 incident note in automatic_config) — so locate it by type, mirroring
@@ -728,6 +824,82 @@ class GatewayMQTT(ComponentBase):
             self.dashboard_item(f"sensor.{pfx}_battery_charge_today", round(energy.battery_charge_today_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_charge_today", {}), app="gateway")
             self.dashboard_item(f"sensor.{pfx}_battery_discharge_today", round(energy.battery_discharge_today_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("battery_discharge_today", {}), app="gateway")
 
+    @staticmethod
+    def _ev_suffix(ev, multi):
+        """Build the entity suffix for an EV charger.
+
+        Single charger (the v1 case) uses a stable "ev" suffix; with more than one
+        charger present, disambiguate by the last 6 chars of the OCPP charge point id.
+
+        Args:
+            ev: An EvCharger protobuf message.
+            multi: True when more than one charger is present in the status.
+
+        Returns:
+            str: The entity suffix (e.g. "ev" or "ev_b749").
+        """
+        if not multi:
+            return "ev"
+        charge_point_id = ev.charge_point_id or ""
+        return f"ev_{charge_point_id[-6:].lower()}" if charge_point_id else "ev"
+
+    def _inject_ev_entities(self, status):
+        """Inject EV charger entities from GatewayStatus.ev_chargers.
+
+        EV chargers are device-level (not per-inverter). Entities are named
+        {type}.{prefix}_gateway_{suffix}_{attribute}, where suffix is "ev" for the
+        single-charger case. Fields documented as "0 = not reported" / "" are skipped
+        so they surface as unavailable rather than a misleading zero.
+
+        Args:
+            status: A decoded GatewayStatus protobuf message.
+        """
+        chargers = list(status.ev_chargers)
+        multi = len(chargers) > 1
+        for ev in chargers:
+            suffix = self._ev_suffix(ev, multi)
+            pfx = f"{self.prefix}_gateway_{suffix}"
+
+            self.dashboard_item(f"binary_sensor.{pfx}_connected", ev.connected, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_connected", {}), app="gateway")
+            self.dashboard_item(f"binary_sensor.{pfx}_session_active", ev.session_active, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_session_active", {}), app="gateway")
+            if ev.status:
+                self.dashboard_item(f"sensor.{pfx}_status", ev.status, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_status", {}), app="gateway")
+            self.dashboard_item(f"sensor.{pfx}_power", ev.power_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_power", {}), app="gateway")
+            self.dashboard_item(f"sensor.{pfx}_session_energy", round(ev.session_energy_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_session_energy", {}), app="gateway")
+            if ev.current_limit_a:
+                self.dashboard_item(f"sensor.{pfx}_current_limit", ev.current_limit_a, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_current_limit", {}), app="gateway")
+            if ev.soc_percent:
+                ev_soc = ev.soc_percent
+            else:
+                # SoC not reported by this charger — estimate from session energy and configured battery size
+                # so the sensor always exists and the optimizer sees progress rather than a stuck 0%.
+                battery_size_kwh = self.get_arg("car_charging_battery_size", 100)
+                try:
+                    battery_size_kwh = float(battery_size_kwh)
+                except (ValueError, TypeError):
+                    battery_size_kwh = 100.0
+                ev_soc = round(min((ev.session_energy_wh / 1000.0) / battery_size_kwh * 100.0, 100.0), 1)
+            self.dashboard_item(f"sensor.{pfx}_soc", ev_soc, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_soc", {}), app="gateway")
+            if ev.max_current_a:
+                self._ev_max_current[ev.charge_point_id or ""] = ev.max_current_a
+                self.dashboard_item(f"sensor.{pfx}_max_current", ev.max_current_a, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_max_current", {}), app="gateway")
+            if ev.voltage_v:
+                self.dashboard_item(f"sensor.{pfx}_voltage", ev.voltage_v, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_voltage", {}), app="gateway")
+            if ev.eco_mode:
+                self.dashboard_item(f"sensor.{pfx}_eco_mode", ev.eco_mode, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_eco_mode", {}), app="gateway")
+
+            # Derived charge-rate capability (kW) — published so auto-config can point
+            # car_charging_rate at it (entity reference, like the inverter args) rather
+            # than baking a value into config. Falls back to 7.4 kW when the charger does
+            # not report its capability.
+            if ev.max_current_a and ev.voltage_v:
+                charge_rate_kw = round(ev.max_current_a * ev.voltage_v / 1000.0, 2)
+            elif ev.max_current_a:
+                charge_rate_kw = round(ev.max_current_a * 230 / 1000.0, 2)
+            else:
+                charge_rate_kw = 7.4
+            self.dashboard_item(f"sensor.{pfx}_charge_rate", charge_rate_kw, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_charge_rate", {}), app="gateway")
+
     def _needs_reconfigure(self, status):
         """Whether automatic_config should (re-)run for this status.
 
@@ -744,6 +916,12 @@ class GatewayMQTT(ComponentBase):
         new_serials = frozenset(inv.serial for inv in status.inverters) - self._configured_inverter_serials
         if new_serials:
             self.log(f"Info: GatewayMQTT: new inverter(s) discovered {sorted(new_serials)} — re-running auto-config")
+            return True
+        # Re-run when an EV charger appears that we have not configured yet, so a charge
+        # point connecting after first telemetry triggers car registration.
+        new_chargers = frozenset(ev.charge_point_id for ev in status.ev_chargers if ev.charge_point_id) - self._configured_ev_chargers
+        if new_chargers:
+            self.log(f"Info: GatewayMQTT: new EV charger(s) discovered {sorted(new_chargers)} — re-running auto-config")
             return True
         return False
 
@@ -979,10 +1157,55 @@ class GatewayMQTT(ComponentBase):
             self.set_state_wrapper(hybrid_entity, "off" if ac_coupled else "on")
             self.log(f"Info: GatewayMQTT: model '{model_name}' -> ac_coupled={ac_coupled}, set {hybrid_entity} {'off' if ac_coupled else 'on'}")
 
+        # Register the gateway's OCPP EV charger as a PredBat car (opt-in). Done after the
+        # inverter config so a failure here never blocks battery control.
+        self._register_ev_car(status)
+
         self._auto_configured = True
         self._configured_inverter_serials = frozenset(inv.serial for inv in all_inverters)
+        self._configured_ev_chargers = frozenset(ev.charge_point_id for ev in status.ev_chargers if ev.charge_point_id)
         self.log(f"Info: GatewayMQTT: auto-config complete: {num_inverters} inverter(s) registered")
         return num_inverters
+
+    def _register_ev_car(self, status):
+        """Register a connected OCPP EV charger as a PredBat car.
+
+        Maps the gateway's EV telemetry entities onto the ``car_charging_*`` args so the
+        optimizer plans for the charger.  Gated behind ``gateway_evc_automatic``; does
+        nothing when no EV charger is present in telemetry.  Battery size, target SoC and
+        ready-time have no source from the charger and are left to the existing
+        ``car_charging_battery_size`` / ``car_charging_limit`` settings.
+
+        Args:
+            status: A decoded GatewayStatus protobuf message.
+        """
+        if not self.gateway_evc_automatic:
+            return
+
+        chargers = list(status.ev_chargers)
+        if not chargers:
+            return
+
+        # For now we overwrite the first charger only; multi-charger support needs work
+        ev = chargers[0]
+        pfx = f"{self.prefix}_gateway_{self._ev_suffix(ev, multi=False)}"
+        self.set_arg("num_cars", 1)
+        # All args point at the gateway EV entities (entity references, like the inverter
+        # args) rather than literal values. The charge-rate capability is published as a
+        # sensor by _inject_ev_entities. Battery size and target limit are deliberately
+        # left to the existing car_charging_battery_size / car_charging_limit settings —
+        # the charger cannot report them, so overwriting them here would only swap one
+        # default for another.
+        # "Planned"/"now" both derive from the connected binary sensor; many OCPP cars do
+        # not report SoC, so the manual-SoC path supplies a starting value.
+        self.set_arg("car_charging_planned", [f"binary_sensor.{pfx}_connected"])
+        if not self.gateway_evc_control:
+            self.set_arg("car_charging_now", [f"binary_sensor.{pfx}_session_active"])
+        self.set_arg("car_charging_soc", [f"sensor.{pfx}_soc"])
+        self.set_arg("car_charging_rate", [f"sensor.{pfx}_charge_rate"])
+        self.set_arg("car_charging_energy", f"sensor.{pfx}_session_energy")
+
+        self.log(f"Info: GatewayMQTT: registered EV charger '{ev.charge_point_id or 'unknown'}' as car 1")
 
     async def _publish_predbat_data(self):
         """Publish price/timeline data to the gateway device for display.
