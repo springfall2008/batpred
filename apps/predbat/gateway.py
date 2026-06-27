@@ -432,10 +432,13 @@ class GatewayMQTT(ComponentBase):
         none is supplied.  No command is sent when the desired state already matches
         ``self._ev_charging_active``.
         """
+        if not self._configured_ev_chargers:
+            return
         should_charge = self._should_ev_charge_now()
         if should_charge == self._ev_charging_active:
             return
-        cp_id = next(iter(self._configured_ev_chargers), "")
+        # min() gives a deterministic choice when multiple chargers are present
+        cp_id = min(self._configured_ev_chargers)
         if should_charge:
             current_a = self._ev_max_current.get(cp_id, 32)
             self.log(f"Info: GatewayMQTT: EVC start charging — current_a={current_a} for '{cp_id}'")
