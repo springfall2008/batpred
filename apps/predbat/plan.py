@@ -4528,6 +4528,8 @@ class Plan:
                         clipping_status_text = clipping_status_text[:-1]
                     clipping_status_text += " ({} active).".format(", ".join(active_params_list))
 
+                self.clipping_status = clipping_status_text
+
                 self.dashboard_item(
                     self.prefix + ".clipping_status",
                     state=clipping_status_text,
