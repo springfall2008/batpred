@@ -1721,7 +1721,11 @@ class Plan:
                 dwindow = self.export_window[0]
                 if self.minutes_now >= pwindow["start"] and self.minutes_now < pwindow["end"] and ((self.minutes_now >= dwindow["start"] and self.minutes_now < dwindow["end"]) or (dwindow["end"] == pwindow["start"])):
                     metric -= max(0.5, self.metric_min_improvement_export)
-                    keep_export = True
+                    # Only relax the cost gate (further below) for an option that actually covers the current
+                    # minute. The option start is varied during optimisation, so a future-starting option is
+                    # not the in-progress export and must not receive the cost-gate commitment.
+                    if start <= self.minutes_now:
+                        keep_export = True
 
             # Round metric to 4 DP
             metric = dp4(metric)

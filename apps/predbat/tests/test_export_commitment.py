@@ -121,6 +121,15 @@ def run_export_commitment_tests(my_predbat):
         print("ERROR: expected export gated out (100%) when the prior export window does not cover now, got {}".format(best_export_outside))
         failed = True
 
+    # Restore the fields mutated above so we do not make later tests in the shared suite order-dependent
+    my_predbat.isExporting = False
+    my_predbat.export_window = []
+    my_predbat.set_export_freeze = True
+    my_predbat.set_export_freeze_only = False
+    my_predbat.set_export_low_power = False
+    my_predbat.metric_min_improvement_export = 0.1
+    my_predbat.metric_min_improvement_export_freeze = 0.1
+
     if failed:
         print("**** Export commitment tests FAILED ****")
     else:
