@@ -3530,7 +3530,7 @@ class TestRunStartupWait:
         assert sleep_count[0] == 1  # One sleep in the auto-config wait loop
 
     def test_auto_config_wait_times_out_with_warning_when_device_offline(self):
-        """When connected but device never sends telemetry, run() logs Warn after 15s and continues."""
+        """When connected but device never sends telemetry, run() logs Warn after 60s and continues."""
         if not HAS_AIOMQTT:
             return
         from unittest.mock import patch
