@@ -3812,8 +3812,9 @@ class TestEvAutoConfig:
         assert gw._args["car_charging_planned"] == ["binary_sensor.predbat_gateway_ev_connected"]
         assert gw._args["car_charging_now"] == ["binary_sensor.predbat_gateway_ev_session_active"]
         assert gw._args["car_charging_soc"] == ["sensor.predbat_gateway_ev_soc"]
-        # Charge rate is a plain entity reference (not a list) so get_arg resolves it via indirect lookup
-        assert gw._args["car_charging_rate"] == "sensor.predbat_gateway_ev_charge_rate"
+        # car_charging_rate is a UI config item — set via expose_config, not set_arg
+        assert "car_charging_rate" not in gw._args
+        gw.base.expose_config.assert_called_once_with("car_charging_rate", 7.68)  # 32A * 240V / 1000
         # Session energy sensor for subtracting EV load from history
         assert gw._args["car_charging_energy"] == "sensor.predbat_gateway_ev_session_energy"
         # Battery size and target limit are left to the existing car_charging_* settings
@@ -3845,11 +3846,24 @@ class TestEvAutoConfig:
         gw._register_ev_car(self._status_with_ev())
         assert "car_charging_now" not in gw._args
 
-    def test_charge_rate_is_entity_reference_regardless_of_capability(self):
-        """car_charging_rate always references the sensor, even with no reported capability."""
+    def test_charge_rate_falls_back_to_7_4_when_capability_unknown(self):
+        """car_charging_rate expose_config uses 7.4kW fallback when max_current_a is 0."""
         gw = self._make_gateway(ev_enable=True, num_cars=0)
         gw._register_ev_car(self._status_with_ev(max_current_a=0, voltage_v=0))
-        assert gw._args["car_charging_rate"] == "sensor.predbat_gateway_ev_charge_rate"
+        assert "car_charging_rate" not in gw._args
+        gw.base.expose_config.assert_called_once_with("car_charging_rate", 7.4)
+
+    def test_charge_rate_computed_from_max_current_and_voltage(self):
+        """car_charging_rate expose_config uses max_current_a * voltage_v when both are set."""
+        gw = self._make_gateway(ev_enable=True, num_cars=0)
+        gw._register_ev_car(self._status_with_ev(max_current_a=16, voltage_v=230))
+        gw.base.expose_config.assert_called_once_with("car_charging_rate", 3.68)  # 16A * 230V / 1000
+
+    def test_charge_rate_uses_230v_default_when_voltage_missing(self):
+        """car_charging_rate expose_config uses 230V default when voltage_v is 0."""
+        gw = self._make_gateway(ev_enable=True, num_cars=0)
+        gw._register_ev_car(self._status_with_ev(max_current_a=32, voltage_v=0))
+        gw.base.expose_config.assert_called_once_with("car_charging_rate", 7.36)  # 32A * 230V / 1000
 
 
 class TestEvInitialize:

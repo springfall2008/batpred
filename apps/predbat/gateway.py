@@ -871,6 +871,19 @@ class GatewayMQTT(ComponentBase):
         charge_point_id = ev.charge_point_id or ""
         return f"ev_{charge_point_id[-6:].lower()}" if charge_point_id else "ev"
 
+    @staticmethod
+    def _ev_charge_rate_kw(ev):
+        """Return the max charge rate in kW from EV charger telemetry.
+
+        Uses max_current_a * voltage_v, falling back to 230 V when voltage is not
+        reported, and to 7.4 kW when current is also absent.
+        """
+        if ev.max_current_a > 0 and ev.voltage_v > 0:
+            return round(ev.max_current_a * ev.voltage_v / 1000.0, 2)
+        if ev.max_current_a > 0:
+            return round(ev.max_current_a * 230 / 1000.0, 2)
+        return 7.4
+
     def _inject_ev_entities(self, status):
         """Inject EV charger entities from GatewayStatus.ev_chargers.
 
@@ -916,17 +929,7 @@ class GatewayMQTT(ComponentBase):
             if ev.eco_mode:
                 self.dashboard_item(f"sensor.{pfx}_eco_mode", ev.eco_mode, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_eco_mode", {}), app="gateway")
 
-            # Derived charge-rate capability (kW) — published so auto-config can point
-            # car_charging_rate at it (entity reference, like the inverter args) rather
-            # than baking a value into config. Falls back to 7.4 kW when the charger does
-            # not report its capability.
-            if ev.max_current_a and ev.voltage_v:
-                charge_rate_kw = round(ev.max_current_a * ev.voltage_v / 1000.0, 2)
-            elif ev.max_current_a:
-                charge_rate_kw = round(ev.max_current_a * 230 / 1000.0, 2)
-            else:
-                charge_rate_kw = 7.4
-            self.dashboard_item(f"sensor.{pfx}_charge_rate", charge_rate_kw, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_charge_rate", {}), app="gateway")
+            self.dashboard_item(f"sensor.{pfx}_charge_rate", self._ev_charge_rate_kw(ev), attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_charge_rate", {}), app="gateway")
 
     def _needs_reconfigure(self, status):
         """Whether automatic_config should (re-)run for this status.
@@ -1218,20 +1221,21 @@ class GatewayMQTT(ComponentBase):
         ev = chargers[0]
         pfx = f"{self.prefix}_gateway_{self._ev_suffix(ev, multi=False)}"
         self.set_arg("num_cars", 1)
-        # All args point at the gateway EV entities (entity references, like the inverter
-        # args) rather than literal values. The charge-rate capability is published as a
-        # sensor by _inject_ev_entities. Battery size and target limit are deliberately
-        # left to the existing car_charging_battery_size / car_charging_limit settings —
-        # the charger cannot report them, so overwriting them here would only swap one
-        # default for another.
+        # Entity-reference args (resolved by get_arg indirect lookup at fetch time).
+        # Battery size and target limit are deliberately left to the existing
+        # car_charging_battery_size / car_charging_limit settings — the charger cannot
+        # report them, so overwriting them here would only swap one default for another.
         # "Planned"/"now" both derive from the connected binary sensor; many OCPP cars do
         # not report SoC, so the manual-SoC path supplies a starting value.
         self.set_arg("car_charging_planned", [f"binary_sensor.{pfx}_connected"])
         if not self.gateway_evc_control:
             self.set_arg("car_charging_now", [f"binary_sensor.{pfx}_session_active"])
         self.set_arg("car_charging_soc", [f"sensor.{pfx}_soc"])
-        self.set_arg("car_charging_rate", f"sensor.{pfx}_charge_rate")
         self.set_arg("car_charging_energy", f"sensor.{pfx}_session_energy")
+        # car_charging_rate is a UI config item (input_number) so it must go through
+        # expose_config rather than set_arg, otherwise get_ha_config intercepts it and
+        # returns the raw string instead of resolving the entity state.
+        self.base.expose_config("car_charging_rate", self._ev_charge_rate_kw(ev))
 
         self.log(f"Info: GatewayMQTT: registered EV charger '{ev.charge_point_id or 'unknown'}' as car 1")
 
