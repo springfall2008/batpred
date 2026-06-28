@@ -1099,6 +1099,7 @@ class Prediction:
                     pv_ac = max(pv_ac - over_limit * inverter_loss, 0)
                     pv_ac_no_loss = max(pv_ac_before - over_limit, 0)
                     clipped_today += pv_ac_before - pv_ac_no_loss
+                    metric += (pv_ac_before - pv_ac_no_loss) * export_rate * clipping_cost_weight * 5
                     total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybrid)
             else:
                 total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybrid)
@@ -1117,6 +1118,7 @@ class Prediction:
                 pv_ac_before = pv_ac
                 pv_ac = max(pv_ac - over_limit, 0)
                 clipped_today += pv_ac_before - pv_ac
+                metric += (pv_ac_before - pv_ac) * export_rate * clipping_cost_weight * 5
 
             # Adjust battery soc
             if battery_draw > 0:
