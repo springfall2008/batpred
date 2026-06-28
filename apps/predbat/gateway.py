@@ -490,6 +490,16 @@ class GatewayMQTT(ComponentBase):
                 await asyncio.sleep(0.5)
             else:
                 self.log("Warn: GatewayMQTT: First connection attempt not yet complete, continuing startup")
+            # After a successful connection, wait briefly for the first telemetry → auto-config so
+            # that inverter args are wired up before other components start.  Cap at 60 s so an
+            # offline gateway device does not stall startup indefinitely.
+            if self._mqtt_connected and not self.api_stop:
+                for _ in range(60 * 2):
+                    if self._auto_configured or self.api_stop:
+                        break
+                    await asyncio.sleep(0.5)
+                else:
+                    self.log("Warn: GatewayMQTT: Auto-config not complete after 60s — gateway device may be offline, continuing startup")
             return True
 
         # Housekeeping on subsequent runs
@@ -509,7 +519,7 @@ class GatewayMQTT(ComponentBase):
                 await self.publish_plan(plan_entries, tz)
 
             # EVC minute-level control: refresh windows from HA plan, then start/stop if needed
-            if self.gateway_evc_control and self.gateway_evc_automatic and self._auto_configured:
+            if self.gateway_evc_control and self._auto_configured:
                 self._refresh_ev_windows()
                 await self._apply_ev_charging_state()
 
@@ -1220,7 +1230,7 @@ class GatewayMQTT(ComponentBase):
         if not self.gateway_evc_control:
             self.set_arg("car_charging_now", [f"binary_sensor.{pfx}_session_active"])
         self.set_arg("car_charging_soc", [f"sensor.{pfx}_soc"])
-        self.set_arg("car_charging_rate", [f"sensor.{pfx}_charge_rate"])
+        self.set_arg("car_charging_rate", f"sensor.{pfx}_charge_rate")
         self.set_arg("car_charging_energy", f"sensor.{pfx}_session_energy")
 
         self.log(f"Info: GatewayMQTT: registered EV charger '{ev.charge_point_id or 'unknown'}' as car 1")
