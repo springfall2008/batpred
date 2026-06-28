@@ -1988,10 +1988,12 @@ class Plan:
             loop_options = [100.0, 99.0, 0.0]
             if self.set_export_low_power:
                 loop_options.extend([0.3, 0.5, 0.7])
+            loop_options.append(98.0)
         else:
             loop_options = [100.0, 0.0]
             if self.set_export_low_power:
                 loop_options.extend([0.3, 0.5, 0.7])
+            loop_options.append(98.0)
 
         # Ensure any pre-assigned fractional limits (like clipping thresholds) are evaluated
         if try_export[window_n] not in loop_options and try_export[window_n] > 0.0 and try_export[window_n] < 99.0:
@@ -2015,6 +2017,12 @@ class Plan:
                     loop_start -= export_step_large
                 else:
                     loop_start -= export_step
+
+                if this_export_limit == 98.0:
+                    soc_at_start = self.predict_soc_best.get(start, self.soc_max)
+                    this_export_limit = float(calc_percent_limit(soc_at_start, self.soc_max))
+                    if this_export_limit in loop_options and this_export_limit != 98.0:
+                        continue
 
                 # Can't optimise all window start slot
                 if all_n and (start != window["start"]):
