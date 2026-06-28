@@ -936,6 +936,16 @@ class Plan:
             minutes_needed = max(60, min(360, minutes_needed))
 
             morning_start = max(self.minutes_now, peak_start - minutes_needed)
+
+            # Stretch the start time back to the end of the overnight charge window, or 06:00
+            midnight = int(peak_start / 1440) * 1440
+            early_start = midnight + (6 * 60)
+            if getattr(self, "clipping_buffer_start", None) is not None:
+                early_start = midnight + self.clipping_buffer_start
+
+            morning_start = min(morning_start, early_start)
+            morning_start = max(self.minutes_now, morning_start)
+
             morning_start = int(morning_start / 30) * 30  # Align to nearest 30 mins
 
             if morning_start >= peak_start:
@@ -1998,6 +2008,12 @@ class Plan:
         # Ensure any pre-assigned fractional limits (like clipping thresholds) are evaluated
         if try_export[window_n] not in loop_options and try_export[window_n] > 0.0 and try_export[window_n] < 99.0:
             loop_options.append(try_export[window_n])
+
+        # FORCE the optimizer to respect clipping protection by removing the "do nothing" (100.0) option
+        # This ensures we pick either the hold flag (98.0) or the explicit clipping target (e.g. 61.0)
+        is_clipping_window = ("clipping_target_soc_pct" in try_export_window[window_n])
+        if is_clipping_window and 100.0 in loop_options and len(loop_options) > 1:
+            loop_options.remove(100.0)
 
         # Collect all options
         results = []
