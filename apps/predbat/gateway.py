@@ -125,7 +125,8 @@ GATEWAY_ATTRIBUTE_TABLE = {
     # Sub-inverter temperature (entity suffix is "_temp")
     "temp": {"friendly_name": "Sub-Inverter Temperature", "icon": "mdi:thermometer", "unit_of_measurement": "°C", "device_class": "temperature", "state_class": "measurement"},
     # EV charger (OCPP) — device-level entities, present when a charge point is connected
-    "ev_connected": {"friendly_name": "EV Charger Connected", "icon": "mdi:ev-station", "device_class": "plug"},
+    "ev_online": {"friendly_name": "EV Charger Online", "icon": "mdi:ev-station", "device_class": "connectivity"},
+    "ev_connected": {"friendly_name": "EV Car Connected", "icon": "mdi:car-electric", "device_class": "plug"},
     "ev_session_active": {"friendly_name": "EV Charging Active", "icon": "mdi:ev-station", "device_class": "battery_charging"},
     "ev_status": {"friendly_name": "EV Charger Status", "icon": "mdi:ev-station"},
     "ev_power": {"friendly_name": "EV Charge Power", "icon": "mdi:ev-station", "unit_of_measurement": "W", "device_class": "power", "state_class": "measurement"},
@@ -901,7 +902,9 @@ class GatewayMQTT(ComponentBase):
             suffix = self._ev_suffix(ev, multi)
             pfx = f"{self.prefix}_gateway_{suffix}"
 
-            self.dashboard_item(f"binary_sensor.{pfx}_connected", ev.connected, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_connected", {}), app="gateway")
+            self.dashboard_item(f"binary_sensor.{pfx}_online", ev.connected, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_online", {}), app="gateway")
+            ev_car_connected = ev.status in {"Preparing", "Charging", "SuspendedEV", "SuspendedEVSE", "Finishing"}
+            self.dashboard_item(f"binary_sensor.{pfx}_connected", ev_car_connected, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_connected", {}), app="gateway")
             self.dashboard_item(f"binary_sensor.{pfx}_session_active", ev.session_active, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_session_active", {}), app="gateway")
             if ev.status:
                 self.dashboard_item(f"sensor.{pfx}_status", ev.status, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_status", {}), app="gateway")
