@@ -95,12 +95,9 @@ def test_inject_creates_contiguous_window(my_predbat):
 
     w = my_predbat.export_window_best[0]
 
-    # Correct calculation: peak at 780 to 840.
-    # To create 2.0 kWh headroom with 1.0 kW effective discharge rate requires 120 minutes of discharge.
-    # Plus 30 mins safety margin = 150 minutes.
-    # Start = max(240, 780 - 150) = 630.
-    if w["start"] != 630:
-        print("ERROR: Expected window start at 630, got {}".format(w["start"]))
+    # With the new behavior, morning_start is stretched back to 06:00 (360 minutes absolute)
+    if w["start"] != 360:
+        print("ERROR: Expected window start at 360, got {}".format(w["start"]))
         failed = True
 
     if w["end"] != 840:
@@ -151,8 +148,8 @@ def test_inject_cleans_fragmented_windows(my_predbat):
         print("ERROR: Non-intersecting windows were incorrectly dropped!")
         failed = True
 
-    if 690 not in starts:  # Injected window start
-        print("ERROR: Injected window start 690 not found, got starts: {}".format(starts))
+    if 360 not in starts:  # Injected window start
+        print("ERROR: Injected window start 360 not found, got starts: {}".format(starts))
         failed = True
 
     # Check that limits are aligned: W0 (limit 10.0), W1 (limit 20.0), W3 (limit 40.0), and new window (target_soc_pct, e.g. 80.0)
