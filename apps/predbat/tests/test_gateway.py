@@ -3416,6 +3416,8 @@ class TestRunStartupWait:
         gw.mqtt_host = "mqtt.test.local"
         gw.api_stop = False
         gw._first_connection_attempted = False
+        gw._mqtt_connected = False
+        gw._auto_configured = False
         gw._mqtt_task = None
         return gw
 
@@ -3498,6 +3500,86 @@ class TestRunStartupWait:
         assert sleep_count[0] == 120  # 60 * 2 iterations of 0.5s each = 60s total
         warn_logged = any("Warn" in str(c) and "not yet complete" in str(c) for c in gw.log.call_args_list)
         assert warn_logged, "Expected a Warn log when the first connection attempt times out"
+
+    def test_waits_for_auto_config_after_connection(self):
+        """When connected, run() waits for _auto_configured before returning."""
+        if not HAS_AIOMQTT:
+            return
+        from unittest.mock import patch
+
+        gw = self._make_gateway()
+        gw._first_connection_attempted = True
+        gw._mqtt_connected = True
+        sleep_count = [0]
+
+        async def run_test():
+            async def fake_sleep(t):
+                sleep_count[0] += 1
+                gw._auto_configured = True  # Simulates first telemetry arriving
+
+            async def fake_mqtt_loop():
+                pass
+
+            gw._mqtt_loop = fake_mqtt_loop
+            with patch("asyncio.sleep", side_effect=fake_sleep):
+                result = await gw.run(0, True)
+            return result
+
+        result = self._run(run_test())
+        assert result is True
+        assert sleep_count[0] == 1  # One sleep in the auto-config wait loop
+
+    def test_auto_config_wait_times_out_with_warning_when_device_offline(self):
+        """When connected but device never sends telemetry, run() logs Warn after 60s and continues."""
+        if not HAS_AIOMQTT:
+            return
+        from unittest.mock import patch
+
+        gw = self._make_gateway()
+        gw._first_connection_attempted = True
+        gw._mqtt_connected = True
+        sleep_count = [0]
+
+        async def run_test():
+            async def fast_sleep(t):
+                sleep_count[0] += 1  # Never sets _auto_configured
+
+            async def fake_mqtt_loop():
+                pass
+
+            gw._mqtt_loop = fake_mqtt_loop
+            with patch("asyncio.sleep", side_effect=fast_sleep):
+                result = await gw.run(0, True)
+            return result
+
+        result = self._run(run_test())
+        assert result is True
+        assert sleep_count[0] == 60 * 2  # 60 * 2 iterations of 0.5s each = 60s total
+        warn_logged = any("Warn" in str(c) and "Auto-config not complete" in str(c) for c in gw.log.call_args_list)
+        assert warn_logged, "Expected a Warn log when auto-config times out"
+
+    def test_auto_config_wait_skipped_when_not_connected(self):
+        """When connection failed, auto-config wait is skipped entirely."""
+        if not HAS_AIOMQTT:
+            return
+        from unittest.mock import patch, AsyncMock
+
+        gw = self._make_gateway()
+        gw._first_connection_attempted = True
+        # _mqtt_connected stays False (connection failed)
+
+        async def run_test():
+            async def fake_mqtt_loop():
+                pass
+
+            gw._mqtt_loop = fake_mqtt_loop
+            with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+                result = await gw.run(0, True)
+            return result, mock_sleep.call_count
+
+        result, sleep_count = self._run(run_test())
+        assert result is True
+        assert sleep_count == 0  # No sleeps: connection-wait breaks immediately, auto-config skipped
 
 
 class TestSetChargeSlotPayload:
@@ -3730,8 +3812,8 @@ class TestEvAutoConfig:
         assert gw._args["car_charging_planned"] == ["binary_sensor.predbat_gateway_ev_connected"]
         assert gw._args["car_charging_now"] == ["binary_sensor.predbat_gateway_ev_session_active"]
         assert gw._args["car_charging_soc"] == ["sensor.predbat_gateway_ev_soc"]
-        # Charge rate points at the published capability sensor (entity reference)
-        assert gw._args["car_charging_rate"] == ["sensor.predbat_gateway_ev_charge_rate"]
+        # Charge rate is a plain entity reference (not a list) so get_arg resolves it via indirect lookup
+        assert gw._args["car_charging_rate"] == "sensor.predbat_gateway_ev_charge_rate"
         # Session energy sensor for subtracting EV load from history
         assert gw._args["car_charging_energy"] == "sensor.predbat_gateway_ev_session_energy"
         # Battery size and target limit are left to the existing car_charging_* settings
@@ -3767,7 +3849,7 @@ class TestEvAutoConfig:
         """car_charging_rate always references the sensor, even with no reported capability."""
         gw = self._make_gateway(ev_enable=True, num_cars=0)
         gw._register_ev_car(self._status_with_ev(max_current_a=0, voltage_v=0))
-        assert gw._args["car_charging_rate"] == ["sensor.predbat_gateway_ev_charge_rate"]
+        assert gw._args["car_charging_rate"] == "sensor.predbat_gateway_ev_charge_rate"
 
 
 class TestEvInitialize:
