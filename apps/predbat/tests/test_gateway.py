@@ -3684,7 +3684,8 @@ class TestEvTelemetry:
         gw._inject_ev_entities(self._status_with_ev())
 
         base = "predbat_gateway_ev"
-        assert gw._dashboard_calls[f"binary_sensor.{base}_connected"][0] is True
+        assert gw._dashboard_calls[f"binary_sensor.{base}_online"][0] is True
+        assert gw._dashboard_calls[f"binary_sensor.{base}_connected"][0] is True  # status="Charging" → car connected
         assert gw._dashboard_calls[f"binary_sensor.{base}_session_active"][0] is True
         assert gw._dashboard_calls[f"sensor.{base}_status"][0] == "Charging"
         assert gw._dashboard_calls[f"sensor.{base}_power"][0] == 7200
@@ -3723,7 +3724,8 @@ class TestEvTelemetry:
         assert f"sensor.{base}_eco_mode" not in gw._dashboard_calls
         assert f"sensor.{base}_status" not in gw._dashboard_calls
         # Always-published fields remain
-        assert f"binary_sensor.{base}_connected" in gw._dashboard_calls
+        assert f"binary_sensor.{base}_online" in gw._dashboard_calls
+        assert gw._dashboard_calls[f"binary_sensor.{base}_connected"][0] is False  # status="" → no car
         assert f"sensor.{base}_power" in gw._dashboard_calls
         # Charge rate falls back to 7.4 kW when capability is not reported
         assert approx_equal(gw._dashboard_calls[f"sensor.{base}_charge_rate"][0], 7.4)
@@ -3762,8 +3764,8 @@ class TestEvTelemetry:
         b.charge_point_id = "BBBBBB222222"
         gw._inject_ev_entities(status)
 
-        assert "binary_sensor.predbat_gateway_ev_111111_connected" in gw._dashboard_calls
-        assert "binary_sensor.predbat_gateway_ev_222222_connected" in gw._dashboard_calls
+        assert "binary_sensor.predbat_gateway_ev_111111_online" in gw._dashboard_calls
+        assert "binary_sensor.predbat_gateway_ev_222222_online" in gw._dashboard_calls
 
 
 class TestEvAutoConfig:
