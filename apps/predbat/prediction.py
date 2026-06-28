@@ -853,7 +853,7 @@ class Prediction:
             if export_window_active:
                 discharge_min = max(soc_max * export_limit_now / 100.0, reserve, self.best_soc_min)
 
-            if not set_export_freeze_only and export_window_active and export_limit_now < 99.0 and (soc > discharge_min):
+            if not set_export_freeze_only and export_window_active and export_limit_now < 99.0:
                 # Discharge enable, capped at export limit
                 if self.set_export_low_power:
                     export_rate_adjust = 1 - (export_limit_now - int(export_limit_now))
@@ -866,7 +866,8 @@ class Prediction:
                 )
                 discharge_rate_now_curve_step = discharge_rate_now_curve * step
 
-                battery_draw = min(discharge_rate_now_curve_step, battery_to_min)
+                battery_to_discharge_min = max(soc - discharge_min, 0) * battery_loss_discharge
+                battery_draw = min(discharge_rate_now_curve_step, battery_to_discharge_min)
 
                 pv_ac = pv_now * inverter_loss_ac
                 pv_dc = 0
