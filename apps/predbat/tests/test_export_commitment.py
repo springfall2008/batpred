@@ -129,11 +129,11 @@ def run_export_commitment_tests(my_predbat):
     # Restore the fields mutated above so we do not make later tests in the shared suite order-dependent
     my_predbat.isExporting = False
     my_predbat.export_window = []
-    my_predbat.set_export_freeze = True
-    my_predbat.set_export_freeze_only = False
-    my_predbat.set_export_low_power = False
-    my_predbat.metric_min_improvement_export = 0.1
-    my_predbat.metric_min_improvement_export_freeze = 0.1
+    my_predbat.set_export_freeze = orig_set_export_freeze
+    my_predbat.set_export_freeze_only = orig_set_export_freeze_only
+    my_predbat.set_export_low_power = orig_set_export_low_power
+    my_predbat.metric_min_improvement_export = orig_metric_min_improvement_export
+    my_predbat.metric_min_improvement_export_freeze = orig_metric_min_improvement_export_freeze
 
     if failed:
         print("**** Export commitment tests FAILED ****")
