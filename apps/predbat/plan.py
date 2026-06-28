@@ -937,9 +937,20 @@ class Plan:
 
             morning_start = max(self.minutes_now, peak_start - minutes_needed)
 
-            # Stretch the start time back to the end of the overnight charge window, or 06:00
+            # Stretch the start time back to the end of the overnight charge window, or 06:00 if unknown
             midnight = int(peak_start / 1440) * 1440
             early_start = midnight + (6 * 60)
+            
+            # Find the end of the last charge window before the peak
+            if getattr(self, "charge_window_best", None):
+                last_charge_end = midnight
+                for w in self.charge_window_best:
+                    if w["end"] <= peak_start and w["end"] > last_charge_end:
+                        last_charge_end = w["end"]
+                # Start clipping window right after the morning charge finishes
+                if last_charge_end > midnight:
+                    early_start = last_charge_end
+
             if getattr(self, "clipping_buffer_start", None) is not None:
                 early_start = midnight + self.clipping_buffer_start
 
