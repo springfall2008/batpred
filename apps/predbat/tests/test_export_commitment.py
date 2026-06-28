@@ -82,6 +82,12 @@ def run_export_commitment_tests(my_predbat):
     export_window_best, record_export_windows, end_record = setup_single_export_window(my_predbat)
 
     # Restrict the export options to [100, 0] so the freeze (99) option cannot interfere
+    orig_set_export_freeze = my_predbat.set_export_freeze
+    orig_set_export_freeze_only = my_predbat.set_export_freeze_only
+    orig_set_export_low_power = my_predbat.set_export_low_power
+    orig_metric_min_improvement_export = my_predbat.metric_min_improvement_export
+    orig_metric_min_improvement_export_freeze = my_predbat.metric_min_improvement_export_freeze
+
     my_predbat.set_export_freeze = False
     my_predbat.set_export_freeze_only = False
     my_predbat.set_export_low_power = False
@@ -90,7 +96,6 @@ def run_export_commitment_tests(my_predbat):
     # fresh plan, but is small enough to be overcome by the commitment relaxation.
     my_predbat.metric_min_improvement_export = 100.0
     my_predbat.metric_min_improvement_export_freeze = 0.1
-
     charge_window_best = []
     charge_limit_best = []
     export_limits_best = [100.0]
