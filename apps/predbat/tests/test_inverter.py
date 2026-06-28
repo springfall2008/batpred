@@ -628,11 +628,16 @@ def test_adjust_battery_target(test_name, ha, inv, dummy_rest, prev_soc, soc, is
     inv.rest_data["Control"]["Target_SOC"] = prev_soc
     dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
     dummy_rest.rest_data["Control"]["Target_SOC"] = expect_soc
+    # enableChargeTarget always enables (True), so set Enable_Charge_Target to "enable" so it passes on first try
+    dummy_rest.rest_data["Control"]["Enable_Charge_Target"] = "enable"
 
     inv.adjust_battery_target(soc, isCharging=isCharging, isExporting=isExporting)
     rest_command = dummy_rest.get_commands()
     if expect_soc != prev_soc:
-        expect_data = [["dummy/setChargeTarget", {"chargeToPercent": expect_soc}]]
+        expect_data = [
+            ["dummy/enableChargeTarget", {"state": "enable"}],
+            ["dummy/setChargeTarget", {"chargeToPercent": expect_soc}],
+        ]
     else:
         expect_data = []
     if json.dumps(expect_data) != json.dumps(rest_command):
@@ -674,7 +679,48 @@ def test_adjust_battery_target_charge_limit_enable(test_name, my_predbat, ha, in
     return failed
 
 
+def test_rest_enable_charge_target(test_name, ha, inv, dummy_rest, enable, expect_commands, queued_rest_states=None, initial_state=None):
+    """
+    Test rest_enableChargeTarget: verifies the correct REST command is issued and the retry logic works.
+
+    initial_state: the Enable_Charge_Target value already in inv.rest_data before the call.
+                   Defaults to the opposite of enable so the guard fires.
+    queued_rest_states: list of Enable_Charge_Target values to return on successive runAll calls.
+    When None, the dummy_rest.rest_data is pre-set to the expected state so it passes on the first try.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    inv.rest_api = "dummy"
+    inv.rest_data = {}
+    inv.rest_data["Control"] = {}
+    # Start with the opposite state by default so the guard always fires
+    if initial_state is None:
+        initial_state = "disable" if enable else "enable"
+    inv.rest_data["Control"]["Enable_Charge_Target"] = initial_state
+
+    if queued_rest_states is not None:
+        for state in queued_rest_states:
+            data = {"Control": {"Enable_Charge_Target": state}}
+            dummy_rest.queue_rest_data(data)
+    else:
+        dummy_rest.rest_data = {"Control": {"Enable_Charge_Target": "enable" if enable else "disable"}}
+
+    inv.rest_enableChargeTarget(enable)
+
+    rest_commands = dummy_rest.get_commands()
+    if json.dumps(expect_commands) != json.dumps(rest_commands):
+        print("ERROR: {}: rest commands should be {} got {}".format(test_name, expect_commands, rest_commands))
+        failed = True
+
+    dummy_rest.clear_queue()
+    return failed
+
+
 def test_inverter_self_test(test_name, my_predbat):
+    """
+    Test the inverter self test function.
+    """
     failed = 0
 
     print("**** Running Test: {} ****".format(test_name))
@@ -710,8 +756,11 @@ def test_inverter_self_test(test_name, my_predbat):
     repeats = INVERTER_MAX_RETRY_REST  # configurable number of repeats
     expected = []
 
-    # Define the command patterns
+    # Define the command patterns (each repeated INVERTER_MAX_RETRY_REST times due to the retry loop).
+    # Enable_Charge_Target is not set in the mock rest_data so enableChargeTarget exhausts all retries,
+    # same as setChargeTarget exhausts retries because Target_SOC stays at 99.
     commands = [
+        ["dummy/enableChargeTarget", {"state": "enable"}],
         ["dummy/setChargeTarget", {"chargeToPercent": 100}],
         ["dummy/setChargeRate", {"chargeRate": 215}],
         ["dummy/setChargeRate", {"chargeRate": 0}],
@@ -2117,6 +2166,50 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_adjust_battery_target("adjust_target100", ha, inv, dummy_rest, 99, 100, True, False, 100, has_inv_time_button_press=True, expect_button_press=True)
     failed |= test_adjust_battery_target("adjust_target100r", ha, inv, dummy_rest, 100, 100, True, False, 100, has_inv_time_button_press=True, expect_button_press=False)  # No change, no button press
     failed |= test_adjust_battery_target("adjust_target0x", ha, inv, dummy_rest, 50, 0, False, True, 50, has_inv_time_button_press=False, expect_button_press=False)  # No button press feature
+    if failed:
+        return failed
+
+    # Test rest_enableChargeTarget directly: enable=True passes first try
+    failed |= test_rest_enable_charge_target(
+        "rest_enable_charge_target_enable",
+        ha,
+        inv,
+        dummy_rest,
+        enable=True,
+        expect_commands=[["dummy/enableChargeTarget", {"state": "enable"}]],
+    )
+    # enable=False passes first try (default Enable_Charge_Target is "disable")
+    failed |= test_rest_enable_charge_target(
+        "rest_enable_charge_target_disable",
+        ha,
+        inv,
+        dummy_rest,
+        enable=False,
+        expect_commands=[["dummy/enableChargeTarget", {"state": "disable"}]],
+    )
+    # Retry logic: first response is wrong, second is correct — expect 2 commands
+    failed |= test_rest_enable_charge_target(
+        "rest_enable_charge_target_retry",
+        ha,
+        inv,
+        dummy_rest,
+        enable=True,
+        expect_commands=[
+            ["dummy/enableChargeTarget", {"state": "enable"}],
+            ["dummy/enableChargeTarget", {"state": "enable"}],
+        ],
+        queued_rest_states=["disable", "enable"],
+    )
+    # Guard no-op: already in the target state, no command sent
+    failed |= test_rest_enable_charge_target(
+        "rest_enable_charge_target_noop",
+        ha,
+        inv,
+        dummy_rest,
+        enable=True,
+        expect_commands=[],
+        initial_state="enable",
+    )
     if failed:
         return failed
 
