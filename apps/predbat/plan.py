@@ -341,7 +341,10 @@ class Plan:
                         else:
                             price_set_export.append([price, window_n, typ == "df"])
                             valid_export_windows[window_n] = True
-                            best_export_limits_reset[window_n] = 100.0
+                            if "clipping_target_soc_pct" in export_window[window_n]:
+                                best_export_limits_reset[window_n] = export_window[window_n]["clipping_target_soc_pct"]
+                            else:
+                                best_export_limits_reset[window_n] = 100.0
 
         FINE_SLOT_LENGTHS = [48, 32, 24, 16, 14, 12, 10, 8, 6, 5, 4, 3, 2, 1, 0]
         COARSE_SLOT_LENGTHS = [32, 16, 8, 4, 2, 1, 0]
@@ -403,7 +406,10 @@ class Plan:
                                                 pass
                                             else:
                                                 all_d.append(window_n)
-                                                try_export[window_n] = 99.0 if freeze else min_freeze_percent
+                                                if "clipping_target_soc_pct" in export_window[window_n]:
+                                                    try_export[window_n] = export_window[window_n]["clipping_target_soc_pct"]
+                                                else:
+                                                    try_export[window_n] = 99.0 if freeze else min_freeze_percent
                                                 count_d += 1
 
                                 # Remove export hitting charge windows if this is disabled
@@ -887,12 +893,12 @@ class Plan:
             # We walk backwards from the peak minute by minute to account for the fact that
             # solar generation (PV) during the export window consumes inverter capacity and
             # reduces the effective battery discharge rate.
-            max_kwh_loss = max(kwh_loss for m_rel, kwh_loss in forecast.items() if peak_start <= (m_rel + self.minutes_now) <= peak_end)
+            total_kwh_loss = sum(kwh_loss for m_rel, kwh_loss in forecast.items() if peak_start <= (m_rel + self.minutes_now) <= peak_end)
 
             # Cap the requested headroom by the physical capacity of the battery.
             # We cannot create more headroom than the battery can physically hold.
             battery_capacity_kwh = self.soc_max - getattr(self, "best_soc_min", 0.0)
-            max_kwh_loss = min(max_kwh_loss, battery_capacity_kwh)
+            total_kwh_loss = min(total_kwh_loss, battery_capacity_kwh)
 
             hybrid = getattr(self, "inverter_hybrid", False)
             inverter_limit_kw = getattr(self, "inverter_limit", 0.0) * 60.0
@@ -926,7 +932,7 @@ class Plan:
                 accumulated_kwh += discharge_kw * (1.0 / 60.0)
                 minutes_needed += 1
 
-                if accumulated_kwh >= max_kwh_loss - 1e-9:
+                if accumulated_kwh >= total_kwh_loss - 1e-9:
                     break
 
             # Add 30 mins safety margin
@@ -963,7 +969,7 @@ class Plan:
                 continue
 
             # Calculate the precise export limit (Target SOC percentage) required to create this headroom
-            target_soc_kwh = max(0.0, self.soc_max - max_kwh_loss)
+            target_soc_kwh = max(0.0, self.soc_max - total_kwh_loss)
             target_soc_pct = max(0.0, min(100.0, target_soc_kwh / self.soc_max * 100.0))
             target_soc_pct = float(int(target_soc_pct))
 
@@ -3844,11 +3850,12 @@ class Plan:
         if self.export_window_best and self.calculate_best_export:
             # Set all to max
             for window_n in range(len(self.export_window_best)):
+                target_limit = self.export_window_best[window_n].get("clipping_target_soc_pct", 100.0)
                 if self.export_window_best[window_n]["start"] < (self.minutes_now + self.end_record):
                     if reset_all:
-                        self.export_limits_best[window_n] = 100.0
+                        self.export_limits_best[window_n] = target_limit
                 else:
-                    self.export_limits_best[window_n] = 100.0
+                    self.export_limits_best[window_n] = target_limit
 
     def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv10, end_record, save=None, step=PREDICT_STEP):
         """

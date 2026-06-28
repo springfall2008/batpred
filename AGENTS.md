@@ -125,3 +125,10 @@ mkdocs serve   # Live preview at http://localhost:8000
 ```
 
 When adding a new doc page, add it to `mkdocs.yml`. The published site at <https://springfall2008.github.io/batpred/> is built automatically from `main` via GitHub Actions.
+
+## Anti-Clipping Requirements
+
+When developing features, fixing bugs, or reviewing PRs related to the `clipping-cloud-model` or legacy `clipping-buffer` branches, **you MUST always consult the requirements validation document**:
+`../clipping_requirements_validation.md` (Note: This is located one directory above the repository root in the `Tech Projects` folder).
+
+This document serves as the absolute ground truth for how the clipping buffer prediction, generation overlay, dynamic SOC targeting, and freeze-export bypassing logic should behave. Ensure any changes align perfectly with the `REQ-xx` matrix.
