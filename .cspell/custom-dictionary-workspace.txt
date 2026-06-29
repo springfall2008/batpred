@@ -120,6 +120,7 @@ dimport
 dischargeenergytotal
 dischargefreeze
 Dischg
+dishcare
 diverter
 dlimit
 dnoregion
