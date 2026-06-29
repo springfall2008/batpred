@@ -49,7 +49,6 @@ DEBUG_EXCLUDE_LIST = [
     "comparison",
     "plugin_system",
     "ge_url_cache",
-    "futurerate_url_cache",
     "github_url_cache",
     "octopus_url_cache",
     "secrets",
@@ -476,6 +475,18 @@ class UserInterface:
             return value, default
         return None, default
 
+    def convert_currency_unit(self, unit):
+        """
+        Convert a config item unit string (using the default £/p symbols) into the
+        user's configured currency symbols so displayed units match the rates.
+        """
+        if not unit:
+            return unit
+        major = self.currency_symbols[0] if self.currency_symbols and len(self.currency_symbols) > 0 else "£"
+        minor = self.currency_symbols[1] if self.currency_symbols and len(self.currency_symbols) > 1 else "p"
+        unit = unit.replace("£", "%%CURR_MAJOR%%").replace("p", minor).replace("%%CURR_MAJOR%%", major)
+        return unit
+
     async def async_expose_config(self, name, value, quiet=True, event=False, force=False, in_progress=False):
         return await self.run_in_executor(self.expose_config, name, value, quiet, event, force, in_progress)
 
@@ -498,16 +509,14 @@ class UserInterface:
                     if has_changed and item.get("reset_inverter_force", False):
                         self.inverter_needs_reset = True
                         self.log("Set reset inverter true due to reset_inverter_force on item {}".format(name))
-                        if event:
+                        if event and item.get("value", None) is not None:
                             self.inverter_needs_reset_force = name
                             self.log("Set reset inverter force true due to reset_inverter_force on item {}".format(name))
                     item["value"] = value
                     if item["type"] == "input_number":
                         """INPUT_NUMBER"""
                         icon = item.get("icon", "mdi:numeric")
-                        unit = item["unit"]
-                        unit = unit.replace("£", self.currency_symbols[0])
-                        unit = unit.replace("p", self.currency_symbols[1])
+                        unit = self.convert_currency_unit(item["unit"])
                         self.set_state_wrapper(
                             entity_id=entity,
                             state=value,
@@ -741,6 +750,10 @@ class UserInterface:
                     new_inverters.append(inverter_obj)
                 self.inverters = new_inverters
 
+        # Handle old-format octopus_slots (flat list of dicts) vs new format (list-of-lists per car)
+        if isinstance(self.octopus_slots, list) and self.octopus_slots and isinstance(self.octopus_slots[0], dict):
+            self.octopus_slots = [self.octopus_slots] + [[] for _ in range(7)]
+
         for item in debug["CONFIG_ITEMS"]:
             current = self.config_index.get(item["name"], None)
             if current:
@@ -845,11 +858,11 @@ class UserInterface:
         """
         if attribute:
             ha_value = self.get_state_wrapper(entity, attribute=attribute)
-            if ha_value is not None:
+            if ha_value is not None and ha_value not in ("unavailable", "unknown"):
                 return ha_value
         else:
             ha_value = self.get_state_wrapper(entity)
-            if ha_value is not None:
+            if ha_value is not None and ha_value not in ("unavailable", "unknown"):
                 return ha_value
 
         # Try history if no current state
@@ -915,7 +928,7 @@ class UserInterface:
             {"domain": "update", "service": "skip", "callback": self.update_event},
         ]
 
-    def load_user_config(self, quiet=True, register=False):
+    def load_user_config(self, quiet=True, register=False, load_config=False):
         """
         Load config from HA
         """
@@ -943,8 +956,14 @@ class UserInterface:
                 # If the item is in args, use it as the default
                 item["default"] = self.args[name]
 
-        # Load current config (if there is one)
-        if register:
+        # Load current config from JSON file when explicitly requested via load_config=True.
+        # This is done on the very first startup call (before HA state is read) so that
+        # JSON-saved values populate item["value"] and take priority over transient HA states.
+        # During HA restart, entities can return "unavailable"/"unknown", and without this
+        # pre-load those transient states would overwrite the saved JSON via save_current_config().
+        # Subsequent periodic calls omit load_config so in-memory values updated by HA events
+        # are not overwritten by the (potentially stale) JSON.
+        if load_config:
             self.log("Loading current config")
             self.load_current_config()
 

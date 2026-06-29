@@ -82,12 +82,20 @@ class Compare:
             else:
                 self.log("Warn: Compare tariff {} bad Octopus entity id {}".format(tariff.get("id", ""), entity_id))
         elif "metric_energidataservice_import" in tariff:
-            # Octopus import rates
+            # Energi Data Service import rates
             entity_id = pb.resolve_arg("metric_energidataservice_import", tariff["metric_energidataservice_import"], indirect=False)
             if entity_id:
                 pb.rate_import = pb.fetch_energidataservice_rates(entity_id, adjust_key="is_intelligent_adjusted")
             else:
                 self.log("Warn: Compare tariff {} bad Energidata entity id {}".format(tariff.get("id", ""), entity_id))
+        elif "metric_stromligning_import_today" in tariff or "metric_stromligning_import_tomorrow" in tariff:
+            # Strømligning import rates
+            entity_id_today = pb.resolve_arg("metric_stromligning_import_today", tariff.get("metric_stromligning_import_today"))
+            entity_id_tomorrow = pb.resolve_arg("metric_stromligning_import_tomorrow", tariff.get("metric_stromligning_import_tomorrow"))
+            if entity_id_today or entity_id_tomorrow:
+                pb.rate_import = pb.fetch_stromligning_rates(entity_id_today, entity_id_tomorrow, adjust_key="is_intelligent_adjusted")
+            else:
+                self.log("Warn: Compare tariff {} bad Strømligning entity ids".format(tariff.get("id", "")))
         elif "rates_import" in tariff:
             pb.rate_import = pb.basic_rates(tariff["rates_import"], "rates_import")
         else:
@@ -104,12 +112,20 @@ class Compare:
             else:
                 self.log("Warn: Compare tariff {} bad Octopus entity id {}".format(tariff.get("id", ""), entity_id))
         elif "metric_energidataservice_export" in tariff:
-            # Octopus import rates
+            # Energi Data Service export rates
             entity_id = pb.resolve_arg("metric_energidataservice_export", tariff["metric_energidataservice_export"], indirect=False)
             if entity_id:
                 pb.rate_export = pb.fetch_energidataservice_rates(entity_id, adjust_key="is_intelligent_adjusted")
             else:
                 self.log("Warn: Compare tariff {} bad Energidata entity id {}".format(tariff.get("id", ""), entity_id))
+        elif "metric_stromligning_export_today" in tariff or "metric_stromligning_export_tomorrow" in tariff:
+            # Strømligning export rates
+            entity_id_today = pb.resolve_arg("metric_stromligning_export_today", tariff.get("metric_stromligning_export_today"))
+            entity_id_tomorrow = pb.resolve_arg("metric_stromligning_export_tomorrow", tariff.get("metric_stromligning_export_tomorrow"))
+            if entity_id_today or entity_id_tomorrow:
+                pb.rate_export = pb.fetch_stromligning_rates(entity_id_today, entity_id_tomorrow)
+            else:
+                self.log("Warn: Compare tariff {} bad Strømligning entity ids".format(tariff.get("id", "")))
         elif "rates_export" in tariff:
             pb.rate_export = pb.basic_rates(tariff["rates_export"], "rates_export")
         else:

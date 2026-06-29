@@ -156,6 +156,12 @@ Like the electricity rates, this is set in the `apps.yaml` template to a regular
 
 When a saving session is available it will be automatically joined by Predbat and should then appear as a joined session within the next 30 minutes.
 
+Auto-joining is controlled by the **switch.predbat_octopus_saving_auto_join** switch (On by default). Turn it Off if you want to decide which saving sessions to join yourself
+(for example through the Octopus app). When auto-join is Off, Predbat still plans your battery activity for any sessions you have already joined - it just will not join
+available sessions on your behalf.
+
+If an available saving session overlaps an Axle VPP session (any overlap in time), Predbat will **not** auto-join the saving session, as the two events cannot both be honoured for the same period. The Axle session takes priority.
+
 In the Predbat plan, for joined saving sessions the energy rates for import and export will be overridden by adding the assumed saving rate to your normal rate.
 The assumed rate will be taken from the Octopus Energy integration and converted into pence
 using the **octopus_saving_session_octopoints_per_penny** configuration item in `apps.yaml` (default is 8).
@@ -275,6 +281,42 @@ The following configuration items in `apps.yaml` are used to configure Predbat t
 - **metric_energidataservice_import** - Import rates from the Energidataservice integration. This should point to the sensor that provides hourly import rates, such as sensor.energi_data_service.
 
 - **metric_energidataservice_export** - Export rates from the Energidataservice integration. This should point to the sensor that provides hourly export rates (e.g., solar feed-in rates), such as sensor.energi_data_service_export.
+
+## Strømligning Integration
+
+Strømligning is a Danish electricity price comparison service that provides detailed 15-minute interval pricing data.
+Unlike Energi Data Service, where Predbat reads both today's and tomorrow's prices from a single sensor entity per rate type using the `raw_today` and `raw_tomorrow` attributes, Strømligning requires 4 separate sensors:
+two for import prices (today and tomorrow) and optionally two for export prices (today and tomorrow).
+
+Each Strømligning sensor should provide attributes with the following format:
+
+- **prices_today** or **prices_tomorrow** - List of price intervals with:
+    - `price` - Price value
+    - `start` - Start time in ISO format (e.g., '2025-11-08T00:00:00+01:00')
+    - `end` - End time in ISO format (e.g., '2025-11-08T00:15:00+01:00')
+
+### Configuring Predbat to Use the Strømligning Integration
+
+The following configuration items in `apps.yaml` are used to configure Predbat to use Strømligning sensors:
+
+**Import Rates (Required):**
+
+- **metric_stromligning_import_today** - Sensor for today's import prices (must have `prices_today` attribute)
+- **metric_stromligning_import_tomorrow** - Sensor for tomorrow's import prices (must have `prices_tomorrow` attribute)
+
+**Export Rates (Optional):**
+
+- **metric_stromligning_export_today** - Sensor for today's export prices (must have `prices_today` attribute)
+- **metric_stromligning_export_tomorrow** - Sensor for tomorrow's export prices (must have `prices_tomorrow` attribute)
+
+Example configuration in `apps.yaml`:
+
+```yaml
+  metric_stromligning_import_today: 'sensor.stromligning_import_today'
+  metric_stromligning_import_tomorrow: 'sensor.stromligning_import_tomorrow'
+  metric_stromligning_export_today: 'sensor.stromligning_export_today'
+  metric_stromligning_export_tomorrow: 'sensor.stromligning_export_tomorrow'
+```
 
 ## Other Energy Spot Rate sensor integrations
 
@@ -566,11 +608,11 @@ Predbat can also [optimise your grid charging based on the Carbon footprint](cus
 
 ### UK Grid Carbon intensity (HA Integration)
 
-If you prefer you can instead install the Carbon Intensity integration <https://github.com/jfparis/sensor.carbon_intensity_uk>. There have been reports that this integration might not be working any more.
+If you prefer you can instead install the Carbon Intensity integration <https://github.com/jscruz/sensor.carbon_intensity_uk>.
 
 Once the integration is active, update `apps.yaml` to link Predbat to the Carbon intensity sensor:
 
 ```yaml
   # Carbon Intensity data from National grid
-  carbon_intensity: 're:(sensor.carbon_intensity_uk)'
+  carbon_intensity: 're:(sensor.carbon_intensity_uk_sensor)'
 ```

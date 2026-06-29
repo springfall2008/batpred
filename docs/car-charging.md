@@ -101,8 +101,8 @@ If you are on the Octopus Intelligent Tariff set the following entries in `apps.
 - **octopus_slot_low_rate** - Default is `true`, meaning any Octopus Intelligent Slot reported will be at the lowest rate if at home. If `false` the existing rates only will be used which is only suitable for tariffs other than IOG.
 
 - **octopus_slot_max** - Default is 48 (disabled). Sets the maximum number of 30-minute cheap rate slots per 24-hour period.
-Octopus Intelligent users maybe from March 2026 limited to 6 hours of cheap charging per day. Slots beyond this limit will use standard rates.
-Its recommended you set this to 12 (for 6 hours) once Octopus enforce this Octopus Intelligent limit.
+Octopus Intelligent users may be from March 2026 limited to 6 hours of cheap charging per day. Slots beyond this limit will use standard rates.
+It's recommended you set this to 12 (for 6 hours) once Octopus enforce this Octopus Intelligent limit.
 
 If you are using Octopus-led charging with the [Octopus Energy integration](energy-rates.md#octopus-energy-home-assistant-integration):
 
@@ -285,6 +285,39 @@ When **ohme_automatic_octopus_intelligent** is set to `true` then Predbat is aut
 ```
 
 **Note:** It's recommended to store `ohme_password` in `secrets.yaml` and reference it as `ohme_password: !secret ohme_password` - see [Storing secrets](apps-yaml.md#storing-secrets).
+
+## GivEnergy Gateway OCPP EV charger
+
+When Predbat is connected to a GivEnergy Gateway that has an OCPP EV charger attached, the charger's live state is reported to Predbat over the gateway's MQTT telemetry and exposed as Home Assistant entities (device-level, single charger):
+
+- `binary_sensor.predbat_gateway_ev_connected` - a charge point is connected
+- `sensor.predbat_gateway_ev_status` - OCPP status (e.g. `Available`, `Charging`)
+- `sensor.predbat_gateway_ev_power` - live charge power (W)
+- `sensor.predbat_gateway_ev_session_energy` - energy delivered this session (kWh)
+- `sensor.predbat_gateway_ev_soc` - EV battery SoC % (reported directly by the car, or estimated from session energy / configured battery size when the car does not report it)
+- `sensor.predbat_gateway_ev_current_limit` / `sensor.predbat_gateway_ev_max_current` - present and configured charge current (A)
+- `sensor.predbat_gateway_ev_voltage` - supply voltage (V)
+- `sensor.predbat_gateway_ev_eco_mode` - the charger's current EcoMode setting
+- `sensor.predbat_gateway_ev_charge_rate` - charge-rate capability (kW), derived from the reported current/voltage (falls back to 7.4 kW when the charger does not report its capability)
+
+To have Predbat plan for the gateway charger as a car, enable it in `apps.yaml`:
+
+```yaml
+  gateway_evc_automatic: true
+```
+
+When enabled, Predbat registers the charger as a car and maps the EV entities above onto the standard `car_charging_*` settings, so the normal [Predbat-led car charging](#predbat-led-charging) planning applies. The charge rate tracks the `sensor.predbat_gateway_ev_charge_rate` capability sensor. The car's battery size and target charge level are taken from your existing `car_charging_battery_size` and `car_charging_limit` settings (the charger cannot report them).
+
+To also have Predbat send the plan to the charger (so the EVC charges according to Predbat's schedule), add a second flag:
+
+```yaml
+  gateway_evc_automatic: true
+  gateway_evc_control: true
+```
+
+When `gateway_evc_control` is enabled, Predbat checks once per minute whether the current time falls inside one of the planned car-charging windows (from `binary_sensor.predbat_car_charging_slot`). On each state transition it sends OCPP commands to the EVC via MQTT — `SetChargingProfile` (at the configured max current) followed by `RemoteStartTransaction` to begin a session, or `RemoteStopTransaction` to end one. This means the charger responds within a minute of a window boundary rather than relying on a schedule that must be reprogrammed each time the plan changes.
+
+`car_charging_now` is omitted from the auto-config when `gateway_evc_control=True` to prevent a feedback loop (an active EVC session would otherwise force an extra slot at the current time, conflicting with the boundaries Predbat is trying to enforce).
 
 ## Car Charging Planning
 
@@ -556,79 +589,79 @@ Predbat will plan and charge the car with the kW that are needed to reach the ta
 
 Predbat provides **predbat.cost_today_car** and **predbat.cost_total_car** which give the cost today and total accumulated cost for all car charging.
 
-If you have multiple cars with a single EV charger then its not possible to segregate the cost per car.
+If you have multiple cars with a single EV charger then it's not possible to segregate the cost per car.
 
 The following solution will accumulate individual charging costs for each car.
 
 - Create two helper entities of type number to collect the cost per car:
 
-    ```yaml
-    input_number.car_car1_cost_today
-    input_number.car_car2_cost_today
-    Min = 0
-    Max = 10000
-    Step = 0.01
-    ```
+```yaml
+input_number.car_car1_cost_today
+input_number.car_car2_cost_today
+Min = 0
+Max = 10000
+Step = 0.01
+```
 
   Predbat accumulates cost in pence/cents, etc so the Max value should be big enough to hold the maximum car charging cost per day (e.g. £10/$10/€10).
 
 - Create an automation that triggers when **predbat.cost_today_car** changes value. Then, based upon which car is connected (sensor.car1_connected or sensor.car2_connected in this case), delta of predbat_cost to the appropriate car cost today sensor:
 
-    ```yaml
-    alias: Allocate EV Charging Cost
-    description: ""
-    triggers:
-      - entity_id:
-          - predbat.cost_today_car
-        trigger: state
-    actions:
-      - variables:
-          new_cost: "{{ trigger.to_state.state | float }}"
-          old_cost: "{{ trigger.from_state.state | float }}"
-          delta: "{{ new_cost - old_cost }}"
-      - condition: template
-        value_template: "{{ delta > 0 }}"
-      - choose:
-          - conditions:
-              - condition: template
-                value_template: "{{ is_state('sensor.car1_connected', 'on') }}"
-            sequence:
-              - target:
-                  entity_id: input_number.car_car1_cost_today
-                data:
-                  value: >
-                    {{ (states('input_number.car_car1_cost_today') | float) + delta
-                    }}
-                action: input_number.set_value
-          - conditions:
-              - condition: template
-                value_template: "{{ is_state('sensor.car2_connected', 'on') }}"
-            sequence:
-              - target:
-                  entity_id: input_number.car_car2_cost_today
-                data:
-                  value: >
-                    {{ (states('input_number.car_car2_cost_today') | float) + delta
-                    }}
-                action: input_number.set_value
-    mode: single
-    ```
+```yaml
+alias: Allocate EV Charging Cost
+description: ""
+triggers:
+  - entity_id:
+   - predbat.cost_today_car
+ trigger: state
+actions:
+  - variables:
+   new_cost: "{{ trigger.to_state.state | float }}"
+   old_cost: "{{ trigger.from_state.state | float }}"
+   delta: "{{ new_cost - old_cost }}"
+  - condition: template
+ value_template: "{{ delta > 0 }}"
+  - choose:
+   - conditions:
+    - condition: template
+   value_template: "{{ is_state('sensor.car1_connected', 'on') }}"
+  sequence:
+    - target:
+     entity_id: input_number.car_car1_cost_today
+   data:
+     value: >
+    {{ (states('input_number.car_car1_cost_today') | float) + delta
+    }}
+   action: input_number.set_value
+   - conditions:
+    - condition: template
+   value_template: "{{ is_state('sensor.car2_connected', 'on') }}"
+  sequence:
+    - target:
+     entity_id: input_number.car_car2_cost_today
+   data:
+     value: >
+    {{ (states('input_number.car_car2_cost_today') | float) + delta
+    }}
+   action: input_number.set_value
+mode: single
+```
 
 - Finally, create an automation that will reset the cost to 0 at midnight every day:
 
-    ```yaml
-    alias: Reset Daily EV Car Costs
-    description: ""
-    triggers:
-      - at: "00:00:00"
-        trigger: time
-    actions:
-      - target:
-          entity_id:
-            - input_number.car_car1_cost_today
-            - input_number.car_car2_cost_today
-        data:
-          value: 0
-        action: input_number.set_value
-    mode: single
-    ```
+```yaml
+alias: Reset Daily EV Car Costs
+description: ""
+triggers:
+  - at: "00:00:00"
+ trigger: time
+actions:
+  - target:
+   entity_id:
+  - input_number.car_car1_cost_today
+  - input_number.car_car2_cost_today
+ data:
+   value: 0
+ action: input_number.set_value
+mode: single
+```

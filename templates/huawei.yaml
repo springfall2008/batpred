@@ -1,387 +1,367 @@
-# ------------------------------------------------------------------
-# Huawei Solar Config example - https://github.com/wlcrs/huawei_solar
-# ------------------------------------------------------------------
----
 pred_bat:
   module: predbat
   class: PredBat
-
-  # Sets the prefix for all created entities in HA - only change if you want to run more than once instance
-  prefix: predbat
-
-  # Timezone to work in
-  timezone: Europe/London
-
-  # XXX: Template configuration, delete this line once you have set up for your system
   template: True
 
-  # If you are using Predbat outside of HA then set the HA URL and Key (long lived access token here)
-  #ha_url: 'http://homeassistant.local:8123'
-  #ha_key: 'xxx'
+  # ------------------------------------------------------------------
+  # Machine learning and forecasting options
+  # ------------------------------------------------------------------
+  battery_scaling_auto: true
 
-  # Currency, symbol for main currency and second symbol for 1/100s e.g. $ and c, £ and p or € and c
+  # Enable ML load prediction
+  load_ml_enable: true
+
+  # Use the output data in Predbat (can be false to explore the use without using the data)
+  # load_ml_source: true
+
+  # Optional: Maximum days of historical data to fetch from HA on each poll (default: 28)
+  # load_ml_max_days_history: 28
+
+  # Optional: Number of days of history to accumulate in the on-disk database (default: 90)
+  # load_ml_database_days: 90
+
+  # Enable temperature predictions (RECOMMENDED for ML load prediction)
+  temperature_enable: true
+
+  # Optional: specify coordinates (defaults to zone.home)
+  # temperature_latitude: 51.5074
+  # temperature_longitude: -0.1278
+
+  plan_interval_minutes: 15
+
+  # ------------------------------------------------------------------
+  # Basic setup
+  # ------------------------------------------------------------------
+  prefix: predbat
+  timezone: Europe/Stockholm
+
   currency_symbols:
-    - '£'
-    - 'p'
+  - "Kr"
+  - "öre"
 
-  # Number of threads to use in plan calculation
-  # Can be auto for automatic, 0 for off or values 1-N for a fixed number
   threads: auto
+  load_filter_threshold: 30
 
-  # Energy today (not power) sensors, more than one can be specified and they will be summed up automatically
+#  load_ml_source: true
+
+  # ------------------------------------------------------------------
+  # Historical energy sensors
   #
-  # For two inverters the load today would normally be the master load sensor only (to cover the entire house)
-  # If you have three phase and one inverter per phase then you would need three load sensors
-  #
-  # For pv_today if you have multiple solar inverter inputs then you should include one entry for each inverter
-  #
+  # These are kWh today sensors, not live W sensors.
+  # Created by the Home Assistant package:
+  #   packages/predbat_energy_today.yaml
+  # ------------------------------------------------------------------
   load_today:
-    - sensor.husforbrukning_i_kwh
-  import_today:
-    - sensor.kopt_el_idag
-  export_today:
-    - sensor.export_today
-  pv_today:
-    - sensor.energy_pv_daily
+  - sensor.predbat_load_today
 
-  # Load forecast can be used to add to the historical load data (heat-pump)
-  # To link to Predheat
-  # Data must be in the format of 'last_updated' timestamp and 'energy' for incrementing kWh
-  #load_forecast:
-  #  - predheat.heat_energy$external
-  #
+  import_today:
+  - sensor.predbat_import_today
+
+  export_today:
+  - sensor.predbat_export_today
+
+  pv_today:
+  - sensor.inverter_daily_yield
+
+  # ------------------------------------------------------------------
+  # Huawei inverter setup
+  # ------------------------------------------------------------------
   num_inverters: 1
   inverter_type: "HU"
-  #
-  # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
   balance_inverters_seconds: 0
+
+  # Allow Predbat freeze/hold logic to use charge/discharge rate limits.
   #
-  # If not using REST then instead set the Control here (one for each inverter)
-  # - you can delete this section if using REST
-  charge_rate:
-    - number.battery_maximum_charging_power
-  discharge_rate:
-    - number.battery_maximum_discharging_power
-  battery_power:
-    - sensor.battery_charge_discharge_power
-  battery_power_invert:
-    - True
-  pv_power:
-    - sensor.inverter_input_power
-  load_power:
-    - sensor.power_meter_active_power
-  # grid_power measures active power in Watts on the grid side, but requires a separate Huawei power module for this
-  # if you do not have the module or any way to measure grid power, then comment grid_power out of apps.yaml
-  # the only impact will be that there is no grid power flow shown on the Predbat web console powerflow.
-  # It has no impact on battery planning
-  grid_power:
-    - sensor.power_meter_active_power
-  grid_power_invert:
-    - False
+  # For Huawei this maps to:
+  # - Hold / Freeze charge: maximum_discharging_power = 0
+  # - Freeze export: maximum_charging_power = 0
+  # - Demand: both restored to normal configured max
+  inverter:
+    support_charge_freeze: true
+    support_discharge_freeze: true
+
+  # ------------------------------------------------------------------
+  # Huawei live sensors
+  #
+  # Sign convention:
+  #
+  # sensor.batteries_charge_discharge_power:
+  #   negative = discharging
+  #   positive = charging
+  #
+  # sensor.power_meter_active_power:
+  #   positive = importing / buying from grid
+  #   negative = exporting / selling to grid
+  # ------------------------------------------------------------------
   soc_percent:
-    - sensor.battery_state_of_capacity
-  #soc_kw:
-  #  - sensor.batteri_to_kw
-  soc_max:
-    - 10
+  - sensor.batteries_state_of_capacity
+
+  battery_power:
+  - sensor.batteries_charge_discharge_power
+
+  battery_power_invert:
+  - true
+
+  pv_power:
+  - sensor.pv_input_power
+
+  load_power:
+  - sensor.house_load_power_calc
+
+  grid_power:
+  - sensor.power_meter_active_power
+
+  grid_power_invert:
+  - false
+
+  # ------------------------------------------------------------------
+  # Huawei control entities
+  # ------------------------------------------------------------------
+  charge_rate:
+  - number.inverter_maximum_charging_power
+
+  discharge_rate:
+  - number.inverter_maximum_discharging_power
+
   charge_limit:
-    - number.battery_end_of_charge_soc
+  - number.inverter_end_of_charge_soc
+
+  # ------------------------------------------------------------------
+  # Battery capacity and safety limits
+  #
+  # soc_max is battery capacity in kWh, not percent.
+  # Change this if your battery is not 10 kWh.
+  # ------------------------------------------------------------------
+  soc_max:
+  - 10
+
   reserve:
-    - 12
+  - 12
+
   battery_min_soc:
-    - 14
+  - 12
 
-  # Services to charge/discharge
+  inverter_reserve_max: 98
+
+  # ------------------------------------------------------------------
+  # Huawei Solar service control
+  #
+  # stop_forcible_charge is used for both charge stop and discharge stop,
+  # because Huawei/Predbat templates often use it as a general stop command.
+  # ------------------------------------------------------------------
   charge_start_service:
-    - service: huawei_solar.forcible_charge_soc
-      target_soc: "{target_soc}"
-      power: "{power}"
-      device_id: "{device_id}"
+    service: huawei_solar.forcible_charge_soc
+    device_id: "YOUR_HUAWEI_DEVICE_ID"
+    target_soc: "{target_soc}"
+    power: "{power}"
+
   charge_stop_service:
-    - service: huawei_solar.stop_forcible_charge
-      device_id: "{device_id}"
+    service: huawei_solar.stop_forcible_charge
+    device_id: "YOUR_HUAWEI_DEVICE_ID"
+
   discharge_start_service:
-    - service: huawei_solar.forcible_discharge_soc
-      target_soc: "{target_soc}"
-      power: "{power}"
-      device_id: "{device_id}"
+    service: huawei_solar.forcible_discharge_soc
+    device_id: "YOUR_HUAWEI_DEVICE_ID"
+    target_soc: "{target_soc}"
+    power: "{power}"
+
   discharge_stop_service:
-    - service: huawei_solar.stop_forcible_charge
-      device_id: "{device_id}"
+    service: huawei_solar.stop_forcible_charge
+    device_id: "YOUR_HUAWEI_DEVICE_ID"
 
-  # You must set Home Assistant's device_id for the Huawei Batteries
+  # ------------------------------------------------------------------
+  # Inverter and battery power limits
   #
-  # Click on 'Settings' / 'Developer Tools' / 'Actions' and choose "Huawei Solar: Forcible Charge" or any other battery related action.
-  # Click on "Go to YAML mode" and you will find the device_id; copy and paste the long numbers/letters in below:
-  device_id: XXXXXX
-
-  # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
-  # If you have a second inverter for PV only please add the two values together
+  # Values are in watts.
+  # ------------------------------------------------------------------
   inverter_limit:
-    - 12000
+  - 6000
 
-  # Set the maximum charge/discharge rate of the battery
   battery_rate_max:
-    - 5000
+  - 5000
 
-  # Set Inverter max charge rate - see inverter setup guide
-  inverter_limit_charge: 3000
+  inverter_limit_charge:
+  - 5000
 
-  # Set Inverter max discharge rate to grid
-  inverter_limit_discharge: 5000
+  inverter_limit_discharge:
+  - 5000
 
-  # Export limit is a software limit set on your inverter that prevents exporting above a given level
-  # When enabled Predbat will model this limit
-  #export_limit:
-  #  - 3600
+  inverter_limit_charge_dc:
+  - 5000
 
-  # Some inverters don't turn off when the rate is set to 0, still charge or discharge at around 200w
-  # The value can be set here in watts to model this (doesn't change operation)
-  #inverter_battery_rate_min:
-  #  - 200
-
-  # Workaround to limit the maximum reserve setting, some inverters won't allow 100% to be set
-  # inverter_reserve_max : 99
-
-  # Some batteries tail off their charge rate at high soc%
-  # enter the charging curve here as a % of the max charge rate for each soc percentage.
-  # the default is 1.0 (full power)
-  # The example below is from GE 9.5kwh battery with latest firmware and gen1 inverter
-  #battery_charge_power_curve:
-  #  91 : 0.91
-  #  92 : 0.81
-  #  93 : 0.71
-  #  94 : 0.62
-  #  95 : 0.52
-  #  96 : 0.43
-  #  97 : 0.33
-  #  98 : 0.24
-  #  99 : 0.24
-  #  100 : 0.24
-
-  # Inverter clock skew in minutes, e.g. 1 means it's 1 minute fast and -1 is 1 minute slow
-  # Separate start and end options are applied to the start and end time windows, mostly as you want to start late (not early) and finish early (not late)
-  # Separate discharge skew for discharge windows only
-#   inverter_clock_skew_start: 0
-#   inverter_clock_skew_end: 0
-#   inverter_clock_skew_discharge_start: 0
-#   inverter_clock_skew_discharge_end: 0
-
-  # Clock skew adjusts the Appdaemon time
-  # This is the time that Predbat takes actions like starting discharge/charging
-  # Only use this for workarounds if your inverter time is correct but Predbat is somehow wrong (AppDaemon issue)
-  # 1 means add 1 minute to AppDaemon time, -1 takes it away
-  clock_skew: 0
-
-  # Solcast cloud interface, set this or the local interface below
-  #solcast_host: 'https://api.solcast.com.au/'
-  #solcast_api_key: 'xxxx'
-  #solcast_poll_hours: 8
-
-  # Set these to match solcast sensor names if not using the cloud interface
-  # The regular expression (re:) makes the solcast bit optional
-  # If these don't match find your own names in Home Assistant
-  pv_forecast_today: re:(sensor.(solcast_|)(pv_forecast_|)forecast_today)
-  pv_forecast_tomorrow: re:(sensor.(solcast_|)(pv_forecast_|)forecast_tomorrow)
-  pv_forecast_d3: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_3|d3))
-  pv_forecast_d4: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_4|d4))
-
-  # car_charging_energy defines an incrementing sensor which measures the charge added to your car
-  # is used for car_charging_hold feature to filter out car charging from the previous load data
-  # Automatically set to detect Wallbox and Zappi, if it doesn't match manually enter your sensor name
-  # Also adjust car_charging_energy_scale if it's not in kwH to fix the units
-  #car_charging_energy: 're:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|sensor.wallbox_portal_added_energy)'
-
-  # Defines the number of cars modelled by the system, set to 0 for no car
-  num_cars: 0
-
-  # car_charging_planned is set to a sensor which when positive indicates the car will charged in the upcoming low rate slots
-  # This should not be needed if you use Intelligent Octopus slots which will take priority if enabled
-  # The list of possible values is in car_charging_planned_response
-  # Auto matches Zappi and Wallbox, or change it for your own
-  # One entry per car
-  #car_charging_planned:
-  # - 're:(sensor.wallbox_portal_status_description|sensor.myenergi_zappi_[0-9a-z]+_plug_status)'
-
-#   car_charging_planned_response:
-#     - 'yes'
-#     - 'on'
-#     - 'true'
-#     - 'connected'
-#     - 'ev connected'
-#     - 'charging'
-#     - 'paused'
-#     - 'waiting for car demand'
-#     - 'waiting for ev'
-#     - 'scheduled'
-#     - 'enabled'
-#     - 'latched'
-#     - 'locked'
-#     - 'plugged in'
-
-  # In some cases car planning is difficult (e.g. Ohme with Intelligent doesn't report slots)
-  # The car charging now can be set to a sensor to indicate the car is charging and to plan
-  # for it to charge during this 30 minute slot
-  #car_charging_now:
-  #  - off
-
-  # Positive responses for car_charging_now
-  #car_charging_now_response:
-  #  - 'yes'
-  #  - 'on'
-  #  - 'true'
-
-  # To make planned car charging more accurate, either using car_charging_planned or the Octopus Energy plugin,
-  # specify your battery size in kwh, charge limit % and current car battery soc % sensors/values.
-  # If you have Intelligent Octopus the battery size and limit will be extracted from the Octopus Energy plugin directly.
-  # Set the car SoC% if you have it to give an accurate forecast of the cars battery levels.
-  # One entry per car if you have multiple cars.
-  #car_charging_battery_size:
-  #  - 75
-  #car_charging_limit:
-  #  - 're:number.tsunami_charge_limit'
-  #car_charging_soc:
-  #  - 're:sensor.tsunami_battery'
-
-  # If you have Octopus Intelligent Go and are not using the Octopus Direct connection method, enable the intelligent slot information to add to pricing
-  # Will automatically disable if not found, or comment out to disable fully
-  # When enabled it overrides the 'car_charging_planned' feature and predict the car charging based on the intelligent plan (unless Octopus intelligent charging is False)
-  # This matches the intelligent slot from the Octopus Energy integration
-  octopus_intelligent_slot: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_intelligent_dispatching)'
-  octopus_ready_time: 're:((select|time).octopus_energy_([0-9a-z_]+|)_intelligent_target_time)'
-  octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_target)'
-
-  # Example alternative configuration for Ohme integration release >=v0.6.1
-  #octopus_intelligent_slot: 'binary_sensor.ohme_slot_active'
-  #octopus_ready_time: 'time.ohme_target_time'
-  #octopus_charge_limit: 'number.ohme_target_percent'
-
-  # Set this to False if you use Octopus Intelligent slot for car planning but when on another tariff e.g. Agile
-  #octopus_slot_low_rate: False
-
-  # Carbon Intensity data from National grid
-  # carbon_postcode: 'SW1 5NA'
-  # carbon_automatic: True
-
-  # Octopus saving session points to the saving session Sensor in the Octopus plugin, when enabled saving sessions will be at the assumed
-  # Rate is read automatically from the add-in and converted to pence using the conversion rate below (default is 8)
-  octopus_saving_session: 're:(event.octopus_energy([0-9a-z_]+|)_saving_session_event(s|))'
-  octopus_saving_session_octopoints_per_penny: 8
-
-  # Octopus free session points to the free session Sensor in the Octopus plugin
-  # Note: You must enable this event sensor in the Octopus Integration in Home Assistant for it to work
-  octopus_free_session: 're:(event.octopus_energy_([0-9a-z_]+|)_octoplus_free_electricity_session_events)'
-
-  # Energy rates
-  # Please set one of these three, if multiple are set then Octopus is used first, second rates_import/rates_export and latest basic metric
-
-  # Set import and export entity to point to the Octopus Energy plugin import and export sensors
-  # automatically matches your meter number assuming you have only one (no need to edit the below)
-  # Will be ignored if you don't have the sensor but will error if you do have one and it's incorrect
-  # Note: To get detailed energy rates you need to go in and manually enable the following events in HA
-  #       event.octopus_energy_electricity_xxxxxxxx_previous_day_rates
-  #       event.octopus_energy_electricity_xxxxxxxx_current_day_rates
-  #       event.octopus_energy_electricity_xxxxxxxx_next_day_rates
-  # and if you have export enable:
-  #       event.octopus_energy_electricity_xxxxxxxx_export_previous_day_rates
-  #       event.octopus_energy_electricity_xxxxxxxx_export_current_day_rates
-  #       event.octopus_energy_electricity_xxxxxxxx_export_next_day_rates
-  # Predbat will automatically find the event. entities from the link below to the sensors
-  metric_octopus_import: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_rate)'
-  #metric_octopus_import: 'sensor.nordpool_kwh_oslo_eur_3_10_025'
-  metric_octopus_export: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_export_current_rate)'
-  #metric_octopus_export: sensor.nordpool_moms
-
-  # Standing charge can be set to a sensor (e.g. Octopus) or manually entered in pounds here (e.g. 0.50 is 50p)
-  metric_standing_charge: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_standing_charge)'
-
-  # Or set your actual rates across time for import and export
-  # If start/end is missing it's assumed to be a fixed rate
-  # Gaps are filled with zero rate
-  #rates_import:
-  #  - start: "00:30:00"
-  #    end: "04:30:00"
-  #    rate: 7.5
-  #  - start: "04:30:00"
-  #    end: "00:30:00"
-  #    rate: 40.0
+  # ------------------------------------------------------------------
+  # Clock skew
   #
-  #rates_export:
-  #  -  rate: 0
+  # Keep these close to 0 unless you see timing problems.
+  # ------------------------------------------------------------------
+  inverter_clock_skew_start: 0
+  inverter_clock_skew_end: 0
+  inverter_clock_skew_discharge_start: 0
+  inverter_clock_skew_discharge_end: -1
+  clock_skew: 2
 
-  # Can be used instead of the plugin to get import rates directly online
-  # Overrides metric_octopus_import and rates_import
-  # See the 'energy rates' part of the documentation for instructions on how to find the correct URL for your tariff and DNO region
+  # ------------------------------------------------------------------
+  # Solar forecast
+  # ------------------------------------------------------------------
+  #pv_forecast_today: sensor.solcast_pv_forecast_forecast_today
+  #pv_forecast_tomorrow: sensor.solcast_pv_forecast_forecast_tomorrow
+  #pv_forecast_d3: sensor.solcast_pv_forecast_forecast_day_3
+  #pv_forecast_d4: sensor.solcast_pv_forecast_forecast_day_4
+
+  #pv_forecast_today_attribute: detailedForecast
+  #pv_forecast_tomorrow_attribute: detailedForecast
+  #pv_forecast_d3_attribute: detailedForecast
+  #pv_forecast_d4_attribute: detailedForecast
+
+  open_meteo_forecast:
+    - latitude: 0.0  # Replace with your latitude
+      longitude: 0.0  # Replace with your longitude
+      kwp: 9.5
+      declination: 18
+      azimuth: 47
+
+  # ------------------------------------------------------------------
+  # Car charging
+  # ------------------------------------------------------------------
+  car_charging_energy:
+  - sensor.go_echarger_energy_kwh
+
+  num_cars: 1
+
+  car_charging_planned:
+  - 're:(binary_sensor\.go_echarger_265216_car)'
+
+  car_charging_planned_response:
+  - "on"
+
+  car_charging_now_response:
+  - "yes"
+  - "on"
+  - "true"
+
+  car_charging_battery_size:
+  - 69.45
+
+  car_charging_limit:
+  - input_number.predbat_ev_soc
+
+  car_charging_soc:
+  - sensor.june_battery_level
+
+  # ------------------------------------------------------------------
+  # Energy rates from Nordpool package sensors
   #
-  # rates_import_octopus_url : "https://api.octopus.energy/v1/products/FLUX-IMPORT-23-02-14/electricity-tariffs/E-1R-FLUX-IMPORT-23-02-14-A/standard-unit-rates"
-  # rates_import_octopus_url : "https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-A/standard-unit-rates"
+  # These should expose today + tomorrow prices.
+  # They should NOT be only current price sensors.
+  # ------------------------------------------------------------------
+  metric_octopus_import: sensor.predbat_import_nordpool
+  metric_octopus_export: sensor.predbat_export_nordpool
 
-  # Overrides metric_octopus_export and rates_export
-  # rates_export_octopus_url: "https://api.octopus.energy/v1/products/FLUX-EXPORT-23-02-14/electricity-tariffs/E-1R-FLUX-EXPORT-23-02-14-A/standard-unit-rates"
-  # rates_export_octopus_url: "https://api.octopus.energy/v1/products/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-A/standard-unit-rates/"
+  # Standing charge disabled for Sweden/Nordpool setup.
+  # metric_standing_charge: 0
 
-  # Import rates can be overridden with rate_import_override
-  # Export rates can be overridden with rate_export_override
-  # Use the same format as above, but a date can be included if it just applies for a set day (e.g. Octopus power ups)
-  # This will override even the Octopus plugin rates if enabled
-  #
-  #rates_import_override:
-  #  - date: '2023-09-10'
-  #    start: '14:00:00'
-  #    end: '14:30:00'
-  #    rate: 5
-
-  # Days previous is the number of days back to find historical load data
-  # Recommended is 7 to capture day of the week but 1 can also be used
-  # if you have more history you could use 7 and 14 (in a list) but the standard data in HA only lasts 10 days
+  # ------------------------------------------------------------------
+  # Load history and forecast horizon
+  # ------------------------------------------------------------------
   days_previous:
-    - 7
+  - 7
 
-  # Days previous weight can be used to control the weighting of the previous load points, the values are multiplied by their
-  # weights and then divided through by the total weight. E.g. if you used 1 and 0.5 then the first value would have 2/3rd of the weight and the second 1/3rd
-  # Include one value for each days_previous value, each weighting on a separate line.
-  # If any days_previous's that are not given a weighting they will assume a default weighting of 1.
   days_previous_weight:
-    - 1
+  - 1
 
-  # Number of hours forward to forecast, best left as-is unless you have specific reason
   forecast_hours: 48
 
-  # Specify the devices that notifies are sent to, the default is 'notify' which goes to all
-  #notify_devices:
-  #  - mobile_app_iphone13pro
+  battery_scaling:
+  - 1.0
 
-  # Battery scaling makes the battery smaller (e.g. 0.9) or bigger than its reported
-  # If you have an 80% DoD battery that falsely reports it's kwh then set it to 0.8 to report the real figures
-  battery_scaling: 1.0
-
-  # Can be used to scale import and export data, used for workarounds
   import_export_scaling: 1.0
 
-  # Export triggers:
-  # For each trigger give a name, the minutes of export needed and the energy required in that time
-  # Multiple triggers can be set at once so in total you could use too much energy if all run
-  # Creates an entity called 'binary_sensor.predbat_export_trigger_<name>' which will be turned On when the condition is valid
-  # connect this to your automation to start whatever you want to trigger
-  export_triggers:
-    - name: 'large'
-      minutes: 60
-      energy: 1.0
-    - name: 'small'
-      minutes: 15
-      energy: 0.25
+  # ------------------------------------------------------------------
+  # Notifications
+  # ------------------------------------------------------------------
+  notify_devices:
+  - "YOUR_NOTIFY_DEVICE"
 
-  # Nordpool market energy rates
-  #futurerate_url: 'https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices?date=DATE&market=N2EX_DayAhead&deliveryArea=UK&currency=GBP'
-  #futurerate_adjust_import: False
-  #futurerate_adjust_export: False
-  #futurerate_peak_start: "16:00:00"
-  #futurerate_peak_end: "19:00:00"
-  #futurerate_peak_premium_import: 14
-  #futurerate_peak_premium_export: 6.5
+  # ------------------------------------------------------------------
+  # Alert feeds
+  #
+  # Customise to your country, alert types, severity and keep value.
+  # Remove the alert types you do not want to trigger on.
+  # ------------------------------------------------------------------
+  alerts:
+    url: "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-sweden"
+    event: "(Amber|Yellow|Orange|Red).*(Wind|Snow|Fog|Rain|Thunderstorm|Frost|Heat|Flood|Forestfire|Ice|Low
+      temperature|Storm|Tornado|Volcano|Wildfire)"
+    severity: "Moderate|Severe|Extreme"
+    certainty: "Possible|Likely|Expected"
+    keep: 40
 
-  # If you have a sensor that gives the energy consumed by your solar diverter then add it here
-  # this will make the predictions more accurate. It should be an incrementing sensor, it can reset at midnight or not
-  # It's assumed to be in Kwh but scaling can be applied if need be
-  #iboost_energy_today: 'sensor.tasmota_energy_today'
-  #iboost_energy_scaling: 1.0 `
+  # ------------------------------------------------------------------
+  # Huawei LUNA charge/discharge power curves
+  #
+  # Values are approximate and mainly used so Predbat models the natural
+  # tapering near full/empty battery more realistically.
+  # Format: SOC percent -> available power percent
+  # ------------------------------------------------------------------
+  #battery_charge_power_curve_auto: true
+  #battery_discharge_power_curve_auto: true
+
+#   battery_charge_power_curve:
+#     0: 1.00
+#     10: 1.00
+#     20: 1.00
+#     30: 1.00
+#     40: 1.00
+#     50: 1.00
+#     60: 1.00
+#     70: 1.00
+#     80: 0.95
+#     85: 0.85
+#     90: 0.70
+#     95: 0.45
+#     98: 0.25
+#     100: 0.10
+
+#   battery_discharge_power_curve:
+#     100: 1.00
+#     90: 1.00
+#     80: 1.00
+#     70: 1.00
+#     60: 1.00
+#     50: 1.00
+#     40: 1.00
+#     30: 1.00
+#     20: 0.90
+#     15: 0.75
+#     10: 0.50
+#     5: 0.25
+#     0: 0.10
+
+  # ------------------------------------------------------------------
+  # Optional export triggers
+  #
+  # Uncomment only if you want Predbat to create export trigger sensors.
+  # ------------------------------------------------------------------
+  # export_triggers:
+  #   - name: "large"
+  #     minutes: 60
+  #     energy: 1.0
+  #   - name: "small"
+  #     minutes: 15
+  #     energy: 0.25
+
+  # ------------------------------------------------------------------
+  # Optional watch list
+  #
+  # Uncomment if you want Predbat to recalculate when car sensors change.
+  # ------------------------------------------------------------------
+  # watch_list:
+  #   - "+[car_charging_planned]"
+  #   - "+[car_charging_soc]"
+
+  # ------------------------------------------------------------------
+  # Predbat database
+  # ------------------------------------------------------------------
+  #db_enable: true
+  #db_days: 30
+  #db_mirror_ha: true

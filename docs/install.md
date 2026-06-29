@@ -87,7 +87,7 @@ The Predbat web interface will work through the Predbat app, you can click on th
 
 As an alternative to the Predbat app, Predbat can be installed via Docker
 
-The Predbat docker image is [https://hub.docker.com/r/nipar44/predbat_addon](https://hub.docker.com/r/nipar44/predbat_addon) and is a fork of the Predbat app with updates so it will run directly as a Docker docker container.
+The Predbat docker image is [https://hub.docker.com/r/nipar44/predbat_addon](https://hub.docker.com/r/nipar44/predbat_addon) and is a fork of the Predbat app with updates so it will run directly as a Docker container.
 
 Installation instructions can be found at [https://github.com/nipar4/predbat_addon](https://github.com/nipar4/predbat_addon).
 
@@ -152,6 +152,7 @@ The azimuth is the direction of the roof: 0=North, -90=East, 90=West, -180/180 =
 The declination is the angle of the panels, e.g. 45 for a sloped roof or 20 for those on a flat roof
 The efficiency relates to the aging of your panels, 0.95 is for newer systems but they will lose around 1% each year.
 The optional forecast_solar_max_age setting sets the number of hours between updates to PV data, the default is 8.
+The optional `azimuth_zero_south` (default False) can be set to True if you prefer to supply the azimuth already in the Forecast.solar convention (0=South, -90=East, 90=West, ±180=North) rather than the default Predbat convention (0=North). When True, Predbat passes the value straight to the API without conversion.
 
 ```yaml
   forecast_solar:
@@ -190,6 +191,7 @@ Ensemble members are used to derive a P10 pessimistic estimate alongside the cen
 You can define one or more arrays (roof aspects). For the UK, use a postcode instead of latitude/longitude.
 
 The azimuth uses the same convention as all other Predbat solar configs (Solcast/Forecast.solar): 0=North, -90=East, 90=West, -180/180=South. Predbat converts this to the Open-Meteo convention (0=South) internally.
+The optional `azimuth_zero_south` (default False) can be set to True if you prefer to supply the azimuth already in the Open-Meteo convention (0=South, -90=East, 90=West, ±180=North). When True, Predbat passes the value straight to the API without conversion.
 The declination is the angle of the panels from horizontal, e.g. 35 for a typical pitched roof.
 The `efficiency` (optional, default 1.0) is the panel efficiency as a fraction where 1.0 = 100% (no losses), e.g. 0.95 for 5% losses. This uses the same convention as Forecast.solar.
 
@@ -376,7 +378,7 @@ Click on the update and select Install:
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/e708899d-a4aa-4bd4-b7d1-1c6687dd7e23)
 
-Note that clicking the 'Skip' button give an error about auto-update being enabled for Predbat and that the update cannot be skipped.  This warning appears because of Predbat's built-in auto-update feature and can be safely ignored.
+Note that clicking the 'Skip' button gives an error about auto-update being enabled for Predbat and that the update cannot be skipped.  This warning appears because of Predbat's built-in auto-update feature and can be safely ignored.
 If you wish to skip or ignore a Predbat update then you don't need to do anything; Predbat will not auto-update (despite what HA says) unless you turn on Predbat's auto-update (see below) or choose a version to install.
 Predbat will remain running on the current version until you choose to update.
 
@@ -500,11 +502,11 @@ you can get Predbat working quickly again by copying it back again.
 
 ## Uninstalling Predbat
 
-Incredible though it may be to imagine, its possible you may want to uninstall Predbat.
+Incredible though it may be to imagine, it's possible you may want to uninstall Predbat.
 
 Removing the Predbat app is easy, System / Apps / Predbat then select 'Uninstall'.
 
-Its recommended that you do a full restart of Home Assistant and all apps after removing Predbat.
+It's recommended that you do a full restart of Home Assistant and all apps after removing Predbat.
 
 You will find that entities created by Predbat unfortunately don't get removed when you remove the Predbat app, and as they do not have unique Home Assistant id's, they can't be removed from the Devices & Services / Entities list.
 

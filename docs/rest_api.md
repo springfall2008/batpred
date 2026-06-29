@@ -1,6 +1,6 @@
 # Predbat REST API
 
-Predbat supports a REST API operated via its Web Interface, this is normally intended for use when Predbat runs in a Docker or Standalone rather than in Home Assistant
+Predbat supports a REST API operated via its Web Interface, this is normally intended for use when Predbat runs in a Docker or Standalone rather than in Home Assistant.
 
 ## /api/state - Method GET
 
@@ -34,7 +34,7 @@ You must post in 'json' as follows
 
 ## /api/service - Method POST
 
-This is the recommended way to change a Predbat value, it will either make the change via home assistant or directly via Predbat if not connected.
+This is the recommended way to change a Predbat value, it will either make the change via Home Assistant or directly via Predbat if not connected.
 
 You must post in 'json' with the service name and the service data, as per Home Assistant services:
 

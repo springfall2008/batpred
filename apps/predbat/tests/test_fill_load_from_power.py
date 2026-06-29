@@ -350,6 +350,63 @@ def test_fill_load_from_power_data_extends_beyond_load():
     print("Test 7 PASSED")
 
 
+def test_fill_load_from_power_negative_power_corrupts_load_total():
+    """
+    Regression test: negative power values in a zero-load period corrupt the day total.
+
+    Phase 1 (zero-period fill) does not clamp negative power values to zero before
+    accumulating amount_to_fill.  When the power sensor reports negative readings
+    (e.g. net solar export exceeds house load), amount_to_fill becomes negative and
+    is added to all recent cumulative-load entries via the "fill to start" loop,
+    reducing result[0] below its true value.
+
+    Phase 2 has the same mismatch: integrated_energy clamps negatives to 0 (line
+    with max(..., 0)), inflating scale_factor, but the running_total update uses the
+    raw negative power, so the period subtotal no longer matches the original load data.
+
+    Expected: result[0] - result[max_minute] should match the original load data
+    total regardless of whether power sensor values are positive or negative.
+    """
+    print("\n=== Test 9: Negative power corrupts load total (regression) ===")
+
+    fetch = TestFetch()
+
+    # 60 minutes of load data.
+    # Minutes 0-30: all 10.0 kWh (sensor stuck for ~30 min, triggers Phase 1 zero-period fill).
+    # Minutes 31-60: linear decrease from ~9.93 down to 8.0 (normal cumulative data).
+    load_minutes = {}
+    for minute in range(0, 31):
+        load_minutes[minute] = 10.0
+    for minute in range(31, 61):
+        load_minutes[minute] = 10.0 - (minute - 30) * (2.0 / 30)  # 9.933 → 8.0
+
+    expected_total = load_minutes[0] - load_minutes[60]  # 10.0 - 8.0 = 2.0 kWh
+
+    # Power sensor with mostly negative values (net solar export dominating).
+    # One small positive value every 10 minutes so Phase 1's has_power check passes.
+    load_power_data = {}
+    for minute in range(0, 61):
+        if minute % 10 == 0:
+            load_power_data[minute] = 500.0  # Small positive (ensures has_power is True)
+        else:
+            load_power_data[minute] = -3000.0  # Negative (solar export exceeds house load)
+
+    result = fetch.fill_load_from_power(load_minutes, load_power_data)
+
+    actual_total = result[0] - result[60]
+
+    print(f"  Expected total: {expected_total:.4f} kWh")
+    print(f"  Actual total:   {actual_total:.4f} kWh")
+    print(f"  result[0]:      {result[0]:.4f} kWh  (should be ~10.0)")
+    print(f"  result[60]:     {result[60]:.4f} kWh (should be ~8.0)")
+
+    assert abs(actual_total - expected_total) < 0.5, (
+        f"Load total corrupted by negative power data: " f"expected {expected_total:.4f} kWh, got {actual_total:.4f} kWh " f"(delta {actual_total - expected_total:+.4f}). " f"Negative power values must be clamped to zero in both Phase 1 and Phase 2."
+    )
+
+    print("Test 9 PASSED")
+
+
 def run_all_tests(my_predbat=None):
     """Run all tests"""
     print("\n" + "=" * 60)
@@ -365,6 +422,7 @@ def run_all_tests(my_predbat=None):
         test_fill_load_from_power_backwards_time()
         test_fill_load_from_power_data_extends_beyond_load()
         test_fill_load_from_power_distorted_power_inflation()
+        test_fill_load_from_power_negative_power_corrupts_load_total()
 
         print("\n" + "=" * 60)
         print("✅ ALL TESTS PASSED")

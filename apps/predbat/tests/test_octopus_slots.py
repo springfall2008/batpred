@@ -10,7 +10,7 @@
 
 from datetime import timedelta
 from tests.test_infra import reset_rates
-from utils import dp2
+from utils import dp2, in_car_slot
 import json
 
 
@@ -67,6 +67,7 @@ def run_load_octopus_slots_tests(my_predbat):
     expected_slots5 = []
     expected_slots6 = []
     expected_slots7 = []
+    expected_slots8 = []
     my_predbat.update_time()
     now_utc = my_predbat.now_utc
     now_utc = now_utc.replace(minute=5, second=0, microsecond=0, hour=14)
@@ -75,7 +76,10 @@ def run_load_octopus_slots_tests(my_predbat):
 
     reset_rates(my_predbat, 10, 5)
     my_predbat.rate_min = 4
+    my_predbat.rate_min_base = 4
+    my_predbat.rate_max_base = 10
     my_predbat.car_charging_rate = [5.0]
+    my_predbat.args["octopus_slot_max"] = 12
 
     # Created 8 slots in total in the next 16 hours
     soc = 2.0
@@ -96,20 +100,26 @@ def run_load_octopus_slots_tests(my_predbat):
         slots6.append({"start": start.strftime(TIME_FORMAT) if i >= 1 else start_minus_30.strftime(TIME_FORMAT), "end": end.strftime(TIME_FORMAT), "source": "null", "location": "AT_HOME"})
         minutes_start = int((start - midnight_utc).total_seconds() / 60)
         minutes_end = int((end - midnight_utc).total_seconds() / 60)
-        expected_slots.append({"start": minutes_start, "end": minutes_end, "kwh": 5.0, "average": 4, "cost": 20.0, "soc": 0.0})
-        expected_slots7.append({"start": minutes_start, "end": minutes_end, "kwh": my_predbat.car_charging_rate[0], "average": 4, "cost": my_predbat.car_charging_rate[0] * 4, "soc": 0.0})
-        expected_slots2.append({"start": minutes_start, "end": minutes_end, "kwh": 0.0, "average": 4, "cost": 0.0, "soc": 0.0})
-        expected_slots3.append({"start": minutes_start, "end": minutes_end, "kwh": 5.0 if soc <= 12.0 else 0.0, "average": 4, "cost": 20.0 if soc <= 12.0 else 0.0, "soc": min(soc, 12.0)})
+        # Slots 5-8 (i >= 4) exceed the 12-block cap (each 60-min slot = 3 blocks, 4 slots = 12 blocks, 5th slot would be 15)
+        slot7_rate = 4 if i < 4 else 10
+        expected_slots.append({"start": minutes_start, "end": minutes_end, "kwh": 5.0, "average": slot7_rate, "cost": 5.0 * slot7_rate, "soc": 0.0, "octopus": True})
+        expected_slots7.append({"start": minutes_start, "end": minutes_end, "kwh": my_predbat.car_charging_rate[0], "average": slot7_rate, "cost": my_predbat.car_charging_rate[0] * slot7_rate, "soc": 0.0, "octopus": True})
+        expected_slots2.append({"start": minutes_start, "end": minutes_end, "kwh": 0.0, "average": slot7_rate, "cost": 0.0, "soc": 0.0, "octopus": True})
+        expected_slots3.append({"start": minutes_start, "end": minutes_end, "kwh": 5.0 if soc <= 12.0 else 0.0, "average": slot7_rate, "cost": (5.0 if soc <= 12.0 else 0.0) * slot7_rate, "soc": min(soc, 12.0), "octopus": True})
         if prev_soc2 < 10.0 and soc2 >= 10.0:
             extra_minutes = int(30 / (5 * 0.5) * 1)
-            expected_slots4.append({"start": minutes_start, "end": minutes_start + extra_minutes, "kwh": 1.0, "average": 4, "cost": 1 * 4.0, "soc": min(soc2, 10.0)})
-            expected_slots4.append({"start": minutes_start + extra_minutes, "end": minutes_end, "kwh": 5.0 if soc <= 20.0 else 0.0, "average": 4, "cost": 20.0 if soc <= 20.0 else 0.0, "soc": min(soc2, 10.0)})
+            expected_slots4.append({"start": minutes_start, "end": minutes_start + extra_minutes, "kwh": 1.0, "average": slot7_rate, "cost": 1.0 * slot7_rate, "soc": min(soc2, 10.0), "octopus": True})
+            expected_slots4.append({"start": minutes_start + extra_minutes, "end": minutes_end, "kwh": 5.0 if soc <= 20.0 else 0.0, "average": slot7_rate, "cost": (5.0 if soc <= 20.0 else 0.0) * slot7_rate, "soc": min(soc2, 10.0), "octopus": True})
         else:
-            expected_slots4.append({"start": minutes_start, "end": minutes_end, "kwh": 5.0 if soc <= 20.0 else 0.0, "average": 4, "cost": 20.0 if soc <= 20.0 else 0.0, "soc": min(soc2, 10.0)})
+            expected_slots4.append({"start": minutes_start, "end": minutes_end, "kwh": 5.0 if soc <= 20.0 else 0.0, "average": slot7_rate, "cost": (5.0 if soc <= 20.0 else 0.0) * slot7_rate, "soc": min(soc2, 10.0), "octopus": True})
+        # Slots 4-8 (i >= 3) exceed the 12-block cap for slots6 (slot 0 is 90-min = 4 blocks, slots 1-2 = 3 blocks each = 10 total, slot 3 would be 13)
+        slot5_rate = 4 if i < 3 else 10
         if i >= 1:
-            expected_slots5.append({"start": minutes_start, "end": minutes_end, "kwh": 5.0, "average": 4, "cost": 4 * 5.0, "soc": 10})
+            expected_slots5.append({"start": minutes_start, "end": minutes_end, "kwh": 5.0, "average": slot5_rate, "cost": slot5_rate * 5.0, "soc": 10, "octopus": True})
+            expected_slots8.append({"start": minutes_start, "end": minutes_end, "kwh": 5.0, "average": slot5_rate, "cost": slot5_rate * 5.0, "soc": 10, "octopus": True})
         else:
-            expected_slots5.append({"start": minutes_start - 30, "end": minutes_end, "kwh": 5 * 1.5, "average": 4, "cost": 4 * 5.0 * 1.5, "soc": 7.5})
+            expected_slots5.append({"start": minutes_start - 30, "end": minutes_end, "kwh": 5 * 1.5, "average": slot5_rate, "cost": slot5_rate * 5.0 * 1.5, "soc": 7.5, "octopus": True})
+            expected_slots8.append({"start": minutes_start - 30, "end": minutes_end, "kwh": 5 * 1.5, "average": slot5_rate, "cost": slot5_rate * 5.0 * 1.5, "soc": 7.5, "octopus": True})
 
     # Extra test
     start = now_utc - timedelta(minutes=121)
@@ -117,7 +127,7 @@ def run_load_octopus_slots_tests(my_predbat):
     minutes_start = int((start - midnight_utc).total_seconds() / 60)
     minutes_end = int((end - midnight_utc).total_seconds() / 60)
     slots4.append({"start": start.strftime(TIME_FORMAT), "end": end.strftime(TIME_FORMAT), "charge_in_kwh": -20, "source": "null", "location": "AT_HOME"})
-    expected_slots6.append({"start": minutes_start, "end": minutes_end, "kwh": 20.0, "average": 4, "cost": 20.0 * 4, "soc": 20.0})
+    expected_slots6.append({"start": minutes_start, "end": minutes_end, "kwh": 20.0, "average": 4, "cost": 20.0 * 4, "soc": 20.0, "octopus": True})
 
     failed |= run_load_octopus_slot_test("test1", my_predbat, slots, expected_slots, False, 2.0, 0.0, 1.0)
 
@@ -131,7 +141,7 @@ def run_load_octopus_slots_tests(my_predbat):
     failed |= run_load_octopus_slot_test("test5", my_predbat, slots3, expected_slots5, False, 0, 10, 1.0)
     failed |= run_load_octopus_slot_test("test6", my_predbat, slots4, expected_slots6, False, 0, 100, 1.0)
     failed |= run_load_octopus_slot_test("test7", my_predbat, slots5, expected_slots7, False, 2.0, 0.0, 1.0)
-    failed |= run_load_octopus_slot_test("test8", my_predbat, slots6, expected_slots5, False, 0, 10, 1.0)
+    failed |= run_load_octopus_slot_test("test8", my_predbat, slots6, expected_slots8, False, 0, 10, 1.0)
     if failed:
         return failed
 
@@ -152,13 +162,37 @@ def run_load_octopus_slots_tests(my_predbat):
     ]
 
     loaded_slots = my_predbat.load_octopus_slots(0, sample_bad, False)
-    expected_loaded = "[{'start': 870, 'end': 900, 'kwh': 1.29, 'average': 4, 'cost': 5.16, 'soc': 1.29}, {'start': 900, 'end': 930, 'kwh': 3.17, 'average': 4, 'cost': 12.68, 'soc': 4.46}, {'start': 930, 'end': 960, 'kwh': 3.18, 'average': 4, 'cost': 12.72, 'soc': 7.64}, {'start': 960, 'end': 990, 'kwh': 3.14, 'average': 4, 'cost': 12.56, 'soc': 10}, {'start': 990, 'end': 1050, 'kwh': 7.47, 'average': 4, 'cost': 29.88, 'soc': 10}, {'start': 1050, 'end': 1080, 'kwh': 3.0, 'average': 4, 'cost': 12.0, 'soc': 10}]"
+    expected_loaded = "[{'start': 870, 'end': 900, 'kwh': 1.29, 'average': 4, 'cost': 5.16, 'soc': 1.29, 'octopus': True}, {'start': 900, 'end': 930, 'kwh': 3.17, 'average': 4, 'cost': 12.68, 'soc': 4.46, 'octopus': True}, {'start': 930, 'end': 960, 'kwh': 3.18, 'average': 4, 'cost': 12.72, 'soc': 7.64, 'octopus': True}, {'start': 960, 'end': 990, 'kwh': 3.14, 'average': 4, 'cost': 12.56, 'soc': 10, 'octopus': True}, {'start': 990, 'end': 1050, 'kwh': 7.47, 'average': 4, 'cost': 29.88, 'soc': 10, 'octopus': True}, {'start': 1050, 'end': 1080, 'kwh': 3.0, 'average': 4, 'cost': 12.0, 'soc': 10, 'octopus': True}]"
     if str(loaded_slots) != expected_loaded:
         print("ERROR: Loaded slots should be {}\ngot {}".format(expected_loaded, loaded_slots))
         failed = True
 
     if failed:
         return failed
+
+    # --- zero chargeKwh active-slot tests ---
+    # Octopus zeros chargeKwh once it calculates the car has hit its SoC target, but the
+    # dispatch window stays open. Active slots must be preserved so the "Hold for car"
+    # guard in execute.py fires for the remainder of the window.
+
+    # Currently-active slot (started 30 min ago) with chargeKwh = 0: preserved, kwh from remaining duration
+    active_start = midnight_utc + timedelta(minutes=my_predbat.minutes_now - 30)
+    active_end = midnight_utc + timedelta(minutes=my_predbat.minutes_now + 60)
+    slot_active_zero = [{"start": active_start.strftime(TIME_FORMAT), "end": active_end.strftime(TIME_FORMAT), "charge_in_kwh": 0, "source": "null", "location": "AT_HOME"}]
+    expected_active_zero = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "kwh": 5.0, "average": 4, "cost": 20.0, "soc": 0.0, "octopus": True}]
+    failed |= run_load_octopus_slot_test("zero_kwh_active", my_predbat, slot_active_zero, expected_active_zero, False, 0.0, 0.0, 1.0)
+
+    # Fully-past slot with chargeKwh = 0: still dropped (end is before minutes_now)
+    past_start = midnight_utc + timedelta(minutes=my_predbat.minutes_now - 120)
+    past_end = midnight_utc + timedelta(minutes=my_predbat.minutes_now - 60)
+    slot_past_zero = [{"start": past_start.strftime(TIME_FORMAT), "end": past_end.strftime(TIME_FORMAT), "charge_in_kwh": 0, "source": "null", "location": "AT_HOME"}]
+    failed |= run_load_octopus_slot_test("zero_kwh_past", my_predbat, slot_past_zero, [], False, 0.0, 0.0, 1.0)
+
+    # Future slot with chargeKwh = 0: still dropped (hasn't started yet)
+    future_start = midnight_utc + timedelta(minutes=my_predbat.minutes_now + 60)
+    future_end = midnight_utc + timedelta(minutes=my_predbat.minutes_now + 120)
+    slot_future_zero = [{"start": future_start.strftime(TIME_FORMAT), "end": future_end.strftime(TIME_FORMAT), "charge_in_kwh": 0, "source": "null", "location": "AT_HOME"}]
+    failed |= run_load_octopus_slot_test("zero_kwh_future", my_predbat, slot_future_zero, [], False, 0.0, 0.0, 1.0)
 
     print("**** Checking car_charge_slot_kwh ****")
     my_predbat.car_charging_slots[0] = expected_slots5
@@ -214,5 +248,27 @@ def run_load_octopus_slots_tests(my_predbat):
 
     my_predbat.car_charging_slots[0] = []
     my_predbat.num_cars = 0
+
+    # --- in_car_slot rate-gating tests ---
+    # A plain (non-octopus) slot must return rate_amount = 0 so the premium
+    # calculation is not applied to non-IOG charging.
+    print("**** Checking in_car_slot rate gating ****")
+    plain_slot = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "kwh": 5.0, "average": 20}]
+    octopus_slot = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "kwh": 5.0, "average": 20, "octopus": True}]
+    test_minute = my_predbat.minutes_now + 30
+
+    load_plain, rate_plain = in_car_slot(test_minute, 1, [plain_slot])
+    if rate_plain[0] != 0:
+        print("ERROR: in_car_slot rate for non-octopus slot should be 0, got {}".format(rate_plain[0]))
+        failed = True
+
+    load_octopus, rate_octopus = in_car_slot(test_minute, 1, [octopus_slot])
+    if rate_octopus[0] != 20:
+        print("ERROR: in_car_slot rate for octopus slot should be 20, got {}".format(rate_octopus[0]))
+        failed = True
+
+    if load_plain[0] != load_octopus[0]:
+        print("ERROR: load_amount should be the same regardless of octopus flag ({} vs {})".format(load_plain[0], load_octopus[0]))
+        failed = True
 
     return failed

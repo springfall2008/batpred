@@ -630,7 +630,6 @@ async def test_octopus_fetch_tariffs(my_predbat):
     - Test 3: Fetch tariffs for gas
     - Test 4: Fetch multiple tariffs (import + export)
     - Test 5: Verify dashboard_item called with correct entity names
-    - Test 6: Verify clean_url_cache called
     """
     print("\n**** Running Octopus fetch_tariffs tests ****")
     failed = False
@@ -649,25 +648,19 @@ async def test_octopus_fetch_tariffs(my_predbat):
     ]
     mock_standing_data = [{"valid_from": "2025-01-01T00:00:00Z", "valid_to": None, "value_inc_vat": 45.0}]
 
-    async def mock_fetch_url(url):
+    async def mock_fetch_url(url, **kwargs):
         if "standing-charges" in url:
             return mock_standing_data
+        elif kwargs.get("json_only"):
+            return {}  # product info: no matching tariff found -> fallback to standard path
         else:
             return mock_rates_data
 
     api.fetch_url_cached = mock_fetch_url
-    api.clean_url_cache = AsyncMock()
     api.dashboard_item = MagicMock()
 
     # Call fetch_tariffs
     await api.fetch_tariffs(tariffs_input)
-
-    # Verify clean_url_cache was called
-    if api.clean_url_cache.call_count != 1:
-        print(f"ERROR: Expected clean_url_cache to be called once, got {api.clean_url_cache.call_count} calls")
-        failed = True
-    else:
-        print("PASS: clean_url_cache called")
 
     # Verify tariff data was stored
     if "data" not in tariffs_input["import"]:
@@ -705,14 +698,15 @@ async def test_octopus_fetch_tariffs(my_predbat):
         {"valid_from": "2025-01-01T00:00:00Z", "valid_to": "2025-01-01T00:30:00Z", "value_inc_vat": 5.5},
     ]
 
-    async def mock_fetch_url2(url):
+    async def mock_fetch_url2(url, **kwargs):
         if "standing-charges" in url:
             return []
+        elif kwargs.get("json_only"):
+            return {}  # product info: no matching tariff found -> fallback to standard path
         else:
             return mock_export_rates
 
     api2.fetch_url_cached = mock_fetch_url2
-    api2.clean_url_cache = AsyncMock()
     api2.dashboard_item = MagicMock()
 
     await api2.fetch_tariffs(tariffs_input2)
@@ -740,7 +734,7 @@ async def test_octopus_fetch_tariffs(my_predbat):
     # Track URLs called
     urls_called = []
 
-    async def mock_fetch_url3(url):
+    async def mock_fetch_url3(url, **kwargs):
         urls_called.append(url)
         if "standing-charges" in url:
             return []
@@ -748,7 +742,6 @@ async def test_octopus_fetch_tariffs(my_predbat):
             return mock_gas_rates
 
     api3.fetch_url_cached = mock_fetch_url3
-    api3.clean_url_cache = AsyncMock()
     api3.dashboard_item = MagicMock()
 
     await api3.fetch_tariffs(tariffs_input3)
@@ -773,11 +766,12 @@ async def test_octopus_fetch_tariffs(my_predbat):
 
     tariffs_input4 = {"import": {"productCode": "AGILE-FLEX-22-11-25", "tariffCode": "E-1R-AGILE-FLEX-22-11-25-C"}, "export": {"productCode": "AGILE-OUTGOING-19-05-13", "tariffCode": "E-1R-AGILE-OUTGOING-19-05-13-C"}}
 
-    async def mock_fetch_url4(url):
+    async def mock_fetch_url4(url, **kwargs):
+        if kwargs.get("json_only"):
+            return {}  # product info: no matching tariff found -> fallback to standard path
         return [{"valid_from": "2025-01-01T00:00:00Z", "valid_to": "2025-01-01T00:30:00Z", "value_inc_vat": 15.0}]
 
     api4.fetch_url_cached = mock_fetch_url4
-    api4.clean_url_cache = AsyncMock()
     api4.dashboard_item = MagicMock()
 
     await api4.fetch_tariffs(tariffs_input4)
@@ -802,11 +796,12 @@ async def test_octopus_fetch_tariffs(my_predbat):
 
     tariffs_input5 = {"import": {"productCode": "TEST-PRODUCT", "tariffCode": "TEST-TARIFF"}}
 
-    async def mock_fetch_url5(url):
+    async def mock_fetch_url5(url, **kwargs):
+        if kwargs.get("json_only"):
+            return {}  # product info: no matching tariff found -> fallback to standard path
         return [{"valid_from": "2025-01-01T00:00:00Z", "valid_to": "2025-01-01T00:30:00Z", "value_inc_vat": 20.0}]
 
     api5.fetch_url_cached = mock_fetch_url5
-    api5.clean_url_cache = AsyncMock()
     dashboard_calls = []
 
     def capture_dashboard_item(entity_id, state, attributes=None, app=None):
@@ -863,6 +858,159 @@ async def test_octopus_fetch_tariffs(my_predbat):
     else:
         print("PASS: All dashboard_item calls use app='octopus'")
 
+    # Test 7: Product info returns day/night links → async_get_day_night_rates is used
+    print("\n*** Test 7: Product info with day_unit_rates links → routes to async_get_day_night_rates ***")
+    api7 = OctopusAPI(my_predbat, key="test-api-key-7", account_id="test-account-7", automatic=False)
+
+    iog_tariff_code = "E-1R-IOG-SMB-TOU-25-12-12-H"
+    iog_product_code = "IOG-SMB-TOU-25-12-12"
+    tariffs_input7 = {"import": {"productCode": iog_product_code, "tariffCode": iog_tariff_code}}
+
+    # Minimal product-info JSON that _async_get_product_rate_link_types will parse:
+    # contains only day/night links for this tariff — no standard_unit_rates link.
+    mock_product_info = {
+        "single_register_electricity_tariffs": {
+            "_H": {
+                "direct_debit_monthly": {
+                    "code": iog_tariff_code,
+                    "links": [
+                        {"rel": "day_unit_rates", "href": f"https://api.octopus.energy/v1/products/{iog_product_code}/electricity-tariffs/{iog_tariff_code}/day-unit-rates/"},
+                        {"rel": "night_unit_rates", "href": f"https://api.octopus.energy/v1/products/{iog_product_code}/electricity-tariffs/{iog_tariff_code}/night-unit-rates/"},
+                        {"rel": "standing_charges", "href": f"https://api.octopus.energy/v1/products/{iog_product_code}/electricity-tariffs/{iog_tariff_code}/standing-charges/"},
+                    ],
+                }
+            }
+        }
+    }
+
+    mock_day_night_result = [
+        {"valid_from": "2026-05-09T23:30:00+0100", "valid_to": "2026-05-10T05:30:00+0100", "value_inc_vat": 7.0},
+        {"valid_from": "2026-05-10T05:30:00+0100", "valid_to": "2026-05-10T23:30:00+0100", "value_inc_vat": 29.14},
+    ]
+
+    async def mock_fetch_url7(url, **kwargs):
+        if kwargs.get("json_only"):
+            return mock_product_info  # product info with day/night links only
+        if "standing-charges" in url:
+            return []
+        return []  # should not be called for rate data in this path
+
+    api7.fetch_url_cached = mock_fetch_url7
+    api7.dashboard_item = MagicMock()
+    api7.async_get_day_night_rates = AsyncMock(return_value=mock_day_night_result)
+
+    await api7.fetch_tariffs(tariffs_input7)
+
+    # async_get_day_night_rates must have been called (not the standard URL path)
+    if api7.async_get_day_night_rates.call_count != 1:
+        print(f"ERROR: Expected async_get_day_night_rates called once, got {api7.async_get_day_night_rates.call_count}")
+        failed = True
+    else:
+        call_kwargs = api7.async_get_day_night_rates.call_args
+        # Verify correct tariff/product codes passed through
+        passed_tariff = call_kwargs.kwargs.get("tariff_code", "")
+        passed_product = call_kwargs.kwargs.get("product_code", "")
+        if passed_tariff != iog_tariff_code:
+            print(f"ERROR: Expected tariff_code={iog_tariff_code}, got {passed_tariff}")
+            failed = True
+        elif passed_product != iog_product_code:
+            print(f"ERROR: Expected product_code={iog_product_code}, got {passed_product}")
+            failed = True
+        else:
+            print("PASS: async_get_day_night_rates called with correct tariff/product codes")
+
+    # The returned day/night data must be stored in tariffs["import"]["data"]
+    if tariffs_input7["import"].get("data") != mock_day_night_result:
+        print(f"ERROR: Expected day/night data stored in tariff, got {tariffs_input7['import'].get('data')}")
+        failed = True
+    else:
+        print("PASS: Day/night rate data stored correctly in tariff")
+
+    # Test 8: INTELLI-FLUX-EXPORT 404s → fetches FLUX-IMPORT as fallback
+    print("\n*** Test 8: INTELLI-FLUX-EXPORT 404s → fetches FLUX-IMPORT as fallback ***")
+    api8 = OctopusAPI(my_predbat, key="test-api-key-8", account_id="test-account-8", automatic=False)
+
+    flux_export_product = "INTELLI-FLUX-EXPORT-23-07-14"
+    flux_export_tariff = "E-1R-INTELLI-FLUX-EXPORT-23-07-14-A"
+    flux_import_product = "INTELLI-FLUX-IMPORT-23-07-14"
+    flux_import_tariff = "E-1R-INTELLI-FLUX-IMPORT-23-07-14-A"
+    tariffs_input8 = {"export": {"productCode": flux_export_product, "tariffCode": flux_export_tariff}}
+
+    mock_flux_import_rates = [
+        {"valid_from": "2025-01-01T00:00:00Z", "valid_to": "2025-01-01T00:30:00Z", "value_inc_vat": 3.49},
+        {"valid_from": "2025-01-01T05:30:00Z", "valid_to": "2025-01-01T06:00:00Z", "value_inc_vat": 28.14},
+    ]
+    urls_called8 = []
+
+    async def mock_fetch_url8(url, **kwargs):
+        urls_called8.append(url)
+        if kwargs.get("json_only"):
+            return {}
+        if "standing-charges" in url:
+            return []
+        if flux_export_product in url:
+            return None  # FLUX-EXPORT 404s
+        if flux_import_product in url:
+            return mock_flux_import_rates
+        return None
+
+    api8.fetch_url_cached = mock_fetch_url8
+    api8.dashboard_item = MagicMock()
+
+    await api8.fetch_tariffs(tariffs_input8)
+
+    flux_import_url_fetched = any(flux_import_product in url and "standard-unit-rates" in url for url in urls_called8)
+    if not flux_import_url_fetched:
+        print(f"ERROR: Expected FLUX-IMPORT standard-unit-rates URL to be fetched, got {urls_called8}")
+        failed = True
+    else:
+        print("PASS: FLUX-IMPORT standard-unit-rates URL was fetched as fallback")
+
+    if tariffs_input8["export"].get("data") != mock_flux_import_rates:
+        print(f"ERROR: Expected FLUX-IMPORT rates stored as export data, got {tariffs_input8['export'].get('data')}")
+        failed = True
+    else:
+        print("PASS: FLUX-IMPORT rates stored correctly as export fallback")
+
+    # Verify the URL constructed has FLUX-IMPORT, not FLUX-EXPORT
+    wrong_url_called = any(flux_export_product in url and "standard-unit-rates" in url and url != f"https://api.octopus.energy/v1/products/{flux_export_product}/electricity-tariffs/{flux_export_tariff}/standard-unit-rates/" for url in urls_called8)
+    expected_flux_import_url = f"https://api.octopus.energy/v1/products/{flux_import_product}/electricity-tariffs/{flux_import_tariff}/standard-unit-rates/"
+    if expected_flux_import_url not in urls_called8:
+        print(f"ERROR: Expected exact URL {expected_flux_import_url}, got {urls_called8}")
+        failed = True
+    else:
+        print("PASS: FLUX-IMPORT URL constructed correctly with correct product and tariff codes")
+
+    # Test 9: INTELLI-FLUX-EXPORT 404s, FLUX-IMPORT also 404s → falls back to current import data
+    print("\n*** Test 9: FLUX-EXPORT and FLUX-IMPORT both fail → falls back to current import data ***")
+    api9 = OctopusAPI(my_predbat, key="test-api-key-9", account_id="test-account-9", automatic=False)
+
+    fix_import_rates = [{"valid_from": "2025-01-01T00:00:00Z", "valid_to": "2025-01-01T00:30:00Z", "value_inc_vat": 28.14}]
+    tariffs_input9 = {
+        "import": {"productCode": "INTELLI-FIX-12M-25-08-29", "tariffCode": "E-1R-INTELLI-FIX-12M-25-08-29-A"},
+        "export": {"productCode": flux_export_product, "tariffCode": flux_export_tariff},
+    }
+
+    async def mock_fetch_url9(url, **kwargs):
+        if kwargs.get("json_only"):
+            return {}
+        if "standing-charges" in url:
+            return []
+        if flux_export_product in url or flux_import_product in url:
+            return None  # both FLUX tariffs fail
+        return fix_import_rates  # FIX import succeeds
+
+    api9.fetch_url_cached = mock_fetch_url9
+    api9.dashboard_item = MagicMock()
+
+    await api9.fetch_tariffs(tariffs_input9)
+
+    if tariffs_input9["export"].get("data") != fix_import_rates:
+        print(f"ERROR: Expected current import rates as final fallback, got {tariffs_input9['export'].get('data')}")
+        failed = True
+    else:
+        print("PASS: Current import rates used as final fallback when FLUX-IMPORT also unavailable")
+
     if failed:
         print("\n**** ❌ Octopus fetch_tariffs tests FAILED ****")
         return 1
@@ -892,10 +1040,10 @@ def test_octopus_get_octopus_rates_direct(my_predbat):
 
     # Setup tariff with rate data (midnight_utc comes from my_predbat)
     # Use dates relative to my_predbat.midnight_utc for compatibility
-    midnight_str = my_predbat.midnight_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
-    midnight_plus_30 = (my_predbat.midnight_utc + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    midnight_plus_60 = (my_predbat.midnight_utc + timedelta(minutes=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    midnight_plus_90 = (my_predbat.midnight_utc + timedelta(minutes=90)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    midnight_str = my_predbat.midnight_utc.strftime("%Y-%m-%dT%H:%M:%S%z")
+    midnight_plus_30 = (my_predbat.midnight_utc + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S%z")
+    midnight_plus_60 = (my_predbat.midnight_utc + timedelta(minutes=60)).strftime("%Y-%m-%dT%H:%M:%S%z")
+    midnight_plus_90 = (my_predbat.midnight_utc + timedelta(minutes=90)).strftime("%Y-%m-%dT%H:%M:%S%z")
 
     api.tariffs = {
         "import": {
@@ -936,8 +1084,8 @@ def test_octopus_get_octopus_rates_direct(my_predbat):
     print("\n*** Test 2: Get standing charges with valid tariff data ***")
     api2 = OctopusAPI(my_predbat, key="test-api-key-2", account_id="test-account-2", automatic=False)
 
-    midnight_str = my_predbat.midnight_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
-    midnight_plus_30 = (my_predbat.midnight_utc + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    midnight_str = my_predbat.midnight_utc.strftime("%Y-%m-%dT%H:%M:%S%z")
+    midnight_plus_30 = (my_predbat.midnight_utc + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S%z")
 
     api2.tariffs = {
         "import": {
@@ -966,7 +1114,7 @@ def test_octopus_get_octopus_rates_direct(my_predbat):
     print("\n*** Test 3: Handle None valid_to (extends to 7 days) ***")
     api3 = OctopusAPI(my_predbat, key="test-api-key-3", account_id="test-account-3", automatic=False)
 
-    midnight_str = my_predbat.midnight_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+    midnight_str = my_predbat.midnight_utc.strftime("%Y-%m-%dT%H:%M:%S%z")
 
     # Create tariff with None valid_to
     tariff_data_before = [{"valid_from": midnight_str, "valid_to": None, "value_inc_vat": 20.0}]
@@ -1062,9 +1210,9 @@ def test_octopus_get_octopus_rates_direct(my_predbat):
     print("\n*** Test 6: Verify minute_data conversion format ***")
     api6 = OctopusAPI(my_predbat, key="test-api-key-6", account_id="test-account-6", automatic=False)
 
-    midnight_str = my_predbat.midnight_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
-    midnight_plus_30 = (my_predbat.midnight_utc + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    midnight_plus_60 = (my_predbat.midnight_utc + timedelta(minutes=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    midnight_str = my_predbat.midnight_utc.strftime("%Y-%m-%dT%H:%M:%S%z")
+    midnight_plus_30 = (my_predbat.midnight_utc + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S%z")
+    midnight_plus_60 = (my_predbat.midnight_utc + timedelta(minutes=60)).strftime("%Y-%m-%dT%H:%M:%S%z")
 
     # Create clear test data - 30 min rates
     api6.tariffs = {
@@ -1704,45 +1852,50 @@ def test_octopus_get_intelligent_vehicle(my_predbat):
         return 0
 
 
-async def test_octopus_run(my_predbat):
-    """
-    Test OctopusAPI run method.
-
-    Tests:
-    - Test 1: First run (loads cache, calls all update methods)
-    - Test 2: 30-minute update (account and tariffs)
-    - Test 3: 10-minute update (intelligent device, fetch tariffs, saving sessions)
-    - Test 4: 2-minute update (intelligent sensor, save cache)
-    - Test 5: Process commands during run
-    - Test 6: Automatic config on first run
-    """
-    print("\n**** Running Octopus run method tests ****")
-    failed = False
-
-    # Test 1: First run (loads cache, calls all update methods)
-    print("\n*** Test 1: First run (loads cache, calls all update methods) ***")
-    api = OctopusAPI(my_predbat, key="test-api-key", account_id="test-account", automatic=False)
-
-    # Mock all async methods called by run()
+def _mock_run_api(my_predbat, key, account_id, automatic=False):
+    """Create an OctopusAPI instance with all run() methods mocked."""
+    api = OctopusAPI(my_predbat, key=key, account_id=account_id, automatic=automatic)
     api.load_octopus_cache = AsyncMock()
     api.async_get_account = AsyncMock()
     api.async_find_tariffs = AsyncMock()
     api.async_update_intelligent_devices = AsyncMock()
     api.fetch_tariffs = AsyncMock()
     api.async_get_saving_sessions = AsyncMock(return_value={"events": []})
+    api.async_get_flexibility_events = AsyncMock(return_value={"events": []})
     api.get_saving_session_data = MagicMock()
     api.async_intelligent_update_sensor = AsyncMock()
     api.save_octopus_cache = AsyncMock()
     api.process_commands = AsyncMock(return_value=False)
+    return api
+
+
+async def test_octopus_run(my_predbat):
+    """
+    Test OctopusAPI run method.
+
+    Tests:
+    - Test 1: First run with no cache (both fetched_at=None) — all methods called
+    - Test 2: Tariff stale (35 min), device fresh (5 min) — only tariff refreshed
+    - Test 3: Device stale (15 min), tariff fresh (5 min) — only device refreshed
+    - Test 4: Both fresh (1 min) at 2-minute sensor mark — only sensor, no cache save
+    - Test 5: Commands processed forces device refresh even when recently fetched
+    - Test 6: Fast restart (first=True) with fresh timestamps — only sensor, no heavy fetches
+    - Test 7: Automatic config on first run
+    """
+    print("\n**** Running Octopus run method tests ****")
+    failed = False
+
+    # Test 1: First run with no cache — all methods should be called
+    print("\n*** Test 1: First run calls all expected methods ***")
+    api = _mock_run_api(my_predbat, key="test-api-key", account_id="test-account")
+    # tariff_fetched_at and device_fetched_at are None → _data_age_minutes returns 9999
 
     result = await api.run(seconds=0, first=True)
 
     if not result:
         print(f"ERROR: Expected run() to return True, got {result}")
         failed = True
-
-    # Verify first run behavior
-    if api.load_octopus_cache.call_count != 1:
+    elif api.load_octopus_cache.call_count != 1:
         print(f"ERROR: Expected load_octopus_cache to be called once, got {api.load_octopus_cache.call_count}")
         failed = True
     elif api.async_get_account.call_count != 1:
@@ -1757,179 +1910,181 @@ async def test_octopus_run(my_predbat):
     elif api.fetch_tariffs.call_count != 1:
         print(f"ERROR: Expected fetch_tariffs to be called once on first run, got {api.fetch_tariffs.call_count}")
         failed = True
-    elif api.async_get_saving_sessions.call_count != 1:
-        print(f"ERROR: Expected async_get_saving_sessions to be called once on first run, got {api.async_get_saving_sessions.call_count}")
+    elif api.async_get_flexibility_events.call_count != 1:
+        print(f"ERROR: Expected async_get_flexibility_events to be called once on first run, got {api.async_get_flexibility_events.call_count}")
         failed = True
     elif api.get_saving_session_data.call_count != 1:
         print(f"ERROR: Expected get_saving_session_data to be called once on first run, got {api.get_saving_session_data.call_count}")
         failed = True
     elif api.async_intelligent_update_sensor.call_count != 1:
-        print(f"ERROR: Expected async_intelligent_update_sensor to be called once on first run, got {api.async_intelligent_update_sensor.call_count}")
+        print(f"ERROR: Expected async_intelligent_update_sensor to be called once on first run (sensor_due=first), got {api.async_intelligent_update_sensor.call_count}")
         failed = True
     elif api.save_octopus_cache.call_count != 1:
-        print(f"ERROR: Expected save_octopus_cache to be called once on first run, got {api.save_octopus_cache.call_count}")
+        print(f"ERROR: Expected save_octopus_cache to be called once (tariff_due=True), got {api.save_octopus_cache.call_count}")
         failed = True
     else:
         print("PASS: First run calls all expected methods")
 
-    # Test 2: 30-minute update (account and tariffs)
-    print("\n*** Test 2: 30-minute update (account and tariffs) ***")
-    api2 = OctopusAPI(my_predbat, key="test-api-key-2", account_id="test-account-2", automatic=False)
+    # Test 2: Tariff stale (35 min old), device fresh (5 min old) — only tariff block runs
+    print("\n*** Test 2: Tariff stale, device fresh — only tariff refreshed ***")
+    api2 = _mock_run_api(my_predbat, key="test-api-key-2", account_id="test-account-2")
+    api2.tariff_fetched_at = datetime(2025, 1, 1, 9, 55, 0)  # 35 min before mock now
+    api2.device_fetched_at = datetime(2025, 1, 1, 10, 25, 0)  # 5 min before mock now
 
-    api2.load_octopus_cache = AsyncMock()
-    api2.async_get_account = AsyncMock()
-    api2.async_find_tariffs = AsyncMock()
-    api2.async_update_intelligent_devices = AsyncMock()
-    api2.fetch_tariffs = AsyncMock()
-    api2.async_get_saving_sessions = AsyncMock(return_value={})
-    api2.get_saving_session_data = MagicMock()
-    api2.async_intelligent_update_sensor = AsyncMock()
-    api2.save_octopus_cache = AsyncMock()
-    api2.process_commands = AsyncMock(return_value=False)
-
-    # Mock datetime to be at 30-minute mark (e.g., 10:30)
     with patch("octopus.datetime") as mock_datetime:
         mock_datetime.now.return_value = datetime(2025, 1, 1, 10, 30, 0)
         result = await api2.run(seconds=0, first=False)
 
     if api2.load_octopus_cache.call_count != 0:
-        print(f"ERROR: Expected load_octopus_cache NOT to be called on non-first run, got {api2.load_octopus_cache.call_count}")
+        print(f"ERROR: Expected load_octopus_cache NOT called on non-first run, got {api2.load_octopus_cache.call_count}")
         failed = True
     elif api2.async_get_account.call_count != 1:
-        print(f"ERROR: Expected async_get_account to be called at 30-minute mark, got {api2.async_get_account.call_count}")
+        print(f"ERROR: Expected async_get_account called (tariff stale), got {api2.async_get_account.call_count}")
         failed = True
     elif api2.async_find_tariffs.call_count != 1:
-        print(f"ERROR: Expected async_find_tariffs to be called at 30-minute mark, got {api2.async_find_tariffs.call_count}")
+        print(f"ERROR: Expected async_find_tariffs called (tariff stale), got {api2.async_find_tariffs.call_count}")
+        failed = True
+    elif api2.async_update_intelligent_devices.call_count != 0:
+        print(f"ERROR: Expected async_update_intelligent_devices NOT called (device fresh), got {api2.async_update_intelligent_devices.call_count}")
+        failed = True
+    elif api2.save_octopus_cache.call_count != 1:
+        print(f"ERROR: Expected save_octopus_cache called (tariff_due=True), got {api2.save_octopus_cache.call_count}")
         failed = True
     else:
-        print("PASS: 30-minute update calls account and tariff methods")
+        print("PASS: Tariff stale, device fresh — only tariff refreshed")
 
-    # Test 3: 10-minute update (intelligent device, fetch tariffs, saving sessions)
-    print("\n*** Test 3: 10-minute update (intelligent device, fetch tariffs, saving sessions) ***")
-    api3 = OctopusAPI(my_predbat, key="test-api-key-3", account_id="test-account-3", automatic=False)
-
-    api3.load_octopus_cache = AsyncMock()
-    api3.async_get_account = AsyncMock()
-    api3.async_find_tariffs = AsyncMock()
-    api3.async_update_intelligent_devices = AsyncMock()
-    api3.fetch_tariffs = AsyncMock()
-    api3.async_get_saving_sessions = AsyncMock(return_value={"events": []})
-    api3.get_saving_session_data = MagicMock()
-    api3.async_intelligent_update_sensor = AsyncMock()
-    api3.save_octopus_cache = AsyncMock()
-    api3.process_commands = AsyncMock(return_value=False)
+    # Test 3: Device stale (15 min old), tariff fresh (5 min old) — only device block runs
+    print("\n*** Test 3: Device stale, tariff fresh — only device refreshed ***")
+    api3 = _mock_run_api(my_predbat, key="test-api-key-3", account_id="test-account-3")
+    api3.tariff_fetched_at = datetime(2025, 1, 1, 10, 5, 0)  # 5 min before mock now
+    api3.device_fetched_at = datetime(2025, 1, 1, 9, 55, 0)  # 15 min before mock now
     api3.tariffs = {}
 
-    # Mock datetime to be at 10-minute mark (e.g., 10:10)
     with patch("octopus.datetime") as mock_datetime:
         mock_datetime.now.return_value = datetime(2025, 1, 1, 10, 10, 0)
         result = await api3.run(seconds=0, first=False)
 
-    if api3.async_update_intelligent_devices.call_count != 1:
-        print(f"ERROR: Expected async_update_intelligent_devices to be called at 10-minute mark, got {api3.async_update_intelligent_devices.call_count}")
+    if api3.async_get_account.call_count != 0:
+        print(f"ERROR: Expected async_get_account NOT called (tariff fresh), got {api3.async_get_account.call_count}")
+        failed = True
+    elif api3.async_update_intelligent_devices.call_count != 1:
+        print(f"ERROR: Expected async_update_intelligent_devices called (device stale), got {api3.async_update_intelligent_devices.call_count}")
         failed = True
     elif api3.fetch_tariffs.call_count != 1:
-        print(f"ERROR: Expected fetch_tariffs to be called at 10-minute mark, got {api3.fetch_tariffs.call_count}")
+        print(f"ERROR: Expected fetch_tariffs called (device stale), got {api3.fetch_tariffs.call_count}")
         failed = True
-    elif api3.async_get_saving_sessions.call_count != 1:
-        print(f"ERROR: Expected async_get_saving_sessions to be called at 10-minute mark, got {api3.async_get_saving_sessions.call_count}")
+    elif api3.async_get_flexibility_events.call_count != 1:
+        print(f"ERROR: Expected async_get_flexibility_events called (device stale), got {api3.async_get_flexibility_events.call_count}")
         failed = True
     elif api3.get_saving_session_data.call_count != 1:
-        print(f"ERROR: Expected get_saving_session_data to be called at 10-minute mark, got {api3.get_saving_session_data.call_count}")
+        print(f"ERROR: Expected get_saving_session_data called (device stale), got {api3.get_saving_session_data.call_count}")
+        failed = True
+    elif api3.save_octopus_cache.call_count != 1:
+        print(f"ERROR: Expected save_octopus_cache called (device_due=True), got {api3.save_octopus_cache.call_count}")
         failed = True
     else:
-        print("PASS: 10-minute update calls intelligent device and saving sessions methods")
+        print("PASS: Device stale, tariff fresh — only device refreshed")
 
-    # Test 4: 2-minute update (intelligent sensor, save cache)
-    print("\n*** Test 4: 2-minute update (intelligent sensor, save cache) ***")
-    api4 = OctopusAPI(my_predbat, key="test-api-key-4", account_id="test-account-4", automatic=False)
+    # Test 4: Both fresh (1 min) at 2-minute sensor mark — only sensor fires, no cache save
+    print("\n*** Test 4: Both fresh — only sensor update, no cache save ***")
+    api4 = _mock_run_api(my_predbat, key="test-api-key-4", account_id="test-account-4")
+    api4.tariff_fetched_at = datetime(2025, 1, 1, 10, 1, 0)  # 1 min before mock now
+    api4.device_fetched_at = datetime(2025, 1, 1, 10, 1, 0)  # 1 min before mock now
 
-    api4.load_octopus_cache = AsyncMock()
-    api4.async_get_account = AsyncMock()
-    api4.async_find_tariffs = AsyncMock()
-    api4.async_update_intelligent_devices = AsyncMock()
-    api4.fetch_tariffs = AsyncMock()
-    api4.async_get_saving_sessions = AsyncMock(return_value={})
-    api4.get_saving_session_data = MagicMock()
-    api4.async_intelligent_update_sensor = AsyncMock()
-    api4.save_octopus_cache = AsyncMock()
-    api4.process_commands = AsyncMock(return_value=False)
-
-    # Mock datetime to be at 2-minute mark (e.g., 10:02)
     with patch("octopus.datetime") as mock_datetime:
-        mock_datetime.now.return_value = datetime(2025, 1, 1, 10, 2, 0)
+        mock_datetime.now.return_value = datetime(2025, 1, 1, 10, 2, 0)  # 10:02 — even minute
         result = await api4.run(seconds=0, first=False)
 
-    if api4.async_intelligent_update_sensor.call_count != 1:
-        print(f"ERROR: Expected async_intelligent_update_sensor to be called at 2-minute mark, got {api4.async_intelligent_update_sensor.call_count}")
+    if api4.async_get_account.call_count != 0:
+        print(f"ERROR: Expected async_get_account NOT called (tariff fresh), got {api4.async_get_account.call_count}")
         failed = True
-    elif api4.save_octopus_cache.call_count != 1:
-        print(f"ERROR: Expected save_octopus_cache to be called at 2-minute mark, got {api4.save_octopus_cache.call_count}")
+    elif api4.async_update_intelligent_devices.call_count != 0:
+        print(f"ERROR: Expected async_update_intelligent_devices NOT called (device fresh), got {api4.async_update_intelligent_devices.call_count}")
+        failed = True
+    elif api4.async_intelligent_update_sensor.call_count != 1:
+        print(f"ERROR: Expected async_intelligent_update_sensor called at 2-min mark, got {api4.async_intelligent_update_sensor.call_count}")
+        failed = True
+    elif api4.save_octopus_cache.call_count != 0:
+        print(f"ERROR: Expected save_octopus_cache NOT called (no data refreshed), got {api4.save_octopus_cache.call_count}")
         failed = True
     else:
-        print("PASS: 2-minute update calls sensor update and cache save methods")
+        print("PASS: Both fresh — only sensor update, no cache save")
 
-    # Test 5: Process commands during run triggers refresh
-    print("\n*** Test 5: Process commands during run triggers refresh ***")
-    api5 = OctopusAPI(my_predbat, key="test-api-key-5", account_id="test-account-5", automatic=False)
-
-    api5.load_octopus_cache = AsyncMock()
-    api5.async_get_account = AsyncMock()
-    api5.async_find_tariffs = AsyncMock()
-    api5.async_update_intelligent_devices = AsyncMock()
-    api5.fetch_tariffs = AsyncMock()
-    api5.async_get_saving_sessions = AsyncMock(return_value={})
-    api5.get_saving_session_data = MagicMock()
-    api5.async_intelligent_update_sensor = AsyncMock()
-    api5.save_octopus_cache = AsyncMock()
-    api5.process_commands = AsyncMock(return_value=True)  # Simulate command processed
+    # Test 5: Commands processed forces device refresh even when recently fetched
+    print("\n*** Test 5: Processing commands triggers device refresh regardless of age ***")
+    api5 = _mock_run_api(my_predbat, key="test-api-key-5", account_id="test-account-5")
+    api5.process_commands = AsyncMock(return_value=True)
+    api5.tariff_fetched_at = datetime(2025, 1, 1, 10, 4, 0)  # 1 min before mock now
+    api5.device_fetched_at = datetime(2025, 1, 1, 10, 4, 0)  # 1 min before mock now (fresh)
     api5.tariffs = {}
 
-    # Mock datetime to be at non-10/30-minute mark (e.g., 10:05)
     with patch("octopus.datetime") as mock_datetime:
-        mock_datetime.now.return_value = datetime(2025, 1, 1, 10, 5, 0)
+        mock_datetime.now.return_value = datetime(2025, 1, 1, 10, 5, 0)  # odd minute — sensor not due
         result = await api5.run(seconds=0, first=False)
 
-    # Because refresh=True, should still call 10-minute update methods
-    if api5.async_update_intelligent_devices.call_count != 1:
-        print(f"ERROR: Expected async_update_intelligent_devices to be called when commands processed, got {api5.async_update_intelligent_devices.call_count}")
+    if api5.async_get_account.call_count != 0:
+        print(f"ERROR: Expected async_get_account NOT called (tariff fresh, refresh doesn't affect tariff), got {api5.async_get_account.call_count}")
+        failed = True
+    elif api5.async_update_intelligent_devices.call_count != 1:
+        print(f"ERROR: Expected async_update_intelligent_devices called (refresh=True forces device update), got {api5.async_update_intelligent_devices.call_count}")
         failed = True
     elif api5.fetch_tariffs.call_count != 1:
-        print(f"ERROR: Expected fetch_tariffs to be called when commands processed, got {api5.fetch_tariffs.call_count}")
+        print(f"ERROR: Expected fetch_tariffs called (refresh=True forces device update), got {api5.fetch_tariffs.call_count}")
+        failed = True
+    elif api5.save_octopus_cache.call_count != 1:
+        print(f"ERROR: Expected save_octopus_cache called (device_due=True from refresh), got {api5.save_octopus_cache.call_count}")
         failed = True
     else:
         print("PASS: Processing commands triggers refresh of intelligent device data")
 
-    # Test 6: Automatic config on first run when automatic=True
-    print("\n*** Test 6: Automatic config on first run when automatic=True ***")
-    api6 = OctopusAPI(my_predbat, key="test-api-key-6", account_id="test-account-6", automatic=True)
+    # Test 6: Fast restart (first=True) with fresh timestamps — API calls skipped but
+    # async_find_tariffs and fetch_tariffs run to rebuild state from cached data
+    print("\n*** Test 6: Fast restart with fresh cache — tariff structure and rates rebuilt, API calls skipped ***")
+    api6 = _mock_run_api(my_predbat, key="test-api-key-6", account_id="test-account-6")
+    api6.tariff_fetched_at = datetime(2025, 1, 1, 10, 10, 0)  # 5 min before mock now
+    api6.device_fetched_at = datetime(2025, 1, 1, 10, 12, 0)  # 3 min before mock now
 
-    api6.load_octopus_cache = AsyncMock()
-    api6.async_get_account = AsyncMock()
-    api6.async_find_tariffs = AsyncMock()
-    api6.async_update_intelligent_devices = AsyncMock()
-    api6.fetch_tariffs = AsyncMock()
-    api6.async_get_saving_sessions = AsyncMock(return_value={})
-    api6.get_saving_session_data = MagicMock()
-    api6.async_intelligent_update_sensor = AsyncMock()
-    api6.save_octopus_cache = AsyncMock()
-    api6.process_commands = AsyncMock(return_value=False)
-    api6.automatic_config = MagicMock()
-    api6.tariffs = {"import": {}}
+    with patch("octopus.datetime") as mock_datetime:
+        mock_datetime.now.return_value = datetime(2025, 1, 1, 10, 15, 0)
+        result = await api6.run(seconds=0, first=True)
 
-    result = await api6.run(seconds=0, first=True)
-
-    if api6.automatic_config.call_count != 1:
-        print(f"ERROR: Expected automatic_config to be called on first run with automatic=True, got {api6.automatic_config.call_count}")
+    if api6.async_get_account.call_count != 0:
+        print(f"ERROR: Expected async_get_account NOT called (tariff 5 min old < 30), got {api6.async_get_account.call_count}")
+        failed = True
+    elif api6.async_find_tariffs.call_count != 1:
+        print(f"ERROR: Expected async_find_tariffs called (rebuilds tariff structure from cached account_data), got {api6.async_find_tariffs.call_count}")
+        failed = True
+    elif api6.async_update_intelligent_devices.call_count != 0:
+        print(f"ERROR: Expected async_update_intelligent_devices NOT called (device 3 min old < 10), got {api6.async_update_intelligent_devices.call_count}")
+        failed = True
+    elif api6.fetch_tariffs.call_count != 1:
+        print(f"ERROR: Expected fetch_tariffs called (loads rate data from cache on first run), got {api6.fetch_tariffs.call_count}")
+        failed = True
+    elif api6.async_intelligent_update_sensor.call_count != 1:
+        print(f"ERROR: Expected async_intelligent_update_sensor called on first run (sensor_due=first), got {api6.async_intelligent_update_sensor.call_count}")
+        failed = True
+    elif api6.save_octopus_cache.call_count != 0:
+        print(f"ERROR: Expected save_octopus_cache NOT called (no API data refreshed), got {api6.save_octopus_cache.call_count}")
         failed = True
     else:
-        # Verify it was called with tariffs
-        call_args = api6.automatic_config.call_args
-        if call_args[0][0] != api6.tariffs:
-            print(f"ERROR: Expected automatic_config to be called with tariffs")
-            failed = True
-        else:
-            print("PASS: Automatic config called on first run when automatic=True")
+        print("PASS: Fast restart with fresh cache — tariff structure and rates rebuilt, API calls skipped")
+
+    # Test 7: Automatic config on first run when automatic=True
+    print("\n*** Test 7: Automatic config on first run when automatic=True ***")
+    api7 = _mock_run_api(my_predbat, key="test-api-key-7", account_id="test-account-7", automatic=True)
+    api7.automatic_config = MagicMock()
+    api7.tariffs = {"import": {}}
+
+    result = await api7.run(seconds=0, first=True)
+
+    if api7.automatic_config.call_count != 1:
+        print(f"ERROR: Expected automatic_config to be called on first run with automatic=True, got {api7.automatic_config.call_count}")
+        failed = True
+    elif api7.automatic_config.call_args[0][0] != api7.tariffs:
+        print(f"ERROR: Expected automatic_config to be called with tariffs")
+        failed = True
+    else:
+        print("PASS: Automatic config called on first run when automatic=True")
 
     if failed:
         print("\n**** ❌ Octopus run method tests FAILED ****")

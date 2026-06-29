@@ -16,12 +16,68 @@ dictionaries, time string parsing, data filtering/pruning, rounding,
 and historical data extraction from incrementing energy counters.
 """
 
+import array
 from datetime import datetime, timedelta, timezone, time
 from functools import lru_cache
 from const import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, MAX_INCREMENT, TIME_FORMAT_DAILY
 import copy
 
 DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+
+
+class MinuteArray:
+    """Dense array-backed replacement for dict[int, float] keyed by contiguous minute indices.
+
+    Stores values in a stdlib array.array('d') to reduce memory ~29x versus a Python dict
+    (8 bytes per entry instead of ~232 bytes). Exposes the same get/[] interface used by
+    get_from_incrementing and get_now_from_cumulative so no callers need updating.
+
+    Only suitable when the key range is contiguous from 0 to size-1 (i.e. after smoothing).
+    """
+
+    def __init__(self, data, size):
+        """Initialise from an existing dense dict, pre-allocated to size entries."""
+        self._data = array.array("d", (data.get(i, 0.0) for i in range(size)))
+
+    def get(self, key, default=0.0):
+        """Return the value at key, or default if key is out of range."""
+        if 0 <= key < len(self._data):
+            return self._data[key]
+        return default
+
+    def __getitem__(self, key):
+        """Return the value at key (no bounds check — callers are responsible)."""
+        return self._data[key]
+
+    def __len__(self):
+        """Return the number of entries in the array."""
+        return len(self._data)
+
+    def __contains__(self, key):
+        """True when key is a valid in-bounds index."""
+        return isinstance(key, int) and 0 <= key < len(self._data)
+
+    def __bool__(self):
+        """True when the array is non-empty."""
+        return len(self._data) > 0
+
+    def __setitem__(self, key, value):
+        """Set the value at key."""
+        self._data[key] = float(value)
+
+    def __iter__(self):
+        """Iterate over all valid indices, mirroring dict iteration over keys."""
+        return iter(range(len(self._data)))
+
+    def keys(self):
+        """Return a range covering all valid indices, mirroring dict.keys() for dense data."""
+        return range(len(self._data))
+
+    def copy(self):
+        """Return a shallow copy of this MinuteArray."""
+        new = MinuteArray.__new__(MinuteArray)
+        new._data = array.array("d", self._data)
+        return new
 
 
 # Helper to make dict hashable for caching
@@ -735,11 +791,12 @@ def in_iboost_slot(minute, iboost_plan):
     return load_amount
 
 
-def in_car_slot(minute, num_cars, car_charging_slots):
+def in_car_slot(minute, num_cars, car_charging_slots, slot_cap=None, slot_cap_period=None):
     """
     Is the given minute inside a car slot
     """
     load_amount = [0 for car_n in range(num_cars)]
+    rate_amount = [0 for car_n in range(num_cars)]
 
     for car_n in range(num_cars):
         if car_charging_slots[car_n]:
@@ -747,14 +804,17 @@ def in_car_slot(minute, num_cars, car_charging_slots):
                 start_minutes = slot["start"]
                 end_minutes = slot["end"]
                 kwh = slot["kwh"]
+                octopus = slot.get("octopus", False)
                 slot_minutes = end_minutes - start_minutes
                 slot_hours = slot_minutes / 60.0
 
                 # Return the load in that slot
                 if minute >= start_minutes and minute < end_minutes:
                     load_amount[car_n] = abs(kwh / slot_hours)
+                    # Only return rate for octopus as its used for premium calculations
+                    rate_amount[car_n] = slot.get("average", 0) if octopus else 0
                     break
-    return load_amount
+    return load_amount, rate_amount
 
 
 def time_string_to_stamp(time_string):
@@ -773,7 +833,11 @@ def time_string_to_stamp(time_string):
     if isinstance(time_string, str) and time_string.startswith("24:"):
         time_string = "00:" + time_string[3:]
 
-    return datetime.strptime(time_string, "%H:%M:%S")
+    try:
+        return datetime.strptime(time_string, "%H:%M:%S")
+    except (ValueError, TypeError):
+        print("WARN: time_string_to_stamp: invalid time string '{}', returning None".format(time_string))
+        return None
 
 
 def compute_window_minutes(start_time, end_time, minutes_now):
@@ -989,7 +1053,7 @@ def get_charge_rate_curve(soc, charge_rate_setting, soc_max, battery_rate_max_ch
     """
     Compute true charging rate from SoC and charge rate setting
     """
-    return get_charge_rate_curve_cached(soc, charge_rate_setting, soc_max, battery_rate_max_charge, charge_curve_to_tuple(battery_charge_power_curve), battery_rate_min, battery_temperature, charge_curve_to_tuple(battery_temperature_curve))
+    return get_charge_rate_curve_cached(round(soc, 1), charge_rate_setting, soc_max, battery_rate_max_charge, charge_curve_to_tuple(battery_charge_power_curve), battery_rate_min, battery_temperature, charge_curve_to_tuple(battery_temperature_curve))
 
 
 @lru_cache(maxsize=8192)
@@ -1012,7 +1076,9 @@ def get_discharge_rate_curve(soc, discharge_rate_setting, soc_max, battery_rate_
     """
     Compute true discharging rate from SoC and charge rate setting
     """
-    return get_discharge_rate_curve_cached(soc, discharge_rate_setting, soc_max, battery_rate_max_discharge, charge_curve_to_tuple(battery_discharge_power_curve), battery_rate_min, battery_temperature, charge_curve_to_tuple(battery_temperature_curve))
+    return get_discharge_rate_curve_cached(
+        round(soc, 1), discharge_rate_setting, soc_max, battery_rate_max_discharge, charge_curve_to_tuple(battery_discharge_power_curve), battery_rate_min, battery_temperature, charge_curve_to_tuple(battery_temperature_curve)
+    )
 
 
 """
@@ -1076,8 +1142,9 @@ def find_charge_rate(
     battery_charge_power_curve_tuple = charge_curve_to_tuple(battery_charge_power_curve)
 
     # Real achieved max rate
-    max_rate_real = get_charge_rate_curve_cached(soc, max_rate, soc_max, max_rate, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple) * battery_rate_max_scaling
+    max_rate_real = get_charge_rate_curve_cached(round(soc, 1), max_rate, soc_max, max_rate, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple) * battery_rate_max_scaling
 
+    min_battery_rate = max(400, int(round(battery_rate_min * MINUTE_WATT)))
     if set_charge_low_power:
         minutes_left = window["end"] - minutes_now - margin
         abs_minutes_left = window["end"] - minutes_now
@@ -1124,7 +1191,7 @@ def find_charge_rate(
                 )
             )
 
-        while rate_w >= 400:
+        while rate_w >= min_battery_rate:
             rate = rate_w / MINUTE_WATT
             if rate_w >= min_rate_w:
                 charge_now = soc
@@ -1132,7 +1199,7 @@ def find_charge_rate(
                 rate_scale_max = 0
                 # Compute over the time period, include the completion time
                 for minute in range(0, minutes_left, PREDICT_STEP):
-                    rate_scale = get_charge_rate_curve_cached(charge_now, rate, soc_max, max_rate, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple)
+                    rate_scale = get_charge_rate_curve_cached(round(charge_now, 1), rate, soc_max, max_rate, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple)
                     highest_achievable_rate = max(highest_achievable_rate, rate_scale)
                     rate_scale *= battery_rate_max_scaling
                     rate_scale_max = max(rate_scale_max, rate_scale)
@@ -1159,7 +1226,7 @@ def find_charge_rate(
                     )
                 )
 
-        best_rate_real = get_charge_rate_curve_cached(soc, best_rate, soc_max, max_rate, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple) * battery_rate_max_scaling
+        best_rate_real = get_charge_rate_curve_cached(round(soc, 1), best_rate, soc_max, max_rate, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple) * battery_rate_max_scaling
         if log_to:
             log_to(
                 "Low Power mode: minutes left: {}, absolute: {}, SoC: {}kW, Target SoC: {}kW, Charge left: {}kW, Max rate: {}W, Min rate: {}W, Best rate: {}W, Best rate real: {}W, Battery temp {}°C".format(

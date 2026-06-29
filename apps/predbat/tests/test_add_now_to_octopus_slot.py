@@ -88,6 +88,7 @@ def test_add_now_to_octopus_slot(my_predbat):
 
     my_predbat.num_cars = 3
     my_predbat.car_charging_now = [True, False, True]
+    my_predbat.car_charging_rate = [7.2, 0, 3.6]  # kW rates for each car
     my_predbat.minutes_now = 14 * 60 + 45  # 14:45
 
     now_utc = my_predbat.midnight_utc + timedelta(minutes=my_predbat.minutes_now)

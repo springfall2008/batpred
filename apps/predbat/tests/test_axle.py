@@ -33,6 +33,7 @@ class MockAxleAPI(AxleAPI):
         # Initialise instance variables that AxleAPI expects
         self.failures_total = 0
         self.last_updated_timestamp = None
+        self.last_success_timestamp = None
         self.event_history = []
         self.current_event = {
             "start_time": None,
@@ -714,37 +715,76 @@ def _test_axle_json_parse_error(my_predbat=None):
 
 
 def _test_axle_run_method(my_predbat=None):
-    """Test the run method polling logic and history loading"""
+    """Test the run method time-based polling logic and history loading"""
     print("Test: Axle API run method")
 
-    axle = MockAxleAPI()
-    axle.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
-
-    # Mock the fetch method
     fetch_called = []
 
     async def mock_fetch():
         fetch_called.append(True)
 
+    # Test 1: first run with no previous fetch - should load history and fetch
+    print("  Test 1: First run, no previous fetch")
+    axle = MockAxleAPI()
+    axle.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
     axle.fetch_axle_event = mock_fetch
 
-    # Test first run - should load history and fetch
     result = run_async(axle.run(seconds=0, first=True))
     assert result is True, "Run should return True"
     assert axle.history_loaded is True, "Should load history on first run"
-    assert len(fetch_called) == 1, "Should fetch on first run"
+    assert len(fetch_called) == 1, "Should fetch when updated_at is None"
+    print("    ✓ Fetches when no previous updated_at")
 
-    # Test run at 600 seconds (10 minutes)
+    # Test 2: recent updated_at (< 10 min ago) - should NOT fetch
+    print("  Test 2: Recent updated_at (5 min ago) - should skip")
+    axle2 = MockAxleAPI()
+    axle2.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
+    axle2.fetch_axle_event = mock_fetch
+    axle2.updated_at = (axle2.now_utc - timedelta(minutes=5)).strftime(TIME_FORMAT)
+
     fetch_called.clear()
-    result = run_async(axle.run(seconds=600, first=False))
-    assert len(fetch_called) == 1, "Should fetch at 10 minute mark"
+    result = run_async(axle2.run(seconds=300, first=False))
+    assert len(fetch_called) == 0, "Should not fetch when updated_at is < 10 min old"
+    print("    ✓ Skips fetch when data is fresh")
 
-    # Test run at non-fetch time
+    # Test 3: stale updated_at (>= 10 min ago) - should fetch
+    print("  Test 3: Stale updated_at (11 min ago) - should fetch")
+    axle3 = MockAxleAPI()
+    axle3.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
+    axle3.fetch_axle_event = mock_fetch
+    axle3.updated_at = (axle3.now_utc - timedelta(minutes=11)).strftime(TIME_FORMAT)
+
     fetch_called.clear()
-    result = run_async(axle.run(seconds=300, first=False))
-    assert len(fetch_called) == 0, "Should not fetch at 5 minute mark"
+    result = run_async(axle3.run(seconds=660, first=False))
+    assert len(fetch_called) == 1, "Should fetch when updated_at is 10+ min old"
+    print("    ✓ Fetches when data is stale")
 
-    print("  ✓ Run method polling logic correct")
+    # Test 4: restart with recent updated_at (restored from storage) - should NOT fetch
+    print("  Test 4: Restart with recent updated_at (2 min ago) - should skip")
+    axle4 = MockAxleAPI()
+    axle4.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
+    axle4.fetch_axle_event = mock_fetch
+    axle4.updated_at = (axle4.now_utc - timedelta(minutes=2)).strftime(TIME_FORMAT)
+
+    fetch_called.clear()
+    result = run_async(axle4.run(seconds=0, first=True))
+    assert axle4.history_loaded is True, "Should still load history on first run"
+    assert len(fetch_called) == 0, "Should not fetch on restart when updated_at is still fresh"
+    print("    ✓ Skips fetch on restart when updated_at is still fresh")
+
+    # Test 5: exactly 10 minutes - boundary: should fetch
+    print("  Test 5: Exactly 10 minutes old - boundary fetch")
+    axle5 = MockAxleAPI()
+    axle5.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
+    axle5.fetch_axle_event = mock_fetch
+    axle5.updated_at = (axle5.now_utc - timedelta(minutes=10)).strftime(TIME_FORMAT)
+
+    fetch_called.clear()
+    run_async(axle5.run(seconds=600, first=False))
+    assert len(fetch_called) == 1, "Should fetch at exactly 10 min boundary"
+    print("    ✓ Fetches at exactly 10 min boundary")
+
+    print("  ✓ Run method time-based polling logic correct")
     return False
 
 
@@ -780,7 +820,7 @@ def _test_axle_history_loading(my_predbat=None):
     }
 
     # Load history
-    axle.load_event_history()
+    run_async(axle.load_event_history())
 
     # Should only load past events
     assert len(axle.event_history) == 1, "Should only load past events"

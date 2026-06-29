@@ -28,20 +28,24 @@ from tests.test_window2minutes import test_window2minutes
 from tests.test_history_attribute import test_history_attribute
 from tests.test_inverter import run_inverter_tests
 from tests.test_basic_rates import test_basic_rates
+from tests.test_rate_min_forward_calc import test_rate_min_forward_calc
 from tests.test_find_charge_curve import run_find_charge_curve_tests
 from tests.test_find_battery_size import run_find_battery_size_tests
 from tests.test_optimise_all_windows import run_optimise_all_windows_tests
+from tests.test_optimise_solar import run_optimise_solar_tests
 from tests.test_nordpool import run_nordpool_test
 from tests.test_futurerate_auto import test_futurerate_auto
 from tests.test_car_charging_smart import run_car_charging_smart_tests
 from tests.test_plugin_startup import test_plugin_startup_order
+from tests.test_active_flag import test_active_flag
 from tests.test_optimise_levels import run_optimise_levels_tests
 from tests.test_energydataservice import run_energydataservice_tests
 from tests.test_iboost import run_iboost_smart_tests
 from tests.test_alert_feed import test_alert_feed
 from tests.test_solax import run_solax_tests
+from tests.test_sigenergy import run_sigenergy_tests
 from tests.test_single_debug import run_single_debug
-from tests.test_saving_session import test_saving_session, test_saving_session_null_octopoints, test_saving_session_notify_config, test_saving_session_default_rate
+from tests.test_saving_session import test_saving_session, test_saving_session_null_octopoints, test_saving_session_notify_config, test_saving_session_default_rate, test_saving_session_axle_conflict, test_saving_session_auto_join_toggle
 from tests.test_secrets import run_secrets_tests
 from tests.test_ge_cloud import test_ge_cloud
 from tests.test_compare import test_compare
@@ -55,12 +59,14 @@ from tests.test_hainterface_service import run_hainterface_service_tests
 from tests.test_hainterface_lifecycle import run_hainterface_lifecycle_tests
 from tests.test_hainterface_websocket import run_hainterface_websocket_tests
 from tests.test_web_if import run_test_web_if
+from tests.test_web_functions import run_web_functions_tests
 from tests.test_window import run_window_sort_tests, run_intersect_window_tests
 from tests.test_find_charge_rate import test_find_charge_rate, test_find_charge_rate_string_temperature, test_find_charge_rate_string_charge_curve
 from tests.test_manual_api import run_test_manual_api
 from tests.test_manual_soc import run_test_manual_soc
 from tests.test_manual_times import run_test_manual_times
 from tests.test_manual_select import run_test_manual_select
+from tests.test_minute_array import test_minute_array
 from tests.test_minute_data import test_minute_data, test_minute_data_load, test_minute_data_no_smoothing_backwards, test_minute_data_no_smoothing_forward
 from tests.test_minute_data_import_export import test_minute_data_import_export
 from tests.test_minute_data_state import test_minute_data_state
@@ -68,6 +74,8 @@ from tests.test_format_time_ago import test_format_time_ago
 from tests.test_override_time import test_get_override_time_from_string
 from tests.test_units import run_test_units
 from tests.test_previous_days_modal import test_previous_days_modal_filter
+from tests.test_load_forecast_history import test_load_forecast_history
+from tests.test_filtered_load_minute import test_filtered_load_minute
 from tests.test_fill_load_from_power import run_all_tests as test_fill_load_from_power
 from tests.test_fetch_pv_forecast import run_all_tests as test_fetch_pv_forecast
 from tests.test_octopus_free import test_octopus_free
@@ -81,8 +89,10 @@ from tests.test_octopus_misc import test_octopus_misc_wrapper
 from tests.test_octopus_read_response import test_octopus_read_response_wrapper
 from tests.test_octopus_read_response_retry import test_octopus_read_response_retry_wrapper
 from tests.test_octopus_rate_limit import test_octopus_rate_limit_wrapper
+from tests.test_octopus_logging import test_octopus_logging_wrapper
 from tests.test_octopus_fetch_previous_dispatch import test_octopus_fetch_previous_dispatch_wrapper
 from tests.test_octopus_intelligent_devices import test_octopus_intelligent_devices_wrapper
+from tests.test_octopus_day_night_rates import test_octopus_day_night_rates_wrapper
 from tests.test_fetch_octopus_rates import test_fetch_octopus_rates
 from tests.test_fetch_tariffs import test_fetch_tariffs
 from tests.test_fetch_url_cached import test_fetch_url_cached
@@ -102,6 +112,9 @@ from tests.test_rate_replicate_missing_slots import test_rate_replicate
 from tests.test_find_charge_window import test_find_charge_window
 from tests.test_random_scenarios import generate_scenarios, save_scenarios, run_scenarios_from_file, compare_results, profile_scenario
 from tests.test_carbon import test_carbon
+from tests.test_storage import test_storage
+from tests.test_plan_persistence import test_plan_persistence
+from tests.test_github import test_github
 from tests.test_download import test_download
 from tests.test_ohme import test_ohme
 from tests.test_component_base import test_component_base_all
@@ -120,6 +133,8 @@ from tests.test_discard_unused_export_slots import run_discard_unused_export_slo
 from tests.test_marginal_costs import test_marginal_costs
 from tests.test_additional_load_forecast import run_additional_load_forecast_tests
 from tests.test_savings_stability import test_savings_stability
+from tests.test_calculate_yesterday import test_calculate_yesterday
+from tests.test_load_today_comparison import test_load_today_comparison
 
 
 # Mock the components and plugin system
@@ -177,9 +192,11 @@ def main():
         ("inverter", run_inverter_tests, "Inverter tests", False),
         ("execute", run_execute_tests, "Execute tests", False),
         ("basic_rates", test_basic_rates, "Basic rates tests", False),
+        ("rate_min_forward_calc", test_rate_min_forward_calc, "Rate min forward calc tests", False),
         ("window_sort", run_window_sort_tests, "Window sort tests", False),
         ("window2minutes", test_window2minutes, "Window to minutes tests", False),
         ("compute_metric", run_compute_metric_tests, "Compute metric tests", False),
+        ("minute_array", test_minute_array, "MinuteArray class tests", False),
         ("minute_data", test_minute_data, "Minute data tests", False),
         ("minute_data_load", test_minute_data_load, "Minute data load tests", False),
         ("minute_data_import_export", test_minute_data_import_export, "Minute data import/export tests", False),
@@ -192,6 +209,8 @@ def main():
         ("format_time_ago", test_format_time_ago, "Format time ago tests", False),
         ("override_time", test_get_override_time_from_string, "Override time from string tests", False),
         ("previous_days_modal", test_previous_days_modal_filter, "Previous days modal filter tests", False),
+        ("load_forecast_history", test_load_forecast_history, "Weighted historical load forecast tests", False),
+        ("filtered_load_minute", test_filtered_load_minute, "Filtered load minute / window tests", False),
         ("fill_load_from_power", test_fill_load_from_power, "Fill load from power sensor tests", False),
         ("fetch_pv_forecast", test_fetch_pv_forecast, "Fetch PV forecast with relative_time offset tests", False),
         # Octopus Energy URL/API tests
@@ -203,8 +222,10 @@ def main():
         ("octopus_read_response", test_octopus_read_response_wrapper, "Octopus read response tests", False),
         ("octopus_read_response_retry", test_octopus_read_response_retry_wrapper, "Octopus read response retry with exponential backoff tests", False),
         ("octopus_rate_limit", test_octopus_rate_limit_wrapper, "Octopus API rate limit tests", False),
+        ("octopus_logging", test_octopus_logging_wrapper, "Octopus GraphQL logging redaction tests", False),
         ("octopus_fetch_previous_dispatch", test_octopus_fetch_previous_dispatch_wrapper, "Octopus fetch previous dispatch tests", False),
         ("octopus_intelligent_devices", test_octopus_intelligent_devices_wrapper, "Octopus intelligent devices tests (flexPlannedDispatches, energyAddedKwh)", False),
+        ("octopus_day_night_rates", test_octopus_day_night_rates_wrapper, "Octopus day/night rate window selection tests (IOG TOU, GO, Economy 7)", False),
         ("download_octopus_rates", test_octopus_download_rates_wrapper, "Test download octopus rates", False),
         ("fetch_octopus_rates", test_fetch_octopus_rates, "Fetch Octopus rates tests", False),
         ("fetch_tariffs", test_fetch_tariffs, "Fetch tariffs tests", False),
@@ -213,6 +234,7 @@ def main():
         ("load_free_slot", test_load_free_slot, "Load free slot tests", False),
         ("add_now_to_octopus_slot", test_add_now_to_octopus_slot, "Add now to Octopus slot tests", False),
         ("plugin_startup", test_plugin_startup_order, "Plugin startup order tests", False),
+        ("active_flag", test_active_flag, "Active flag cleared on exception tests", False),
         ("dynamic_load_car", test_dynamic_load_car_slot_cancellation, "Dynamic load car slot cancellation tests", False),
         ("units", run_test_units, "Unit tests", False),
         ("manual_api", run_test_manual_api, "Manual API tests", False),
@@ -221,6 +243,7 @@ def main():
         ("manual_times", run_test_manual_times, "Manual times tests", False),
         ("manual_select", run_test_manual_select, "Manual select tests", False),
         ("web_if", run_test_web_if, "Web interface tests", False),
+        ("web_functions", run_web_functions_tests, "Web function unit tests", False),
         ("nordpool", run_nordpool_test, "Nordpool tests", False),
         ("futurerate_auto", test_futurerate_auto, "FutureRate auto Agile detection tests", False),
         ("octopus_slots", run_load_octopus_slots_tests, "Load Octopus slots tests", False),
@@ -238,11 +261,14 @@ def main():
         ("saving_session_null", test_saving_session_null_octopoints, "Saving session null octopoints test (issue #3079)", False),
         ("saving_session_notify", test_saving_session_notify_config, "Saving session notification config tests", False),
         ("saving_session_default_rate", test_saving_session_default_rate, "Saving session default rate injection test", False),
+        ("saving_session_axle_conflict", test_saving_session_axle_conflict, "Saving session Axle conflict avoidance test (issue #4120)", False),
+        ("saving_session_auto_join_toggle", test_saving_session_auto_join_toggle, "Saving session auto-join toggle test (issue #4120)", False),
         ("alert_feed", test_alert_feed, "Alert feed tests", False),
         ("fox_api", run_fox_api_tests, "Fox API tests", False),
         ("solcast", run_solcast_tests, "Solcast API tests", False),
         ("open_meteo", run_open_meteo_tests, "Open-Meteo solar forecast provider tests", False),
         ("solax", run_solax_tests, "SolaX API tests", False),
+        ("sigenergy", run_sigenergy_tests, "Sigenergy Cloud API tests", False),
         ("iboost_smart", run_iboost_smart_tests, "iBoost smart tests", False),
         ("car_charging_smart", run_car_charging_smart_tests, "Car charging smart tests", False),
         ("intersect_window", run_intersect_window_tests, "Intersect window tests", False),
@@ -275,6 +301,10 @@ def main():
         ("hainterface_websocket", run_hainterface_websocket_tests, "HAInterface websocket tests", False),
         # Carbon Intensity API unit tests
         ("carbon", test_carbon, "Carbon Intensity API comprehensive tests (fetch, cache, publish, config)", False),
+        # Storage component unit tests
+        ("storage", test_storage, "Storage component tests (yaml/json/text round-trip, expiry, cleanup)", False),
+        ("plan_persistence", test_plan_persistence, "Plan persistence tests (save/load round-trip, expiry, missing storage)", False),
+        ("github", test_github, "GitHub mixin tests (cache hit/miss/stale, HTTP errors, release parsing, auto-update)", False),
         # Ohme EV charger API unit tests
         ("ohme", test_ohme, "Ohme EV charger comprehensive tests (helper functions, client methods, API operations, event handlers)", False),
         # ComponentBase lifecycle tests
@@ -296,11 +326,14 @@ def main():
         ("discard_unused_export_slots", run_discard_unused_export_slots_tests, "Discard unused export slots tests", False),
         ("marginal_costs", test_marginal_costs, "Marginal energy cost matrix tests", False),
         ("savings_stability", test_savings_stability, "Savings yesterday rate_low stability tests", False),
+        ("calculate_yesterday", test_calculate_yesterday, "Calculate yesterday savings and IOG car-slot subtraction tests", False),
+        ("load_today_comparison", test_load_today_comparison, "load_today_comparison None-guard regression test", False),
         ("compare", test_compare, "Compare tariff engine tests (hardware overrides, bleed isolation)", False),
         ("gateway", run_gateway_tests, "GatewayMQTT component tests (protobuf, plan serialization, commands, telemetry)", False),
         ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", False),
         ("load_ml", test_load_ml, "ML Load Forecaster tests (MLP, training, persistence, validation)", True),
         ("optimise_windows", run_optimise_all_windows_tests, "Optimise all windows tests", True),
+        ("optimise_solar", run_optimise_solar_tests, "Optimise export more solar tests", False),
         ("debug_cases", run_debug_cases, "Debug case file tests", True),
     ]
 
@@ -308,6 +341,7 @@ def main():
     parser = argparse.ArgumentParser(description="Predbat unit tests")
     parser.add_argument("--debug_file", action="store", help="Enable debug output")
     parser.add_argument("--full_debug", action="store_true", help="Enable full debug output")
+    parser.add_argument("--redo", action="store_true", help="Redo rates, load model and octopus slots for debug test")
     parser.add_argument("--compare", action="store_true", help="Run compare")
     parser.add_argument("--test", "-t", action="append", help="Run specific test(s) by name (can be used multiple times, use --list to see available tests)")
     parser.add_argument("--keyword", "-k", action="store", help="Run tests matching keyword pattern (e.g., -k carbon_ runs all carbon tests)")
@@ -386,7 +420,7 @@ def main():
         sys.exit(0)
 
     if args.debug_file:
-        run_single_debug(args.debug_file, my_predbat, args.debug_file, compare=args.compare, debug=args.full_debug)
+        run_single_debug(args.debug_file, my_predbat, args.debug_file, compare=args.compare, debug=args.full_debug, redo=args.redo)
         sys.exit(0)
 
     # Collect tests to run based on arguments

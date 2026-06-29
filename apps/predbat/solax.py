@@ -406,6 +406,7 @@ class SolaxAPI(ComponentBase):
         self.set_arg("grid_power", [f"sensor.{self.prefix}_solax_{plant}_{inv}_grid_power" for plant, inv in zip(plants, inverter_list)])
         self.set_arg("pv_power", [f"sensor.{self.prefix}_solax_{plant}_{inv}_pv_power" for plant, inv in zip(plants, inverter_list)])
         self.set_arg("load_power", [f"sensor.{self.prefix}_solax_{plant}_{inv}_load_power" for plant, inv in zip(plants, inverter_list)])
+        self.set_arg("battery_scaling", [f"sensor.{self.prefix}_solax_{plant}_{inv}_battery_soh" for plant, inv in zip(plants, inverter_list)])
 
         # Sensors
         self.set_arg("battery_temperature", [f"sensor.{self.prefix}_solax_{plant}_battery_temperature" for plant in plants])
@@ -2077,7 +2078,7 @@ class SolaxAPI(ComponentBase):
                 # only set once (first inverter processed) so it never gets overwritten.
                 if plant_id not in plant_save:
                     stable_sn = self.plant_inverters.get(plant_id, [device_sn])[0]
-                    plant_save[plant_id] = {"grid": 0, "pv": 0, "battery": 0, "inverter_sn": stable_sn, "friendly_name": friendly_name}
+                    plant_save[plant_id] = {"grid": 0, "pv": 0, "battery": 0, "inverter_sn": stable_sn, "friendly_name": friendly_name, "total_soh": 0, "count_soh": 0}
                 plant_save[plant_id]["pv"] = (plant_save[plant_id]["pv"] or 0) + (pvPower or 0)
                 plant_save[plant_id]["grid"] = (plant_save[plant_id]["grid"] or 0) + (gridPower or 0)
 
@@ -2163,6 +2164,7 @@ class SolaxAPI(ComponentBase):
                 )
             elif device_type == 2:  # Battery
                 battery_soc = realtime.get("batterySOC", 0)
+                battery_soh = realtime.get("batterySOH", 100.0)
                 battery_voltage = realtime.get("batteryVoltage", 0)
                 charge_discharge_power = realtime.get("chargeDischargePower", 0)
                 battery_current = realtime.get("batteryCurrent", 0)
@@ -2172,7 +2174,8 @@ class SolaxAPI(ComponentBase):
 
                 # Store per-plant battery value for load-power calculation (second pass)
                 if plant_id not in plant_save:
-                    plant_save[plant_id] = {"grid": 0, "pv": 0, "battery": 0, "inverter_sn": device_sn, "friendly_name": friendly_name}
+                    plant_save[plant_id] = {"grid": 0, "pv": 0, "battery": 0, "inverter_sn": device_sn, "friendly_name": friendly_name, "total_soh": 0, "count_soh": 0}
+
                 plant_save[plant_id]["battery"] += charge_discharge_power if charge_discharge_power is not None else 0
 
                 self.dashboard_item(
@@ -2192,6 +2195,29 @@ class SolaxAPI(ComponentBase):
                     attributes={
                         "friendly_name": f"{friendly_name} Battery SOC",
                         "unit_of_measurement": "%",
+                        "device_class": "battery",
+                        "state_class": "measurement",
+                    },
+                    app="solax",
+                )
+
+                # Convert to float range 0-1
+                try:
+                    battery_soh = float(battery_soh) / 100.0
+                except (ValueError, TypeError):
+                    battery_soh = 1.0
+                if battery_soh == 0:
+                    battery_soh = 1.0
+
+                plant_save[plant_id]["total_soh"] += battery_soh
+                plant_save[plant_id]["count_soh"] += 1
+
+                self.dashboard_item(
+                    f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_battery_soh",
+                    state=battery_soh,
+                    attributes={
+                        "friendly_name": f"{friendly_name} Battery State of Health",
+                        "unit_of_measurement": "*",
                         "device_class": "battery",
                         "state_class": "measurement",
                     },
@@ -2260,6 +2286,17 @@ class SolaxAPI(ComponentBase):
                     "friendly_name": f"{friendly_name} Load Power",
                     "unit_of_measurement": "W",
                     "device_class": "power",
+                    "state_class": "measurement",
+                },
+                app="solax",
+            )
+            self.dashboard_item(
+                f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_battery_soh",
+                state=plant_save[plant_id]["total_soh"] / plant_save[plant_id]["count_soh"] if plant_save[plant_id]["count_soh"] > 0 else 1.0,
+                attributes={
+                    "friendly_name": f"{friendly_name} Battery State of Health",
+                    "unit_of_measurement": "*",
+                    "device_class": "battery",
                     "state_class": "measurement",
                 },
                 app="solax",

@@ -7,7 +7,7 @@ There can never be a single Predbat dashboard that suits every user, so instead 
 
 ## Web interface
 
-The [Predbat Web Interface](web-interface.md) provides an easy to use way to see and change different aspects of your Predbat system including view the current plan, adjust the configuration, view the charts, check your apps.yaml and view the logfiles.
+The [Predbat Web Interface](web-interface.md) provides an easy to use way to see and change different aspects of your Predbat system including viewing the current plan, adjusting the configuration, viewing the charts, checking your apps.yaml and viewing the logfiles.
 
 ![image](images/web-interface-plan-view.png)
 

@@ -16,6 +16,26 @@ import plan as plan_module
 from tests.test_infra import run_async
 
 
+class _AdditionalLoadTestComponents:
+    """Minimal component event bridge for additional-load event tests."""
+
+    async def select_event(self, entity_id, value):
+        """Ignore component select events during these tests."""
+        return None
+
+    async def switch_event(self, entity_id, value):
+        """Ignore component switch events during these tests."""
+        return None
+
+    async def number_event(self, entity_id, value):
+        """Ignore component number events during these tests."""
+        return None
+
+    def get_component(self, name):
+        """Return no backing component for storage/history lookups."""
+        return None
+
+
 def configure_additional_load_test(my_predbat):
     """Configure deterministic clock and plan settings for additional load tests."""
     my_predbat.minutes_now = 10 * 60
@@ -32,6 +52,8 @@ def configure_additional_load_test(my_predbat):
     my_predbat.house_load_additional_forecast_adjust = {}
     my_predbat.house_load_additional_history = []
     my_predbat.house_load_additional_history_loaded = True
+    if my_predbat.components and not hasattr(my_predbat.components, "select_event"):
+        my_predbat.components = _AdditionalLoadTestComponents()
 
 
 def configure_additional_load_rates(my_predbat, cheap_start, cheap_end):

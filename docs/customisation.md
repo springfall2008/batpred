@@ -265,6 +265,10 @@ When Off export slots are sorted just by decreasing export price and then time (
 
 By default with this option On the latest export slots of the same value will be picked, this is useful for fixed-price export tariffs where you want to export as late in the day as you can, thus preserving the battery for as long as possible.
 
+**switch.predbat_export_more_solar** When turned On, late in the planning stage Predbat will try enabling Freeze Export on every otherwise Idle slot that has predicted solar generation. With Freeze Export the battery is not charged from the surplus solar, so that solar is exported to the grid instead.
+
+This alternative plan is only kept if it does not increase the overall plan metric by more than **input_number.predbat_export_more_solar_threshold** (_expert mode_, default 1p), otherwise the original plan is restored. This lets you favour exporting solar over storing it when doing so is roughly cost-neutral. The feature relies on **switch.predbat_set_export_freeze** being enabled (and your inverter supporting export/discharge freeze); it is an optimiser-only setting and uses the existing Freeze Export execution behaviour.
+
 ## Battery margins and metrics options
 
 **input_number.predbat_best_soc_keep** is the minimum battery level in kWh that Predbat will to try to keep the battery above for the Predbat plan.
@@ -369,6 +373,7 @@ Set the list of [devices to notify](apps-yaml.md#notify_devices) in `apps.yaml`.
 lowest possible rate to meet the charge target. This is only really effective for charge windows longer than a single slot.
 If this setting is turned on, it is strongly recommended that you create a [battery_power_charge_curve in apps.yaml](apps-yaml.md#battery-chargedischarge-curves)
 as otherwise the low power charge may not reach the charge target in time.
+The minimum requested charge rate used in this mode is 400 watts (subject to inverter/battery minimum rate limits).
 This setting is off by default.
 
 The YouTube video [low power charging and charging curve](https://youtu.be/L2vY_Vj6pQg?si=0ZiIVrDLHkeDCx7h)

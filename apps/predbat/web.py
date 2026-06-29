@@ -581,6 +581,8 @@ class WebInterface(ComponentBase):
         else:
             text += "<tr><td>Status</td><td{}>{}</td></tr>\n".format(debug_title, status_full)
         text += "<tr><td>Last Updated</td><td>{}</td></tr>\n".format(last_updated)
+        last_started = self.get_state_wrapper(self.prefix + ".last_started", default=None)
+        text += "<tr><td>Last Started</td><td>{}</td></tr>\n".format(last_started)
         text += "<tr><td>Version</td><td>{}</td></tr>\n".format(version)
 
         # Editable Mode field
@@ -760,7 +762,7 @@ class WebInterface(ComponentBase):
                 if self.base.user_config_item_enabled(item):
                     entity_id = item.get("entity", "")
                     entity_friendly_name = item.get("friendly_name", "")
-                    unit = item.get("unit", "")
+                    unit = self.base.convert_currency_unit(item.get("unit", ""))
                     if unit:
                         entity_friendly_name = f"{entity_friendly_name} ({unit})"
                     if entity_id:
@@ -3094,6 +3096,69 @@ chart.render();
             ]
 
             text += self.render_chart(series_data, f"Daily Savings ({self.currency_symbols[0]})", "Cost Savings Analysis", now_str, daily_chart=False, extra_yaxis=secondary_axis)
+        elif chart == "BatteryDegradation":
+            num_inverters = int(self.base.get_arg("num_inverters", 1))
+            series_data = []
+            secondary_series_names = []
+            inv_colors = [
+                ("#3291a8", "#eb2323", "#f5a442"),
+                ("#9b59b6", "#15eb8b", "#f5c43d"),
+                ("#e8972c", "#cd23eb", "#15eb1c"),
+                ("#6b6b6b", "#cccccc", "#a8a8a7"),
+            ]
+            for inv_id in range(num_inverters):
+                suffix = "" if inv_id == 0 else "_{}".format(inv_id)
+                label_suffix = "" if num_inverters == 1 else " {}".format(inv_id)
+                sensor_id = "sensor." + self.prefix + "_soc_max_calculated" + suffix
+                raw_hist = self.get_history_wrapper(sensor_id, 28, required=False)
+                calculated_hist = history_attribute(raw_hist, daily=True, first=False)
+                nominal_hist = history_attribute(raw_hist, attributes=True, state_key="nominal_capacity", daily=True, first=False)
+                degradation_hist = history_attribute(raw_hist, attributes=True, state_key="degradation_percent", daily=True, first=False)
+                # Also inject the current sensor value so today's data point is always present
+                today_key = self.now_utc.strftime("%Y-%m-%d")
+                cur_state = self.base.dashboard_values.get(sensor_id, {}).get("state")
+                cur_attrs = self.base.dashboard_values.get(sensor_id, {}).get("attributes", {})
+                if cur_state is not None:
+                    try:
+                        calculated_hist[today_key] = float(cur_state)
+                    except (ValueError, TypeError):
+                        pass
+                if "nominal_capacity" in cur_attrs:
+                    try:
+                        nominal_hist[today_key] = float(cur_attrs["nominal_capacity"])
+                    except (ValueError, TypeError):
+                        pass
+                if "degradation_percent" in cur_attrs:
+                    try:
+                        degradation_hist[today_key] = float(cur_attrs["degradation_percent"])
+                    except (ValueError, TypeError):
+                        pass
+                colors = inv_colors[inv_id % len(inv_colors)]
+                nominal_name = "Nominal{}".format(label_suffix)
+                calculated_name = "Calculated{}".format(label_suffix)
+                degradation_name = "Degradation%{}".format(label_suffix)
+                series_data.append({"name": nominal_name, "data": nominal_hist, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": colors[0], "unit": "kWh"})
+                series_data.append({"name": calculated_name, "data": calculated_hist, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": colors[1], "unit": "kWh"})
+                series_data.append({"name": degradation_name, "data": degradation_hist, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline", "color": colors[2], "unit": "%"})
+                secondary_series_names.append(degradation_name)
+            secondary_axis = [
+                {
+                    "title": "%",
+                    "series_names": secondary_series_names,
+                    "decimals": 1,
+                    "opposite": True,
+                    "labels_formatter": "return val.toFixed(1) + '%';",
+                }
+            ]
+            text += self.render_chart(series_data, "kWh", "Battery Degradation", now_str, daily_chart=False, extra_yaxis=secondary_axis)
+            if self.base.battery_scaling_auto:
+                text += "<p style='color:#15eb8b;font-weight:bold;'>&#10003; battery_scaling_auto is enabled &mdash; Predbat is automatically adjusting the usable battery capacity to account for degradation.</p>\n"
+            else:
+                text += (
+                    "<p style='color:#f5a442;font-weight:bold;'>&#9888; battery_scaling_auto is disabled. "
+                    "Enable it in apps.yaml (<code>battery_scaling_auto: true</code>) so Predbat can automatically "
+                    "scale the usable battery capacity to reflect real-world degradation shown in this chart.</p>\n"
+                )
         elif chart == "MarginalCosts":
             sensor_attrs = self.base.dashboard_values.get("sensor." + self.prefix + "_marginal_energy_costs", {}).get("attributes", {})
             matrix = sensor_attrs.get("matrix", {})
@@ -3216,6 +3281,7 @@ chart.render();
         text += f'<a href="./charts?chart=PV7" class="{"active" if chart == "PV7" else ""}">PV7</a>'
         text += f'<a href="./charts?chart=PVAccuracy" class="{"active" if chart == "PVAccuracy" else ""}">PVAccuracy</a>'
         text += f'<a href="./charts?chart=Savings" class="{"active" if chart == "Savings" else ""}">Savings</a>'
+        text += f'<a href="./charts?chart=BatteryDegradation" class="{"active" if chart == "BatteryDegradation" else ""}">BatteryDegradation</a>'
         text += f'<a href="./charts?chart=MarginalCosts" class="{"active" if chart == "MarginalCosts" else ""}">MarginalCosts</a>'
         # Only show LoadML chart if ML is enabled
         if self.base.get_arg("load_ml_enable", False):
@@ -3314,7 +3380,7 @@ chart.render();
         for arg in args:
             value = args[arg]
             raw_value = self.resolve_value_raw(arg, value)
-            if ("_key" in arg) or ("_password" in arg) or ("_secret" in arg):
+            if isinstance(arg, str) and (("_key" in arg) or ("_password" in arg) or ("_secret" in arg) or ("_pem" in arg)):
                 value = '<span title = "{}"> (hidden)</span>'.format(value)
             arg_errors = self.base.arg_errors.get(arg, "")
 
@@ -3517,7 +3583,7 @@ chart.render();
                 itemtype = item.get("type", "")
                 default = item.get("default", "")
                 icon = self.icon2html(item.get("icon", ""))
-                unit = item.get("unit", "")
+                unit = self.base.convert_currency_unit(item.get("unit", ""))
                 text += "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td>".format(icon, friendly, entity, itemtype)
                 if value == default:
                     text += '<td class="cfg_default">{} {}</td><td>{} {}</td>\n'.format(value, unit, default, unit)
@@ -3568,7 +3634,7 @@ chart.render();
                 itemtype = item.get("type", "")
                 default = item.get("default", "")
                 useid = entity.replace(".", "__")
-                unit = item.get("unit", "")
+                unit = self.base.convert_currency_unit(item.get("unit", ""))
                 icon = self.icon2html(item.get("icon", ""))
 
                 if itemtype in ["input_number", "number"] and item.get("step", 1) == 1:
@@ -4020,9 +4086,16 @@ chart.render();
         if not self.base.dashboard_index:
             return '<span class="mdi mdi-battery-sync"></span>'
 
-        percent = calc_percent_limit(self.base.soc_kw, self.base.soc_max)
+        soc_now = self.get_state_wrapper(self.prefix + ".soc_kw", attribute="soc_now", default=None)
+        soc_max = self.get_state_wrapper(self.prefix + ".soc_kw", attribute="soc_max", default=None)
+        if soc_now is None or not soc_max:
+            return '<span class="mdi mdi-battery-sync"></span>'
+
+        percent = calc_percent_limit(soc_now, soc_max)
         percent_rounded_to_nearest_10 = round(float(percent) / 10) * 10
-        if self.base.isCharging:
+        is_charging = self.get_state_wrapper("binary_sensor." + self.prefix + "_charging", default="off") == "on"
+        is_exporting = self.get_state_wrapper("binary_sensor." + self.prefix + "_exporting", default="off") == "on"
+        if is_charging:
             if percent_rounded_to_nearest_10 == 0:
                 icon_text = "battery-charging-outline"
             else:
@@ -4038,7 +4111,7 @@ chart.render();
         text = '<span class="mdi mdi-{}"></span>'.format(icon_text)
         text += str(dp2(percent)) + "%"
 
-        if self.base.isExporting:
+        if is_exporting:
             text += '<span class="mdi mdi-transmission-tower-export"></span>'
         return text
 

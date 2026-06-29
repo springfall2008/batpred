@@ -366,6 +366,232 @@ friendly_name: Octoplus Saving Session Events
     return failed
 
 
+def test_saving_session_axle_conflict(my_predbat):
+    """
+    Test that an available Octopus saving session is not auto-joined when it overlaps an Axle VPP session
+    Covers GitHub issue #4120
+    """
+    print("Test saving session Axle conflict avoidance (issue #4120)")
+    ha = my_predbat.ha_interface
+    failed = False
+    date_today = datetime.now().strftime("%Y-%m-%d")
+    tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
+    tz_offset = f"{tz_offset:02d}"
+
+    session_binary = f"""
+state: off
+current_joined_event_start: null
+current_joined_event_end: null
+current_joined_event_duration_in_minutes: null
+next_joined_event_start: null
+next_joined_event_end: null
+next_joined_event_duration_in_minutes: null
+icon: mdi:leaf
+friendly_name: Octoplus Saving Session
+"""
+
+    # A single available saving session 18:30-19:30
+    session_sensor = f"""
+state: '2025-01-23T12:10:11.108+{tz_offset}:00'
+event_types: octopus_energy_all_octoplus_saving_sessions
+event_type: octopus_energy_all_octoplus_saving_sessions
+account_id: A-4DD6C5EE
+available_events:
+    - id: 9999
+      start: '{date_today}T18:30:00+{tz_offset}:00'
+      end: '{date_today}T19:30:00+{tz_offset}:00'
+      duration_in_minutes: 60
+      rewarded_octopoints: null
+      octopoints_per_kwh: 500
+      code: TEST123
+joined_events: []
+friendly_name: Octoplus Saving Session Events
+"""
+
+    def setup_items():
+        ha.dummy_items.clear()
+        ha.dummy_items["binary_sensor.octopus_energy_test_octoplus_saving_sessions"] = yaml.safe_load(session_binary)
+        ha.dummy_items["event.octopus_energy_test_octoplus_saving_session_event"] = yaml.safe_load(session_sensor)
+        ha.dummy_items["sensor.octopus_free_session"] = {}
+        my_predbat.args["octopus_saving_session"] = "event.octopus_energy_test_octoplus_saving_session_event"
+        my_predbat.args["octopus_free_session"] = "sensor.octopus_free_session"
+        if "octopus_free_url" in my_predbat.args:
+            del my_predbat.args["octopus_free_url"]
+        my_predbat.args["octopus_saving_session_octopoints_per_penny"] = 10
+        # Reset throttle so a join is attempted
+        my_predbat.octopus_last_joined_try = None
+
+    # Test 1: Overlapping Axle session (Axle 19:00-20:00 overlaps saving 18:30-19:30) -> no join
+    print("  Test 1: Overlapping Axle session blocks the join")
+    setup_items()
+    axle_overlap = [
+        {
+            "start_time": f"{date_today}T19:00:00+{tz_offset}:00",
+            "end_time": f"{date_today}T20:00:00+{tz_offset}:00",
+            "import_export": "export",
+            "pence_per_kwh": 50,
+        }
+    ]
+    ha.service_store_enable = True
+    ha.service_store = []
+    my_predbat.fetch_octopus_sessions(axle_overlap)
+    service_result = ha.get_service_store()
+    ha.service_store_enable = False
+
+    join_calls = [svc for svc in service_result if "join" in svc[0]]
+    if join_calls:
+        print(f"ERROR: Expected no join when overlapping an Axle session, got {join_calls}")
+        failed = True
+    else:
+        print("  PASS: Join skipped when saving session overlaps an Axle session")
+
+    # Test 2: Non-overlapping Axle session (Axle 12:00-13:00) -> join proceeds
+    print("  Test 2: Non-overlapping Axle session allows the join")
+    setup_items()
+    axle_clear = [
+        {
+            "start_time": f"{date_today}T12:00:00+{tz_offset}:00",
+            "end_time": f"{date_today}T13:00:00+{tz_offset}:00",
+            "import_export": "export",
+            "pence_per_kwh": 50,
+        }
+    ]
+    ha.service_store_enable = True
+    ha.service_store = []
+    my_predbat.fetch_octopus_sessions(axle_clear)
+    service_result = ha.get_service_store()
+    ha.service_store_enable = False
+
+    join_calls = [svc for svc in service_result if "join" in svc[0]]
+    if len(join_calls) != 1:
+        print(f"ERROR: Expected 1 join when Axle session does not overlap, got {len(join_calls)}: {service_result}")
+        failed = True
+    else:
+        print("  PASS: Join proceeds when no Axle session overlaps")
+
+    # Test 3: No Axle sessions at all -> join proceeds (backwards compatible default)
+    print("  Test 3: No Axle sessions allows the join")
+    setup_items()
+    ha.service_store_enable = True
+    ha.service_store = []
+    my_predbat.fetch_octopus_sessions()
+    service_result = ha.get_service_store()
+    ha.service_store_enable = False
+
+    join_calls = [svc for svc in service_result if "join" in svc[0]]
+    if len(join_calls) != 1:
+        print(f"ERROR: Expected 1 join when no Axle sessions provided, got {len(join_calls)}: {service_result}")
+        failed = True
+    else:
+        print("  PASS: Join proceeds when no Axle sessions are provided")
+
+    if not failed:
+        print("PASS: All Axle conflict avoidance tests passed")
+
+    # Restore default throttle state so we do not leak it to other tests
+    my_predbat.octopus_last_joined_try = None
+
+    return failed
+
+
+def test_saving_session_auto_join_toggle(my_predbat):
+    """
+    Test that the octopus_saving_auto_join switch controls whether available saving sessions are auto-joined
+    Covers GitHub issue #4120
+    """
+    print("Test saving session auto-join toggle (issue #4120)")
+    ha = my_predbat.ha_interface
+    failed = False
+    date_today = datetime.now().strftime("%Y-%m-%d")
+    tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
+    tz_offset = f"{tz_offset:02d}"
+
+    session_binary = f"""
+state: off
+current_joined_event_start: null
+current_joined_event_end: null
+current_joined_event_duration_in_minutes: null
+next_joined_event_start: null
+next_joined_event_end: null
+next_joined_event_duration_in_minutes: null
+icon: mdi:leaf
+friendly_name: Octoplus Saving Session
+"""
+
+    session_sensor = f"""
+state: '2025-01-23T12:10:11.108+{tz_offset}:00'
+event_types: octopus_energy_all_octoplus_saving_sessions
+event_type: octopus_energy_all_octoplus_saving_sessions
+account_id: A-4DD6C5EE
+available_events:
+    - id: 9999
+      start: '{date_today}T18:30:00+{tz_offset}:00'
+      end: '{date_today}T19:30:00+{tz_offset}:00'
+      duration_in_minutes: 60
+      rewarded_octopoints: null
+      octopoints_per_kwh: 500
+      code: TEST123
+joined_events: []
+friendly_name: Octoplus Saving Session Events
+"""
+
+    def setup_items():
+        ha.dummy_items.clear()
+        ha.dummy_items["binary_sensor.octopus_energy_test_octoplus_saving_sessions"] = yaml.safe_load(session_binary)
+        ha.dummy_items["event.octopus_energy_test_octoplus_saving_session_event"] = yaml.safe_load(session_sensor)
+        ha.dummy_items["sensor.octopus_free_session"] = {}
+        my_predbat.args["octopus_saving_session"] = "event.octopus_energy_test_octoplus_saving_session_event"
+        my_predbat.args["octopus_free_session"] = "sensor.octopus_free_session"
+        if "octopus_free_url" in my_predbat.args:
+            del my_predbat.args["octopus_free_url"]
+        my_predbat.args["octopus_saving_session_octopoints_per_penny"] = 10
+        # Reset throttle so a join is attempted
+        my_predbat.octopus_last_joined_try = None
+
+    # Test 1: auto-join disabled -> no join
+    print("  Test 1: octopus_saving_auto_join=False blocks the join")
+    setup_items()
+    my_predbat.expose_config("octopus_saving_auto_join", False, quiet=True)
+    ha.service_store_enable = True
+    ha.service_store = []
+    my_predbat.fetch_octopus_sessions()
+    service_result = ha.get_service_store()
+    ha.service_store_enable = False
+
+    join_calls = [svc for svc in service_result if "join" in svc[0]]
+    if join_calls:
+        print(f"ERROR: Expected no join when auto-join disabled, got {join_calls}")
+        failed = True
+    else:
+        print("  PASS: Join skipped when octopus_saving_auto_join is False")
+
+    # Test 2: auto-join enabled -> join proceeds
+    print("  Test 2: octopus_saving_auto_join=True allows the join")
+    setup_items()
+    my_predbat.expose_config("octopus_saving_auto_join", True, quiet=True)
+    ha.service_store_enable = True
+    ha.service_store = []
+    my_predbat.fetch_octopus_sessions()
+    service_result = ha.get_service_store()
+    ha.service_store_enable = False
+
+    join_calls = [svc for svc in service_result if "join" in svc[0]]
+    if len(join_calls) != 1:
+        print(f"ERROR: Expected 1 join when auto-join enabled, got {len(join_calls)}: {service_result}")
+        failed = True
+    else:
+        print("  PASS: Join proceeds when octopus_saving_auto_join is True")
+
+    if not failed:
+        print("PASS: All auto-join toggle tests passed")
+
+    # Restore default state so we do not leak it to other tests
+    my_predbat.expose_config("octopus_saving_auto_join", True, quiet=True)
+    my_predbat.octopus_last_joined_try = None
+
+    return failed
+
+
 def test_saving_session_default_rate(my_predbat):
     """
     Test that saving sessions with no octopoints_per_kwh use the default rate

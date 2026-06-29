@@ -11,6 +11,7 @@ import json
 import copy
 
 from const import TIME_FORMAT
+from ha import run_async
 from utils import dp1, dp2, minute_data
 
 TIME_FORMAT_NORD = "%d-%m-%YT%H:%M:%S%z"
@@ -36,8 +37,14 @@ class FutureRate:
         self.minutes_now = base.minutes_now
         self.forecast_plan_hours = base.forecast_plan_hours
         self.time_abs_str = base.time_abs_str
-        self.futurerate_url_cache = base.futurerate_url_cache
         self.get_state_wrapper = base.get_state_wrapper
+
+        self.storage = base.components.get_component("storage") if base.components else None
+        self.futurerate_url_cache = {}
+        if self.storage:
+            cached = run_async(self.storage.load("futurerate", "url_cache"))
+            if isinstance(cached, dict):
+                self.futurerate_url_cache = cached
 
         futurerate_adjust_auto = self.get_arg("futurerate_adjust_auto", False)
         if futurerate_adjust_auto:
@@ -395,10 +402,12 @@ class FutureRate:
         if pdata == "empty":
             pdata = {}
 
-        # Cache New Octopus data
+        # Cache new futurerate data and persist to storage
         self.futurerate_url_cache[url] = {}
         self.futurerate_url_cache[url]["stamp"] = now
         self.futurerate_url_cache[url]["data"] = pdata
+        if self.storage:
+            run_async(self.storage.save("futurerate", "url_cache", self.futurerate_url_cache, format="yaml", expiry=None))
         return pdata
 
     def download_futurerate_data_func(self, url):

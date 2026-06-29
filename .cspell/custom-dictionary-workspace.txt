@@ -5,8 +5,10 @@ adbase
 afci
 AIO
 AIO's
+aiofiles
 aiohttp
 aiomqtt
+aios
 Alertfeed
 allclose
 Anson
@@ -14,6 +16,7 @@ apexcharts
 apikey
 appdaemon
 appkey
+Apprent
 appsyaml
 argname
 ASHP
@@ -25,10 +28,12 @@ autopep
 autoupdate
 axvline
 axvspan
+Backfeed
 backprop
 Backpropagate
 backpropagation
 backsteps
+backtest
 Basepath
 Batpred
 battemperature
@@ -38,6 +43,7 @@ beforeunload
 bierner
 brickatius
 byok
+cadata
 calib
 Cantarell
 cexxxx
@@ -53,6 +59,7 @@ Codespaces
 collapsable
 compareform
 configform
+connack
 Consolas
 coro
 cprofile
@@ -97,6 +104,7 @@ dstart
 dwindow
 Eddi
 elif
+emqx
 emszzzz
 enctype
 endfor
@@ -110,6 +118,7 @@ energydataservice
 energythroughput
 epod
 euids
+evergen
 evse
 exog
 exportlimit
@@ -158,6 +167,7 @@ heatingactive
 heatingtemp
 heatpump
 heatsink
+holdout
 homeassistant
 houseb
 htmlcov
@@ -201,6 +211,7 @@ loadml
 loadmlpower
 loadspower
 localfolder
+locationless
 lockstep
 logdata
 loglines
@@ -252,6 +263,7 @@ nordpool
 nosc
 nrgheat
 numpy
+OCPP
 octo
 octoplus
 octopoints
@@ -265,28 +277,31 @@ onmouseout
 onmouseover
 openweathermap
 overfitting
+overvoltage
 ownerapi
+pbat
 pbgw
 pdata
 pdetails
 perc
 percnt
-PeterHaban
+peterhaban
 photovoltaics
 pitem
 pkwh
-Plenticore
+plenticore
 postdata
 powercontrolmode
 powerline
 Powerwall
 ppdetails
 ppkwh
-Pred
-Predai
-Predbat
+pred
+predai
+predbat
 predbatt
-Predheat
+predheat
+prevs
 psum
 pvbat
 pvenergytotal
@@ -330,7 +345,9 @@ Selfuse
 semodbus
 Sergoe
 SFMB
+sigcloud
 sigen
+sigencloud
 sigenergy
 sigenstor
 Slee
@@ -358,7 +375,10 @@ startswith
 startt
 stdlib
 stepline
+Stromligning
 strptime
+Strømligning
+submessage
 substep
 sunspec
 sunsynk
@@ -394,6 +414,7 @@ treforsiphone
 twinx
 tzfile
 tzpath
+unconfigured
 unsmoothed
 unstaged
 useid
@@ -413,6 +434,7 @@ xaxistooltip
 xlabel
 xlim
 xload
+xrtkq
 xticks
 yaxis
 yaxistooltip
@@ -420,3 +442,4 @@ yday
 ylabel
 yuanzhi
 zappi
+zigbee

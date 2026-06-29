@@ -143,7 +143,7 @@ As another example, the configuration entry for the Solcast day 3 forecast follo
 
 Syntax errors will be highlighted by the Home Assistant editor or via other YAML-aware editors such as VSCode.
 
-Once you have completed your `apps.yaml` and started Predbat you may want to open the Predbat Web Interface and click on 'apps.yaml'. Review any items shown
+Once you have completed your `apps.yaml` and started Predbat you may want to open the Predbat Web Interface and click on 'Apps' at the top. Review any items shown
 in a red background as those do not match (it's okay for a 2nd inverter not to match if you only have one configured). Regular expressions that do not
 match can be ignored if you are not supporting that feature (e.g. Car SoC if you don't have a car).
 
@@ -355,6 +355,37 @@ Or if you want Predbat to take the average of the same day for the last two week
 
 Further details and worked examples of [how days_previous works](#understanding-how-days_previous-works) are covered at the end of this document.
 
+#### days_previous_auto (weighted historical load forecast)
+
+Setting **days_previous_auto** to `True` in `apps.yaml` switches house-load prediction from the fixed
+list/weighting approach above to a weighted-bucket forecast:
+
+```yaml
+  days_previous_auto: True
+```
+
+In this mode Predbat ignores the fixed averaging and instead builds a forward load forecast from **all** of
+the load history within the search window (without padding when fewer days exist). The window is taken from
+`max(days_previous)`, or 7 days when `days_previous` is not set, capped at 30 days. This is more robust when
+there are gaps in your history or when your usage pattern has changed (for example when returning from
+holiday), because it no longer depends on a small number of specific days all being present and
+representative.
+
+Each historical 5-minute sample is combined into a weighted average for the matching time-of-day, where the
+weight of every sample is the product of three factors:
+
+- **Weekday** - 1.0 if the historical day is the same day of the week as today; 0.7 if it is a different day
+  but both are weekdays or both are weekend days; 0.5 if one is a weekday and the other a weekend day.
+- **Holiday** - reduced by 50% if that historical day's [holiday mode](customisation.md#holiday-mode) state
+  does not match today's holiday mode state. The historical holiday state is reconstructed from the recorded
+  history of `holiday_days_left`.
+- **Age** - 0.9 for yesterday, reducing by 0.03 per day down to a floor of 0.1 (reached after about a
+  month), so recent days count for more.
+
+Buckets with no recorded data (zero) are ignored entirely so gaps in the history do not drag the estimate
+down. As with Load ML, this replaces the normal days_previous averaging; if [Load ML](load-ml.md) is enabled
+it takes precedence over `days_previous_auto`.
+
 Do keep in mind that Home Assistant only keeps 10 days of history by default, so if you want to access more than this for Predbat you might need to increase the number of days of history
 kept in HA before it is purged by editing and adding the following to the `/homeassistant/configuration.yaml` configuration file and restarting Home Assistant afterwards:
 
@@ -431,6 +462,15 @@ you will need to wait until you have a few days of history established (at least
 
 - **ge_cloud_load_today_ignore** - Optional, defaults to false. When set to `true`, Predbat will override the **ge_cloud_automatic** setting and use the **load_today** sensor configured in `apps.yaml`.
 This can be useful if the **load_today** data in the GivEnergy Cloud does not accurately reflect your house load (e.g. multiple inverters that share load) and you want to use a custom load_today sensor.  All other sensors will use either the `apps.yaml` entries or the GivEnergy Cloud entities depending upon **ge_cloud_automatic**.
+
+- **ge_cloud_automatic_shared_ct** - Optional, defaults to false. When set to `true`, Predbat will treat multiple inverters as sharing a single physical CT clamp for grid and load measurement.
+In this mode only the first inverter's grid and load readings are used (the rest are zeroed out), preventing double-counting of grid import/export and house load.
+Use this if you have two or more inverters connected to a single CT clamp and Predbat is not detecting the shared CT automatically (e.g. your inverters have no external dedicated meters, so the cloud API does not report duplicate meter serials).
+See also **ge_cloud_automatic_split_ct** which takes priority over this setting if both are set.
+
+- **ge_cloud_automatic_split_ct** - Optional, defaults to false. When set to `true`, Predbat will treat each inverter as having its own independent CT clamp, summing all inverters' grid and load readings.
+Use this to override automatic shared-CT detection if Predbat incorrectly identifies your system as sharing a CT clamp (e.g. when duplicate meter serials are reported by the cloud API but the inverters actually have separate CT clamps).
+This setting takes priority over **ge_cloud_automatic_shared_ct** if both are set.
 
 ### SolaX Cloud Direct
 
@@ -893,6 +933,8 @@ for more accurate predictions.
 
 ## Inverter control configurations
 
+NB: literal numeric values for the power-limit settings below (`inverter_limit`, `pv_ac_limit`, `export_limit`, `inverter_limit_charge`, `inverter_limit_discharge`, `inverter_limit_export`, `inverter_limit_charge_dc`, `battery_rate_max`, `inverter_battery_rate_min`) must always be in **watts** — e.g. `7300` for a 7.3 kW inverter, never `7.3`. Predbat's unit auto-conversion only fires when the value is a sensor reference (it reads `unit_of_measurement` from the HA entity); for literal values there is no entity to read, so the raw number is taken as watts. A literal `inverter_limit: 7.3` will be interpreted as 7.3 W and clamp `battery_draw` to ~0.0006 kWh per 5-min step, producing a plan that looks like Predbat refuses to discharge the battery.
+
 ### **inverter_limit**
 
 One per inverter.
@@ -910,6 +952,12 @@ For an AC Coupled inverter make sure the Hybrid Inverter toggle is off and set t
 Do not add on separate Micro Inverters to the total power.
 
 If you have multiple inverters then set the value of each one in a list format.
+
+Example:
+
+```yaml
+  inverter_limit: 5000   # 5 kW — must be in watts when set as a literal
+```
 
 NB: inverter_limit is ONLY used by Predbat to improve the quality of the plan, any solar clipping is done by the inverter and is not controlled by Predbat.
 
@@ -1191,6 +1239,7 @@ or
 - **charge_time** - Battery charge time entity for inverters that require a charge time expressed as a range in the format "*start hour*:*start minute*-*end hour*:*end minute*".
 - **discharge_time** = Ditto battery discharge time expressed as a time range.
 - **charge_limit** - Entity name for used to set the SoC target for the battery in percentage (AC charge target)
+- **charge_limit_enable** - Optional switch entity that enables the AC charge upper percent limit. When set, Predbat will turn this switch on whenever it writes a new charge limit value. Used by inverters (such as GivEnergy via GE Cloud) that have a separate enable/disable control for the charge limit register.
 - **scheduled_charge_enable** - Switch to enable/disable battery charge according to the charge start/end times defined above.
 - **scheduled_discharge_enable** - Switch to enable/disable battery discharge according to the discharge start/end times defined above.
 - **discharge_target_soc** - Set the battery target percent for timed exports, will be written to minimum by Predbat.
@@ -1421,6 +1470,7 @@ The azimuth is the direction of the roof: 0=North, -90=East, 90=West, -180/180 =
 The declination is the angle of the panels, e.g. 45 for a sloped roof or 20 for those on a flat roof
 The efficiency relates to the aging of your panels, 0.95 is for newer systems but they will lose around 1% each year.
 The optional forecast_solar_max_age setting sets the number of hours between updates to PV data, the default is 8.
+The optional `azimuth_zero_south` (default False) can be set to True if you prefer to supply the azimuth already in the Forecast.solar convention (0=South, -90=East, 90=West, ±180=North) rather than the default Predbat convention (0=North). When True, Predbat passes the value straight to the API without conversion.
 
 ```yaml
   forecast_solar:
@@ -1450,6 +1500,22 @@ Optionally you can set an api_key for personal or professional accounts and you 
 
 Note you can omit any of these settings for a default value. They do not have to be exact if you use Predbat auto calibration for PV to improve the data quality.
 
+### Open-Meteo backup for Forecast.solar
+
+If you set `forecast_solar_open_meteo_backup: true`, Predbat will automatically fall back to the [Open-Meteo](#open-meteo-solar-forecast) API whenever Forecast.solar returns no data (for example, due to a server error, rate limiting, or an outage).
+
+When the fallback is active, Predbat derives the Open-Meteo request from the same `forecast_solar` configuration entries (latitude, longitude, postcode, declination, azimuth, kwp, efficiency), so no extra configuration is needed. If you also have an `open_meteo_forecast` section configured, that configuration is used for the backup request instead, which lets you apply Open-Meteo-specific options such as `shading_factors`.
+
+```yaml
+  forecast_solar:
+    - postcode: SW1A 2AB
+      kwp: 3
+      azimuth: 45
+      declination: 45
+      efficiency: 0.95
+  forecast_solar_open_meteo_backup: true
+```
+
 ## Open-Meteo Solar Forecast
 
 [Open-Meteo](https://open-meteo.com/) is a free, open-source weather API that provides solar irradiance forecasts with no API key required.
@@ -1459,6 +1525,7 @@ Ensemble members are used to derive a P10 pessimistic estimate alongside the cen
 You can define one or more rooftop arrays by providing a list; they will be summed automatically.
 
 The azimuth uses the same convention as all other Predbat solar configs (Solcast/Forecast.solar): 0=North, -90=East, 90=West, -180/180=South. Predbat converts this to the Open-Meteo convention (0=South) internally.
+The optional `azimuth_zero_south` (default False) can be set to True if you prefer to supply the azimuth already in the Open-Meteo convention (0=South, -90=East, 90=West, ±180=North). When True, Predbat passes the value straight to the API without conversion.
 The declination is the angle of the panels from horizontal (e.g. 35 for a typical pitched UK roof).
 For the UK you can use a postcode instead of latitude/longitude.
 The optional `efficiency` (default 1.0) is the panel efficiency as a fraction where 1.0 = 100% (no losses), e.g. 0.95 for 5% losses from wiring and soiling. This uses the same convention as Forecast.solar.
@@ -1814,7 +1881,7 @@ weirdness you may have from your inverter and battery setup.
 Sometimes the load predictions can yield near zero data due to inaccuracy of data (e.g. a second PV system not tracked, car data being unreliable, poor sensors).
 In order to not get unrealistically low values you can set a base load value (in watts) which Predbat will use as a minimum load for a slot duration.
 
-To set a base load set **base_load** as an integer value in watts.
+To set a base load set **base_load** as an integer value in watts. The default is 100 watts if not specified.
 
 ```yaml
    base_load: 300
@@ -1874,6 +1941,26 @@ it will incorrectly report the 13.5kWh usable capacity of each AIO as 15.9kWh, s
 
 If you are going to chart your battery SoC in Home Assistant then you may want to use **predbat.soc_kw_h0** as your current SoC (as this will be scaled)
 rather than the usual *givtcp_SERIAL_NUMBER_soc* GivTCP entity so everything lines up.
+
+```yaml
+  battery_scaling_auto: true|false
+```
+
+Default false. When set to true Predbat will automatically calculate `battery_scaling` based on historical charge data rather than using the static value above.
+
+The calculation uses `find_battery_size()` to estimate the actual usable battery capacity from historical charging periods and
+compares it to the nominal capacity (`soc_max`). A 7-day rolling history of daily estimates is stored in a new sensor
+`sensor.predbat_soc_max_calculated` (or `sensor.predbat_soc_max_calculated_N` for inverter N > 0).
+The sensor state is the trimmed mean of the history (the highest and lowest samples are discarded when 3 or more data points exist,
+giving a stable average that is robust to occasional outliers).
+
+The calculation is performed at most once per calendar day to avoid wasting compute resources.
+On subsequent Predbat cycles in the same day the stored sensor state is used instead.
+
+The resulting `battery_scaling` is clamped to the range [0.8, 1.0] if `soc_max` is configured.
+
+This is useful for batteries that degrade over time — the scaling will gradually reduce as the measured capacity drifts
+below the nominal figure, without needing any manual adjustment.
 
 ### Import export scaling
 

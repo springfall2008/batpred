@@ -17,6 +17,7 @@ schedules, rate window sensors, and financial metric summaries.
 """
 
 import math
+import copy
 from datetime import datetime, timedelta
 from config import THIS_VERSION
 from const import TIME_FORMAT, PREDICT_STEP
@@ -1005,7 +1006,7 @@ class Output:
 
         return sentence
 
-    def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record, publish=True):
+    def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record, publish=True, prediction=None):
         """
         Publish the current plan in HTML format
         """
@@ -1047,8 +1048,8 @@ class Output:
         raw_plan["import_cost_threshold"] = import_cost_threshold
         raw_plan["export_cost_threshold"] = export_cost_threshold
         raw_plan["currency_symbols"] = self.currency_symbols
-        raw_plan["soc"] = self.soc_kw
-        raw_plan["soc_max"] = self.soc_max
+        raw_plan["soc"] = prediction.soc_kw if prediction is not None else self.soc_kw
+        raw_plan["soc_max"] = prediction.soc_max if prediction is not None else self.soc_max
         raw_plan["reserve"] = self.reserve
         raw_plan["time"] = self.midnight_utc.strftime(TIME_FORMAT)
         raw_plan["mode"] = mode
@@ -1930,6 +1931,23 @@ class Output:
                 day_cost_time_export[stamp] = dp2(day_cost_export)
                 day_carbon_time[stamp] = dp2(carbon_g)
 
+        # Add beyond-cap IOG rate premium for day and hour car cost.
+        # The per-minute loops above charged car energy at house import rate (correct base).
+        # For IOG slots where average > house rate (beyond cap), add the difference.
+        for car_n in range(self.num_cars):
+            for slot in self.car_charging_slots[car_n]:
+                house_rate = self.rate_import.get(slot["start"], 0)
+                premium = max(0, slot.get("average", 0) - house_rate) * slot.get("kwh", 0)
+                if premium > 0:
+                    slot_start = slot["start"]
+                    if 0 <= slot_start < self.minutes_now:
+                        day_cost_car += premium
+                        day_cost += premium
+                        day_cost_nosc += premium
+                    if self.minutes_now - 60 <= slot_start < self.minutes_now:
+                        hour_cost_car += premium
+                        hour_cost += premium
+
         day_pkwh = self.rate_import.get(0, 0)
         day_car_pkwh = self.rate_import.get(0, 0)
         day_import_pkwh = self.rate_import.get(0, 0)
@@ -2491,6 +2509,20 @@ class Output:
         if had_errors:
             self.had_errors = True
 
+    def publish_last_started(self):
+        """
+        Publish the last started time sensor
+        """
+        self.dashboard_item(
+            self.prefix + ".last_started",
+            state=self.started_time.strftime(TIME_FORMAT),
+            attributes={
+                "friendly_name": "Predbat Last Started",
+                "device_class": "timestamp",
+                "icon": "mdi:clock-start",
+            },
+        )
+
     def load_today_comparison(self, load_minutes, load_forecast, car_minutes, import_minutes, minutes_now, step=5, save=True):
         """
         Compare predicted vs actual load
@@ -2679,9 +2711,9 @@ class Output:
                 state=dp3(load_total_pred),
                 attributes={
                     "results": self.filtered_times(load_predict_stamp),
-                    "today": dp2(load_today),
-                    "today_so_far": dp2(load_so_far),
-                    "today_remaining": dp2(load_today_remaining),
+                    "today": dp2(load_today) if load_today is not None else 0.0,
+                    "today_so_far": dp2(load_so_far) if load_so_far is not None else 0.0,
+                    "today_remaining": dp2(load_today_remaining) if load_today_remaining is not None else 0.0,
                     "friendly_name": "Load energy predicted (filtered)",
                     "state_class": "measurement",
                     "unit_of_measurement": "kWh",
@@ -2701,9 +2733,9 @@ class Output:
                 state=dp3(load_adjusted),
                 attributes={
                     "results": self.filtered_times(load_adjusted_stamp),
-                    "today": dp2(load_today),
-                    "today_so_far": dp2(load_so_far),
-                    "today_remaining": dp2(load_today_remaining),
+                    "today": dp2(load_today) if load_today is not None else 0.0,
+                    "today_so_far": dp2(load_so_far) if load_so_far is not None else 0.0,
+                    "today_remaining": dp2(load_today_remaining) if load_today_remaining is not None else 0.0,
                     "friendly_name": "Load energy prediction adjusted",
                     "state_class": "measurement",
                     "unit_of_measurement": "kWh",
@@ -2765,6 +2797,67 @@ class Output:
             attributes={"friendly_name": "Predbat is force exporting", "icon": "mdi:battery-arrow-down"},
         )
         self.dashboard_item("binary_sensor." + self.prefix + "_demand", state="on" if isDemand else "off", attributes={"friendly_name": "Predbat is in demand mode", "icon": "mdi:battery-arrow-up"})
+
+    def yesterday_reconstruct_car_slots(self, end_record, yesterday_load_step):
+        # Normalize to list for multi-car support
+        entity_id_config = self.get_arg("octopus_intelligent_slot", indirect=False)
+        if entity_id_config and not isinstance(entity_id_config, list):
+            entity_id_list = [entity_id_config]
+        elif entity_id_config:
+            entity_id_list = entity_id_config
+        else:
+            entity_id_list = []
+
+        # re-load car charging slots for yesterday (for octopus if enabled).
+        for car_n in range(min(len(entity_id_list), self.num_cars, len(self.octopus_slots))):
+            self.car_charging_slots[car_n] = self.load_octopus_slots(car_n, self.octopus_slots[car_n], self.octopus_intelligent_consider_full)
+
+        # re-construct car charging slots from non-octopus using the car energy sensor
+        # sum the energy over each 30 minutes and add it to the car plan if missing
+        if self.num_cars > 0:
+            for start_minute in range(0, end_record, self.plan_interval_minutes):
+                car_energy = 0
+                for minute in range(start_minute, start_minute + self.plan_interval_minutes):
+                    minute_previous = self.minutes_now + 24 * 60 - minute  # How far back in time are we looking
+                    car_energy += self.get_from_incrementing(self.car_charging_energy, minute_previous)
+                if car_energy > 0.1:
+                    # Only add the slot if there isn't already one covering this time period
+                    if not any(slot["start"] <= start_minute < slot["end"] for slot in self.car_charging_slots[0]):
+                        self.car_charging_slots[0].append({"start": start_minute, "end": start_minute + self.plan_interval_minutes, "kwh": car_energy, "octopus": False})
+
+        if self.car_energy_reported_load:
+            # Walk through each car slot for each car and subtract it from the load
+            # We assume the load sensor correct, so if the car slot over reports then can the car slot energy based on the possible load
+            for car_n in range(self.num_cars):
+                for slot in self.car_charging_slots[car_n]:
+                    start_minutes = slot["start"]
+                    end_minutes = slot["end"]
+                    kwh = slot["kwh"]
+                    kwh_drain = kwh / self.car_charging_loss
+                    load_reported = 0
+
+                    # Skip empty slot
+                    if end_minutes <= start_minutes:
+                        continue
+
+                    for minute in range(start_minutes, end_minutes, PREDICT_STEP):
+                        load_reported += yesterday_load_step.get(minute, 0)
+                    if load_reported < kwh_drain:
+                        # The slot is reporting more energy than the load, so we need to adjust the slot energy down to the real load
+                        # e.g. Octopus can over report energy in the period
+                        if load_reported * 10 < kwh_drain:
+                            # Threshold where we assume no car charging at all
+                            slot["kwh"] = 0
+                        else:
+                            slot["kwh"] = load_reported * self.car_charging_loss
+                    khw = slot["kwh"]
+
+                    # Subtract the energy for the period from the historical load as it will be added back in again during the simulation
+                    total_hours = (end_minutes - start_minutes) / 60.0
+                    subtract_amount = khw / total_hours * PREDICT_STEP / 60.0
+                    for minute in range(start_minutes, end_minutes, PREDICT_STEP):
+                        load_value = yesterday_load_step.get(minute, 0)
+                        yesterday_load_step[minute] = max(load_value - subtract_amount, 0)
 
     def calculate_yesterday(self):
         """
@@ -2860,16 +2953,19 @@ class Output:
                 cost_value += cost_yesterday
             cost_yesterday_array[minute] = cost_value
 
-        # Get battery level yesterday
-        battery_today_data = self.get_history_wrapper(entity_id=self.prefix + ".soc_kw_h0", days=2, required=False)
-        if not battery_today_data:
-            self.log("Warn: Calculate yesterday: No soc_kw_h0 data for yesterday")
-            return
-        battery_data, _ = minute_data(battery_today_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
-        battery_soc_yesterday = battery_data.get(minutes_back, 0.0)
+        # Get battery level yesterday - prefer the already-fetched in-memory history, fall back to HA query
+        battery_data = self.soc_kwh_history
+        if not battery_data:
+            battery_today_data = self.get_history_wrapper(entity_id=self.prefix + ".soc_kw_h0", days=2, required=False)
+            if battery_today_data:
+                battery_data, _ = minute_data(battery_today_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
+            else:
+                self.log("Info: Calculate yesterday: No soc_kw_h0 history available, using saved soc value as fallback")
+                battery_data = {}
+        battery_soc_yesterday = battery_data.get(minutes_back, soc_yesterday)
         battery_soc_yesterday_array = {}
         for minute in range(0, end_record + self.minutes_now):
-            battery_soc_yesterday_array[minute] = battery_data.get(minutes_back + 24 * 60 - minute - 5, 0.0)  # -5 gives 4 minutes into new data to allow for reset
+            battery_soc_yesterday_array[minute] = battery_data.get(minutes_back + 24 * 60 - minute - 5, soc_yesterday)  # -5 gives 4 minutes into new data to allow for reset
 
         # Get status history
         predbat_status_data = self.get_history_wrapper(entity_id=self.prefix + ".status", days=2, required=False)
@@ -2916,6 +3012,8 @@ class Output:
         carbon_enable = self.carbon_enable
         rate_import_replicated = self.rate_import_replicated
         rate_export_replicated = self.rate_export_replicated
+        car_charging_slots_backup = copy.deepcopy(self.car_charging_slots)
+        car_charging_soc = list(self.car_charging_soc)
 
         # Fake to yesterday state
         self.minutes_now = 0
@@ -2926,21 +3024,26 @@ class Output:
         self.midnight_utc = self.midnight_utc - timedelta(days=1)
         self.forecast_minutes = end_record
         self.pv_today_now = 0
-        self.soc_kw = soc_yesterday
         self.car_charging_hold = False
         self.iboost_energy_subtract = False
         self.load_minutes_now = 0
         self.rate_import = past_rates
         self.rate_export = past_rates_export
         self.iboost_enable = False
-        self.num_cars = 0
         self.plan_debug = False
         self.carbon_enable = False
         self.rate_import_replicated = {}
         self.rate_export_replicated = {}
+        # Reset car SOC to 0 so the prediction can add back the full car energy from IOG slots.
+        # The current car_charging_soc reflects today's state; if the car is already at its limit
+        # the Prediction would compute car_load_scale=0 and omit all car energy from the metric.
+        self.car_charging_soc = [0] * len(self.car_charging_soc)
+
+        # re-construct car charging slots from non-octopus using the sensor
+        self.yesterday_reconstruct_car_slots(end_record, yesterday_load_step)
 
         # Simulate yesterday
-        self.prediction = Prediction(self, yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step)
+        self.prediction = Prediction(self, yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, soc_kw=soc_yesterday)
         (
             metric_baseline,
             import_kwh_battery,
@@ -2970,7 +3073,7 @@ class Output:
         self.charge_window_best = charge_window_best
         self.export_limits_best = []
         self.export_window_best = []
-        plan_html_baseline, plan_json_baseline = self.plan_write_debug(True, None, yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record)
+        plan_html_baseline, plan_json_baseline = self.plan_write_debug(True, None, yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record, prediction=self.prediction)
 
         # Now try to show what really happened yesterday
         self.charge_limit_best = []
@@ -3049,7 +3152,7 @@ class Output:
 
         # Simulate yesterday with actual charge/export windows
         self.forecast_minutes = end_record + minutes_now
-        plan_html_yesterday, plan_json_yesterday = self.publish_html_plan(yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record + minutes_now, publish=False)
+        plan_html_yesterday, plan_json_yesterday = self.publish_html_plan(yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record + minutes_now, publish=False, prediction=self.prediction)
         self.forecast_minutes = end_record
 
         # Restore state
@@ -3150,10 +3253,7 @@ class Output:
         )
 
         # Simulate no PV or battery
-        self.soc_kw = 0
-        self.soc_max = 0
-
-        self.prediction = Prediction(self, yesterday_pv_step_zero, yesterday_pv_step_zero, yesterday_load_step, yesterday_load_step)
+        self.prediction = Prediction(self, yesterday_pv_step_zero, yesterday_pv_step_zero, yesterday_load_step, yesterday_load_step, soc_kw=0, soc_max=0)
         metric_no_pvbat, import_kwh_battery, import_kwh_house, export_kwh, soc_min, final_soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction([], [], [], [], False, end_record=end_record, save="yesterday")
 
         # Add back in battery value
@@ -3229,7 +3329,6 @@ class Output:
         self.export_today_now = export_today_now
         self.carbon_today_sofar = carbon_today_sofar
         self.pv_today_now = pv_today_now
-        self.soc_kw = soc_kw
         self.car_charging_hold = car_charging_hold
         self.iboost_energy_subtract = iboost_energy_subtract
         self.load_minutes_now = load_minutes_now
@@ -3242,6 +3341,8 @@ class Output:
         self.carbon_enable = carbon_enable
         self.rate_import_replicated = rate_import_replicated
         self.rate_export_replicated = rate_export_replicated
+        self.car_charging_slots = car_charging_slots_backup
+        self.car_charging_soc = car_charging_soc
 
         # Update timestamp
         self.savings_last_updated = self.now_utc

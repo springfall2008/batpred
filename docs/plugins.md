@@ -5,7 +5,7 @@
 **Core Plugin System (`plugin_system.py`)**
 
 - **Auto-discovery**: Automatically finds and loads plugins from multiple directories (`plugins/`, same directory, parent directory)
-- **Flexible plugin detection**: Supports multiple plugin patterns (classes ending in 'Plugin'', `PREDBAT_PLUGIN` marker, `initialize_plugin()` function)
+- **Flexible plugin detection**: Supports multiple plugin patterns (classes ending in 'Plugin', `PREDBAT_PLUGIN` marker, `initialize_plugin()` function)
 - **Lifecycle hooks**: Provides four key integration points:
     - `on_init`: Called when plugin system initialises
     - `on_update`: Called during each update cycle

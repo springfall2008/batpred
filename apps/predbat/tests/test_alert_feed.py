@@ -7,11 +7,37 @@
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
+import asyncio
+import tempfile
+import shutil
 from datetime import datetime, timedelta
 from alertfeed import AlertFeed
 import json
 from unittest.mock import patch
+from storage import StorageComponent, StorageLocalFiles
 from tests.test_infra import run_async, create_aiohttp_mock_response, create_aiohttp_mock_session
+
+
+class _MockComponents:
+    """Minimal components mock that returns a pre-configured storage component."""
+
+    def __init__(self, storage):
+        """Initialise with a storage instance."""
+        self._storage = storage
+
+    def get_component(self, name):
+        """Return the mocked storage for 'storage', None for others."""
+        if name == "storage":
+            return self._storage
+        return None
+
+
+def _attach_storage(api, temp_dir):
+    """Attach a real StorageComponent backed by a temp directory to the api instance."""
+    storage = StorageComponent(api.base)
+    storage.backend = StorageLocalFiles(temp_dir, api.base.log)
+    api.base.components = _MockComponents(storage)
+    return storage
 
 
 def test_alert_feed(my_predbat):
@@ -381,19 +407,89 @@ def test_alert_feed(my_predbat):
         failed = 1
         return failed
 
-    print("- Test download function, cache")
+    print("- Test run: no storage, first=True always fetches")
+    alert_feed_run = AlertFeed(my_predbat, alert_config={"url": url})
+    download_count = [0]
+    original_xml = alert_data
 
-    # Second test checks the cache actually works
-    mock_response.text = "foobar"
-    mock_session = create_aiohttp_mock_session(mock_response)
-    with patch("alertfeed.aiohttp.ClientSession") as mock_session_class:
-        mock_session_class.return_value = mock_session
-        xml = run_async(alert_feed.download_alert_data(url))
-    # Verify the downloaded data matches our test data
-    if xml != alert_data:
-        print("ERROR: Downloaded data cache failed, got {} expected {}".format(xml, alert_data))
+    async def mock_download(_url):
+        """Mock download that counts calls."""
+        download_count[0] += 1
+        return original_xml
+
+    alert_feed_run.download_alert_data = mock_download
+    run_async(alert_feed_run.run(seconds=0, first=True))
+    if download_count[0] != 1:
+        print("ERROR: Expected 1 download with no storage, got {}".format(download_count[0]))
         failed = 1
-        return failed
+    elif alert_feed_run.alert_xml != original_xml:
+        print("ERROR: alert_xml not set after run")
+        failed = 1
+
+    print("- Test run: fresh storage cache skips fetch")
+    temp_dir_fresh = tempfile.mkdtemp()
+    try:
+        alert_feed_fresh = AlertFeed(my_predbat, alert_config={"url": url})
+        storage_fresh = _attach_storage(alert_feed_fresh, temp_dir_fresh)
+        fresh_ts = datetime.now() - timedelta(minutes=5)
+        asyncio.run(storage_fresh.save("alertfeed", "feed", {"xml": alert_data, "timestamp": fresh_ts}, format="yaml", expiry=None))
+
+        fresh_download_count = [0]
+
+        async def mock_download_fresh(_url):
+            """Mock download that should not be called."""
+            fresh_download_count[0] += 1
+            return "<should_not_fetch/>"
+
+        alert_feed_fresh.download_alert_data = mock_download_fresh
+        run_async(alert_feed_fresh.run(seconds=0, first=True))
+        if fresh_download_count[0] != 0:
+            print("ERROR: Expected no download with fresh cache, got {}".format(fresh_download_count[0]))
+            failed = 1
+        elif alert_feed_fresh.alert_xml != alert_data:
+            print("ERROR: Expected cached alert_xml to be loaded")
+            failed = 1
+        else:
+            print("  PASS: fresh cache skips fetch")
+    finally:
+        my_predbat.components = None
+        shutil.rmtree(temp_dir_fresh, ignore_errors=True)
+
+    print("- Test run: stale storage cache triggers fetch and saves")
+    temp_dir_stale = tempfile.mkdtemp()
+    try:
+        alert_feed_stale = AlertFeed(my_predbat, alert_config={"url": url})
+        storage_stale = _attach_storage(alert_feed_stale, temp_dir_stale)
+        stale_ts = datetime.now() - timedelta(minutes=45)
+        asyncio.run(storage_stale.save("alertfeed", "feed", {"xml": "<old_data/>", "timestamp": stale_ts}, format="yaml", expiry=None))
+
+        new_xml = "<new_alert_data/>"
+        stale_download_count = [0]
+
+        async def mock_download_stale(_url):
+            """Mock download returning fresh data."""
+            stale_download_count[0] += 1
+            return new_xml
+
+        alert_feed_stale.download_alert_data = mock_download_stale
+        run_async(alert_feed_stale.run(seconds=0, first=True))
+        if stale_download_count[0] != 1:
+            print("ERROR: Expected 1 download with stale cache, got {}".format(stale_download_count[0]))
+            failed = 1
+        elif alert_feed_stale.alert_xml != new_xml:
+            print("ERROR: Expected updated alert_xml after stale fetch")
+            failed = 1
+        else:
+            # Verify new data was persisted
+            saved = asyncio.run(storage_stale.load("alertfeed", "feed"))
+            if saved is None or saved.get("xml") != new_xml:
+                print("ERROR: New alert data not saved to storage")
+                failed = 1
+            else:
+                print("  PASS: stale cache triggers fetch and saves result")
+    finally:
+        my_predbat.components = None
+        shutil.rmtree(temp_dir_stale, ignore_errors=True)
 
     print("- Test process alerts")
     alert_config = {

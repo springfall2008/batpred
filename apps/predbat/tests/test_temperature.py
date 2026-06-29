@@ -23,7 +23,7 @@ Tests all major functionality including:
 """
 
 from temperature import TemperatureAPI
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, MagicMock, AsyncMock
 import aiohttp
 import asyncio
@@ -796,12 +796,8 @@ def _test_run_first_fetch(my_predbat=None):
                     print("    ERROR: last_updated_timestamp should be set")
                     return 1
 
-                if temp_api.publish_temperature_sensor.call_count != 2:
-                    print("    ERROR: publish_temperature_sensor should be called twice (after fetch and after success)")
-                    return 1
-
-                if not temp_api.update_success_timestamp.called:
-                    print("    ERROR: update_success_timestamp should be called")
+                if temp_api.publish_temperature_sensor.call_count != 1:
+                    print("    ERROR: publish_temperature_sensor should be called once after fetch")
                     return 1
 
                 print("    PASS: first run fetches and publishes data")
@@ -983,6 +979,157 @@ def _test_run_exception_handling(my_predbat=None):
     return run_test()
 
 
+def _test_run_first_fresh_cache(my_predbat=None):
+    """Test first run with fresh cache skips API fetch"""
+
+    def run_test():
+        async def async_test():
+            temp_api = MockTemperatureAPI(
+                temperature_latitude=51.5074,
+                temperature_longitude=-0.1278,
+                temperature_url="http://example.com/api"
+            )
+            temp_api.temperature_enable = True
+            temp_api.publish_temperature_sensor = MagicMock()
+            temp_api.update_success_timestamp = MagicMock()
+
+            cached_data = {"current": {"temperature_2m": 15.0}, "hourly": {"time": [], "temperature_2m": []}, "utc_offset_seconds": 0}
+            fetch_called = [False]
+
+            async def mock_load_cache():
+                # Simulate loading fresh cache (45 min old)
+                temp_api.temperature_data = cached_data
+                temp_api.last_updated_timestamp = datetime.now() - timedelta(minutes=45)
+
+            async def mock_fetch():
+                fetch_called[0] = True
+                return {"current": {"temperature_2m": 20.0}}
+
+            with patch.object(temp_api, 'load_temperature_cache', side_effect=mock_load_cache):
+                with patch.object(temp_api, 'save_temperature_cache', new_callable=AsyncMock):
+                    with patch.object(temp_api, 'fetch_temperature_data', side_effect=mock_fetch):
+                        result = await temp_api.run(seconds=0, first=True)
+
+            if fetch_called[0]:
+                print("    ERROR: fetch_temperature_data should not be called (cache is 45 min old < 60)")
+                return 1
+            if temp_api.temperature_data != cached_data:
+                print("    ERROR: temperature_data should remain the cached value")
+                return 1
+            if not temp_api.update_success_timestamp.called:
+                print("    ERROR: update_success_timestamp should be called when data is available")
+                return 1
+            print("    PASS: fresh cache (45 min) skips API fetch on startup")
+            return 0
+
+        return asyncio.run(async_test())
+
+    return run_test()
+
+
+def _test_run_first_stale_cache(my_predbat=None):
+    """Test first run with stale cache triggers API fetch and saves result"""
+
+    def run_test():
+        async def async_test():
+            temp_api = MockTemperatureAPI(
+                temperature_latitude=51.5074,
+                temperature_longitude=-0.1278,
+                temperature_url="http://example.com/api"
+            )
+            temp_api.temperature_enable = True
+            temp_api.publish_temperature_sensor = MagicMock()
+            temp_api.update_success_timestamp = MagicMock()
+
+            cached_data = {"current": {"temperature_2m": 15.0}, "hourly": {"time": [], "temperature_2m": []}, "utc_offset_seconds": 0}
+            fresh_data = {"current": {"temperature_2m": 20.0}, "hourly": {"time": [], "temperature_2m": []}, "utc_offset_seconds": 0}
+
+            async def mock_load_cache():
+                # Simulate loading stale cache (90 min old)
+                temp_api.temperature_data = cached_data
+                temp_api.last_updated_timestamp = datetime.now() - timedelta(minutes=90)
+
+            with patch.object(temp_api, 'load_temperature_cache', side_effect=mock_load_cache):
+                with patch.object(temp_api, 'save_temperature_cache', new_callable=AsyncMock) as mock_save:
+                    with patch.object(temp_api, 'fetch_temperature_data', new_callable=AsyncMock, return_value=fresh_data):
+                        result = await temp_api.run(seconds=0, first=True)
+
+            if temp_api.temperature_data != fresh_data:
+                print("    ERROR: temperature_data should be updated (cache was 90 min old >= 60)")
+                return 1
+            if mock_save.call_count != 1:
+                print("    ERROR: save_temperature_cache should be called after fresh fetch, got {}".format(mock_save.call_count))
+                return 1
+            print("    PASS: stale cache (90 min) triggers API fetch on startup")
+            return 0
+
+        return asyncio.run(async_test())
+
+    return run_test()
+
+
+def _test_run_saves_to_cache(my_predbat=None):
+    """Test that a successful fetch saves data to storage"""
+
+    def run_test():
+        async def async_test():
+            temp_api = MockTemperatureAPI(
+                temperature_latitude=51.5074,
+                temperature_longitude=-0.1278,
+                temperature_url="http://example.com/api"
+            )
+            temp_api.temperature_enable = True
+            temp_api.publish_temperature_sensor = MagicMock()
+            temp_api.update_success_timestamp = MagicMock()
+
+            fresh_data = {"current": {"temperature_2m": 20.0}}
+
+            with patch.object(temp_api, 'load_temperature_cache', new_callable=AsyncMock):
+                with patch.object(temp_api, 'save_temperature_cache', new_callable=AsyncMock) as mock_save:
+                    with patch.object(temp_api, 'fetch_temperature_data', new_callable=AsyncMock, return_value=fresh_data):
+                        await temp_api.run(seconds=0, first=True)
+
+            if mock_save.call_count != 1:
+                print("    ERROR: save_temperature_cache should be called once after fetch, got {}".format(mock_save.call_count))
+                return 1
+            print("    PASS: successful fetch triggers save_temperature_cache")
+            return 0
+
+        return asyncio.run(async_test())
+
+    return run_test()
+
+
+def _test_run_no_save_on_failed_fetch(my_predbat=None):
+    """Test that a failed fetch does not save to storage"""
+
+    def run_test():
+        async def async_test():
+            temp_api = MockTemperatureAPI(
+                temperature_latitude=51.5074,
+                temperature_longitude=-0.1278,
+                temperature_url="http://example.com/api"
+            )
+            temp_api.temperature_enable = True
+            temp_api.publish_temperature_sensor = MagicMock()
+            temp_api.update_success_timestamp = MagicMock()
+
+            with patch.object(temp_api, 'load_temperature_cache', new_callable=AsyncMock):
+                with patch.object(temp_api, 'save_temperature_cache', new_callable=AsyncMock) as mock_save:
+                    with patch.object(temp_api, 'fetch_temperature_data', new_callable=AsyncMock, return_value=None):
+                        await temp_api.run(seconds=0, first=True)
+
+            if mock_save.call_count != 0:
+                print("    ERROR: save_temperature_cache should NOT be called when fetch returns None, got {}".format(mock_save.call_count))
+                return 1
+            print("    PASS: failed fetch does not trigger save_temperature_cache")
+            return 0
+
+        return asyncio.run(async_test())
+
+    return run_test()
+
+
 def _test_run_exception_no_data(my_predbat=None):
     """Test run method exception handling when no temperature data exists"""
 
@@ -1059,6 +1206,10 @@ def test_temperature(my_predbat=None):
         ("run_fetch_none", _test_run_fetch_returns_none, "run method when fetch returns None"),
         ("run_exception", _test_run_exception_handling, "run method exception handling with data"),
         ("run_exception_nodata", _test_run_exception_no_data, "run method exception handling without data"),
+        ("run_fresh_cache", _test_run_first_fresh_cache, "first run with fresh cache skips API fetch"),
+        ("run_stale_cache", _test_run_first_stale_cache, "first run with stale cache triggers API fetch"),
+        ("run_saves_cache", _test_run_saves_to_cache, "successful fetch saves to storage cache"),
+        ("run_no_save_failed", _test_run_no_save_on_failed_fetch, "failed fetch does not save to cache"),
     ]
 
     print("\n" + "=" * 70)

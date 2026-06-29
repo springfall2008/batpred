@@ -19,6 +19,7 @@ This document provides a comprehensive overview of all Predbat components, their
     - [Fox ESS API (fox)](#fox-ess-api-fox)
     - [Solax Cloud API (Solax)](#solax-cloud-api-solax)
     - [Solis Cloud API (Solis)](#solis-cloud-api-solis)
+    - [Sigenergy Cloud API (Sigenergy)](#sigenergy-cloud-api-sigenergy)
     - [Alert Feed (alert_feed)](#alert-feed-alert_feed)
     - [Carbon Intensity API (carbon)](#carbon-intensity-api-carbon)
     - [Temperature API (temperature)](#temperature-api-temperature)
@@ -211,6 +212,9 @@ Connects directly to the GivEnergy Cloud to control your GivEnergy inverter and 
 | `ge_cloud_direct` | Boolean | Yes | - | `ge_cloud_direct` | Set to `true` to enable GivEnergy Cloud control |
 | `api_key` | String | Yes | - | `ge_cloud_key` | Your GivEnergy Cloud API key |
 | `automatic` | Boolean | No | false | `ge_cloud_automatic` | Set to `true` to automatically configured Predbat to use GivEnergy Cloud direct (no additional apps.yaml changes required) |
+| `load_today_ignore` | Boolean | No | false | `ge_cloud_load_today_ignore` | Set to `true` to ignore GE Cloud load_today data and use the `load_today` sensor from `apps.yaml` instead |
+| `automatic_shared_ct` | Boolean | No | false | `ge_cloud_automatic_shared_ct` | Set to `true` to force shared CT clamp mode — only the first inverter's grid and load readings are used, preventing double-counting on multi-inverter systems with a single shared CT |
+| `automatic_split_ct` | Boolean | No | false | `ge_cloud_automatic_split_ct` | Set to `true` to force split CT clamp mode — each inverter's readings are summed independently. Takes priority over `ge_cloud_automatic_shared_ct` if both are set |
 
 #### How to get your API key (gecloud)
 
@@ -557,6 +561,84 @@ Integrates with Solis inverters for monitoring and controlling Solis battery sys
 
 ---
 
+### Sigenergy Cloud API (sigenergy)
+
+**Can be restarted:** Yes
+
+#### What it does (sigenergy)
+
+Integrates with Sigenergy (SigenStor) inverter and battery systems via the Sigenergy OpenAPI (REST) and MQTT broker.
+No local Home Assistant integration is required — Predbat connects directly to the Sigenergy cloud, publishes all needed sensor entities, and can automatically wire itself to use them.
+
+Supports real-time monitoring (SOC, power flows, operational mode) and full charge/discharge control including reserve, charge target, and export target SoC.
+
+#### When to enable (sigenergy)
+
+- You have a Sigenergy (SigenStor) inverter with battery storage
+- You want cloud-based control without a local modbus
+
+#### Important notes (sigenergy)
+
+- **EXPERIMENTAL**: This is a new integration and may have issues
+- The Sigenergy Developer Portal application must have **VPP Mode** enabled or charge/discharge commands will be rejected
+- On first startup Sigenergy sends an **onboarding approval email** — you must click the approval link before live MQTT data starts flowing
+- MQTT certificates (CA, client cert, client key) are required for TLS-authenticated connections to the broker
+
+#### Configuration Options (sigenergy)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `app_key` | String | Yes | - | `sigenergy_app_key` | Your Sigenergy Application Key from the Developer Portal |
+| `app_secret` | String | Yes | - | `sigenergy_app_secret` | Your Sigenergy Application Secret |
+| `ca_cert` | String | No | System CAs | `sigenergy_ca_pem` | PEM text of the CA certificate for TLS verification |
+| `client_cert` | String | No | - | `sigenergy_client_pem` | PEM text of the client certificate for mutual TLS |
+| `client_key` | String | No | - | `sigenergy_client_key` | PEM text of the client private key for mutual TLS |
+| `system_id` | String/List | Yes | n/a | `sigenergy_system_id` | Must be set to onboard systems. Find your System ID in the SigEnergy app under **Settings → System Settings → About → System ID** (tap to copy) |
+| `automatic` | Boolean | No | false | `sigenergy_automatic` | Set to `true` to automatically configure Predbat sensors and controls (recommended) |
+| `enable_controls` | Boolean | No | true | `sigenergy_enable_controls` | Set to `false` for monitoring only — no charge/discharge commands will be sent |
+| `base_url` | String | No | EU endpoint | `sigenergy_base_url` | Override the REST API base URL (e.g. for non-EU regions) |
+| `mqtt_host` | String | No | Derived from base_url | `sigenergy_mqtt_host` | Override the MQTT broker hostname |
+
+#### Configuration example (sigenergy)
+
+In `apps.yaml`:
+
+```yaml
+  sigenergy_app_key: !secret sigenergy_app_key
+  sigenergy_app_secret: !secret sigenergy_app_secret
+  sigenergy_ca_pem: !secret sigenergy_ca_pem
+  sigenergy_client_pem: !secret sigenergy_client_pem
+  sigenergy_client_key: !secret sigenergy_client_key
+  sigenergy_automatic: true
+  sigenergy_system_id: MY_SYSTEM_ID
+```
+
+In `secrets.yaml` (certificates use YAML literal block scalars — every line of the PEM must be indented):
+
+```yaml
+sigenergy_app_key: "your-app-key-here"
+sigenergy_app_secret: "your-app-secret-here"
+
+sigenergy_ca_pem: |
+  -----BEGIN CERTIFICATE-----
+  ... note entire key must be indented 2 spaces
+  -----END CERTIFICATE-----
+
+sigenergy_client_pem: |
+  -----BEGIN CERTIFICATE-----
+  ... note entire key must be indented 2 spaces
+  -----END CERTIFICATE-----
+
+sigenergy_client_key: |
+  -----BEGIN RSA PRIVATE KEY-----
+  ... note entire key must be indented 2 spaces
+  -----END RSA PRIVATE KEY-----
+```
+
+See [Sigenergy Cloud setup](inverter-setup.md#sigenergy-cloud) for the full credential-acquisition walkthrough.
+
+---
+
 ### Alert Feed (alert_feed)
 
 **Can be restarted:** Yes
@@ -644,7 +726,7 @@ This temperature data is used by the ML Load Prediction component to improve loa
 - Publishes data to `sensor.predbat_temperature` with forecasts in the `results` attribute
 - Automatically retries on API failures with exponential backoff
 
-**Important**: This component is **recommended** when using ML Load Prediction, as temperature data cam improve prediction accuracy for households with electric/heat-pump heating.
+**Important**: This component is **recommended** when using ML Load Prediction, as temperature data can improve prediction accuracy for households with electric/heat-pump heating.
 
 #### Configuration Options (temperature)
 

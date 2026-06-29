@@ -5091,6 +5091,64 @@ async def test_publish_device_realtime_data_main():
     else:
         print(f"✓ Multi-inverter load_power aggregated correctly ({expected_load10}W) and tied to first inverter SN")
 
+    # Test 11: Battery SOH sensor published correctly, including zero-SOH guard and aggregate
+    print("Test 11: Battery SOH sensor published correctly")
+    api11 = MockSolaxAPI()
+    api11.initialize(client_id="test", client_secret="test", region="eu")
+
+    api11.device_info["BAT_SOH"] = {"deviceSn": "BAT_SOH", "deviceType": 2, "deviceModel": 0, "plantId": "soh_plant"}
+    api11.device_info["INV_SOH"] = {"deviceSn": "INV_SOH", "deviceType": 1, "deviceModel": 3, "plantId": "soh_plant"}
+    api11.plant_inverters["soh_plant"] = ["INV_SOH"]
+    api11.realtime_device_data["INV_SOH"] = {"acPower1": 0, "acPower2": 0, "acPower3": 0, "gridPower": 0, "totalActivePower": 0, "totalReactivePower": 0, "totalYield": 0.0, "deviceStatus": 102}
+    api11.realtime_device_data["BAT_SOH"] = {"batterySOC": 70, "batterySOH": 92, "batteryVoltage": 400.0, "chargeDischargePower": 0, "batteryCurrent": 0.0, "batteryTemperature": 20.0, "deviceStatus": 0}
+
+    await api11.publish_device_realtime_data()
+
+    soh_sensor = "sensor.predbat_solax_soh_plant_BAT_SOH_battery_soh"
+    if soh_sensor not in api11.dashboard_items:
+        print(f"**** ERROR: Per-device battery_soh sensor not found ****")
+        failed = True
+    elif abs(api11.dashboard_items[soh_sensor]["state"] - 0.92) > 0.0001:
+        print(f"**** ERROR: Expected battery_soh 0.92, got {api11.dashboard_items[soh_sensor]['state']} ****")
+        failed = True
+    elif api11.dashboard_items[soh_sensor]["attributes"]["unit_of_measurement"] != "*":
+        print(f"**** ERROR: Wrong battery_soh unit ****")
+        failed = True
+    else:
+        print(f"✓ Per-device battery_soh sensor correct (0.92)")
+
+    # Per-inverter aggregate SOH sensor (updated in second pass)
+    agg_soh_sensor = "sensor.predbat_solax_soh_plant_INV_SOH_battery_soh"
+    if agg_soh_sensor not in api11.dashboard_items:
+        print(f"**** ERROR: Aggregate battery_soh sensor not found ****")
+        failed = True
+    elif abs(api11.dashboard_items[agg_soh_sensor]["state"] - 0.92) > 0.0001:
+        print(f"**** ERROR: Expected aggregate battery_soh 0.92, got {api11.dashboard_items[agg_soh_sensor]['state']} ****")
+        failed = True
+    else:
+        print(f"✓ Aggregate battery_soh sensor correct (0.92)")
+
+    # Verify batterySOH=0 is treated as 1.0 (guard against bad API data)
+    api11b = MockSolaxAPI()
+    api11b.initialize(client_id="test", client_secret="test", region="eu")
+    api11b.device_info["BAT_ZERO_SOH"] = {"deviceSn": "BAT_ZERO_SOH", "deviceType": 2, "deviceModel": 0, "plantId": "zero_soh_plant"}
+    api11b.device_info["INV_ZERO_SOH"] = {"deviceSn": "INV_ZERO_SOH", "deviceType": 1, "deviceModel": 3, "plantId": "zero_soh_plant"}
+    api11b.plant_inverters["zero_soh_plant"] = ["INV_ZERO_SOH"]
+    api11b.realtime_device_data["INV_ZERO_SOH"] = {"acPower1": 0, "acPower2": 0, "acPower3": 0, "gridPower": 0, "totalActivePower": 0, "totalReactivePower": 0, "totalYield": 0.0, "deviceStatus": 102}
+    api11b.realtime_device_data["BAT_ZERO_SOH"] = {"batterySOC": 50, "batterySOH": 0, "batteryVoltage": 400.0, "chargeDischargePower": 0, "batteryCurrent": 0.0, "batteryTemperature": 20.0, "deviceStatus": 0}
+
+    await api11b.publish_device_realtime_data()
+
+    zero_soh_sensor = "sensor.predbat_solax_zero_soh_plant_BAT_ZERO_SOH_battery_soh"
+    if zero_soh_sensor not in api11b.dashboard_items:
+        print(f"**** ERROR: Zero-SOH battery_soh sensor not found ****")
+        failed = True
+    elif api11b.dashboard_items[zero_soh_sensor]["state"] != 1.0:
+        print(f"**** ERROR: Expected battery_soh 1.0 for batterySOH=0, got {api11b.dashboard_items[zero_soh_sensor]['state']} ****")
+        failed = True
+    else:
+        print(f"✓ batterySOH=0 correctly guarded to 1.0")
+
     if not failed:
         print("✓ publish_device_realtime_data tests passed")
 
@@ -5369,6 +5427,9 @@ async def test_automatic_config_main():
         failed = True
     elif api.get_arg("load_today") != ["sensor.predbat_solax_plant1_total_load"]:
         print(f"**** ERROR: load_today config incorrect ****")
+        failed = True
+    elif api.get_arg("battery_scaling") != ["sensor.predbat_solax_plant1_INV001_battery_soh"]:
+        print(f"**** ERROR: battery_scaling not set to SOH sensor, got {api.get_arg('battery_scaling')} ****")
         failed = True
     else:
         print(f"✓ Single plant configuration correct")

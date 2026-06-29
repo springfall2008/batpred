@@ -6,35 +6,34 @@
 
 ## Introduction
 
-Home battery prediction and automatic charging for Home Assistant supporting multiple inverters including GivEnergy, Solis, Huawei, SolarEdge, SigEnergy, FoxESS, Sofar, Tesla Powerwall and many more.
+Home battery prediction and automatic charging for Home Assistant supporting multiple inverters, including GivEnergy, Solis, Huawei, SolarEdge, SigEnergy, FoxESS, Sofar, Tesla Powerwall and many more.
 
 Also known by some as Batpred or Batman!
 
 ![icon](https://github.com/springfall2008/batpred/assets/48591903/7c207423-1423-4f88-beb2-d1da5cfbfeeb) ![image](https://github.com/springfall2008/batpred/assets/48591903/e98a0720-d2cf-4b71-94ab-97fe09b3cee1)
 
-If you want to buy me a beer then please use [Paypal](https://paypal.me/predbat?country.x=GB&locale.x=en_GB) or [GitHub sponsor](https://github.com/springfall2008)
+If you want to buy me a beer, then please use [Paypal](https://paypal.me/predbat?country.x=GB&locale.x=en_GB) or [GitHub sponsor](https://github.com/springfall2008)
 ![image](https://github.com/springfall2008/batpred/assets/48591903/b3a533ef-0862-4e0b-b272-30e254f58467)
 
 * Use my referral code for Octopus Energy: <https://share.octopus.energy/jolly-eel-176>
 * Use my referral code for Axle Energy (UK): <https://vpp.axle.energy/landing/grid?ref=R-VWIICRSA>
 
-If you are finding Home Assistant and Predbat too difficult to set up yourself there is now [PredBat Cloud](https://predbat.com/) which is a paid for version of Predbat hosted in the cloud.
-Please note that while I have given permission for PredBat Cloud to operate this is not my company, PredBat will remain open source for everyone personal use.
+If you find Home Assistant and Predbat too difficult to set up yourself, there is now [PredBat Cloud](https://predbat.com/), a paid version of Predbat hosted in the cloud. Please note that while I have given permission for PredBat Cloud to operate under license, PredBat will remain open source for personal use.
 
 ## Predbat documentation
 
 You can find the latest Predbat documentation at [https://springfall2008.github.io/batpred/](https://springfall2008.github.io/batpred/) and
 how-to videos on my [YouTube channel](https://www.youtube.com/@springfall2008).
 
-The documentation covers how Predbat works, how to get it installed
+The documentation covers how Predbat works and how to get it installed
 and configured, video tutorials and FAQs to help you get going.
 It also explains how you can contribute to the project.
 
 ## Support
 
-For support please raise a GitHub ticket or use the Facebook Group: [Predbat](https://www.facebook.com/groups/1477599886299106)
+For support, please raise a GitHub ticket or use the Facebook Group: [Predbat](https://www.facebook.com/groups/1477599886299106)
 
-Some inverters have their own groups also e.g:
+Some inverters have their own groups also, e.g.:
 
 * [GivTCP](https://www.facebook.com/groups/615579009972782)
 * [Solis](https://www.facebook.com/groups/288045168816481)
@@ -45,6 +44,6 @@ Please see [License](https://github.com/springfall2008/batpred/blob/main/License
 
 ```text
 Copyright (c) Trefor Southwell 2025-2026 - All rights reserved
-This software maybe used at no cost for personal use only.
+This software may be used at no cost for personal use only.
 No warranty is given, either expressed or implied.
 ```

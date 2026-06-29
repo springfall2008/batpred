@@ -29,7 +29,7 @@ Predbat now has some unit-level tests, to run them on your local machine:
 
 You can add --quick to run just the faster tests. If the tests fail then debug them.
 
-For coverage analysis installed the 'coverage' library with Python
+For coverage analysis install the 'coverage' library with Python, or use the version installed from `requirements.txt`.
 
 1. ./run_cov --quick
 2. Open `htmlcov/index.html` in your web browser
@@ -148,8 +148,8 @@ and creating HTML files from those files. `mkdocs` can be used locally for previ
 but is also used as part of the documentation build process that publishes
 the official documentation site.
 
-The publishing of the documentation is triggered by a GitHub action,
-as defined in `.github/workflows/main.yml`.
+The publishing of the documentation is triggered by a GitHub action when a release is published,
+as defined in `.github/workflows/publish-docs.yml`.
 
 In short, after configuring the build environment, `mkdocs` builds the
 site then pushes the HTML produced to the `gh-pages` branch,
@@ -272,7 +272,7 @@ again (still unstaged).
 Running `pre-commit` automatically:
 
 - If you run `pre-commit install` in a terminal window it will install a pre-commit hook -
-this is a file which tells `git` to run some code for each type you do a
+this is a file which tells `git` to run some code each time you do a
 particular action (a pre-commit hook runs at the start of processing
 a commit, but there are other hooks e.g. pre-push).
 
@@ -286,7 +286,7 @@ automated checks that it will do on commits.
 #### Running the checks from within GitHub
 
 When commits are done on pull requests, and in any other scenarios
-added to the `on` section of`.github/workflows/linting.yml`,
+added to the `on` section of `.github/workflows/code-quality.yml`,
 the GitHub Actions in that file will run.
 
 In particular, the [pre-commit.ci lite](https://pre-commit.ci/lite.html)
