@@ -627,8 +627,9 @@ class Prediction:
                 best_soc_keep = max(best_soc_keep, min(alert_keep / 100.0 * soc_max, soc_max))
 
             # Find charge & discharge windows
-            charge_window_n = charge_window_optimised.get(minute_absolute, -1)
-            export_window_n = export_window_optimised.get(minute_absolute, -1)
+            minute_absolute_aligned = int(minute_absolute / step) * step
+            charge_window_n = charge_window_optimised.get(minute_absolute_aligned, -1)
+            export_window_n = export_window_optimised.get(minute_absolute_aligned, -1)
             charge_window_active = charge_window_n >= 0
             export_window_active = export_window_n >= 0
             export_limit_now = export_limits[export_window_n] if export_window_active else 100.0
