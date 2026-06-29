@@ -1084,9 +1084,6 @@ class Plan:
             # Pre-fill best export enable with Off
             self.export_limits_best = [100.0 for i in range(len(self.export_window_best))]
 
-            # Inject export windows to create headroom for clipping peaks
-            self.inject_clipping_export_windows()
-
             self.end_record = self.forecast_minutes
         # Show best windows
         self.log("Best charge window {}".format(self.window_as_text(self.charge_window_best, calc_percent_limit(self.charge_limit_best, self.soc_max))))
@@ -1341,6 +1338,9 @@ class Plan:
             # If manual override is active, reflect it in the UI totals
             if self.clipping_buffer_kwh > 0:
                 self.clipping_remaining_today = max(self.clipping_remaining_today, self.clipping_buffer_kwh)
+
+            # Inject export windows to create headroom for clipping peaks
+            self.inject_clipping_export_windows()
 
         # Save step data for debug
         self.load_minutes_step = load_minutes_step
