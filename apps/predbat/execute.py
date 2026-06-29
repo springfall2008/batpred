@@ -348,7 +348,7 @@ class Execute:
                 self.log("Next export window will be: {} - {} at reserve {}".format(discharge_start_time, discharge_end_time, self.export_limits_best[0]))
                 if (self.minutes_now >= minutes_start) and (self.minutes_now < minutes_end) and (self.export_limits_best[0] < 100.0):
                     is_anti_clipping = self.export_window_best[0].get("clipping_target_soc_pct") is not None
-                    if (not self.set_export_freeze_only or is_anti_clipping) and self.export_limits_best[0] < 99.0 and (self.soc_kw > discharge_soc or is_anti_clipping):
+                    if (not self.set_export_freeze_only or is_anti_clipping) and self.export_limits_best[0] < 99.0 and (self.soc_kw > discharge_soc):
                         if self.set_export_low_power:
                             export_rate_adjust = 1 - (self.export_limits_best[0] - int(self.export_limits_best[0]))
                         else:

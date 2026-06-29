@@ -2441,7 +2441,7 @@ def run_execute_tests(my_predbat):
         assert_force_export=True,
         set_charge_window=True,
         set_export_window=True,
-        soc_kw=7.9,
+        soc_kw=8.5,
         soc_max=10.0,
         assert_status="Exporting",
         assert_reserve=80,
