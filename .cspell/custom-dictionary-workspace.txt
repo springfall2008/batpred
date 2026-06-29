@@ -148,6 +148,7 @@ dischargefreeze
 Dischg
 Dise
 Disf
+dishcare
 diverter
 dlimit
 dnoregion
