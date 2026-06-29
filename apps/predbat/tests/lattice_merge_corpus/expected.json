@@ -1,0 +1,489 @@
+{
+  "union: same node via two peer providers — ranked access paths + unioned caps": {
+    "site": {
+      "topologyVersion": "0.1.0",
+      "scope": "site",
+      "producer": {
+        "name": "lattice-merge",
+        "provider": "lattice-merge",
+        "inputs": [
+          {
+            "name": "gw",
+            "provider": "gw",
+            "authority": 0,
+            "docVersion": 1
+          },
+          {
+            "name": "cloud",
+            "provider": "cloud",
+            "authority": 0,
+            "docVersion": 1
+          }
+        ]
+      },
+      "nodes": [
+        {
+          "id": "INV",
+          "kind": "inverter",
+          "accessPaths": [
+            {
+              "id": "gw-local",
+              "provider": "gw",
+              "preference": 10
+            },
+            {
+              "id": "vendor-cloud",
+              "provider": "cloud",
+              "preference": 1
+            }
+          ],
+          "capabilities": [
+            {
+              "capability": "battery.soc",
+              "accessPath": "gw-local",
+              "unit": "%",
+              "read": {
+                "protocol": "modbus",
+                "address": 60
+              },
+              "ref": 1
+            },
+            {
+              "capability": "battery.soc",
+              "accessPath": "vendor-cloud",
+              "unit": "%",
+              "read": {
+                "protocol": "cloud-api",
+                "address": "/soc"
+              },
+              "ref": 1
+            },
+            {
+              "capability": "battery.power",
+              "accessPath": "vendor-cloud",
+              "unit": "W",
+              "read": {
+                "protocol": "cloud-api",
+                "address": "/power"
+              },
+              "ref": 2
+            }
+          ]
+        }
+      ]
+    },
+    "warnings": []
+  },
+  "override: higher-authority overlay corrects kind, discovered attributes intact": {
+    "site": {
+      "topologyVersion": "0.1.0",
+      "scope": "site",
+      "producer": {
+        "name": "lattice-merge",
+        "provider": "lattice-merge",
+        "inputs": [
+          {
+            "name": "gw",
+            "provider": "gw",
+            "authority": 0,
+            "docVersion": 1
+          },
+          {
+            "name": "installer",
+            "provider": "installer",
+            "authority": 50,
+            "docVersion": 1
+          }
+        ]
+      },
+      "nodes": [
+        {
+          "id": "N",
+          "kind": "gateway",
+          "attributes": {
+            "ratedW": 5000
+          }
+        }
+      ]
+    },
+    "warnings": []
+  },
+  "sparse-override: high-authority overlay sets only kind, keeps discovered access paths + capabilities": {
+    "site": {
+      "topologyVersion": "0.1.0",
+      "scope": "site",
+      "producer": {
+        "name": "lattice-merge",
+        "provider": "lattice-merge",
+        "inputs": [
+          {
+            "name": "gw",
+            "provider": "gw",
+            "authority": 0,
+            "docVersion": 1
+          },
+          {
+            "name": "installer",
+            "provider": "installer",
+            "authority": 50,
+            "docVersion": 1
+          }
+        ]
+      },
+      "nodes": [
+        {
+          "id": "N",
+          "kind": "gateway",
+          "attributes": {
+            "ratedW": 5000
+          },
+          "accessPaths": [
+            {
+              "id": "ap",
+              "provider": "gw",
+              "preference": 10
+            }
+          ],
+          "capabilities": [
+            {
+              "capability": "battery.soc",
+              "accessPath": "ap",
+              "unit": "%",
+              "read": {
+                "protocol": "modbus",
+                "address": 60
+              },
+              "ref": 1
+            }
+          ]
+        }
+      ]
+    },
+    "warnings": []
+  },
+  "add: overlay introduces a node + a contains edge discovery missed": {
+    "site": {
+      "topologyVersion": "0.1.0",
+      "scope": "site",
+      "producer": {
+        "name": "lattice-merge",
+        "provider": "lattice-merge",
+        "inputs": [
+          {
+            "name": "gw",
+            "provider": "gw",
+            "authority": 0,
+            "docVersion": 1
+          },
+          {
+            "name": "installer",
+            "provider": "installer",
+            "authority": 50,
+            "docVersion": 1
+          }
+        ]
+      },
+      "nodes": [
+        {
+          "id": "GW",
+          "kind": "gateway"
+        },
+        {
+          "id": "INV",
+          "kind": "inverter"
+        }
+      ],
+      "relationships": [
+        {
+          "from": "GW",
+          "to": "INV",
+          "type": "contains"
+        }
+      ]
+    },
+    "warnings": []
+  },
+  "remove-node: overlay tombstones a phantom node; its relationships drop": {
+    "site": {
+      "topologyVersion": "0.1.0",
+      "scope": "site",
+      "producer": {
+        "name": "lattice-merge",
+        "provider": "lattice-merge",
+        "inputs": [
+          {
+            "name": "gw",
+            "provider": "gw",
+            "authority": 0,
+            "docVersion": 1
+          },
+          {
+            "name": "installer",
+            "provider": "installer",
+            "authority": 50,
+            "docVersion": 1
+          }
+        ]
+      },
+      "nodes": [
+        {
+          "id": "GW",
+          "kind": "gateway"
+        }
+      ]
+    },
+    "warnings": [
+      "relationship GW|PHANTOM|contains dropped: endpoint not in merged node set"
+    ]
+  },
+  "remove-offer: overlay tombstones a misdetected capability on a real node": {
+    "site": {
+      "topologyVersion": "0.1.0",
+      "scope": "site",
+      "producer": {
+        "name": "lattice-merge",
+        "provider": "lattice-merge",
+        "inputs": [
+          {
+            "name": "gw",
+            "provider": "gw",
+            "authority": 0,
+            "docVersion": 1
+          },
+          {
+            "name": "installer",
+            "provider": "installer",
+            "authority": 50,
+            "docVersion": 1
+          }
+        ]
+      },
+      "nodes": [
+        {
+          "id": "N",
+          "kind": "inverter",
+          "accessPaths": [
+            {
+              "id": "ap",
+              "provider": "gw"
+            }
+          ],
+          "capabilities": [
+            {
+              "capability": "battery.soc",
+              "accessPath": "ap",
+              "unit": "%",
+              "read": {
+                "protocol": "modbus",
+                "address": 60
+              },
+              "ref": 1
+            }
+          ]
+        }
+      ]
+    },
+    "warnings": []
+  },
+  "recency: equal authority, higher docVersion wins": {
+    "site": {
+      "topologyVersion": "0.1.0",
+      "scope": "site",
+      "producer": {
+        "name": "lattice-merge",
+        "provider": "lattice-merge",
+        "inputs": [
+          {
+            "name": "gw",
+            "provider": "gw",
+            "authority": 10,
+            "docVersion": 1
+          },
+          {
+            "name": "gw2",
+            "provider": "gw",
+            "authority": 10,
+            "docVersion": 5
+          }
+        ]
+      },
+      "nodes": [
+        {
+          "id": "N",
+          "kind": "gateway"
+        }
+      ]
+    },
+    "warnings": []
+  },
+  "tie warns: equal authority and docVersion, conflicting kind — first wins + warning": {
+    "site": {
+      "topologyVersion": "0.1.0",
+      "scope": "site",
+      "producer": {
+        "name": "lattice-merge",
+        "provider": "lattice-merge",
+        "inputs": [
+          {
+            "name": "a",
+            "provider": "a",
+            "authority": 10,
+            "docVersion": 1
+          },
+          {
+            "name": "b",
+            "provider": "b",
+            "authority": 10,
+            "docVersion": 1
+          }
+        ]
+      },
+      "nodes": [
+        {
+          "id": "N",
+          "kind": "inverter"
+        }
+      ]
+    },
+    "warnings": [
+      "node \"N\" field \"kind\": conflicting values at equal precedence; kept first"
+    ]
+  },
+  "survival: a fresh rediscovery does not clobber the upstream override": {
+    "site": {
+      "topologyVersion": "0.1.0",
+      "scope": "site",
+      "producer": {
+        "name": "lattice-merge",
+        "provider": "lattice-merge",
+        "inputs": [
+          {
+            "name": "gw",
+            "provider": "gw",
+            "authority": 0,
+            "docVersion": 9
+          },
+          {
+            "name": "installer",
+            "provider": "installer",
+            "authority": 50,
+            "docVersion": 1
+          }
+        ]
+      },
+      "nodes": [
+        {
+          "id": "N",
+          "kind": "gateway",
+          "attributes": {
+            "ratedW": 6000
+          }
+        }
+      ]
+    },
+    "warnings": []
+  },
+  "tombstone-noop: tombstoning an absent element changes nothing": {
+    "site": {
+      "topologyVersion": "0.1.0",
+      "scope": "site",
+      "producer": {
+        "name": "lattice-merge",
+        "provider": "lattice-merge",
+        "inputs": [
+          {
+            "name": "gw",
+            "provider": "gw",
+            "authority": 0,
+            "docVersion": 1
+          },
+          {
+            "name": "installer",
+            "provider": "installer",
+            "authority": 50,
+            "docVersion": 1
+          }
+        ]
+      },
+      "nodes": [
+        {
+          "id": "N",
+          "kind": "inverter"
+        }
+      ]
+    },
+    "warnings": []
+  },
+  "deviceTypes: descriptor carried into the site so node deviceType resolves": {
+    "site": {
+      "topologyVersion": "0.1.0",
+      "scope": "site",
+      "producer": {
+        "name": "lattice-merge",
+        "provider": "lattice-merge",
+        "inputs": [
+          {
+            "name": "gw",
+            "provider": "gw",
+            "authority": 0,
+            "docVersion": 1
+          }
+        ]
+      },
+      "nodes": [
+        {
+          "id": "INV",
+          "kind": "inverter",
+          "deviceType": "ge-aio"
+        }
+      ],
+      "deviceTypes": [
+        {
+          "key": "ge-aio",
+          "capabilities": [
+            {
+              "capability": "battery.soc",
+              "read": {
+                "protocol": "modbus",
+                "address": 60
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "warnings": []
+  },
+  "site.id: survives from low-authority discovery when a high-authority overlay omits id": {
+    "site": {
+      "topologyVersion": "0.1.0",
+      "scope": "site",
+      "producer": {
+        "name": "lattice-merge",
+        "provider": "lattice-merge",
+        "inputs": [
+          {
+            "name": "gw",
+            "provider": "gw",
+            "authority": 0,
+            "docVersion": 1
+          },
+          {
+            "name": "installer",
+            "provider": "installer",
+            "authority": 50,
+            "docVersion": 1
+          }
+        ]
+      },
+      "nodes": [
+        {
+          "id": "INV",
+          "kind": "gateway"
+        }
+      ],
+      "id": "site:home"
+    },
+    "warnings": []
+  }
+}
