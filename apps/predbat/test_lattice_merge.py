@@ -160,6 +160,21 @@ class TestMergeRules(unittest.TestCase):
         with self.assertRaises(ValueError):
             merge([a, b])
 
+    def test_site_id_higher_authority_wins_when_both_set(self):
+        """Among inputs that set id, the highest-authority one wins (not merely the first setter)."""
+        low = {"topologyVersion": "0.1.0", "scope": "fragment", "id": "site:low", "producer": {"name": "gw", "provider": "gw", "authority": 10}, "docVersion": 1, "nodes": [{"id": "N", "kind": "inverter"}]}
+        high = {"topologyVersion": "0.1.0", "scope": "fragment", "id": "site:high", "producer": {"name": "i", "provider": "installer", "authority": 50}, "docVersion": 1, "nodes": [{"id": "N", "kind": "inverter"}]}
+        self.assertEqual(merge([low, high])["site"]["id"], "site:high")
+        self.assertEqual(merge([high, low])["site"]["id"], "site:high")
+
+    def test_relationship_tombstone_removes_relationship(self):
+        """A higher-authority overlay can tombstone a relationship directly (endpoints survive)."""
+        disc = _frag(nodes=[{"id": "A", "kind": "gateway"}, {"id": "B", "kind": "inverter"}], relationships=[{"from": "A", "to": "B", "type": "contains"}])
+        over = _frag(producer={"name": "i", "provider": "installer", "authority": 50}, nodes=[{"id": "A", "kind": "gateway"}, {"id": "B", "kind": "inverter"}], relationships=[{"from": "A", "to": "B", "type": "contains", "removed": True}])
+        out = merge([disc, over])
+        self.assertNotIn("relationships", out["site"])
+        self.assertEqual([n["id"] for n in out["site"]["nodes"]], ["A", "B"])
+
 
 if __name__ == "__main__":
     unittest.main()
