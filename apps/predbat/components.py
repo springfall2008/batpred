@@ -439,6 +439,8 @@ if HAS_GATEWAY:
             "mqtt_port": {"required": False, "config": "gateway_mqtt_port", "default": 8883},
             "mqtt_token": {"required": True, "config": "gateway_mqtt_token"},
             "gateway_inverter_serial": {"required": False, "config": "gateway_inverter_serial", "default": None},
+            "gateway_evc_automatic": {"required": False, "config": "gateway_evc_automatic", "default": False},
+            "gateway_evc_control": {"required": False, "config": "gateway_evc_control", "default": False},
         },
         "phase": 1,
         "can_restart": True,

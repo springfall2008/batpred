@@ -19,7 +19,8 @@ enum InverterType {
   INVERTER_TYPE_GIVENERGY_EMS   = 7;
   INVERTER_TYPE_GIVENERGY_GATEWAY = 8;
   INVERTER_TYPE_ALPHA_ESS       = 9;
-  INVERTER_TYPE_CUSTOM          = 10;
+  INVERTER_TYPE_DEMO            = 10;
+  INVERTER_TYPE_CUSTOM          = 11;
 }
 
 message BatteryStatus {
@@ -33,7 +34,7 @@ message BatteryStatus {
   uint32 cycle_count     = 7;
   int32  capacity_wh     = 8;  // rated capacity
   uint32 rate_max_w      = 9;  // max charge/discharge rate in W
-  uint32 depth_of_discharge_pct = 10;  // usable % 0-100 (e.g. 95 = 0.95); 0 = unknown (use 100)
+  uint32 depth_of_discharge_pct = 10;  // usable % 0-100 (e.g. 95 = 0.95); 0 = unknown (use 95)
 }
 
 message PvStatus {
@@ -52,13 +53,13 @@ message LoadStatus {
 }
 
 message InverterData {
-  int32 active_power_w  = 1;
-  float temperature_c   = 2;
-  int32 rate_max_w      = 3;
+  int32  active_power_w  = 1;
+  float  temperature_c   = 2;
+  uint32 rate_max_w      = 3;  // inverter AC output power limit in W (from HR(2)); 0 = not available
 }
 
 message ControlStatus {
-  uint32 mode               = 1;  // Plan Mode enum (0=auto,1=charge,2=discharge)
+  uint32 mode               = 1;  // OperatingMode enum (0=auto,1=manual)
   bool   charge_enabled     = 2;
   bool   discharge_enabled  = 3;
   uint32 charge_rate_w      = 4;
@@ -67,7 +68,7 @@ message ControlStatus {
   uint32 target_soc         = 7;  // charge target SOC %
   uint32 force_power_w      = 8;
   uint32 command_expires    = 9;  // unix timestamp
-  uint32 export_limit_w     = 10; // export limit in watts, 0=undefined (publish as 99999/unlimited), 1=zero limit (publish as 0), otherwise value in watts
+  uint32 export_limit_w     = 10; // W — grid port max power output (HR 26); 99999 = not read (unlimited)
 }
 
 message ScheduleStatus {
@@ -127,6 +128,23 @@ message InverterEntry {
   string         model         = 18;  // GivEnergy model class (e.g. "All-in-One", "Hybrid HV Gen3", "AC 3ph", "Gateway") — drives AC-coupled vs hybrid handling in PredBat
 }
 
+// EV charger (OCPP 1.6) state — present only when a charge point is connected
+// to the gateway's local OCPP server. Device-level (not per-inverter).
+message EvCharger {
+  bool   connected         = 1;  // a charge point is connected via OCPP
+  bool   session_active    = 2;  // a charging transaction is in progress
+  string status            = 3;  // OCPP StatusNotification: Available/Charging/Faulted/...
+  int32  power_w           = 4;  // live charging power (Power.Active.Import)
+  uint32 session_energy_wh = 5;  // energy delivered this session
+  uint32 session_secs      = 6;  // session duration in seconds
+  uint32 current_limit_a   = 7;  // charge current limit we set (0 = unknown)
+  uint32 soc_percent       = 8;  // EV battery SoC % (MeterValues 'SoC'); 0 = not reported
+  string charge_point_id   = 9;  // OCPP charge point identity (BootNotification serial)
+  uint32 max_current_a     = 10; // charger's configured max charge current (OCPP GetConfiguration 'ChargeRate'); 0 = unknown
+  uint32 voltage_v         = 11; // live supply voltage (MeterValues 'Voltage'); 0 = not reported
+  string eco_mode          = 12; // OCPP 'EcoMode' config value (e.g. "Eco"/"Boost"); "" = not reported
+}
+
 message GatewayStatus {
   string   device_id      = 1;
   uint32   dongle_count   = 2;
@@ -138,6 +156,9 @@ message GatewayStatus {
   int32    wifi_rssi_dbm    = 8;   // WiFi.RSSI(), 0 if not connected
   uint32   free_heap_bytes  = 9;   // ESP.getFreeHeap()
   uint32   log_level        = 10;  // current setting: 0=NONE..4=DEBUG
+  string        wifi_ip    = 11;   // gateway's own LAN IP (net_localIP(), IPv4 or IPv6) — used by cloud gateway-dns
+  optional bool ev_control = 12;   // present+true = EV-control mesh leader; absent = single/non-elected
+  repeated EvCharger ev_chargers = 13;  // one entry per connected/recent EV charger
 }
 
 // Execution plan sent from PredBat cloud to gateway
@@ -149,7 +170,7 @@ message PlanEntry {
   uint32 start_minute  = 3;  // 0-59
   uint32 end_hour      = 4;  // 0-23
   uint32 end_minute    = 5;  // 0-59
-  uint32 mode          = 6;  // OperatingMode: 0=auto, 1=charge, 2=discharge, 3=idle
+  uint32 mode          = 6;  // PlanMode: 0=auto, 1=charge, 2=discharge
   uint32 power_w       = 7;  // target power
   uint32 target_soc    = 8;  // target SOC for charge, min SOC for discharge
   uint32 days_of_week  = 9;  // bitmask: bit 0 = Sunday, bit 6 = Saturday
@@ -159,6 +180,6 @@ message PlanEntry {
 message ExecutionPlan {
   uint32 timestamp        = 1;  // when plan was generated (unix epoch)
   uint32 plan_version     = 2;  // monotonic, gateway skips stale plans
-  string timezone         = 3;  // IANA timezone (e.g. "Europe/London")
+  string timezone         = 3;  // POSIX TZ rule (e.g. "GMT0BST,M3.5.0/1,M10.5.0") — set by cloud, applied via setenv("TZ")
   repeated PlanEntry entries = 4;
 }
