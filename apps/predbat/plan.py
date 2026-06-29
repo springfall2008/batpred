@@ -902,11 +902,10 @@ class Plan:
 
             hybrid = getattr(self, "inverter_hybrid", False)
             inverter_limit_kw = getattr(self, "inverter_limit", 0.0) * 60.0
-            user_inverter_limit = getattr(self, "set_inverter_limit", 0)
-            if user_inverter_limit > 0:
-                inverter_limit_kw = user_inverter_limit / 1000.0
             export_limit_kw = getattr(self, "export_limit", 0.0) * 60.0
-            pv_forecast = getattr(self, "pv_forecast_minute_step", {})
+            # Prefer stepped PV data; on the first plan cycle it hasn't been computed yet,
+            # so fall back to the raw minute-level forecast to approximate PV contribution.
+            pv_forecast = getattr(self, "pv_forecast_minute_step", {}) or getattr(self, "pv_forecast_minute", {})
 
             accumulated_kwh = 0.0
             minutes_needed = 0
@@ -957,8 +956,16 @@ class Plan:
                 if last_charge_end > midnight:
                     early_start = last_charge_end
 
-            if getattr(self, "clipping_buffer_start", None) is not None:
-                early_start = midnight + self.clipping_buffer_start
+            # Read manual start override from config if the attribute hasn't been
+            # initialised yet (first plan cycle, before the main clipping config block runs).
+            clipping_start_override = getattr(self, "clipping_buffer_start", None)
+            if clipping_start_override is None:
+                start_time_str = self.get_arg("clipping_buffer_start_time", default="None")
+                if start_time_str and start_time_str != "None":
+                    clipping_start_override = self.time_to_minutes(start_time_str)
+                    self.clipping_buffer_start = clipping_start_override
+            if clipping_start_override is not None:
+                early_start = midnight + clipping_start_override
 
             morning_start = min(morning_start, early_start)
             morning_start = max(self.minutes_now, morning_start)
@@ -1242,8 +1249,12 @@ class Plan:
 
             if has_clearsky:
                 pv_forecast_peak_step = {k: max(v, pv_clearsky_step.get(k, 0)) for k, v in pv_forecast_peak_step.items()}
+                self.clipping_mode = "Dynamic ClearSky"
             elif effective_amplification != 1.0:
                 pv_forecast_peak_step = {k: v * effective_amplification for k, v in pv_forecast_peak_step.items()}
+                self.clipping_mode = "Amplified ({}x)".format(dp2(effective_amplification))
+            else:
+                self.clipping_mode = "Base Forecast"
 
             # Apply start/end offsets to widen the clipping risk window
             start_offset = int(getattr(self, "clipping_buffer_start_offset", 0))
@@ -3794,7 +3805,7 @@ class Plan:
             best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import = self.tweak_plan(self.end_record, best_metric, best_keep)
 
         # Export more solar - enable freeze export on idle solar windows if it doesn't cost too much
-        if self.export_more_solar:
+        if self.export_more_solar and not self.clipping_buffer_enable:
             best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import = self.optimise_solar(best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import, record_export_windows, debug_mode=debug_mode)
 
         self.plan_write_debug(debug_mode, "plan_raw.html", self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)

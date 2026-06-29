@@ -850,10 +850,12 @@ class Prediction:
             battery_to_max = max(soc_max - soc, 0) * battery_loss
 
             discharge_min = reserve
+            is_anti_clipping = False
             if export_window_active:
                 discharge_min = max(soc_max * export_limit_now / 100.0, reserve, self.best_soc_min)
+                is_anti_clipping = "clipping_target_soc_pct" in export_window[export_window_n]
 
-            if not set_export_freeze_only and export_window_active and export_limit_now < 99.0:
+            if (not set_export_freeze_only or is_anti_clipping) and export_window_active and export_limit_now < 99.0 and (soc > discharge_min or is_anti_clipping):
                 # Discharge enable, capped at export limit
                 if self.set_export_low_power:
                     export_rate_adjust = 1 - (export_limit_now - int(export_limit_now))
