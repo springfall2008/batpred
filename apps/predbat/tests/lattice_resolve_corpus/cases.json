@@ -1,0 +1,86 @@
+[
+  {
+    "name": "read: single offer resolves to its node + access path",
+    "query": { "capability": "battery.soc", "side": "read" },
+    "doc": {
+      "topologyVersion": "0.2.0", "scope": "site", "docVersion": 1, "producer": { "name": "p", "provider": "x" },
+      "nodes": [{ "id": "INV", "kind": "inverter", "accessPaths": [{ "id": "ap", "provider": "p", "preference": 10 }],
+        "capabilities": [{ "capability": "battery.soc", "ref": 1, "accessPath": "ap", "unit": "%",
+          "read": { "protocol": "modbus", "op": "read_input", "address": 60, "transform": { "kind": "identity" } } }] }]
+    }
+  },
+  {
+    "name": "read: ranked access-path fallback when the preferred path is offline",
+    "query": { "capability": "battery.soc", "side": "read", "offline": ["gw-local"] },
+    "doc": {
+      "topologyVersion": "0.2.0", "scope": "site", "docVersion": 1, "producer": { "name": "p", "provider": "x" },
+      "nodes": [{ "id": "INV", "kind": "inverter",
+        "accessPaths": [{ "id": "gw-local", "provider": "gw", "preference": 10 }, { "id": "vendor-cloud", "provider": "cloud", "preference": 1 }],
+        "capabilities": [
+          { "capability": "battery.soc", "ref": 1, "accessPath": "gw-local", "unit": "%", "read": { "protocol": "modbus", "address": 60 } },
+          { "capability": "battery.soc", "ref": 1, "accessPath": "vendor-cloud", "unit": "%", "read": { "protocol": "cloud-api", "address": "/soc" } }
+        ] }]
+    }
+  },
+  {
+    "name": "control: setpoint clamps an over-range intent to max",
+    "query": { "capability": "battery.charge_power_limit", "side": "control", "intent": 9000 },
+    "doc": {
+      "topologyVersion": "0.2.0", "scope": "site", "docVersion": 1, "producer": { "name": "p", "provider": "x" },
+      "nodes": [{ "id": "INV", "kind": "inverter", "attributes": { "ratedW": 5000 },
+        "accessPaths": [{ "id": "ap", "provider": "p", "preference": 10 }],
+        "capabilities": [{ "capability": "battery.charge_power_limit", "ref": 1, "accessPath": "ap", "unit": "W", "shape": "setpoint", "tier": 1,
+          "constraints": { "min": 0, "max": "rated", "scope": "node" },
+          "control": { "protocol": "modbus", "op": "write_single", "address": 80, "transform": { "kind": "identity" } } }] }]
+    }
+  },
+  {
+    "name": "control: aggregate coordinator takes one delegated command for its children",
+    "query": { "capability": "battery.charge_power_limit", "side": "control", "intent": 3000, "altitude": "auto" },
+    "doc": {
+      "topologyVersion": "0.2.0", "scope": "site", "docVersion": 1, "producer": { "name": "p", "provider": "x" },
+      "nodes": [
+        { "id": "GW", "kind": "gateway", "aggregate": { "serves": true, "minChildren": 2, "priority": 10, "over": "contains" },
+          "accessPaths": [{ "id": "gw", "provider": "gw", "preference": 10 }],
+          "capabilities": [{ "capability": "battery.charge_power_limit", "ref": 1, "accessPath": "gw", "unit": "W", "shape": "setpoint", "tier": 1,
+            "distribution": "replicate", "control": { "protocol": "modbus", "address": 90 } }] },
+        { "id": "INV1", "kind": "inverter", "accessPaths": [{ "id": "ap1", "provider": "p", "preference": 5 }],
+          "capabilities": [{ "capability": "battery.charge_power_limit", "ref": 1, "accessPath": "ap1", "unit": "W", "shape": "setpoint", "tier": 1, "control": { "protocol": "modbus", "address": 80 } }] },
+        { "id": "INV2", "kind": "inverter", "accessPaths": [{ "id": "ap2", "provider": "p", "preference": 5 }],
+          "capabilities": [{ "capability": "battery.charge_power_limit", "ref": 1, "accessPath": "ap2", "unit": "W", "shape": "setpoint", "tier": 1, "control": { "protocol": "modbus", "address": 80 } }] }
+      ],
+      "relationships": [{ "from": "GW", "to": "INV1", "type": "contains" }, { "from": "GW", "to": "INV2", "type": "contains" }]
+    }
+  },
+  {
+    "name": "control: same capability, divergent format per access path — picks the higher-preference local path",
+    "query": { "capability": "battery.target_soc", "side": "control", "intent": 80 },
+    "doc": {
+      "topologyVersion": "0.2.0", "scope": "site", "docVersion": 1, "producer": { "name": "p", "provider": "x" },
+      "nodes": [{ "id": "INV", "kind": "inverter",
+        "accessPaths": [{ "id": "gw-local", "provider": "gw", "preference": 10 }, { "id": "vendor-cloud", "provider": "cloud", "preference": 1 }],
+        "capabilities": [
+          { "capability": "battery.target_soc", "ref": 1, "accessPath": "gw-local", "unit": "%", "shape": "setpoint", "tier": 1,
+            "constraints": { "min": 0, "max": 100, "scope": "capability" }, "control": { "protocol": "modbus", "address": 82 } },
+          { "capability": "battery.target_soc", "ref": 1, "accessPath": "vendor-cloud", "unit": "%", "shape": "schedule", "tier": 2,
+            "scheduleSpec": { "maxSlots": 8, "slotFields": ["target_soc"], "endBound": "inclusive", "requiresDefaultMode": true },
+            "constraints": { "min": 0, "max": 100, "scope": "capability" }, "control": { "protocol": "cloud-api", "address": "/sched", "readModifyWrite": true } }
+        ] }]
+    }
+  },
+  {
+    "name": "read: a derived value is computed from sibling capabilities (no access path)",
+    "query": { "capability": "meter.load_power", "side": "read" },
+    "doc": {
+      "topologyVersion": "0.2.0", "scope": "site", "docVersion": 1, "producer": { "name": "p", "provider": "x" },
+      "nodes": [{ "id": "GW", "kind": "gateway", "accessPaths": [{ "id": "gw", "provider": "gw", "preference": 10 }],
+        "capabilities": [
+          { "capability": "pv.power", "ref": 1, "accessPath": "gw", "unit": "W", "read": { "protocol": "modbus", "address": 101 } },
+          { "capability": "meter.grid_power", "ref": 2, "accessPath": "gw", "unit": "W", "read": { "protocol": "modbus", "address": 100 } },
+          { "capability": "battery.power", "ref": 3, "accessPath": "gw", "unit": "W", "read": { "protocol": "modbus", "address": 102 } },
+          { "capability": "meter.load_power", "ref": 4, "unit": "W",
+            "derived": { "op": "sum", "inputs": [{ "ref": "pv.power", "weight": 1 }, { "ref": "meter.grid_power", "weight": -1 }, { "ref": "battery.power", "weight": -1 }] } }
+        ] }]
+    }
+  }
+]

@@ -1,0 +1,139 @@
+{
+  "read: single offer resolves to its node + access path": {
+    "ok": true,
+    "side": "read",
+    "node": "INV",
+    "nodeKind": "inverter",
+    "chosenAccessPath": "ap",
+    "fellBack": false,
+    "routeNodeCount": 1,
+    "strategy": "direct",
+    "planNodes": [
+      "INV"
+    ],
+    "ownedNodes": [
+      "INV"
+    ],
+    "unit": "%",
+    "binding": {
+      "protocol": "modbus",
+      "op": "read_input",
+      "address": 60,
+      "transform": "identity"
+    }
+  },
+  "read: ranked access-path fallback when the preferred path is offline": {
+    "ok": true,
+    "side": "read",
+    "node": "INV",
+    "nodeKind": "inverter",
+    "chosenAccessPath": "vendor-cloud",
+    "fellBack": true,
+    "routeNodeCount": 1,
+    "strategy": "direct",
+    "planNodes": [
+      "INV"
+    ],
+    "ownedNodes": [
+      "INV"
+    ],
+    "unit": "%",
+    "binding": {
+      "protocol": "cloud-api",
+      "address": "/soc"
+    }
+  },
+  "control: setpoint clamps an over-range intent to max": {
+    "ok": true,
+    "side": "control",
+    "node": "INV",
+    "nodeKind": "inverter",
+    "chosenAccessPath": "ap",
+    "fellBack": false,
+    "routeNodeCount": 1,
+    "strategy": "direct",
+    "planNodes": [
+      "INV"
+    ],
+    "ownedNodes": [
+      "INV"
+    ],
+    "unit": "W",
+    "shape": "setpoint",
+    "tier": 1,
+    "clamped": 5000,
+    "clampMin": 0,
+    "clampMaxLabel": "rated = 5000",
+    "binding": {
+      "protocol": "modbus",
+      "op": "write_single",
+      "address": 80,
+      "transform": "identity"
+    },
+    "intent": 9000
+  },
+  "control: aggregate coordinator takes one delegated command for its children": {
+    "ok": true,
+    "side": "control",
+    "node": "GW",
+    "nodeKind": "gateway",
+    "chosenAccessPath": "gw",
+    "fellBack": false,
+    "routeNodeCount": 1,
+    "strategy": "delegated",
+    "planNodes": [
+      "GW"
+    ],
+    "distribution": "replicate",
+    "ownedNodes": [
+      "INV1",
+      "INV2"
+    ],
+    "unit": "W",
+    "shape": "setpoint",
+    "tier": 1,
+    "clamped": 3000,
+    "clampMin": 0,
+    "clampMaxLabel": "—",
+    "binding": {
+      "protocol": "modbus",
+      "address": 90
+    },
+    "intent": 3000
+  },
+  "control: same capability, divergent format per access path — picks the higher-preference local path": {
+    "ok": true,
+    "side": "control",
+    "node": "INV",
+    "nodeKind": "inverter",
+    "chosenAccessPath": "gw-local",
+    "fellBack": false,
+    "routeNodeCount": 1,
+    "strategy": "direct",
+    "planNodes": [
+      "INV"
+    ],
+    "ownedNodes": [
+      "INV"
+    ],
+    "unit": "%",
+    "shape": "setpoint",
+    "tier": 1,
+    "clamped": 80,
+    "clampMin": 0,
+    "clampMaxLabel": "100",
+    "binding": {
+      "protocol": "modbus",
+      "address": 82
+    },
+    "intent": 80
+  },
+  "read: a derived value is computed from sibling capabilities (no access path)": {
+    "ok": true,
+    "side": "read",
+    "node": "GW",
+    "nodeKind": "gateway",
+    "unit": "W",
+    "derived": "sum(pv.power + -1×meter.grid_power + -1×battery.power)"
+  }
+}

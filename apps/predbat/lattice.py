@@ -437,3 +437,241 @@ def merge(docs):
         site["relationships"] = merged_rels
     site["docVersion"] = _digest(site)
     return {"site": site, "warnings": warnings}
+
+
+# -----------------------------------------------------------------------------
+# Resolve: a {capability, side} query against a site doc -> routing/clamp plan.
+# Pure mirror of the lattice-spec reference (editor/src/resolve-engine.ts),
+# pinned by the conformance/resolve/ corpus. Independent of merge above.
+# -----------------------------------------------------------------------------
+
+
+def _as_num(x):
+    """Return x if it is a real number (not a bool), else None."""
+    return x if isinstance(x, (int, float)) and not isinstance(x, bool) else None
+
+
+def _num_str(x):
+    """Render a number as JavaScript String() would: an integer-valued float loses its trailing '.0'."""
+    if isinstance(x, float) and x.is_integer():
+        return str(int(x))
+    return str(x)
+
+
+def _fmt_param(v):
+    """Render a transform value-or-ref param for display."""
+    if isinstance(v, dict) and "ref" in v:
+        factor = v.get("factor")
+        return "ref {}×{}".format(v["ref"], _num_str(factor)) if factor is not None else "ref {}".format(v["ref"])
+    return _num_str(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else str(v)
+
+
+def format_transform(t):
+    """Render a binding transform as a short display string (mirrors the editor); None if not a transform."""
+    if not isinstance(t, dict) or not isinstance(t.get("kind"), str):
+        return None
+    if t["kind"] == "pipeline":
+        steps = [s for s in (format_transform(step) for step in (t.get("steps") or [])) if s]
+        return "pipeline[{}]".format(", ".join(steps))
+    keys = [k for k in ("num", "den", "scale", "offset", "min", "max") if t.get(k) is not None]
+    extra = []
+    if t.get("round") and t.get("round") != "trunc":
+        extra.append("round={}".format(t["round"]))
+    if t.get("onRefUnavailable") == "max":
+        extra.append("fail-open")
+    parts = ["{}={}".format(k, _fmt_param(t[k])) for k in keys] + extra
+    return t["kind"] if not parts else "{}({})".format(t["kind"], ", ".join(parts))
+
+
+def _format_derived(d):
+    """Render a derived-read spec (sum/ratio over sibling capabilities) as a short display string."""
+    if not isinstance(d, dict):
+        return None
+    if d.get("op") == "sum":
+        parts = []
+        for i in d.get("inputs") or []:
+            w = i.get("weight")
+            prefix = "{}×".format(_num_str(w)) if (w is not None and w != 1) else ""
+            parts.append("{}{}".format(prefix, i.get("ref")))
+        return "sum({})".format(" + ".join(parts))
+    if d.get("op") == "ratio":
+        num = d.get("num") or {}
+        den = d.get("den") or {}
+        nf = num.get("factor")
+        num_prefix = "{}×".format(_num_str(nf)) if (nf is not None and nf != 1) else ""
+        return "ratio({}{} / {})".format(num_prefix, num.get("ref"), den.get("ref"))
+    return d.get("op")
+
+
+def _resolve_max(max_spec, node):
+    """Resolve a control max bound to {value, label}; value is None when only known at runtime."""
+    if isinstance(max_spec, (int, float)) and not isinstance(max_spec, bool):
+        return {"value": max_spec, "label": _num_str(max_spec)}
+    if isinstance(max_spec, dict) and "source" in max_spec:
+        return {"value": None, "label": "source {}".format(max_spec["source"])}
+    attrs = node.get("attributes") or {}
+    rated = attrs.get("ratedW")
+    cap = attrs.get("capacityWh")
+    if max_spec == "rated":
+        return {"value": rated, "label": "rated = {}".format(_num_str(rated) if rated is not None else "?")}
+    if isinstance(max_spec, str) and "capacity/2" in max_spec:
+        half = (cap / 2) if cap is not None else None
+        if half is not None and rated is not None:
+            v = min(half, rated)
+        else:
+            v = half if half is not None else rated
+        return {"value": v, "label": "min(cap/2 = {}, rated = {}) = {}".format(_num_str(half) if half is not None else "?", _num_str(rated) if rated is not None else "?", _num_str(v) if v is not None else "?")}
+    return {"value": None, "label": "—" if max_spec is None else str(max_spec)}
+
+
+def _children_of(doc, node_id, rel):
+    """Ids of nodes reached from node_id by a relationship of the given type."""
+    return [r["to"] for r in (doc.get("relationships") or []) if r.get("from") == node_id and r.get("type") == rel]
+
+
+def _nodes_offering(doc, cap, side):
+    """Nodes offering cap on the requested side, each with its matching capability offers."""
+    out = []
+    for n in doc.get("nodes") or []:
+        offers = [c for c in (n.get("capabilities") or []) if c.get("capability") == cap and ((c.get("read") or c.get("derived")) if side == "read" else c.get("control"))]
+        if offers:
+            out.append({"node": n, "offers": offers})
+    return out
+
+
+def resolve(doc, capability, side, intent=None, offline=None, altitude="auto"):
+    """Resolve a {capability, side} query against a site doc to a routing/clamp plan.
+
+    Pure mirror of the lattice-spec reference (editor/src/resolve-engine.ts), pinned by the
+    conformance/resolve/ corpus: read vs control routing, ranked access-path fallback, aggregate
+    delegation/expansion, ownership, derived reads, and intent clamping. `offline` is a set of
+    access-path ids; `altitude` is "auto", "aggregate", or "leaves". Returns the observable result.
+    """
+    offline = offline or set()
+    offering = _nodes_offering(doc, capability, side)
+    if not offering:
+        return {"ok": False, "side": side, "message": 'No node offers {} for "{}".'.format(side, capability)}
+
+    # Control altitude: a qualifying aggregator can take one delegated command (its firmware fans
+    # out to its children); otherwise the hub expands to the leaves directly.
+    agg = None
+    agg_priority = -1
+    for o in offering:
+        a = o["node"].get("aggregate")
+        if not (a and a.get("serves")):
+            continue
+        over = a.get("over") or "contains"
+        if len(_children_of(doc, o["node"]["id"], over)) >= (a.get("minChildren") or 0) and (a.get("priority") or 0) >= agg_priority:
+            agg = o
+            agg_priority = a.get("priority") or 0
+    leaves = [o for o in offering if not (o["node"].get("aggregate") or {}).get("serves")]
+
+    ownership_note = None
+    if agg and altitude in ("auto", "aggregate"):
+        route_nodes = [agg]
+        strategy = "delegated"
+    else:
+        route_nodes = leaves if leaves else offering
+        strategy = "expanded" if len(route_nodes) > 1 else "direct"
+        if agg and altitude == "leaves":
+            ownership_note = "{} serves as coordinator for these — commanding the leaves directly contends with it (§6). Prefer the aggregate altitude.".format(agg["node"]["id"])
+        elif not agg and altitude == "aggregate":
+            ownership_note = "No qualifying coordinator for this capability — falling back to per-leaf (expanded)."
+
+    # The chosen altitude claims a group of nodes; the other altitude is then off-limits (ownership).
+    if strategy == "delegated":
+        owned_nodes = _children_of(doc, agg["node"]["id"], (agg["node"].get("aggregate") or {}).get("over") or "contains")
+    else:
+        owned_nodes = [o["node"]["id"] for o in route_nodes]
+
+    primary = route_nodes[0]
+    node = primary["node"]
+
+    # A derived read is computed from sibling capabilities — no access path / binding to rank.
+    if side == "read":
+        d_offer = next((c for c in (node.get("capabilities") or []) if c.get("capability") == capability and c.get("derived") and not c.get("read")), None)
+        if d_offer:
+            return {"ok": True, "side": side, "node": node["id"], "nodeKind": node.get("kind"), "unit": d_offer.get("unit"), "derived": _format_derived(d_offer.get("derived"))}
+
+    # Rank this node's offers (= access paths) by preference, descending.
+    ap_by_id = {a["id"]: a for a in (node.get("accessPaths") or []) if a.get("id") is not None}
+    ranked = [x for x in ({"offer": offer, "ap": ap_by_id.get(offer.get("accessPath"))} for offer in primary["offers"]) if x["ap"]]
+    ranked.sort(key=lambda x: -(x["ap"].get("preference") or 0))
+
+    result = {
+        "ok": False,
+        "side": side,
+        "node": node["id"],
+        "nodeKind": node.get("kind"),
+        "routeNodeCount": len(route_nodes),
+        "strategy": strategy,
+        "planNodes": [o["node"]["id"] for o in route_nodes],
+        "ownedNodes": owned_nodes,
+    }
+    if primary["offers"]:
+        first_reducer = primary["offers"][0].get("reducer")
+        reducer = (first_reducer if first_reducer is not None else "mean") if len(route_nodes) > 1 else first_reducer
+        if reducer is not None:
+            result["reducer"] = reducer
+    distribution = next((o.get("distribution") for o in primary["offers"] if o.get("distribution")), None)
+    if distribution is not None:
+        result["distribution"] = distribution
+    if ownership_note is not None:
+        result["ownershipNote"] = ownership_note
+
+    chosen_idx = next((i for i, x in enumerate(ranked) if x["ap"]["id"] not in offline), -1)
+    if chosen_idx < 0:
+        result["message"] = "All access paths offline — unresolved."
+        return result
+    result["ok"] = True
+    result["chosenAccessPath"] = ranked[chosen_idx]["ap"]["id"]
+    result["fellBack"] = chosen_idx > 0
+
+    chosen_offer = ranked[chosen_idx]["offer"]
+    b = chosen_offer.get("read") if side == "read" else chosen_offer.get("control")
+    if b:
+        binding = {}
+        for key in ("protocol", "op", "address"):
+            if b.get(key) is not None:
+                binding[key] = b[key]
+        tf = format_transform(b.get("transform"))
+        if tf is not None:
+            binding["transform"] = tf
+        if b.get("readModifyWrite"):
+            binding["readModifyWrite"] = True
+        result["binding"] = binding
+    for key in ("unit", "shape", "tier", "controlGroup"):
+        if chosen_offer.get(key) is not None:
+            result[key] = chosen_offer[key]
+
+    if side == "control" and chosen_offer.get("controlGroup"):
+        members = []
+        for o in node.get("capabilities") or []:
+            if o.get("controlGroup") == chosen_offer["controlGroup"] and o.get("accessPath") == chosen_offer.get("accessPath"):
+                s = o.get("groupSlot") or {}
+                if s.get("field"):
+                    where = " → {}".format(s["field"])
+                elif s.get("bits"):
+                    where = " → bits[{}..{}]".format(s["bits"]["lsb"], s["bits"]["lsb"] + s["bits"]["width"] - 1)
+                else:
+                    where = ""
+                members.append("{}{}".format(o.get("capability"), where))
+        result["groupMembers"] = members
+
+    if side == "control" and intent is not None and intent == intent:  # intent == intent excludes NaN
+        cons = chosen_offer.get("constraints") or {}
+        mn = _as_num(cons.get("min"))
+        if mn is None:
+            mn = 0
+        mx = _resolve_max(cons.get("max"), node)
+        c = intent
+        if c < mn:
+            c = mn
+        if mx["value"] is not None and c > mx["value"]:
+            c = mx["value"]
+        result["intent"] = intent
+        result["clamped"] = c
+        result["clampMin"] = mn
+        result["clampMaxLabel"] = mx["label"]
+
+    return result
