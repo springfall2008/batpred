@@ -351,6 +351,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.minutes_to_midnight = 0
         self.days_previous = [7]
         self.days_previous_weight = [1]
+        self.max_days_previous = max(self.days_previous) + 1
         self.forecast_days = 0
         self.forecast_minutes = 0
         self.soc_kw = 0
