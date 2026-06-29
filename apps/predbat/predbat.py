@@ -361,6 +361,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.predict_soc = {}
         self.predict_soc_best = {}
         self.predict_iboost_best = {}
+        self.predict_car_solar_best = {}
         self.predict_metric_best = {}
         self.metric_min_improvement = 0.0
         self.metric_min_improvement_export = 0.1
@@ -457,6 +458,13 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.car_charging_soc_next = [None]
         self.car_charging_rate = [7.4]
         self.car_charging_loss = 1.0
+        self.car_charging_solar = [False]
+        self.car_charging_plugged = [False]
+        self.car_charging_solar_max_power = [7.4]
+        self.car_charging_solar_min_power = [0.0]
+        self.car_charging_solar_power_step = [0.0]
+        self.car_charging_solar_limit = [100.0]
+        self.car_charging_solar_min_soc = 0.0
         self.export_window = []
         self.export_limits = []
         self.export_limits_best = []
