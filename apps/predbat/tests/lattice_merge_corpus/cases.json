@@ -114,5 +114,13 @@
       { "topologyVersion": "0.1.0", "scope": "fragment", "producer": { "name": "installer", "provider": "installer", "authority": 50 }, "docVersion": 1,
         "nodes": [{ "id": "INV", "kind": "gateway" }] }
     ]
+  },
+  {
+    "name": "tiebreak: equal-preference access paths sort by id codepoint order",
+    "inputs": [
+      { "topologyVersion": "0.1.0", "scope": "fragment", "producer": { "name": "gw", "provider": "gw", "authority": 0 }, "docVersion": 1,
+        "nodes": [{ "id": "INV", "kind": "inverter",
+          "accessPaths": [{ "id": "a-local", "provider": "gw", "preference": 5 }, { "id": "B-cloud", "provider": "cloud", "preference": 5 }] }] }
+    ]
   }
 ]

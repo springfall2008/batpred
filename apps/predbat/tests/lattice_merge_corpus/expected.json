@@ -485,5 +485,42 @@
       "id": "site:home"
     },
     "warnings": []
+  },
+  "tiebreak: equal-preference access paths sort by id codepoint order": {
+    "site": {
+      "topologyVersion": "0.1.0",
+      "scope": "site",
+      "producer": {
+        "name": "lattice-merge",
+        "provider": "lattice-merge",
+        "inputs": [
+          {
+            "name": "gw",
+            "provider": "gw",
+            "authority": 0,
+            "docVersion": 1
+          }
+        ]
+      },
+      "nodes": [
+        {
+          "id": "INV",
+          "kind": "inverter",
+          "accessPaths": [
+            {
+              "id": "B-cloud",
+              "provider": "cloud",
+              "preference": 5
+            },
+            {
+              "id": "a-local",
+              "provider": "gw",
+              "preference": 5
+            }
+          ]
+        }
+      ]
+    },
+    "warnings": []
   }
 }
