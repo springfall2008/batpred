@@ -87,6 +87,7 @@ digestmod
 dimport
 dischargeenergytotal
 dischargefreeze
+dishcare
 diverter
 dlimit
 dnoregion

@@ -144,7 +144,7 @@ class Plan:
                 continue
 
             baseline_prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, working_load_step, working_load_step10)
-            baseline_metric = baseline_prediction.run_prediction(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, False, self.end_record)[0]
+            baseline_metric = self.score_flexible_additional_load_prediction(baseline_prediction)
             best_start = None
             best_metric = None
             candidate_count = 0
@@ -154,7 +154,7 @@ class Plan:
                 candidate_load_step = self.add_additional_load_to_step_data(working_load_step, candidate_adjust)
                 candidate_load_step10 = self.add_additional_load_to_step_data(working_load_step10, candidate_adjust)
                 candidate_prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, candidate_load_step, candidate_load_step10)
-                candidate_metric = candidate_prediction.run_prediction(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, False, self.end_record)[0]
+                candidate_metric = self.score_flexible_additional_load_prediction(candidate_prediction)
                 candidate_count += 1
                 if best_metric is None or candidate_metric < best_metric:
                     best_metric = candidate_metric
@@ -204,6 +204,53 @@ class Plan:
         self.house_load_additional_forecast_adjust, self.house_load_additional_forecasts = self.fetch_additional_load_forecast(selected_flexible=selected_flexible)
         self.publish_additional_load_forecasts()
         return True, working_load_step, working_load_step10
+
+    def score_flexible_additional_load_prediction(self, prediction):
+        """
+        Score a flexible additional load candidate using the same full metric as the optimiser.
+        """
+        (
+            cost10,
+            _import_kwh_battery10,
+            _import_kwh_house10,
+            _export_kwh10,
+            _soc_min10,
+            soc10,
+            _soc_min_minute10,
+            _battery_cycle10,
+            _metric_keep10,
+            final_iboost10,
+            _final_carbon_g10,
+        ) = prediction.run_prediction(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, True, self.end_record)
+        (
+            cost,
+            import_kwh_battery,
+            import_kwh_house,
+            export_kwh,
+            _soc_min,
+            soc,
+            _soc_min_minute,
+            battery_cycle,
+            metric_keep,
+            final_iboost,
+            final_carbon_g,
+        ) = prediction.run_prediction(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, False, self.end_record)
+        metric, _battery_value = self.compute_metric(
+            self.end_record,
+            soc,
+            soc10,
+            cost,
+            cost10,
+            final_iboost,
+            final_iboost10,
+            battery_cycle,
+            metric_keep,
+            final_carbon_g,
+            import_kwh_battery,
+            import_kwh_house,
+            export_kwh,
+        )
+        return metric
 
     def dynamic_load(self):
         """
