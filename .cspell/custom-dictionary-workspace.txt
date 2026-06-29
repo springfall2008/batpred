@@ -60,6 +60,7 @@ compareform
 configform
 connack
 Consolas
+contribs
 coro
 cprofile
 creds
@@ -96,6 +97,7 @@ diverter
 dlimit
 dnoregion
 docstrings
+docversion
 dstamp
 dstart
 dwindow
@@ -313,6 +315,7 @@ recp
 Redownload
 regionid
 regname
+rels
 remainings
 remotecontrol
 resetmidnight
@@ -408,6 +411,7 @@ twinx
 tzfile
 tzpath
 unconfigured
+unioned
 unsmoothed
 unstaged
 useid
