@@ -650,6 +650,46 @@ def test_additional_load_flexible_api_locks_after_suggested_start(my_predbat):
     return failed
 
 
+def test_additional_load_flexible_locked_selection_not_reselected(my_predbat):
+    """Test a running locked flexible forecast is not reselected by the planner."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.minutes_now = 13 * 60
+    my_predbat.plan_interval_minutes = 15
+    my_predbat.args["plan_interval_minutes"] = 15
+    my_predbat.args["house_load_additional_forecast"] = []
+    my_predbat.api_select("load_forecast_delta_api", "dishwasher?enabled=true&mode=flexible&end_time=07:00&duration=5.0&energy=0.7")
+    my_predbat.house_load_additional_forecast_overrides["dishwasher"] = {
+        "name": "dishwasher",
+        "_requested_start_minutes": 12 * 60 + 30,
+        "_selected_start_minutes": 12 * 60 + 30,
+        "_selection_reason": "prediction_metric",
+        "_candidate_count": 57,
+        "_selected_metric": -1737.07,
+        "_baseline_metric": -2007.2,
+        "_expires_minutes": 17 * 60 + 30,
+    }
+    my_predbat.refresh_additional_load_forecast_api()
+
+    forecast = my_predbat.house_load_additional_forecasts.get("dishwasher", {})
+    selected, _load_step, _load10_step = my_predbat.select_flexible_additional_loads({}, {}, {}, {})
+    forecast_after = my_predbat.house_load_additional_forecasts.get("dishwasher", {})
+
+    if selected or my_predbat.house_load_additional_flexible_selection_changed:
+        print("ERROR: Locked flexible forecast should not be reselected, selected {} changed {}".format(selected, my_predbat.house_load_additional_flexible_selection_changed))
+        failed = 1
+    if not forecast.get("selection_locked") or not forecast_after.get("selection_locked"):
+        print("ERROR: Flexible forecast should be locked before and after selection attempt, before {} after {}".format(forecast, forecast_after))
+        failed = 1
+    if "T12:30:00" not in forecast_after.get("suggested_start", "") or forecast_after.get("suggested_start") != forecast.get("suggested_start"):
+        print("ERROR: Locked flexible forecast should keep original suggested start, before {} after {}".format(forecast, forecast_after))
+        failed = 1
+
+    my_predbat.api_select("load_forecast_delta_api", "off")
+    my_predbat.house_load_additional_forecast_overrides = {}
+    return failed
+
+
 def test_additional_load_flexible_api_metadata_survives_restart(my_predbat):
     """Test omitted start_time and selected flexible metadata survive API command reparse."""
     failed = 0
@@ -854,7 +894,7 @@ def test_additional_load_flexible_yaml_omitted_start_rolls(my_predbat):
 
 
 def test_additional_load_flexible_prediction_metric_selection(my_predbat):
-    """Test flexible additional load uses prediction metric, not raw import rate order."""
+    """Test flexible additional load uses full prediction metric, not raw cost."""
     failed = 0
     configure_additional_load_test(my_predbat)
     my_predbat.minutes_now = 16 * 60
@@ -870,30 +910,37 @@ def test_additional_load_flexible_prediction_metric_selection(my_predbat):
     my_predbat.end_record = my_predbat.forecast_minutes
 
     original_prediction = plan_module.Prediction
+    original_compute_metric = my_predbat.compute_metric
 
     class FakePrediction:
-        """Fake prediction scores 01:00 as cheapest regardless of candidate order."""
+        """Fake prediction makes raw cost prefer 00:00 while full metric prefers 01:00."""
 
         def __init__(self, base, pv_step, pv10_step, load_step, load10_step):
             """Store load step data."""
             self.load_step = load_step
 
         def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv10, end_record):
-            """Return a metric based on when the injected load appears."""
-            metric = 1000.0
+            """Return raw cost and encode the selected load start in soc."""
+            cost = 1000.0
             first_load_minute = None
             for minute, load in self.load_step.items():
                 if load > 0:
                     first_load_minute = my_predbat.minutes_now + minute if first_load_minute is None else min(first_load_minute, my_predbat.minutes_now + minute)
             if first_load_minute is not None:
-                metric = abs(first_load_minute - 25 * 60)
-            return (metric, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+                cost = abs(first_load_minute - 24 * 60)
+            return (cost, 0, 0, 0, 0, first_load_minute or 0, 0, 0, 0, 0, 0)
+
+    def fake_compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh):
+        """Score 01:00 as the best full metric even though raw cost prefers midnight."""
+        return (abs(soc - 25 * 60), 0)
 
     try:
         plan_module.Prediction = FakePrediction
+        my_predbat.compute_metric = fake_compute_metric
         selected, load_step, _ = my_predbat.select_flexible_additional_loads({}, {}, {}, {})
     finally:
         plan_module.Prediction = original_prediction
+        my_predbat.compute_metric = original_compute_metric
 
     if not selected:
         print("ERROR: Flexible prediction metric selection should select a slot")
@@ -947,6 +994,7 @@ def test_additional_load_flexible_unchanged_selection_not_marked_changed(my_pred
     my_predbat.end_record = my_predbat.forecast_minutes
 
     original_prediction = plan_module.Prediction
+    original_compute_metric = my_predbat.compute_metric
 
     class FakePrediction:
         """Fake prediction scores the existing 01:00 selection as cheapest."""
@@ -956,19 +1004,25 @@ def test_additional_load_flexible_unchanged_selection_not_marked_changed(my_pred
             self.load_step = load_step
 
         def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv10, end_record):
-            """Return a metric based on when the injected load appears."""
+            """Return raw cost and encode the selected load start in soc."""
             first_load_minute = None
             for minute, load in self.load_step.items():
                 if load > 0:
                     first_load_minute = my_predbat.minutes_now + minute if first_load_minute is None else min(first_load_minute, my_predbat.minutes_now + minute)
             metric = abs(first_load_minute - 25 * 60) if first_load_minute is not None else 1000.0
-            return (metric, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+            return (metric, 0, 0, 0, 0, first_load_minute or 0, 0, 0, 0, 0, 0)
+
+    def fake_compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh):
+        """Score the existing 01:00 selection as the best full metric."""
+        return (abs(soc - 25 * 60), 0)
 
     try:
         plan_module.Prediction = FakePrediction
+        my_predbat.compute_metric = fake_compute_metric
         selected, _, _ = my_predbat.select_flexible_additional_loads({}, {}, {}, {})
     finally:
         plan_module.Prediction = original_prediction
+        my_predbat.compute_metric = original_compute_metric
 
     if not selected or my_predbat.house_load_additional_flexible_selection_changed:
         print("ERROR: Unchanged flexible selection should not be marked changed, selected {} changed {}".format(selected, my_predbat.house_load_additional_flexible_selection_changed))
@@ -1185,6 +1239,7 @@ def run_additional_load_forecast_tests(my_predbat):
     failed |= test_additional_load_flexible_api_reselects_before_suggested_start(my_predbat)
     failed |= test_additional_load_flexible_api_stale_selection_not_before_requested_start(my_predbat)
     failed |= test_additional_load_flexible_api_locks_after_suggested_start(my_predbat)
+    failed |= test_additional_load_flexible_locked_selection_not_reselected(my_predbat)
     failed |= test_additional_load_flexible_api_metadata_survives_restart(my_predbat)
     failed |= test_additional_load_flexible_api_repeat_preserves_metadata(my_predbat)
     failed |= test_additional_load_flexible_pending_until_plan(my_predbat)
