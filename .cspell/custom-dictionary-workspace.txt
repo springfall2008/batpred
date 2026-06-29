@@ -262,6 +262,7 @@ nordpool
 nosc
 nrgheat
 numpy
+OCPP
 octo
 octoplus
 octopoints

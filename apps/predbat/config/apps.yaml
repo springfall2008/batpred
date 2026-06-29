@@ -143,6 +143,9 @@ pred_bat:
   charge_limit:
     - number.givtcp_{geserial}_target_soc
     - number.givtcp2_{geserial2}_target_soc
+  charge_limit_enable:
+    - switch.givtcp_{geserial}_enable_charge_target
+    - switch.givtcp2_{geserial2}_enable_charge_target
   scheduled_charge_enable:
     - switch.givtcp_{geserial}_enable_charge_schedule
     - switch.givtcp2_{geserial2}_enable_charge_schedule

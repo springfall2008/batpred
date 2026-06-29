@@ -286,6 +286,39 @@ When **ohme_automatic_octopus_intelligent** is set to `true` then Predbat is aut
 
 **Note:** It's recommended to store `ohme_password` in `secrets.yaml` and reference it as `ohme_password: !secret ohme_password` - see [Storing secrets](apps-yaml.md#storing-secrets).
 
+## GivEnergy Gateway OCPP EV charger
+
+When Predbat is connected to a GivEnergy Gateway that has an OCPP EV charger attached, the charger's live state is reported to Predbat over the gateway's MQTT telemetry and exposed as Home Assistant entities (device-level, single charger):
+
+- `binary_sensor.predbat_gateway_ev_connected` - a charge point is connected
+- `sensor.predbat_gateway_ev_status` - OCPP status (e.g. `Available`, `Charging`)
+- `sensor.predbat_gateway_ev_power` - live charge power (W)
+- `sensor.predbat_gateway_ev_session_energy` - energy delivered this session (kWh)
+- `sensor.predbat_gateway_ev_soc` - EV battery SoC % (reported directly by the car, or estimated from session energy / configured battery size when the car does not report it)
+- `sensor.predbat_gateway_ev_current_limit` / `sensor.predbat_gateway_ev_max_current` - present and configured charge current (A)
+- `sensor.predbat_gateway_ev_voltage` - supply voltage (V)
+- `sensor.predbat_gateway_ev_eco_mode` - the charger's current EcoMode setting
+- `sensor.predbat_gateway_ev_charge_rate` - charge-rate capability (kW), derived from the reported current/voltage (falls back to 7.4 kW when the charger does not report its capability)
+
+To have Predbat plan for the gateway charger as a car, enable it in `apps.yaml`:
+
+```yaml
+  gateway_evc_automatic: true
+```
+
+When enabled, Predbat registers the charger as a car and maps the EV entities above onto the standard `car_charging_*` settings, so the normal [Predbat-led car charging](#predbat-led-charging) planning applies. The charge rate tracks the `sensor.predbat_gateway_ev_charge_rate` capability sensor. The car's battery size and target charge level are taken from your existing `car_charging_battery_size` and `car_charging_limit` settings (the charger cannot report them).
+
+To also have Predbat send the plan to the charger (so the EVC charges according to Predbat's schedule), add a second flag:
+
+```yaml
+  gateway_evc_automatic: true
+  gateway_evc_control: true
+```
+
+When `gateway_evc_control` is enabled, Predbat checks once per minute whether the current time falls inside one of the planned car-charging windows (from `binary_sensor.predbat_car_charging_slot`). On each state transition it sends OCPP commands to the EVC via MQTT — `SetChargingProfile` (at the configured max current) followed by `RemoteStartTransaction` to begin a session, or `RemoteStopTransaction` to end one. This means the charger responds within a minute of a window boundary rather than relying on a schedule that must be reprogrammed each time the plan changes.
+
+`car_charging_now` is omitted from the auto-config when `gateway_evc_control=True` to prevent a feedback loop (an active EVC session would otherwise force an extra slot at the current time, conflicting with the boundaries Predbat is trying to enforce).
+
 ## Car Charging Planning
 
 There are two ways that Predbat can plan the slots for charging your car:
