@@ -146,6 +146,8 @@ class Marginal:
             "grid_export": getattr(self, "marginal_grid_export", {}),
             "grid_import_now": dp2(self.rate_import.get(self.minutes_now, 0)),
             "grid_export_now": dp2(self.rate_export.get(self.minutes_now, 0)),
+            "rate_min": dp2(self.rate_min),
+            "rate_max": dp2(self.rate_max),
             "timestamp": self.now_utc.isoformat(),
         }
 

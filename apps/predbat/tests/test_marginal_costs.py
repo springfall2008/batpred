@@ -134,6 +134,16 @@ def test_marginal_costs(my_predbat):
                 except (TypeError, ValueError):
                     print("ERROR: sensor '{}' = '{}' is not numeric".format(attr, attrs[attr]))
                     failed = True
+        for attr in ("rate_min", "rate_max"):
+            if attr not in attrs:
+                print("ERROR: sensor missing '{}' attribute".format(attr))
+                failed = True
+            else:
+                try:
+                    float(attrs[attr])
+                except (TypeError, ValueError):
+                    print("ERROR: sensor '{}' = '{}' is not numeric".format(attr, attrs[attr]))
+                    failed = True
         for state_name in MARGINAL_EXTRA_KWH_LEVEL_NAMES:
             attr = "rate_now_{}_consumption".format(state_name)
             if attr not in attrs:
