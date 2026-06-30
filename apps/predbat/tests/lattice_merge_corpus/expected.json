@@ -1,7 +1,7 @@
 {
   "union: same node via two peer providers — ranked access paths + unioned caps": {
     "site": {
-      "topologyVersion": "0.1.0",
+      "topologyVersion": "0.2.0",
       "scope": "site",
       "producer": {
         "name": "lattice-merge",
@@ -76,7 +76,7 @@
   },
   "override: higher-authority overlay corrects kind, discovered attributes intact": {
     "site": {
-      "topologyVersion": "0.1.0",
+      "topologyVersion": "0.2.0",
       "scope": "site",
       "producer": {
         "name": "lattice-merge",
@@ -110,7 +110,7 @@
   },
   "sparse-override: high-authority overlay sets only kind, keeps discovered access paths + capabilities": {
     "site": {
-      "topologyVersion": "0.1.0",
+      "topologyVersion": "0.2.0",
       "scope": "site",
       "producer": {
         "name": "lattice-merge",
@@ -163,7 +163,7 @@
   },
   "add: overlay introduces a node + a contains edge discovery missed": {
     "site": {
-      "topologyVersion": "0.1.0",
+      "topologyVersion": "0.2.0",
       "scope": "site",
       "producer": {
         "name": "lattice-merge",
@@ -205,7 +205,7 @@
   },
   "remove-node: overlay tombstones a phantom node; its relationships drop": {
     "site": {
-      "topologyVersion": "0.1.0",
+      "topologyVersion": "0.2.0",
       "scope": "site",
       "producer": {
         "name": "lattice-merge",
@@ -238,7 +238,7 @@
   },
   "remove-offer: overlay tombstones a misdetected capability on a real node": {
     "site": {
-      "topologyVersion": "0.1.0",
+      "topologyVersion": "0.2.0",
       "scope": "site",
       "producer": {
         "name": "lattice-merge",
@@ -287,7 +287,7 @@
   },
   "recency: equal authority, higher docVersion wins": {
     "site": {
-      "topologyVersion": "0.1.0",
+      "topologyVersion": "0.2.0",
       "scope": "site",
       "producer": {
         "name": "lattice-merge",
@@ -318,7 +318,7 @@
   },
   "tie warns: equal authority and docVersion, conflicting kind — first wins + warning": {
     "site": {
-      "topologyVersion": "0.1.0",
+      "topologyVersion": "0.2.0",
       "scope": "site",
       "producer": {
         "name": "lattice-merge",
@@ -351,7 +351,7 @@
   },
   "survival: a fresh rediscovery does not clobber the upstream override": {
     "site": {
-      "topologyVersion": "0.1.0",
+      "topologyVersion": "0.2.0",
       "scope": "site",
       "producer": {
         "name": "lattice-merge",
@@ -385,7 +385,7 @@
   },
   "tombstone-noop: tombstoning an absent element changes nothing": {
     "site": {
-      "topologyVersion": "0.1.0",
+      "topologyVersion": "0.2.0",
       "scope": "site",
       "producer": {
         "name": "lattice-merge",
@@ -416,7 +416,7 @@
   },
   "deviceTypes: descriptor carried into the site so node deviceType resolves": {
     "site": {
-      "topologyVersion": "0.1.0",
+      "topologyVersion": "0.2.0",
       "scope": "site",
       "producer": {
         "name": "lattice-merge",
@@ -456,7 +456,7 @@
   },
   "site.id: survives from low-authority discovery when a high-authority overlay omits id": {
     "site": {
-      "topologyVersion": "0.1.0",
+      "topologyVersion": "0.2.0",
       "scope": "site",
       "producer": {
         "name": "lattice-merge",
@@ -488,7 +488,7 @@
   },
   "tiebreak: equal-preference access paths sort by id codepoint order": {
     "site": {
-      "topologyVersion": "0.1.0",
+      "topologyVersion": "0.2.0",
       "scope": "site",
       "producer": {
         "name": "lattice-merge",
@@ -518,6 +518,43 @@
               "preference": 5
             }
           ]
+        }
+      ]
+    },
+    "warnings": []
+  },
+  "tombstone-barrier: re-add above a removal does not resurrect sub-barrier discovery": {
+    "site": {
+      "topologyVersion": "0.2.0",
+      "scope": "site",
+      "producer": {
+        "name": "lattice-merge",
+        "provider": "lattice-merge",
+        "inputs": [
+          {
+            "name": "gw",
+            "provider": "gw",
+            "authority": 0,
+            "docVersion": 1
+          },
+          {
+            "name": "installer",
+            "provider": "installer",
+            "authority": 50,
+            "docVersion": 1
+          },
+          {
+            "name": "admin",
+            "provider": "admin",
+            "authority": 100,
+            "docVersion": 1
+          }
+        ]
+      },
+      "nodes": [
+        {
+          "id": "N",
+          "kind": "gateway"
         }
       ]
     },

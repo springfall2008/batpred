@@ -379,7 +379,14 @@ def merge(docs):
         if _top_by(contribs)[0].get("removed") is True:
             continue
         surviving.add(nid)
-        merged_nodes.append(_merge_node([(it, rk) for it, rk in contribs if it.get("removed") is not True], warnings))
+        # Tombstone barrier: a re-add above a removal must not resurrect sub-barrier (lower-authority)
+        # discovery data, so only contributors ranked strictly above the highest tombstone merge.
+        barrier = None
+        for it, rk in contribs:
+            if it.get("removed") is True and (barrier is None or _better(rk, barrier)):
+                barrier = rk
+        live = [(it, rk) for it, rk in contribs if it.get("removed") is not True and (barrier is None or _better(rk, barrier))]
+        merged_nodes.append(_merge_node(live, warnings))
 
     rel_order = []
     rel_contribs = {}
