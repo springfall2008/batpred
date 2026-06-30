@@ -419,7 +419,7 @@ def merge(docs):
 
     top_tv = top[0].get("topologyVersion")
     site = {
-        "topologyVersion": "0.1.0" if top_tv is None else top_tv,
+        "topologyVersion": "0.2.0" if top_tv is None else top_tv,
         "scope": "site",
         "producer": {
             "name": "lattice-merge",
