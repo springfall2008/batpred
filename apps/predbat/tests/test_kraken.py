@@ -398,6 +398,49 @@ def test_run_wires_export_when_discovered():
     api.set_arg.assert_any_call("metric_octopus_export", api.get_entity_name("sensor", "export_rates"))
 
 
+def test_run_does_not_wire_export_when_rates_unavailable():
+    """An export tariff can be discovered while its rate endpoint returns no data.
+
+    Real case: EDF SEG export tariffs (e.g. EDF_EXPORT_SEG_12M) are registered on
+    the meter point so the tariff is discovered, but Kraken's standard-unit-rates
+    endpoint returns HTTP 404, so no export rates are ever fetched. Wiring
+    metric_octopus_export to the (empty) export_rates sensor in that case makes
+    fetch.py take the octopus-export branch and ignore the user's manual
+    rates_export fallback, zeroing out all export in the plan. So when no export
+    rates are available, metric_octopus_export must NOT be wired.
+    """
+    api = make_kraken_api()
+    discovered = {"tariff_code": "E-1R-IMP-01", "product_code": "IMP-01"}
+
+    async def find_tariffs_side_effect():
+        api.current_tariff = discovered
+        api.export_tariff = {"tariff_code": "E-1R-EDF_EXPORT_SEG_12M_HH-B", "product_code": "EDF_EXPORT_SEG_12M"}
+        return discovered
+
+    async def fetch_rates_side_effect(tariff=None):
+        # Export fetch (tariff kwarg set) returns nothing — simulates the SEG 404.
+        if tariff is not None:
+            return []
+        return [{"value_inc_vat": 24.5}]
+
+    api.async_find_tariffs = AsyncMock(side_effect=find_tariffs_side_effect)
+    api.async_fetch_rates = AsyncMock(side_effect=fetch_rates_side_effect)
+    api.async_fetch_standing_charges = AsyncMock(return_value=53.0)
+    api.dashboard_item = MagicMock()
+    api.set_arg = MagicMock()
+    api.update_success_timestamp = MagicMock()
+
+    result = asyncio.run(api.run(0, True))
+
+    assert result is True
+    # Import is still wired normally.
+    api.set_arg.assert_any_call("metric_octopus_import", api.get_entity_name("sensor", "import_rates"))
+    # Export must NOT be wired — no export rates were available.
+    export_calls = [c for c in api.set_arg.call_args_list if c.args and c.args[0] == "metric_octopus_export"]
+    assert export_calls == [], "metric_octopus_export should not be wired when export rates are unavailable, got {}".format(export_calls)
+    assert api.export_wired is False
+
+
 def test_find_active_tariff_prefers_configured_mpan():
     """_find_active_tariff should prefer the configured MPAN."""
     api = make_kraken_api()
