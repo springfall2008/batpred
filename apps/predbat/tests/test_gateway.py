@@ -4,6 +4,7 @@ Tests for GatewayMQTT component.
 import sys
 import os
 import math
+import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -4150,6 +4151,28 @@ class TestEvControl:
         assert published[0]["current_a"] == 32
 
 
+class TestRateAnchors(unittest.TestCase):
+    """extract_rate_anchors() validates and rounds the three rate fields."""
+
+    def test_valid_anchors_rounded(self):
+        from gateway import extract_rate_anchors
+
+        self.assertEqual(
+            extract_rate_anchors(8.04, 28.97, 12.01),
+            {"rate_min": 8.0, "rate_max": 29.0, "export_rate": 12.0},
+        )
+
+    def test_missing_value_returns_none(self):
+        from gateway import extract_rate_anchors
+
+        self.assertIsNone(extract_rate_anchors(None, 29.0, 12.0))
+
+    def test_non_numeric_returns_none(self):
+        from gateway import extract_rate_anchors
+
+        self.assertIsNone(extract_rate_anchors("n/a", 29.0, 12.0))
+
+
 def run_gateway_tests(my_predbat=None):
     """Run all GatewayMQTT tests. Returns True on failure, False on success."""
     from tests.test_gateway_token_refresh import TestIsAuthFailure, TestApplyRefreshResponse, TestMaybeRefreshOnAuthError
@@ -4183,6 +4206,7 @@ def run_gateway_tests(my_predbat=None):
         TestIsAuthFailure,
         TestApplyRefreshResponse,
         TestMaybeRefreshOnAuthError,
+        TestRateAnchors,
     ]
     for cls in test_classes:
         instance = cls()

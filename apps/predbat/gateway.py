@@ -140,6 +140,23 @@ GATEWAY_ATTRIBUTE_TABLE = {
 }
 
 
+def extract_rate_anchors(rate_min, rate_max, export_rate):
+    """Validate and round the three rate anchors for the device payload.
+
+    Returns a dict with rate_min / rate_max / export_rate rounded to 0.1 p/kWh,
+    or None if any value is missing or non-numeric so the device falls back to
+    its plan-aware RAG.
+    """
+    try:
+        return {
+            "rate_min": round(float(rate_min), 1),
+            "rate_max": round(float(rate_max), 1),
+            "export_rate": round(float(export_rate), 1),
+        }
+    except (TypeError, ValueError):
+        return None
+
+
 class GatewayMQTT(ComponentBase):
     """ESP32 Gateway MQTT component for PredBat.
 
@@ -1342,6 +1359,11 @@ class GatewayMQTT(ComponentBase):
             # gateway's appliance RAG to pick a colour that actually reflects the
             # cost of running the dryer/EV/etc, rather than inferring from slot
             # categories alone.
+            rate_anchors = extract_rate_anchors(
+                self.get_state_wrapper("sensor." + self.prefix + "_marginal_energy_costs", attribute="rate_min"),
+                self.get_state_wrapper("sensor." + self.prefix + "_marginal_energy_costs", attribute="rate_max"),
+                self.get_state_wrapper("sensor." + self.prefix + "_marginal_energy_costs", attribute="grid_export_now"),
+            )
             marginal_costs = []
             marginal_time_labels = []
             try:
@@ -1393,6 +1415,9 @@ class GatewayMQTT(ComponentBase):
                 "predbat_status_detail": predbat_status_detail,
                 "marginal_costs": marginal_costs,
                 "marginal_time_labels": marginal_time_labels,
+                "rate_min": (rate_anchors or {}).get("rate_min"),
+                "rate_max": (rate_anchors or {}).get("rate_max"),
+                "export_rate": (rate_anchors or {}).get("export_rate"),
             }
 
             # Only publish if data changed
