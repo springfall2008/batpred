@@ -856,7 +856,6 @@ class Fetch:
             if not self.rate_import:
                 self.log("Error: metric_octopus_import is not set correctly in apps.yaml, or no energy rates can be read")
                 self.record_status(message="Error: metric_octopus_import not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
-                raise ValueError
         elif "metric_energidataservice_import" in self.args:
             # Energi Data Service import rates
             entity_id = self.get_arg("metric_energidataservice_import", None, indirect=False)
@@ -864,7 +863,6 @@ class Fetch:
             if not self.rate_import:
                 self.log("Error: metric_energidataservice_import is not set correctly in apps.yaml, or no energy rates can be read")
                 self.record_status(message="Error: metric_energidataservice_import not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
-                raise ValueError
         elif "metric_stromligning_import_today" in self.args or "metric_stromligning_import_tomorrow" in self.args:
             # Strømligning import rates
             entity_id_today = self.get_arg("metric_stromligning_import_today", None, indirect=False)
@@ -873,10 +871,13 @@ class Fetch:
             if not self.rate_import:
                 self.log("Error: metric_stromligning_import sensors are not set correctly or no energy rates can be read")
                 self.record_status(message="Error: metric_stromligning_import sensors not set correctly or no energy rates can be read", had_errors=True)
-                raise ValueError
-        else:
+
+        # Fallback if no other rate types are set
+        if not self.rate_import:
             # Basic rates defined by user over time
-            self.rate_import = self.basic_rates(self.get_arg("rates_import", [], indirect=False), "rates_import")
+            rate_import_dict = self.get_arg("rates_import", [], indirect=False)
+            if rate_import_dict:
+                self.rate_import = self.basic_rates(rate_import_dict, "rates_import")
 
         # Gas rates if set
         if "metric_octopus_gas" in self.args:
@@ -946,9 +947,13 @@ class Fetch:
             if not self.rate_export:
                 self.log("Warning: metric_stromligning_export sensors are not set correctly or no energy rates can be read")
                 self.record_status(message="Error: metric_stromligning_export sensors not set correctly or no energy rates can be read", had_errors=True)
-        else:
+
+        # Fallback if no other rate types are set
+        if not self.rate_export:
             # Basic rates defined by user over time
-            self.rate_export = self.basic_rates(self.get_arg("rates_export", [], indirect=False), "rates_export")
+            rate_export_dict = self.get_arg("rates_export", [], indirect=False)
+            if rate_export_dict:
+                self.rate_export = self.basic_rates(rate_export_dict, "rates_export")
 
         # Fetch Axle sessions first so Octopus auto-join can skip saving sessions that overlap an Axle VPP session
         self.axle_sessions = fetch_axle_sessions(self)

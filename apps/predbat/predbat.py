@@ -35,7 +35,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v8.42.5"
+THIS_VERSION = "v8.43.0"
 
 from download import predbat_update_move, predbat_update_download, check_install, DEFAULT_PREDBAT_REPOSITORY
 from const import MINUTE_WATT
@@ -768,7 +768,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             recompute = True
 
         # Fetch inverter data
-        self.fetch_inverter_data()
+        if not self.fetch_inverter_data():
+            self.log("Error: Failed to fetch inverter data, not able to compute a plan")
+            self.record_status("Error: Failed to fetch inverter data, not able to compute a plan", had_errors=True)
+            return
 
         # Check if we have valid import rates
         if self.rate_min == self.rate_max == 0:
@@ -800,7 +803,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         # Execute the plan, re-read the inverter first if we had to calculate (as time passes during calculations)
         if recompute:
-            self.fetch_inverter_data()
+            if not self.fetch_inverter_data():
+                self.log("Error: Failed to fetch inverter data, not able to execute the plan")
+                self.record_status("Error: Failed to fetch inverter data, not able to execute the plan", had_errors=True)
+                return
         status, status_extra = self.execute_plan()
 
         # If the plan was not updated, and the time has expired lets update it now
@@ -818,7 +824,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                     time.sleep(delay)
                 # Calculate an updated plan, fetch the inverter data again and execute the plan
                 self.calculate_plan(recompute=True)
-                self.fetch_inverter_data()
+                if not self.fetch_inverter_data():
+                    self.log("Error: Failed to fetch inverter data, not able to execute the plan")
+                    self.record_status("Error: Failed to fetch inverter data, not able to execute the plan", had_errors=True)
+                    return
                 status, status_extra = self.execute_plan()
             else:
                 self.log("Will not recompute the plan, it is {} minutes old and max age is {} minutes".format(dp1(plan_age_minutes), self.calculate_plan_every))
