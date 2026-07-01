@@ -2673,6 +2673,34 @@ class TestPublishPredbatData:
         assert payload["marginal_costs"] == []
         assert payload["marginal_time_labels"] == []
 
+    # ------------------------------------------------------------------
+    # Rate anchors
+    # ------------------------------------------------------------------
+
+    def test_payload_includes_rate_anchors(self):
+        """rate_min/rate_max/export_rate are published (rounded to 0.1p) from the marginal sensor attributes."""
+        gw = self._make_gateway(
+            {
+                "sensor.predbat_marginal_energy_costs#rate_min": "8.04",
+                "sensor.predbat_marginal_energy_costs#rate_max": "28.97",
+                "sensor.predbat_marginal_energy_costs#grid_export_now": "12.01",
+            }
+        )
+        self._run(gw._publish_predbat_data())
+        payload = self._get_published_payload(gw)
+        assert approx_equal(payload["rate_min"], 8.0), f"rate_min: {payload.get('rate_min')}"
+        assert approx_equal(payload["rate_max"], 29.0), f"rate_max: {payload.get('rate_max')}"
+        assert approx_equal(payload["export_rate"], 12.0), f"export_rate: {payload.get('export_rate')}"
+
+    def test_payload_rate_anchors_null_when_attrs_absent(self):
+        """When the marginal sensor lacks the rate attributes, the anchor keys publish as None so firmware falls back."""
+        gw = self._make_gateway()
+        self._run(gw._publish_predbat_data())
+        payload = self._get_published_payload(gw)
+        assert payload["rate_min"] is None
+        assert payload["rate_max"] is None
+        assert payload["export_rate"] is None
+
 
 class TestIanaToPosixTz:
     """Tests for GatewayMQTT.iana_to_posix_tz() — IANA to POSIX TZ string conversion."""
