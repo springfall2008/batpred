@@ -175,12 +175,17 @@ def run_execute_test(
     set_export_low_power=False,
     charge_low_power_margin=10,
     assert_charge_time_enable=False,
+    assert_charge_time_enable_array=None,
     assert_force_export=False,
     assert_pause_charge=False,
+    assert_pause_charge_array=None,
     assert_pause_discharge=False,
+    assert_pause_discharge_array=None,
     assert_status="Demand",
     assert_charge_start_time_minutes=-1,
     assert_charge_end_time_minutes=-1,
+    assert_charge_start_time_minutes_array=None,
+    assert_charge_end_time_minutes_array=None,
     assert_discharge_start_time_minutes=-1,
     assert_discharge_end_time_minutes=-1,
     inverter_charge_time_minutes_start=-1,
@@ -207,12 +212,14 @@ def run_execute_test(
     reserve=1,
     soc_kw_array=None,
     reserve_max=100,
+    reserve_max_array=None,
+    assert_reserve_array=None,
     car_soc=0,
     battery_temperature=20,
-    assert_button_push=False,
+    assert_immediate_charge_soc_freeze_array=[]
 ):
-    print("Run scenario {}".format(name))
-    my_predbat.log("Run scenario {}".format(name))
+    print("> Run scenario {}".format(name))
+    my_predbat.log("> Run scenario {}".format(name))
     failed = False
     my_predbat.set_read_only = read_only
     my_predbat.set_read_only_axle = set_read_only_axle
@@ -269,7 +276,7 @@ def run_execute_test(
         inverter.reserve_current = reserve_percent
         inverter.reserve_percent_current = reserve_percent
         inverter.reserve = reserve_kwh
-        inverter.reserve_max = reserve_max
+        inverter.reserve_max = reserve_max_array[inverter.id] if reserve_max_array else reserve_max
         inverter.battery_temperature = battery_temperature
 
     my_predbat.fetch_inverter_data(create=False)
@@ -311,22 +318,33 @@ def run_execute_test(
         if assert_status != status:
             print("ERROR: Inverter {} status should be {} got {}".format(inverter.id, assert_status, status))
             failed = True
-        if assert_charge_time_enable != inverter.charge_time_enable:
-            print("ERROR: Inverter {} Charge time enable should be {} got {}".format(inverter.id, assert_charge_time_enable, inverter.charge_time_enable))
+        inv_assert_charge_time_enable = assert_charge_time_enable_array[inverter.id] if assert_charge_time_enable_array else assert_charge_time_enable
+        if inv_assert_charge_time_enable != inverter.charge_time_enable:
+            print("ERROR: Inverter {} Charge time enable should be {} got {}".format(inverter.id, inv_assert_charge_time_enable, inverter.charge_time_enable))
             failed = True
         if assert_force_export != inverter.force_export:
             print("ERROR: Inverter {} Force discharge should be {} got {}".format(inverter.id, assert_force_export, inverter.force_export))
             failed = True
-        if assert_pause_charge != inverter.pause_charge:
-            print("ERROR: Inverter {} Pause charge should be {} got {}".format(inverter.id, assert_pause_charge, inverter.pause_charge))
+        inv_assert_pause_charge = assert_pause_charge_array[inverter.id] if assert_pause_charge_array else assert_pause_charge
+        if inv_assert_pause_charge != inverter.pause_charge:
+            print("ERROR: Inverter {} Pause charge should be {} got {}".format(inverter.id, inv_assert_pause_charge, inverter.pause_charge))
             failed = True
-        if assert_pause_discharge != inverter.pause_discharge:
-            print("ERROR: Inverter {} Pause discharge should be {} got {}".format(inverter.id, assert_pause_discharge, inverter.pause_discharge))
+        inv_assert_pause_discharge = assert_pause_discharge_array[inverter.id] if assert_pause_discharge_array else assert_pause_discharge
+        if inv_assert_pause_discharge != inverter.pause_discharge:
+            print("ERROR: Inverter {} Pause discharge should be {} got {}".format(inverter.id, inv_assert_pause_discharge, inverter.pause_discharge))
             failed = True
-        if assert_charge_time_enable and assert_charge_start_time_minutes != inverter.charge_start_time_minutes:
+        if assert_charge_start_time_minutes_array:
+            if assert_charge_start_time_minutes_array[inverter.id] != inverter.charge_start_time_minutes:
+                print("ERROR: Inverter {} Charge start time should be {} got {}".format(inverter.id, assert_charge_start_time_minutes_array[inverter.id], inverter.charge_start_time_minutes))
+                failed = True
+        elif inv_assert_charge_time_enable and assert_charge_start_time_minutes != inverter.charge_start_time_minutes:
             print("ERROR: Inverter {} Charge start time should be {} got {}".format(inverter.id, assert_charge_start_time_minutes, inverter.charge_start_time_minutes))
             failed = True
-        if assert_charge_time_enable and assert_charge_end_time_minutes != inverter.charge_end_time_minutes:
+        if assert_charge_end_time_minutes_array:
+            if assert_charge_end_time_minutes_array[inverter.id] != inverter.charge_end_time_minutes:
+                print("ERROR: Inverter {} Charge end time should be {} got {}".format(inverter.id, assert_charge_end_time_minutes_array[inverter.id], inverter.charge_end_time_minutes))
+                failed = True
+        elif inv_assert_charge_time_enable and assert_charge_end_time_minutes != inverter.charge_end_time_minutes:
             print("ERROR: Inverter {} Charge end time should be {} got {}".format(inverter.id, assert_charge_end_time_minutes, inverter.charge_end_time_minutes))
             failed = True
         if assert_force_export and assert_discharge_start_time_minutes != inverter.discharge_start_time_minutes:
@@ -341,8 +359,9 @@ def run_execute_test(
         if assert_discharge_rate != inverter.discharge_rate:
             print("ERROR: Inverter {} Discharge rate should be {} got {}".format(inverter.id, assert_discharge_rate, inverter.discharge_rate))
             failed = True
-        if assert_reserve != inverter.reserve_last:
-            print("ERROR: Inverter {} Reserve should be {} got {}".format(inverter.id, assert_reserve, inverter.reserve_last))
+        inv_assert_reserve = assert_reserve_array[inverter.id] if assert_reserve_array else assert_reserve
+        if inv_assert_reserve != inverter.reserve_last:
+            print("ERROR: Inverter {} Reserve should be {} got {}".format(inverter.id, inv_assert_reserve, inverter.reserve_last))
             failed = True
         if assert_soc_target_array:
             assert_soc_target = assert_soc_target_array[inverter.id]
@@ -363,7 +382,11 @@ def run_execute_test(
         if inverter.immediate_charge_soc_target != assert_soc_target_force:
             print("ERROR: Inverter {} Immediate charge SOC target should be {} got {}".format(inverter.id, assert_soc_target_force, inverter.immediate_charge_soc_target))
             failed = True
-        if assert_status in ["Freeze charging"] and inverter.immediate_charge_soc_freeze != True:
+        if assert_immediate_charge_soc_freeze_array:
+            if inverter.immediate_charge_soc_freeze != assert_immediate_charge_soc_freeze_array[inverter.id]:
+                print("ERROR: Inverter {} Immediate charge SOC freeze should be {} got {}".format(inverter.id, assert_immediate_charge_soc_freeze_array[inverter.id], inverter.immediate_charge_soc_freeze))
+                failed = True
+        elif assert_status in ["Freeze charging"] and inverter.immediate_charge_soc_freeze != True:
             print("ERROR: Inverter {} Immediate charge SOC freeze should be True got {}".format(inverter.id, inverter.immediate_charge_soc_freeze))
             failed = True
         assert_soc_target_force_dis = assert_immediate_soc_target if assert_status in ["Exporting", "Freeze exporting"] else 100
@@ -495,6 +518,7 @@ def run_execute_tests(my_predbat):
     charge_limit_best0 = [10]
     charge_limit_best = [10, 10]
     charge_limit_best2 = [5]
+    charge_limit_best3 = [8]
     charge_limit_best_frz = [1]
     export_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 1}]
     export_window_best2 = [{"start": my_predbat.minutes_now - 30, "end": my_predbat.minutes_now + 90, "average": 1}]
@@ -646,6 +670,7 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
+    # Here we are already above the target SOC, we can discharge as a hold
     failed |= run_execute_test(
         my_predbat,
         "charge_imbalance2",
@@ -654,7 +679,7 @@ def run_execute_tests(my_predbat):
         assert_charge_time_enable=True,
         set_charge_window=True,
         set_export_window=True,
-        assert_status="Charging",
+        assert_status="Hold charging",
         assert_charge_start_time_minutes=-1,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
         soc_kw=9.5,
@@ -663,62 +688,130 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
+    # Here the target is 5 and we are at 5 so we will hold charge with a pause
     failed |= run_execute_test(
         my_predbat,
         "charge_imbalance3",
         charge_window_best=charge_window_best,
         charge_limit_best=charge_limit_best2,
-        assert_charge_time_enable=True,
+        assert_charge_time_enable=False,
         set_charge_window=True,
         set_export_window=True,
         assert_status="Hold charging",
         assert_charge_start_time_minutes=-1,
-        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        assert_charge_end_time_minutes=-1,
         soc_kw=5,
         soc_kw_array=[2.0, 3.0],
-        assert_soc_target_array=[40, 60],
-        assert_immediate_soc_target=50,
+        assert_soc_target_array=[100, 100],
+        assert_immediate_soc_target_array=[40, 60],
+        assert_pause_discharge=True,
     )
     if failed:
         return failed
 
+    # We the battery level is 6kWh and the target is 5kWh, we will hold charge and let it discharge.
     failed |= run_execute_test(
         my_predbat,
         "charge_imbalance4",
         charge_window_best=charge_window_best,
         charge_limit_best=charge_limit_best2,
-        assert_charge_time_enable=True,
+        assert_charge_time_enable=False,
         set_charge_window=True,
         set_export_window=True,
         assert_status="Hold charging",
         assert_charge_start_time_minutes=-1,
-        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        assert_charge_end_time_minutes=-1,
         soc_kw=6,
         soc_kw_array=[3.0, 3.0],
-        assert_soc_target_array=[50, 50],
+        assert_soc_target_array=[100, 100],
         assert_immediate_soc_target=50,
+        assert_pause_discharge=False,
+        assert_reserve=51,
     )
     if failed:
         return failed
 
+    # Here the battery level is 7kWh and we target 5kWh, we will hold charge and let it discharge.
     failed |= run_execute_test(
         my_predbat,
         "charge_imbalance5",
         charge_window_best=charge_window_best,
         charge_limit_best=charge_limit_best2,
-        assert_charge_time_enable=True,
+        assert_charge_time_enable=False,
         set_charge_window=True,
         set_export_window=True,
         assert_status="Hold charging",
         assert_charge_start_time_minutes=-1,
-        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        assert_charge_end_time_minutes=-1,
         soc_kw=7,
         soc_kw_array=[3.0, 4.0],
-        assert_soc_target_array=[40, 60],
-        assert_immediate_soc_target=50,
+        assert_soc_target_array=[100, 100],
+        assert_immediate_soc_target_array=[40, 60],
+        assert_pause_discharge=False,
+        assert_reserve_array=[41, 61],
     )
     if failed:
         return failed
+    
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_imbalance6",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Charging",
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        assert_soc_target_array=[80, 20],
+        assert_immediate_soc_target_array=[80, 20],
+        soc_kw=4,
+        soc_kw_array=[3.5, 0.5],
+    )
+    if failed:
+        return failed
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_imbalance7",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best3,
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Charging",
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        assert_soc_target_array=[100, 35],
+        assert_immediate_soc_target_array=[100, 35],
+        soc_kw=5.5,
+        soc_kw_array=[5, 0.5],
+    )
+    if failed:
+        return failed
+
+    
+    # Here the battery level is 4kWh and we target 5kWh, we will charge.
+    # We add 1 kWh which is 0.5kWh per inverter, hence going from 20%->30% and 60%->70% SOC, which is the target.
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_imbalance7",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Charging",
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=780,
+        soc_kw=4,
+        soc_kw_array=[1.0, 3.0],
+        assert_soc_target_array=[30, 70],
+        assert_immediate_soc_target_array=[30, 70],
+        assert_pause_discharge=False,
+    )
+    if failed:
+        return failed    
 
     failed |= run_execute_test(
         my_predbat,
@@ -1011,23 +1104,29 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
+    # Here the current SOC is 9kWh and the target is 5kWh
+    # but set_charge_during_charge is false so we should pause the discharge.
     failed |= run_execute_test(
         my_predbat,
         "charge2a",
         charge_window_best=charge_window_best,
         charge_limit_best=charge_limit_best2,
-        assert_charge_time_enable=True,
+        assert_charge_time_enable=False,
         set_charge_window=True,
         set_export_window=True,
         assert_status="Hold charging",
         soc_kw=9,
         assert_charge_start_time_minutes=-1,
-        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        assert_charge_end_time_minutes=-1,
         set_discharge_during_charge=False,
         assert_discharge_rate=1000,
         assert_pause_discharge=True,
-        assert_soc_target=50,
+        assert_soc_target=100,
+        assert_immediate_soc_target=50,
+        assert_reserve=51,
     )
+    if failed:
+        return failed
     failed |= run_execute_test(
         my_predbat,
         "charge2b",
@@ -1044,6 +1143,8 @@ def run_execute_tests(my_predbat):
         assert_reserve=0,
         assert_immediate_soc_target=50,
     )
+    if failed:
+        return failed
     failed |= run_execute_test(
         my_predbat,
         "charge2c",
@@ -1061,20 +1162,25 @@ def run_execute_tests(my_predbat):
         assert_immediate_soc_target=50,
         has_timed_pause=False,
     )
+    # Here the target is 5kWh and we are at 9kWh, so we will hold charge and let it discharge.
     failed |= run_execute_test(
         my_predbat,
         "charge2d",
         charge_window_best=charge_window_best,
         charge_limit_best=charge_limit_best2,
-        assert_charge_time_enable=True,
+        assert_charge_time_enable=False,
         set_charge_window=True,
         set_export_window=True,
         assert_status="Hold charging",
         soc_kw=9,
         assert_charge_start_time_minutes=-1,
-        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
-        assert_soc_target=50,
+        assert_charge_end_time_minutes=-1,
+        assert_soc_target=100,
+        assert_immediate_soc_target=50,
+        assert_reserve=51,
     )
+    if failed:
+        return failed
     failed |= run_execute_test(
         my_predbat,
         "charge2e",
@@ -1095,6 +1201,8 @@ def run_execute_tests(my_predbat):
         has_timed_pause=False,
         set_discharge_during_charge=False,
     )
+    if failed:
+        return failed
     failed |= run_execute_test(
         my_predbat,
         "charge3",
@@ -1154,27 +1262,34 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
+    # Here the target is 5kWh and we are at 9kWh so we will let it discharge.
     failed |= run_execute_test(
         my_predbat,
         "charge_hold_reserve_max1",
         charge_window_best=charge_window_best,
         charge_limit_best=charge_limit_best2,
-        assert_charge_time_enable=True,
+        assert_charge_time_enable=False,
         set_charge_window=True,
         set_export_window=True,
         assert_status="Hold charging",
         soc_kw=9,
         assert_charge_start_time_minutes=-1,
-        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        assert_charge_end_time_minutes=-1,
         assert_discharge_rate=1000,
         assert_pause_discharge=False,
-        assert_soc_target=50,
+        assert_soc_target=100,
+        assert_immediate_soc_target=50,
         reserve_max=50,
         has_timed_pause=False,
+        assert_reserve_array=[50, 50]
     )
+    if failed:
+        return failed
+
+    # Here the reserve can't hold so we keep charging on with target 50%
     failed |= run_execute_test(
         my_predbat,
-        "charge_hold_reserve_max2",
+        "charge_hold_reserve_max1b",
         charge_window_best=charge_window_best,
         charge_limit_best=charge_limit_best2,
         assert_charge_time_enable=True,
@@ -1183,15 +1298,40 @@ def run_execute_tests(my_predbat):
         assert_status="Hold charging",
         soc_kw=9,
         assert_charge_start_time_minutes=-1,
-        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        assert_charge_end_time_minutes=780,
         assert_discharge_rate=1000,
         assert_pause_discharge=False,
-        assert_soc_target_array=[60, 40],
-        assert_immediate_soc_target=50,
+        assert_soc_target=50,
+        reserve_max=10,
+        has_timed_pause=False,
+        assert_reserve_array=[0, 0]
+    )    
+    if failed:
+        return failed
+    # Here the target is 5kWh and we are at 9kWh so we will let it discharge.
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_hold_reserve_max2",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        assert_charge_time_enable=False,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold charging",
+        soc_kw=9,
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=-1,
+        assert_discharge_rate=1000,
+        assert_pause_discharge=False,
+        assert_soc_target_array=[100, 100],
+        assert_immediate_soc_target_array=[60, 40],
+        assert_reserve_array=[61, 41],
         reserve_max=90,
         has_timed_pause=False,
         soc_kw_array=[5, 4],
     )
+    if failed:
+        return failed
 
     # Charge/discharge with rate
     for inverter in my_predbat.inverters:
@@ -1515,6 +1655,8 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
+    # Charge freeze, one inverter is empty and the other at 40%
+    # Inverter 0 will charge to 10% while inverter 1 will freeze at current level of 40% (as it is above the reserve of 1kWh)
     failed |= run_execute_test(
         my_predbat,
         "charge_freeze_imb1",
@@ -1522,20 +1664,23 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best_frz,
         set_charge_window=True,
         set_export_window=True,
-        assert_charge_time_enable=True,
+        assert_charge_time_enable_array=[True, False],
         soc_kw=2,
-        assert_pause_discharge=False,
-        assert_status="Hold charging",
+        assert_pause_discharge_array=[False, True],
+        assert_status="Freeze charging",
         assert_reserve=0,
-        assert_soc_target_array=[10, 40],
+        assert_soc_target_array=[10, 100],
         assert_immediate_soc_target_array=[10, 40],
         assert_charge_start_time_minutes=-1,
-        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        assert_charge_end_time_minutes_array=[my_predbat.minutes_now + 60, -1],
         soc_kw_array=[0, 2],
+        assert_reserve_array=[0, 0],
+        assert_immediate_charge_soc_freeze_array=[False, True]
     )
     if failed:
         return failed
 
+    # Charge freeze, one inverter is empty and the other at 40%
     failed |= run_execute_test(
         my_predbat,
         "charge_freeze_imb2",
@@ -1543,15 +1688,15 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best_frz,
         set_charge_window=True,
         set_export_window=True,
-        assert_charge_time_enable=True,
+        assert_charge_time_enable_array=[False, True],
         soc_kw=2,
-        assert_pause_discharge=False,
-        assert_status="Hold charging",
-        assert_reserve=0,
-        assert_soc_target_array=[40, 10],
+        assert_pause_discharge_array=[True, False],
+        assert_status="Charging",
+        assert_soc_target_array=[100, 10],
         assert_immediate_soc_target_array=[40, 10],
         assert_charge_start_time_minutes=-1,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        assert_reserve_array=[0, 0],
         soc_kw_array=[2, 0],
     )
     if failed:
@@ -1565,20 +1710,21 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best_frz,
         set_charge_window=True,
         set_export_window=True,
-        assert_charge_time_enable=True,
+        assert_charge_time_enable_array=[False, True],
         soc_kw=0.75,
-        assert_pause_discharge=False,
+        assert_pause_discharge_array=[True, False],
         assert_status="Charging",
         assert_reserve=0,
-        assert_soc_target_array=[10, 10],
-        assert_immediate_soc_target=10,
+        assert_soc_target_array=[100, 10],
+        assert_immediate_soc_target_array=[10, 10],
         assert_charge_start_time_minutes=-1,
-        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        assert_charge_end_time_minutes_array=[-1, my_predbat.minutes_now + 60],
         soc_kw_array=[0.5, 0.25],
     )
     if failed:
         return failed
 
+    # One inverter below the reserve, the other above it, re-balance at 10%
     failed |= run_execute_test(
         my_predbat,
         "charge_freeze_imb4",
@@ -1586,16 +1732,17 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best_frz,
         set_charge_window=True,
         set_export_window=True,
-        assert_charge_time_enable=True,
+        assert_charge_time_enable_array=[True, False],
         soc_kw=1,
-        assert_pause_discharge=False,
-        assert_status="Hold charging",
-        assert_reserve=0,
-        assert_soc_target_array=[10, 15],
+        assert_pause_discharge_array=[False, True],
+        assert_status="Freeze charging",
+        assert_reserve_array=[0, 0],
+        assert_soc_target_array=[10, 100],
         assert_immediate_soc_target_array=[10, 15],
         assert_charge_start_time_minutes=-1,
-        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        assert_charge_end_time_minutes_array=[my_predbat.minutes_now + 60, -1],
         soc_kw_array=[0.25, 0.75],
+        assert_immediate_charge_soc_freeze_array=[False, True],
     )
     if failed:
         return failed
@@ -2407,14 +2554,15 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best2,
         soc_kw=10,
         car_slot=charge_window_best_slot,
-        assert_charge_time_enable=True,
+        assert_charge_time_enable=False,
         set_charge_window=True,
         set_export_window=True,
         assert_status="Hold charging, Hold for car",
         assert_charge_start_time_minutes=-1,
-        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        assert_charge_end_time_minutes=-1,
         assert_immediate_soc_target=50,
-        assert_soc_target=50,
+        assert_soc_target=100,
+        assert_reserve=51,
         assert_pause_discharge=True,
     )
     failed |= run_execute_test(
