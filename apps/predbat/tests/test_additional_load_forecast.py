@@ -10,14 +10,29 @@
 
 """Tests for named additional house load forecasts."""
 
+import tempfile
 from datetime import timedelta
 
-import plan as plan_module
+import additional_load as additional_load_module
+from storage import StorageComponent, StorageLocalFiles
 from tests.test_infra import run_async
+
+
+def attach_additional_load_storage(my_predbat):
+    """Attach a real StorageComponent backed by a temp directory for history persistence tests."""
+    temp_dir = tempfile.mkdtemp(prefix="predbat_test_additional_load_")
+    storage = StorageComponent(my_predbat)
+    storage.backend = StorageLocalFiles(temp_dir, my_predbat.log)
+    my_predbat.components = _AdditionalLoadTestComponents(storage=storage)
+    return storage
 
 
 class _AdditionalLoadTestComponents:
     """Minimal component event bridge for additional-load event tests."""
+
+    def __init__(self, storage=None):
+        """Initialise with an optional storage component for history persistence."""
+        self._storage = storage
 
     async def select_event(self, entity_id, value):
         """Ignore component select events during these tests."""
@@ -32,7 +47,9 @@ class _AdditionalLoadTestComponents:
         return None
 
     def get_component(self, name):
-        """Return no backing component for storage/history lookups."""
+        """Return the configured storage component, otherwise nothing."""
+        if name == "storage":
+            return self._storage
         return None
 
 
@@ -560,7 +577,7 @@ def test_additional_load_flexible_api_reselects_before_suggested_start(my_predba
     my_predbat.export_window_best = []
     my_predbat.export_limits_best = []
     my_predbat.end_record = my_predbat.forecast_minutes
-    original_prediction = plan_module.Prediction
+    original_prediction = additional_load_module.Prediction
 
     class FakePrediction:
         """Fake prediction scores 12:00 as cheapest regardless of the previous suggestion."""
@@ -579,10 +596,10 @@ def test_additional_load_flexible_api_reselects_before_suggested_start(my_predba
             return (metric, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 
     try:
-        plan_module.Prediction = FakePrediction
+        additional_load_module.Prediction = FakePrediction
         selected, load_step, _ = my_predbat.select_flexible_additional_loads({}, {}, {}, {})
     finally:
-        plan_module.Prediction = original_prediction
+        additional_load_module.Prediction = original_prediction
 
     forecast = my_predbat.house_load_additional_forecasts.get("dishwasher", {})
     if not selected or "T12:00:00" not in forecast.get("suggested_start", "") or forecast.get("target_times") or forecast.get("selection_locked"):
@@ -931,7 +948,7 @@ def test_additional_load_flexible_prediction_metric_selection(my_predbat):
     my_predbat.export_limits_best = []
     my_predbat.end_record = my_predbat.forecast_minutes
 
-    original_prediction = plan_module.Prediction
+    original_prediction = additional_load_module.Prediction
     original_compute_metric = my_predbat.compute_metric
 
     class FakePrediction:
@@ -957,11 +974,11 @@ def test_additional_load_flexible_prediction_metric_selection(my_predbat):
         return (abs(soc - 25 * 60), 0)
 
     try:
-        plan_module.Prediction = FakePrediction
+        additional_load_module.Prediction = FakePrediction
         my_predbat.compute_metric = fake_compute_metric
         selected, load_step, _ = my_predbat.select_flexible_additional_loads({}, {}, {}, {})
     finally:
-        plan_module.Prediction = original_prediction
+        additional_load_module.Prediction = original_prediction
         my_predbat.compute_metric = original_compute_metric
 
     if not selected:
@@ -999,6 +1016,57 @@ def test_additional_load_flexible_candidate_energy_conserved(my_predbat):
     return failed
 
 
+def test_additional_load_flexible_max_hours_caps_search(my_predbat):
+    """Test house_load_additional_flexible_max_hours bounds the deadline-less flexible candidate search."""
+    failed = 0
+    configure_additional_load_test(my_predbat)
+    my_predbat.minutes_now = 10 * 60
+    my_predbat.forecast_minutes = 24 * 60
+    my_predbat.args["house_load_additional_flexible_max_hours"] = 2
+    my_predbat.args["house_load_additional_forecast"] = [
+        {"name": "dishwasher", "mode": "flexible", "duration": 0.5, "energy": 0.5},
+    ]
+    my_predbat.house_load_additional_forecast_adjust, my_predbat.house_load_additional_forecasts = my_predbat.fetch_additional_load_forecast()
+    my_predbat.charge_limit_best = []
+    my_predbat.charge_window_best = []
+    my_predbat.export_window_best = []
+    my_predbat.export_limits_best = []
+    my_predbat.end_record = my_predbat.forecast_minutes
+
+    original_prediction = additional_load_module.Prediction
+    original_compute_metric = my_predbat.compute_metric
+
+    class FakePrediction:
+        """Trivial prediction returning a constant cost for every candidate."""
+
+        def __init__(self, base, pv_step, pv10_step, load_step, load10_step):
+            """Ignore inputs."""
+
+        def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv10, end_record):
+            """Return a constant zero-cost prediction tuple."""
+            return (0.0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {}, [], [], False, False, False)
+
+    def fake_compute_metric(*args):
+        """Score every candidate identically."""
+        return (0.0, 0)
+
+    try:
+        additional_load_module.Prediction = FakePrediction
+        my_predbat.compute_metric = fake_compute_metric
+        my_predbat.select_flexible_additional_loads({}, {}, {}, {})
+    finally:
+        additional_load_module.Prediction = original_prediction
+        my_predbat.compute_metric = original_compute_metric
+        my_predbat.args.pop("house_load_additional_flexible_max_hours", None)
+
+    # now=10:00, duration=0.5h, plan_interval=30, cap=2h => latest_start = now + 120 - 30 => candidates at now, +30, +60, +90 = 4
+    forecast = my_predbat.house_load_additional_forecasts.get("dishwasher", {})
+    if forecast.get("candidate_count") != 4:
+        print("ERROR: flexible_max_hours=2 should bound the search to 4 candidates, got {}".format(forecast.get("candidate_count")))
+        failed = 1
+    return failed
+
+
 def test_additional_load_flexible_unchanged_selection_not_marked_changed(my_predbat):
     """Test unchanged flexible selection does not request another optimisation pass."""
     failed = 0
@@ -1015,7 +1083,7 @@ def test_additional_load_flexible_unchanged_selection_not_marked_changed(my_pred
     my_predbat.export_limits_best = []
     my_predbat.end_record = my_predbat.forecast_minutes
 
-    original_prediction = plan_module.Prediction
+    original_prediction = additional_load_module.Prediction
     original_compute_metric = my_predbat.compute_metric
 
     class FakePrediction:
@@ -1039,11 +1107,11 @@ def test_additional_load_flexible_unchanged_selection_not_marked_changed(my_pred
         return (abs(soc - 25 * 60), 0)
 
     try:
-        plan_module.Prediction = FakePrediction
+        additional_load_module.Prediction = FakePrediction
         my_predbat.compute_metric = fake_compute_metric
         selected, _, _ = my_predbat.select_flexible_additional_loads({}, {}, {}, {})
     finally:
-        plan_module.Prediction = original_prediction
+        additional_load_module.Prediction = original_prediction
         my_predbat.compute_metric = original_compute_metric
 
     if not selected or my_predbat.house_load_additional_flexible_selection_changed:
@@ -1198,10 +1266,11 @@ def test_additional_load_history_prunes_old_records(my_predbat):
     return failed
 
 
-def test_additional_load_history_restores_from_sensor(my_predbat):
-    """Test additional load history is restored from the persisted HA sensor attribute."""
+def test_additional_load_history_restores_from_storage(my_predbat):
+    """Test additional load history is restored from persistent storage."""
     failed = 0
     configure_additional_load_test(my_predbat)
+    storage = attach_additional_load_storage(my_predbat)
     start = my_predbat.midnight_utc - timedelta(days=1, hours=-9)
     record = {
         "id": "dishwasher:{}:{}".format(start.isoformat(), (start + timedelta(minutes=30)).isoformat()),
@@ -1212,14 +1281,14 @@ def test_additional_load_history_restores_from_sensor(my_predbat):
         "end": (start + timedelta(minutes=30)).isoformat(),
         "energy": "0.4",
     }
-    my_predbat.ha_interface.dummy_items["sensor.predbat_load_forecast_delta_history"] = {"state": 1, "records": [record]}
+    run_async(storage.save("additional_load", "history", [record], format="json"))
     my_predbat.house_load_additional_history = []
     my_predbat.house_load_additional_history_loaded = False
 
     my_predbat.load_additional_load_history()
 
     if len(my_predbat.house_load_additional_history) != 1 or my_predbat.house_load_additional_history[0].get("energy") != 0.4:
-        print("ERROR: Additional load history should restore valid sensor records, got {}".format(my_predbat.house_load_additional_history))
+        print("ERROR: Additional load history should restore valid storage records, got {}".format(my_predbat.house_load_additional_history))
         failed = 1
     return failed
 
@@ -1271,6 +1340,7 @@ def run_additional_load_forecast_tests(my_predbat):
     failed |= test_additional_load_flexible_yaml_omitted_start_rolls(my_predbat)
     failed |= test_additional_load_flexible_prediction_metric_selection(my_predbat)
     failed |= test_additional_load_flexible_candidate_energy_conserved(my_predbat)
+    failed |= test_additional_load_flexible_max_hours_caps_search(my_predbat)
     failed |= test_additional_load_flexible_unchanged_selection_not_marked_changed(my_predbat)
     failed |= test_additional_load_textual_plan_summary(my_predbat)
     failed |= test_additional_load_history_archives_expired_api(my_predbat)
@@ -1278,6 +1348,6 @@ def run_additional_load_forecast_tests(my_predbat):
     failed |= test_additional_load_history_filters_historical_load(my_predbat)
     failed |= test_additional_load_history_does_not_archive_future_slots(my_predbat)
     failed |= test_additional_load_history_prunes_old_records(my_predbat)
-    failed |= test_additional_load_history_restores_from_sensor(my_predbat)
+    failed |= test_additional_load_history_restores_from_storage(my_predbat)
     failed |= test_additional_load_history_archives_end_time_without_duration(my_predbat)
     return failed

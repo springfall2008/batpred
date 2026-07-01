@@ -1720,6 +1720,8 @@ In addition to the normal historical or ML load forecast, Predbat can add named 
 
 Each item in **house_load_additional_forecast** is labelled by **name** and can be updated later from a Home Assistant automation using **select.predbat_load_forecast_delta_api**.
 
+The **energy**, **slot_energy**, **duration**, **start_time**, **end_time**, **enabled**, and **weighting** fields are resolved using the standard Predbat argument resolution, so as well as literal values they may reference a Home Assistant entity (for example `energy: sensor.dishwasher_last_cycle_kwh`).
+
 For appliances where you know the total cycle energy, use **energy** in kWh. Predbat will divide the total across the generated plan slots:
 
 ```yaml
@@ -1796,6 +1798,12 @@ With a 30-minute plan interval this redistributes 1.2kWh as 0.4kWh, 0.4kWh, 0.2k
 Set **mode** to `flexible` when the load can run at any time before a deadline. For flexible loads, **start_time** means the earliest allowed start and **end_time** means the load must be done by that time. If **start_time** is omitted in `apps.yaml`, Predbat uses the current plan slot each time the forecast is refreshed; if **end_time** is omitted, Predbat uses the remaining forecast horizon.
 
 Predbat scores flexible candidates with the prediction metric, not just the import rate. This means the suggested time considers the current plan, solar forecast, battery state, import/export rates, losses, and other predicted load.
+
+Because each candidate start time is scored with a full prediction pass, a flexible load with no **end_time** is searched across the whole forecast horizon, which can be a lot of passes on low-powered hardware. Set **house_load_additional_flexible_max_hours** in `apps.yaml` to cap how far ahead a flexible load may be searched and placed. It defaults to the forecast horizon (usually 48 hours); an explicit **end_time** always takes precedence when it is sooner.
+
+```yaml
+  house_load_additional_flexible_max_hours: 24
+```
 
 ```yaml
   house_load_additional_forecast:

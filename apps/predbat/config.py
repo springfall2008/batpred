@@ -2107,6 +2107,7 @@ APPS_SCHEMA = {
         "sensor_type": "dict|list",
     },
     "house_load_additional_forecast": {"type": "dict_list"},
+    "house_load_additional_flexible_max_hours": {"type": "integer"},
     "ge_cloud_data": {"type": "boolean"},
     "ge_cloud_serial": {"type": "string", "empty": False},
     "ge_cloud_key": {"type": "string", "empty": False},

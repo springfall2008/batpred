@@ -80,6 +80,7 @@ from marginal import Marginal
 from plan import Plan
 from fetch import Fetch
 from output import Output
+from additional_load import AdditionalLoad
 from userinterface import UserInterface
 from compare import Compare
 from plugin_system import PluginSystem
@@ -87,7 +88,7 @@ from github import GitHub
 from ha import run_async
 
 
-class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, Marginal, Execute, Output, UserInterface, GitHub):
+class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, Marginal, Execute, Output, AdditionalLoad, UserInterface, GitHub):
     """Main PredBat orchestrator combining all subsystems via multiple inheritance.
 
     Inherits from Hass (HA interface), Octopus (rate loading), Energidataservice, Stromligning,
