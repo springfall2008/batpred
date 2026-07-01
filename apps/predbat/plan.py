@@ -221,6 +221,7 @@ class Plan:
             _metric_keep10,
             final_iboost10,
             _final_carbon_g10,
+            *_prediction_detail10,
         ) = prediction.run_prediction(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, True, self.end_record)
         (
             cost,
@@ -234,6 +235,7 @@ class Plan:
             metric_keep,
             final_iboost,
             final_carbon_g,
+            *_prediction_detail,
         ) = prediction.run_prediction(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, False, self.end_record)
         metric, _battery_value = self.compute_metric(
             self.end_record,

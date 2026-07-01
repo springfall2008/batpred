@@ -950,7 +950,7 @@ def test_additional_load_flexible_prediction_metric_selection(my_predbat):
                     first_load_minute = my_predbat.minutes_now + minute if first_load_minute is None else min(first_load_minute, my_predbat.minutes_now + minute)
             if first_load_minute is not None:
                 cost = abs(first_load_minute - 24 * 60)
-            return (cost, 0, 0, 0, 0, first_load_minute or 0, 0, 0, 0, 0, 0)
+            return (cost, 0, 0, 0, 0, first_load_minute or 0, 0, 0, 0, 0, 0, {}, [], [], False, False, False)
 
     def fake_compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh):
         """Score 01:00 as the best full metric even though raw cost prefers midnight."""
@@ -1032,7 +1032,7 @@ def test_additional_load_flexible_unchanged_selection_not_marked_changed(my_pred
                 if load > 0:
                     first_load_minute = my_predbat.minutes_now + minute if first_load_minute is None else min(first_load_minute, my_predbat.minutes_now + minute)
             metric = abs(first_load_minute - 25 * 60) if first_load_minute is not None else 1000.0
-            return (metric, 0, 0, 0, 0, first_load_minute or 0, 0, 0, 0, 0, 0)
+            return (metric, 0, 0, 0, 0, first_load_minute or 0, 0, 0, 0, 0, 0, {}, [], [], False, False, False)
 
     def fake_compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh):
         """Score the existing 01:00 selection as the best full metric."""
