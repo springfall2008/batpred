@@ -2678,7 +2678,7 @@ class TestPublishPredbatData:
     # ------------------------------------------------------------------
 
     def test_payload_includes_rate_anchors(self):
-        """rate_min/rate_max/export_rate are published (rounded to 0.1p) from the marginal sensor attributes."""
+        """rate_min/rate_max/export_rate are published (rounded to 0.01p) from the marginal sensor attributes."""
         gw = self._make_gateway(
             {
                 "sensor.predbat_marginal_energy_costs#rate_min": "8.04",
@@ -2688,9 +2688,9 @@ class TestPublishPredbatData:
         )
         self._run(gw._publish_predbat_data())
         payload = self._get_published_payload(gw)
-        assert approx_equal(payload["rate_min"], 8.0), f"rate_min: {payload.get('rate_min')}"
-        assert approx_equal(payload["rate_max"], 29.0), f"rate_max: {payload.get('rate_max')}"
-        assert approx_equal(payload["export_rate"], 12.0), f"export_rate: {payload.get('export_rate')}"
+        assert approx_equal(payload["rate_min"], 8.04), f"rate_min: {payload.get('rate_min')}"
+        assert approx_equal(payload["rate_max"], 28.97), f"rate_max: {payload.get('rate_max')}"
+        assert approx_equal(payload["export_rate"], 12.01), f"export_rate: {payload.get('export_rate')}"
 
     def test_payload_rate_anchors_null_when_attrs_absent(self):
         """When the marginal sensor lacks the rate attributes, the anchor keys publish as None so firmware falls back."""
@@ -4187,7 +4187,7 @@ class TestRateAnchors(unittest.TestCase):
 
         self.assertEqual(
             extract_rate_anchors(8.04, 28.97, 12.01),
-            {"rate_min": 8.0, "rate_max": 29.0, "export_rate": 12.0},
+            {"rate_min": 8.04, "rate_max": 28.97, "export_rate": 12.01},
         )
 
     def test_missing_value_returns_none(self):
@@ -4199,6 +4199,12 @@ class TestRateAnchors(unittest.TestCase):
         from gateway import extract_rate_anchors
 
         self.assertIsNone(extract_rate_anchors("n/a", 29.0, 12.0))
+
+    def test_non_finite_returns_none(self):
+        from gateway import extract_rate_anchors
+
+        self.assertIsNone(extract_rate_anchors(float("nan"), 29.0, 12.0))
+        self.assertIsNone(extract_rate_anchors(8.0, float("inf"), 12.0))
 
 
 def run_gateway_tests(my_predbat=None):

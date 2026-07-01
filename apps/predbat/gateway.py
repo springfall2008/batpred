@@ -9,6 +9,7 @@ gateway — no Home Assistant in the loop.
 import asyncio
 import datetime
 import json
+import math
 import os
 import ssl
 import time
@@ -143,18 +144,20 @@ GATEWAY_ATTRIBUTE_TABLE = {
 def extract_rate_anchors(rate_min, rate_max, export_rate):
     """Validate and round the three rate anchors for the device payload.
 
-    Returns a dict with rate_min / rate_max / export_rate rounded to 0.1 p/kWh,
-    or None if any value is missing or non-numeric so the device falls back to
-    its plan-aware RAG.
+    Returns a dict with rate_min / rate_max / export_rate rounded to 0.01 p/kWh
+    (matching the marginal-cost matrix precision), or None if any value is
+    missing, non-numeric, or non-finite (NaN/Inf) so the device falls back to
+    its plan-aware RAG and the payload never carries invalid JSON tokens.
     """
     try:
-        return {
-            "rate_min": round(float(rate_min), 1),
-            "rate_max": round(float(rate_max), 1),
-            "export_rate": round(float(export_rate), 1),
-        }
+        rmin = round(float(rate_min), 2)
+        rmax = round(float(rate_max), 2)
+        rexp = round(float(export_rate), 2)
     except (TypeError, ValueError):
         return None
+    if not (math.isfinite(rmin) and math.isfinite(rmax) and math.isfinite(rexp)):
+        return None
+    return {"rate_min": rmin, "rate_max": rmax, "export_rate": rexp}
 
 
 class GatewayMQTT(ComponentBase):
