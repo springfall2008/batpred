@@ -407,8 +407,10 @@ def run_execute_test(
         failed = True
 
     # Validate isExporting binary sensor state: must be True for any exporting status (Exporting, Freeze exporting variants)
+    # Use only the base status (before any " [...]" suffix) to avoid "Freeze exporting" matching "Demand [Freeze exporting]"
     exporting_statuses = ["Exporting", "Freeze exporting"]
-    expected_is_exporting = any(s in assert_status for s in exporting_statuses)
+    status_base = assert_status.split(" [")[0]
+    expected_is_exporting = any(s in status_base for s in exporting_statuses)
     if my_predbat.isExporting != expected_is_exporting:
         print("ERROR: isExporting should be {} for status '{}' got {}".format(expected_is_exporting, assert_status, my_predbat.isExporting))
         failed = True
@@ -795,7 +797,7 @@ def run_execute_tests(my_predbat):
     # We add 1 kWh which is 0.5kWh per inverter, hence going from 20%->30% and 60%->70% SOC, which is the target.
     failed |= run_execute_test(
         my_predbat,
-        "charge_imbalance7",
+        "charge_imbalance8",
         charge_window_best=charge_window_best,
         charge_limit_best=charge_limit_best2,
         assert_charge_time_enable=True,
@@ -2634,6 +2636,281 @@ def run_execute_tests(my_predbat):
         assert_soc_target=100,
         assert_immediate_soc_target=99,  # Current SoC% = 10.048/10.149 = ~99%
     )
+    if failed:
+        return failed
+
+    # iBoost hold without timed pause (lines 476-478): discharge rate set to 0 instead of pause
+    my_predbat.iboost_enable = True
+    my_predbat.iboost_prevent_discharge = True
+    my_predbat.iboost_running_full = True
+    failed |= run_execute_test(
+        my_predbat,
+        "no_charge_iboost_no_pause",
+        set_charge_window=True,
+        set_export_window=True,
+        has_timed_pause=False,
+        assert_status="Hold for iBoost",
+        soc_kw=1,
+        assert_immediate_soc_target=10,
+        assert_pause_discharge=False,
+        assert_discharge_rate=0,
+        assert_reserve=11,  # soc_percent=10, min(10+1, 100)=11
+    )
+    my_predbat.iboost_enable = False
+    my_predbat.iboost_prevent_discharge = False
+    my_predbat.iboost_running_full = False
+    if failed:
+        return failed
+
+    # set_freeze_export_during_demand tests (lines 419-433): demand mode prevents charging
+    my_predbat.set_freeze_export_during_demand = True
+
+    # Sub-test: inv_charge_discharge_with_rate=True + inv_has_timed_pause=True (lines 423-428)
+    for inverter in my_predbat.inverters:
+        inverter.inv_charge_discharge_with_rate = True
+    failed |= run_execute_test(
+        my_predbat,
+        "freeze_export_demand_with_rate",
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Demand [Freeze exporting]",
+        assert_charge_rate=0,
+        assert_pause_charge=True,
+        assert_discharge_rate=1000,
+    )
+    for inverter in my_predbat.inverters:
+        inverter.inv_charge_discharge_with_rate = False
+    if failed:
+        return failed
+
+    # Sub-test: inv_charge_discharge_with_rate=False + inv_has_timed_pause=True (lines 426-428)
+    failed |= run_execute_test(
+        my_predbat,
+        "freeze_export_demand_timed_pause",
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Demand [Freeze exporting]",
+        assert_charge_rate=1000,
+        assert_pause_charge=True,
+        assert_discharge_rate=1000,
+    )
+    if failed:
+        return failed
+
+    # Sub-test: inv_charge_discharge_with_rate=False + inv_has_timed_pause=False (lines 429-431)
+    failed |= run_execute_test(
+        my_predbat,
+        "freeze_export_demand_no_pause",
+        set_charge_window=True,
+        set_export_window=True,
+        has_timed_pause=False,
+        assert_status="Demand [Freeze exporting]",
+        assert_charge_rate=0,
+        assert_pause_charge=False,
+        assert_discharge_rate=1000,
+    )
+
+    my_predbat.set_freeze_export_during_demand = False
+    if failed:
+        return failed
+
+    # Export with inv_has_discharge_enable_time=False (lines 505-506): soc_target set to 0
+    for inverter in my_predbat.inverters:
+        inverter.inv_has_discharge_enable_time = False
+    failed |= run_execute_test(
+        my_predbat,
+        "export_no_discharge_enable_time",
+        export_window_best=export_window_best,
+        export_limits_best=export_limits_best,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=5,
+        assert_status="Exporting",
+        assert_soc_target=0,
+        assert_immediate_soc_target=0,
+        assert_force_export=True,
+        assert_discharge_start_time_minutes=my_predbat.minutes_now,
+        assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
+    )
+    for inverter in my_predbat.inverters:
+        inverter.inv_has_discharge_enable_time = True
+    if failed:
+        return failed
+
+    # Export with inverter_hybrid=True (lines 511-513): soc_target set to 0 (no AC-coupled reset)
+    failed |= run_execute_test(
+        my_predbat,
+        "export_hybrid",
+        export_window_best=export_window_best,
+        export_limits_best=export_limits_best,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=5,
+        inverter_hybrid=True,
+        assert_status="Exporting",
+        assert_soc_target=0,
+        assert_immediate_soc_target=0,
+        assert_force_export=True,
+        assert_discharge_start_time_minutes=my_predbat.minutes_now,
+        assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
+    )
+    if failed:
+        return failed
+
+    # Charge freeze approaching, not yet charging, inv_has_target_soc=False (line 534-536)
+    # Pre-set charge_end_time_minutes so the approaching-window SOC path is entered even though
+    # disable_charge_window() (not adjust_charge_window()) is called at the approaching-window step
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_freeze_approaching_no_target_soc",
+        charge_window_best=charge_window_best_soon,
+        charge_limit_best=charge_limit_best_frz,
+        set_charge_window=True,
+        set_export_window=True,
+        has_target_soc=False,
+        inverter_charge_time_minutes_end=my_predbat.minutes_now + 60,
+        assert_status="Demand",
+        assert_charge_time_enable=False,
+        assert_soc_target=0,
+    )
+    if failed:
+        return failed
+
+    # Charge freeze approaching, not yet charging, inv_has_target_soc=True (lines 537-540): hold at 100%
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_freeze_approaching_with_target_soc",
+        charge_window_best=charge_window_best_soon,
+        charge_limit_best=charge_limit_best_frz,
+        set_charge_window=True,
+        set_export_window=True,
+        has_target_soc=True,
+        inverter_charge_time_minutes_end=my_predbat.minutes_now + 60,
+        assert_status="Demand",
+        assert_charge_time_enable=False,
+        assert_soc_target=100,
+    )
+    if failed:
+        return failed
+
+    # Alert status append (lines 629-630)
+    my_predbat.alert_active_keep = {my_predbat.minutes_now: 1}
+    failed |= run_execute_test(
+        my_predbat,
+        "status_alert",
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Demand [Alert]",
+    )
+    my_predbat.alert_active_keep = {}
+    if failed:
+        return failed
+
+    # Manual SoC status append (lines 631-632)
+    my_predbat.manual_soc_keep = {my_predbat.minutes_now: 1}
+    failed |= run_execute_test(
+        my_predbat,
+        "status_manual_soc",
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Demand [Manual SoC]",
+    )
+    my_predbat.manual_soc_keep = {}
+    if failed:
+        return failed
+
+    # Export window overlaps charge window (line 317): discharge_start_time_minutes is in the past,
+    # within the charge window range, so the export start is clamped to max(window start, minutes_now)
+    for inverter in my_predbat.inverters:
+        inverter.discharge_start_time_minutes = 100
+    failed |= run_execute_test(
+        my_predbat,
+        "export_overlap_charge_window",
+        export_window_best=export_window_best,
+        export_limits_best=export_limits_best,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=10,
+        inverter_charge_time_minutes_end=my_predbat.minutes_now + 60,
+        assert_status="Exporting",
+        assert_force_export=True,
+        assert_discharge_start_time_minutes=my_predbat.minutes_now,
+        assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
+        assert_immediate_soc_target=0,
+    )
+    if failed:
+        return failed
+
+    # Export window would wrap over 24 hours (lines 330-331): start time gets realigned to the
+    # nearest plan_interval_minutes boundary rather than left far in the past
+    export_window_best_long = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 1500, "average": 1}]
+    for inverter in my_predbat.inverters:
+        inverter.discharge_start_time_minutes = -1
+    failed |= run_execute_test(
+        my_predbat,
+        "export_window_wrap_avoid",
+        export_window_best=export_window_best_long,
+        export_limits_best=export_limits_best,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=10,
+        assert_status="Exporting",
+        assert_force_export=True,
+        assert_discharge_start_time_minutes=my_predbat.minutes_now,
+        assert_discharge_end_time_minutes=my_predbat.minutes_now + 1500 + 1,
+        assert_immediate_soc_target=0,
+    )
+    if failed:
+        return failed
+
+    # Export window end coincides with the charge window start (line 342): the 1 minute margin
+    # normally added to the export end time is dropped to avoid overlapping the charge window
+    for inverter in my_predbat.inverters:
+        inverter.discharge_start_time_minutes = my_predbat.minutes_now + 1000
+    failed |= run_execute_test(
+        my_predbat,
+        "export_overlap_charge_start",
+        export_window_best=export_window_best,
+        export_limits_best=export_limits_best,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=10,
+        inverter_charge_time_minutes_start=my_predbat.minutes_now + 60,
+        assert_status="Exporting",
+        assert_force_export=True,
+        assert_discharge_start_time_minutes=my_predbat.minutes_now,
+        assert_discharge_end_time_minutes=my_predbat.minutes_now + 60,
+        assert_immediate_soc_target=0,
+    )
+    for inverter in my_predbat.inverters:
+        inverter.discharge_start_time_minutes = -1
+    if failed:
+        return failed
+
+    # Register write counter feeds the Prometheus metric (line 613)
+    my_predbat.inverters[0].count_register_writes = 1
+    failed |= run_execute_test(
+        my_predbat,
+        "register_writes_metric",
+        set_charge_window=True,
+        set_export_window=True,
+    )
+    if failed:
+        return failed
+
+    # quick_inverter_data_update (lines 890-895): no-inverters guard and the happy path
+    saved_inverters = my_predbat.inverters
+    my_predbat.inverters = None
+    if my_predbat.quick_inverter_data_update() is not False:
+        print("ERROR: quick_inverter_data_update should return False when inverters is None")
+        failed = True
+    my_predbat.inverters = saved_inverters
+    if failed:
+        return failed
+
+    if my_predbat.quick_inverter_data_update() is not True:
+        print("ERROR: quick_inverter_data_update should return True")
+        failed = True
     if failed:
         return failed
 

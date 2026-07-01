@@ -225,11 +225,7 @@ class Execute:
                                     # Else we will be holding on reserve
                                 else:
                                     # Still charging or we have no way to hold on either reserve or pause the discharge
-                                    if inverter.soc_percent < inv_target_soc_percent or inverter.soc_percent >= 100.0:
-                                        inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
-                                    else:
-                                        inverter.disable_charge_window()
-                                        disabled_charge_window = True
+                                    inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
                             else:
                                 status = "Charging"
                                 inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
@@ -518,7 +514,7 @@ class Execute:
                     elif not disabled_export:
                         inverter.adjust_export_immediate(int(self.export_limits_best[0]))
                     else:
-                        inverter.adjust_export_immediate(100)
+                        inverter.adjust_export_immediate(100) # Dead code right, but kept in case other logic changes
 
                 elif self.charge_limit_best and (self.minutes_now < inverter.charge_end_time_minutes) and ((inverter.charge_start_time_minutes - self.minutes_now) <= self.set_soc_minutes) and not (disabled_charge_window):
                     if inverter.inv_has_charge_enable_time or isCharging:
