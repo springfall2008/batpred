@@ -166,7 +166,7 @@ class Execute:
                             inverter.adjust_discharge_rate(0)
                             resetDischarge = False
 
-                        # Can only freeze charge if all inverters have a SoC value above the reserve
+                        # Can only freeze charge for this inverter if its SoC is above reserve and it can hold via reserve/pause
                         can_freeze_charge = True
                         if inverter.soc_kw < inverter.reserve:
                             can_freeze_charge = False
