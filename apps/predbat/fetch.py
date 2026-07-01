@@ -871,8 +871,8 @@ class Fetch:
             if not self.rate_import:
                 self.log("Error: metric_stromligning_import sensors are not set correctly or no energy rates can be read")
                 self.record_status(message="Error: metric_stromligning_import sensors not set correctly or no energy rates can be read", had_errors=True)
-        
-        # Fallback if no other rate types are set        
+
+        # Fallback if no other rate types are set
         if not self.rate_import:
             # Basic rates defined by user over time
             rate_import_dict = self.get_arg("rates_import", [], indirect=False)
@@ -948,7 +948,7 @@ class Fetch:
                 self.log("Warning: metric_stromligning_export sensors are not set correctly or no energy rates can be read")
                 self.record_status(message="Error: metric_stromligning_export sensors not set correctly or no energy rates can be read", had_errors=True)
 
-        # Fallback if no other rate types are set        
+        # Fallback if no other rate types are set
         if not self.rate_export:
             # Basic rates defined by user over time
             rate_export_dict = self.get_arg("rates_export", [], indirect=False)

@@ -216,7 +216,7 @@ def run_execute_test(
     assert_reserve_array=None,
     car_soc=0,
     battery_temperature=20,
-    assert_immediate_charge_soc_freeze_array=[]
+    assert_immediate_charge_soc_freeze_array=[],
 ):
     print("> Run scenario {}".format(name))
     my_predbat.log("> Run scenario {}".format(name))
@@ -754,7 +754,7 @@ def run_execute_tests(my_predbat):
     )
     if failed:
         return failed
-    
+
     failed |= run_execute_test(
         my_predbat,
         "charge_imbalance6",
@@ -792,7 +792,6 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
-    
     # Here the battery level is 4kWh and we target 5kWh, we will charge.
     # We add 1 kWh which is 0.5kWh per inverter, hence going from 20%->30% and 60%->70% SOC, which is the target.
     failed |= run_execute_test(
@@ -813,7 +812,7 @@ def run_execute_tests(my_predbat):
         assert_pause_discharge=False,
     )
     if failed:
-        return failed    
+        return failed
 
     failed |= run_execute_test(
         my_predbat,
@@ -1283,7 +1282,7 @@ def run_execute_tests(my_predbat):
         assert_immediate_soc_target=50,
         reserve_max=50,
         has_timed_pause=False,
-        assert_reserve_array=[50, 50]
+        assert_reserve_array=[50, 50],
     )
     if failed:
         return failed
@@ -1306,8 +1305,8 @@ def run_execute_tests(my_predbat):
         assert_soc_target=50,
         reserve_max=10,
         has_timed_pause=False,
-        assert_reserve_array=[0, 0]
-    )    
+        assert_reserve_array=[0, 0],
+    )
     if failed:
         return failed
     # Here the target is 5kWh and we are at 9kWh so we will let it discharge.
@@ -1677,7 +1676,7 @@ def run_execute_tests(my_predbat):
         assert_charge_end_time_minutes_array=[my_predbat.minutes_now + 60, -1],
         soc_kw_array=[0, 2],
         assert_reserve_array=[0, 0],
-        assert_immediate_charge_soc_freeze_array=[False, True]
+        assert_immediate_charge_soc_freeze_array=[False, True],
     )
     if failed:
         return failed

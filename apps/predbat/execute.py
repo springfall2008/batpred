@@ -198,7 +198,11 @@ class Execute:
                             # and the current charge level is above the target for all inverters
                             if self.set_soc_enable and inverter.soc_percent >= inv_target_soc_percent:
                                 status = "Hold charging"
-                                self.log("Inverter {} Hold charging as SoC {}% is above target SoC {}% (global soc target {}%) set_discharge_during_charge {}".format(inverter.id, inverter.soc_percent, dp0(inv_target_soc_percent), dp0(target_soc), self.set_discharge_during_charge))
+                                self.log(
+                                    "Inverter {} Hold charging as SoC {}% is above target SoC {}% (global soc target {}%) set_discharge_during_charge {}".format(
+                                        inverter.id, inverter.soc_percent, dp0(inv_target_soc_percent), dp0(target_soc), self.set_discharge_during_charge
+                                    )
+                                )
 
                                 if (inv_target_soc_percent < 100.0) and (inverter.soc_percent >= inv_target_soc_percent - 1.0):
                                     # If we are at or above the target, or within 1% below it, hold charge by disabling the charge window.
@@ -514,7 +518,7 @@ class Execute:
                     elif not disabled_export:
                         inverter.adjust_export_immediate(int(self.export_limits_best[0]))
                     else:
-                        inverter.adjust_export_immediate(100) # Dead code right, but kept in case other logic changes
+                        inverter.adjust_export_immediate(100)  # Dead code right, but kept in case other logic changes
 
                 elif self.charge_limit_best and (self.minutes_now < inverter.charge_end_time_minutes) and ((inverter.charge_start_time_minutes - self.minutes_now) <= self.set_soc_minutes) and not (disabled_charge_window):
                     if inverter.inv_has_charge_enable_time or isCharging:
