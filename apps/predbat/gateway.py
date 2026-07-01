@@ -141,23 +141,25 @@ GATEWAY_ATTRIBUTE_TABLE = {
 }
 
 
-def extract_rate_anchors(rate_min, rate_max, export_rate):
-    """Validate and round the three rate anchors for the device payload.
+def extract_rate_anchors(rate_min, rate_max, import_rate, export_rate):
+    """Validate and round the four rate anchors for the device payload.
 
-    Returns a dict with rate_min / rate_max / export_rate rounded to 0.01 p/kWh
-    (matching the marginal-cost matrix precision), or None if any value is
-    missing, non-numeric, or non-finite (NaN/Inf) so the device falls back to
-    its plan-aware RAG and the payload never carries invalid JSON tokens.
+    Returns a dict with rate_min / rate_max / import_rate / export_rate rounded
+    to 0.01 p/kWh (matching the marginal-cost matrix precision), or None if any
+    value is missing, non-numeric, or non-finite (NaN/Inf) so the device falls
+    back to its plan-aware RAG and the payload never carries invalid JSON
+    tokens.
     """
     try:
-        rmin = round(float(rate_min), 2)
-        rmax = round(float(rate_max), 2)
-        rexp = round(float(export_rate), 2)
+        rate_min = round(float(rate_min), 2)
+        rate_max = round(float(rate_max), 2)
+        rate_import = round(float(import_rate), 2)
+        rate_export = round(float(export_rate), 2)
     except (TypeError, ValueError):
         return None
-    if not (math.isfinite(rmin) and math.isfinite(rmax) and math.isfinite(rexp)):
+    if not (math.isfinite(rate_min) and math.isfinite(rate_max) and math.isfinite(rate_import) and math.isfinite(rate_export)):
         return None
-    return {"rate_min": rmin, "rate_max": rmax, "export_rate": rexp}
+    return {"rate_min": rate_min, "rate_max": rate_max, "import_rate": rate_import, "export_rate": rate_export}
 
 
 class GatewayMQTT(ComponentBase):
@@ -1365,7 +1367,8 @@ class GatewayMQTT(ComponentBase):
             rate_anchors = extract_rate_anchors(
                 self.get_state_wrapper("sensor." + self.prefix + "_marginal_energy_costs", attribute="rate_min"),
                 self.get_state_wrapper("sensor." + self.prefix + "_marginal_energy_costs", attribute="rate_max"),
-                self.get_state_wrapper("sensor." + self.prefix + "_marginal_energy_costs", attribute="grid_export_now"),
+                self.get_state_wrapper("sensor." + self.prefix + "_marginal_energy_costs", attribute="import_rate_base"),
+                self.get_state_wrapper("sensor." + self.prefix + "_marginal_energy_costs", attribute="export_rate_base"),
             )
             marginal_costs = []
             marginal_time_labels = []
@@ -1420,6 +1423,7 @@ class GatewayMQTT(ComponentBase):
                 "marginal_time_labels": marginal_time_labels,
                 "rate_min": (rate_anchors or {}).get("rate_min"),
                 "rate_max": (rate_anchors or {}).get("rate_max"),
+                "import_rate": (rate_anchors or {}).get("import_rate"),
                 "export_rate": (rate_anchors or {}).get("export_rate"),
             }
 

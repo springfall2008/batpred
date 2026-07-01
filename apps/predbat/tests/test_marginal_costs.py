@@ -134,7 +134,7 @@ def test_marginal_costs(my_predbat):
                 except (TypeError, ValueError):
                     print("ERROR: sensor '{}' = '{}' is not numeric".format(attr, attrs[attr]))
                     failed = True
-        for attr in ("rate_min", "rate_max"):
+        for attr in ("rate_min", "rate_max", "import_rate_base", "export_rate_base"):
             if attr not in attrs:
                 print("ERROR: sensor missing '{}' attribute".format(attr))
                 failed = True

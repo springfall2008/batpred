@@ -2678,18 +2678,20 @@ class TestPublishPredbatData:
     # ------------------------------------------------------------------
 
     def test_payload_includes_rate_anchors(self):
-        """rate_min/rate_max/export_rate are published (rounded to 0.01p) from the marginal sensor attributes."""
+        """rate_min/rate_max/import_rate/export_rate are published (rounded to 0.01p) from the marginal sensor attributes."""
         gw = self._make_gateway(
             {
                 "sensor.predbat_marginal_energy_costs#rate_min": "8.04",
                 "sensor.predbat_marginal_energy_costs#rate_max": "28.97",
-                "sensor.predbat_marginal_energy_costs#grid_export_now": "12.01",
+                "sensor.predbat_marginal_energy_costs#import_rate_base": "15.23",
+                "sensor.predbat_marginal_energy_costs#export_rate_base": "12.01",
             }
         )
         self._run(gw._publish_predbat_data())
         payload = self._get_published_payload(gw)
         assert approx_equal(payload["rate_min"], 8.04), f"rate_min: {payload.get('rate_min')}"
         assert approx_equal(payload["rate_max"], 28.97), f"rate_max: {payload.get('rate_max')}"
+        assert approx_equal(payload["import_rate"], 15.23), f"import_rate: {payload.get('import_rate')}"
         assert approx_equal(payload["export_rate"], 12.01), f"export_rate: {payload.get('export_rate')}"
 
     def test_payload_rate_anchors_null_when_attrs_absent(self):
@@ -2699,6 +2701,7 @@ class TestPublishPredbatData:
         payload = self._get_published_payload(gw)
         assert payload["rate_min"] is None
         assert payload["rate_max"] is None
+        assert payload["import_rate"] is None
         assert payload["export_rate"] is None
 
 
@@ -4180,31 +4183,31 @@ class TestEvControl:
 
 
 class TestRateAnchors(unittest.TestCase):
-    """extract_rate_anchors() validates and rounds the three rate fields."""
+    """extract_rate_anchors() validates and rounds the four rate fields."""
 
     def test_valid_anchors_rounded(self):
         from gateway import extract_rate_anchors
 
         self.assertEqual(
-            extract_rate_anchors(8.04, 28.97, 12.01),
-            {"rate_min": 8.04, "rate_max": 28.97, "export_rate": 12.01},
+            extract_rate_anchors(8.04, 28.97, 15.23, 12.01),
+            {"rate_min": 8.04, "rate_max": 28.97, "import_rate": 15.23, "export_rate": 12.01},
         )
 
     def test_missing_value_returns_none(self):
         from gateway import extract_rate_anchors
 
-        self.assertIsNone(extract_rate_anchors(None, 29.0, 12.0))
+        self.assertIsNone(extract_rate_anchors(None, 29.0, 15.0, 12.0))
 
     def test_non_numeric_returns_none(self):
         from gateway import extract_rate_anchors
 
-        self.assertIsNone(extract_rate_anchors("n/a", 29.0, 12.0))
+        self.assertIsNone(extract_rate_anchors("n/a", 29.0, 15.0, 12.0))
 
     def test_non_finite_returns_none(self):
         from gateway import extract_rate_anchors
 
-        self.assertIsNone(extract_rate_anchors(float("nan"), 29.0, 12.0))
-        self.assertIsNone(extract_rate_anchors(8.0, float("inf"), 12.0))
+        self.assertIsNone(extract_rate_anchors(float("nan"), 29.0, 15.0, 12.0))
+        self.assertIsNone(extract_rate_anchors(8.0, float("inf"), 15.0, 12.0))
 
 
 def run_gateway_tests(my_predbat=None):

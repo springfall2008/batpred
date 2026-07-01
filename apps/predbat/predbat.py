@@ -381,7 +381,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.iboost_value_scaling = 1.0
         self.rate_import = {}
         self.rate_import_no_io = {}
+        self.rate_import_base = {}
         self.rate_export = {}
+        self.rate_export_base = {}
         self.rate_gas = {}
         self.rate_slots = []
         self.low_rates = []
