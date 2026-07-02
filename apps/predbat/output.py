@@ -1251,6 +1251,15 @@ class Output:
 
             had_state = False
 
+            # PHYSICS ENGINE PRIORITY FIX:
+            # In prediction.py, a real export window (limit < 99) overrides a charge window.
+            # If both are active, suppress the charge window in the UI so we don't display a fake "Chrg"
+            # or a broken split-cell.
+            if charge_window_n >= 0 and export_window_n >= 0:
+                exp_limit = self.export_limits_best[export_window_n]
+                if exp_limit < 99.0:
+                    charge_window_n = -1
+
             if charge_window_n >= 0:
                 limit = self.charge_limit_best[charge_window_n]
                 target = limit
