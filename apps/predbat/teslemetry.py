@@ -18,6 +18,7 @@ reserve, grid import/export rules and the export tariff-trick).
 """
 
 import asyncio
+from datetime import datetime, timezone
 
 import aiohttp
 
@@ -36,6 +37,10 @@ TARIFF_MODES = ["normal", "export_now"]
 
 class TeslemetryAPI(ComponentBase):
     """Tesla Powerwall component using the Teslemetry (or Fleet) REST API."""
+
+    EXPORT_SELL_RATE = 0.50  # GBP/kWh synthetic high sell price to force export now.
+    DEFAULT_IMPORT_RATE = 0.28
+    DEFAULT_EXPORT_RATE = 0.15
 
     def initialize(self, key="", site_id="", base_url=TESLEMETRY_DEFAULT_URL, **kwargs):
         """Initialise the Teslemetry component from configuration.
@@ -159,6 +164,8 @@ class TeslemetryAPI(ComponentBase):
         success = True
         if not self.site_info_done:
             self.site_info_done = await self.fetch_site_info()
+        if first:
+            await self.reconcile_on_start()
         if first or (seconds - self.last_live_poll >= LIVE_POLL_SECONDS):
             self.last_live_poll = seconds
             success = await self.fetch_live_status()
@@ -196,10 +203,99 @@ class TeslemetryAPI(ComponentBase):
         """Set the grid export rule (never/pv_only/battery_ok)."""
         return await self._command("grid_import_export", {"customer_preferred_export_rule": rule})
 
+    def current_rates(self):
+        """Return (import_rate, export_rate) in GBP/kWh from Predbat's rate data when available.
+
+        Defaults to class constants if rates are unavailable. Rates from the base are in PENCE
+        (pence per kWh), so they are divided by 100.0 to convert to GBP.
+        """
+        import_rate = self.DEFAULT_IMPORT_RATE
+        export_rate = self.DEFAULT_EXPORT_RATE
+        base = getattr(self, "base", None)
+        if base is not None:
+            minutes_now = getattr(base, "minutes_now", None)
+            rate_import = getattr(base, "rate_import", None)
+            rate_export = getattr(base, "rate_export", None)
+            if minutes_now is not None and rate_import:
+                import_rate = round(rate_import.get(minutes_now, self.DEFAULT_IMPORT_RATE * 100) / 100.0, 4)
+            if minutes_now is not None and rate_export:
+                export_rate = round(rate_export.get(minutes_now, self.DEFAULT_EXPORT_RATE * 100) / 100.0, 4)
+        return import_rate, export_rate
+
+    def build_tariff(self, mode, now=None):
+        """Build a tariff_content_v2 dict for the requested mode.
+
+        export_now: current 30-minute-aligned window becomes ON_PEAK with a
+        high sell price so autonomous mode exports immediately; the window
+        self-expires. normal: flat tariff from the customer's current rates.
+        """
+        if now is None:
+            now = datetime.now(timezone.utc)
+        import_rate, export_rate = self.current_rates()
+
+        def charges(off_peak_buy, on_peak_buy):
+            """Build an energy_charges block."""
+            rates = {"SUPER_OFF_PEAK": off_peak_buy}
+            if mode == "export_now":
+                rates["ON_PEAK"] = on_peak_buy
+            return {"ALL": {"rates": {"ALL": 0}}, "AllYear": {"rates": rates}}
+
+        tou_periods = {"SUPER_OFF_PEAK": {"periods": [{"fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 0, "fromMinute": 0, "toHour": 0, "toMinute": 0}]}}
+        if mode == "export_now":
+            start = now.replace(minute=0 if now.minute < 30 else 30, second=0, microsecond=0)
+            end_minute_total = start.hour * 60 + start.minute + 60
+            end_hour, end_min = (end_minute_total // 60) % 24, end_minute_total % 60
+            window = {"fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": start.hour, "fromMinute": start.minute, "toHour": end_hour, "toMinute": end_min}
+            off_periods = []
+            if start.hour > 0 or start.minute > 0:
+                off_periods.append({"fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 0, "fromMinute": 0, "toHour": start.hour, "toMinute": start.minute})
+            if end_hour > 0 or end_min > 0:
+                off_periods.append({"fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": end_hour, "fromMinute": end_min, "toHour": 0, "toMinute": 0})
+            tou_periods = {"SUPER_OFF_PEAK": {"periods": off_periods}, "ON_PEAK": {"periods": [window]}}
+
+        seasons = {"AllYear": {"fromMonth": 1, "fromDay": 1, "toMonth": 12, "toDay": 31, "tou_periods": tou_periods}}
+        sell_rates = charges(export_rate, self.EXPORT_SELL_RATE)
+        buy_rates = charges(import_rate, import_rate)
+        common = {
+            "min_applicable_demand": 0,
+            "max_applicable_demand": 0,
+            "monthly_minimum_bill": 0,
+            "monthly_charges": 0,
+            "daily_charges": [{"name": "Charge", "amount": 0}],
+            "demand_charges": {"ALL": {"rates": {"ALL": 0}}, "AllYear": {"rates": {}}},
+        }
+        return {
+            "version": 1,
+            "utility": "Predbat",
+            "code": "PREDBAT-{}".format(mode.upper().replace("_", "-")),
+            "name": "Predbat ({})".format(mode),
+            "currency": "GBP",
+            "daily_demand_charges": {},
+            "energy_charges": buy_rates,
+            "seasons": seasons,
+            "sell_tariff": {**common, "utility": "Predbat", "energy_charges": sell_rates, "seasons": seasons},
+            **common,
+        }
+
     async def set_tariff(self, mode):
-        """Push the tariff for the requested mode (implemented in the tariff task)."""
-        self.log("Info: Teslemetry set_tariff({}) stub".format(mode))
-        return True
+        """Push the tariff for the requested mode via time_of_use_settings."""
+        tariff = self.build_tariff(mode)
+        return await self._command("time_of_use_settings", {"tou_settings": {"tariff_content_v2": tariff}})
+
+    async def reconcile_on_start(self):
+        """Restore a safe state if a previous run died mid-export.
+
+        If the tariff mode is left in export_now (indicating a previous run crashed
+        mid-operation), restores normal tariff and disables export to prevent unintended
+        grid export. If the tariff mode is already normal, does nothing.
+        """
+        tariff_mode = self.get_state_wrapper(self.entity("tariff_mode", domain="select"), default="normal")
+        if tariff_mode == "export_now":
+            self.log("Warn: Teslemetry was left in export_now - restoring normal tariff and disabling export")
+            if await self.set_tariff("normal"):
+                self.set_state_wrapper(self.entity("tariff_mode", domain="select"), "normal")
+            if await self.set_export_rule("never"):
+                self.set_state_wrapper(self.entity("allow_export", domain="select"), "never")
 
     async def select_event(self, entity_id, value):
         """Handle select changes routed from the service-hook loopback."""

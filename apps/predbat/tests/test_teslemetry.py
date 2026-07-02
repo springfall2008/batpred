@@ -329,6 +329,59 @@ def test_teslemetry_site_info_latch():
     assert api.dashboard_items["sensor.predbat_teslemetry_soc_max"]["state"] == 13.5
 
 
+def test_teslemetry_build_tariff_export_now():
+    """export_now tariff marks the current window ON_PEAK with a high sell rate."""
+    from datetime import datetime
+
+    api = MockTeslemetryAPI()
+    now = datetime(2026, 7, 2, 14, 40)
+    tariff = api.build_tariff("export_now", now=now)
+    assert tariff["version"] == 1
+    sell = tariff["sell_tariff"]["energy_charges"]["AllYear"]["rates"]
+    assert sell["ON_PEAK"] > sell["SUPER_OFF_PEAK"]
+    periods = tariff["seasons"]["AllYear"]["tou_periods"]["ON_PEAK"]["periods"]
+    assert periods[0]["fromHour"] == 14 and periods[0]["fromMinute"] == 30
+    assert periods[0]["toHour"] == 15 and periods[0]["toMinute"] == 30
+
+
+def test_teslemetry_build_tariff_normal_flat():
+    """normal tariff is flat (single ALL rate, no ON_PEAK windows)."""
+    api = MockTeslemetryAPI()
+    tariff = api.build_tariff("normal")
+    assert "ON_PEAK" not in tariff["seasons"]["AllYear"]["tou_periods"]
+    assert tariff["energy_charges"]["AllYear"]["rates"]["SUPER_OFF_PEAK"] >= 0
+
+
+def test_teslemetry_set_tariff_posts_tou_settings():
+    """set_tariff wraps the tariff in tou_settings and POSTs it."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/time_of_use_settings"] = {"response": {"code": 201}}
+    result = run_async(api.set_tariff("normal"))
+    assert result is True
+    method, path, body = api.requests_made[-1]
+    assert path == "/api/1/energy_sites/123456/time_of_use_settings"
+    assert "tariff_content_v2" in body["tou_settings"]
+
+
+def test_teslemetry_reconcile_on_start_restores_normal():
+    """Boot reconciliation restores normal tariff + never export if left in export_now."""
+    api = MockTeslemetryAPI()
+    api.entity_states["select.predbat_teslemetry_tariff_mode"] = "export_now"
+    api.mock_responses["/api/1/energy_sites/123456/time_of_use_settings"] = {"response": {"code": 201}}
+    api.mock_responses["/api/1/energy_sites/123456/grid_import_export"] = {"response": {"code": 201}}
+    run_async(api.reconcile_on_start())
+    assert api.entity_states["select.predbat_teslemetry_tariff_mode"] == "normal"
+    assert api.entity_states["select.predbat_teslemetry_allow_export"] == "never"
+
+
+def test_teslemetry_reconcile_on_start_noop_when_normal():
+    """Boot reconciliation does nothing when tariff mode is already normal."""
+    api = MockTeslemetryAPI()
+    api.entity_states["select.predbat_teslemetry_tariff_mode"] = "normal"
+    run_async(api.reconcile_on_start())
+    assert api.requests_made == []
+
+
 def test_teslemetry(my_predbat=None):
     """Run all Teslemetry component tests (registry entry point).
 
@@ -351,5 +404,10 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_switch_grid_charging()
     test_teslemetry_select_export_rule()
     test_teslemetry_site_info_latch()
+    test_teslemetry_build_tariff_export_now()
+    test_teslemetry_build_tariff_normal_flat()
+    test_teslemetry_set_tariff_posts_tou_settings()
+    test_teslemetry_reconcile_on_start_restores_normal()
+    test_teslemetry_reconcile_on_start_noop_when_normal()
     print("**** Teslemetry tests passed ****")
     return 0
