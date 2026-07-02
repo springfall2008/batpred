@@ -783,7 +783,7 @@ class SigenergyAPI(ComponentBase):
             "/openapi/systems/{}/v1/history".format(system_id),
             params={"systemId": system_id, "date": today, "level": "Lifetime"},
         )
-        if data is None:
+        if data is None or not isinstance(data, dict):
             self.log("Warn: SigenergyAPI: Failed to fetch history totals for {}".format(system_id))
             return False
 

@@ -694,6 +694,32 @@ def test_sigenergy_fetch_history_totals(my_predbat):
     return failed
 
 
+def test_sigenergy_fetch_history_totals_empty_data(my_predbat):
+    """Test fetch_history_totals handles code=0 with a null/missing data field without crashing.
+
+    _request() returns the _SIGENERGY_OK sentinel (not a dict) in this case — fetch_history_totals
+    must not call .get() on it.
+    """
+    failed = False
+    api = MockSigenergyAPI()
+    api.access_token = "fake_token"
+    api.token_expires_at = 9_999_999_999
+    api._last_request_time = 0
+
+    fake_response = {"code": 0, "msg": "success"}  # no 'data' field
+
+    mock_response = _make_mock_response(status=200, json_data=fake_response)
+    mock_session = _make_mock_session(mock_response)
+
+    with patch("sigenergy.aiohttp.ClientSession", return_value=mock_session):
+        ok = run_async(api.fetch_history_totals("SIG001"))
+
+    assert ok is False, "fetch_history_totals should return False for empty data, got {}".format(ok)
+    assert "SIG001" not in api.history_totals, "history_totals not populated on failure"
+
+    return failed
+
+
 def test_sigenergy_apply_controls_charge_mode(my_predbat):
     """Test apply_controls selects charge command during active charge window."""
     failed = False
@@ -1883,6 +1909,7 @@ def run_sigenergy_tests(my_predbat):
         ("fetch_system_list", test_sigenergy_fetch_system_list),
         ("fetch_system_list_with_filter", test_sigenergy_fetch_system_list_with_filter),
         ("fetch_history_totals", test_sigenergy_fetch_history_totals),
+        ("fetch_history_totals_empty_data", test_sigenergy_fetch_history_totals_empty_data),
         ("apply_controls_charge_mode", test_sigenergy_apply_controls_charge_mode),
         ("apply_controls_eco_mode", test_sigenergy_apply_controls_eco_mode),
         ("apply_controls_deduplication", test_sigenergy_apply_controls_deduplication),
