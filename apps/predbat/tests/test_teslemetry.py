@@ -23,6 +23,7 @@ class MockTeslemetryAPI(TeslemetryAPI):
         self.api_auth_failed = False
         self.last_live_poll = 0
         self.last_energy_poll = 0
+        self.site_info_done = False
         self.dashboard_items = {}
         self.log_messages = []
         self.entity_states = {}
@@ -264,6 +265,70 @@ def test_teslemetry_run_auth_failed_only_probes_live_status():
     assert calls == ["live_status"]
 
 
+def test_teslemetry_select_operation_mode():
+    """select_event on operation_mode POSTs /operation and updates entity state on success."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/operation"] = {"response": {"code": 201}}
+    run_async(api.select_event("select.predbat_teslemetry_operation_mode", "backup"))
+    assert ("POST", "/api/1/energy_sites/123456/operation", {"default_real_mode": "backup"}) in api.requests_made
+    assert api.entity_states["select.predbat_teslemetry_operation_mode"] == "backup"
+
+
+def test_teslemetry_select_failure_keeps_state():
+    """Failed command does not update entity state (write_and_poll will retry)."""
+    api = MockTeslemetryAPI()
+    # No mock response registered -> _request returns None -> command fails
+    run_async(api.select_event("select.predbat_teslemetry_operation_mode", "backup"))
+    assert "select.predbat_teslemetry_operation_mode" not in api.entity_states
+
+
+def test_teslemetry_number_backup_reserve():
+    """number_event on backup_reserve POSTs /backup with an integer percent."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/backup"] = {"response": {"code": 201}}
+    run_async(api.number_event("number.predbat_teslemetry_backup_reserve", 100))
+    assert ("POST", "/api/1/energy_sites/123456/backup", {"backup_reserve_percent": 100}) in api.requests_made
+    assert api.entity_states["number.predbat_teslemetry_backup_reserve"] == 100
+
+
+def test_teslemetry_switch_grid_charging():
+    """switch_event maps turn_off to disallow grid charging."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/grid_import_export"] = {"response": {"code": 201}}
+    run_async(api.switch_event("switch.predbat_teslemetry_allow_charging_from_grid", "turn_off"))
+    assert ("POST", "/api/1/energy_sites/123456/grid_import_export", {"disallow_charge_from_grid_with_solar_installed": True}) in api.requests_made
+    assert api.entity_states["switch.predbat_teslemetry_allow_charging_from_grid"] == "off"
+
+
+def test_teslemetry_select_export_rule():
+    """select_event on allow_export POSTs the customer_preferred_export_rule."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/grid_import_export"] = {"response": {"code": 201}}
+    run_async(api.select_event("select.predbat_teslemetry_allow_export", "battery_ok"))
+    assert ("POST", "/api/1/energy_sites/123456/grid_import_export", {"customer_preferred_export_rule": "battery_ok"}) in api.requests_made
+    assert api.entity_states["select.predbat_teslemetry_allow_export"] == "battery_ok"
+
+
+def test_teslemetry_site_info_latch():
+    """site_info fetch is retried on every cycle until success; latch prevents redundant calls once successful."""
+    api, calls = _make_run_api_with_fetch_capture(site_info=False, live_status=True, energy_today=True)
+    # First cycle: site_info missing, fetch returns False, latch stays False
+    assert run_async(api.run(0, True)) is True
+    assert calls == ["site_info", "live_status", "energy_today"]
+    assert api.site_info_done is False
+    # Now provide the site_info mock and unbind fetch_site_info so the real one runs
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO
+    api.fetch_site_info = TeslemetryAPI.fetch_site_info.__get__(api)
+    # Re-create the fake live_status/energy_today so they still record and return True
+    api.fetch_live_status = _make_run_api_with_fetch_capture(live_status=True)[0].fetch_live_status
+    api.fetch_energy_today = _make_run_api_with_fetch_capture(energy_today=True)[0].fetch_energy_today
+    # Run again: site_info_done latch should trigger fetch_site_info and succeed
+    assert run_async(api.run(300, False)) is True
+    # site_info_done should now be True and soc_max should be published
+    assert api.site_info_done is True
+    assert api.dashboard_items["sensor.predbat_teslemetry_soc_max"]["state"] == 13.5
+
+
 def test_teslemetry(my_predbat=None):
     """Run all Teslemetry component tests (registry entry point).
 
@@ -280,5 +345,11 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_run_unconfigured_returns_false()
     test_teslemetry_run_first_success_returns_true()
     test_teslemetry_run_auth_failed_only_probes_live_status()
+    test_teslemetry_select_operation_mode()
+    test_teslemetry_select_failure_keeps_state()
+    test_teslemetry_number_backup_reserve()
+    test_teslemetry_switch_grid_charging()
+    test_teslemetry_select_export_rule()
+    test_teslemetry_site_info_latch()
     print("**** Teslemetry tests passed ****")
     return 0

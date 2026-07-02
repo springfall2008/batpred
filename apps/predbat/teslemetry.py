@@ -52,7 +52,9 @@ class TeslemetryAPI(ComponentBase):
         self.api_auth_failed = False
         self.last_live_poll = 0
         self.last_energy_poll = 0
+        self.site_info_done = False
         self.log("Info: TeslemetryAPI initialising site_id={}".format(self.site_id))
+        self.register_control_entities()
 
     def entity(self, suffix, domain="sensor"):
         """Build a prefixed virtual entity id for this component."""
@@ -155,8 +157,8 @@ class TeslemetryAPI(ComponentBase):
                 return await self.fetch_live_status()
             return False
         success = True
-        if first:
-            await self.fetch_site_info()
+        if not self.site_info_done:
+            self.site_info_done = await self.fetch_site_info()
         if first or (seconds - self.last_live_poll >= LIVE_POLL_SECONDS):
             self.last_live_poll = seconds
             success = await self.fetch_live_status()
@@ -164,6 +166,79 @@ class TeslemetryAPI(ComponentBase):
             self.last_energy_poll = seconds
             await self.fetch_energy_today()
         return success
+
+    def register_control_entities(self):
+        """Publish the virtual control entities with their initial states."""
+        self.dashboard_item(self.entity("operation_mode", domain="select"), "self_consumption", {"friendly_name": "Powerwall Operation Mode", "options": OPERATION_MODES}, app="teslemetry")
+        self.dashboard_item(self.entity("backup_reserve", domain="number"), 0, {"friendly_name": "Powerwall Backup Reserve", "min": 0, "max": 100, "step": 1, "unit_of_measurement": "%"}, app="teslemetry")
+        self.dashboard_item(self.entity("allow_charging_from_grid", domain="switch"), "on", {"friendly_name": "Powerwall Allow Grid Charging"}, app="teslemetry")
+        self.dashboard_item(self.entity("allow_export", domain="select"), "never", {"friendly_name": "Powerwall Allow Export", "options": EXPORT_RULES}, app="teslemetry")
+        self.dashboard_item(self.entity("tariff_mode", domain="select"), "normal", {"friendly_name": "Powerwall Tariff Mode", "options": TARIFF_MODES}, app="teslemetry")
+
+    async def _command(self, path, body):
+        """POST a command; return True on success."""
+        result = await self._request("POST", "/api/1/energy_sites/{}/{}".format(self.site_id, path), json_body=body)
+        return result is not None
+
+    async def set_operation_mode(self, mode):
+        """Set the Powerwall operation mode (self_consumption/autonomous/backup)."""
+        return await self._command("operation", {"default_real_mode": mode})
+
+    async def set_backup_reserve(self, percent):
+        """Set the backup reserve percentage (cloud caps at 80; 80-100 treated as 100 by Predbat)."""
+        return await self._command("backup", {"backup_reserve_percent": int(percent)})
+
+    async def set_grid_charging(self, allow):
+        """Allow or disallow charging the battery from the grid."""
+        return await self._command("grid_import_export", {"disallow_charge_from_grid_with_solar_installed": not allow})
+
+    async def set_export_rule(self, rule):
+        """Set the grid export rule (never/pv_only/battery_ok)."""
+        return await self._command("grid_import_export", {"customer_preferred_export_rule": rule})
+
+    async def set_tariff(self, mode):
+        """Push the tariff for the requested mode (implemented in the tariff task)."""
+        self.log("Info: Teslemetry set_tariff({}) stub".format(mode))
+        return True
+
+    async def select_event(self, entity_id, value):
+        """Handle select changes routed from the service-hook loopback."""
+        success = False
+        if entity_id.endswith("_operation_mode") and value in OPERATION_MODES:
+            success = await self.set_operation_mode(value)
+        elif entity_id.endswith("_allow_export") and value in EXPORT_RULES:
+            success = await self.set_export_rule(value)
+        elif entity_id.endswith("_tariff_mode") and value in TARIFF_MODES:
+            success = await self.set_tariff(value)
+        else:
+            self.log("Warn: Teslemetry unhandled select_event {} = {}".format(entity_id, value))
+            return
+        if success:
+            self.set_state_wrapper(entity_id, value)
+        else:
+            self.log("Warn: Teslemetry command failed for {} = {} (state not updated)".format(entity_id, value))
+
+    async def number_event(self, entity_id, value):
+        """Handle number changes routed from the service-hook loopback."""
+        if entity_id.endswith("_backup_reserve"):
+            percent = max(0, min(100, int(float(value))))
+            if await self.set_backup_reserve(percent):
+                self.set_state_wrapper(entity_id, percent)
+            else:
+                self.log("Warn: Teslemetry backup_reserve command failed (state not updated)")
+        else:
+            self.log("Warn: Teslemetry unhandled number_event {} = {}".format(entity_id, value))
+
+    async def switch_event(self, entity_id, service):
+        """Handle switch service calls routed from the service-hook loopback."""
+        if entity_id.endswith("_allow_charging_from_grid"):
+            allow = service != "turn_off"
+            if await self.set_grid_charging(allow):
+                self.set_state_wrapper(entity_id, "on" if allow else "off")
+            else:
+                self.log("Warn: Teslemetry grid charging command failed (state not updated)")
+        else:
+            self.log("Warn: Teslemetry unhandled switch_event {} {}".format(entity_id, service))
 
     async def final(self):
         """Cleanup on shutdown."""
