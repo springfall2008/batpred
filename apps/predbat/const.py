@@ -33,6 +33,7 @@ TIMEOUT = 60 * 5
 CONFIG_REFRESH_PERIOD = 60 * 8
 INVERTER_MAX_RETRY = 10  # Maximum number of retries for inverter commands
 INVERTER_MAX_RETRY_REST = 5  # Maximum number of retries for inverter REST commands
+INVERTER_REST_TIMEOUT = 5  # Seconds to wait for a REST response before giving up (local network call, should be fast)
 INVERTER_QUICK_UPDATE_SECONDS = 120  # Minimum seconds between quick inverter data updates
 
 # 240v x 100 amps x 3 phases / 1000 to kW / 60 minutes in an hour is the maximum kWh in a 1 minute period

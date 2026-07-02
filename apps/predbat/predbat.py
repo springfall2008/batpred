@@ -35,7 +35,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v8.42.5"
+THIS_VERSION = "v8.43.1"
 
 from download import predbat_update_move, predbat_update_download, check_install, DEFAULT_PREDBAT_REPOSITORY
 from const import MINUTE_WATT
@@ -351,6 +351,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.minutes_to_midnight = 0
         self.days_previous = [7]
         self.days_previous_weight = [1]
+        self.max_days_previous = max(self.days_previous) + 1
         self.forecast_days = 0
         self.forecast_minutes = 0
         self.soc_kw = 0
@@ -381,7 +382,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.iboost_value_scaling = 1.0
         self.rate_import = {}
         self.rate_import_no_io = {}
+        self.rate_import_base = {}
         self.rate_export = {}
+        self.rate_export_base = {}
         self.rate_gas = {}
         self.rate_slots = []
         self.low_rates = []
@@ -603,6 +606,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.octopus_url_cache_loaded = False
         self.github_url_cache_loaded = False
         self.load_forecast_history = False
+        self.prediction_kernel_enable = False
 
         for root in CONFIG_ROOTS:
             if os.path.exists(root):
@@ -776,7 +780,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             recompute = True
 
         # Fetch inverter data
-        self.fetch_inverter_data()
+        if not self.fetch_inverter_data():
+            self.log("Error: Failed to fetch inverter data, not able to compute a plan")
+            self.record_status("Error: Failed to fetch inverter data, not able to compute a plan", had_errors=True)
+            return
 
         # Check if we have valid import rates
         if self.rate_min == self.rate_max == 0:
@@ -808,7 +815,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         # Execute the plan, re-read the inverter first if we had to calculate (as time passes during calculations)
         if recompute:
-            self.fetch_inverter_data()
+            if not self.fetch_inverter_data():
+                self.log("Error: Failed to fetch inverter data, not able to execute the plan")
+                self.record_status("Error: Failed to fetch inverter data, not able to execute the plan", had_errors=True)
+                return
         status, status_extra = self.execute_plan()
 
         # If the plan was not updated, and the time has expired lets update it now
@@ -826,7 +836,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                     time.sleep(delay)
                 # Calculate an updated plan, fetch the inverter data again and execute the plan
                 self.calculate_plan(recompute=True)
-                self.fetch_inverter_data()
+                if not self.fetch_inverter_data():
+                    self.log("Error: Failed to fetch inverter data, not able to execute the plan")
+                    self.record_status("Error: Failed to fetch inverter data, not able to execute the plan", had_errors=True)
+                    return
                 status, status_extra = self.execute_plan()
             else:
                 self.log("Will not recompute the plan, it is {} minutes old and max age is {} minutes".format(dp1(plan_age_minutes), self.calculate_plan_every))

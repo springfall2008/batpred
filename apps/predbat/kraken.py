@@ -162,6 +162,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         self.export_tariff = None  # Export tariff (discovered dynamically)
         self.wired = False
         self.export_wired = False
+        self.export_rates_available = False  # True once export rates are actually fetched (not just tariff discovered)
         self.requests_total = 0
         self.failures_total = 0
         self.oauth_failed = False
@@ -804,6 +805,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                 export_rates = await self.async_fetch_rates(tariff=self.export_tariff)
                 if export_rates:
                     had_success = True
+                    self.export_rates_available = True
                     self.dashboard_item(
                         self.get_entity_name("sensor", "export_rates"),
                         state=len(export_rates),
@@ -823,8 +825,14 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             self.set_arg("metric_standing_charge", self.get_entity_name("sensor", "import_standing"))
             self.wired = True
 
-        # Wire export into fetch.py once export tariff is discovered
-        if not self.export_wired and self.export_tariff:
+        # Wire export into fetch.py once export rates are actually available.
+        # An export tariff can be discovered (e.g. EDF SEG tariffs registered on the
+        # meter point) while the standard-unit-rates endpoint returns HTTP 404, so no
+        # rates are ever fetched. Wiring metric_octopus_export to the empty export_rates
+        # sensor would make fetch.py take the octopus-export branch and ignore the user's
+        # manual rates_export fallback, zeroing out all export in the plan. Only wire once
+        # we have real export rate data.
+        if not self.export_wired and self.export_tariff and self.export_rates_available:
             self.set_arg("metric_octopus_export", self.get_entity_name("sensor", "export_rates"))
             self.export_wired = True
 

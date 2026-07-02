@@ -672,6 +672,9 @@ class GECloudDirect(ComponentBase):
                         else:
                             self.log("GECloud: Warn: Failed to set {} for {}".format(ha_name, device))
             if "real_time_control" in ha_name:
+                if self.ems_device:
+                    # RTC is on the EMS, not the individual inverters — skip
+                    continue
                 if value:
                     self.log("GECloud: Real-time control already enabled for {}".format(device))
                     changed = True

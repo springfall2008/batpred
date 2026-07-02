@@ -11,8 +11,9 @@
 from tests.test_infra import reset_rates, reset_inverter, simple_scenario, reset_rates2
 
 
-def run_model_tests(my_predbat):
-    print("**** Running Model tests ****")
+def run_model_tests(my_predbat, prediction_kernel=False):
+    print("**** Running Model tests{} ****".format(" (C++ prediction kernel enabled)" if prediction_kernel else ""))
+    my_predbat.prediction_kernel_enable = prediction_kernel
     reset_inverter(my_predbat)
     import_rate = 10.0
     export_rate = 5.0
@@ -2086,6 +2087,7 @@ def run_model_tests(my_predbat):
         clipping_cost_weight=1.0,
     )
 
+    my_predbat.prediction_kernel_enable = False
     if failed:
         print("**** ERROR: Some Model tests failed ****")
     return failed

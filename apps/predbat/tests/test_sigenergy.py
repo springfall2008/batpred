@@ -317,6 +317,7 @@ def test_sigenergy_publish_system_entities(my_predbat):
         "evPower": 0.0,
     }
     api.daily_summary[system_id] = {"dailyPowerGeneration": 12.3}
+    api.history_totals[system_id] = {"TO_LOAD": 987.6, "FROM_GRID": 500.5, "TO_GRID": 400.4}
 
     run_async(api.publish_system_entities(system_id))
 
@@ -325,6 +326,8 @@ def test_sigenergy_publish_system_entities(my_predbat):
     grid_key = "sensor.predbat_sigenergy_{}_grid_power".format(slug)
     pv_key = "sensor.predbat_sigenergy_{}_pv_power".format(slug)
     today_key = "sensor.predbat_sigenergy_{}_pv_today".format(slug)
+    load_lifetime_key = "sensor.predbat_sigenergy_{}_load_lifetime".format(slug)
+    grid_import_lifetime_key = "sensor.predbat_sigenergy_{}_grid_import_lifetime".format(slug)
 
     assert soc_key in api.dashboard_items, "Battery SOC entity published"
     soc_kwh = api.dashboard_items[soc_key]["state"]
@@ -342,6 +345,11 @@ def test_sigenergy_publish_system_entities(my_predbat):
 
     assert today_key in api.dashboard_items, "PV today entity published"
     assert abs(api.dashboard_items[today_key]["state"] - 12.3) < 0.01, "PV today correct"
+
+    assert load_lifetime_key in api.dashboard_items, "Load lifetime entity published"
+    assert abs(api.dashboard_items[load_lifetime_key]["state"] - 987.6) < 0.01, "Load lifetime correct"
+    assert grid_import_lifetime_key in api.dashboard_items, "Grid import lifetime entity published"
+    assert abs(api.dashboard_items[grid_import_lifetime_key]["state"] - 500.5) < 0.01, "Grid import lifetime correct"
 
     return failed
 
@@ -365,6 +373,10 @@ def test_sigenergy_automatic_config(my_predbat):
     assert "grid_power" in api.set_args, "grid_power wired"
     assert "inverter_time" in api.set_args, "inverter_time wired"
     assert len(api.set_args["inverter_time"]) == 2, "inverter_time has one entry per system"
+    assert api.set_args.get("pv_today") == ["sensor.predbat_sigenergy_sig001_pv_lifetime", "sensor.predbat_sigenergy_sig002_pv_lifetime"], "pv_today wired to lifetime totals"
+    assert api.set_args.get("load_today") == ["sensor.predbat_sigenergy_sig001_load_lifetime", "sensor.predbat_sigenergy_sig002_load_lifetime"], "load_today wired to lifetime totals"
+    assert api.set_args.get("import_today") == ["sensor.predbat_sigenergy_sig001_grid_import_lifetime", "sensor.predbat_sigenergy_sig002_grid_import_lifetime"], "import_today wired to lifetime totals"
+    assert api.set_args.get("export_today") == ["sensor.predbat_sigenergy_sig001_grid_export_lifetime", "sensor.predbat_sigenergy_sig002_grid_export_lifetime"], "export_today wired to lifetime totals"
 
     return failed
 
@@ -636,6 +648,75 @@ def test_sigenergy_fetch_system_list_with_filter(my_predbat):
     assert ok is True, "fetch_system_list should return True with filter, got {}".format(ok)
     assert "SIG001" in api.systems, "Filtered system included"
     assert "SIG002" not in api.systems, "Non-matching system excluded"
+
+    return failed
+
+
+def test_sigenergy_fetch_history_totals(my_predbat):
+    """Test fetch_history_totals parses Sankey node totals from the /v1/history endpoint."""
+    failed = False
+    api = MockSigenergyAPI()
+    api.access_token = "fake_token"
+    api.token_expires_at = 9_999_999_999
+    api._last_request_time = 0
+
+    fake_response = {
+        "code": 0,
+        "data": {
+            "sankeyData": {
+                "nodes": [
+                    {"id": "FROM_SOLAR", "value": 1234.5},
+                    {"id": "FROM_BATTERY", "value": 111.1},
+                    {"id": "TO_BATTERY", "value": 222.2},
+                    {"id": "TO_EVDC", "value": 0.0},
+                    {"id": "FROM_EVDC", "value": 3.3},
+                    {"id": "FROM_GRID", "value": 500.5},
+                    {"id": "TO_LOAD", "value": 987.6},
+                    {"id": "TO_GRID", "value": 400.4},
+                ],
+                "links": [],
+            },
+        },
+    }
+
+    mock_response = _make_mock_response(status=200, json_data=fake_response)
+    mock_session = _make_mock_session(mock_response)
+
+    with patch("sigenergy.aiohttp.ClientSession", return_value=mock_session):
+        ok = run_async(api.fetch_history_totals("SIG001"))
+
+    assert ok is True, "fetch_history_totals should return True, got {}".format(ok)
+    totals = api.history_totals.get("SIG001", {})
+    assert totals.get("TO_LOAD") == 987.6, "TO_LOAD lifetime total captured"
+    assert totals.get("FROM_GRID") == 500.5, "FROM_GRID lifetime total captured"
+    assert totals.get("TO_GRID") == 400.4, "TO_GRID lifetime total captured"
+    assert totals.get("FROM_SOLAR") == 1234.5, "FROM_SOLAR lifetime total captured"
+
+    return failed
+
+
+def test_sigenergy_fetch_history_totals_empty_data(my_predbat):
+    """Test fetch_history_totals handles code=0 with a null/missing data field without crashing.
+
+    _request() returns the _SIGENERGY_OK sentinel (not a dict) in this case — fetch_history_totals
+    must not call .get() on it.
+    """
+    failed = False
+    api = MockSigenergyAPI()
+    api.access_token = "fake_token"
+    api.token_expires_at = 9_999_999_999
+    api._last_request_time = 0
+
+    fake_response = {"code": 0, "msg": "success"}  # no 'data' field
+
+    mock_response = _make_mock_response(status=200, json_data=fake_response)
+    mock_session = _make_mock_session(mock_response)
+
+    with patch("sigenergy.aiohttp.ClientSession", return_value=mock_session):
+        ok = run_async(api.fetch_history_totals("SIG001"))
+
+    assert ok is False, "fetch_history_totals should return False for empty data, got {}".format(ok)
+    assert "SIG001" not in api.history_totals, "history_totals not populated on failure"
 
     return failed
 
@@ -1752,6 +1833,7 @@ def test_sigenergy_run_derives_onboard_status(my_predbat):
         api._manage_vpp_registration = AsyncMock(return_value=True)
         api.fetch_inverter_realtime = AsyncMock(return_value=True)
         api.fetch_daily_summary = AsyncMock()
+        api.fetch_history_totals = AsyncMock()
         api.publish_system_entities = AsyncMock()
         api.apply_controls = AsyncMock()
         return api
@@ -1827,6 +1909,8 @@ def run_sigenergy_tests(my_predbat):
         ("get_access_token_no_retry_on_api_error", test_sigenergy_get_access_token_no_retry_on_api_error),
         ("fetch_system_list", test_sigenergy_fetch_system_list),
         ("fetch_system_list_with_filter", test_sigenergy_fetch_system_list_with_filter),
+        ("fetch_history_totals", test_sigenergy_fetch_history_totals),
+        ("fetch_history_totals_empty_data", test_sigenergy_fetch_history_totals_empty_data),
         ("apply_controls_charge_mode", test_sigenergy_apply_controls_charge_mode),
         ("apply_controls_eco_mode", test_sigenergy_apply_controls_eco_mode),
         ("apply_controls_deduplication", test_sigenergy_apply_controls_deduplication),

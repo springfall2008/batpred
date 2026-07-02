@@ -68,6 +68,7 @@ def test_download(my_predbat):
         ("update_download_api_failure", _test_predbat_update_download_api_failure, "Update download API failure"),
         ("update_download_file_failure", _test_predbat_update_download_file_failure, "Update download file failure"),
         ("download_file_success", _test_download_predbat_file_success, "Download file success"),
+        ("download_file_binary", _test_download_predbat_file_binary, "Download binary file round-trips byte-for-byte"),
         ("download_file_failure", _test_download_predbat_file_failure, "Download file failure"),
         ("download_file_no_filename", _test_download_predbat_file_no_filename, "Download file no filename"),
         ("update_move_success", _test_predbat_update_move_success, "Move files success"),
@@ -524,18 +525,47 @@ def _test_download_predbat_file_success(my_predbat):
     try:
         output_file = os.path.join(temp_dir, "test.py.v8.30.8")
 
-        # Mock successful HTTP response
-        mock_response = type("MockResponse", (), {"ok": True, "text": 'print("test file content")\n'})()
+        # Mock successful HTTP response (requests.Response exposes both .text and .content;
+        # the downloader must use .content and write in binary mode so binary files such as
+        # the prediction kernel .so binaries round-trip byte-for-byte)
+        mock_response = type("MockResponse", (), {"ok": True, "content": b'print("test file content")\n'})()
 
         with patch("download.requests.get", return_value=mock_response):
             result = download_predbat_file_from_github("v8.30.8", "test.py", output_file)
 
-            # Verify file was written
+            # Verify file was written byte-for-byte
             assert os.path.exists(output_file)
-            with open(output_file, "r") as f:
+            with open(output_file, "rb") as f:
                 content = f.read()
-            assert content == 'print("test file content")\n'
-            assert result == 'print("test file content")\n'
+            assert content == b'print("test file content")\n'
+            assert result == b'print("test file content")\n'
+
+    finally:
+        shutil.rmtree(temp_dir)
+    return 0
+
+
+def _test_download_predbat_file_binary(my_predbat):
+    """
+    Test downloading a binary file (e.g. the prediction kernel .so) round-trips byte-for-byte
+    """
+    temp_dir = tempfile.mkdtemp()
+
+    try:
+        output_file = os.path.join(temp_dir, "prediction_kernel_lib_x86_64.so.v8.30.8")
+        # Bytes that are not valid UTF-8 and include newline-like bytes, to catch any
+        # accidental text decoding or newline translation in the download path
+        binary_data = bytes([0x7F, 0x45, 0x4C, 0x46, 0x00, 0x0A, 0x0D, 0xFF, 0xFE, 0x80])
+        mock_response = type("MockResponse", (), {"ok": True, "content": binary_data})()
+
+        with patch("download.requests.get", return_value=mock_response):
+            result = download_predbat_file_from_github("v8.30.8", "prediction_kernel_lib_x86_64.so", output_file)
+
+            assert os.path.exists(output_file)
+            with open(output_file, "rb") as f:
+                content = f.read()
+            assert content == binary_data
+            assert result == binary_data
 
     finally:
         shutil.rmtree(temp_dir)
@@ -571,11 +601,11 @@ def _test_download_predbat_file_no_filename(my_predbat):
     Test download without saving to file (returns content only)
     """
     # Mock successful HTTP response
-    mock_response = type("MockResponse", (), {"ok": True, "text": 'print("test file content")\n'})()
+    mock_response = type("MockResponse", (), {"ok": True, "content": b'print("test file content")\n'})()
 
     with patch("download.requests.get", return_value=mock_response):
         result = download_predbat_file_from_github("v8.30.8", "test.py", None)
-        assert result == 'print("test file content")\n'
+        assert result == b'print("test file content")\n'
     return 0
 
 

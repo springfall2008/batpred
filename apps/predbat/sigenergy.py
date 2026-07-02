@@ -23,6 +23,7 @@ Data endpoints used:
   GET  /openapi/system/{systemId}/devices                — device inventory
   GET  /openapi/systems/{systemId}/energyFlow            — realtime power & SOC
   GET  /openapi/systems/{systemId}/summary               — daily/lifetime yield
+  GET  /openapi/systems/{systemId}/v1/history             — lifetime energy totals (Sankey nodes)
   GET  /openapi/instruction/{systemId}/settings          — current operating mode
 
 Control endpoints:
@@ -191,6 +192,23 @@ SIGENERGY_DEVICE_METER = "Meter"
 _BASE_TIME = datetime.strptime("00:00:00", "%H:%M:%S")
 SIGENERGY_OPTIONS_TIME = [(_BASE_TIME + timedelta(seconds=m * 60)).strftime("%H:%M:%S") for m in range(0, 24 * 60)]
 
+# Sankey node IDs returned by the /v1/history endpoint (level=Lifetime), mapped to the
+# entity slug and friendly name used to publish each as a lifetime-cumulative kWh sensor.
+# There is no native "today" load/import/export sensor on the Sigenergy Cloud API, so
+# Predbat is wired to these ever-growing totals — the same pattern used for lifetime
+# energy counters on other inverter brands, where load_today/import_today/export_today
+# derive "today" by diffing against midnight rather than reading a daily-reset sensor.
+SIGENERGY_HISTORY_NODES = [
+    ("TO_LOAD", "load_lifetime", "Load Lifetime"),
+    ("FROM_GRID", "grid_import_lifetime", "Grid Import Lifetime"),
+    ("TO_GRID", "grid_export_lifetime", "Grid Export Lifetime"),
+    ("FROM_SOLAR", "pv_lifetime", "PV Lifetime"),
+    ("TO_BATTERY", "battery_charge_lifetime", "Battery Charge Lifetime"),
+    ("FROM_BATTERY", "battery_discharge_lifetime", "Battery Discharge Lifetime"),
+    ("TO_EVDC", "ev_charge_lifetime", "EV Charge Lifetime"),
+    ("FROM_EVDC", "ev_discharge_lifetime", "EV Discharge Lifetime"),
+]
+
 # Sentinel returned by _request() when the API responds with code=0 but an empty/null data field.
 # Distinguishes "success with no payload" from None which always means "request failed".
 _SIGENERGY_OK = object()
@@ -281,6 +299,7 @@ class SigenergyAPI(ComponentBase):
         self.energy_flow = {}     # systemId → latest energyFlow dict
         self.system_status = {}   # systemId → latest systemStatus dict
         self.daily_summary = {}   # systemId → latest summary dict
+        self.history_totals = {}  # systemId → {sankey node id: lifetime kWh total}
         self.current_mode = {}    # systemId → energyStorageOperationMode int
         self.onboard_status = {}  # systemId → onboarding status string (published for the SaaS UI)
 
@@ -740,6 +759,36 @@ class SigenergyAPI(ComponentBase):
             return False
 
         self.daily_summary[system_id] = data
+        return True
+
+    async def fetch_history_totals(self, system_id):
+        """Fetch lifetime cumulative energy totals for a system.
+
+        The Sigenergy Cloud API has no native "today" load/import/export sensor,
+        so this polls the history endpoint at level=Lifetime for the ever-growing
+        Sankey node totals (TO_LOAD, FROM_GRID, TO_GRID, FROM_SOLAR, TO_BATTERY,
+        FROM_BATTERY, TO_EVDC, FROM_EVDC). Predbat derives "today" energy from
+        these by diffing against midnight — the same pattern already used for
+        lifetime energy counters on other inverter brands.
+
+        Args:
+            system_id: Sigenergy system unique identifier.
+
+        Returns:
+            True on success, False on failure.
+        """
+        today = datetime.now(self.local_tz).strftime("%Y-%m-%d")
+        data = await self._request(
+            "GET",
+            "/openapi/systems/{}/v1/history".format(system_id),
+            params={"systemId": system_id, "date": today, "level": "Lifetime"},
+        )
+        if data is None or not isinstance(data, dict):
+            self.log("Warn: SigenergyAPI: Failed to fetch history totals for {}".format(system_id))
+            return False
+
+        nodes = data.get("sankeyData", {}).get("nodes", [])
+        self.history_totals[system_id] = {node.get("id"): _safe_float(node.get("value", 0)) for node in nodes if node.get("id")}
         return True
 
     async def fetch_current_mode(self, system_id):
@@ -1525,6 +1574,21 @@ class SigenergyAPI(ComponentBase):
             app="sigenergy",
         )
 
+        # --- Lifetime energy totals (kWh, from /v1/history level=Lifetime) ---
+        history = self.history_totals.get(system_id, {})
+        for node_id, node_slug, friendly in SIGENERGY_HISTORY_NODES:
+            self.dashboard_item(
+                "sensor.{}_sigenergy_{}_{}".format(self.prefix, slug, node_slug),
+                state=round(_safe_float(history.get(node_id, 0)), 3),
+                attributes={
+                    "friendly_name": "Sigenergy {} {}".format(system_name, friendly),
+                    "unit_of_measurement": "kWh",
+                    "device_class": "energy",
+                    "state_class": "total_increasing",
+                },
+                app="sigenergy",
+            )
+
         # --- Battery capacity (kWh) ---
         self.dashboard_item(
             "sensor.{}_sigenergy_{}_battery_capacity".format(self.prefix, slug),
@@ -1650,7 +1714,10 @@ class SigenergyAPI(ComponentBase):
         self.set_arg("pv_power", ["sensor.{}_sigenergy_{}_pv_power".format(self.prefix, s) for s in slugs])
         self.set_arg("grid_power", ["sensor.{}_sigenergy_{}_grid_power".format(self.prefix, s) for s in slugs])
         self.set_arg("load_power", ["sensor.{}_sigenergy_{}_load_power".format(self.prefix, s) for s in slugs])
-        self.set_arg("pv_today", ["sensor.{}_sigenergy_{}_pv_today".format(self.prefix, s) for s in slugs])
+        self.set_arg("pv_today", ["sensor.{}_sigenergy_{}_pv_lifetime".format(self.prefix, s) for s in slugs])
+        self.set_arg("load_today", ["sensor.{}_sigenergy_{}_load_lifetime".format(self.prefix, s) for s in slugs])
+        self.set_arg("import_today", ["sensor.{}_sigenergy_{}_grid_import_lifetime".format(self.prefix, s) for s in slugs])
+        self.set_arg("export_today", ["sensor.{}_sigenergy_{}_grid_export_lifetime".format(self.prefix, s) for s in slugs])
         self.set_arg("inverter_time", ["sensor.{}_sigenergy_{}_time".format(self.prefix, s) for s in slugs])
 
         # Control entities
@@ -2201,8 +2268,9 @@ class SigenergyAPI(ComponentBase):
                 else:
                     if not await self.fetch_inverter_realtime(sid):
                         await self.fetch_energy_flow(sid)
-                # Always poll daily summary — not provided by MQTT
+                # Always poll daily summary and lifetime history totals — not provided by MQTT
                 await self.fetch_daily_summary(sid)
+                await self.fetch_history_totals(sid)
 
         # Publish entities
         if first or seconds % SIGENERGY_POLL_INTERVAL == 0:

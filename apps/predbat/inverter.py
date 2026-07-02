@@ -24,7 +24,7 @@ import pytz
 import requests
 from datetime import datetime, timedelta
 from config import INVERTER_DEF, SOLAX_SOLIS_MODES_NEW, SOLAX_SOLIS_MODES
-from const import MINUTE_WATT, TIME_FORMAT, TIME_FORMAT_OCTOPUS, INVERTER_TEST, TIME_FORMAT_SECONDS, INVERTER_MAX_RETRY, INVERTER_MAX_RETRY_REST
+from const import MINUTE_WATT, TIME_FORMAT, TIME_FORMAT_OCTOPUS, INVERTER_TEST, TIME_FORMAT_SECONDS, INVERTER_MAX_RETRY, INVERTER_MAX_RETRY_REST, INVERTER_REST_TIMEOUT
 from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, minute_data_state, window2minutes
 
 TIME_FORMAT_HMS = "%H:%M:%S"
@@ -3086,7 +3086,12 @@ class Inverter:
         """
         Send REST Command
         """
-        r = requests.post(url, json=json)
+        try:
+            r = requests.post(url, json=json, timeout=INVERTER_REST_TIMEOUT)
+        except Exception as e:
+            self.base.log("Warn: Inverter {} REST POST {} failed: {}".format(self.id, url, e))
+            return None
+        return r
 
     def rest_getData(self, url):
         """
@@ -3095,7 +3100,7 @@ class Inverter:
         r = None
 
         try:
-            r = requests.get(url)
+            r = requests.get(url, timeout=INVERTER_REST_TIMEOUT)
         except Exception as e:
             self.base.log("Error: Exception raised {}".format(e))
 

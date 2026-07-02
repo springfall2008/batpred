@@ -8,7 +8,10 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+import time
+
 from tests.test_infra import reset_rates, reset_inverter, update_rates_import, update_rates_export
+from tests.test_kernel_parity import kernel_available
 from prediction import Prediction
 from compare import Compare
 
@@ -69,7 +72,12 @@ def run_optimise_all_windows(
         pv_step[minute] = pv_amount / (60 / 5)
         load_step[minute] = load_amount / (60 / 5)
     my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step)
-    my_predbat.debug_enable = True
+    # Debug is off so the Python engine and the C++ kernel run identical workloads (debug blocks kernel dispatch)
+    my_predbat.debug_enable = False
+
+    if getattr(my_predbat, "prediction_kernel_enable", False) and not getattr(my_predbat.prediction, "kernel_handle", 0):
+        print("ERROR: Test {} expected the C++ prediction kernel but it is not available".format(name))
+        return True
 
     charge_limit_best = [0 for n in range(len(charge_window_best))]
     export_limits_best = [100 for n in range(len(export_window_best))]
@@ -131,9 +139,39 @@ def run_optimise_all_windows(
     return failed
 
 
-def run_optimise_all_windows_tests(my_predbat):
-    print("**** Running Optimise all windows tests ****")
+def run_optimise_all_windows_kernel_tests(my_predbat):
+    """Run the optimise all windows tests with the Python engine and again with the C++ kernel, comparing runtime.
+
+    Both runs must pass their normal assertions; the kernel run dispatches every supported
+    prediction to the C++ kernel. Returns True on failure.
+    """
+
+    start = time.time()
+    failed = run_optimise_all_windows_tests(my_predbat)
+    python_time = time.time() - start
+    print("Optimise all windows tests (Python engine) took {} seconds".format(round(python_time, 2)))
+
+    available, required_failure = kernel_available()
+    if not available:
+        return required_failure
+
+    start = time.time()
+    failed |= run_optimise_all_windows_tests(my_predbat, prediction_kernel=True)
+    kernel_time = time.time() - start
+    print("Optimise all windows tests (C++ kernel) took {} seconds".format(round(kernel_time, 2)))
+    print("C++ kernel speedup: {}x".format(round(python_time / kernel_time, 1)))
+    return failed
+
+
+def run_optimise_all_windows_tests(my_predbat, prediction_kernel=False):
+    print("**** Running Optimise all windows tests{} ****".format(" (C++ prediction kernel enabled)" if prediction_kernel else ""))
     reset_inverter(my_predbat)
+    my_predbat.prediction_kernel_enable = prediction_kernel
+    # reset_rates() uses rate_scan(print=False) which deliberately skips the rate_min_forward
+    # recalculation, so a stale forward-min from a previous test (e.g. the Compare test's real
+    # tariffs) would leak into compute_metric's battery residual value and change the plan.
+    # Production is unaffected: fetch always ends with rate_scan(print=True) which recomputes it.
+    my_predbat.rate_min_forward = {}
     failed = False
 
     charge_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 10.0}]
@@ -333,4 +371,5 @@ def run_optimise_all_windows_tests(my_predbat):
     #        print("ERROR: Expected result 1 cost to be 231.0 but got {}".format(result1['cost']))
     #        failed = True
 
+    my_predbat.prediction_kernel_enable = False
     return failed

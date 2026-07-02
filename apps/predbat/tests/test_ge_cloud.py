@@ -3487,7 +3487,24 @@ def _test_enable_default_options(my_predbat):
             print("ERROR: Should not write when real-time control already enabled, got {} calls".format(len(write_calls)))
             return 1
 
-        # Test 9: Write failure should return False
+        # Test 9: EMS present — real-time control must be skipped (not attempted on inverters)
+        write_calls = []
+        ge_cloud.ems_device = "ems001"
+        registers = {105: {"name": "Real_Time_Control", "value": False, "validation_rules": []}}
+        ge_cloud.async_write_inverter_setting = mock_write
+
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if result:
+            print("ERROR: enable_default_options should not enable RTC when EMS device is present")
+            return 1
+        if len(write_calls) != 0:
+            print("ERROR: Should not write RTC when EMS present, got {} calls".format(len(write_calls)))
+            return 1
+
+        ge_cloud.ems_device = None
+
+        # Test 10: Write failure should return False
         write_calls = []
         registers = {100: {"name": "Export_SOC_Percent_Limit", "value": 10, "validation_rules": []}}
 
@@ -3503,7 +3520,7 @@ def _test_enable_default_options(my_predbat):
             print("ERROR: enable_default_options should return False when write fails")
             return 1
 
-        # Test 10: Multiple settings - should process all matching settings
+        # Test 11: Multiple settings - should process all matching settings
         write_calls = []
         registers = {100: {"name": "Export_SOC_Percent_Limit", "value": 10, "validation_rules": []}, 102: {"name": "AC_Charge_Upper_Percent_Limit", "value": 80, "validation_rules": []}}
 
@@ -3519,7 +3536,7 @@ def _test_enable_default_options(my_predbat):
             print("ERROR: Should process all matching settings, got {} calls".format(len(write_calls)))
             return 1
 
-        # Test 11: AC charge slot 2 start time needs resetting
+        # Test 12: AC charge slot 2 start time needs resetting
         write_calls = []
         registers = {200: {"name": "AC_Charge_2_Start_Time", "value": "05:30", "validation_rules": []}}
         ge_cloud.async_write_inverter_setting = mock_write
@@ -3536,7 +3553,7 @@ def _test_enable_default_options(my_predbat):
             print("ERROR: Expected value='00:00' for AC charge 2 start time, got {}".format(write_calls[0]["value"]))
             return 1
 
-        # Test 12: AC charge slot 5 end time needs resetting
+        # Test 13: AC charge slot 5 end time needs resetting
         write_calls = []
         registers = {201: {"name": "AC_Charge_5_End_Time", "value": "08:00", "validation_rules": []}}
 
@@ -3549,7 +3566,7 @@ def _test_enable_default_options(my_predbat):
             print("ERROR: Expected value='00:00' for AC charge 5 end time, got {}".format(write_calls[0]["value"]))
             return 1
 
-        # Test 13: DC discharge slot 3 start time needs resetting
+        # Test 14: DC discharge slot 3 start time needs resetting
         write_calls = []
         registers = {202: {"name": "DC_Discharge_3_Start_Time", "value": "14:00", "validation_rules": []}}
 
@@ -3562,7 +3579,7 @@ def _test_enable_default_options(my_predbat):
             print("ERROR: Expected value='00:00' for DC discharge 3 start time, got {}".format(write_calls[0]["value"]))
             return 1
 
-        # Test 14: DC discharge slot 10 end time needs resetting
+        # Test 15: DC discharge slot 10 end time needs resetting
         write_calls = []
         registers = {203: {"name": "DC_Discharge_10_End_Time", "value": "22:30", "validation_rules": []}}
 
@@ -3575,7 +3592,7 @@ def _test_enable_default_options(my_predbat):
             print("ERROR: Expected value='00:00' for DC discharge 10 end time, got {}".format(write_calls[0]["value"]))
             return 1
 
-        # Test 15: AC charge slot 2 start time already at 00:00 - should not write
+        # Test 16: AC charge slot 2 start time already at 00:00 - should not write
         write_calls = []
         registers = {200: {"name": "AC_Charge_2_Start_Time", "value": "00:00", "validation_rules": []}}
 
@@ -3588,7 +3605,7 @@ def _test_enable_default_options(my_predbat):
             print("ERROR: Should not write when time already 00:00, got {} calls".format(len(write_calls)))
             return 1
 
-        # Test 16: AC charge slot 2 start time is None - should not write
+        # Test 17: AC charge slot 2 start time is None - should not write
         write_calls = []
         registers = {200: {"name": "AC_Charge_2_Start_Time", "value": None, "validation_rules": []}}
 
@@ -3601,7 +3618,7 @@ def _test_enable_default_options(my_predbat):
             print("ERROR: Should not write when time is None, got {} calls".format(len(write_calls)))
             return 1
 
-        # Test 17: AC charge slot 1 should NOT be reset (slots 2-10 only)
+        # Test 18: AC charge slot 1 should NOT be reset (slots 2-10 only)
         write_calls = []
         registers = {210: {"name": "AC_Charge_1_Start_Time", "value": "05:30", "validation_rules": []}}
 
@@ -3614,7 +3631,7 @@ def _test_enable_default_options(my_predbat):
             print("ERROR: Should not write to AC charge 1 slot, got {} calls".format(len(write_calls)))
             return 1
 
-        # Test 18: Lower SOC percent limit needs fixing
+        # Test 19: Lower SOC percent limit needs fixing
         write_calls = []
         registers = {220: {"name": "Lower_SOC_Percent_Limit", "value": 10, "validation_rules": []}}
         ge_cloud.async_write_inverter_setting = mock_write
@@ -3628,7 +3645,7 @@ def _test_enable_default_options(my_predbat):
             print("ERROR: Expected value=4 for lower SOC limit, got {}".format(write_calls[0]["value"]))
             return 1
 
-        # Test 19: Upper SOC percent limit needs fixing
+        # Test 20: Upper SOC percent limit needs fixing
         write_calls = []
         registers = {221: {"name": "DC_Discharge_Upper_SOC_Percent_Limit", "value": 95, "validation_rules": []}}
 
@@ -3641,7 +3658,7 @@ def _test_enable_default_options(my_predbat):
             print("ERROR: Expected value=100 for upper SOC limit, got {}".format(write_calls[0]["value"]))
             return 1
 
-        # Test 20: Charge Up To Percent needs fixing
+        # Test 21: Charge Up To Percent needs fixing
         write_calls = []
         registers = {222: {"name": "Charge_Up_To_Percent", "value": 80, "validation_rules": []}}
 
@@ -3654,7 +3671,7 @@ def _test_enable_default_options(my_predbat):
             print("ERROR: Expected value=100 for charge up to percent, got {}".format(write_calls[0]["value"]))
             return 1
 
-        # Test 21: Discharge Down To Percent needs fixing
+        # Test 22: Discharge Down To Percent needs fixing
         write_calls = []
         registers = {223: {"name": "Discharge_Down_To_Percent", "value": 15, "validation_rules": []}}
 
