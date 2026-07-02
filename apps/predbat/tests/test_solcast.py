@@ -2373,6 +2373,58 @@ def test_pv_calibration_power_conversion(my_predbat):
     return failed
 
 
+def test_pv_calibration_sparse_recent_history_no_crash(my_predbat):
+    """
+    Regression test: pv_today history that has data but no entry at the most
+    recent 5-minute boundaries (e.g. a freshly added sensor with almost no
+    history yet) used to crash pv_calibration with:
+      TypeError: unsupported operand type(s) for -: 'NoneType' and 'NoneType'
+    because current_value/next_value stayed None until a real data point was
+    found walking backwards through the history. pv_calibration must instead
+    skip those undated minutes and fall back to an uncalibrated forecast.
+    """
+    print("  - test_pv_calibration_sparse_recent_history_no_crash")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        solar = test_api.solar
+        base = test_api.mock_base
+
+        # Only a single, old data point - no entry near "now" (minutes 0-10), so the
+        # backwards walk starts with several None/None lookups before finding data.
+        pv_today_hist = {10: 5.2}
+
+        def mock_minute_data_import_export(max_days_previous, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True):
+            if key == "pv_today":
+                return pv_today_hist
+            return {}
+
+        base.minute_data_import_export = mock_minute_data_import_export
+        solar.get_history_wrapper = lambda entity_id, days, required=False: []
+
+        total_minutes = 4 * 24 * 60
+        pv_forecast_minute = {m: 0.05 for m in range(total_minutes)}
+        pv_forecast_minute10 = {m: 0.04 for m in range(total_minutes)}
+        pv_forecast_data = [{"period_start": base.midnight_utc.strftime("%Y-%m-%dT%H:%M:%S+0000"), "pv_estimate": 0.05}]
+
+        try:
+            adj_minute, adj_minute10, adj_data = solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
+        except TypeError as e:
+            print("ERROR: pv_calibration raised TypeError with sparse recent history: {}".format(e))
+            failed = True
+            return failed
+
+        if any(v < 0 for v in adj_minute.values()):
+            print("ERROR: pv_calibration returned negative adjusted forecast values")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
 def test_pv_calibration_partial_history(my_predbat):
     """
     Test that pv_calibration enables/disables based on the true available history
@@ -3458,6 +3510,7 @@ def run_solcast_tests(my_predbat):
 
     # Calibration tests
     failed |= test_pv_calibration_power_conversion(my_predbat)
+    failed |= test_pv_calibration_sparse_recent_history_no_crash(my_predbat)
     failed |= test_pv_calibration_capped_data_clamp(my_predbat)
     failed |= test_pv_calibration_no_history_not_zeroed(my_predbat)
     failed |= test_pv_calibration_partial_history(my_predbat)

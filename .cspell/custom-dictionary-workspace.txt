@@ -116,6 +116,7 @@ energydataservice
 energythroughput
 epod
 euids
+EVDC
 evergen
 evse
 exog

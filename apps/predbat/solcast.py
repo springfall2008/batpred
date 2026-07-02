@@ -940,6 +940,9 @@ class SolarAPI(ComponentBase):
         for minute in range(pv_today_hist_max_minute - 5, -5, -5):
             current_value = pv_today_hist.get(minute, current_value)
             next_value = pv_today_hist.get(minute - 5, current_value)
+            if current_value is None or next_value is None:
+                # No PV history yet at this point (e.g. brand new sensor) - nothing to calibrate against
+                continue
             power_amount = max(0, next_value - current_value) * 60.0 / 5.0
             for sub_minute in range(1, 6):
                 pv_power_hist[minute + 5 - sub_minute] = power_amount
