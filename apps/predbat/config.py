@@ -603,6 +603,20 @@ CONFIG_ITEMS = [
         "default": 0.0,
     },
     {
+        # Model curtailment of export when the export price is negative (issue #3986). Predbat does not drive
+        # the curtailment, it only models it - the actual curtailment stays with the user's inverter or automation.
+        # "off" (the default) disables the feature. "curtail_excess" models grid export as blocked while PV still
+        # charges the battery and supplies the house. "solar_production_off" models the PV as fully off, for
+        # inverters that can only disable generation rather than limit export.
+        "name": "curtail_on_negative_export_price",
+        "friendly_name": "Curtail on negative export price",
+        "type": "select",
+        "options": ["off", "curtail_excess", "solar_production_off"],
+        "icon": "mdi:transmission-tower-export",
+        "enable": "expert_mode",
+        "default": "off",
+    },
+    {
         "name": "car_charging_hold",
         "friendly_name": "Car charging hold (remove car charging energy from load data)",
         "type": "switch",

@@ -198,6 +198,23 @@ then you must turn PV calibration Off as otherwise Predbat will model the choppe
 
 Note: If you change the PV calibration enable switch (to On or Off), you will need to restart Predbat for the change to take effect.
 
+### Curtailment on a negative export price
+
+If your inverter or an automation curtails export when the export price goes negative (for example, setting the inverter export limit to zero whenever the export rate is below zero), Predbat can model this so that both the plan and the PV calibration match reality.
+Predbat does not perform the curtailment itself, it only models it - the actual curtailment stays with your inverter or automation.
+
+- **select.predbat_curtail_on_negative_export_price** (_expert mode_) Models curtailment of export during negative-price slots:
+    - **off** (the default) - no curtailment is modelled.
+    - **curtail_excess** - grid export is modelled as blocked whenever the export price is negative, while PV still charges the battery and supplies the house. Use this if your inverter or automation limits the export to zero.
+    - **solar_production_off** - the PV is modelled as fully off whenever the export price is negative (no generation, so the battery is not charged from PV and the house is not supplied from PV). Use this if your inverter can only disable generation rather than limit export.
+
+When enabled, Predbat caps the modelled export during negative-price slots, so it no longer books a phantom export cost for energy you actually withhold.
+It also excludes those curtailed slots from the PV calibration input (using the recorded history of the export rate sensor), so you can keep **metric_pv_calibration_enable** turned On - the deliberate curtailment is no longer mistaken for panel underperformance.
+This is particularly useful for Forecast.Solar users, who have no auto-dampening to fall back on.
+The curtailed slots are also shown in a distinct colour in the Predbat plan.
+
+See [curtailment on a negative export price](energy-rates.md#curtailment-on-a-negative-export-price) in the energy rates documentation for more background.
+
 ## Historical load data
 
 The historical load data is taken from the load sensor as configured in `apps.yaml` with the days are selected using **days_previous**, and weighted using **days_previous_weight** in `apps.yaml`.

@@ -1178,6 +1178,12 @@ class Output:
             elif pv_forecast == 0.0:
                 pv_forecast = "&#9866;"
 
+            # Mark PV modelled as curtailed on a negative export price with a distinct colour, so curtailed solar
+            # is visually separated from normally-exported solar (issue #3986). With the feature off this never
+            # triggers, leaving the plan unchanged for existing users.
+            if raw_pv_forecast > 0.0 and self.curtail_on_negative_export_price != "off" and rate_value_export < 0:
+                pv_color = "#C8A2C8"
+
             pv_forecast = str(pv_forecast)
             if plan_debug and pv_forecast10 > 0.0:
                 pv_forecast += " (%s)" % (str(pv_forecast10))
