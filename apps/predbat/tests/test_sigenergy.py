@@ -373,6 +373,7 @@ def test_sigenergy_automatic_config(my_predbat):
     assert "grid_power" in api.set_args, "grid_power wired"
     assert "inverter_time" in api.set_args, "inverter_time wired"
     assert len(api.set_args["inverter_time"]) == 2, "inverter_time has one entry per system"
+    assert api.set_args.get("pv_today") == ["sensor.predbat_sigenergy_sig001_pv_lifetime", "sensor.predbat_sigenergy_sig002_pv_lifetime"], "pv_today wired to lifetime totals"
     assert api.set_args.get("load_today") == ["sensor.predbat_sigenergy_sig001_load_lifetime", "sensor.predbat_sigenergy_sig002_load_lifetime"], "load_today wired to lifetime totals"
     assert api.set_args.get("import_today") == ["sensor.predbat_sigenergy_sig001_grid_import_lifetime", "sensor.predbat_sigenergy_sig002_grid_import_lifetime"], "import_today wired to lifetime totals"
     assert api.set_args.get("export_today") == ["sensor.predbat_sigenergy_sig001_grid_export_lifetime", "sensor.predbat_sigenergy_sig002_grid_export_lifetime"], "export_today wired to lifetime totals"
