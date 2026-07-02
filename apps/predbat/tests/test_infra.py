@@ -741,10 +741,23 @@ def simple_scenario(
         my_predbat.num_cars = 0
         my_predbat.car_charging_slots[0] = []
 
+    # When the C++ prediction kernel is enabled, run kernel-supported scenarios with save=None so
+    # the prediction dispatches to the kernel and the scenario asserts validate the kernel results.
+    # Scenarios relying on save-run-only behaviour (low-power charge, standing charge) keep the
+    # Python engine as those never apply to optimisation scenario runs.
+    kernel_mode = bool(getattr(my_predbat, "prediction_kernel_enable", False))
+    kernel_eligible = kernel_mode and not (my_predbat.set_charge_window and my_predbat.set_charge_low_power) and my_predbat.metric_standing_charge == 0
+    if kernel_eligible and not quiet:
+        print("Scenario {} routed via the C++ prediction kernel".format(name))
+
     if prediction_handle:
         prediction = prediction_handle
     else:
         prediction = Prediction(my_predbat, pv_step, pv10_step, load_step, load10_step)
+
+    if kernel_eligible and not getattr(prediction, "kernel_handle", 0):
+        print("ERROR: Scenario {} expected the C++ prediction kernel but it is not available".format(name))
+        return (True, prediction) if return_prediction_handle else True
 
     compute_charge_limit = False
     if charge_limit_best is None:
@@ -793,7 +806,7 @@ def simple_scenario(
             iboost_running,
             iboost_running_solar,
             iboost_running_full,
-        ) = prediction.run_prediction(charge_limit_best, charge_window_best, export_window_best, export_limit_best, pv10, end_record=(my_predbat.end_record), save=save)
+        ) = prediction.run_prediction(charge_limit_best, charge_window_best, export_window_best, export_limit_best, pv10, end_record=(my_predbat.end_record), save=None if kernel_eligible else save)
         prediction.predict_soc = predict_soc
         prediction.car_charging_soc_next = car_charging_soc_next
         prediction.iboost_next = iboost_next
@@ -838,7 +851,7 @@ def simple_scenario(
             print("ERROR: iBoost running full should be {}".format(assert_iboost_running_full))
         failed = True
 
-    if save != "none":
+    if save != "none" and not kernel_eligible:
         total_clipped = prediction.predict_clipped_best[max(prediction.predict_clipped_best.keys())] if prediction.predict_clipped_best else 0
         if abs(total_clipped - assert_clipped) >= 0.9:
             if not ignore_failed:
