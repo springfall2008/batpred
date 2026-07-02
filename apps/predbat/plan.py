@@ -3559,22 +3559,23 @@ class Plan:
                         round(final_pv_kwh, 2),
                     )
                 )
-                self.log("   Slot: [{}]".format(self.scenario_summary_title(record_time)))
-                self.log("    SoC: [{}] kWh".format(self.scenario_summary(record_time, predict_soc_time)))
-                self.log("    BAT: [{}] kWh".format(self.scenario_summary(record_time, predict_state)))
-                self.log("   LOAD: [{}] kWh".format(self.scenario_summary(record_time, load_kwh_time)))
-                self.log("     PV: [{}] kWh".format(self.scenario_summary(record_time, pv_kwh_time)))
-                self.log(" IMPORT: [{}] kWh".format(self.scenario_summary(record_time, import_kwh_time)))
-                self.log(" EXPORT: [{}] kWh".format(self.scenario_summary(record_time, export_kwh_time)))
-                if self.iboost_enable:
-                    self.log(" IBOOST: [{}] kWh".format(self.scenario_summary(record_time, predict_iboost)))
-                if self.carbon_enable:
-                    self.log(" CARBON: [{}] kg".format(self.scenario_summary(record_time, predict_carbon_g)))
-                for car_n in range(self.num_cars):
-                    self.log("   CAR{}: [{}] kWh".format(car_n, self.scenario_summary(record_time, predict_car_soc_time[car_n])))
-                self.log(" METRIC: [{}] {}".format(self.scenario_summary(record_time, metric_time), self.currency_symbols[1]))
-                if save == "best":
-                    self.log(" STATE:  [{}]".format(self.scenario_summary_state(record_time)))
+                if self.debug_enable:
+                    self.log("   Slot: [{}]".format(self.scenario_summary_title(record_time)))
+                    self.log("    SoC: [{}] kWh".format(self.scenario_summary(record_time, predict_soc_time)))
+                    self.log("    BAT: [{}] kWh".format(self.scenario_summary(record_time, predict_state)))
+                    self.log("   LOAD: [{}] kWh".format(self.scenario_summary(record_time, load_kwh_time)))
+                    self.log("     PV: [{}] kWh".format(self.scenario_summary(record_time, pv_kwh_time)))
+                    self.log(" IMPORT: [{}] kWh".format(self.scenario_summary(record_time, import_kwh_time)))
+                    self.log(" EXPORT: [{}] kWh".format(self.scenario_summary(record_time, export_kwh_time)))
+                    if self.iboost_enable:
+                        self.log(" IBOOST: [{}] kWh".format(self.scenario_summary(record_time, predict_iboost)))
+                    if self.carbon_enable:
+                        self.log(" CARBON: [{}] kg".format(self.scenario_summary(record_time, predict_carbon_g)))
+                    for car_n in range(self.num_cars):
+                        self.log("   CAR{}: [{}] kWh".format(car_n, self.scenario_summary(record_time, predict_car_soc_time[car_n])))
+                    self.log(" METRIC: [{}] {}".format(self.scenario_summary(record_time, metric_time), self.currency_symbols[1]))
+                    if save == "best":
+                        self.log(" STATE:  [{}]".format(self.scenario_summary_state(record_time)))
 
             # Save data to HA state
             if save and save == "base":
