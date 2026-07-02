@@ -19,6 +19,8 @@ appkey
 Apprent
 appsyaml
 argname
+armhf
+armv
 ASHP
 asyncio
 autodocstring
@@ -117,6 +119,7 @@ energydataservice
 energythroughput
 epod
 euids
+EVDC
 evergen
 evse
 exog
@@ -126,6 +129,7 @@ fdsoc
 feedin
 fentry
 figsize
+finaliser
 Fingerbot
 firstparty
 fline
@@ -148,6 +152,7 @@ getall
 Ginlong
 GivEnergy
 givtcp
+gnueabihf
 gridconsumption
 gridconsumptionpower
 growatt
@@ -204,6 +209,7 @@ kwhb
 labelcolor
 labelnames
 larr
+libc
 linebreak
 linestyle
 loadml
@@ -238,6 +244,7 @@ minsocongrid
 minuteb
 Mixergy
 mkdocs
+mlugg
 Modbus
 mogons
 monokai
@@ -426,6 +433,7 @@ visibilitychange
 Wallbox
 weblink
 welink
+Werror
 workmode
 writeonly
 wrongsha

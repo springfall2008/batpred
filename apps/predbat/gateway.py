@@ -9,6 +9,7 @@ gateway — no Home Assistant in the loop.
 import asyncio
 import datetime
 import json
+import math
 import os
 import ssl
 import time
@@ -21,10 +22,12 @@ from component_base import ComponentBase
 
 try:
     import gateway_status_pb2 as pb
+    from google.protobuf import json_format as _pb_json_format
 
     HAS_PROTOBUF = True
 except (ImportError, Exception):
     pb = None
+    _pb_json_format = None
     HAS_PROTOBUF = False
 
 try:
@@ -138,6 +141,27 @@ GATEWAY_ATTRIBUTE_TABLE = {
     "ev_eco_mode": {"friendly_name": "EV Eco Mode", "icon": "mdi:leaf"},
     "ev_charge_rate": {"friendly_name": "EV Charge Rate", "icon": "mdi:ev-station", "unit_of_measurement": "kW", "device_class": "power"},
 }
+
+
+def extract_rate_anchors(rate_min, rate_max, import_rate, export_rate):
+    """Validate and round the four rate anchors for the device payload.
+
+    Returns a dict with rate_min / rate_max / import_rate / export_rate rounded
+    to 0.01 p/kWh (matching the marginal-cost matrix precision), or None if any
+    value is missing, non-numeric, or non-finite (NaN/Inf) so the device falls
+    back to its plan-aware RAG and the payload never carries invalid JSON
+    tokens.
+    """
+    try:
+        rate_min = round(float(rate_min), 2)
+        rate_max = round(float(rate_max), 2)
+        rate_import = round(float(import_rate), 2)
+        rate_export = round(float(export_rate), 2)
+    except (TypeError, ValueError):
+        return None
+    if not (math.isfinite(rate_min) and math.isfinite(rate_max) and math.isfinite(rate_import) and math.isfinite(rate_export)):
+        return None
+    return {"rate_min": rate_min, "rate_max": rate_max, "import_rate": rate_import, "export_rate": rate_export}
 
 
 class GatewayMQTT(ComponentBase):
@@ -661,7 +685,7 @@ class GatewayMQTT(ComponentBase):
                 message = message_type()
                 message.ParseFromString(raw)
             size = f" ({len(raw)} bytes)" if raw is not None else ""
-            text = str(message).strip()
+            text = _pb_json_format.MessageToJson(message, always_print_fields_with_no_presence=True, preserving_proto_field_name=True)
             self.log(f"Debug: GatewayMQTT: {label}{size}:\n{text}")
         except Exception as e:
             self.log(f"Warn: GatewayMQTT: failed to dump {label}: {e}")
@@ -1342,6 +1366,12 @@ class GatewayMQTT(ComponentBase):
             # gateway's appliance RAG to pick a colour that actually reflects the
             # cost of running the dryer/EV/etc, rather than inferring from slot
             # categories alone.
+            rate_anchors = extract_rate_anchors(
+                self.get_state_wrapper("sensor." + self.prefix + "_marginal_energy_costs", attribute="rate_min"),
+                self.get_state_wrapper("sensor." + self.prefix + "_marginal_energy_costs", attribute="rate_max"),
+                self.get_state_wrapper("sensor." + self.prefix + "_marginal_energy_costs", attribute="import_rate_base"),
+                self.get_state_wrapper("sensor." + self.prefix + "_marginal_energy_costs", attribute="export_rate_base"),
+            )
             marginal_costs = []
             marginal_time_labels = []
             try:
@@ -1393,6 +1423,10 @@ class GatewayMQTT(ComponentBase):
                 "predbat_status_detail": predbat_status_detail,
                 "marginal_costs": marginal_costs,
                 "marginal_time_labels": marginal_time_labels,
+                "rate_min": (rate_anchors or {}).get("rate_min"),
+                "rate_max": (rate_anchors or {}).get("rate_max"),
+                "import_rate": (rate_anchors or {}).get("import_rate"),
+                "export_rate": (rate_anchors or {}).get("export_rate"),
             }
 
             # Only publish if data changed
