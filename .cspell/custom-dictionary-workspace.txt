@@ -85,6 +85,7 @@ dayname
 daynumber
 daysymbol
 dedup
+delayedstart
 dend
 denorm
 derating
@@ -95,6 +96,7 @@ digestmod
 dimport
 dischargeenergytotal
 dischargefreeze
+dishcare
 diverter
 dlimit
 dnoregion

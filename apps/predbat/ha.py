@@ -890,13 +890,26 @@ class HAInterface(ComponentBase):
             data_frame = {"domain": domain, "service": service, "service_data": data}
             return run_async(self.base.trigger_callback(data_frame))
 
-    def api_call(self, endpoint, data_in=None, post=False, core=True, silent=False):
+    def delete_state(self, entity_id):
+        """
+        Delete a state from Home Assistant.
+        """
+        entity_id_lower = entity_id.lower()
+        self.db_mirror_list.pop(entity_id, None)
+        self.db_mirror_list.pop(entity_id_lower, None)
+        self.state_data.pop(entity_id_lower, None)
+        if self.ha_key:
+            self.api_call("/api/states/{}".format(entity_id), delete=True)
+        return True
+
+    def api_call(self, endpoint, data_in=None, post=False, delete=False, core=True, silent=False):
         """
         Make an API call to Home Assistant.
 
         :param endpoint: The API endpoint to call.
         :param data_in: The data to send in the body of the request.
         :param post: True if this is a POST request, False for GET.
+        :param delete: True if this is a DELETE request
         :param core: True is this is a call to HA Core, False if it is a Supervisor call
         :param silent: True if warning message from the API call is to be suppressed
         :return: The response from the API.
@@ -918,7 +931,9 @@ class HAInterface(ComponentBase):
             "Accept": "application/json",
         }
         try:
-            if post:
+            if delete:
+                response = requests.delete(url, headers=headers, timeout=TIMEOUT)
+            elif post:
                 if data_in:
                     response = requests.post(url, headers=headers, json=data_in, timeout=TIMEOUT)
                 else:
@@ -928,7 +943,7 @@ class HAInterface(ComponentBase):
                     response = requests.get(url, headers=headers, params=data_in, timeout=TIMEOUT)
                 else:
                     response = requests.get(url, headers=headers, timeout=TIMEOUT)
-            data = response.json()
+            data = {} if delete and not response.text else response.json()
             self.api_errors = 0
         except requests.exceptions.JSONDecodeError:
             if not silent:  # suppress warning message for call to get slug id from supervisor because in docker installs this will always error (no supervisor)

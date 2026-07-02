@@ -845,6 +845,38 @@ class Plan:
             window_n += 1
         return -1
 
+    def optimise_best_windows_once(self, metric, metric_keep, debug_mode):
+        """
+        Run one best-window optimisation pass and apply the standard post-processing.
+        """
+        self.optimise_all_windows(metric, metric_keep, debug_mode)
+        self.update_target_values()
+        self.charge_limit_best, self.charge_window_best = remove_intersecting_windows(self.charge_limit_best, self.charge_window_best, self.export_limits_best, self.export_window_best)
+
+        if self.calculate_best_export and self.export_window_best:
+            self.export_limits_best, self.export_window_best = self.discard_unused_export_slots(self.export_limits_best, self.export_window_best)
+            if self.export_window_best:
+                self.run_prediction(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, False, end_record=self.end_record)
+                record_export_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.export_window_best), 1)
+                self.export_window_best, self.export_limits_best = self.clip_export_slots(self.minutes_now, self.predict_soc, self.export_window_best, self.export_limits_best, record_export_windows, PREDICT_STEP)
+                self.export_limits_best, self.export_window_best = self.discard_unused_export_slots(self.export_limits_best, self.export_window_best)
+            self.log("Export windows filtered {}".format(self.window_as_text(self.export_window_best, self.export_limits_best)))
+
+        if self.calculate_best_charge and self.charge_window_best:
+            self.run_prediction(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, False, end_record=self.end_record)
+            self.log("Raw charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
+            if self.set_charge_window:
+                self.charge_limit_best, self.charge_window_best = self.discard_unused_charge_slots(self.charge_limit_best, self.charge_window_best, self.reserve)
+            record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
+            self.log("Unclipped charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
+            self.charge_window_best, self.charge_limit_best = self.clip_charge_slots(self.minutes_now, self.predict_soc, self.charge_window_best, self.charge_limit_best, record_charge_windows, PREDICT_STEP)
+            if self.set_charge_window:
+                self.log("Unfiltered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
+                self.charge_limit_best, self.charge_window_best = self.discard_unused_charge_slots(self.charge_limit_best, self.charge_window_best, self.reserve)
+                self.log("Filtered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
+            else:
+                self.log("Unfiltered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
+
     def calculate_plan(self, recompute=True, debug_mode=False, publish=True):
         """
         Calculate the new plan (best)
@@ -931,6 +963,9 @@ class Plan:
         # Created optimised step data
         self.metric_cloud_coverage = self.get_cloud_factor(self.minutes_now, self.pv_forecast_minute, self.pv_forecast_minute10)
         self.metric_load_divergence = self.get_load_divergence(self.minutes_now, self.load_minutes)
+        load_adjust = self.manual_load_adjust.copy()
+        for minute, adjustment in self.house_load_additional_forecast_adjust.items():
+            load_adjust[minute] = load_adjust.get(minute, 0.0) + adjustment
         load_minutes_step = self.step_data_history(
             self.load_minutes,
             self.minutes_now,
@@ -941,7 +976,7 @@ class Plan:
             load_forecast=self.load_forecast,
             load_scaling_dynamic=self.load_scaling_dynamic,
             cloud_factor=self.metric_load_divergence,
-            load_adjust=self.manual_load_adjust,
+            load_adjust=load_adjust,
             load_baseline=self.dynamic_load_baseline,
         )
         load_minutes_step10 = self.step_data_history(
@@ -954,7 +989,7 @@ class Plan:
             load_forecast=self.load_forecast,
             load_scaling_dynamic=self.load_scaling_dynamic,
             cloud_factor=min(self.metric_load_divergence + 0.5, 1.0) if self.metric_load_divergence else None,
-            load_adjust=self.manual_load_adjust,
+            load_adjust=load_adjust,
             load_baseline=self.dynamic_load_baseline,
         )
         pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
@@ -1016,96 +1051,7 @@ class Plan:
             # Recomputing the plan
             self.log_option_best()
 
-            # Full plan
-            self.optimise_all_windows(metric, metric_keep, debug_mode)
-
-            # Update target values, will be refined via clipping
-            self.update_target_values()
-
-            # Remove charge windows that overlap with export windows
-            self.charge_limit_best, self.charge_window_best = remove_intersecting_windows(self.charge_limit_best, self.charge_window_best, self.export_limits_best, self.export_window_best)
-
-            # Filter out any unused export windows
-            if self.calculate_best_export and self.export_window_best:
-                # Filter out the windows we disabled
-                self.export_limits_best, self.export_window_best = self.discard_unused_export_slots(self.export_limits_best, self.export_window_best)
-
-                # Clipping windows
-                if self.export_window_best:
-                    # Re-run prediction to get data for clipping
-                    (
-                        best_metric,
-                        import_kwh_battery,
-                        import_kwh_house,
-                        export_kwh,
-                        soc_min,
-                        soc,
-                        soc_min_minute,
-                        battery_cycle,
-                        metric_keep,
-                        final_iboost,
-                        final_carbon_g,
-                    ) = self.run_prediction(
-                        self.charge_limit_best,
-                        self.charge_window_best,
-                        self.export_window_best,
-                        self.export_limits_best,
-                        False,
-                        end_record=self.end_record,
-                    )
-
-                    # Work out record windows
-                    record_export_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.export_window_best), 1)
-
-                    # Export slot clipping
-                    self.export_window_best, self.export_limits_best = self.clip_export_slots(self.minutes_now, self.predict_soc, self.export_window_best, self.export_limits_best, record_export_windows, PREDICT_STEP)
-
-                    # Filter out the windows we disabled during clipping
-                    self.export_limits_best, self.export_window_best = self.discard_unused_export_slots(self.export_limits_best, self.export_window_best)
-                self.log("Export windows filtered {}".format(self.window_as_text(self.export_window_best, self.export_limits_best)))
-
-            # Filter out any unused charge slots
-            if self.calculate_best_charge and self.charge_window_best:
-                # Re-run prediction to get data for clipping
-                (
-                    best_metric,
-                    import_kwh_battery,
-                    import_kwh_house,
-                    export_kwh,
-                    soc_min,
-                    soc,
-                    soc_min_minute,
-                    battery_cycle,
-                    metric_keep,
-                    final_iboost,
-                    final_carbon_g,
-                ) = self.run_prediction(
-                    self.charge_limit_best,
-                    self.charge_window_best,
-                    self.export_window_best,
-                    self.export_limits_best,
-                    False,
-                    end_record=self.end_record,
-                )
-                self.log("Raw charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
-
-                # Initial charge slot filter
-                if self.set_charge_window:
-                    record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
-                    self.charge_limit_best, self.charge_window_best = self.discard_unused_charge_slots(self.charge_limit_best, self.charge_window_best, self.reserve)
-
-                # Charge slot clipping
-                record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
-                self.log("Unclipped charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
-                self.charge_window_best, self.charge_limit_best = self.clip_charge_slots(self.minutes_now, self.predict_soc, self.charge_window_best, self.charge_limit_best, record_charge_windows, PREDICT_STEP)
-
-                if self.set_charge_window:
-                    # Filter out the windows we disabled during clipping
-                    self.log("Unfiltered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
-                    self.charge_limit_best, self.charge_window_best = self.discard_unused_charge_slots(self.charge_limit_best, self.charge_window_best, self.reserve)
-                    self.log("Filtered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
-                else:
-                    self.log("Unfiltered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
+            self.optimise_best_windows_once(metric, metric_keep, debug_mode)
 
             # Plan comparison
             if charge_window_best_prev is not None and not debug_mode:
@@ -1137,6 +1083,23 @@ class Plan:
                 metrics().plan_valid.set(0)
             self.plan_last_updated = self.now_utc
             self.plan_last_updated_minutes = self.minutes_now
+
+        flexible_selected, load_minutes_step, load_minutes_step10 = self.select_flexible_additional_loads(load_minutes_step, load_minutes_step10, pv_forecast_minute_step, pv_forecast_minute10_step)
+        if flexible_selected:
+            self.load_minutes_step = load_minutes_step
+            self.load_minutes_step10 = load_minutes_step10
+            self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10)
+            if recompute and self.calculate_best and self.house_load_additional_flexible_selection_changed:
+                self.log("Re-optimising plan after flexible additional load selection")
+                metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
+                    self.charge_limit,
+                    self.charge_window,
+                    self.export_window,
+                    self.export_limits,
+                    False,
+                    end_record=self.end_record,
+                )
+                self.optimise_best_windows_once(metric, metric_keep, debug_mode)
 
         # Final simulation of base
         metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
