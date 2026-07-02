@@ -1274,7 +1274,7 @@ def test_sigenergy_mqtt_listener_loop_ignores_other_systems(my_predbat):
     api.access_token = "tok"
     api.token_expires_at = 9_999_999_999
     # Only one system is in scope - the account may have others.
-    api.systems["SPJAV1755782498"] = {"systemName": "In scope"}
+    api.systems["ZOO1755782498"] = {"systemName": "In scope"}
     api.api_stop = False
 
     period_payload_other_system = _json.dumps([{

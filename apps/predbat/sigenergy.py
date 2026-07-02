@@ -1208,7 +1208,7 @@ class SigenergyAPI(ComponentBase):
         # Note: storageChargeDischargePowerW is negative when discharging, convert to Predbat
         bat_power_kw = -_safe_float(raw.get("storageChargeDischargePowerW", 0)) / 1000.0
         pv_power_kw = _safe_float(raw.get("PV power", 0)) / 1000.0
-        # Convert grid power, from positve=import to positive=export (same as Predbat)
+        # Convert grid power, from positive=import to positive=export (same as Predbat)
         grid_power_kw = -_safe_float(raw.get("gridActivePowerW", 0)) / 1000.0
         # Energy balance in Predbat convention (bat: +discharge/-charge, grid: +export/-import):
         # load = pv + battery_discharge - grid_export
