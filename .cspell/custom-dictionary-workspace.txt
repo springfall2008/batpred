@@ -323,8 +323,6 @@ remotecontrol
 resetmidnight
 resultid
 resultmid
-rexp
-rmax
 rname
 Roboto
 rowspan
