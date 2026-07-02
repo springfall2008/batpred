@@ -197,6 +197,20 @@ def kernel_library_candidates():
     return candidates
 
 
+def kernel_status_summary(pred):
+    """Return (message, is_warning) describing whether the kernel is active for this Prediction.
+
+    Intended for a per-plan-cycle status log line, e.g. self.log("Prediction kernel: " + message).
+    is_warning is True only for the "enabled but not available" case, which is worth flagging
+    since it means every prediction this cycle silently falls back to the slower Python engine.
+    """
+    if not getattr(pred, "prediction_kernel_enable", False):
+        return "disabled", False
+    if getattr(pred, "kernel_handle", 0):
+        return "enabled and active ({})".format(KERNEL_STATUS), False
+    return "enabled but NOT available ({}) - falling back to the Python engine".format(KERNEL_STATUS), True
+
+
 def load_kernel(log=None):
     """Load and verify the kernel shared library, returns the ctypes library or None.
 
