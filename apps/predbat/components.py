@@ -27,6 +27,7 @@ from temperature import TemperatureAPI
 from axle import AxleAPI
 from solax import SolaxAPI
 from sigenergy import SigenergyAPI
+from teslemetry import TeslemetryAPI
 from solis import SolisAPI
 from alertfeed import AlertFeed
 from web import WebInterface
@@ -365,6 +366,17 @@ COMPONENT_LIST = {
         },
         "phase": 1,
         "can_restart": True,
+    },
+    "teslemetry": {
+        "class": TeslemetryAPI,
+        "name": "Tesla Powerwall (Teslemetry)",
+        "event_filter": "predbat_teslemetry_",
+        "args": {
+            "key": {"required": True, "config": "teslemetry_key"},
+            "site_id": {"required": True, "config": "teslemetry_site_id"},
+            "base_url": {"required": False, "config": "teslemetry_base_url", "default": "https://api.teslemetry.com"},
+        },
+        "phase": 1,
     },
     "solax": {
         "class": SolaxAPI,
