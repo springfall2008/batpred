@@ -1558,13 +1558,17 @@ class WebInterface(ComponentBase):
             first = False
             text += "{"
             text += "x: new Date('{}').getTime(),".format(key)
-            text += "y: {}".format(results[key])
+            val = results[key]
+            if val is None:
+                text += "y: null"
+            else:
+                text += "y: {}".format(val)
             text += "}"
         text += "  ]\n"
         text += "  }\n"
         return text
 
-    def render_chart(self, series_data, yaxis_name, chart_name, now_str, tagname="chart", daily_chart=True, extra_yaxis=None):
+    def render_chart(self, series_data, yaxis_name, chart_name, now_str, tagname="chart", daily_chart=True, extra_yaxis=None, yaxis_annotations=None, xaxis_annotations=None, yaxis_min=None, yaxis_max=None, yaxis_tick_amount=None):
         """
         Render a chart
         """
@@ -1667,6 +1671,14 @@ var options = {
         text += "  },\n"
         text += "  xaxis: {\n"
         text += "    type: 'datetime',\n"
+
+        # Enforce +/- 48 hours bounding box to prevent chart from showing too much trailing history
+        # Use numeric timestamps (ms) which is much safer than string parsing in the browser
+        min_x = int((self.now_utc - timedelta(hours=48)).timestamp() * 1000)
+        max_x = int((self.now_utc + timedelta(hours=48)).timestamp() * 1000)
+        text += "    min: {},\n".format(min_x)
+        text += "    max: {},\n".format(max_x)
+
         text += "    labels: {\n"
         text += "           datetimeUTC: false\n"
         text += "       }\n"
@@ -1695,6 +1707,13 @@ var options = {
                 "      title: {{ text: '{}' }}".format(yaxis_name),
                 "      decimalsInFloat: 2",
             ]
+            if yaxis_min is not None:
+                primary_parts.append("      min: {}".format(yaxis_min))
+            if yaxis_max is not None:
+                primary_parts.append("      max: {}".format(yaxis_max))
+            if yaxis_tick_amount is not None:
+                primary_parts.append("      tickAmount: {}".format(yaxis_tick_amount))
+
             if primary_series_names:
                 names = ",".join("'{}'".format(name) for name in primary_series_names)
                 primary_parts.append("      seriesName: [{}]".format(names))
@@ -1710,6 +1729,11 @@ var options = {
                 opposite = axis.get("opposite", False)
                 labels_formatter = axis.get("labels_formatter")
 
+                # Apply global scaling to secondary axes as well to force grid line alignment
+                ax_min = axis.get("min", yaxis_min)
+                ax_max = axis.get("max", yaxis_max)
+                ax_tick = axis.get("tickAmount", yaxis_tick_amount)
+
                 axis_parts = []
                 if series_names:
                     names = ",".join("'{}'".format(name) for name in series_names)
@@ -1718,6 +1742,14 @@ var options = {
                     axis_parts.append("      seriesName: '{}'".format(series_name))
                 axis_parts.append("      title: {{ text: '{}' }}".format(title))
                 axis_parts.append("      decimalsInFloat: {}".format(decimals))
+
+                if ax_min is not None:
+                    axis_parts.append("      min: {}".format(ax_min))
+                if ax_max is not None:
+                    axis_parts.append("      max: {}".format(ax_max))
+                if ax_tick is not None:
+                    axis_parts.append("      tickAmount: {}".format(ax_tick))
+
                 if opposite:
                     axis_parts.append("      opposite: true")
                 if labels_formatter:
@@ -1743,7 +1775,20 @@ var options = {
         text += "    }\n"
         text += "  },\n"
         text += "  annotations: {\n"
+        if yaxis_annotations:
+            text += "   yaxis: [\n"
+            for ann in yaxis_annotations:
+                text += "    {\n"
+                text += "       y: {},\n".format(ann.get("y", 0))
+                text += "       borderColor: '{}',\n".format(ann.get("color", "#FF0000"))
+                text += "       label: {\n"
+                text += "          text: '{}',\n".format(ann.get("text", ""))
+                text += "          style: {{ background: '{}', color: '#fff' }}\n".format(ann.get("color", "#FF0000"))
+                text += "       }\n"
+                text += "    },\n"
+            text += "   ],\n"
         text += "   xaxis: [\n"
+        # Always add 'now'
         text += "    {\n"
         text += "       x: new Date('{}').getTime(),\n".format(now_str)
         text += "       borderColor: '#775DD0',\n"
@@ -1752,12 +1797,27 @@ var options = {
         text += "          text: 'now'\n"
         text += "       }\n"
         text += "    },\n"
+
+        # Add custom X-axis annotations
+        if xaxis_annotations:
+            for ann in xaxis_annotations:
+                text += "    {\n"
+                text += "       x: new Date('{}').getTime(),\n".format(ann.get("x", ""))
+                text += "       borderColor: '{}',\n".format(ann.get("color", "#00E396"))
+                text += "       textAnchor: 'middle',\n"
+                text += "       label: {\n"
+                text += "          text: '{}',\n".format(ann.get("text", ""))
+                text += "       }\n"
+                text += "    },\n"
+
+        # Always add 'midnight'
         text += "    {\n"
         text += "       x: new Date('{}').getTime(),\n".format(midnight_str)
         text += "       borderColor: '#000000',\n"
         text += "       textAnchor: 'middle',\n"
         text += "       label: {\n"
-        text += "          text: 'midnight'\n"
+        text += "          text: 'midnight',\n"
+        text += "          offsetY: 20\n"
         text += "       }\n"
         text += "    }\n"
         text += "   ]\n"
@@ -2820,13 +2880,19 @@ chart.render();
         """
         now_str = self.now_utc.strftime(TIME_FORMAT)
         soc_kw_h0 = {}
-        if self.base.soc_kwh_history:
+        if self.base.soc_kwh_history and self.midnight_utc:
             hist = self.base.soc_kwh_history
-            for minute in range(0, self.minutes_now, self.plan_interval_minutes):
+            # Fetch up to 48 hours of history
+            start_minute = self.minutes_now - (48 * 60)
+            for minute in range(start_minute, self.minutes_now, self.plan_interval_minutes):
                 minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
                 stamp = minute_timestamp.strftime(TIME_FORMAT)
-                soc_kw_h0[stamp] = hist.get(self.minutes_now - minute, 0)
+                age_minutes = self.minutes_now - minute
+                # Only add if we actually have history data to avoid filling with 0s
+                if age_minutes in hist or age_minutes < 1440:  # Fallback to 0 for recent history, but avoid plotting old 0s if no data
+                    soc_kw_h0[stamp] = hist.get(age_minutes, 0)
         soc_kw_h0[now_str] = self.base.soc_kw
+
         soc_kw = self.get_entity_results(self.prefix + ".soc_kw")
         soc_kw_best = self.get_entity_results(self.prefix + ".soc_kw_best")
         soc_kw_best10 = self.get_entity_results(self.prefix + ".soc_kw_best10")
@@ -2960,6 +3026,146 @@ chart.render();
                 {"name": "Forecast CL", "data": pv_today_forecastCL, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#e90a0a"},
             ]
             text += self.render_chart(series_data, "kW", "Solar Forecast", now_str)
+        elif chart == "Clipping":
+            pv_power_hist = history_attribute(self.get_history_wrapper(self.prefix + ".pv_power", 7, required=False))
+            pv_power = prune_today(pv_power_hist, self.now_utc, self.midnight_utc, prune=False)
+
+            # Selected forecast for clipping
+            clipping_forecast_type = self.get_arg("clipping_buffer_forecast", "pv_estimate90")
+            subitem = clipping_forecast_type
+
+            clipping_forecast = prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_today", subitem), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
+            clipping_forecast.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_tomorrow", subitem), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
+
+            soc_kw_best = self.get_entity_results(self.prefix + ".soc_kw_best")
+
+            soc_kw_h0 = {}
+            if self.base.soc_kwh_history:
+                hist = self.base.soc_kwh_history
+                for minute in range(0, self.minutes_now, self.plan_interval_minutes):
+                    minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
+                    stamp = minute_timestamp.strftime(TIME_FORMAT)
+                    soc_kw_h0[stamp] = hist.get(self.minutes_now - minute, 0)
+            soc_kw_h0[now_str] = self.base.soc_kw
+
+            # Limits
+            # Get physical inverter limit (kW)
+            inverter_ac_limit_kw = 0.0
+            if self.base.inverters:
+                for inverter in self.base.inverters:
+                    inverter_ac_limit_kw += inverter.inverter_limit * 60.0  # internal kW/min back to kW
+
+            # Get effective limit from logic
+            clipping_limit_kw = getattr(self.base, "clipping_limit", 0.0) * 60.0
+            clipping_mode = getattr(self.base, "clipping_mode", "Inverter Limit")
+
+            # Ceiling for both axes (kWh and kW) to ensure ticks line up
+            # Max of (SOC Max, Inverter Limit, Max expected Solar)
+            axis_max = 12.0
+            if self.base.soc_max > 12.0 or inverter_ac_limit_kw > 12.0:
+                axis_max = max(self.base.soc_max, inverter_ac_limit_kw, 12.0)
+
+            # Use 6 ticks for even division (e.g. 0, 2, 4, 6, 8, 10, 12)
+            axis_ticks = 6
+
+            annotations = []
+            if clipping_limit_kw > 0:
+                annotations.append({"y": clipping_limit_kw, "text": "{} ({} kW)".format(clipping_mode, round(clipping_limit_kw, 2)), "color": "#FF0000"})
+
+            # If the physical inverter limit is different from the effective limit (e.g. DNO limit is lower), show it too
+            if inverter_ac_limit_kw > 0 and abs(inverter_ac_limit_kw - clipping_limit_kw) > 0.1:
+                annotations.append({"y": inverter_ac_limit_kw, "text": "Inverter Capacity ({} kW)".format(round(inverter_ac_limit_kw, 2)), "color": "#999999"})
+
+            # New X-Axis annotations for clipping window
+            xaxis_annotations = []
+            clipping_start = getattr(self.base, "clipping_buffer_start", None)
+            clipping_end = getattr(self.base, "clipping_buffer_end", None)
+
+            # Today's window
+            if clipping_start is not None and clipping_end is not None:
+                start_dt = self.midnight_utc + timedelta(minutes=clipping_start)
+                end_dt = self.midnight_utc + timedelta(minutes=clipping_end)
+                xaxis_annotations.append({"x": start_dt.strftime(TIME_FORMAT), "text": "Today Buffer Start", "color": "#FF9800"})
+                xaxis_annotations.append({"x": end_dt.strftime(TIME_FORMAT), "text": "Today Buffer End", "color": "#FF9800"})
+
+            # Tomorrow's window (if available in forecast)
+            if getattr(self.base, "clipping_buffer_forecast_kwh", None):
+                forecast = self.base.clipping_buffer_forecast_kwh
+                tomorrow_start = 1440
+                if any(forecast.get(m, 0) > 0 for m in range(tomorrow_start, tomorrow_start + 1440)):
+                    mid_tomorrow = self.midnight_utc + timedelta(days=1)
+                    xaxis_annotations.append({"x": mid_tomorrow.strftime(TIME_FORMAT), "text": "Tomorrow Buffer Active", "color": "#FF9800"})
+
+            # Clipping Remaining Time-Series
+            clipping_remaining_series = {}
+            if getattr(self.base, "clipping_buffer_forecast_kwh", None):
+                forecast = self.base.clipping_buffer_forecast_kwh
+                step_size = getattr(self.base, "plan_interval_minutes", 30)
+                for minute, kwh in forecast.items():
+                    if minute % step_size == 0:
+                        minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
+                        stamp = minute_timestamp.strftime(TIME_FORMAT)
+                        clipping_remaining_series[stamp] = round(kwh, 2)
+
+            # Clipping Target SOC series (The "Red Line")
+            clipping_target_series = {}
+            if getattr(self.base, "clipping_buffer_forecast_kwh", None):
+                forecast = self.base.clipping_buffer_forecast_kwh
+                step_size = getattr(self.base, "plan_interval_minutes", 30)
+                for minute, kwh in forecast.items():
+                    if minute % step_size == 0:
+                        minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
+                        stamp = minute_timestamp.strftime(TIME_FORMAT)
+                        # Target is the "Ceiling" we want to stay under
+                        target_val = max(0, self.base.soc_max - kwh)
+                        if kwh > 0:
+                            clipping_target_series[stamp] = round(target_val, 2)
+                        else:
+                            clipping_target_series[stamp] = None  # Don't plot the ceiling when there is no buffer
+
+            series_data = [
+                {"name": "Clipping Ceiling", "data": clipping_target_series, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#eb2323", "unit": "kWh"},
+                {"name": "Actual SOC", "data": soc_kw_best, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": "#9b23eb", "unit": "kWh"},
+                {"name": "Clipping Remaining", "data": clipping_remaining_series, "opacity": "0.4", "stroke_width": "2", "stroke_curve": "smooth", "color": "#2196F3", "unit": "kWh"},
+                {"name": "PV Power", "data": pv_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#f5c43d", "unit": "kW"},
+                {"name": "Clipping Forecast (" + clipping_forecast_type + ")", "data": clipping_forecast, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#a8a8a7", "unit": "kW"},
+            ]
+
+            secondary_axis = [
+                {
+                    "title": "kW",
+                    "series_name": "PV Power",
+                    "decimals": 1,
+                    "opposite": True,
+                    "min": 0,
+                    "max": axis_max,
+                    "tickAmount": axis_ticks,
+                },
+                {
+                    "title": "kW",
+                    "series_name": "Clipping Forecast (" + clipping_forecast_type + ")",
+                    "show": False,
+                    "min": 0,
+                    "max": axis_max,
+                    "tickAmount": axis_ticks,
+                },
+                {
+                    "title": "kWh",
+                    "series_name": "Clipping Remaining",
+                    "show": False,
+                    "min": 0,
+                    "max": axis_max,
+                    "tickAmount": axis_ticks,
+                },
+            ]
+
+            # Append dynamic stats to chart title
+            clipping_remaining = getattr(self.base, "clipping_remaining_today", 0.0)
+            clipping_mitigated = getattr(self.base, "clipping_mitigated_today", 0.0)
+            chart_title = "Clipping Analysis (Remaining: {:.2f} kWh, Mitigated: {:.2f} kWh)".format(clipping_remaining, clipping_mitigated)
+
+            text += self.render_chart(series_data, "kWh", chart_title, now_str, yaxis_annotations=annotations, xaxis_annotations=xaxis_annotations, extra_yaxis=secondary_axis, yaxis_min=0, yaxis_max=axis_max, yaxis_tick_amount=axis_ticks)
+
         elif chart == "PVAccuracy":
             # Get pv_today history once and extract total and remaining attributes per timestamp
             pv_today_hist = self.get_history_wrapper("sensor." + self.prefix + "_pv_today", 7, required=False)
@@ -3280,6 +3486,7 @@ chart.render();
         text += f'<a href="./charts?chart=PV" class="{"active" if chart == "PV" else ""}">PV</a>'
         text += f'<a href="./charts?chart=PV7" class="{"active" if chart == "PV7" else ""}">PV7</a>'
         text += f'<a href="./charts?chart=PVAccuracy" class="{"active" if chart == "PVAccuracy" else ""}">PVAccuracy</a>'
+        text += f'<a href="./charts?chart=Clipping" class="{"active" if chart == "Clipping" else ""}">Clipping</a>'
         text += f'<a href="./charts?chart=Savings" class="{"active" if chart == "Savings" else ""}">Savings</a>'
         text += f'<a href="./charts?chart=BatteryDegradation" class="{"active" if chart == "BatteryDegradation" else ""}">BatteryDegradation</a>'
         text += f'<a href="./charts?chart=MarginalCosts" class="{"active" if chart == "MarginalCosts" else ""}">MarginalCosts</a>'

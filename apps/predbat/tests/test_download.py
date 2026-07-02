@@ -257,8 +257,8 @@ def _test_compute_file_sha1(my_predbat):
     Test Git blob SHA1 hash computation (matches GitHub's SHA)
     """
     # Create a temporary file with known content
-    with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
-        f.write("test content\n")
+    with tempfile.NamedTemporaryFile(mode="wb", delete=False) as f:
+        f.write(b"test content\n")
         temp_path = f.name
 
     try:

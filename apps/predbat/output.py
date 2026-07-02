@@ -912,6 +912,31 @@ class Output:
             else:
                 sentence += "- You will reach a minimum of {}% battery in {}.\n".format(soc_min_percent, self.duration_string(soc_min_minute - self.minutes_now))
 
+        if getattr(self, "clipping_buffer_kwh", 0) > 0:
+            start_str = self.time_abs_str(self.clipping_buffer_start) if self.clipping_buffer_start is not None else None
+            end_str = self.time_abs_str(self.clipping_buffer_end) if self.clipping_buffer_end is not None else None
+            clipping_mode = getattr(self, "clipping_mode", "Inverter Limit")
+            discharge_note = ""
+            clipping_can_discharge = getattr(self, "clipping_buffer_can_discharge", "None")
+            if clipping_can_discharge == "Cost Optimal":
+                # Check if any charge window is currently overriding the buffer
+                override_active = False
+                for n, window in enumerate(self.charge_window_best):
+                    if window["start"] < (self.clipping_buffer_end or 0):
+                        if self.charge_limit_best[n] >= 99.0:
+                            override_active = True
+                            break
+                if override_active:
+                    discharge_note = " (Mitigation bypassed: Grid charging outweighs clipped solar)"
+                else:
+                    discharge_note = " (Cost-optimal mitigation enabled)"
+            elif clipping_can_discharge == "Always":
+                discharge_note = " (Active mitigation enabled)"
+
+            if start_str and end_str:
+                sentence += "- {} kWh clipping forecast ({}) between {} and {}. Setting charge target to mitigate{}.\n".format(dp2(self.clipping_buffer_kwh), clipping_mode, start_str, end_str, discharge_note)
+            else:
+                sentence += "- {} kWh clipping buffer active based on your settings (restricted by {}). No immediate clipping forecast{}.\n".format(dp2(self.clipping_buffer_kwh), clipping_mode, discharge_note)
         car_charging_kwh = self.car_charge_slot_kwh(self.minutes_now, self.minutes_now + 5)
         if car_charging_kwh > 0:
             sentence += "- Your car is currently charging.\n"
@@ -1254,6 +1279,12 @@ class Output:
                     had_state = True
                     if plan_debug:
                         show_limit += " ({})".format(str(calc_percent_limit(limit, self.soc_max)))
+
+                    # Clipping Buffer Financial Override indicator
+                    buffer_kwh_expected = getattr(self, "clipping_buffer_forecast_kwh", {}).get(minute, 0)
+                    if buffer_kwh_expected > 0 and limit_percent == 100.0:
+                        show_limit += " (Override &#128184;)"
+
                     raw_state_target = str(limit_percent)
             else:
                 if export_window_n >= 0:
@@ -2982,19 +3013,9 @@ class Output:
 
         # Simulate yesterday
         self.prediction = Prediction(self, yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, soc_kw=soc_yesterday)
-        (
-            metric_baseline,
-            import_kwh_battery,
-            import_kwh_house,
-            export_kwh,
-            soc_min,
-            final_soc,
-            soc_min_minute,
-            battery_cycle,
-            metric_keep,
-            final_iboost,
-            final_carbon_g,
-        ) = self.run_prediction(charge_limit_best, charge_window_best, [], [], False, end_record=end_record, save="yesterday")
+        (metric_baseline, import_kwh_battery, import_kwh_house, export_kwh, soc_min, final_soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g, *_) = self.run_prediction(
+            charge_limit_best, charge_window_best, [], [], False, end_record=end_record, save="yesterday"
+        )
 
         # Add back in battery value
         overall_metric, battery_value_baseline = self.compute_metric(
@@ -3192,7 +3213,9 @@ class Output:
 
         # Simulate no PV or battery
         self.prediction = Prediction(self, yesterday_pv_step_zero, yesterday_pv_step_zero, yesterday_load_step, yesterday_load_step, soc_kw=0, soc_max=0)
-        metric_no_pvbat, import_kwh_battery, import_kwh_house, export_kwh, soc_min, final_soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction([], [], [], [], False, end_record=end_record, save="yesterday")
+        metric_no_pvbat, import_kwh_battery, import_kwh_house, export_kwh, soc_min, final_soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g, *_ = self.run_prediction(
+            [], [], [], [], False, end_record=end_record, save="yesterday"
+        )
 
         # Add back in battery value
         overall_metric, battery_value_no_pvbat = self.compute_metric(

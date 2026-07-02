@@ -124,6 +124,11 @@ class ComponentBase(ABC):
         return self.base.midnight_utc
 
     @property
+    def midnight(self):
+        """Get today's midnight time in local time"""
+        return self.base.midnight
+
+    @property
     def now_utc_exact(self):
         """Get the current time in the local timezone"""
         return datetime.now(self.local_tz)
