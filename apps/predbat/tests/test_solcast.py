@@ -172,6 +172,10 @@ class TestSolarAPI:
             pv_forecast_tomorrow=None,
             pv_forecast_d3=None,
             pv_forecast_d4=None,
+            pv_clearsky_today=None,
+            pv_clearsky_tomorrow=None,
+            pv_clearsky_d3=None,
+            pv_clearsky_d4=None,
             pv_scaling=1.0,
             open_meteo_forecast=None,
             open_meteo_forecast_max_age=1.0,
@@ -1885,6 +1889,82 @@ def test_fetch_pv_forecast_ha_sensors(my_predbat):
     return failed
 
 
+def test_fetch_pv_forecast_ha_clearsky(my_predbat):
+    """
+    Integration test: fetch_pv_forecast using HA sensors for clearsky forecast.
+    Ensures that:
+      - Regex pattern resolves sensor names (e.g. sensor.solcast_clear_sky_today).
+      - fetch_pv_datapoints does not raise KeyError for pv_clearsky key.
+      - overlay_clearsky_data correctly overlays pv_clearsky values.
+    """
+    print("  - test_fetch_pv_forecast_ha_clearsky")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        # Configure matching options
+        test_api.solar.solcast_host = None
+        test_api.solar.solcast_api_key = None
+        test_api.solar.forecast_solar = None
+        test_api.solar.pv_forecast_today = "sensor.solcast_pv_forecast_today"
+        test_api.solar.pv_forecast_tomorrow = None
+
+        # Enable clearsky source as HA
+        test_api.mock_base.set_arg("clipping_clearsky_source", "ha_solcast_clearsky")
+        test_api.solar.pv_clearsky_today = "sensor.solcast_clear_sky_today"
+        test_api.solar.pv_clearsky_tomorrow = None
+        test_api.solar.pv_clearsky_d3 = None
+        test_api.solar.pv_clearsky_d4 = None
+
+        # Setup mock forecast sensor (base)
+        test_api.set_mock_ha_state(
+            "sensor.solcast_pv_forecast_today",
+            {
+                "state": "2.0",
+                "detailedForecast": [
+                    {"period_start": "2025-06-15T12:00:00+0000", "pv_estimate": 1.0},
+                    {"period_start": "2025-06-15T12:30:00+0000", "pv_estimate": 1.0},
+                ],
+            },
+        )
+
+        # Setup mock clearsky sensor
+        test_api.set_mock_ha_state(
+            "sensor.solcast_clear_sky_today",
+            {
+                "state": "3.0",
+                "detailedForecast": [
+                    {"period_start": "2025-06-15T12:00:00+0000", "pv_clearsky": 1.5},
+                    {"period_start": "2025-06-15T12:30:00+0000", "pv_clearsky": 1.5},
+                ],
+            },
+        )
+
+        def create_mock_session(*args, **kwargs):
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
+
+        # Verify that clearsky was overlaid correctly and published
+        today_entity = f"sensor.{test_api.mock_base.prefix}_pv_today"
+        if today_entity not in test_api.dashboard_items:
+            print("ERROR: Expected pv_today entity to be published")
+            failed = True
+        else:
+            today_item = test_api.dashboard_items[today_entity]
+            total_cs = today_item["attributes"].get("totalCS", 0)
+            expected_total_cs = 3.0
+            if abs(total_cs - expected_total_cs) > 0.05:
+                print(f"ERROR: Expected totalCS ~{expected_total_cs} kWh, got {total_cs} kWh")
+                failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
 # ============================================================================
 # 15-minute resolution tests
 # ============================================================================
@@ -2355,7 +2435,7 @@ def test_pv_calibration_power_conversion(my_predbat):
         pv_forecast_minute10 = {m: 0.04 for m in range(total_minutes)}
         pv_forecast_data = [{"period_start": base.midnight_utc.strftime("%Y-%m-%dT%H:%M:%S+0000"), "pv_estimate": 0.05}]
 
-        adj_minute, adj_minute10, adj_data = solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
+        adj_minute, adj_minute10, adj_data, _ = solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
 
         # Returned minute data must be non-negative
         if any(v < 0 for v in adj_minute.values()):
@@ -2627,7 +2707,7 @@ def test_pv_calibration_capped_data_clamp(my_predbat):
             pv_forecast_data.append({"period_start": ts.strftime("%Y-%m-%dT%H:%M:%S+0000"), "pv_estimate": 3.0 * plan_interval / 60})
 
         max_kwh = 2.0  # panel peak output cap in kW
-        adj_minute, adj_minute10, adj_data = solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=max_kwh, forecast_days=solar.forecast_days)
+        adj_minute, adj_minute10, adj_data, _ = solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=max_kwh, forecast_days=solar.forecast_days)
 
         # capped_data = min(max(max_pv_power_hist, max_pv_power_forecast), max_kwh) * plan_interval / 60
         # max_pv_power_hist ≈ 1 kW (per minute), max_pv_power_forecast ≈ 3/60 kW per minute
@@ -2816,7 +2896,7 @@ def test_pv_calibration_synthetic_values(my_predbat):
         # synthetic pv_forecast dict without going through the real h0 pipeline
         # (which relies on now_utc_exact returning the mocked time).
         with patch("solcast.history_attribute_to_minute_data", return_value=(pv_forecast_hist, days_back)):
-            adj_m, adj_m10, adj_data = solar.pv_calibration(pv_m, pv_m10, pv_data, create_pv10=True, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
+            adj_m, adj_m10, adj_data, _ = solar.pv_calibration(pv_m, pv_m10, pv_data, create_pv10=True, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
         result = {
             "total_adj": solar.pv_calibration_total_adjustment,
             "avg_scaling": getattr(solar, "pv_calibration_average_scaling", None),
@@ -3025,7 +3105,7 @@ def test_pv_calibration_60min_period(my_predbat):
             pv_forecast_hist[minutes_ago] = float(FORECAST_KW)
 
     with patch("solcast.history_attribute_to_minute_data", return_value=(pv_forecast_hist, days)):
-        adj_m, adj_m10, adj_data = solar.pv_calibration(pv_m, pv_m10, pv_data, create_pv10=True, divide_by=divide_by_factor, max_kwh=10.0, forecast_days=solar.forecast_days, period=FORECAST_PERIOD)
+        adj_m, adj_m10, adj_data, _ = solar.pv_calibration(pv_m, pv_m10, pv_data, create_pv10=True, divide_by=divide_by_factor, max_kwh=10.0, forecast_days=solar.forecast_days, period=FORECAST_PERIOD)
 
     # Each annotated entry should cover the full FORECAST_PERIOD minutes.
     # Expected calibrated kWh per entry ≈ FORECAST_KW * FORECAST_PERIOD / 60 = 2.0 kWh.
@@ -3148,7 +3228,7 @@ def test_pv_calibration_15min_period(my_predbat):
             pv_forecast_hist[minutes_ago] = float(FORECAST_KW)
 
     with patch("solcast.history_attribute_to_minute_data", return_value=(pv_forecast_hist, days)):
-        adj_m, adj_m10, adj_data = solar.pv_calibration(pv_m, pv_m10, pv_data, create_pv10=True, divide_by=divide_by_factor, max_kwh=10.0, forecast_days=solar.forecast_days, period=FORECAST_PERIOD)
+        adj_m, adj_m10, adj_data, _ = solar.pv_calibration(pv_m, pv_m10, pv_data, create_pv10=True, divide_by=divide_by_factor, max_kwh=10.0, forecast_days=solar.forecast_days, period=FORECAST_PERIOD)
 
     # Each 15-min entry should be annotated with the single 30-min plan slot that
     # starts at the entry timestamp.  slots_per_period=max(1,round(15/30))=1, so
@@ -3502,6 +3582,7 @@ def run_solcast_tests(my_predbat):
     failed |= test_fetch_pv_forecast_forecast_solar_open_meteo_backup_on_failure(my_predbat)
     failed |= test_fetch_pv_forecast_forecast_solar_open_meteo_backup_not_used_on_success(my_predbat)
     failed |= test_fetch_pv_forecast_ha_sensors(my_predbat)
+    failed |= test_fetch_pv_forecast_ha_clearsky(my_predbat)
 
     # 15-minute resolution tests
     failed |= test_fetch_pv_forecast_ha_sensors_15min_kwh(my_predbat)
