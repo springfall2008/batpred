@@ -1183,7 +1183,7 @@ class Plan:
 
                 if limit > 0:
                     if max_pv_power >= limit * 0.98:
-                        auto_amp = min(2.5, auto_amp + 0.05)
+                        auto_amp = round(min(2.5, auto_amp + 0.05), 2)
                         auto_start_offset = min(60, auto_start_offset + 5)
                         auto_end_offset = min(60, auto_end_offset + 5)
                         self.log(
@@ -1192,7 +1192,7 @@ class Plan:
                             )
                         )
                     else:
-                        auto_amp = max(1.0, auto_amp - 0.01)
+                        auto_amp = round(max(1.0, auto_amp - 0.01), 2)
                         auto_start_offset = max(0, auto_start_offset - 5)
                         auto_end_offset = max(0, auto_end_offset - 5)
                         self.log("Clipping auto-tuner: No clipping detected. Decreased safety margins - amp: {}, start_offset: {}m, end_offset: {}m".format(auto_amp, auto_start_offset, auto_end_offset))
