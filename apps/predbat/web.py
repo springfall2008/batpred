@@ -2663,7 +2663,7 @@ chart.render();
             # Pure string fields (e.g. gateway_mqtt_host = "mqtt.predbat.com") must not
             # be treated as HA entity IDs even though they contain a dot.
             schema_type = APPS_SCHEMA.get(arg, {}).get("type", "")
-            is_pure_string = schema_type and "sensor" not in schema_type.split("|")
+            is_pure_string = schema_type and not any(t.startswith("sensor") for t in schema_type.split("|"))
             if "{" in value:
                 text = self.base.resolve_arg(arg, value, indirect=False, quiet=True)
                 if text is None:
