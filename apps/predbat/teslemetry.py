@@ -108,7 +108,7 @@ class TeslemetryAPI(ComponentBase):
         return True
 
     async def fetch_site_info(self):
-        """Fetch site info, publishing capacity and seeding control entity states."""
+        """Fetch site info, publishing the battery capacity as soc_max."""
         data = await self._request("GET", "/api/1/energy_sites/{}/site_info".format(self.site_id))
         if not data:
             return False
@@ -137,24 +137,33 @@ class TeslemetryAPI(ComponentBase):
         return True
 
     async def run(self, seconds=0, first=False):
-        """Main component loop: poll data at the configured cadences."""
+        """Main component loop: poll data at the configured cadences.
+
+        Returns True on a successful (or gated no-op) cycle and False on failure —
+        ComponentBase.start() uses this to set api_started, clear the startup flag
+        and drive its retry backoff, so a failing cycle must return False.
+        """
         if not self.api_key or not self.site_id:
             self.log("Warn: Teslemetry key or site_id not configured, skipping run")
-            return
-        if first:
-            await self.fetch_site_info()
+            return False
         if self.api_auth_failed:
-            # Do not hammer the API with a dead token; only live_status probes recovery
+            # Do not hammer the API with a dead token; only live_status probes recovery.
+            # A successful probe clears the flag in _request; a failed one returns False
+            # so ComponentBase keeps backing off.
             if seconds - self.last_live_poll >= LIVE_POLL_SECONDS:
                 self.last_live_poll = seconds
-                await self.fetch_live_status()
-            return
+                return await self.fetch_live_status()
+            return False
+        success = True
+        if first:
+            await self.fetch_site_info()
         if first or (seconds - self.last_live_poll >= LIVE_POLL_SECONDS):
             self.last_live_poll = seconds
-            await self.fetch_live_status()
+            success = await self.fetch_live_status()
         if first or (seconds - self.last_energy_poll >= ENERGY_POLL_SECONDS):
             self.last_energy_poll = seconds
             await self.fetch_energy_today()
+        return success
 
     async def final(self):
         """Cleanup on shutdown."""
