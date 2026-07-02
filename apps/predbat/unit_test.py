@@ -19,6 +19,7 @@ from tests.test_infra import TestHAInterface
 from tests.test_compute_metric import run_compute_metric_tests
 from tests.test_perf import run_perf_test
 from tests.test_model import run_model_tests
+from tests.test_kernel_parity import run_kernel_parity_tests, run_model_kernel_tests
 from tests.test_execute import run_execute_tests
 from tests.test_octopus_slots import run_load_octopus_slots_tests
 from tests.test_multi_car_iog import run_multi_car_iog_tests
@@ -31,7 +32,7 @@ from tests.test_basic_rates import test_basic_rates
 from tests.test_rate_min_forward_calc import test_rate_min_forward_calc
 from tests.test_find_charge_curve import run_find_charge_curve_tests
 from tests.test_find_battery_size import run_find_battery_size_tests
-from tests.test_optimise_all_windows import run_optimise_all_windows_tests
+from tests.test_optimise_all_windows import run_optimise_all_windows_kernel_tests
 from tests.test_optimise_solar import run_optimise_solar_tests
 from tests.test_nordpool import run_nordpool_test
 from tests.test_futurerate_auto import test_futurerate_auto
@@ -149,6 +150,9 @@ def run_debug_cases(my_predbat):
     failed = False
     print("**** Running debug case files ****")
 
+    total_calculate_plan_time = 0.0
+    case_count = 0
+
     # Scan .yaml files in cases directory
     for filename in glob.glob("cases/*.yaml"):
         basename = os.path.basename(filename)
@@ -156,12 +160,17 @@ def run_debug_cases(my_predbat):
         if basename == "random_scenarios.yaml":
             continue  # Skip the random scenarios template file
         test_failed = run_single_debug(basename, my_predbat, filename, pathname + "/" + basename + ".expected.json")
+        total_calculate_plan_time += getattr(my_predbat, "last_calculate_plan_time", 0.0)
+        case_count += 1
         if test_failed:
             print(f"**** Debug case {basename}: FAILED ****")
             failed = True
             break
         else:
             print(f"**** Debug case {basename}: PASSED ****")
+
+    if case_count:
+        print("**** Debug cases calculate_plan total time: {} seconds across {} case(s), average {} seconds ****".format(round(total_calculate_plan_time, 3), case_count, round(total_calculate_plan_time / case_count, 3)))
 
     return failed
 
@@ -189,6 +198,8 @@ def main():
         ("secrets", run_secrets_tests, "Secrets loading tests", False),
         ("perf", run_perf_test, "Performance tests", False),
         ("model", run_model_tests, "Model tests", False),
+        ("model_kernel", run_model_kernel_tests, "Model tests run with the C++ prediction kernel enabled", False),
+        ("kernel_parity", run_kernel_parity_tests, "C++ prediction kernel vs Python engine parity tests", False),
         ("inverter", run_inverter_tests, "Inverter tests", False),
         ("execute", run_execute_tests, "Execute tests", False),
         ("basic_rates", test_basic_rates, "Basic rates tests", False),
@@ -332,7 +343,8 @@ def main():
         ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", False),
         ("export_commitment", run_export_commitment_tests, "Forced-export commitment / anti-flapping tests", False),
         ("load_ml", test_load_ml, "ML Load Forecaster tests (MLP, training, persistence, validation)", True),
-        ("optimise_windows", run_optimise_all_windows_tests, "Optimise all windows tests", True),
+        # ("optimise_windows", run_optimise_all_windows_tests, "Optimise all windows tests", True),
+        ("optimise_windows_kernel", run_optimise_all_windows_kernel_tests, "Optimise all windows tests with/without the C++ kernel", True),
         ("optimise_solar", run_optimise_solar_tests, "Optimise export more solar tests", False),
         ("debug_cases", run_debug_cases, "Debug case file tests", True),
     ]

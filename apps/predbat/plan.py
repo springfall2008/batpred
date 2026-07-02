@@ -24,6 +24,7 @@ from multiprocessing import Pool, cpu_count
 from const import PREDICT_STEP, TIME_FORMAT, MINUTE_WATT
 from utils import calc_percent_limit, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, calc_percent_limit, in_car_slot
 from prediction import Prediction, wrapped_run_prediction_single, wrapped_run_prediction_charge, wrapped_run_prediction_charge_min_max, wrapped_run_prediction_export, wrapped_run_prediction_charge_min_max
+from prediction_kernel import kernel_status_summary
 from predbat_metrics import metrics
 import time
 
@@ -971,6 +972,8 @@ class Plan:
 
         # Creation prediction object
         self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10)
+        kernel_message, kernel_is_warning = kernel_status_summary(self.prediction)
+        self.log("{}Prediction kernel: {}".format("Warn: " if kernel_is_warning else "", kernel_message))
 
         # Check if LoadML is active and disable thread pools as it causes lockup due to race conditions with NumPy
         load_ml_comp = self.components.get_component("load_ml") if self.components else None
