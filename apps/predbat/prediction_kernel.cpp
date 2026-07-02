@@ -9,12 +9,13 @@
 // PARITY RULE: This file must produce bit-identical results to the Python engine
 // for the scenarios it supports (see prediction_kernel.py capability check).
 // Any behavioural change to the hot loop in prediction.py MUST be mirrored here
-// and PK_PARITY_REVISION below AND KERNEL_PARITY_REVISION in prediction.py must
+// and PK_PARITY_REVISION below AND KERNEL_PARITY_REVISION in prediction_kernel.py must
 // both be bumped. A mismatch at load time disables the kernel (Python fallback).
 // Section comments reference the prediction.py line anchors they mirror.
 //
 // Build: bash apps/predbat/build_kernel.sh (g++/clang, C++17, no dependencies)
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -260,7 +261,7 @@ int32_t pk_abi_version(void)
     return PK_ABI_VERSION;
 }
 
-// Parity revision, must match KERNEL_PARITY_REVISION in prediction.py
+// Parity revision, must match KERNEL_PARITY_REVISION in prediction_kernel.py
 int32_t pk_parity_revision(void)
 {
     return PK_PARITY_REVISION;

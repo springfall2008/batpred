@@ -25,16 +25,9 @@ jobs:
         cd coverage
         python3 ../apps/predbat/unit_test.py --quick
     - name: Verify checked-in x86_64 kernel binary
-      env:
-        PREDBAT_KERNEL_REQUIRED: "1"
-        PREDBAT_KERNEL_SO: ${{ github.workspace }}/apps/predbat/prediction_kernel_lib_x86_64.so
       run: |
-        if [ -f "$PREDBAT_KERNEL_SO" ]; then
-          cd coverage
-          python3 ../apps/predbat/unit_test.py --test kernel_parity
-        else
-          echo "No checked-in x86_64 kernel binary yet - skipping"
-        fi
+        cd coverage
+        python3 ../apps/predbat/verify_kernel_binary.py ../apps/predbat/prediction_kernel_lib_x86_64.so
 
   # Cross-build the prediction kernel binaries for every platform and commit them
   # back to the PR branch when they change (same auto-fix pattern as pre-commit)

@@ -8,11 +8,17 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+import math
 import time
 from tests.test_infra import reset_rates, reset_inverter, simple_scenario
 from tests.test_kernel_parity import kernel_available
 
 PERF_ITERATIONS = 200
+
+
+def safe_ratio(numerator, denominator):
+    """Divide, returning infinity instead of raising when the elapsed time rounds to 0 (very fast runs or a coarse clock)"""
+    return numerator / denominator if denominator > 0 else math.inf
 
 
 def time_perf_scenario(my_predbat, import_rate):
@@ -71,19 +77,21 @@ def run_perf_test(my_predbat):
     my_predbat.prediction_kernel_enable = False
     failed_python, python_time = time_perf_scenario(my_predbat, import_rate)
     failed |= failed_python
-    python_rate = PERF_ITERATIONS / python_time
+    python_rate = safe_ratio(PERF_ITERATIONS, python_time)
     print("Performance test (Python engine) took {} seconds for {} iterations = {} iterations per second".format(round(python_time, 3), PERF_ITERATIONS, round(python_rate, 2)))
 
-    # C++ kernel (skipped when the shared library is not available)
-    kernel_loaded, _ = kernel_available()
+    # C++ kernel (skipped when the shared library is not available, unless PREDBAT_KERNEL_REQUIRED=1)
+    kernel_loaded, kernel_required_failure = kernel_available()
     if kernel_loaded:
         my_predbat.prediction_kernel_enable = True
         failed_kernel, kernel_time = time_perf_scenario(my_predbat, import_rate)
         failed |= failed_kernel
-        kernel_rate = PERF_ITERATIONS / kernel_time
+        kernel_rate = safe_ratio(PERF_ITERATIONS, kernel_time)
         print("Performance test (C++ kernel) took {} seconds for {} iterations = {} iterations per second".format(round(kernel_time, 3), PERF_ITERATIONS, round(kernel_rate, 2)))
-        print("C++ kernel speedup: {}x".format(round(python_time / kernel_time, 1)))
+        print("C++ kernel speedup: {}x".format(round(safe_ratio(python_time, kernel_time), 1)))
         my_predbat.prediction_kernel_enable = False
+    elif kernel_required_failure:
+        failed = True
     else:
         print("C++ kernel not available - kernel performance test skipped")
 

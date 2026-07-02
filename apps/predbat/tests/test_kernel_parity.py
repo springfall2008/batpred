@@ -139,9 +139,18 @@ def restore_scenario_state(my_predbat, state):
 
 
 def ensure_kernel_built():
-    """Build the kernel shared library if it is not already present, returns True when available"""
-    if any(os.path.exists(path) for path in prediction_kernel.kernel_library_candidates()):
+    """Ensure a loadable kernel shared library is available, building one locally if necessary.
+
+    Existence alone isn't enough to skip building - a candidate binary (e.g. a checked-in
+    cross-built one) can be stale (parity revision mismatch) or corrupted - so this actually
+    attempts to load before deciding a build is needed. Returns True once a usable library
+    has been loaded, whether that was an existing candidate or a freshly built local one.
+    """
+    prediction_kernel.KERNEL_LOAD_TRIED = False
+    prediction_kernel.KERNEL_LIB = None
+    if load_kernel(log=print):
         return True
+
     build_script = os.path.join(os.path.dirname(os.path.abspath(prediction_kernel.__file__)), "build_kernel.sh")
     try:
         result = subprocess.run(["bash", build_script], capture_output=True, text=True, timeout=120)
@@ -151,7 +160,10 @@ def ensure_kernel_built():
     except (OSError, subprocess.SubprocessError) as error:
         print("Kernel build failed: {}".format(error))
         return False
-    return any(os.path.exists(path) for path in prediction_kernel.kernel_library_candidates())
+
+    prediction_kernel.KERNEL_LOAD_TRIED = False
+    prediction_kernel.KERNEL_LIB = None
+    return load_kernel(log=print) is not None
 
 
 def make_windows(rng, minutes_now, forecast_minutes, count, align=5):
@@ -597,11 +609,7 @@ def run_random_sweep_tests(my_predbat, count=150):
 
 def kernel_available():
     """Ensure the kernel library is built and loaded, returns (available, required_failure)"""
-    # Reset loader state so a freshly-built library is picked up
-    prediction_kernel.KERNEL_LOAD_TRIED = False
-    prediction_kernel.KERNEL_LIB = None
-
-    if not ensure_kernel_built() or not load_kernel(log=print):
+    if not ensure_kernel_built():
         if os.environ.get("PREDBAT_KERNEL_REQUIRED"):
             print("ERROR: Prediction kernel is required (PREDBAT_KERNEL_REQUIRED) but could not be built/loaded")
             return False, True
