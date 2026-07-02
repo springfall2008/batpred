@@ -9,6 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 import os
 import json
+import time
 from compare import Compare
 from prediction import Prediction
 from tests.test_infra import reset_inverter
@@ -105,7 +106,8 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.iboost_solar_excess = True
         # my_predbat.iboost_min_power = 500 / MINUTE_WATT
         # my_predbat.calculate_export_on_pv = False
-        my_predbat.export_more_solar = True
+        #my_predbat.export_more_solar = True
+        #my_predbat.prediction_kernel_enable = True
         pass
 
     print("Charge scaling 10 {} load scaling 10 {}".format(my_predbat.charge_scaling10, my_predbat.load_scaling10))
@@ -223,8 +225,11 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     # contexts (full ./run_all suite vs standalone) to find any leaked/uninitialised state.
     # _dump_state_before_plan(my_predbat, test_name + ".state.json")
     print("Re-calculate plan")
+    start_time = time.time()
     my_predbat.calculate_plan(recompute=True, debug_mode=debug)
-    print("Plan calculated")
+    calculate_plan_time = time.time() - start_time
+    my_predbat.last_calculate_plan_time = calculate_plan_time
+    print("Plan calculated in {} seconds".format(round(calculate_plan_time, 3)))
 
     # Predict
     my_predbat.log("> FINAL PLAN")

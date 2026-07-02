@@ -420,12 +420,22 @@ def create_kernel_context(pred):
 
 
 def kernel_supported(pred, save, step):
-    """Check whether the kernel supports this prediction run (unsupported means Python fallback, never approximation)"""
-    return not save and not pred.debug_enable and step == PREDICT_STEP and getattr(pred, "kernel_handle", 0) != 0
+    """Check whether the kernel supports this prediction run (unsupported means Python fallback, never approximation)
+
+    Any requested step is supported: the kernel always simulates at PREDICT_STEP (5 minute)
+    granularity internally, which is strictly finer than the coarse "fast mode" step (e.g. 30)
+    the Python engine falls back to for speed - so kernel runs are both faster and more accurate
+    than a coarse-step Python run, never an approximation of what was asked for.
+    """
+    return not save and not pred.debug_enable and getattr(pred, "kernel_handle", 0) != 0
 
 
 def run_prediction_kernel(pred, charge_limit, charge_window, export_window, export_limits, pv10, end_record, step, cache):
     """Run one prediction scenario through the C++ kernel.
+
+    The caller's requested step is intentionally ignored - the kernel always simulates at
+    PREDICT_STEP (5 minutes), see kernel_supported() - so a coarse "fast mode" step never
+    reaches the kernel or the shared library ABI.
 
     Returns the same 17-tuple as Prediction.run_prediction() or None when the
     kernel could not run the scenario (caller falls back to the Python engine).
@@ -451,7 +461,7 @@ def run_prediction_kernel(pred, charge_limit, charge_window, export_window, expo
     scenario.n_export = len(export_window)
     scenario.pv10 = 1 if pv10 else 0
     scenario.end_record = end_record
-    scenario.step = step
+    scenario.step = PREDICT_STEP  # the caller's step is ignored - see run_prediction_kernel docstring
 
     result = PkResult()
     return_code = lib.pk_run(pred.kernel_handle, ctypes.byref(scenario), ctypes.byref(result))

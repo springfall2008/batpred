@@ -145,14 +145,15 @@ def run_optimise_all_windows_kernel_tests(my_predbat):
     Both runs must pass their normal assertions; the kernel run dispatches every supported
     prediction to the C++ kernel. Returns True on failure.
     """
-    available, required_failure = kernel_available()
-    if not available:
-        return required_failure
 
     start = time.time()
     failed = run_optimise_all_windows_tests(my_predbat)
     python_time = time.time() - start
     print("Optimise all windows tests (Python engine) took {} seconds".format(round(python_time, 2)))
+
+    available, required_failure = kernel_available()
+    if not available:
+        return required_failure
 
     start = time.time()
     failed |= run_optimise_all_windows_tests(my_predbat, prediction_kernel=True)
