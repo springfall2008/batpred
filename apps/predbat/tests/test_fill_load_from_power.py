@@ -425,7 +425,7 @@ def run_all_tests(my_predbat=None):
         test_fill_load_from_power_negative_power_corrupts_load_total()
 
         print("\n" + "=" * 60)
-        print("✅ ALL TESTS PASSED")
+        print("PASS: ALL TESTS PASSED")
         print("=" * 60)
         return 0  # Return 0 for success
     except AssertionError as e:
