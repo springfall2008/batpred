@@ -1715,11 +1715,17 @@ class Plan:
                 metric -= 0.001
 
             # Adjust to try to keep existing windows
+            keep_export = False
             if window_n < 2 and this_export_limit < 99.0 and self.export_window and self.isExporting:
                 pwindow = export_window[window_n]
                 dwindow = self.export_window[0]
                 if self.minutes_now >= pwindow["start"] and self.minutes_now < pwindow["end"] and ((self.minutes_now >= dwindow["start"] and self.minutes_now < dwindow["end"]) or (dwindow["end"] == pwindow["start"])):
                     metric -= max(0.5, self.metric_min_improvement_export)
+                    # Only relax the cost gate (further below) for an option that actually covers the current
+                    # minute. The option start is varied during optimisation, so a future-starting option is
+                    # not the in-progress export and must not receive the cost-gate commitment.
+                    if start <= self.minutes_now:
+                        keep_export = True
 
             # Round metric to 4 DP
             metric = dp4(metric)
@@ -1764,6 +1770,14 @@ class Plan:
                 min_improvement_scaled = self.metric_min_improvement_export * rate_scale * len(all_n)
             else:
                 min_improvement_scaled = self.metric_min_improvement_export * window_size * rate_scale / float(self.plan_interval_minutes)
+
+            # When already exporting within this window keep the export going across planning cycles by
+            # relaxing the cost gate (not just the metric above). This only sustains an in-progress forced
+            # export (it never opens a new one) so it cannot reintroduce the metric_keep gaming of issue #2984.
+            # It prevents export oscillation on near-flat multi-slot price peaks where exporting now versus
+            # holding and exporting the adjacent equal-priced slot is otherwise a cost coin-toss each cycle.
+            if keep_export:
+                min_improvement_scaled = min(min_improvement_scaled, -max(0.5, self.metric_min_improvement_export))
 
             # Only select an export if it makes a notable improvement has defined by min_improvement (divided in M windows)
             # Also require cost improvement to prevent exports that only game metric_keep without actual savings (issue #2984)

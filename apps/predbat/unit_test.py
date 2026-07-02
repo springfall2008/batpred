@@ -39,6 +39,7 @@ from tests.test_car_charging_smart import run_car_charging_smart_tests
 from tests.test_plugin_startup import test_plugin_startup_order
 from tests.test_active_flag import test_active_flag
 from tests.test_optimise_levels import run_optimise_levels_tests
+from tests.test_export_commitment import run_export_commitment_tests
 from tests.test_energydataservice import run_energydataservice_tests
 from tests.test_iboost import run_iboost_smart_tests
 from tests.test_alert_feed import test_alert_feed
@@ -329,6 +330,7 @@ def main():
         ("compare", test_compare, "Compare tariff engine tests (hardware overrides, bleed isolation)", False),
         ("gateway", run_gateway_tests, "GatewayMQTT component tests (protobuf, plan serialization, commands, telemetry)", False),
         ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", False),
+        ("export_commitment", run_export_commitment_tests, "Forced-export commitment / anti-flapping tests", False),
         ("load_ml", test_load_ml, "ML Load Forecaster tests (MLP, training, persistence, validation)", True),
         ("optimise_windows", run_optimise_all_windows_tests, "Optimise all windows tests", True),
         ("optimise_solar", run_optimise_solar_tests, "Optimise export more solar tests", False),
