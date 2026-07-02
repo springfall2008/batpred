@@ -1806,6 +1806,7 @@ def test_sigenergy_run_derives_onboard_status(my_predbat):
         api._manage_vpp_registration = AsyncMock(return_value=True)
         api.fetch_inverter_realtime = AsyncMock(return_value=True)
         api.fetch_daily_summary = AsyncMock()
+        api.fetch_history_totals = AsyncMock()
         api.publish_system_entities = AsyncMock()
         api.apply_controls = AsyncMock()
         return api
