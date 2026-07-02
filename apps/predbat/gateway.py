@@ -22,10 +22,12 @@ from component_base import ComponentBase
 
 try:
     import gateway_status_pb2 as pb
+    from google.protobuf import json_format as _pb_json_format
 
     HAS_PROTOBUF = True
 except (ImportError, Exception):
     pb = None
+    _pb_json_format = None
     HAS_PROTOBUF = False
 
 try:
@@ -683,7 +685,7 @@ class GatewayMQTT(ComponentBase):
                 message = message_type()
                 message.ParseFromString(raw)
             size = f" ({len(raw)} bytes)" if raw is not None else ""
-            text = str(message).strip()
+            text = _pb_json_format.MessageToJson(message, always_print_fields_with_no_presence=True, preserving_proto_field_name=True)
             self.log(f"Debug: GatewayMQTT: {label}{size}:\n{text}")
         except Exception as e:
             self.log(f"Warn: GatewayMQTT: failed to dump {label}: {e}")

@@ -724,7 +724,7 @@ class TestDebugLogging:
 
         assert gw.log.call_count == 1
         msg = gw.log.call_args[0][0]
-        assert "plan_version: 7" in msg
+        assert '"plan_version": 7' in msg
 
     def test_initialize_reads_gateway_debug_arg(self):
         """initialize() picks up the gateway_debug flag from apps.yaml args."""
