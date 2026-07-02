@@ -300,6 +300,7 @@ class SigenergyAPI(ComponentBase):
         self.system_status = {}   # systemId → latest systemStatus dict
         self.daily_summary = {}   # systemId → latest summary dict
         self.history_totals = {}  # systemId → {sankey node id: lifetime kWh total}
+        self.mqtt_period_raw = {}  # systemId → merged raw 'period' fields (MQTT only sends fields that changed)
         self.current_mode = {}    # systemId → energyStorageOperationMode int
         self.onboard_status = {}  # systemId → onboarding status string (published for the SaaS UI)
 
@@ -634,9 +635,9 @@ class SigenergyAPI(ComponentBase):
         that all downstream code (publish_system_entities, apply_controls) works
         unchanged.  Also updates daily_summary with pvEnergyDaily if present.
 
-        Field sign conventions (realtimeInfo vs energyFlow):
-          batPower:   realtimeInfo positive=discharging  → energyFlow positive=charging (negated)
-          activePower: positive=generation/export        → gridPower positive=export (same)
+        Field sign conventions map directly onto Predbat's own convention, no negation needed:
+          batPower:    positive=discharging, negative=charging (same as Predbat battery_power)
+          activePower: positive=export, negative=import (same as Predbat grid_power)
           loadPower is derived as: pv + battery_discharge - grid_export
 
         Note: The API enforces a 5-minute access restriction per device, so this
@@ -668,17 +669,14 @@ class SigenergyAPI(ComponentBase):
 
         bat_soc = _safe_float(rt.get("batSoc", 0))
         # batPower: realtimeInfo convention is positive=discharging, negative=charging.
-        # energyFlow convention (used everywhere else) is positive=charging, negative=discharging.
-        # Negate to match the energyFlow convention.
-        bat_power_kw = -_safe_float(rt.get("batPower", 0))
+        bat_power_kw = _safe_float(rt.get("batPower", 0))
         pv_power_kw = _safe_float(rt.get("pvPower", 0))
         # activePower: positive=export (net generation to grid), negative=import.
-        # Maps directly to gridPower in the energyFlow convention (positive=export).
+        # Maps directly to gridPower in the Predbat convention (positive=export).
         grid_power_kw = _safe_float(rt.get("activePower", 0))
-        # Derive load: pv + battery_discharge - grid_export
-        # battery_discharge = -bat_power_kw when bat_power_kw < 0 (bat_power_kw is now in charging-positive convention)
-        battery_discharge_kw = max(0.0, -bat_power_kw)
-        load_power_kw = max(0.0, pv_power_kw + battery_discharge_kw - grid_power_kw)
+        # Energy balance in Predbat convention (bat: +discharge/-charge, grid: +export/-import):
+        # load = pv + battery_discharge - grid_export
+        load_power_kw = max(0.0, pv_power_kw + bat_power_kw - grid_power_kw)
 
         flow = {
             "batterySoc": bat_soc,
@@ -704,10 +702,10 @@ class SigenergyAPI(ComponentBase):
     async def fetch_energy_flow(self, system_id):
         """Fetch realtime energy-flow data for a system.
 
-        The API returns power values in kW with these sign conventions:
+        The raw API returns power values in kW with these sign conventions:
           pvPower      — always positive
-          gridPower    — positive = export to grid, negative = import from grid
-          batteryPower — positive = charging, negative = discharging
+          gridPower    — positive = export to grid, negative = import from grid (same as Predbat)
+          batteryPower — positive = charging, negative = discharging (opposite of Predbat - negated below)
           loadPower    — always positive
 
         Args:
@@ -736,11 +734,19 @@ class SigenergyAPI(ComponentBase):
             self.log("Warn: SigenergyAPI: Failed to fetch energy flow for {}".format(system_id))
             return False
 
-        self.energy_flow[system_id] = data
         soc = _safe_float(data.get("batterySoc", 0))
-        battery_kw = _safe_float(data.get("batteryPower", 0))
+        # batteryPower: raw API is positive=charging - negate to Predbat convention (positive=discharging)
+        battery_kw = -_safe_float(data.get("batteryPower", 0))
         pv_kw = _safe_float(data.get("pvPower", 0))
         grid_kw = _safe_float(data.get("gridPower", 0))
+        self.energy_flow[system_id] = {
+            "batterySoc": soc,
+            "batteryPower": battery_kw,
+            "pvPower": pv_kw,
+            "gridPower": grid_kw,
+            "loadPower": _safe_float(data.get("loadPower", 0)),
+            "evPower": _safe_float(data.get("evPower", 0)),
+        }
         self.log("SigenergyAPI: System {} — SOC {:.0f}% battery {:.2f}kW pv {:.2f}kW grid {:.2f}kW".format(system_id, soc, battery_kw, pv_kw, grid_kw))
         return True
 
@@ -1148,17 +1154,19 @@ class SigenergyAPI(ComponentBase):
     def _handle_mqtt_period(self, system_id, value_dict):
         """Handle a Sigenergy ``openapi/period`` MQTT message.
 
-        Overwrites ``self.energy_flow[system_id]`` with fresh real-time data.
-        The ``period`` message is broadcast every ~5 s by the broker and carries
-        inverter and storage power/SOC values.
+        The broker only includes fields that changed since the previous message,
+        so ``value_dict`` is merged onto ``self.mqtt_period_raw[system_id]`` (the
+        last known value of every raw field) rather than used on its own —
+        otherwise any field that hasn't changed recently would read back as 0.
+        Recomputes and overwrites ``self.energy_flow[system_id]`` from that merged
+        state. The ``period`` message is broadcast every ~5 s by the broker and
+        carries inverter and storage power/SOC values.
 
-        Field sign convention matches the REST energyFlow convention used
-        throughout the rest of the code:
-          batteryPower — positive = charging, negative = discharging
+        Field sign convention matches Predbat's own battery_power/grid_power convention:
+          batteryPower — positive = discharging, negative = charging
           gridPower    — positive = export, negative = import
           pvPower      — always positive
-          loadPower    — derived as ``pvPower − batteryPower − gridPower``
-
+          loadPower    — derived as ``pvPower + batteryPower - gridPower``
         Example message:
         {
             "PV power": "0.0",
@@ -1192,34 +1200,41 @@ class SigenergyAPI(ComponentBase):
             system_id: Sigenergy system identifier extracted from the MQTT topic.
             value_dict: ``value`` sub-dict from the parsed MQTT payload (string→string).
         """
-        # Note: storageChargeDischargePowerW is negative when discharging — same
-        # sign convention as the REST batteryPower field (positive=charging).
-        bat_power_kw = _safe_float(value_dict.get("storageChargeDischargePowerW", 0)) / 1000.0
-        pv_power_kw = _safe_float(value_dict.get("PV power", 0)) / 1000.0
-        grid_power_kw = _safe_float(value_dict.get("gridActivePowerW", 0)) / 1000.0
-        load_power_kw = pv_power_kw - bat_power_kw - grid_power_kw
+        # The broker only sends fields that changed, so merge onto the last known
+        # raw values rather than treating an absent field as 0.
+        raw = self.mqtt_period_raw.setdefault(system_id, {})
+        raw.update(value_dict)
+
+        # Note: storageChargeDischargePowerW is negative when discharging, convert to Predbat
+        bat_power_kw = -_safe_float(raw.get("storageChargeDischargePowerW", 0)) / 1000.0
+        pv_power_kw = _safe_float(raw.get("PV power", 0)) / 1000.0
+        # Convert grid power, from positve=import to positive=export (same as Predbat)
+        grid_power_kw = -_safe_float(raw.get("gridActivePowerW", 0)) / 1000.0
+        # Energy balance in Predbat convention (bat: +discharge/-charge, grid: +export/-import):
+        # load = pv + battery_discharge - grid_export
+        load_power_kw = pv_power_kw + bat_power_kw - grid_power_kw
 
         flow = {
-            "batterySoc": _safe_float(value_dict.get("storageSOC%", 0)),
+            "batterySoc": _safe_float(raw.get("storageSOC%", 0)),
             "batteryPower": bat_power_kw,
             "pvPower": pv_power_kw,
             "gridPower": grid_power_kw,
             "loadPower": max(0.0, load_power_kw),
             "evPower": 0.0,
-            "inverterPower": _safe_float(value_dict.get("inverterActivePowerW", 0)) / 1000.0,
+            "inverterPower": _safe_float(raw.get("inverterActivePowerW", 0)) / 1000.0,
         }
         flow_status = {
-            "chargeCapacity": _safe_float(value_dict.get("storageChargeCapacityWh", 0)) / 1000.0,
-            "dischargeCapacity": _safe_float(value_dict.get("storageDischargeCapacityWh", 0)) / 1000.0,
-            "ratedChargePower": _safe_float(value_dict.get("batteryMaxChargePowerW", 0)) / 1000.0,
-            "ratedDischargePower": _safe_float(value_dict.get("batteryMaxDischargePowerW", 0)) / 1000.0,
-            "operationalMode": _safe_float(value_dict.get("operationalMode", 0)),
-            "systemStatus": _safe_float(value_dict.get("systemStatus", 0)),
+            "chargeCapacity": _safe_float(raw.get("storageChargeCapacityWh", 0)) / 1000.0,
+            "dischargeCapacity": _safe_float(raw.get("storageDischargeCapacityWh", 0)) / 1000.0,
+            "ratedChargePower": _safe_float(raw.get("batteryMaxChargePowerW", 0)) / 1000.0,
+            "ratedDischargePower": _safe_float(raw.get("batteryMaxDischargePowerW", 0)) / 1000.0,
+            "operationalMode": _safe_float(raw.get("operationalMode", 0)),
+            "systemStatus": _safe_float(raw.get("systemStatus", 0)),
         }
         self.energy_flow[system_id] = flow
         self.system_status[system_id] = flow_status
-        if "operationalMode" in value_dict:
-            self.current_mode[system_id] = int(_safe_float(value_dict["operationalMode"]))
+        if "operationalMode" in raw:
+            self.current_mode[system_id] = int(_safe_float(raw["operationalMode"]))
         self.log(
             "SigenergyAPI: MQTT period {}: SOC {:.0f}% bat {:.2f}kW pv {:.2f}kW grid {:.2f}kW load {:.2f}kW".format(
                 system_id, flow["batterySoc"], bat_power_kw, pv_power_kw, grid_power_kw, flow["loadPower"]
@@ -1322,7 +1337,7 @@ class SigenergyAPI(ComponentBase):
         On each (re)connect cycle:
           1. Refreshes the access token.
           2. Opens a TLS MQTT connection to the Sigenergy broker.
-          3. Subscribes to wildcard topics for change, period and alarm data.
+          3. Subscribes to change/period/alarm topics for each managed system.
           4. Publishes Sigenergy application-level subscription requests.
           5. Dispatches incoming messages to the appropriate handler.
           6. Publishes updated HA entities when data changes.
@@ -1338,12 +1353,6 @@ class SigenergyAPI(ComponentBase):
         reconnect_delay = 5
         attempt = 0
         system_id_list = list(self.systems.keys()) if self.systems else []
-        # Build per-app-key wildcard topics
-        topics = [
-            SIGENERGY_MQTT_TOPIC_CHANGE.format(app_key=self.app_key, system_id="#"),
-            SIGENERGY_MQTT_TOPIC_PERIOD.format(app_key=self.app_key, system_id="#"),
-            SIGENERGY_MQTT_TOPIC_ALARM.format(app_key=self.app_key, system_id="#"),
-        ]
 
         while not self.api_stop:
             attempt += 1
@@ -1358,6 +1367,16 @@ class SigenergyAPI(ComponentBase):
                 # Refresh system list for subscription if not yet known
                 if not system_id_list:
                     system_id_list = list(self.systems.keys())
+
+                # Subscribe only to the systems we manage - the broker topic includes the
+                # system_id, so a "#" wildcard here would also deliver messages for other
+                # systems on the same app_key that we are not managing (e.g. excluded by
+                # system_id_filter).
+                topics = []
+                for sid in system_id_list:
+                    topics.append(SIGENERGY_MQTT_TOPIC_CHANGE.format(app_key=self.app_key, system_id=sid))
+                    topics.append(SIGENERGY_MQTT_TOPIC_PERIOD.format(app_key=self.app_key, system_id=sid))
+                    topics.append(SIGENERGY_MQTT_TOPIC_ALARM.format(app_key=self.app_key, system_id=sid))
 
                 tls_context = self._build_tls_context()
                 async with aiomqtt.Client(
@@ -1402,6 +1421,11 @@ class SigenergyAPI(ComponentBase):
                         entries = payload if isinstance(payload, list) else [payload]
                         for entry in entries:
                             entry_sid = entry.get("systemId", msg_sid)
+                            if entry_sid not in self.systems:
+                                # Defensive belt-and-suspenders: subscriptions are scoped to
+                                # self.systems, but ignore anything outside that list in case
+                                # a stray message arrives (e.g. system list changed mid-connection).
+                                continue
                             self.last_mqtt_update[entry_sid] = time.time()
                             value_dict = entry.get("value", {})
                             self.log("SigenergyAPI: MQTT message on {} for system {}: type={} value={}".format(topic_str, entry_sid, msg_type, value_dict))
@@ -1450,11 +1474,9 @@ class SigenergyAPI(ComponentBase):
         summary = self.daily_summary.get(system_id, {})
 
         battery_soc_pct = _safe_float(flow.get("batterySoc", 0))
-        # battery_power: API positive=charging, negative=discharging (same as Predbat convention, in kW)
         battery_power_kw = _safe_float(flow.get("batteryPower", 0))
         pv_power_kw = _safe_float(flow.get("pvPower", 0))
-        # gridPower: API positive=export, negative=import → invert for Predbat (positive=import)
-        grid_power_kw = -_safe_float(flow.get("gridPower", 0))
+        grid_power_kw = _safe_float(flow.get("gridPower", 0))
         load_power_kw = _safe_float(flow.get("loadPower", 0))
         ev_power_kw = _safe_float(flow.get("evPower", 0))
 
