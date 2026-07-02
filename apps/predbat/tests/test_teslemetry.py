@@ -382,6 +382,71 @@ def test_teslemetry_reconcile_on_start_noop_when_normal():
     assert api.requests_made == []
 
 
+def _assert_tou_periods_partition_day(tou_periods):
+    """Assert the tou_periods cover every minute of the (circular) day exactly once — no overlaps, no gaps."""
+    covered = [0] * (24 * 60)
+    for group in tou_periods.values():
+        for period in group["periods"]:
+            from_min = period["fromHour"] * 60 + period["fromMinute"]
+            to_min = period["toHour"] * 60 + period["toMinute"]
+            if to_min <= from_min:
+                to_min += 24 * 60
+            for minute in range(from_min, to_min):
+                covered[minute % (24 * 60)] += 1
+    assert max(covered) <= 1, "tou_periods overlap"
+    assert min(covered) >= 1, "tou_periods leave a gap"
+
+
+def test_teslemetry_build_tariff_export_now_midnight_wrap():
+    """export_now at 23:40 wraps midnight: ON_PEAK 23:30-00:30 with a single non-overlapping off-peak complement."""
+    from datetime import datetime
+
+    api = MockTeslemetryAPI()
+    tariff = api.build_tariff("export_now", now=datetime(2026, 7, 2, 23, 40))
+    tou_periods = tariff["seasons"]["AllYear"]["tou_periods"]
+    assert tou_periods["ON_PEAK"]["periods"] == [{"fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 23, "fromMinute": 30, "toHour": 0, "toMinute": 30}]
+    assert tou_periods["SUPER_OFF_PEAK"]["periods"] == [{"fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 0, "fromMinute": 30, "toHour": 23, "toMinute": 30}]
+    _assert_tou_periods_partition_day(tou_periods)
+
+
+def test_teslemetry_build_tariff_export_now_midnight_exact():
+    """export_now at 23:10 ends exactly at midnight: ON_PEAK 23:00-00:00 with a single off-peak complement."""
+    from datetime import datetime
+
+    api = MockTeslemetryAPI()
+    tariff = api.build_tariff("export_now", now=datetime(2026, 7, 2, 23, 10))
+    tou_periods = tariff["seasons"]["AllYear"]["tou_periods"]
+    assert tou_periods["ON_PEAK"]["periods"] == [{"fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 23, "fromMinute": 0, "toHour": 0, "toMinute": 0}]
+    assert tou_periods["SUPER_OFF_PEAK"]["periods"] == [{"fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 0, "fromMinute": 0, "toHour": 23, "toMinute": 0}]
+    _assert_tou_periods_partition_day(tou_periods)
+
+
+def test_teslemetry_build_tariff_sell_clamp_above_export_rate():
+    """ON_PEAK sell (and buy) stay above the live export rate even when it exceeds the static high rate."""
+    from types import SimpleNamespace
+
+    api = MockTeslemetryAPI()
+    api.base = SimpleNamespace(minutes_now=600, rate_import={600: 30.0}, rate_export={600: 60.0})
+    tariff = api.build_tariff("export_now")
+    sell = tariff["sell_tariff"]["energy_charges"]["AllYear"]["rates"]
+    assert sell["SUPER_OFF_PEAK"] == 0.6
+    assert sell["ON_PEAK"] > 0.6
+    assert sell["ON_PEAK"] == 1.2
+    # Buy-side ON_PEAK matches the high sell rate to discourage grid-charging during the export window
+    assert tariff["energy_charges"]["AllYear"]["rates"]["ON_PEAK"] == sell["ON_PEAK"]
+
+
+def test_teslemetry_reconcile_on_start_partial_failure():
+    """Partial reconcile: tariff restore succeeds but the export-rule command fails, so only tariff_mode is updated."""
+    api = MockTeslemetryAPI()
+    api.entity_states["select.predbat_teslemetry_tariff_mode"] = "export_now"
+    api.mock_responses["/api/1/energy_sites/123456/time_of_use_settings"] = {"response": {"code": 201}}
+    # grid_import_export mock ABSENT -> _request returns None -> set_export_rule fails
+    run_async(api.reconcile_on_start())
+    assert api.entity_states["select.predbat_teslemetry_tariff_mode"] == "normal"
+    assert "select.predbat_teslemetry_allow_export" not in api.entity_states
+
+
 def test_teslemetry(my_predbat=None):
     """Run all Teslemetry component tests (registry entry point).
 
@@ -409,5 +474,9 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_set_tariff_posts_tou_settings()
     test_teslemetry_reconcile_on_start_restores_normal()
     test_teslemetry_reconcile_on_start_noop_when_normal()
+    test_teslemetry_build_tariff_export_now_midnight_wrap()
+    test_teslemetry_build_tariff_export_now_midnight_exact()
+    test_teslemetry_build_tariff_sell_clamp_above_export_rate()
+    test_teslemetry_reconcile_on_start_partial_failure()
     print("**** Teslemetry tests passed ****")
     return 0

@@ -232,6 +232,9 @@ class TeslemetryAPI(ComponentBase):
         if now is None:
             now = datetime.now(timezone.utc)
         import_rate, export_rate = self.current_rates()
+        # Keep the synthetic ON_PEAK sell strictly above the live export rate, otherwise the
+        # export trick silently inverts at the highest-value moments.
+        sell_high = max(self.EXPORT_SELL_RATE, round(export_rate * 2, 4))
 
         def charges(off_peak_buy, on_peak_buy):
             """Build an energy_charges block."""
@@ -244,18 +247,24 @@ class TeslemetryAPI(ComponentBase):
         if mode == "export_now":
             start = now.replace(minute=0 if now.minute < 30 else 30, second=0, microsecond=0)
             end_minute_total = start.hour * 60 + start.minute + 60
+            wrapped = end_minute_total >= 24 * 60
             end_hour, end_min = (end_minute_total // 60) % 24, end_minute_total % 60
             window = {"fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": start.hour, "fromMinute": start.minute, "toHour": end_hour, "toMinute": end_min}
             off_periods = []
-            if start.hour > 0 or start.minute > 0:
-                off_periods.append({"fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 0, "fromMinute": 0, "toHour": start.hour, "toMinute": start.minute})
-            if end_hour > 0 or end_min > 0:
-                off_periods.append({"fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": end_hour, "fromMinute": end_min, "toHour": 0, "toMinute": 0})
+            if wrapped:
+                # ON_PEAK crosses midnight, so its circle complement is a single segment from the wrapped end back to the start.
+                off_periods.append({"fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": end_hour, "fromMinute": end_min, "toHour": start.hour, "toMinute": start.minute})
+            else:
+                if start.hour > 0 or start.minute > 0:
+                    off_periods.append({"fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 0, "fromMinute": 0, "toHour": start.hour, "toMinute": start.minute})
+                if end_hour > 0 or end_min > 0:
+                    off_periods.append({"fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": end_hour, "fromMinute": end_min, "toHour": 0, "toMinute": 0})
             tou_periods = {"SUPER_OFF_PEAK": {"periods": off_periods}, "ON_PEAK": {"periods": [window]}}
 
         seasons = {"AllYear": {"fromMonth": 1, "fromDay": 1, "toMonth": 12, "toDay": 31, "tou_periods": tou_periods}}
-        sell_rates = charges(export_rate, self.EXPORT_SELL_RATE)
-        buy_rates = charges(import_rate, import_rate)
+        sell_rates = charges(export_rate, sell_high)
+        # Buy-side ON_PEAK mirrors the high sell rate to discourage grid-charging during the export window.
+        buy_rates = charges(import_rate, sell_high)
         common = {
             "min_applicable_demand": 0,
             "max_applicable_demand": 0,
