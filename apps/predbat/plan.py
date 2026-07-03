@@ -1182,12 +1182,12 @@ class Plan:
                     limit = self.inverter_limit / MINUTE_WATT
 
                 if limit > 0:
-                    if max_pv_power >= limit * 0.98:
+                    if limit * 0.98 <= max_pv_power <= limit * 1.02:
                         auto_amp = round(min(2.5, auto_amp + 0.05), 2)
                         auto_start_offset = min(60, auto_start_offset + 5)
                         auto_end_offset = min(60, auto_end_offset + 5)
                         self.log(
-                            "Clipping auto-tuner: Real clipping detected (max PV {} kW >= limit {} kW). Increased safety margins - amp: {}, start_offset: {}m, end_offset: {}m".format(
+                            "Clipping auto-tuner: Real mechanical clipping detected (max PV {} kW flatlined at limit {} kW). Increased safety margins - amp: {}, start_offset: {}m, end_offset: {}m".format(
                                 dp2(max_pv_power), dp2(limit), auto_amp, auto_start_offset, auto_end_offset
                             )
                         )
@@ -1195,7 +1195,7 @@ class Plan:
                         auto_amp = round(max(1.0, auto_amp - 0.01), 2)
                         auto_start_offset = max(0, auto_start_offset - 5)
                         auto_end_offset = max(0, auto_end_offset - 5)
-                        self.log("Clipping auto-tuner: No clipping detected. Decreased safety margins - amp: {}, start_offset: {}m, end_offset: {}m".format(auto_amp, auto_start_offset, auto_end_offset))
+                        self.log("Clipping auto-tuner: No mechanical clipping detected (max PV {} kW). Decreased safety margins - amp: {}, start_offset: {}m, end_offset: {}m".format(dp2(max_pv_power), auto_amp, auto_start_offset, auto_end_offset))
 
                     try:
                         with open(auto_tune_file, "w") as f:
