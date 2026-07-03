@@ -272,6 +272,14 @@ class HAHistory(ComponentBase):
                     entry["attributes"].pop(attr, None)
             for entry_attr in FILTER_ENTRIES:
                 entry.pop(entry_attr, None)
+            # Normalise numeric states to float here (mirroring EntityHistory.append_record) so a
+            # tracked entity's first (uncached) fetch returns the same state type as later cache hits
+            try:
+                state_value = float(entry["state"])
+            except (ValueError, TypeError, KeyError):
+                state_value = None
+            if state_value is not None and state_value == state_value:
+                entry["state"] = state_value
 
         with self.history_lock:
             store = self.history_data.get(entity_id, None)
