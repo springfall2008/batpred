@@ -340,16 +340,32 @@ class TeslemetryAPI(ComponentBase):
         return None
 
     async def get_current_tariff_code(self):
-        """Fetch the site's current tariff_rate from the device and return its tariff "code", or None on failure."""
+        """Fetch the site's current tariff_rate from the device and return its tariff "code", or None on failure.
+
+        Logs distinct warnings for the two failure modes: the read itself failing (network/HTTP error, empty
+        body) versus a successful read whose response simply carries no "code" key anywhere.
+        """
         data = await self._request("GET", "/api/1/energy_sites/{}/tariff_rate".format(self.site_id))
         if not data:
+            self.log("Warn: Teslemetry tariff_rate read failed - no response from the device")
             return None
-        return self._find_tariff_code(data)
+        code = self._find_tariff_code(data)
+        if code is None:
+            self.log("Warn: Teslemetry tariff_rate response contained no tariff code: {}".format(str(data)[:200]))
+        return code
 
     def _is_read_only(self):
-        """Return True if Predbat is configured read-only, so device-write commands must not be sent."""
-        base = getattr(self, "base", None)
-        return bool(getattr(base, "set_read_only", False)) if base is not None else False
+        """Return True if Predbat is configured read-only, so device-write commands must not be sent.
+
+        Reads the configuration via get_arg rather than the base's set_read_only attribute: the attribute
+        defaults to True in the PredBat constructor and is only refreshed from config during the fetch cycle,
+        which runs AFTER phase-1 components start - so at reconcile_on_start time the attribute would always
+        read True even for read-write instances. load_user_config(load_config=True) runs before phase-1
+        component start, so get_arg returns the real configured value here.
+        """
+        if getattr(self, "base", None) is None:
+            return False
+        return bool(self.get_arg("set_read_only", False))
 
     async def reconcile_on_start(self):
         """Restore a safe state if a previous run died mid-export.
@@ -360,12 +376,12 @@ class TeslemetryAPI(ComponentBase):
         If the device's tariff still carries the PREDBAT-EXPORT-NOW marker written by
         build_tariff(), a previous run crashed mid-export, so normal tariff and disabled
         export are restored (unless Predbat is running read-only, in which case the need
-        for recovery is logged but no write is sent). If the tariff read itself fails,
-        this skips silently rather than guessing at the device state.
+        for recovery is logged but no write is sent). If no tariff code can be determined
+        (read failure or code-less response, each logged distinctly by
+        get_current_tariff_code), this skips rather than guessing at the device state.
         """
         tariff_code = await self.get_current_tariff_code()
         if tariff_code is None:
-            self.log("Warn: Teslemetry could not read the current tariff from the device on boot - skipping reconcile")
             return
         export_now_code = self.build_tariff("export_now").get("code")
         if tariff_code != export_now_code:

@@ -434,20 +434,33 @@ def test_teslemetry_reconcile_on_start_device_normal_is_noop():
 
 
 def test_teslemetry_reconcile_on_start_read_failure_skips_without_crash():
-    """Boot reconciliation skips silently (no writes, no exception) when the device tariff read fails."""
+    """Boot reconciliation skips (no writes, no exception) when the device tariff read fails, logging a read failure."""
     api = MockTeslemetryAPI()
     # No mock response registered for tariff_rate -> _request returns None
     run_async(api.reconcile_on_start())
     assert [req for req in api.requests_made if req[0] == "POST"] == []
     assert api.entity_states == {}
+    assert any("read failed" in msg for msg in api.log_messages)
+    assert not any("no tariff code" in msg for msg in api.log_messages)
+
+
+def test_teslemetry_reconcile_on_start_no_code_in_response_skips():
+    """Boot reconciliation skips with a DISTINCT log when the tariff read succeeds but the response carries no code key."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/tariff_rate"] = {"response": {"tariff_content_v2": {"version": 1, "utility": "SomeUtility"}}}
+    run_async(api.reconcile_on_start())
+    assert [req for req in api.requests_made if req[0] == "POST"] == []
+    assert api.entity_states == {}
+    assert any("no tariff code" in msg for msg in api.log_messages)
+    assert not any("read failed" in msg for msg in api.log_messages)
 
 
 def test_teslemetry_reconcile_on_start_read_only_mode_skips_writes():
-    """In read-only mode, a device tariff still marked PREDBAT-EXPORT-NOW is logged but not written back."""
+    """When get_arg reports read-only, a device tariff still marked PREDBAT-EXPORT-NOW is logged but not written back."""
     from types import SimpleNamespace
 
     api = MockTeslemetryAPI()
-    api.base = SimpleNamespace(set_read_only=True)
+    api.base = SimpleNamespace(set_read_only=True, get_arg=lambda arg, default=None, **kwargs: True if arg == "set_read_only" else default)
     api.mock_responses["/api/1/energy_sites/123456/tariff_rate"] = TARIFF_RATE_EXPORT_NOW
     api.mock_responses["/api/1/energy_sites/123456/time_of_use_settings"] = {"response": {"code": 201}}
     api.mock_responses["/api/1/energy_sites/123456/grid_import_export"] = {"response": {"code": 201}}
@@ -455,6 +468,26 @@ def test_teslemetry_reconcile_on_start_read_only_mode_skips_writes():
     assert [req for req in api.requests_made if req[0] == "POST"] == []
     assert api.entity_states == {}
     assert any("read-only" in msg.lower() for msg in api.log_messages)
+
+
+def test_teslemetry_reconcile_on_start_ignores_boot_default_read_only_attribute():
+    """The recovery write must NOT be gated on base.set_read_only: the constructor defaults that attribute to True
+    and it is only refreshed from config in the fetch cycle AFTER phase-1 components start, so at reconcile time it
+    is always True. With get_arg (the real config source) reporting False, the writes must go ahead regardless."""
+    from types import SimpleNamespace
+
+    api = MockTeslemetryAPI()
+    # Simulate the real boot condition: stale constructor default True on the attribute, real config value False.
+    api.base = SimpleNamespace(set_read_only=True, get_arg=lambda arg, default=None, **kwargs: False if arg == "set_read_only" else default)
+    api.mock_responses["/api/1/energy_sites/123456/tariff_rate"] = TARIFF_RATE_EXPORT_NOW
+    api.mock_responses["/api/1/energy_sites/123456/time_of_use_settings"] = {"response": {"code": 201}}
+    api.mock_responses["/api/1/energy_sites/123456/grid_import_export"] = {"response": {"code": 201}}
+    run_async(api.reconcile_on_start())
+    assert any(req[1].endswith("/time_of_use_settings") for req in api.requests_made if req[0] == "POST")
+    assert any(req[1].endswith("/grid_import_export") for req in api.requests_made if req[0] == "POST")
+    assert api.entity_states["select.predbat_teslemetry_tariff_mode"] == "normal"
+    assert api.entity_states["select.predbat_teslemetry_allow_export"] == "never"
+    assert not any("read-only" in msg.lower() for msg in api.log_messages)
 
 
 def _assert_tou_periods_partition_day(tou_periods):
@@ -555,7 +588,9 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_reconcile_on_start_device_marker_restores_normal()
     test_teslemetry_reconcile_on_start_device_normal_is_noop()
     test_teslemetry_reconcile_on_start_read_failure_skips_without_crash()
+    test_teslemetry_reconcile_on_start_no_code_in_response_skips()
     test_teslemetry_reconcile_on_start_read_only_mode_skips_writes()
+    test_teslemetry_reconcile_on_start_ignores_boot_default_read_only_attribute()
     test_teslemetry_build_tariff_export_now_midnight_wrap()
     test_teslemetry_build_tariff_export_now_midnight_exact()
     test_teslemetry_build_tariff_sell_clamp_above_export_rate()
