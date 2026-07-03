@@ -107,7 +107,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.iboost_min_power = 500 / MINUTE_WATT
         # my_predbat.calculate_export_on_pv = False
         # my_predbat.export_more_solar = True
-        #my_predbat.prediction_kernel_enable = True
+        # my_predbat.prediction_kernel_enable = True
         pass
     else:
         # Fast pass for regression tests, no debug output
