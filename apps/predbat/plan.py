@@ -973,8 +973,13 @@ class Plan:
 
             morning_start = int(morning_start / 30) * 30  # Align to nearest 30 mins
 
-            if morning_start >= peak_start:
+            if morning_start >= peak_end:
                 continue
+
+            # Ensure the window covers the remaining duration of the clipping event
+            morning_start = min(morning_start, peak_start)
+            morning_start = max(self.minutes_now, morning_start)
+            morning_start = int(morning_start / 30) * 30  # Align to nearest 30 mins
 
             # Calculate the precise export limit (Target SOC percentage) required to create this headroom
             target_soc_kwh = max(0.0, self.soc_max - total_kwh_loss)
