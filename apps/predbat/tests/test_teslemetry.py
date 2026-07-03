@@ -75,6 +75,10 @@ SITE_INFO = {
     }
 }
 
+TARIFF_RATE_EXPORT_NOW = {"response": {"tariff_content_v2": {"version": 1, "utility": "Predbat", "code": "PREDBAT-EXPORT-NOW", "name": "Predbat (export_now)"}}}
+
+TARIFF_RATE_NORMAL = {"response": {"tariff_content_v2": {"version": 1, "utility": "Predbat", "code": "PREDBAT-NORMAL", "name": "Predbat (normal)"}}}
+
 ENERGY_HISTORY = {
     "response": {
         "time_series": [
@@ -119,6 +123,16 @@ def test_teslemetry_site_info_publishes_soc_max():
     api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO
     run_async(api.fetch_site_info())
     assert api.dashboard_items["sensor.predbat_teslemetry_soc_max"]["state"] == 13.5
+
+
+def test_teslemetry_site_info_seeds_control_entity_states():
+    """site_info seeds the operation_mode select and backup_reserve number entity states from the device (display only, no commands)."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO
+    run_async(api.fetch_site_info())
+    assert api.entity_states["select.predbat_teslemetry_operation_mode"] == "self_consumption"
+    assert api.entity_states["number.predbat_teslemetry_backup_reserve"] == 20
+    assert api.requests_made == [("GET", "/api/1/energy_sites/123456/site_info", None)]
 
 
 def test_teslemetry_energy_today_publishes_kwh():
@@ -282,6 +296,36 @@ def test_teslemetry_select_failure_keeps_state():
     assert "select.predbat_teslemetry_operation_mode" not in api.entity_states
 
 
+def test_teslemetry_command_success_on_low_response_code():
+    """_command treats a response.code below 400 as success."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/operation"] = {"response": {"code": 201}}
+    assert run_async(api._command("operation", {"default_real_mode": "backup"})) is True
+
+
+def test_teslemetry_command_failure_on_application_error_key():
+    """_command treats a body carrying an "error" key as a failure even though _request returned parsed JSON."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/operation"] = {"error": "invalid_argument"}
+    assert run_async(api._command("operation", {"default_real_mode": "backup"})) is False
+    assert any("failed" in msg for msg in api.log_messages)
+
+
+def test_teslemetry_command_failure_on_high_response_code():
+    """_command treats an application-level response.code >= 400 as a failure despite a 2xx transport status."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/operation"] = {"response": {"code": 401}}
+    assert run_async(api._command("operation", {"default_real_mode": "backup"})) is False
+    assert any("failed" in msg for msg in api.log_messages)
+
+
+def test_teslemetry_command_none_response_is_failure():
+    """_command returns False when _request itself returns None (unchanged transport-failure behaviour)."""
+    api = MockTeslemetryAPI()
+    # No mock response registered -> _request returns None
+    assert run_async(api._command("operation", {"default_real_mode": "backup"})) is False
+
+
 def test_teslemetry_number_backup_reserve():
     """number_event on backup_reserve POSTs /backup with an integer percent."""
     api = MockTeslemetryAPI()
@@ -363,23 +407,54 @@ def test_teslemetry_set_tariff_posts_tou_settings():
     assert "tariff_content_v2" in body["tou_settings"]
 
 
-def test_teslemetry_reconcile_on_start_restores_normal():
-    """Boot reconciliation restores normal tariff + never export if left in export_now."""
+def test_teslemetry_reconcile_on_start_device_marker_restores_normal():
+    """Boot reconciliation reads the ACTUAL device tariff (not the local entity mirror); a PREDBAT-EXPORT-NOW
+    marker on the device restores normal tariff + never export and updates the mirror entities on success."""
     api = MockTeslemetryAPI()
-    api.entity_states["select.predbat_teslemetry_tariff_mode"] = "export_now"
+    # The entity mirror is always reseeded to "normal" by register_control_entities() on boot, so it must
+    # be irrelevant here - only the device response drives the outcome.
+    api.entity_states["select.predbat_teslemetry_tariff_mode"] = "normal"
+    api.mock_responses["/api/1/energy_sites/123456/tariff_rate"] = TARIFF_RATE_EXPORT_NOW
     api.mock_responses["/api/1/energy_sites/123456/time_of_use_settings"] = {"response": {"code": 201}}
     api.mock_responses["/api/1/energy_sites/123456/grid_import_export"] = {"response": {"code": 201}}
     run_async(api.reconcile_on_start())
+    assert ("GET", "/api/1/energy_sites/123456/tariff_rate", None) in api.requests_made
     assert api.entity_states["select.predbat_teslemetry_tariff_mode"] == "normal"
     assert api.entity_states["select.predbat_teslemetry_allow_export"] == "never"
+    assert any("PREDBAT-EXPORT-NOW" in msg for msg in api.log_messages)
 
 
-def test_teslemetry_reconcile_on_start_noop_when_normal():
-    """Boot reconciliation does nothing when tariff mode is already normal."""
+def test_teslemetry_reconcile_on_start_device_normal_is_noop():
+    """Boot reconciliation issues zero command requests when the device tariff is not the export_now marker."""
     api = MockTeslemetryAPI()
-    api.entity_states["select.predbat_teslemetry_tariff_mode"] = "normal"
+    api.mock_responses["/api/1/energy_sites/123456/tariff_rate"] = TARIFF_RATE_NORMAL
     run_async(api.reconcile_on_start())
-    assert api.requests_made == []
+    assert [req for req in api.requests_made if req[0] == "POST"] == []
+    assert api.entity_states == {}
+
+
+def test_teslemetry_reconcile_on_start_read_failure_skips_without_crash():
+    """Boot reconciliation skips silently (no writes, no exception) when the device tariff read fails."""
+    api = MockTeslemetryAPI()
+    # No mock response registered for tariff_rate -> _request returns None
+    run_async(api.reconcile_on_start())
+    assert [req for req in api.requests_made if req[0] == "POST"] == []
+    assert api.entity_states == {}
+
+
+def test_teslemetry_reconcile_on_start_read_only_mode_skips_writes():
+    """In read-only mode, a device tariff still marked PREDBAT-EXPORT-NOW is logged but not written back."""
+    from types import SimpleNamespace
+
+    api = MockTeslemetryAPI()
+    api.base = SimpleNamespace(set_read_only=True)
+    api.mock_responses["/api/1/energy_sites/123456/tariff_rate"] = TARIFF_RATE_EXPORT_NOW
+    api.mock_responses["/api/1/energy_sites/123456/time_of_use_settings"] = {"response": {"code": 201}}
+    api.mock_responses["/api/1/energy_sites/123456/grid_import_export"] = {"response": {"code": 201}}
+    run_async(api.reconcile_on_start())
+    assert [req for req in api.requests_made if req[0] == "POST"] == []
+    assert api.entity_states == {}
+    assert any("read-only" in msg.lower() for msg in api.log_messages)
 
 
 def _assert_tou_periods_partition_day(tou_periods):
@@ -439,7 +514,7 @@ def test_teslemetry_build_tariff_sell_clamp_above_export_rate():
 def test_teslemetry_reconcile_on_start_partial_failure():
     """Partial reconcile: tariff restore succeeds but the export-rule command fails, so only tariff_mode is updated."""
     api = MockTeslemetryAPI()
-    api.entity_states["select.predbat_teslemetry_tariff_mode"] = "export_now"
+    api.mock_responses["/api/1/energy_sites/123456/tariff_rate"] = TARIFF_RATE_EXPORT_NOW
     api.mock_responses["/api/1/energy_sites/123456/time_of_use_settings"] = {"response": {"code": 201}}
     # grid_import_export mock ABSENT -> _request returns None -> set_export_rule fails
     run_async(api.reconcile_on_start())
@@ -456,6 +531,7 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_entity_names()
     test_teslemetry_live_status_publishes_sensors()
     test_teslemetry_site_info_publishes_soc_max()
+    test_teslemetry_site_info_seeds_control_entity_states()
     test_teslemetry_energy_today_publishes_kwh()
     test_teslemetry_request_auth_failure()
     test_teslemetry_request_rate_limit_retry()
@@ -465,6 +541,10 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_run_auth_failed_only_probes_live_status()
     test_teslemetry_select_operation_mode()
     test_teslemetry_select_failure_keeps_state()
+    test_teslemetry_command_success_on_low_response_code()
+    test_teslemetry_command_failure_on_application_error_key()
+    test_teslemetry_command_failure_on_high_response_code()
+    test_teslemetry_command_none_response_is_failure()
     test_teslemetry_number_backup_reserve()
     test_teslemetry_switch_grid_charging()
     test_teslemetry_select_export_rule()
@@ -472,8 +552,10 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_build_tariff_export_now()
     test_teslemetry_build_tariff_normal_flat()
     test_teslemetry_set_tariff_posts_tou_settings()
-    test_teslemetry_reconcile_on_start_restores_normal()
-    test_teslemetry_reconcile_on_start_noop_when_normal()
+    test_teslemetry_reconcile_on_start_device_marker_restores_normal()
+    test_teslemetry_reconcile_on_start_device_normal_is_noop()
+    test_teslemetry_reconcile_on_start_read_failure_skips_without_crash()
+    test_teslemetry_reconcile_on_start_read_only_mode_skips_writes()
     test_teslemetry_build_tariff_export_now_midnight_wrap()
     test_teslemetry_build_tariff_export_now_midnight_exact()
     test_teslemetry_build_tariff_sell_clamp_above_export_rate()

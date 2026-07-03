@@ -115,7 +115,7 @@ class TeslemetryAPI(ComponentBase):
         return True
 
     async def fetch_site_info(self):
-        """Fetch site info, publishing the battery capacity as soc_max."""
+        """Fetch site info, publishing the battery capacity as soc_max and seeding control entity states."""
         data = await self._request("GET", "/api/1/energy_sites/{}/site_info".format(self.site_id))
         if not data:
             return False
@@ -123,6 +123,14 @@ class TeslemetryAPI(ComponentBase):
         nameplate_wh = response.get("nameplate_energy", 0)
         if nameplate_wh:
             self.publish_sensor("soc_max", round(nameplate_wh / 1000.0, 2), unit="kWh", state_class=None, friendly="Powerwall Capacity")
+        # Seed the control entity STATES (display only, no commands) from the device so they reflect
+        # reality at boot instead of the hardcoded defaults set by register_control_entities().
+        default_mode = response.get("default_real_mode")
+        if default_mode in OPERATION_MODES:
+            self.set_state_wrapper(self.entity("operation_mode", domain="select"), default_mode)
+        backup_reserve = response.get("backup_reserve_percent")
+        if isinstance(backup_reserve, (int, float)):
+            self.set_state_wrapper(self.entity("backup_reserve", domain="number"), backup_reserve)
         return True
 
     async def fetch_energy_today(self):
@@ -183,9 +191,26 @@ class TeslemetryAPI(ComponentBase):
         self.dashboard_item(self.entity("tariff_mode", domain="select"), "normal", {"friendly_name": "Powerwall Tariff Mode", "options": TARIFF_MODES}, app="teslemetry")
 
     async def _command(self, path, body):
-        """POST a command; return True on success."""
+        """POST a command; return True only if both the transport and the application layer succeeded.
+
+        A 2xx HTTP status with a parsed JSON body is not sufficient on its own: Teslemetry/Fleet API can
+        return HTTP 200 carrying an application-level failure, so the body is also checked for a truthy
+        "error" key or a numeric "response.code" of 400 or above.
+        """
         result = await self._request("POST", "/api/1/energy_sites/{}/{}".format(self.site_id, path), json_body=body)
-        return result is not None
+        if result is None:
+            return False
+        if isinstance(result, dict):
+            if result.get("error"):
+                self.log("Warn: Teslemetry command to {} failed (application error): {}".format(path, str(result)[:200]))
+                return False
+            response = result.get("response")
+            if isinstance(response, dict):
+                code = response.get("code")
+                if isinstance(code, (int, float)) and not isinstance(code, bool) and code >= 400:
+                    self.log("Warn: Teslemetry command to {} failed (response code {}): {}".format(path, code, str(result)[:200]))
+                    return False
+        return True
 
     async def set_operation_mode(self, mode):
         """Set the Powerwall operation mode (self_consumption/autonomous/backup)."""
@@ -291,20 +316,68 @@ class TeslemetryAPI(ComponentBase):
         tariff = self.build_tariff(mode)
         return await self._command("time_of_use_settings", {"tou_settings": {"tariff_content_v2": tariff}})
 
+    @staticmethod
+    def _find_tariff_code(node):
+        """Recursively search a parsed JSON structure for the first string "code" key.
+
+        The Teslemetry/Fleet API tariff_rate response shape is not guaranteed to nest the
+        code at one fixed path (top-level, under tariff_content_v2, or elsewhere), so this
+        walks dicts and lists looking for a "code" key rather than assuming a fixed path.
+        """
+        if isinstance(node, dict):
+            code = node.get("code")
+            if isinstance(code, str):
+                return code
+            for value in node.values():
+                found = TeslemetryAPI._find_tariff_code(value)
+                if found is not None:
+                    return found
+        elif isinstance(node, list):
+            for item in node:
+                found = TeslemetryAPI._find_tariff_code(item)
+                if found is not None:
+                    return found
+        return None
+
+    async def get_current_tariff_code(self):
+        """Fetch the site's current tariff_rate from the device and return its tariff "code", or None on failure."""
+        data = await self._request("GET", "/api/1/energy_sites/{}/tariff_rate".format(self.site_id))
+        if not data:
+            return None
+        return self._find_tariff_code(data)
+
+    def _is_read_only(self):
+        """Return True if Predbat is configured read-only, so device-write commands must not be sent."""
+        base = getattr(self, "base", None)
+        return bool(getattr(base, "set_read_only", False)) if base is not None else False
+
     async def reconcile_on_start(self):
         """Restore a safe state if a previous run died mid-export.
 
-        If the tariff mode is left in export_now (indicating a previous run crashed
-        mid-operation), restores normal tariff and disables export to prevent unintended
-        grid export. If the tariff mode is already normal, does nothing.
+        Reads the Powerwall's ACTUAL current tariff from the device rather than the local
+        entity mirror: register_control_entities() unconditionally reseeds the mirror to
+        "normal" on every boot, so trusting it would make this recovery path unreachable.
+        If the device's tariff still carries the PREDBAT-EXPORT-NOW marker written by
+        build_tariff(), a previous run crashed mid-export, so normal tariff and disabled
+        export are restored (unless Predbat is running read-only, in which case the need
+        for recovery is logged but no write is sent). If the tariff read itself fails,
+        this skips silently rather than guessing at the device state.
         """
-        tariff_mode = self.get_state_wrapper(self.entity("tariff_mode", domain="select"), default="normal")
-        if tariff_mode == "export_now":
-            self.log("Warn: Teslemetry was left in export_now - restoring normal tariff and disabling export")
-            if await self.set_tariff("normal"):
-                self.set_state_wrapper(self.entity("tariff_mode", domain="select"), "normal")
-            if await self.set_export_rule("never"):
-                self.set_state_wrapper(self.entity("allow_export", domain="select"), "never")
+        tariff_code = await self.get_current_tariff_code()
+        if tariff_code is None:
+            self.log("Warn: Teslemetry could not read the current tariff from the device on boot - skipping reconcile")
+            return
+        export_now_code = self.build_tariff("export_now").get("code")
+        if tariff_code != export_now_code:
+            return
+        if self._is_read_only():
+            self.log("Warn: Teslemetry device tariff was left as {} - recovery needed but skipped (read-only mode)".format(tariff_code))
+            return
+        self.log("Warn: Teslemetry device tariff was left as {} - restoring normal tariff and disabling export".format(tariff_code))
+        if await self.set_tariff("normal"):
+            self.set_state_wrapper(self.entity("tariff_mode", domain="select"), "normal")
+        if await self.set_export_rule("never"):
+            self.set_state_wrapper(self.entity("allow_export", domain="select"), "never")
 
     async def select_event(self, entity_id, value):
         """Handle select changes routed from the service-hook loopback."""
