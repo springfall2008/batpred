@@ -157,9 +157,12 @@ class EntityHistory:
         """
         Materialise the store back into the standard list of history record dicts.
 
-        The returned records are freshly created so callers may modify them, however
-        records which shared identical attributes when stored will share one
-        attributes dict in the output (mirroring how deepcopy preserves sharing).
+        Each returned record dict, and its "state"/"last_updated" values, are freshly
+        created and safe for callers to reassign. The "attributes" dict is NOT: records
+        that shared identical attributes when stored share one attributes dict object in
+        the output, so mutating it in place (rather than replacing record["attributes"]
+        wholesale) will affect every other record sharing it. Callers that need to edit
+        attributes in place must dict.copy() first.
         """
         shared_attributes = dict(self.shared_attributes) if self.shared_attributes else {}
         state_exceptions = self.state_exceptions
@@ -222,8 +225,10 @@ class HAHistory(ComponentBase):
         with self.history_lock:
             store = self.history_data.get(entity_id, None)
             if store and self.history_entities.get(entity_id, 0) >= days:
-                # Materialise fresh record dicts from the compact store, so callers can
-                # mutate the result without corrupting the cache (replaces the previous deepcopy)
+                # Materialise fresh record dicts from the compact store (replaces the previous
+                # deepcopy) - callers can reassign record["state"]/["attributes"] without
+                # corrupting the cache, but must not mutate a returned attributes dict in place
+                # (see EntityHistory.to_records docstring: it may be shared across records)
                 result = [store.to_records()]
 
         if result is None:
