@@ -4621,6 +4621,15 @@ class Plan:
                         "clipping_auto_tune": getattr(self, "clipping_auto_tune", False),
                     },
                 )
+                self.dashboard_item(
+                    self.prefix + ".inverter_limit_watts",
+                    state=dp2(self.inverter_limit),
+                    attributes={
+                        "friendly_name": "Inverter AC Limit",
+                        "unit_of_measurement": "W",
+                        "icon": "mdi:flash-outline",
+                    },
+                )
                 self.dashboard_item(self.prefix + ".record", state=0.0, attributes={"results": self.filtered_times(record_time), "friendly_name": "Prediction window", "state_class": "measurement"})
                 self.dashboard_item(
                     self.prefix + ".iboost_best",
