@@ -870,6 +870,14 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             else:
                 self.log("Will not recompute the plan, it is {} minutes old and max age is {} minutes".format(dp1(plan_age_minutes), self.calculate_plan_every))
 
+        self._post_run_bookkeeping(status, status_extra, scheduled, recompute)
+
+    def _post_run_bookkeeping(self, status, status_extra, scheduled, recompute):
+        """
+        Post-run bookkeeping shared by every successful update cycle: plugin hooks, iBoost model
+        state, register-write counters, savings totals, car SoC, holiday countdown, status
+        recording, component health, tariff comparison and memory cleanup.
+        """
         # Notify listeners that plan has been executed (consumed by gateway, plugins, etc.)
         if self.plugin_system:
             self.plugin_system.call_hooks(
