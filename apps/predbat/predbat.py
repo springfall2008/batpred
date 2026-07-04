@@ -814,6 +814,22 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             "plan_last_updated": self.plan_last_updated,
         }
 
+    def execute_once(self, refetch_inverter=True):
+        """
+        Execute the current plan against the inverters.
+
+        When refetch_inverter is True the inverter data is re-read first, as time passes
+        during plan calculations. Returns None if the inverter data could not be fetched
+        (the error will already have been recorded), otherwise the (status, status_extra)
+        tuple from execute_plan().
+        """
+        if refetch_inverter:
+            if not self.fetch_inverter_data():
+                self.log("Error: Failed to fetch inverter data, not able to execute the plan")
+                self.record_status("Error: Failed to fetch inverter data, not able to execute the plan", had_errors=True)
+                return None
+        return self.execute_plan()
+
     def update_pred(self, scheduled=True):
         """
         Update the prediction state, everything is called from here right now
@@ -827,12 +843,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         recompute = plan["recomputed"]
 
         # Execute the plan, re-read the inverter first if we had to calculate (as time passes during calculations)
-        if recompute:
-            if not self.fetch_inverter_data():
-                self.log("Error: Failed to fetch inverter data, not able to execute the plan")
-                self.record_status("Error: Failed to fetch inverter data, not able to execute the plan", had_errors=True)
-                return
-        status, status_extra = self.execute_plan()
+        executed = self.execute_once(refetch_inverter=recompute)
+        if executed is None:
+            return
+        status, status_extra = executed
 
         # If the plan was not updated, and the time has expired lets update it now
         if not recompute:
@@ -849,11 +863,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                     time.sleep(delay)
                 # Calculate an updated plan, fetch the inverter data again and execute the plan
                 self.calculate_plan(recompute=True)
-                if not self.fetch_inverter_data():
-                    self.log("Error: Failed to fetch inverter data, not able to execute the plan")
-                    self.record_status("Error: Failed to fetch inverter data, not able to execute the plan", had_errors=True)
+                executed = self.execute_once(refetch_inverter=True)
+                if executed is None:
                     return
-                status, status_extra = self.execute_plan()
+                status, status_extra = executed
             else:
                 self.log("Will not recompute the plan, it is {} minutes old and max age is {} minutes".format(dp1(plan_age_minutes), self.calculate_plan_every))
 

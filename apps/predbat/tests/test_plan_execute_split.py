@@ -274,6 +274,33 @@ def _scenario_plan_once_failures(my_predbat):
     return failed
 
 
+def _scenario_execute_once(my_predbat):
+    """execute_once refetches inverter data when asked, skips when not, and returns None on fetch failure."""
+    failed = 0
+
+    with ExitStack() as stack:
+        mocks = _patch_pipeline(my_predbat, stack)
+        result = my_predbat.execute_once(refetch_inverter=True)
+    failed = _check(failed, result == ("Demand", ""), "execute_once refetch: returns execute_plan result")
+    failed = _check(failed, mocks["fetch_inverter_data"].call_count == 1, "execute_once refetch: inverter fetched once")
+    failed = _check(failed, mocks["execute_plan"].call_count == 1, "execute_once refetch: execute_plan called once")
+
+    with ExitStack() as stack:
+        mocks = _patch_pipeline(my_predbat, stack)
+        result = my_predbat.execute_once(refetch_inverter=False)
+    failed = _check(failed, result == ("Demand", ""), "execute_once no refetch: returns execute_plan result")
+    failed = _check(failed, mocks["fetch_inverter_data"].call_count == 0, "execute_once no refetch: inverter not fetched")
+
+    my_predbat.had_errors = False
+    with ExitStack() as stack:
+        mocks = _patch_pipeline(my_predbat, stack, inverter_ok=False)
+        result = my_predbat.execute_once(refetch_inverter=True)
+    failed = _check(failed, result is None, "execute_once fetch failure: returns None")
+    failed = _check(failed, mocks["execute_plan"].call_count == 0, "execute_once fetch failure: execute_plan not called")
+    failed = _check(failed, my_predbat.had_errors, "execute_once fetch failure: had_errors set")
+    return failed
+
+
 def test_plan_execute_split(my_predbat):
     """Entry point registered in unit_test.py - characterises update_pred and tests plan_once/execute_once."""
     print("**** Running plan/execute split tests ****")
@@ -291,6 +318,7 @@ def test_plan_execute_split(my_predbat):
         failed += _scenario_plan_once_reuse(my_predbat)
         failed += _scenario_plan_once_unscheduled_forces(my_predbat)
         failed += _scenario_plan_once_failures(my_predbat)
+        failed += _scenario_execute_once(my_predbat)
     finally:
         _restore_state(my_predbat, saved)
     return failed
