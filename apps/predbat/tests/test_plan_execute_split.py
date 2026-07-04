@@ -42,6 +42,7 @@ def _save_state(my_predbat):
     """Snapshot the shared fixture attributes this module mutates, so they can be restored."""
     saved = {name: getattr(my_predbat, name, None) for name in _STATE_ATTRS}
     saved["_template_arg"] = my_predbat.args.get("template", None)
+    saved["_plan_random_delay_arg"] = my_predbat.args.get("plan_random_delay", None)
     return saved
 
 
@@ -53,6 +54,10 @@ def _restore_state(my_predbat, saved):
         my_predbat.args.pop("template", None)
     else:
         my_predbat.args["template"] = saved["_template_arg"]
+    if saved["_plan_random_delay_arg"] is None:
+        my_predbat.args.pop("plan_random_delay", None)
+    else:
+        my_predbat.args["plan_random_delay"] = saved["_plan_random_delay_arg"]
 
 
 def _quiet_bookkeeping(my_predbat):
@@ -71,6 +76,7 @@ def _quiet_bookkeeping(my_predbat):
     my_predbat.had_errors = False
     my_predbat.count_inverter_writes = {}
     my_predbat.args.pop("template", None)
+    my_predbat.args["plan_random_delay"] = 0  # avoids the real random sleep in update_pred's aged-plan path
 
 
 def _patch_pipeline(my_predbat, stack, inverter_ok=True, plan_valid_after=True):
