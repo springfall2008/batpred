@@ -74,7 +74,6 @@ class MockFoxAPIWithRequests(FoxAPI):
         self.fdpwr_max = {}
         self.fdsoc_min = {}
         self.device_scheduler_count = {}
-        self.scheduler_api_v2 = {}
         self.data_age = {}
         self.local_tz = pytz.timezone("Europe/London")
         self.inverter_sn_filter = []
@@ -2074,25 +2073,23 @@ def test_api_set_scheduler_enabled(my_predbat):
     return False
 
 
-def test_api_get_scheduler_v2_fallback(my_predbat):
+def test_api_get_scheduler_v2_evo(my_predbat):
     """
-    Test get_scheduler falls back to the v2 API when v1 fails (EVO series)
+    Test get_scheduler uses the v2 API for EVO-series devices (productType 812)
 
     Fox's v1 scheduler endpoints return errno 41200 permanently for EVO-series
-    inverters (productType 812) even though the devices support the scheduler.
-    The v2 response nests SOC/power fields inside extraParam, which must be
-    flattened back to the v1 group shape used by the rest of the code.
+    inverters even though the devices support the scheduler. EVO is detected by
+    productType, so the v1 endpoint is never polled. The v2 response nests SOC/power
+    fields inside extraParam, which must be flattened back to the v1 group shape.
     """
-    print("  - test_api_get_scheduler_v2_fallback")
+    print("  - test_api_get_scheduler_v2_evo")
 
     fox = MockFoxAPIWithRequests()
     deviceSN = "EVO1234567"
 
-    # Setup device with battery (10kW inverter)
-    fox.device_detail[deviceSN] = {"hasBattery": True, "capacity": 10}
+    # EVO device (productType 812), 10kW inverter
+    fox.device_detail[deviceSN] = {"hasBattery": True, "capacity": 10, "productType": "812"}
 
-    # v1 is NOT mocked so request_get returns None (permanent EVO failure);
-    # only the v2 endpoint responds
     fox.set_mock_response(
         "/op/v2/device/scheduler/get",
         {
@@ -2113,9 +2110,9 @@ def test_api_get_scheduler_v2_fallback(my_predbat):
 
     result = asyncio.run(fox.get_scheduler(deviceSN))
 
-    # Both endpoints tried in order: v1 first, then the v2 fallback
-    assert fox.request_log[0]["path"] == "/op/v1/device/scheduler/get"
-    assert fox.request_log[1]["path"] == "/op/v2/device/scheduler/get"
+    # EVO detected by productType: v2 used directly, v1 never polled
+    assert len(fox.request_log) == 1
+    assert fox.request_log[0]["path"] == "/op/v2/device/scheduler/get"
 
     # Result must be normalised to the flat v1 group shape
     assert result["enable"] == 1
@@ -2140,55 +2137,100 @@ def test_api_get_scheduler_v2_fallback(my_predbat):
     return False
 
 
-def test_api_get_scheduler_v2_sticky(my_predbat):
+def test_api_get_scheduler_v2_null_groups(my_predbat):
     """
-    Test get_scheduler skips the failing v1 endpoint once v2 has succeeded
-
-    A v1 failure costs retries with long sleeps, so once a device has proven
-    to need the v2 API the v1 endpoint must not be polled again.
+    Test get_scheduler_v2 tolerates a present-but-null groups value and defaults enable
     """
-    print("  - test_api_get_scheduler_v2_sticky")
+    print("  - test_api_get_scheduler_v2_null_groups")
 
     fox = MockFoxAPIWithRequests()
     deviceSN = "EVO1234567"
+    fox.device_detail[deviceSN] = {"hasBattery": True, "capacity": 10, "productType": "812"}
 
-    fox.device_detail[deviceSN] = {"hasBattery": True, "capacity": 10}
-    fox.set_mock_response("/op/v2/device/scheduler/get", {"enable": 1, "groups": []})
-    fox.set_mock_response("/op/v3/device/scheduler/enable", {})
+    # groups is null (idle scheduler) and a group omits its enable flag
+    fox.set_mock_response(
+        "/op/v2/device/scheduler/get",
+        {"groups": None},
+    )
 
-    asyncio.run(fox.get_scheduler(deviceSN))
-    asyncio.run(fox.get_scheduler(deviceSN))
+    result = asyncio.run(fox.get_scheduler(deviceSN))
+    assert result["groups"] == []
+    assert result["enable"] == 1  # defaulted when the key is absent
 
-    paths = [request["path"] for request in fox.request_log]
-    assert paths == ["/op/v1/device/scheduler/get", "/op/v2/device/scheduler/get", "/op/v2/device/scheduler/get"]
-
-    # Writes must also skip the failing v1 endpoint once the device is marked
-    groups = [{"enable": 1, "startHour": 2, "startMinute": 30, "endHour": 5, "endMinute": 29, "workMode": "ForceCharge", "fdSoc": 100, "maxSoc": 100, "fdPwr": 8000, "minSocOnGrid": 10}]
-    result = asyncio.run(fox.set_scheduler(deviceSN, groups))
-    assert result == True
-    assert fox.request_log[-1]["path"] == "/op/v3/device/scheduler/enable"
-    paths = [request["path"] for request in fox.request_log]
-    assert "/op/v1/device/scheduler/enable" not in paths
+    # A group without an explicit enable defaults to enabled
+    fox.set_mock_response(
+        "/op/v2/device/scheduler/get",
+        {"enable": 1, "groups": [{"startHour": 0, "endHour": 5, "workMode": "ForceCharge", "extraParam": {"fdSoc": 100}}]},
+    )
+    result = asyncio.run(fox.get_scheduler(deviceSN))
+    assert result["groups"][0]["enable"] == 1
+    assert result["groups"][0]["fdSoc"] == 100
 
     return False
 
 
-def test_api_set_scheduler_v3_fallback(my_predbat):
+def test_api_get_scheduler_kh_stays_v1(my_predbat):
     """
-    Test set_scheduler falls back to the v3 enable API when v1 fails (EVO series)
+    Test a non-EVO (KH) device stays on v1 and is NOT rerouted to v2 on failure
 
-    The v3 request nests SOC/power fields inside extraParam and only carries
-    enabled groups; time fields and workMode stay flat (matching the shape the
-    foxesscloud reference library sends).
+    Regression guard: errno 41200 doubles as a transient rate-limit code, so a v1
+    failure must not switch a healthy KH device to the v2/v3 API.
     """
-    print("  - test_api_set_scheduler_v3_fallback")
+    print("  - test_api_get_scheduler_kh_stays_v1")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "KH1234567"
+    fox.device_detail[deviceSN] = {"hasBattery": True, "capacity": 8, "productType": "KH"}
+
+    # v1 is NOT mocked so it returns None (simulating a transient failure); v2 IS mocked
+    fox.set_mock_response("/op/v2/device/scheduler/get", {"enable": 1, "groups": []})
+
+    result = asyncio.run(fox.get_scheduler(deviceSN))
+
+    # KH must only ever try v1 — never the v2 endpoint
+    paths = [request["path"] for request in fox.request_log]
+    assert paths == ["/op/v1/device/scheduler/get"]
+    assert result is None
+
+    return False
+
+
+def test_api_get_scheduler_v2_evo_fails(my_predbat):
+    """
+    Test get_scheduler returns None (no crash) when an EVO device's v2 API also fails
+    """
+    print("  - test_api_get_scheduler_v2_evo_fails")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "EVO1234567"
+    fox.device_detail[deviceSN] = {"hasBattery": True, "capacity": 10, "productType": "812"}
+
+    # Neither v1 nor v2 mocked: both return None
+    result = asyncio.run(fox.get_scheduler(deviceSN))
+
+    assert result is None
+    paths = [request["path"] for request in fox.request_log]
+    assert paths == ["/op/v2/device/scheduler/get"]
+
+    return False
+
+
+def test_api_set_scheduler_v3_evo(my_predbat):
+    """
+    Test set_scheduler uses the v3 enable API for EVO-series devices (productType 812)
+
+    The v3 request nests SOC/power fields inside extraParam and only carries enabled
+    groups; time fields and workMode stay flat (matching the shape the foxesscloud
+    reference library sends). v1 is never polled.
+    """
+    print("  - test_api_set_scheduler_v3_evo")
 
     fox = MockFoxAPIWithRequests()
     deviceSN = "EVO1234567"
 
+    fox.device_detail[deviceSN] = {"hasBattery": True, "capacity": 10, "productType": "812"}
     fox.device_scheduler[deviceSN] = {"enable": False, "groups": []}
 
-    # v1 enable is NOT mocked so it fails; only v3 responds
     fox.set_mock_response("/op/v3/device/scheduler/enable", {})
 
     groups = [
@@ -2222,12 +2264,12 @@ def test_api_set_scheduler_v3_fallback(my_predbat):
 
     assert result == True
 
-    # v1 first, then the v3 fallback
-    assert fox.request_log[0]["path"] == "/op/v1/device/scheduler/enable"
-    assert fox.request_log[1]["path"] == "/op/v3/device/scheduler/enable"
+    # EVO detected by productType: v3 used directly, v1 never polled
+    assert len(fox.request_log) == 1
+    assert fox.request_log[0]["path"] == "/op/v3/device/scheduler/enable"
 
     # v3 request carries only the enabled group, with extraParam nesting
-    sent_groups = fox.request_log[1]["datain"]["groups"]
+    sent_groups = fox.request_log[0]["datain"]["groups"]
     assert len(sent_groups) == 1
     sent = sent_groups[0]
     assert sent["workMode"] == "ForceCharge"
@@ -2247,6 +2289,34 @@ def test_api_set_scheduler_v3_fallback(my_predbat):
     # Local state keeps the original flat groups
     assert fox.device_scheduler[deviceSN]["enable"] == True
     assert fox.device_scheduler[deviceSN]["groups"] == groups
+
+    return False
+
+
+def test_api_set_scheduler_kh_stays_v1(my_predbat):
+    """
+    Test a non-EVO (KH) device's writes stay on v1 and never fall back to v3
+
+    Regression guard: a transient v1 write failure must not reroute a healthy KH
+    device to the v3 endpoint.
+    """
+    print("  - test_api_set_scheduler_kh_stays_v1")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "KH1234567"
+    fox.device_detail[deviceSN] = {"hasBattery": True, "capacity": 8, "productType": "KH"}
+    fox.device_scheduler[deviceSN] = {"enable": False, "groups": []}
+
+    # v1 enable NOT mocked (transient failure); v3 IS mocked
+    fox.set_mock_response("/op/v3/device/scheduler/enable", {})
+
+    groups = [{"enable": 1, "startHour": 2, "startMinute": 30, "endHour": 5, "endMinute": 29, "workMode": "ForceCharge", "fdSoc": 100, "maxSoc": 100, "fdPwr": 8000, "minSocOnGrid": 10}]
+    result = asyncio.run(fox.set_scheduler(deviceSN, groups))
+
+    # KH must only ever try v1 — never the v3 endpoint — and report failure
+    assert result == False
+    paths = [request["path"] for request in fox.request_log]
+    assert paths == ["/op/v1/device/scheduler/enable"]
 
     return False
 
@@ -6058,10 +6128,13 @@ def run_fox_api_tests(my_predbat):
         failed |= test_api_get_battery_charging_time(my_predbat)
         failed |= test_api_set_battery_charging_time(my_predbat)
         failed |= test_api_get_scheduler(my_predbat)
-        failed |= test_api_get_scheduler_v2_fallback(my_predbat)
-        failed |= test_api_get_scheduler_v2_sticky(my_predbat)
+        failed |= test_api_get_scheduler_v2_evo(my_predbat)
+        failed |= test_api_get_scheduler_v2_null_groups(my_predbat)
+        failed |= test_api_get_scheduler_kh_stays_v1(my_predbat)
+        failed |= test_api_get_scheduler_v2_evo_fails(my_predbat)
         failed |= test_api_set_scheduler(my_predbat)
-        failed |= test_api_set_scheduler_v3_fallback(my_predbat)
+        failed |= test_api_set_scheduler_v3_evo(my_predbat)
+        failed |= test_api_set_scheduler_kh_stays_v1(my_predbat)
         failed |= test_api_set_scheduler_enabled(my_predbat)
         failed |= test_api_get_real_time_data(my_predbat)
         failed |= test_api_get_device_production_year(my_predbat)

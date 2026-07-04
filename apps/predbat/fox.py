@@ -50,6 +50,15 @@ FOX_REFRESH_SETTINGS = 60  # Device settings and scheduler
 FOX_REFRESH_PRODUCTION = 15  # Monthly production totals
 FOX_REFRESH_REALTIME = 5  # Real time monitoring data
 
+# Fox productType codes that must use the v2/v3 scheduler API. Fox's v1 scheduler
+# endpoints return errno 41200 permanently for these (EVO series) even though the
+# devices fully support the scheduler — verified against EVO 10-5-H units (productType
+# "812"); KH-series and others (which work on v1) are deliberately excluded. Detection is
+# by productType, not by v1 failure: errno 41200 doubles as a transient rate-limit code, so
+# keying off a v1 failure would wrongly reroute a healthy device after a single blip.
+# Extend this set as new EVO product types are confirmed.
+FOX_V2_SCHEDULER_PRODUCT_TYPES = {"812"}
+
 # Dummy attribute table for testing
 fox_attribute_table = {"mode": {}}
 
@@ -272,8 +281,6 @@ class FoxAPI(ComponentBase, OAuthMixin):
         self.fdpwr_max = {}
         self.fdsoc_min = {}
         self.device_scheduler_count = {}
-        # Devices whose v1 scheduler API has failed and which use the v2/v3 API instead (EVO series)
-        self.scheduler_api_v2 = {}
         # Age (datetime of last update) of each cached data category, used to drive age-based refresh
         self.data_age = {}
         # Rate limiting tracking
@@ -1016,9 +1023,26 @@ class FoxAPI(ComponentBase, OAuthMixin):
             self.device_power_generation[deviceSN] = result
         return result
 
+    def uses_v2_scheduler(self, deviceSN):
+        """
+        Return True if this device must use the v2/v3 scheduler API instead of v1
+
+        Detection is by productType (EVO series fail the v1 scheduler endpoints
+        permanently) so a device is classified deterministically, never as a side
+        effect of a transient v1 error. Falls back to v1 for any device whose detail
+        is not yet cached or whose productType is unknown.
+        """
+        product_type = self.device_detail.get(deviceSN, {}).get("productType")
+        return product_type in FOX_V2_SCHEDULER_PRODUCT_TYPES
+
     async def set_scheduler_enabled(self, deviceSN, enabled):
         """
         Set scheduler enabled/disabled
+
+        Note: only reached via set_scheduler with an empty schedule, which
+        apply_battery_schedule never produces (validate_schedule always returns at
+        least one all-day slot). Left on the v1 flag endpoint as it is unreachable in
+        production; there is no v2/v3 flag endpoint (EVO disables via a written schedule).
         """
         enabled_value = 1 if enabled else 0
 
@@ -1055,13 +1079,12 @@ class FoxAPI(ComponentBase, OAuthMixin):
             same = schedules_are_equal(datetime.now(), current_groups, groups)
             self.log("Fox: Debug: Setting scheduler for {} same={} current_enable={} current_groups={} new_groups={}".format(deviceSN, same, current_enable, current_groups, groups))
             if not same:
-                # Devices marked as v2/v3-only (EVO series) skip the failing v1 endpoint;
-                # otherwise try v1 first and fall back to v3 if it fails
-                result = None
-                if not self.scheduler_api_v2.get(deviceSN):
-                    result = await self.request_get(SET_SCHEDULER, datain={"deviceSN": deviceSN, "groups": groups}, post=True)
-                if result is None:
+                # EVO-series devices use the v3 write endpoint (v1 fails permanently for
+                # them); every other device stays on v1, which it supports.
+                if self.uses_v2_scheduler(deviceSN):
                     result = await self.request_get(SET_SCHEDULER_V3, datain={"deviceSN": deviceSN, "groups": groups_to_v3(groups)}, post=True)
+                else:
+                    result = await self.request_get(SET_SCHEDULER, datain={"deviceSN": deviceSN, "groups": groups}, post=True)
                 if result is not None:
                     if deviceSN not in self.device_scheduler:
                         self.device_scheduler[deviceSN] = {}
@@ -1248,16 +1271,12 @@ class FoxAPI(ComponentBase, OAuthMixin):
         detail = self.device_detail.get(deviceSN, {})
         inverter_capacity = detail.get("capacity", 0) * 1000.0
 
-        # EVO-series devices fail the v1 scheduler API permanently (errno 41200) so once
-        # marked they go straight to v2 — a v1 attempt costs FOX_RETRIES with long sleeps
-        result = None
-        if not self.scheduler_api_v2.get(deviceSN):
-            result = await self.request_get(GET_SCHEDULER, datain={"deviceSN": deviceSN}, post=True)
-        if result is None:
+        # EVO-series devices fail the v1 scheduler API permanently (errno 41200); route
+        # them to v2 by productType. Every other device stays on v1, which it supports.
+        if self.uses_v2_scheduler(deviceSN):
             result = await self.get_scheduler_v2(deviceSN)
-            if result is not None and not self.scheduler_api_v2.get(deviceSN):
-                self.scheduler_api_v2[deviceSN] = True
-                self.log("Fox: v1 scheduler API failed for {}, switching to the v2/v3 scheduler API (EVO series)".format(deviceSN))
+        else:
+            result = await self.request_get(GET_SCHEDULER, datain={"deviceSN": deviceSN}, post=True)
         if result is not None:
             self.fdpwr_max[deviceSN] = result.get("properties", {}).get("fdpwr", {}).get("range", {}).get("max", 8000)
             # XXX: Fox seems to be have an issue with FD Power max value being too high, cap it at the inverter capacity
@@ -1281,7 +1300,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
         scheduler. The v2 response nests each group's SOC/power fields inside
         'extraParam'; flatten them back into the group so the rest of the code can
         treat v1 and v2 results identically. v2 has no 'properties' block, so the
-        existing fdPwr/fdSoc defaults apply.
+        existing fdPwr/fdSoc defaults (capped to inverter capacity) apply.
         """
         GET_SCHEDULER_V2 = "/op/v2/device/scheduler/get"
 
@@ -1290,11 +1309,18 @@ class FoxAPI(ComponentBase, OAuthMixin):
             return None
 
         groups = []
-        for group in result.get("groups", []):
+        # `or []` guards a present-but-null groups value (dict.get's default only applies
+        # when the key is absent)
+        for group in result.get("groups") or []:
             flat_group = {key: value for key, value in group.items() if key != "extraParam"}
             flat_group.update(group.get("extraParam", {}) or {})
+            # v2 active periods may omit `enable`; default to enabled so downstream
+            # schedule_strip_disabled does not discard them
+            flat_group.setdefault("enable", 1)
             groups.append(flat_group)
-        return {"enable": result.get("enable", 0), "groups": groups}
+        # Default enable to 1 when the key is absent: v2 returned groups, so the scheduler
+        # is active (compute_schedule treats a falsy enable as "scheduler disabled")
+        return {"enable": result.get("enable", 1), "groups": groups}
 
     async def get_device_list(self):
         """
