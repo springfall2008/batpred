@@ -73,6 +73,7 @@ from tests.test_minute_data import test_minute_data, test_minute_data_load, test
 from tests.test_minute_data_import_export import test_minute_data_import_export
 from tests.test_minute_data_state import test_minute_data_state
 from tests.test_format_time_ago import test_format_time_ago
+from tests.test_str2time import test_str2time
 from tests.test_override_time import test_get_override_time_from_string
 from tests.test_units import run_test_units
 from tests.test_previous_days_modal import test_previous_days_modal_filter
@@ -109,6 +110,7 @@ from tests.test_battery_curve_keys import run_battery_curve_keys_tests
 from tests.test_balance_inverters import run_balance_inverters_tests
 from tests.test_octopus_download_rates import test_octopus_download_rates_wrapper
 from tests.test_integer_config import test_integer_config_entities, test_expose_config_preserves_integer
+from tests.test_validate_config import test_validate_config
 from tests.test_plan_json_rate_adjust import run_test_plan_json_rate_adjust
 from tests.test_rate_replicate_missing_slots import test_rate_replicate
 from tests.test_find_charge_window import test_find_charge_window
@@ -219,6 +221,7 @@ def main():
         ("history_attribute", test_history_attribute, "History attribute tests", False),
         ("minute_data_state", test_minute_data_state, "Minute data state tests", False),
         ("format_time_ago", test_format_time_ago, "Format time ago tests", False),
+        ("str2time", test_str2time, "Time string parsing tests", False),
         ("override_time", test_get_override_time_from_string, "Override time from string tests", False),
         ("previous_days_modal", test_previous_days_modal_filter, "Previous days modal filter tests", False),
         ("load_forecast_history", test_load_forecast_history, "Weighted historical load forecast tests", False),
@@ -290,6 +293,7 @@ def main():
         # GE Cloud unit tests
         ("ge_cloud", test_ge_cloud, "GE Cloud comprehensive tests (API, devices, EVC, inverter ops, events, publishing, config, downloads, cache)", False),
         ("integer_config", test_integer_config_entities, "Integer config entities tests", False),
+        ("validate_config", test_validate_config, "APPS_SCHEMA validator tests (string types, sensor boolean states)", False),
         ("expose_config_integer", test_expose_config_preserves_integer, "Expose config preserves integer tests", False),
         ("plan_json_rate_adjust", run_test_plan_json_rate_adjust, "Plan JSON rate adjust type field tests", False),
         # Download tests

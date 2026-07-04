@@ -2695,13 +2695,18 @@ chart.render();
             text += "</table>"
         elif isinstance(value, str):
             pat = re.match(r"^[a-zA-Z_]+\.\S+", value)
+            # Only try entity resolution if the schema type for this arg can be a sensor.
+            # Pure string fields (e.g. gateway_mqtt_host = "mqtt.predbat.com") must not
+            # be treated as HA entity IDs even though they contain a dot.
+            schema_type = APPS_SCHEMA.get(arg, {}).get("type", "")
+            is_pure_string = schema_type and not any(t.startswith("sensor") for t in schema_type.split("|"))
             if "{" in value:
                 text = self.base.resolve_arg(arg, value, indirect=False, quiet=True)
                 if text is None:
                     text = '<span style="background-color:#FFAAAA"> {} </p>'.format(value)
                 else:
                     text = self.render_type(arg, text, parent_path, row_counter)
-            elif pat and (arg != "service"):
+            elif pat and (arg != "service") and not is_pure_string:
                 entity_id = value
                 unit_of_measurement = ""
                 if "$" in entity_id:
