@@ -342,6 +342,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.plan_valid = False
         self.plan_last_updated = None
         self.plan_last_updated_minutes = 0
+        self.plan_version = 0
         self.plugin_system = None
         self.calculate_plan_every = 5
         self.prediction_started = False
@@ -687,6 +688,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             "export_limits_best": self.export_limits_best,
             "plan_last_updated": self.plan_last_updated.isoformat() if self.plan_last_updated else None,
             "plan_last_updated_minutes": self.plan_last_updated_minutes,
+            "plan_version": self.plan_version,
         }
         try:
             expiry = self.now_utc + timedelta(hours=8)
@@ -738,6 +740,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.export_limits_best = plan_data.get("export_limits_best", [])
         self.plan_last_updated = saved_dt
         self.plan_last_updated_minutes = plan_data.get("plan_last_updated_minutes", 0)
+        self.plan_version = plan_data.get("plan_version", 0)
         self.plan_valid = True
         self.log("Restored saved plan from {:.0f} minutes ago: {} charge windows, {} export windows".format(age_minutes, len(self.charge_window_best), len(self.export_window_best)))
 
@@ -747,8 +750,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         Returns None when a pre-condition fails (template configuration, inverter data
         unavailable or import rates all zero) - the error will already have been recorded.
-        Otherwise returns a plan artifact summary dict with keys recomputed, plan_valid
-        and plan_last_updated. Passing scheduled=False forces a recompute.
+        Otherwise returns a plan artifact summary dict with keys recomputed, plan_valid,
+        plan_version and plan_last_updated. Passing scheduled=False forces a recompute.
         """
         recompute = False
 
@@ -803,6 +806,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         # Persist the plan so it can be restored immediately on next startup
         if recompute and self.plan_valid:
+            self.plan_version += 1
             self.save_plan()
 
         # Publish rate data
@@ -812,6 +816,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             "recomputed": recompute,
             "plan_valid": self.plan_valid,
             "plan_last_updated": self.plan_last_updated,
+            "plan_version": self.plan_version,
         }
 
     def execute_once(self, refetch_inverter=True):

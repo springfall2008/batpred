@@ -29,6 +29,12 @@ _STATE_ATTRS = [
     "plan_last_updated",
     "had_errors",
     "count_inverter_writes",
+    "plan_version",
+    "plan_last_updated_minutes",
+    "charge_window_best",
+    "charge_limit_best",
+    "export_window_best",
+    "export_limits_best",
 ]
 
 
@@ -301,6 +307,87 @@ def _scenario_execute_once(my_predbat):
     return failed
 
 
+class _FakeStorage:
+    """Minimal async stand-in for the storage component, capturing save_plan payloads in memory."""
+
+    def __init__(self):
+        """Create the empty in-memory store."""
+        self.saved = {}
+
+    async def save(self, namespace, key, data, format="json", expiry=None):
+        """Record the payload under (namespace, key)."""
+        self.saved[(namespace, key)] = data
+
+    async def load(self, namespace, key):
+        """Return the previously saved payload, or None."""
+        return self.saved.get((namespace, key))
+
+
+class _FakeComponents:
+    """Stub component registry exposing only a storage component."""
+
+    def __init__(self, storage):
+        """Wrap the given storage stub."""
+        self._storage = storage
+
+    def get_component(self, name):
+        """Return the storage stub for 'storage', None otherwise."""
+        return self._storage if name == "storage" else None
+
+
+def _scenario_plan_version_bump(my_predbat):
+    """plan_once bumps plan_version only when a recompute produced a valid plan."""
+    failed = 0
+    my_predbat.plan_version = 0
+
+    my_predbat.plan_valid = False
+    my_predbat.plan_last_updated = None
+    with ExitStack() as stack:
+        _patch_pipeline(my_predbat, stack)
+        artifact = my_predbat.plan_once(scheduled=True)
+    failed = _check(failed, my_predbat.plan_version == 1, "plan version: bumped to 1 on recompute")
+    failed = _check(failed, artifact and artifact.get("plan_version") == 1, "plan version: artifact carries version 1")
+
+    with ExitStack() as stack:
+        _patch_pipeline(my_predbat, stack)
+        artifact = my_predbat.plan_once(scheduled=True)
+    failed = _check(failed, my_predbat.plan_version == 1, "plan version: unchanged on plan reuse")
+
+    with ExitStack() as stack:
+        _patch_pipeline(my_predbat, stack)
+        artifact = my_predbat.plan_once(scheduled=False)
+    failed = _check(failed, my_predbat.plan_version == 2, "plan version: bumped to 2 on forced recompute")
+    return failed
+
+
+def _scenario_plan_version_persistence(my_predbat):
+    """save_plan persists plan_version and load_plan restores it."""
+    failed = 0
+    storage = _FakeStorage()
+    my_predbat.components = _FakeComponents(storage)
+    my_predbat.plan_version = 7
+    my_predbat.plan_valid = True
+    my_predbat.plan_last_updated = my_predbat.now_utc
+    my_predbat.plan_last_updated_minutes = my_predbat.minutes_now
+    my_predbat.charge_window_best = []
+    my_predbat.charge_limit_best = []
+    my_predbat.export_window_best = []
+    my_predbat.export_limits_best = []
+
+    my_predbat.save_plan()
+    payload = storage.saved.get(("predbat", "plan"))
+    failed = _check(failed, payload is not None, "plan version persistence: save_plan wrote a payload")
+    failed = _check(failed, payload and payload.get("plan_version") == 7, "plan version persistence: payload carries version 7")
+
+    my_predbat.plan_version = 0
+    my_predbat.plan_valid = False
+    my_predbat.load_plan()
+    failed = _check(failed, my_predbat.plan_version == 7, "plan version persistence: load_plan restored version 7")
+    failed = _check(failed, my_predbat.plan_valid, "plan version persistence: load_plan marked plan valid")
+    my_predbat.components = None
+    return failed
+
+
 def test_plan_execute_split(my_predbat):
     """Entry point registered in unit_test.py - characterises update_pred and tests plan_once/execute_once."""
     print("**** Running plan/execute split tests ****")
@@ -319,6 +406,8 @@ def test_plan_execute_split(my_predbat):
         failed += _scenario_plan_once_unscheduled_forces(my_predbat)
         failed += _scenario_plan_once_failures(my_predbat)
         failed += _scenario_execute_once(my_predbat)
+        failed += _scenario_plan_version_bump(my_predbat)
+        failed += _scenario_plan_version_persistence(my_predbat)
     finally:
         _restore_state(my_predbat, saved)
     return failed
