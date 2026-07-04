@@ -737,7 +737,7 @@ class Prediction:
                     unmitigated_clip = max(potential_clip - absorbable, 0)
 
                     if unmitigated_clip > 0:
-                        clipping_penalty = unmitigated_clip * (step / 60.0) * export_rate * clipping_cost_weight
+                        clipping_penalty = unmitigated_clip * export_rate * clipping_cost_weight
                         metric += clipping_penalty
                         clipping_penalty_total += clipping_penalty
 
