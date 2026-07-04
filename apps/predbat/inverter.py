@@ -733,6 +733,7 @@ class Inverter:
                         divide_by=1.0,
                         scale=1.0,
                         required_unit="%",
+                        can_modify_history=True,  # history is not accessed after this point, so minute_data can freely modify it
                     )
                 else:
                     soc_percent = {}
@@ -753,6 +754,7 @@ class Inverter:
                         divide_by=1.0,
                         scale=1.0,
                         required_unit="kWh",
+                        can_modify_history=True,  # history is not accessed after this point, so minute_data can freely modify it
                     )
                     # Determine soc_max from nominal_capacity or the observed maximum
                     if nominal_capacity and nominal_capacity > 0:
@@ -779,6 +781,7 @@ class Inverter:
                 divide_by=1.0,
                 scale=1.0,
                 required_unit="W",
+                can_modify_history=True,  # history is not accessed after this point, so minute_data can freely modify it
             )
             if battery_power_invert:
                 # Invert the battery power if required
@@ -1062,6 +1065,7 @@ class Inverter:
                         divide_by=1.0,
                         scale=self.battery_scaling,
                         required_unit="%",
+                        can_modify_history=True,  # history is not accessed after this point, so minute_data can freely modify it
                     )
                     for entry in soc_kwh:
                         soc_kwh[entry] = dp4(soc_kwh[entry] * self.soc_max / 100.0)
@@ -1078,6 +1082,7 @@ class Inverter:
                         divide_by=1.0,
                         scale=self.battery_scaling,
                         required_unit="kWh",
+                        can_modify_history=True,  # history is not accessed after this point, so minute_data can freely modify it
                     )
                 charge_rate, ignore_io = minute_data(
                     charge_rate_data[0],
@@ -1091,6 +1096,7 @@ class Inverter:
                     divide_by=1.0,
                     scale=1.0,
                     required_unit="W",
+                    can_modify_history=True,  # history is not accessed after this point, so minute_data can freely modify it
                 )
                 predbat_status = minute_data_state(predbat_status_data[0], self.base.max_days_previous, self.base.now_utc, "state", "last_updated")
                 for minute in predbat_status:
@@ -1110,6 +1116,7 @@ class Inverter:
                     divide_by=1.0,
                     scale=1.0,
                     required_unit="W",
+                    can_modify_history=True,  # history is not accessed after this point, so minute_data can freely modify it
                 )
                 if battery_power_invert:
                     # Invert the battery power if required

@@ -952,8 +952,8 @@ class Fetch:
         if not self.rate_export:
             # Basic rates defined by user over time
             rate_export_dict = self.get_arg("rates_export", [], indirect=False)
-            if rate_export_dict:
-                self.rate_export = self.basic_rates(rate_export_dict, "rates_export")
+            # Allow all zero export rates, as some users have a feed-in tariff that is zero
+            self.rate_export = self.basic_rates(rate_export_dict, "rates_export")
 
         # Fetch Axle sessions first so Octopus auto-join can skip saving sessions that overlap an Axle VPP session
         self.axle_sessions = fetch_axle_sessions(self)

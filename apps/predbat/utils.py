@@ -24,6 +24,9 @@ import copy
 
 DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
+# Use datetime.fromisoformat in str2time rather than strptime, set False to revert to strptime
+STR2TIME_USE_FROMISOFORMAT = True
+
 
 class MinuteArray:
     """Dense array-backed replacement for dict[int, float] keyed by contiguous minute indices.
@@ -115,10 +118,7 @@ def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=
     prev_value = None
     for key in data:
         # Convert key in format '2024-09-07T15:40:09.799567+00:00' into a datetime
-        if "." in key:
-            timekey = datetime.strptime(key, TIME_FORMAT_SECONDS)
-        else:
-            timekey = datetime.strptime(key, TIME_FORMAT)
+        timekey = str2time(key)
         if last_time and (timekey - last_time).total_seconds() < group * 60:
             continue
         if intermediate and last_time and ((timekey - last_time).total_seconds() > group * 60):
@@ -940,14 +940,37 @@ def minutes_to_time(updated, now):
     return minutes
 
 
-def str2time(str):
-    if "." in str:
-        tdata = datetime.strptime(str, TIME_FORMAT_SECONDS)
-    elif "T" in str:
-        tdata = datetime.strptime(str, TIME_FORMAT)
+def str2time_strptime(time_str):
+    """
+    Parse a timezone-aware time string into a datetime using strptime (legacy implementation)
+    """
+    if "." in time_str:
+        tdata = datetime.strptime(time_str, TIME_FORMAT_SECONDS)
+    elif "T" in time_str:
+        tdata = datetime.strptime(time_str, TIME_FORMAT)
     else:
-        tdata = datetime.strptime(str, TIME_FORMAT_OCTOPUS)
+        tdata = datetime.strptime(time_str, TIME_FORMAT_OCTOPUS)
     return tdata
+
+
+def str2time(time_str):
+    """
+    Parse a timezone-aware time string into a datetime
+
+    Uses datetime.fromisoformat as a fast path (C-implemented, far less allocation churn than
+    strptime) when STR2TIME_USE_FROMISOFORMAT is set, falling back to strptime for any string
+    fromisoformat cannot handle or parses without a UTC offset (the strptime formats all
+    require an offset, so the fallback preserves the ValueError contract for naive strings).
+    """
+    if STR2TIME_USE_FROMISOFORMAT:
+        try:
+            tdata = datetime.fromisoformat(time_str)
+        except (ValueError, TypeError):
+            return str2time_strptime(time_str)
+        if tdata.tzinfo is None:
+            return str2time_strptime(time_str)
+        return tdata
+    return str2time_strptime(time_str)
 
 
 def calc_percent_limit(charge_limit, soc_max):

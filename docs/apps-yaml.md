@@ -302,6 +302,23 @@ This significantly reduces planning time while maintaining near-optimal results.
   enable_coarse_fine_levels: true
 ```
 
+### prediction_kernel_enable
+
+**Experimental.** Enables a compiled C++ prediction kernel that replaces Predbat's Python simulation engine for the vast majority of the scenario evaluations run during planning, giving a significant (several-times) speedup with identical results.
+
+The default is `false` while this feature is being tested. It will likely default to `true` in a future release once it has had wider real-world testing.
+
+```yaml
+  prediction_kernel_enable: true
+```
+
+Notes:
+
+- This is an `apps.yaml`-only setting - there is no HA switch for it.
+- Predbat automatically falls back to the Python engine if the compiled kernel isn't available for your system's CPU architecture, so it is always safe to enable.
+- Predbat logs its status once per plan cycle, e.g. `Prediction kernel: enabled and active (...)` or `Prediction kernel: enabled but NOT available (...) - falling back to the Python engine` - check your Predbat log if you enable this and want to confirm it's actually being used.
+- Results are bit-for-bit identical to the Python engine; this option only affects performance, not the plan produced.
+
 ### Web interface
 
 Docker users can change the web port for the Predbat web interface by setting **web_port** to a new port number. The default port of 5052 must always be used for the Predbat app.

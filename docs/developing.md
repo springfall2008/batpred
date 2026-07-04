@@ -34,6 +34,44 @@ For coverage analysis install the 'coverage' library with Python, or use the ver
 1. ./run_cov --quick
 2. Open `htmlcov/index.html` in your web browser
 
+## The C++ prediction kernel
+
+Predbat has an experimental compiled C++ "kernel" (`apps/predbat/prediction_kernel.cpp`) that is a fast, bit-for-bit-identical mirror of the Python simulation engine (`Prediction.run_prediction()` in `apps/predbat/prediction.py`). It's used to speed up the huge number of scenario evaluations run during planning. It's controlled by the `prediction_kernel_enable` `apps.yaml` setting (see [apps-yaml.md](apps-yaml.md#prediction_kernel_enable)), Off by default while it's tested more widely.
+
+### Building it locally
+
+You don't need a compiler to run Predbat or the normal test suite - if no compiled kernel is present, Predbat transparently falls back to the Python engine.
+
+To build a kernel for your own machine (for local testing):
+
+```bash
+bash apps/predbat/build_kernel.sh
+```
+
+This produces `apps/predbat/prediction_kernel_lib.so`, built with `g++`/`clang`, no external dependencies. It's not committed to the repository (see `.gitignore`).
+
+Predbat also ships pre-built binaries for each supported platform/architecture (`apps/predbat/prediction_kernel_lib_<arch>.so`), which **are** committed to the repository so they're delivered by Predbat's self-update mechanism. These are produced by a separate cross-compilation script using [zig](https://ziglang.org/) as the toolchain:
+
+```bash
+bash apps/predbat/build_kernel_cross.sh
+```
+
+A GitHub Actions job (`kernel-binaries` in `.github/workflows/code-quality.yml`) runs this automatically on every pull request and commits any changed binaries back to the PR branch - similar to how `pre-commit.ci` auto-fixes formatting issues. You shouldn't normally need to run the cross-build script yourself.
+
+### Testing the kernel
+
+Three test targets exercise the kernel:
+
+- `./run_all --test kernel_parity` - dual-runs a large set of deterministic edge cases and seeded random scenarios through both engines and asserts the results match to within `1e-6`
+- `./run_all --test model_kernel` - runs the standard model test suite (`./run_all --test model`) with the kernel enabled
+- `./run_all --test optimise_windows_kernel` - runs the optimiser test suite with and without the kernel, checking results match and reporting the speedup
+
+These automatically build a local kernel via `build_kernel.sh` if one isn't already present, and skip (or fail, if `PREDBAT_KERNEL_REQUIRED=1` is set, as it is in CI) if the build fails.
+
+### Keeping the two engines in sync
+
+**This is important:** if you change the behaviour of the hot loop in `Prediction.run_prediction()`, you must mirror the change in `prediction_kernel.cpp`, and bump both `KERNEL_PARITY_REVISION` (in `apps/predbat/prediction_kernel.py`) and `PK_PARITY_REVISION` (in `apps/predbat/prediction_kernel.cpp`). This isn't just good practice - it's enforced: the two revision numbers are checked when the kernel loads, and a mismatch disables the kernel (falling back to Python) rather than risking silently divergent results. Run `./run_all --test kernel_parity` before submitting any change to `prediction.py`'s simulation loop.
+
 ## Editing the code
 
 There are at least a couple of ways of working on the code, outlined here.
