@@ -198,6 +198,82 @@ def _scenario_fused_template(my_predbat):
     return failed
 
 
+def _scenario_plan_once_recompute(my_predbat):
+    """plan_once with an invalid plan recomputes, persists, publishes rates and returns the artifact - without executing."""
+    failed = 0
+    my_predbat.plan_valid = False
+    my_predbat.plan_last_updated = None
+    with ExitStack() as stack:
+        mocks = _patch_pipeline(my_predbat, stack)
+        artifact = my_predbat.plan_once(scheduled=True)
+    failed = _check(failed, isinstance(artifact, dict), "plan_once recompute: returns a dict artifact")
+    failed = _check(failed, artifact and artifact.get("recomputed") is True, "plan_once recompute: artifact recomputed True")
+    failed = _check(failed, artifact and artifact.get("plan_valid") is True, "plan_once recompute: artifact plan_valid True")
+    failed = _check(failed, artifact and artifact.get("plan_last_updated") == my_predbat.plan_last_updated, "plan_once recompute: artifact timestamp matches instance state")
+    failed = _check(failed, mocks["save_plan"].call_count == 1, "plan_once recompute: save_plan called once")
+    failed = _check(failed, mocks["publish_rate_and_threshold"].call_count == 1, "plan_once recompute: rates published")
+    failed = _check(failed, mocks["execute_plan"].call_count == 0, "plan_once recompute: execute_plan NOT called")
+    failed = _check(failed, mocks["fetch_inverter_data"].call_count == 1, "plan_once recompute: inverter fetched once only")
+    return failed
+
+
+def _scenario_plan_once_reuse(my_predbat):
+    """plan_once with a fresh valid plan reuses it - recomputed False and nothing persisted."""
+    failed = 0
+    my_predbat.plan_valid = True
+    my_predbat.plan_last_updated = my_predbat.now_utc
+    with ExitStack() as stack:
+        mocks = _patch_pipeline(my_predbat, stack)
+        artifact = my_predbat.plan_once(scheduled=True)
+    failed = _check(failed, artifact and artifact.get("recomputed") is False, "plan_once reuse: artifact recomputed False")
+    failed = _check(failed, mocks["save_plan"].call_count == 0, "plan_once reuse: save_plan not called")
+    failed = _check(failed, mocks["execute_plan"].call_count == 0, "plan_once reuse: execute_plan NOT called")
+    return failed
+
+
+def _scenario_plan_once_unscheduled_forces(my_predbat):
+    """plan_once with scheduled=False forces a recompute even when the plan is fresh and valid."""
+    failed = 0
+    my_predbat.plan_valid = True
+    my_predbat.plan_last_updated = my_predbat.now_utc
+    with ExitStack() as stack:
+        mocks = _patch_pipeline(my_predbat, stack)
+        artifact = my_predbat.plan_once(scheduled=False)
+    failed = _check(failed, artifact and artifact.get("recomputed") is True, "plan_once unscheduled: recompute forced")
+    failed = _check(failed, mocks["calculate_plan"].call_args.kwargs.get("recompute") is True, "plan_once unscheduled: calculate_plan recompute=True")
+    return failed
+
+
+def _scenario_plan_once_failures(my_predbat):
+    """plan_once returns None on inverter-fetch failure, zero rates and template configuration."""
+    failed = 0
+    my_predbat.plan_valid = True
+    my_predbat.plan_last_updated = my_predbat.now_utc
+
+    with ExitStack() as stack:
+        mocks = _patch_pipeline(my_predbat, stack, inverter_ok=False)
+        artifact = my_predbat.plan_once(scheduled=True)
+    failed = _check(failed, artifact is None, "plan_once inverter failure: returns None")
+    failed = _check(failed, mocks["calculate_plan"].call_count == 0, "plan_once inverter failure: calculate_plan not called")
+
+    my_predbat.rate_min = 0
+    my_predbat.rate_max = 0
+    with ExitStack() as stack:
+        mocks = _patch_pipeline(my_predbat, stack)
+        artifact = my_predbat.plan_once(scheduled=True)
+    my_predbat.rate_min = 5.0
+    my_predbat.rate_max = 30.0
+    failed = _check(failed, artifact is None, "plan_once zero rates: returns None")
+
+    my_predbat.args["template"] = True
+    with ExitStack() as stack:
+        mocks = _patch_pipeline(my_predbat, stack)
+        artifact = my_predbat.plan_once(scheduled=True)
+    my_predbat.args.pop("template", None)
+    failed = _check(failed, artifact is None, "plan_once template: returns None")
+    return failed
+
+
 def test_plan_execute_split(my_predbat):
     """Entry point registered in unit_test.py - characterises update_pred and tests plan_once/execute_once."""
     print("**** Running plan/execute split tests ****")
@@ -211,6 +287,10 @@ def test_plan_execute_split(my_predbat):
         failed += _scenario_fused_inverter_failure(my_predbat)
         failed += _scenario_fused_zero_rates(my_predbat)
         failed += _scenario_fused_template(my_predbat)
+        failed += _scenario_plan_once_recompute(my_predbat)
+        failed += _scenario_plan_once_reuse(my_predbat)
+        failed += _scenario_plan_once_unscheduled_forces(my_predbat)
+        failed += _scenario_plan_once_failures(my_predbat)
     finally:
         _restore_state(my_predbat, saved)
     return failed

@@ -741,13 +741,16 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.plan_valid = True
         self.log("Restored saved plan from {:.0f} minutes ago: {} charge windows, {} export windows".format(age_minutes, len(self.charge_window_best), len(self.export_window_best)))
 
-    def update_pred(self, scheduled=True):
+    def plan_once(self, scheduled=True):
         """
-        Update the prediction state, everything is called from here right now
+        Refresh input data and recompute the plan if required, without executing it.
+
+        Returns None when a pre-condition fails (template configuration, inverter data
+        unavailable or import rates all zero) - the error will already have been recorded.
+        Otherwise returns a plan artifact summary dict with keys recomputed, plan_valid
+        and plan_last_updated. Passing scheduled=False forces a recompute.
         """
         recompute = False
-        status_extra = ""
-        self.had_errors = False
 
         self.update_time()
         self.save_current_config()
@@ -760,7 +763,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         if self.get_arg("template", False):
             self.log("Error: You have not completed editing the apps.yaml template, Predbat cannot run. Please comment out 'Template: True' line in apps.yaml to start Predbat running")
             self.record_status("Error: Template Configuration, remove 'Template: True' line in apps.yaml to start predbat running", had_errors=True)
-            return
+            return None
 
         self.expose_config("active", True)
         self.fetch_config_options()
@@ -775,13 +778,13 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         if not self.fetch_inverter_data():
             self.log("Error: Failed to fetch inverter data, not able to compute a plan")
             self.record_status("Error: Failed to fetch inverter data, not able to compute a plan", had_errors=True)
-            return
+            return None
 
         # Check if we have valid import rates
         if self.rate_min == self.rate_max == 0:
             self.log("Error: Import rates are all zero, not able to compute a plan")
             self.record_status("Error: Import rates are all zero, not able to compute a plan", had_errors=True)
-            return
+            return None
 
         if self.dynamic_load():
             self.log("Dynamic load adjustment changed, will recompute the plan")
@@ -804,6 +807,24 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         # Publish rate data
         self.publish_rate_and_threshold()
+
+        return {
+            "recomputed": recompute,
+            "plan_valid": self.plan_valid,
+            "plan_last_updated": self.plan_last_updated,
+        }
+
+    def update_pred(self, scheduled=True):
+        """
+        Update the prediction state, everything is called from here right now
+        """
+        status_extra = ""
+        self.had_errors = False
+
+        plan = self.plan_once(scheduled=scheduled)
+        if plan is None:
+            return
+        recompute = plan["recomputed"]
 
         # Execute the plan, re-read the inverter first if we had to calculate (as time passes during calculations)
         if recompute:
