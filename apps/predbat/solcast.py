@@ -1029,7 +1029,7 @@ class SolarAPI(ComponentBase):
             minute_absolute = self.minutes_now - minute
             if minute_absolute < 0:
                 days_prev = int(abs(minute_absolute) / (24 * 60)) + 1
-                if days_prev in down_days:
+                if days_prev > hist_days or days_prev in down_days:
                     continue
                 weight = max(1.0 - 0.1 * (days_prev - 1), 0.3)
                 slot_abs = minute_absolute % (24 * 60)
