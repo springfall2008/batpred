@@ -59,7 +59,7 @@ FOX_SETTINGS_DEFAULTS = {
 }
 
 # Storage cache keys for device data persisted between reboots
-FOX_CACHE_KEYS = ["device_list", "device_detail", "battery_charging_time", "device_settings", "scheduler_state", "device_values", "device_production_month"]
+FOX_CACHE_KEYS = ["device_list", "device_detail", "battery_charging_time", "device_settings", "device_settings_unavailable", "scheduler_state", "device_values", "device_production_month"]
 
 # Maximum age (minutes) of cached data before an API refresh is triggered
 FOX_REFRESH_STATIC = 24 * 60  # Device list, detail and battery charge times rarely change
