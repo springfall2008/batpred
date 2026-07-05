@@ -2724,10 +2724,11 @@ def test_pv_calibration_synthetic_values(my_predbat):
 
     Sub-case B – variable performance (3 days: actual = 0.5, 1.0, 1.5 kWh each, forecast=1.0):
       - average_day_scaling ≈ 0.963  (weighted: (0.5×1.0 + 1.0×0.9 + 1.5×0.8) / 2.7 ≈ 0.963)
-      - total_adjustment ≈ 1.0
+      - total_adjustment ≈ 0.963  (slot averages are recency-weighted the same way, so with a
+        uniform per-day forecast this lands on the same weighted ratio as average_day_scaling)
       - worst_day_scaling ≈ 0.519  (min/weighted_avg = 0.5/0.963, above floor of 0.5)
       - best_day_scaling  ≈ 1.558  (max/weighted_avg = 1.5/0.963)
-      - point estimate (pv_estimateCL) ≈ unchanged input (aggregate ratio ≈ 1.0)
+      - point estimate (pv_estimateCL) ≈ 0.963 × input (aggregate weighted ratio)
       - pv_estimate10 ≈ 0.519 × pv_estimateCL
       - pv_estimate90 ≈ 1.558 × pv_estimateCL (may be capped to capped_data)
     """
@@ -2884,8 +2885,8 @@ def test_pv_calibration_synthetic_values(my_predbat):
     # --- Sub-case B: 3 days at 0.5x, 1.0x, 1.5x → weighted avg=0.963, worst=0.519, best=1.558 ---
     r = run_scenario([0.5, 1.0, 1.5])
 
-    if abs(r["total_adj"] - 1.0) > TOL:
-        print("ERROR [B]: total_adjustment should be ~1.0 (avg ratio), got {}".format(r["total_adj"]))
+    if abs(r["total_adj"] - 0.963) > TOL:
+        print("ERROR [B]: total_adjustment should be ~0.963 (recency-weighted ratio), got {}".format(r["total_adj"]))
         failed = True
 
     if r["avg_scaling"] is not None and abs(r["avg_scaling"] - 0.963) > TOL:
@@ -3039,6 +3040,108 @@ def test_pv_calibration_average_day_scaling_ratio_of_sums(my_predbat):
 
     if abs(average - old_biased_average) < TOL:
         print("ERROR: average_day_scaling ({}) matches the old biased average-of-ratios result ({:.4f}) - ratio-of-sums fix appears reverted".format(average, old_biased_average))
+        failed = True
+
+    return failed
+
+
+def test_pv_calibration_total_adjustment_recency_weighted(my_predbat):
+    """
+    total_adjustment (and slot_adjustment, which both drive the calibrated median forecast -
+    pv_estimateCL) must weight more recent days higher, using the same recency weight as
+    average_day_scaling/worst/best, rather than a flat unweighted average across the whole
+    history window. Otherwise a recent change in system performance (e.g. panel cleaning,
+    seasonal trend) is diluted by older, less-relevant days.
+
+    3 days (day1=most recent, weight 1.0/0.9/0.8), uniform forecast=1.0 kWh/day:
+      day1: actual=2.0 kWh (ratio 2.0)
+      day2: actual=1.0 kWh (ratio 1.0)
+      day3: actual=0.5 kWh (ratio 0.5)
+
+    Flat/unweighted ratio (what the old code produced): (2.0+1.0+0.5) / (1.0+1.0+1.0) = 3.5/3 ~= 1.1667
+    Recency-weighted ratio (current code): (2.0*1.0+1.0*0.9+0.5*0.8) / (1.0*1.0+1.0*0.9+1.0*0.8) = 3.3/2.7 ~= 1.2222
+    """
+    print("  - test_pv_calibration_total_adjustment_recency_weighted")
+    failed = False
+
+    GEN_START = 600  # 10:00 UTC in minutes since midnight
+    GEN_END = 660  # 11:00 UTC
+    TOL = 0.01
+
+    def build_pv_today_hist(actual_per_day, minutes_now):
+        hist = {}
+        for day_idx, actual_kwh in enumerate(actual_per_day):
+            day = day_idx + 1
+            midnight_ago = day * 1440 + minutes_now
+            for step in range(0, 24 * 60, 5):
+                minute_ago = midnight_ago - step
+                if minute_ago < 0:
+                    continue
+                actual_min = step
+                if actual_min < GEN_START:
+                    cumulative = 0.0
+                elif actual_min < GEN_END:
+                    cumulative = actual_kwh * (actual_min - GEN_START) / (GEN_END - GEN_START)
+                else:
+                    cumulative = actual_kwh
+                hist[minute_ago] = cumulative
+        return hist
+
+    def build_pv_forecast_hist(forecast_kwh_per_day, minutes_now):
+        forecast_hist = {}
+        for day_idx, forecast_kwh in enumerate(forecast_kwh_per_day):
+            day = day_idx + 1
+            for m_of_day in range(GEN_START, GEN_END):
+                minutes_ago = day * 1440 + (minutes_now - m_of_day)
+                forecast_hist[minutes_ago] = float(forecast_kwh)  # 1-hour window -> kW == kWh
+        return forecast_hist
+
+    actual_per_day = [2.0, 1.0, 0.5]
+    forecast_per_day = [1.0, 1.0, 1.0]
+    weights = [1.0, 0.9, 0.8]
+
+    flat_average = sum(actual_per_day) / sum(forecast_per_day)
+    expected_weighted = sum(a * w for a, w in zip(actual_per_day, weights)) / sum(f * w for f, w in zip(forecast_per_day, weights))
+
+    test_api = create_test_solar_api()
+    total_adjustment = None
+    try:
+        solar = test_api.solar
+        base = test_api.mock_base
+        days_back = len(actual_per_day)
+        minutes_now = base.minutes_now  # 720 (noon)
+
+        hist = build_pv_today_hist(actual_per_day, minutes_now)
+        forecast_hist = build_pv_forecast_hist(forecast_per_day, minutes_now)
+
+        def mock_minute_import_export(max_days_prev, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True, _hist=hist):
+            return dict(_hist) if key == "pv_today" else {}
+
+        base.minute_data_import_export = mock_minute_import_export
+        solar.get_history_wrapper = lambda entity_id, days, required=False: []
+
+        total_minutes = 4 * 24 * 60
+        pv_m = {m: 0.0 for m in range(total_minutes)}
+        pv_m10 = {m: 0.0 for m in range(total_minutes)}
+        pv_data = []
+
+        with patch("solcast.history_attribute_to_minute_data", return_value=(forecast_hist, days_back)):
+            solar.pv_calibration(pv_m, pv_m10, pv_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
+
+        total_adjustment = solar.pv_calibration_total_adjustment
+    finally:
+        test_api.cleanup()
+
+    if total_adjustment is None:
+        print("ERROR: pv_calibration_total_adjustment was not set")
+        return True
+
+    if abs(total_adjustment - expected_weighted) > TOL:
+        print("ERROR: total_adjustment should be the recency-weighted ratio ~{:.4f}, got {}".format(expected_weighted, total_adjustment))
+        failed = True
+
+    if abs(total_adjustment - flat_average) < TOL:
+        print("ERROR: total_adjustment ({}) matches the old flat/unweighted average ({:.4f}) - recency weighting appears reverted".format(total_adjustment, flat_average))
         failed = True
 
     return failed
@@ -3619,6 +3722,7 @@ def run_solcast_tests(my_predbat):
     failed |= test_pv_calibration_partial_history(my_predbat)
     failed |= test_pv_calibration_synthetic_values(my_predbat)
     failed |= test_pv_calibration_average_day_scaling_ratio_of_sums(my_predbat)
+    failed |= test_pv_calibration_total_adjustment_recency_weighted(my_predbat)
     failed |= test_pv_calibration_60min_period(my_predbat)
     failed |= test_pv_calibration_15min_period(my_predbat)
     failed |= test_pv_calibration_skips_system_down_days(my_predbat)
