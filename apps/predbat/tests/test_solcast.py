@@ -2845,7 +2845,7 @@ def test_pv_calibration_synthetic_values(my_predbat):
         print("ERROR [A]: worst_day_scaling should be 1.0 (no day variance), got {}".format(r["worst"]))
         failed = True
 
-    # Uniform underperformance, zero day-to-day variance: relative best = min/avg = 0.5/0.5 = 1.0.
+    # Uniform underperformance, zero day-to-day variance: relative best = max/avg = 0.5/0.5 = 1.0.
     # (worst/best are seeded from the first observed day's ratio, not a hardcoded 1.0, so a run of
     # days all on the same side of 1.0x does not spuriously widen the best/worst spread.)
     if abs(r["best"] - 1.0) > TOL:
