@@ -12,7 +12,7 @@ import pytz
 import aiohttp
 import json
 from unittest.mock import MagicMock, patch, AsyncMock
-from fox import validate_schedule, minutes_to_schedule_time, end_minute_inclusive_to_exclusive, FoxAPI, schedules_are_equal, FOX_CACHE_KEYS, FOX_REFRESH_SETTINGS, FOX_REFRESH_REALTIME
+from fox import validate_schedule, minutes_to_schedule_time, end_minute_inclusive_to_exclusive, FoxAPI, schedules_are_equal, FOX_CACHE_KEYS, FOX_REFRESH_SETTINGS, FOX_REFRESH_REALTIME, OPTIONS_WORK_MODE
 from tests.test_infra import run_async, create_aiohttp_mock_response, create_aiohttp_mock_session
 
 
@@ -66,6 +66,8 @@ class MockFoxAPIWithRequests(FoxAPI):
         self.available_variables = {}
         self.device_values = {}
         self.device_settings = {}
+        self.device_settings_unavailable = {}
+        self.last_unsupported = False
         self.device_production_month = {}
         self.device_production_year = {}
         self.device_battery_charging_time = {}
@@ -1781,6 +1783,83 @@ def test_api_get_device_setting(my_predbat):
     return False
 
 
+def test_api_get_device_setting_unsupported_applies_default(my_predbat):
+    """
+    Test get_device_setting marks a setting unavailable and applies its default value when
+    the API reports it unsupported (errno 42015/44096), then never polls it again
+    """
+    print("  - test_api_get_device_setting_unsupported_applies_default")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    # No mock response registered so request_get returns None, simulating an unsupported
+    # setting response; last_unsupported is what request_get_func would have set for errno 42015/44096
+    fox.last_unsupported = True
+
+    result = asyncio.run(fox.get_device_setting(deviceSN, "WorkMode"))
+
+    assert result is None
+    assert len(fox.request_log) == 1
+    assert "workmode" in fox.device_settings_unavailable[deviceSN]
+    assert fox.device_settings[deviceSN]["WorkMode"]["value"] == "SelfUse"
+    # Must carry an enumList so it still publishes as a select entity - automatic_config wires
+    # inverter_mode to a hardcoded select.*_setting_workmode entity id
+    assert fox.device_settings[deviceSN]["WorkMode"]["enumList"] == OPTIONS_WORK_MODE
+
+    # Second call must be served from the cached default without hitting the API again
+    result2 = asyncio.run(fox.get_device_setting(deviceSN, "WorkMode"))
+    assert result2 == {"value": "SelfUse", "enumList": OPTIONS_WORK_MODE}
+    assert len(fox.request_log) == 1
+
+    return False
+
+
+def test_api_get_device_setting_unsupported_no_default_leaves_absent(my_predbat):
+    """
+    Test get_device_setting marks ExportLimit unavailable without inventing a stub entry, so
+    existing "missing setting" fallback behaviour (unlimited export) keeps working unchanged
+    """
+    print("  - test_api_get_device_setting_unsupported_no_default_leaves_absent")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+    fox.last_unsupported = True
+
+    result = asyncio.run(fox.get_device_setting(deviceSN, "ExportLimit"))
+
+    assert result is None
+    assert "exportlimit" in fox.device_settings_unavailable[deviceSN]
+    assert "ExportLimit" not in fox.device_settings.get(deviceSN, {})
+
+    # Second call is still skipped (no further API traffic) despite there being no stub value
+    result2 = asyncio.run(fox.get_device_setting(deviceSN, "ExportLimit"))
+    assert result2 is None
+    assert len(fox.request_log) == 1
+
+    return False
+
+
+def test_api_get_device_setting_already_marked_unavailable_skips_poll(my_predbat):
+    """
+    Test get_device_setting skips the API entirely when the setting was already marked
+    unavailable (e.g. restored from a persisted cache) without needing last_unsupported set
+    """
+    print("  - test_api_get_device_setting_already_marked_unavailable_skips_poll")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+    fox.device_settings_unavailable[deviceSN] = ["gridcode"]
+    fox.set_mock_response("/op/v0/device/setting/get", {"value": "should not be used"})
+
+    result = asyncio.run(fox.get_device_setting(deviceSN, "GridCode"))
+
+    assert result is None
+    assert len(fox.request_log) == 0
+
+    return False
+
+
 def test_api_set_device_setting(my_predbat):
     """
     Test set_device_setting API endpoint
@@ -1804,6 +1883,34 @@ def test_api_set_device_setting(my_predbat):
     assert fox.request_log[0]["datain"]["sn"] == deviceSN
     assert fox.request_log[0]["datain"]["key"] == "MinSoc"
     assert fox.request_log[0]["datain"]["value"] == 20
+
+    return False
+
+
+def test_api_set_device_setting_unsupported_marks_unavailable(my_predbat):
+    """
+    Test set_device_setting marks a setting unavailable and applies its default when the
+    write is rejected as unsupported, then never writes to it again
+    """
+    print("  - test_api_set_device_setting_unsupported_marks_unavailable")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+    fox.last_unsupported = True
+
+    result = asyncio.run(fox.set_device_setting(deviceSN, "MaxSoc", 90))
+
+    assert result == True
+    assert len(fox.request_log) == 1
+    assert "maxsoc" in fox.device_settings_unavailable[deviceSN]
+    assert fox.device_settings[deviceSN]["MaxSoc"]["value"] == 100
+
+    # A later write attempt must be ignored entirely - no further API traffic
+    fox.set_mock_response("/op/v0/device/setting/set", {})
+    result2 = asyncio.run(fox.set_device_setting(deviceSN, "MaxSoc", 50))
+    assert result2 == True
+    assert len(fox.request_log) == 1
+    assert fox.device_settings[deviceSN]["MaxSoc"]["value"] == 100
 
     return False
 
@@ -1851,6 +1958,82 @@ def test_api_get_device_settings(my_predbat):
     assert deviceSN in fox.device_settings
     for key in expected_keys:
         assert key in fox.device_settings[deviceSN], f"Expected key {key} in device_settings"
+
+    return False
+
+
+def test_api_get_device_settings_with_unsupported_setting(my_predbat):
+    """
+    Test get_device_settings applies the default and stops polling a setting reported as
+    unsupported, while the other settings continue to be read normally each cycle
+    """
+    print("  - test_api_get_device_settings_with_unsupported_setting")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+
+    async def fake_request_get(path, post=False, datain=None):
+        fox.request_log.append({"path": path, "post": post, "datain": datain})
+        key = (datain or {}).get("key")
+        if key == "WorkMode":
+            fox.last_unsupported = True
+            return None
+        fox.last_unsupported = False
+        return {"value": "100", "unit": "%", "precision": 1.0}
+
+    fox.request_get = fake_request_get
+
+    result = run_async(fox.get_device_settings(deviceSN))
+
+    # get_device_settings should still report success since the other 5 settings succeeded
+    assert result is not None
+
+    # WorkMode was marked unavailable with its SelfUse default applied
+    assert "workmode" in fox.device_settings_unavailable[deviceSN]
+    assert fox.device_settings[deviceSN]["WorkMode"]["value"] == "SelfUse"
+
+    # The other settings were read normally
+    for key in ["ExportLimit", "MaxSoc", "GridCode", "MinSoc", "MinSocOnGrid"]:
+        assert fox.device_settings[deviceSN][key]["value"] == "100"
+
+    # A second poll must not query WorkMode again
+    fox.request_log = []
+    run_async(fox.get_device_settings(deviceSN))
+    queried_keys = [req["datain"]["key"] for req in fox.request_log]
+    assert "WorkMode" not in queried_keys
+    assert len(queried_keys) == 5
+
+    return False
+
+
+def test_api_get_device_settings_all_unsupported_still_settles(my_predbat):
+    """
+    Test get_device_settings returns non-None immediately when every FOX_SETTINGS key is
+    unsupported, so callers persist the cache age and stop re-polling every cycle. Regression
+    guard: this used to leave the age-based refresh gate permanently open (age stays None
+    forever), which also dragged the scheduler poll along since it shares the same gate.
+    """
+    print("  - test_api_get_device_settings_all_unsupported_still_settles")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.last_unsupported = True
+    # No mock response registered so every setting/get call fails as unsupported
+
+    result = run_async(fox.get_device_settings(deviceSN))
+
+    assert result is not None
+    assert len(fox.request_log) == 6
+    for key in ["ExportLimit", "MaxSoc", "GridCode", "WorkMode", "MinSoc", "MinSocOnGrid"]:
+        assert key.lower() in fox.device_settings_unavailable[deviceSN]
+
+    # A second poll must not repeat any of the API calls
+    fox.request_log = []
+    result2 = run_async(fox.get_device_settings(deviceSN))
+    assert result2 is not None
+    assert len(fox.request_log) == 0
 
     return False
 
@@ -2137,6 +2320,64 @@ def test_api_get_scheduler_v2_evo(my_predbat):
     return False
 
 
+def test_api_get_scheduler_derives_settings_from_schedule(my_predbat):
+    """
+    Test get_scheduler derives ExportLimit/ImportLimit/MaxSoc/PvLimit (max) and MinSocOnGrid
+    (min) from the schedule groups and stores them in device_settings, filling the gap left by
+    a settings/get endpoint that doesn't support these (e.g. errno 42015), without clobbering a
+    setting that already has a real register-backed entry
+    """
+    print("  - test_api_get_scheduler_derives_settings_from_schedule")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "EVO1234567"
+    fox.device_detail[deviceSN] = {"hasBattery": True, "capacity": 20, "productType": "812"}
+
+    # GridCode already has a real register-backed reading - must not be touched by this
+    fox.device_settings[deviceSN] = {"GridCode": {"value": "50Hz", "enumList": ["50Hz", "60Hz"]}}
+
+    fox.set_mock_response(
+        "/op/v2/device/scheduler/get",
+        {
+            "enable": 1,
+            "groups": [
+                {
+                    "enable": 1,
+                    "startHour": 0,
+                    "endHour": 5,
+                    "workMode": "ForceCharge",
+                    "extraParam": {"fdPwr": 5000.0, "minSocOnGrid": 5.0, "fdSoc": 100.0, "maxSoc": 90.0, "pvLimit": 10000.0, "importLimit": 8000.0, "exportLimit": 9000.0, "reactivePower": 0.0},
+                },
+                {
+                    "enable": 1,
+                    "startHour": 5,
+                    "endHour": 23,
+                    "workMode": "SelfUse",
+                    "extraParam": {"fdPwr": 5000.0, "minSocOnGrid": 10.0, "fdSoc": 10.0, "maxSoc": 100.0, "pvLimit": 16000.0, "importLimit": 12000.0, "exportLimit": 12000.0, "reactivePower": 0.0},
+                },
+            ],
+        },
+    )
+
+    asyncio.run(fox.get_scheduler(deviceSN))
+
+    settings = fox.device_settings[deviceSN]
+    # max() across the two groups
+    assert settings["ExportLimit"]["value"] == 12000.0
+    assert settings["ImportLimit"]["value"] == 12000.0
+    assert settings["MaxSoc"]["value"] == 100.0
+    assert settings["PvLimit"]["value"] == 16000.0
+    # min() across the two groups
+    assert settings["MinSocOnGrid"]["value"] == 5.0
+    # reactivePower is never derived/stored
+    assert "ReactivePower" not in settings
+
+    # A setting with a real register-backed entry is left untouched
+    assert settings["GridCode"] == {"value": "50Hz", "enumList": ["50Hz", "60Hz"]}
+
+    return False
+
+
 def test_api_get_scheduler_v2_null_groups(my_predbat):
     """
     Test get_scheduler_v2 tolerates a present-but-null groups value and defaults enable
@@ -2289,6 +2530,66 @@ def test_api_set_scheduler_v3_evo(my_predbat):
     # Local state keeps the original flat groups
     assert fox.device_scheduler[deviceSN]["enable"] == True
     assert fox.device_scheduler[deviceSN]["groups"] == groups
+
+    return False
+
+
+def test_api_set_scheduler_v3_evo_carries_stored_limits(my_predbat):
+    """
+    Test set_scheduler carries exportLimit/importLimit/pvLimit from stored device settings into
+    the v3 write's extraParam, since Predbat's own schedule groups never populate them and
+    omitting them risks Fox resetting them to a default. maxSoc/minSocOnGrid must keep coming
+    from the live plan group (not a stale stored value), and reactivePower must never be sent.
+    """
+    print("  - test_api_set_scheduler_v3_evo_carries_stored_limits")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "EVO1234567"
+
+    fox.device_detail[deviceSN] = {"hasBattery": True, "capacity": 10, "productType": "812"}
+    fox.device_scheduler[deviceSN] = {"enable": False, "groups": []}
+    # A stale MaxSoc reading must not leak into the write - the live group's maxSoc must win
+    fox.device_settings[deviceSN] = {
+        "ExportLimit": {"value": 12000.0},
+        "ImportLimit": {"value": 8000.0},
+        "PvLimit": {"value": 16000.0},
+        "MaxSoc": {"value": 55},
+    }
+
+    fox.set_mock_response("/op/v3/device/scheduler/enable", {})
+
+    groups = [
+        {
+            "enable": 1,
+            "startHour": 2,
+            "startMinute": 30,
+            "endHour": 5,
+            "endMinute": 29,
+            "workMode": "ForceCharge",
+            "fdSoc": 100,
+            "maxSoc": 100,
+            "fdPwr": 8000,
+            "minSocOnGrid": 10,
+        },
+    ]
+
+    result = asyncio.run(fox.set_scheduler(deviceSN, groups))
+
+    assert result == True
+    sent_groups = fox.request_log[0]["datain"]["groups"]
+    sent = sent_groups[0]
+
+    # Stored limits are carried into extraParam
+    assert sent["extraParam"]["exportLimit"] == 12000.0
+    assert sent["extraParam"]["importLimit"] == 8000.0
+    assert sent["extraParam"]["pvLimit"] == 16000.0
+
+    # maxSoc/minSocOnGrid come from the live plan group, not the stale stored MaxSoc value
+    assert sent["extraParam"]["maxSoc"] == 100
+    assert sent["extraParam"]["minSocOnGrid"] == 10
+
+    # reactivePower is never sent - there is no stored value to carry forward
+    assert "reactivePower" not in sent["extraParam"]
 
     return False
 
@@ -3348,6 +3649,7 @@ class MockFoxAPIForRequestTesting(FoxAPI):
         self.local_tz = pytz.timezone("Europe/London")
         self.log_messages = []
         self.auth_method = "password"
+        self.last_unsupported = False
 
         # Rate limiting attributes
         self.requests_today = 0
@@ -3503,6 +3805,72 @@ def test_request_get_func_real_fox_errno_api_limit(my_predbat):
     assert allow_retry == False  # API limit should NOT retry
     assert fox.failures_total == 1
     mock_sleep.assert_called_once()  # Should sleep for 5 minutes
+
+    return False
+
+
+def test_request_get_func_real_fox_errno_unsupported_42015(my_predbat):
+    """
+    Test real request_get_func flags errno 42015 (unsupported function) via last_unsupported
+    """
+    print("  - test_request_get_func_real_fox_errno_unsupported_42015")
+
+    fox = MockFoxAPIForRequestTesting()
+
+    mock_response = create_aiohttp_mock_response(status=200, json_data={"errno": 42015, "msg": "This device does not currently support this feature"})
+    mock_session = create_aiohttp_mock_session(mock_response)
+
+    with patch("fox.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
+        result, allow_retry = run_async(fox.request_get_func("/op/v0/device/setting/get"))
+
+    assert result is None
+    assert allow_retry == False
+    assert fox.last_unsupported == True
+
+    return False
+
+
+def test_request_get_func_real_fox_errno_unsupported_44096(my_predbat):
+    """
+    Test real request_get_func flags errno 44096 (unsupported function) via last_unsupported
+    """
+    print("  - test_request_get_func_real_fox_errno_unsupported_44096")
+
+    fox = MockFoxAPIForRequestTesting()
+
+    mock_response = create_aiohttp_mock_response(status=200, json_data={"errno": 44096, "msg": "Unsupported function"})
+    mock_session = create_aiohttp_mock_session(mock_response)
+
+    with patch("fox.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
+        result, allow_retry = run_async(fox.request_get_func("/op/v0/device/setting/get"))
+
+    assert result is None
+    assert allow_retry == False
+    assert fox.last_unsupported == True
+
+    return False
+
+
+def test_request_get_func_real_fox_errno_other_leaves_unsupported_false(my_predbat):
+    """
+    Test real request_get_func leaves last_unsupported False for an unrelated errno
+    """
+    print("  - test_request_get_func_real_fox_errno_other_leaves_unsupported_false")
+
+    fox = MockFoxAPIForRequestTesting()
+
+    mock_response = create_aiohttp_mock_response(status=200, json_data={"errno": 40257, "msg": "Invalid parameter"})
+    mock_session = create_aiohttp_mock_session(mock_response)
+
+    with patch("fox.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
+        result, allow_retry = run_async(fox.request_get_func("/op/v0/device/setting/get"))
+
+    assert result is None
+    assert allow_retry == False
+    assert fox.last_unsupported == False
 
     return False
 
@@ -5099,6 +5467,41 @@ def test_publish_data_device_settings(my_predbat):
     return False
 
 
+def test_publish_data_workmode_default_publishes_as_select(my_predbat):
+    """
+    Regression guard: when WorkMode is unsupported (errno 42015/44096) its fallback default
+    must still publish as a select entity, not a sensor. automatic_config wires inverter_mode
+    to a hardcoded select.*_setting_workmode entity id - a sensor there would leave it
+    unresolvable (get_arg returns None) and break force-export mode switching for Fox.
+    """
+    print("  - test_publish_data_workmode_default_publishes_as_select")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    fox.device_list = [{"deviceSN": deviceSN}]
+    fox.device_detail[deviceSN] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {}, "deviceType": "KH8", "stationName": "Test", "batteryList": []}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.device_values[deviceSN] = {}
+    fox.local_schedule[deviceSN] = {}
+
+    # Simulate WorkMode being reported unsupported by the device
+    fox.mark_setting_unavailable(deviceSN, "WorkMode")
+
+    run_async(fox.publish_data())
+
+    workmode_entity = f"select.predbat_fox_{deviceSN.lower()}_setting_workmode"
+    assert workmode_entity in fox.dashboard_items
+    assert fox.dashboard_items[workmode_entity]["state"] == "SelfUse"
+    assert fox.dashboard_items[workmode_entity]["attributes"]["options"] == OPTIONS_WORK_MODE
+
+    # Must NOT have also published as a sensor
+    assert f"sensor.predbat_fox_{deviceSN.lower()}_setting_workmode" not in fox.dashboard_items
+
+    return False
+
+
 def test_publish_data_no_battery_skips_settings(my_predbat):
     """
     Test publish_data skips settings entities for non-battery devices
@@ -6121,19 +6524,27 @@ def run_fox_api_tests(my_predbat):
         failed |= test_api_get_available_variables(my_predbat)
         failed |= test_api_get_available_variables_empty(my_predbat)
         failed |= test_api_get_device_setting(my_predbat)
+        failed |= test_api_get_device_setting_unsupported_applies_default(my_predbat)
+        failed |= test_api_get_device_setting_unsupported_no_default_leaves_absent(my_predbat)
+        failed |= test_api_get_device_setting_already_marked_unavailable_skips_poll(my_predbat)
         failed |= test_api_set_device_setting(my_predbat)
+        failed |= test_api_set_device_setting_unsupported_marks_unavailable(my_predbat)
         failed |= test_api_get_device_settings(my_predbat)
+        failed |= test_api_get_device_settings_with_unsupported_setting(my_predbat)
+        failed |= test_api_get_device_settings_all_unsupported_still_settles(my_predbat)
         failed |= test_api_get_device_settings_no_battery(my_predbat)
         failed |= test_api_get_device_settings_missing_detail(my_predbat)
         failed |= test_api_get_battery_charging_time(my_predbat)
         failed |= test_api_set_battery_charging_time(my_predbat)
         failed |= test_api_get_scheduler(my_predbat)
         failed |= test_api_get_scheduler_v2_evo(my_predbat)
+        failed |= test_api_get_scheduler_derives_settings_from_schedule(my_predbat)
         failed |= test_api_get_scheduler_v2_null_groups(my_predbat)
         failed |= test_api_get_scheduler_kh_stays_v1(my_predbat)
         failed |= test_api_get_scheduler_v2_evo_fails(my_predbat)
         failed |= test_api_set_scheduler(my_predbat)
         failed |= test_api_set_scheduler_v3_evo(my_predbat)
+        failed |= test_api_set_scheduler_v3_evo_carries_stored_limits(my_predbat)
         failed |= test_api_set_scheduler_kh_stays_v1(my_predbat)
         failed |= test_api_set_scheduler_enabled(my_predbat)
         failed |= test_api_get_real_time_data(my_predbat)
@@ -6182,6 +6593,9 @@ def run_fox_api_tests(my_predbat):
         failed |= test_request_get_func_real_rate_limit_429(my_predbat)
         failed |= test_request_get_func_real_fox_errno_rate_limit(my_predbat)
         failed |= test_request_get_func_real_fox_errno_api_limit(my_predbat)
+        failed |= test_request_get_func_real_fox_errno_unsupported_42015(my_predbat)
+        failed |= test_request_get_func_real_fox_errno_unsupported_44096(my_predbat)
+        failed |= test_request_get_func_real_fox_errno_other_leaves_unsupported_false(my_predbat)
         failed |= test_request_get_func_real_connection_error(my_predbat)
         failed |= test_request_get_func_real_timeout(my_predbat)
         failed |= test_request_get_func_real_json_decode_error(my_predbat)
@@ -6243,6 +6657,7 @@ def run_fox_api_tests(my_predbat):
         failed |= test_publish_data_device_values(my_predbat)
         failed |= test_publish_data_device_values_dual_soc(my_predbat)
         failed |= test_publish_data_device_settings(my_predbat)
+        failed |= test_publish_data_workmode_default_publishes_as_select(my_predbat)
         failed |= test_publish_data_no_battery_skips_settings(my_predbat)
 
         # apply_battery_schedule tests
