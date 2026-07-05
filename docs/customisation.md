@@ -93,8 +93,10 @@ Note: Combining export slots may prevent optimal forced export. Combining charge
 The number of CPU threads you use can change your performance, you can set **threads** in `apps.yaml` to 0 to disable threading if you don't have multiple CPUs available,
 or set it to 'auto' (the default) to use one thread per CPU. It is recommended you don't set this to an odd number of threads.
 
-Advanced: Predbat has an experimental compiled C++ prediction kernel that can give a significant speedup to planning with identical results. It is Off by default while it undergoes wider testing (it's expected to become the default in a future release).
-Set `prediction_kernel_enable: true` in `apps.yaml` to try it - see [prediction_kernel_enable](apps-yaml.md#prediction_kernel_enable) for details, including how to confirm it's actually active from the Predbat log.
+Predbat has a compiled C++ prediction kernel that can give a significant speedup to planning with identical results.
+It is On by default but if it fails to load on your architecture you may want to look at why.
+
+See [prediction_kernel_enable](apps-yaml.md#prediction_kernel_enable) for details.
 
 ## Battery loss options
 

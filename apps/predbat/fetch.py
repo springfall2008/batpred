@@ -2460,7 +2460,7 @@ class Fetch:
         self.calculate_export_oncharge = self.get_arg("calculate_export_oncharge")
         self.calculate_export_on_pv = self.get_arg("calculate_export_on_pv")
         self.calculate_second_pass = self.get_arg("calculate_second_pass")
-        self.prediction_kernel_enable = self.get_arg("prediction_kernel_enable", False)
+        self.prediction_kernel_enable = self.get_arg("prediction_kernel_enable", True)
         self.calculate_inday_adjustment = self.get_arg("calculate_inday_adjustment")
         self.calculate_regions = True
         self.calculate_import_low_export = self.get_arg("calculate_import_low_export")

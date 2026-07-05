@@ -304,12 +304,12 @@ This significantly reduces planning time while maintaining near-optimal results.
 
 ### prediction_kernel_enable
 
-**Experimental.** Enables a compiled C++ prediction kernel that replaces Predbat's Python simulation engine for the vast majority of the scenario evaluations run during planning, giving a significant (several-times) speedup with identical results.
+Enables a compiled C++ prediction kernel that replaces Predbat's Python simulation engine for the vast majority of the scenario evaluations run during planning, giving a significant (several-times) speedup with identical results.
 
-The default is `false` while this feature is being tested. It will likely default to `true` in a future release once it has had wider real-world testing.
+The default is `true` but if it fails to load the correct binary it will automatically fall back to the python version. It can be disabled in the event of a problem with:
 
 ```yaml
-  prediction_kernel_enable: true
+  prediction_kernel_enable: false
 ```
 
 Notes:
