@@ -364,18 +364,12 @@ pred_bat:
       end: '19:00:00'
       rate_increment: -10
 
-  # Days previous is the number of days back to find historical load data
-  # Recommended is 7 to capture day of the week but 1 can also be used
-  # if you have more history you could use 7 and 14 (in a list) but the standard data in HA only lasts 10 days
+  # Days previous sets how many days of load history Predbat searches when forecasting your future house load.
+  # By default this uses a weighted-bucket forecast that automatically accounts for day-of-week, holiday mode
+  # and recency (days_previous_auto) - see the documentation for other options, such as picking specific
+  # days/weights instead, or using Load ML.
   days_previous:
-    - 1
-
-  # Days previous weight can be used to control the weighting of the previous load points, the values are multiplied by their
-  # weights and then divided through by the total weight. E.g. if you used 1 and 0.5 then the first value would have 2/3rd of the weight and the second 1/3rd
-  # Include one value for each days_previous value, each weighting on a separate line.
-  # If any days_previous's that are not given a weighting they will assume a default weighting of 1.
-  days_previous_weight:
-    - 1
+    - 7
 
   # Number of hours forward to forecast, best left as-is unless you have specific reason
   forecast_hours: 48
