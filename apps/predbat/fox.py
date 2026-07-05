@@ -50,6 +50,15 @@ FOX_REFRESH_SETTINGS = 60  # Device settings and scheduler
 FOX_REFRESH_PRODUCTION = 15  # Monthly production totals
 FOX_REFRESH_REALTIME = 5  # Real time monitoring data
 
+# Fox productType codes that must use the v2/v3 scheduler API. Fox's v1 scheduler
+# endpoints return errno 41200 permanently for these (EVO series) even though the
+# devices fully support the scheduler — verified against EVO 10-5-H units (productType
+# "812"); KH-series and others (which work on v1) are deliberately excluded. Detection is
+# by productType, not by v1 failure: errno 41200 doubles as a transient rate-limit code, so
+# keying off a v1 failure would wrongly reroute a healthy device after a single blip.
+# Extend this set as new EVO product types are confirmed.
+FOX_V2_SCHEDULER_PRODUCT_TYPES = {"812"}
+
 # Dummy attribute table for testing
 fox_attribute_table = {"mode": {}}
 
@@ -223,6 +232,30 @@ def validate_schedule(new_schedule, reserve, fdPwr_max, target_count=0):
 
     # Pad to target_count with disabled SelfUse entries if the device originally had more slots
     return pad_schedule(result_schedule, target_count, reserve, fdPwr_max)
+
+
+# Group fields that the v3 scheduler API nests inside 'extraParam'
+V3_EXTRA_PARAM_KEYS = ["minSocOnGrid", "fdSoc", "fdPwr", "maxSoc"]
+
+
+def groups_to_v3(groups):
+    """
+    Convert flat v1 scheduler groups into the nested shape used by the v3 API
+
+    Only enabled groups are carried (v1 uses fixed slots with enable flags while v3
+    takes just the active periods) and SOC/power fields move inside 'extraParam',
+    matching the request shape the foxesscloud reference library sends.
+    """
+    v3_groups = []
+    for group in groups:
+        if not group.get("enable", 1):
+            continue
+        v3_group = {key: value for key, value in group.items() if key not in V3_EXTRA_PARAM_KEYS and key != "enable"}
+        extra_param = {key: group[key] for key in V3_EXTRA_PARAM_KEYS if key in group}
+        if extra_param:
+            v3_group["extraParam"] = extra_param
+        v3_groups.append(v3_group)
+    return v3_groups
 
 
 class FoxAPI(ComponentBase, OAuthMixin):
@@ -990,9 +1023,26 @@ class FoxAPI(ComponentBase, OAuthMixin):
             self.device_power_generation[deviceSN] = result
         return result
 
+    def uses_v2_scheduler(self, deviceSN):
+        """
+        Return True if this device must use the v2/v3 scheduler API instead of v1
+
+        Detection is by productType (EVO series fail the v1 scheduler endpoints
+        permanently) so a device is classified deterministically, never as a side
+        effect of a transient v1 error. Falls back to v1 for any device whose detail
+        is not yet cached or whose productType is unknown.
+        """
+        product_type = self.device_detail.get(deviceSN, {}).get("productType")
+        return product_type in FOX_V2_SCHEDULER_PRODUCT_TYPES
+
     async def set_scheduler_enabled(self, deviceSN, enabled):
         """
         Set scheduler enabled/disabled
+
+        Note: only reached via set_scheduler with an empty schedule, which
+        apply_battery_schedule never produces (validate_schedule always returns at
+        least one all-day slot). Left on the v1 flag endpoint as it is unreachable in
+        production; there is no v2/v3 flag endpoint (EVO disables via a written schedule).
         """
         enabled_value = 1 if enabled else 0
 
@@ -1017,6 +1067,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
         Set scheduler groups, also disables scheduler if no groups provided
         """
         SET_SCHEDULER = "/op/v1/device/scheduler/enable"
+        SET_SCHEDULER_V3 = "/op/v3/device/scheduler/enable"
         current_enable = self.device_scheduler.get(deviceSN, {}).get("enable", None)
         current_groups = self.device_scheduler.get(deviceSN, {}).get("groups", [])
         if not groups:
@@ -1028,7 +1079,12 @@ class FoxAPI(ComponentBase, OAuthMixin):
             same = schedules_are_equal(datetime.now(), current_groups, groups)
             self.log("Fox: Debug: Setting scheduler for {} same={} current_enable={} current_groups={} new_groups={}".format(deviceSN, same, current_enable, current_groups, groups))
             if not same:
-                result = await self.request_get(SET_SCHEDULER, datain={"deviceSN": deviceSN, "groups": groups}, post=True)
+                # EVO-series devices use the v3 write endpoint (v1 fails permanently for
+                # them); every other device stays on v1, which it supports.
+                if self.uses_v2_scheduler(deviceSN):
+                    result = await self.request_get(SET_SCHEDULER_V3, datain={"deviceSN": deviceSN, "groups": groups_to_v3(groups)}, post=True)
+                else:
+                    result = await self.request_get(SET_SCHEDULER, datain={"deviceSN": deviceSN, "groups": groups}, post=True)
                 if result is not None:
                     if deviceSN not in self.device_scheduler:
                         self.device_scheduler[deviceSN] = {}
@@ -1215,7 +1271,12 @@ class FoxAPI(ComponentBase, OAuthMixin):
         detail = self.device_detail.get(deviceSN, {})
         inverter_capacity = detail.get("capacity", 0) * 1000.0
 
-        result = await self.request_get(GET_SCHEDULER, datain={"deviceSN": deviceSN}, post=True)
+        # EVO-series devices fail the v1 scheduler API permanently (errno 41200); route
+        # them to v2 by productType. Every other device stays on v1, which it supports.
+        if self.uses_v2_scheduler(deviceSN):
+            result = await self.get_scheduler_v2(deviceSN)
+        else:
+            result = await self.request_get(GET_SCHEDULER, datain={"deviceSN": deviceSN}, post=True)
         if result is not None:
             self.fdpwr_max[deviceSN] = result.get("properties", {}).get("fdpwr", {}).get("range", {}).get("max", 8000)
             # XXX: Fox seems to be have an issue with FD Power max value being too high, cap it at the inverter capacity
@@ -1229,6 +1290,37 @@ class FoxAPI(ComponentBase, OAuthMixin):
             self.device_scheduler[deviceSN] = result
             return result
         return None
+
+    async def get_scheduler_v2(self, deviceSN):
+        """
+        Get the device scheduler via the v2 API, normalised to the v1 response shape
+
+        Fox's v1 scheduler endpoints return errno 41200 permanently for EVO-series
+        inverters (productType 812) even though those devices fully support the
+        scheduler. The v2 response nests each group's SOC/power fields inside
+        'extraParam'; flatten them back into the group so the rest of the code can
+        treat v1 and v2 results identically. v2 has no 'properties' block, so the
+        existing fdPwr/fdSoc defaults (capped to inverter capacity) apply.
+        """
+        GET_SCHEDULER_V2 = "/op/v2/device/scheduler/get"
+
+        result = await self.request_get(GET_SCHEDULER_V2, datain={"deviceSN": deviceSN}, post=True)
+        if result is None:
+            return None
+
+        groups = []
+        # `or []` guards a present-but-null groups value (dict.get's default only applies
+        # when the key is absent)
+        for group in result.get("groups") or []:
+            flat_group = {key: value for key, value in group.items() if key != "extraParam"}
+            flat_group.update(group.get("extraParam", {}) or {})
+            # v2 active periods may omit `enable`; default to enabled so downstream
+            # schedule_strip_disabled does not discard them
+            flat_group.setdefault("enable", 1)
+            groups.append(flat_group)
+        # Default enable to 1 when the key is absent: v2 returned groups, so the scheduler
+        # is active (compute_schedule treats a falsy enable as "scheduler disabled")
+        return {"enable": result.get("enable", 1), "groups": groups}
 
     async def get_device_list(self):
         """
