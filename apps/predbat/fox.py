@@ -41,6 +41,23 @@ FOX_RETRIES = 10
 FOX_SETTINGS = ["ExportLimit", "MaxSoc", "GridCode", "WorkMode", "MinSoc", "MinSocOnGrid"]
 OPTIONS_WORK_MODE = ["SelfUse", "ForceCharge", "ForceDischarge", "Feedin"]
 
+# Fox errno codes meaning "this device does not support this setting" - permanent, not transient,
+# so once seen for a given device/key we stop polling and writing that setting entirely
+FOX_SETTINGS_UNSUPPORTED_ERRNO = (42015, 44096)
+
+# Fallback values applied when a setting is found to be unsupported, so the rest of Predbat still
+# has something sensible to work with instead of a missing entry. Keys not listed here (ExportLimit,
+# MinSocOnGrid) are simply left absent - existing callers already treat a missing setting as the
+# safe default (e.g. export_limit falls back to unlimited). WorkMode carries an enumList so it
+# still publishes as a select entity: automatic_config wires inverter_mode to a hardcoded
+# select.*_setting_workmode entity id, and a plain sensor there would leave it unresolvable (None).
+FOX_SETTINGS_DEFAULTS = {
+    "workmode": {"value": "SelfUse", "enumList": OPTIONS_WORK_MODE},
+    "maxsoc": {"value": 100},
+    "gridcode": {"value": None},
+    "minsoc": {"value": 10},
+}
+
 # Storage cache keys for device data persisted between reboots
 FOX_CACHE_KEYS = ["device_list", "device_detail", "battery_charging_time", "device_settings", "scheduler_state", "device_values", "device_production_month"]
 
@@ -86,6 +103,38 @@ def schedules_are_equal(time_now, schedule1, schedule2):
             if not same:
                 break
     return same
+
+
+def print_schedule_diff(label1, schedule1, label2, schedule2):  # pragma: no cover
+    """
+    Print a per-group, per-key diff between two schedules for debugging a reported mismatch.
+
+    Sorts/strips both schedules the same way schedules_are_equal does, then - unlike
+    schedules_are_equal, which stops at the first mismatched key - compares the union of keys
+    across every group so a difference caused by a field one side simply doesn't have (e.g.
+    exportLimit only appearing in a read-back) is reported clearly instead of read as a generic
+    "not equal".
+    """
+    sorted1 = sort_schedule_by_start_time(schedule1)
+    sorted2 = sort_schedule_by_start_time(schedule2)
+
+    if len(sorted1) != len(sorted2):
+        print(f"Group count differs: {label1}={len(sorted1)} groups, {label2}={len(sorted2)} groups")
+
+    for i in range(max(len(sorted1), len(sorted2))):
+        entry1 = sorted1[i] if i < len(sorted1) else None
+        entry2 = sorted2[i] if i < len(sorted2) else None
+        if entry1 is None:
+            print(f"  [{i}] only in {label2}: {entry2}")
+            continue
+        if entry2 is None:
+            print(f"  [{i}] only in {label1}: {entry1}")
+            continue
+        diff_keys = [key for key in sorted(set(entry1) | set(entry2)) if entry1.get(key, None) != entry2.get(key, None)]
+        if diff_keys:
+            print(f"  [{i}] start={entry1.get('startHour')}:{entry1.get('startMinute', 0):02d} mismatched keys: {diff_keys}")
+            for key in diff_keys:
+                print(f"      {key}: {label1}={entry1.get(key, '<missing>')}  {label2}={entry2.get(key, '<missing>')}")
 
 
 def end_minute_inclusive_to_exclusive(end_hour, end_minute):
@@ -235,16 +284,33 @@ def validate_schedule(new_schedule, reserve, fdPwr_max, target_count=0):
 
 
 # Group fields that the v3 scheduler API nests inside 'extraParam'
-V3_EXTRA_PARAM_KEYS = ["minSocOnGrid", "fdSoc", "fdPwr", "maxSoc"]
+V3_EXTRA_PARAM_KEYS = ["minSocOnGrid", "fdSoc", "fdPwr", "maxSoc", "importLimit", "exportLimit", "pvLimit", "reactivePower"]
+
+# Schedule group field -> FOX device-setting name, for exportLimit/importLimit/pvLimit values
+# that a schedule read observes but Predbat's own schedule writes never populate. Carried
+# forward on a v3 write (see get_schedule_extra_param) using the max seen across all groups
+# (see update_settings_from_schedule) so writing a new schedule does not implicitly clear them.
+SCHEDULE_DERIVED_LIMITS = [("exportLimit", "ExportLimit"), ("importLimit", "ImportLimit"), ("pvLimit", "PvLimit")]
+
+# All schedule group fields derived into device_settings on a read, each with the aggregate used
+# to combine per-slot values into a single device-level setting. Includes SCHEDULE_DERIVED_LIMITS
+# plus maxSoc (max) and minSocOnGrid (min), which are read-only derivations - not carried on
+# write since Predbat's schedule groups already set those per-slot from the live plan.
+SCHEDULE_DERIVED_SETTINGS = [(group_key, setting_key, max) for group_key, setting_key in SCHEDULE_DERIVED_LIMITS] + [("maxSoc", "MaxSoc", max), ("minSocOnGrid", "MinSocOnGrid", min)]
 
 
-def groups_to_v3(groups):
+def groups_to_v3(groups, extra_extra_param=None):
     """
     Convert flat v1 scheduler groups into the nested shape used by the v3 API
 
     Only enabled groups are carried (v1 uses fixed slots with enable flags while v3
     takes just the active periods) and SOC/power fields move inside 'extraParam',
     matching the request shape the foxesscloud reference library sends.
+
+    extra_extra_param merges additional extraParam fields (exportLimit/importLimit/pvLimit)
+    into every group, since Predbat's own schedule groups never populate them and omitting
+    them from the write risks Fox resetting them to a default. It must not contain maxSoc or
+    minSocOnGrid, which already come from the live plan per-group via V3_EXTRA_PARAM_KEYS.
     """
     v3_groups = []
     for group in groups:
@@ -252,6 +318,8 @@ def groups_to_v3(groups):
             continue
         v3_group = {key: value for key, value in group.items() if key not in V3_EXTRA_PARAM_KEYS and key != "enable"}
         extra_param = {key: group[key] for key in V3_EXTRA_PARAM_KEYS if key in group}
+        if extra_extra_param:
+            extra_param.update(extra_extra_param)
         if extra_param:
             v3_group["extraParam"] = extra_param
         v3_groups.append(v3_group)
@@ -273,6 +341,12 @@ class FoxAPI(ComponentBase, OAuthMixin):
         self.available_variables = {}
         self.device_values = {}
         self.device_settings = {}
+        # {deviceSN: [key_lower, ...]} of settings the device has reported as unsupported (errno
+        # 42015/44096), so they are never polled or written to again
+        self.device_settings_unavailable = {}
+        # Set within request_get_func for the duration of a single request_get() call, so callers
+        # can tell an "unsupported" failure (permanent) apart from a transient one
+        self.last_unsupported = False
         self.device_production_month = {}
         self.device_production_year = {}
         self.device_battery_charging_time = {}
@@ -414,6 +488,8 @@ class FoxAPI(ComponentBase, OAuthMixin):
                         scheduler_updated = True
             if settings_updated:
                 await self._save_cache("device_settings", self.device_settings)
+            if self.device_settings_unavailable:
+                await self._save_cache("device_settings_unavailable", self.device_settings_unavailable)
             if scheduler_updated:
                 await self._save_cache("scheduler_state", self._scheduler_state())
 
@@ -540,6 +616,10 @@ class FoxAPI(ComponentBase, OAuthMixin):
         device_settings = await self._load_cache("device_settings")
         if device_settings is not None:
             self.device_settings = device_settings
+
+        device_settings_unavailable = await self._load_cache("device_settings_unavailable")
+        if device_settings_unavailable is not None:
+            self.device_settings_unavailable = device_settings_unavailable
 
         scheduler_state = await self._load_cache("scheduler_state")
         if isinstance(scheduler_state, dict):
@@ -801,25 +881,52 @@ class FoxAPI(ComponentBase, OAuthMixin):
     async def get_device_settings(self, deviceSN, checkBattery=True):
         """
         Get device settings
+
+        Returns non-None once every key has been settled (read successfully or marked
+        unavailable), even if none of them are actually supported by this device - otherwise a
+        device where every setting is unsupported would never persist a cache age, and the
+        scheduler poll sharing the same refresh gate would run every cycle instead of hourly.
         """
         # Check if device has battery
-        okay = False
         if checkBattery and not self.device_detail.get(deviceSN, {}).get("hasBattery", False):
             # These controls don't exist for non-battery devices
             return {}
+        settled = True
         for key in FOX_SETTINGS:
-            if await self.get_device_setting(deviceSN, key) is not None:
-                okay = True
-        if not okay:
+            if await self.get_device_setting(deviceSN, key) is None and not self.is_setting_unavailable(deviceSN, key):
+                settled = False
+        if not settled:
             return None
         else:
             return self.device_settings.get(deviceSN, {})
+
+    def is_setting_unavailable(self, deviceSN, key):
+        """
+        Return True if this device has already reported the setting as unsupported.
+        """
+        return key.lower() in self.device_settings_unavailable.get(deviceSN, [])
+
+    def mark_setting_unavailable(self, deviceSN, key):
+        """
+        Record that a Fox device does not support a setting (errno 42015/44096) so it is never
+        polled or written to again, applying a safe fallback value where one is defined.
+        """
+        key_lower = key.lower()
+        unavailable = self.device_settings_unavailable.setdefault(deviceSN, [])
+        if key_lower not in unavailable:
+            unavailable.append(key_lower)
+        self.log(f"Fox: Warn: Setting {key} is not supported by device {deviceSN}, will not read or write it again")
+        if key_lower in FOX_SETTINGS_DEFAULTS:
+            self.device_settings.setdefault(deviceSN, {})[key] = dict(FOX_SETTINGS_DEFAULTS[key_lower])
 
     async def get_device_setting(self, deviceSN, key):
         """
         Get device setting
         {'enumList': ['PeakShaving', 'Feedin', 'SelfUse'], 'unit': '', 'precision': 1.0, 'value': 'SelfUse'}
         """
+        if self.is_setting_unavailable(deviceSN, key):
+            return self.device_settings.get(deviceSN, {}).get(key, None)
+
         GET_DEVICE_SETTING = "/op/v0/device/setting/get"
         result = await self.request_get(GET_DEVICE_SETTING, datain={"sn": deviceSN, "key": key}, post=True)
         if result is not None:
@@ -827,6 +934,8 @@ class FoxAPI(ComponentBase, OAuthMixin):
                 self.device_settings[deviceSN] = {}
             self.device_settings[deviceSN][key] = result
             return result
+        elif self.last_unsupported:
+            self.mark_setting_unavailable(deviceSN, key)
         else:
             self.log(f"Fox: Warn: Failed to get device setting for {deviceSN} key {key}")
         return None
@@ -835,9 +944,16 @@ class FoxAPI(ComponentBase, OAuthMixin):
         """
         Set device setting
         """
+        if self.is_setting_unavailable(deviceSN, key):
+            self.log(f"Fox: Warn: Ignoring write to unsupported setting {key} for device {deviceSN}")
+            return True
+
         SET_DEVICE_SETTING = "/op/v0/device/setting/set"
         result = await self.request_get(SET_DEVICE_SETTING, datain={"sn": deviceSN, "key": key, "value": value, "lang": FOX_LANG}, post=True)
         if result is None:
+            if self.last_unsupported:
+                self.mark_setting_unavailable(deviceSN, key)
+                return True
             if self.device_settings.get(deviceSN, {}).get(key, None) is None:
                 # Failed to write setting after failure to read, assume it doesn't exist
                 self.log(f"Fox: Warn: Failed to set device setting for {deviceSN} key {key} value {value}, assuming not supported")
@@ -1035,6 +1151,38 @@ class FoxAPI(ComponentBase, OAuthMixin):
         product_type = self.device_detail.get(deviceSN, {}).get("productType")
         return product_type in FOX_V2_SCHEDULER_PRODUCT_TYPES
 
+    def get_schedule_extra_param(self, deviceSN):
+        """
+        Build the exportLimit/importLimit/pvLimit values to carry into a v3 scheduler write
+        from stored device settings, so writing a new schedule does not implicitly clear them.
+
+        maxSoc and minSocOnGrid are deliberately excluded - Predbat's own schedule groups
+        already set those per-slot from the live plan, and overwriting them here with a
+        historical aggregate would corrupt the write. reactivePower is never sent - there is
+        no stored value to carry forward for it.
+        """
+        extra_param = {}
+        for group_key, setting_key in SCHEDULE_DERIVED_LIMITS:
+            value = self.device_settings.get(deviceSN, {}).get(setting_key, {}).get("value")
+            if value is not None:
+                extra_param[group_key] = value
+        return extra_param
+
+    def update_settings_from_schedule(self, deviceSN, groups):
+        """
+        Derive settings from a live schedule read that the settings/get endpoint may not
+        support (e.g. errno 42015) or that are not part of FOX_SETTINGS at all (ImportLimit,
+        PvLimit). exportLimit/importLimit/maxSoc/pvLimit use the max seen across all groups;
+        minSocOnGrid uses the min. A setting that already has a working register-backed entry
+        is left untouched so its range/precision metadata is not clobbered by a bare value.
+        """
+        for group_key, setting_key, aggregate in SCHEDULE_DERIVED_SETTINGS:
+            values = [group[group_key] for group in groups if group_key in group]
+            if not values:
+                continue
+            if setting_key not in self.device_settings.get(deviceSN, {}) or self.is_setting_unavailable(deviceSN, setting_key):
+                self.device_settings.setdefault(deviceSN, {})[setting_key] = {"value": aggregate(values)}
+
     async def set_scheduler_enabled(self, deviceSN, enabled):
         """
         Set scheduler enabled/disabled
@@ -1082,7 +1230,8 @@ class FoxAPI(ComponentBase, OAuthMixin):
                 # EVO-series devices use the v3 write endpoint (v1 fails permanently for
                 # them); every other device stays on v1, which it supports.
                 if self.uses_v2_scheduler(deviceSN):
-                    result = await self.request_get(SET_SCHEDULER_V3, datain={"deviceSN": deviceSN, "groups": groups_to_v3(groups)}, post=True)
+                    extra_extra_param = self.get_schedule_extra_param(deviceSN)
+                    result = await self.request_get(SET_SCHEDULER_V3, datain={"deviceSN": deviceSN, "groups": groups_to_v3(groups, extra_extra_param)}, post=True)
                 else:
                     result = await self.request_get(SET_SCHEDULER, datain={"deviceSN": deviceSN, "groups": groups}, post=True)
                 if result is not None:
@@ -1277,6 +1426,8 @@ class FoxAPI(ComponentBase, OAuthMixin):
             result = await self.get_scheduler_v2(deviceSN)
         else:
             result = await self.request_get(GET_SCHEDULER, datain={"deviceSN": deviceSN}, post=True)
+            self.log("Fetch scheduler V1 returned {}".format(result))
+
         if result is not None:
             self.fdpwr_max[deviceSN] = result.get("properties", {}).get("fdpwr", {}).get("range", {}).get("max", 8000)
             # XXX: Fox seems to be have an issue with FD Power max value being too high, cap it at the inverter capacity
@@ -1286,8 +1437,8 @@ class FoxAPI(ComponentBase, OAuthMixin):
             # Min SOC On grid can change as Predbat writes reserve so this must be the real min
             self.fdsoc_min[deviceSN] = result.get("properties", {}).get("fdsoc", {}).get("range", {}).get("min", 10)
             self.device_scheduler_count[deviceSN] = len(result.get("groups", []))
-            self.log("Fox: Fetched schedule got {} fdPwr max {} fdSoc min {} groups {}".format(result, self.fdpwr_max[deviceSN], self.fdsoc_min[deviceSN], self.device_scheduler_count[deviceSN]))
             self.device_scheduler[deviceSN] = result
+            self.update_settings_from_schedule(deviceSN, result.get("groups", []))
             return result
         return None
 
@@ -1301,12 +1452,42 @@ class FoxAPI(ComponentBase, OAuthMixin):
         'extraParam'; flatten them back into the group so the rest of the code can
         treat v1 and v2 results identically. v2 has no 'properties' block, so the
         existing fdPwr/fdSoc defaults (capped to inverter capacity) apply.
+
+        {'enable': 1, 'groups':
+            [
+                {'endHour': 23, 'workMode': 'SelfUse', 'enable': 1, 'startHour': 0, 'extraParam': {'fdPwr': 5000.0, 'minSocOnGrid': 10.0, 'pvLimit': 16000.0, 'reactivePower': 0.0, 'exportLimit': 12000.0, 'fdSoc': 10.0, 'importLimit': 12000.0, 'maxSoc': 100.0}, 'startMinute': 0, 'endMinute': 59},
+                {'endHour': 20, 'workMode': 'ForceDischarge', 'enable': 0, 'startHour': 20, 'extraParam': {'fdPwr': 0.0, 'minSocOnGrid': 10.0, 'pvLimit': 16000.0, 'reactivePower': 0.0, 'exportLimit': 12000.0, 'fdSoc': 36.0, 'importLimit': 12000.0, 'maxSoc': 10.0}, 'startMinute': 0, 'endMinute': 29},
+                {'endHour': 23, 'workMode': 'SelfUse', 'enable': 0, 'startHour': 20, 'extraParam': {'fdPwr': 5000.0, 'minSocOnGrid': 10.0, 'pvLimit': 16000.0, 'reactivePower': 0.0, 'exportLimit': 12000.0, 'fdSoc': 10.0, 'importLimit': 12000.0, 'maxSoc': 100.0}, 'startMinute': 30, 'endMinute': 59},
+                {'endHour': 23, 'workMode': 'SelfUse', 'enable': 0, 'startHour': 20, 'extraParam': {'fdPwr': 5000.0, 'minSocOnGrid': 10.0, 'pvLimit': 16000.0, 'reactivePower': 0.0, 'exportLimit': 12000.0, 'fdSoc': 10.0, 'importLimit': 12000.0, 'maxSoc': 100.0}, 'startMinute': 30, 'endMinute': 59},
+                {'endHour': 23, 'workMode': 'SelfUse', 'enable': 0, 'startHour': 0, 'extraParam': {'fdPwr': 0.0, 'minSocOnGrid': 5.0, 'pvLimit': 16000.0, 'reactivePower': 0.0, 'exportLimit': 12000.0, 'fdSoc': 10.0, 'importLimit': 12000.0, 'maxSoc': 100.0}, 'startMinute': 0, 'endMinute': 59},
+                {'endHour': 0, 'workMode': 'SelfUse', 'enable': 0, 'startHour': 0, 'extraParam': {'fdPwr': 5000.0, 'minSocOnGrid': 10.0, 'pvLimit': 16000.0, 'reactivePower': 0.0, 'exportLimit': 12000.0, 'fdSoc': 10.0, 'importLimit': 12000.0, 'maxSoc': 100.0}, 'startMinute': 0, 'endMinute': 0},
+                {'endHour': 0, 'workMode': 'SelfUse', 'enable': 0, 'startHour': 0, 'extraParam': {'fdPwr': 5000.0, 'minSocOnGrid': 10.0, 'pvLimit': 16000.0, 'reactivePower': 0.0, 'exportLimit': 12000.0, 'fdSoc': 10.0, 'importLimit': 12000.0, 'maxSoc': 100.0}, 'startMinute': 0, 'endMinute': 0},
+                {'endHour': 0, 'workMode': 'ForceDischarge', 'enable': 0, 'startHour': 0, 'extraParam': {'fdPwr': 0.0, 'minSocOnGrid': 10.0, 'pvLimit': 16000.0, 'reactivePower': 0.0, 'exportLimit': 12000.0, 'fdSoc': 10.0, 'importLimit': 12000.0, 'maxSoc': 100.0}, 'startMinute': 0, 'endMinute': 0}
+            ],
+        'properties':
+            {'fdpwr': {'unit': 'W', 'precision': 1.0, 'range': {'min': 0.0, 'max': 12000.0}},
+                'endhour': {'unit': '', 'precision': 1.0, 'range': {'min': 0.0, 'max': 23.0}},
+                'endminute': {'unit': '', 'precision': 1.0, 'range': {'min': 0.0, 'max': 59.0}},
+                'fdsoc': {'unit': '%', 'precision': 1.0, 'range': {'min': 5.0, 'max': 100.0}},
+                'workmode': {'enumList': ['ForceDischarge', 'Feedin', 'ForceCharge(BAT)', 'ForceDischarge(BAT)', 'Backup', 'SelfUse', 'ForceCharge'], 'unit': '', 'precision': 1.0},
+                'minsocongrid': {'unit': '%', 'precision': 1.0, 'range': {'min': 5.0, 'max': 100.0}},
+                'maxsoc': {'unit': '%', 'precision': 1.0, 'range': {'min': 10.0, 'max': 100.0}},
+                'pvlimit': {'unit': 'W', 'precision': 1.0, 'range': {'min': 0.0, 'max': 24000.0}},
+                'startminute': {'unit': '', 'precision': 1.0, 'range': {'min': 0.0, 'max': 59.0}},
+                'exportlimit': {'unit': 'W', 'precision': 1.0, 'range': {'min': 0.0, 'max': 100000.0}},
+                'importlimit': {'unit': 'W', 'precision': 1.0, 'range': {'min': 0.0, 'max': 100000.0}},
+                'starthour': {'unit': '', 'precision': 1.0, 'range': {'min': 0.0, 'max': 23.0}},
+                'reactivepower': {'unit': 'Var', 'precision': 1.0, 'range': {'min': -6000.0, 'max': 6000.0}}
+            }
+        }
         """
         GET_SCHEDULER_V2 = "/op/v2/device/scheduler/get"
 
         result = await self.request_get(GET_SCHEDULER_V2, datain={"deviceSN": deviceSN}, post=True)
         if result is None:
             return None
+
+        self.log("Fetch scheduler V2 returned {}".format(result))
 
         groups = []
         # `or []` guards a present-but-null groups value (dict.get's default only applies
@@ -1383,6 +1564,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
         Retry wrapper
         """
         retries = 0
+        self.last_unsupported = False
         self.log("Fox: API Requesting {} {} - data {}".format("POST" if post else "GET", path, datain))
 
         while retries < FOX_RETRIES:
@@ -1481,8 +1663,9 @@ class FoxAPI(ComponentBase, OAuthMixin):
                     self.log(f"Warn: Fox: Has run out of API calls for today {msg}:{errno}, sleeping...")
                     await asyncio.sleep(5 * 60)
                     return None, False
-                elif errno in [44096, 42015]:
+                elif errno in FOX_SETTINGS_UNSUPPORTED_ERRNO:
                     # Unsupported function code
+                    self.last_unsupported = True
                     self.log(f"Warn: Fox: Unsupported function code {msg}:{errno} from {url}")
                     return None, False
                 elif errno in [40257]:
@@ -2103,7 +2286,7 @@ async def test_write_schedule(sn, api_key, token_hash, token_expires, supabase_u
     await fox_api.get_device_detail(serial)
 
     # Initial read back to check connectivity
-    read_back = await fox_api.get_scheduler(serial, checkBattery=False)
+    read_back_original = await fox_api.get_scheduler(serial, checkBattery=False) or {}
 
     # Write the schedule
     print(f"Writing schedule:\n{json.dumps(schedule, indent=2)}")
@@ -2117,13 +2300,23 @@ async def test_write_schedule(sn, api_key, token_hash, token_expires, supabase_u
     read_back_groups = read_back.get("groups", [])
     print(f"Read back schedule:\n{json.dumps(read_back, indent=2)}")
 
-    # Compare written schedule against read-back groups
+    # Compare written schedule against read-back groups. Argument order matters:
+    # schedules_are_equal only walks schedule2's keys, so read_back_groups (which carries the
+    # extra exportLimit/importLimit/pvLimit/reactivePower fields a read adds) must be schedule1
+    # here - matching how set_scheduler() itself calls it - or those extra fields falsely report
+    # a mismatch just because "schedule" (Predbat's own canonical group shape) never carries them.
     from datetime import datetime as _dt
 
-    match = schedules_are_equal(_dt.now(), schedule, read_back_groups)
+    match = schedules_are_equal(_dt.now(), read_back_groups, schedule)
     print(f"Schedule match: {match}")
     if not match:
         print("WARNING: Written schedule does not match read-back schedule")
+        print_schedule_diff("written", schedule, "read-back", read_back_groups)
+
+    # Final put back original
+    await fox_api.set_scheduler(serial, read_back_original.get("groups", []))
+
+    print("Done")
 
 
 async def test_fox_api(sn, api_key, token_hash, token_expires, supabase_url, supabase_key, user_id):  # pragma: no cover
