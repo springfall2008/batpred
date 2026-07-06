@@ -15,9 +15,18 @@ calendar_history (daily energy) and publishes predbat_teslemetry_* sensors.
 Control path: exposes virtual select/number/switch entities driven by the
 TESLA service hooks; handlers issue REST commands (operation mode, backup
 reserve, grid import/export rules and the export tariff-trick).
+
+Command dedupe: the TESLA service hooks carry `repeat: true`, so Predbat fires
+each hook's loopback event every cycle (~5 minutes) even when nothing has
+changed. Every control write is routed through `_apply_command`, which only
+POSTs when the value actually differs from the last CONFIRMED-SENT value,
+cutting Teslemetry command-credit spend without losing failure-retry (a
+failed POST never updates the cache) or external-drift correction (see
+`fetch_site_info`).
 """
 
 import asyncio
+import json
 from datetime import datetime, timezone
 
 import aiohttp
@@ -59,6 +68,7 @@ class TeslemetryAPI(ComponentBase):
         self.last_energy_poll = 0
         self.site_info_done = False
         self.reconcile_done = False
+        self._last_sent = {}
         self.log("Info: TeslemetryAPI initialising site_id={}".format(self.site_id))
         self.register_control_entities()
 
@@ -137,9 +147,15 @@ class TeslemetryAPI(ComponentBase):
         default_mode = response.get("default_real_mode")
         if default_mode in OPERATION_MODES:
             self.publish_control(self.entity("operation_mode", domain="select"), default_mode)
+            # Drift correction: refresh the dedupe cache to the device's ACTUAL mode. If it matches what
+            # Predbat last sent, the cache is unchanged (no spurious resend); if the user changed it
+            # externally (e.g. the Tesla app), the cache now reflects that drift, so the next assertion
+            # of Predbat's desired mode finds a mismatch and re-POSTs instead of being silently skipped.
+            self._last_sent["operation_mode"] = default_mode
         backup_reserve = response.get("backup_reserve_percent")
         if isinstance(backup_reserve, (int, float)):
             self.publish_control(self.entity("backup_reserve", domain="number"), backup_reserve)
+            self._last_sent["backup_reserve"] = int(backup_reserve)  # Same drift-correction rationale as operation_mode above.
         return soc_max_published
 
     async def fetch_energy_today(self):
@@ -256,21 +272,50 @@ class TeslemetryAPI(ComponentBase):
                     return False
         return True
 
-    async def set_operation_mode(self, mode):
-        """Set the Powerwall operation mode (self_consumption/autonomous/backup)."""
-        return await self._command("operation", {"default_real_mode": mode})
+    async def _apply_command(self, key, signature, sender, force=False):
+        """Send a control command only when its value has actually changed, to cut Teslemetry command-credit spend.
 
-    async def set_backup_reserve(self, percent):
-        """Set the backup reserve percentage (cloud caps at 80; 80-100 treated as 100 by Predbat)."""
-        return await self._command("backup", {"backup_reserve_percent": int(percent)})
+        `key` identifies which control this is ("operation_mode", "backup_reserve", "grid_charging",
+        "export_rule" or "tariff") and `signature` is a comparable representation of the value being
+        asserted (e.g. the mode string, or a canonical JSON serialisation of a built tariff body).
+        When `signature` already matches the last confirmed-sent value for `key`, `sender` is not
+        called at all - this is the actual command-credit saving, since the TESLA service hooks fire
+        their loopback event every cycle regardless of whether anything changed.
 
-    async def set_grid_charging(self, allow):
-        """Allow or disallow charging the battery from the grid."""
-        return await self._command("grid_import_export", {"disallow_charge_from_grid_with_solar_installed": not allow})
+        Invariant (failure-retry): the dedupe cache is updated ONLY after a confirmed-successful send
+        (a True return from `sender`), never on a skip or a failure. A dropped/failed command therefore
+        leaves the cache stale, so the very next cycle's loopback event re-sends the same value instead
+        of being silently skipped forever - failure-retry is preserved even though every-cycle sends of
+        an unchanged value are deduped away.
 
-    async def set_export_rule(self, rule):
-        """Set the grid export rule (never/pv_only/battery_ok)."""
-        return await self._command("grid_import_export", {"customer_preferred_export_rule": rule})
+        `force=True` bypasses the cache check and always calls `sender`, still refreshing the cache on
+        success. This is used by `reconcile_on_start` so its corrective writes can never be silently
+        skipped by a (present or future) pre-seeded cache entry that happens to already match what the
+        recovery is about to send.
+        """
+        if not force and self._last_sent.get(key) == signature:
+            return True
+        ok = await sender()
+        if ok:
+            self._last_sent[key] = signature
+        return ok
+
+    async def set_operation_mode(self, mode, force=False):
+        """Set the Powerwall operation mode (self_consumption/autonomous/backup), deduped on write-on-change."""
+        return await self._apply_command("operation_mode", mode, lambda: self._command("operation", {"default_real_mode": mode}), force=force)
+
+    async def set_backup_reserve(self, percent, force=False):
+        """Set the backup reserve percentage (cloud caps at 80; 80-100 treated as 100 by Predbat), deduped on write-on-change."""
+        percent = int(percent)
+        return await self._apply_command("backup_reserve", percent, lambda: self._command("backup", {"backup_reserve_percent": percent}), force=force)
+
+    async def set_grid_charging(self, allow, force=False):
+        """Allow or disallow charging the battery from the grid, deduped on write-on-change."""
+        return await self._apply_command("grid_charging", bool(allow), lambda: self._command("grid_import_export", {"disallow_charge_from_grid_with_solar_installed": not allow}), force=force)
+
+    async def set_export_rule(self, rule, force=False):
+        """Set the grid export rule (never/pv_only/battery_ok), deduped on write-on-change."""
+        return await self._apply_command("export_rule", rule, lambda: self._command("grid_import_export", {"customer_preferred_export_rule": rule}), force=force)
 
     def current_rates(self):
         """Return (import_rate, export_rate) in GBP/kWh from Predbat's rate data when available.
@@ -368,10 +413,18 @@ class TeslemetryAPI(ComponentBase):
             **common,
         }
 
-    async def set_tariff(self, mode):
-        """Push the tariff for the requested mode via time_of_use_settings."""
+    async def set_tariff(self, mode, force=False):
+        """Push the tariff for the requested mode via time_of_use_settings, deduped on write-on-change.
+
+        The dedupe signature is a canonical (sort_keys) JSON serialisation of the BUILT tariff body
+        rather than just `mode`: the export_now window and sell price are time-varying (the ON_PEAK
+        window advances every 30 minutes and the sell price tracks the live export rate), so the same
+        `mode` string can legitimately need re-sending when the underlying built tariff has changed,
+        while an unchanged build (the common case every 5-minute cycle) is skipped.
+        """
         tariff = self.build_tariff(mode)
-        return await self._command("time_of_use_settings", {"tou_settings": {"tariff_content_v2": tariff}})
+        signature = json.dumps(tariff, sort_keys=True)
+        return await self._apply_command("tariff", signature, lambda: self._command("time_of_use_settings", {"tou_settings": {"tariff_content_v2": tariff}}), force=force)
 
     @staticmethod
     def _find_tariff_code(node):
@@ -441,6 +494,11 @@ class TeslemetryAPI(ComponentBase):
         returned a usable code, whether or not a restore was needed), so run() can latch
         reconcile_done and stop retrying. Returns False when the tariff read itself failed to
         return anything usable, so run() retries on a later cycle instead of latching a no-op.
+
+        The restore writes below pass force=True to `set_tariff`/`set_export_rule` so this recovery
+        path can NEVER be silently skipped by the write-on-change dedupe cache - at boot the cache is
+        empty so this is naturally a no-op today, but forcing makes that explicit and future-proof
+        against a cache-preseed feature that might otherwise make recovery look like a no-op.
         """
         tariff_code = await self.get_current_tariff_code()
         if tariff_code is None:
@@ -452,9 +510,9 @@ class TeslemetryAPI(ComponentBase):
             self.log("Warn: Teslemetry device tariff was left as {} - recovery needed but skipped (read-only mode)".format(tariff_code))
             return True
         self.log("Warn: Teslemetry device tariff was left as {} - restoring normal tariff and disabling export".format(tariff_code))
-        if await self.set_tariff("normal"):
+        if await self.set_tariff("normal", force=True):
             self.publish_control(self.entity("tariff_mode", domain="select"), "normal")
-        if await self.set_export_rule("never"):
+        if await self.set_export_rule("never", force=True):
             self.publish_control(self.entity("allow_export", domain="select"), "never")
         return True
 

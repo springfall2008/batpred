@@ -30,6 +30,7 @@ class MockTeslemetryAPI(TeslemetryAPI):
         self.entity_states = {}
         self.mock_responses = {}
         self.requests_made = []
+        self._last_sent = {}
 
     def log(self, msg):
         """Capture log messages."""
@@ -688,6 +689,124 @@ def test_teslemetry_number_event_guards_null_value():
     assert any("invalid" in msg.lower() for msg in api.log_messages)
 
 
+def test_teslemetry_dedupe_operation_mode_skips_repeat_post():
+    """Sending the same operation_mode value twice via select_event posts only once (write-on-change)."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/operation"] = {"response": {"code": 201}}
+    run_async(api.select_event("select.predbat_teslemetry_operation_mode", "backup"))
+    run_async(api.select_event("select.predbat_teslemetry_operation_mode", "backup"))
+    posts = [req for req in api.requests_made if req[0] == "POST"]
+    assert len(posts) == 1
+    assert api.entity_states["select.predbat_teslemetry_operation_mode"] == "backup"
+
+
+def test_teslemetry_dedupe_operation_mode_resends_on_change():
+    """A changed operation_mode value must still POST (dedupe only skips an unchanged value)."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/operation"] = {"response": {"code": 201}}
+    run_async(api.select_event("select.predbat_teslemetry_operation_mode", "backup"))
+    run_async(api.select_event("select.predbat_teslemetry_operation_mode", "autonomous"))
+    posts = [req for req in api.requests_made if req[0] == "POST"]
+    assert len(posts) == 2
+    assert api.entity_states["select.predbat_teslemetry_operation_mode"] == "autonomous"
+
+
+def test_teslemetry_dedupe_failed_post_not_cached_so_retries():
+    """A failed POST must NOT update the dedupe cache, so the identical value is re-sent next cycle
+    (failure-retry survives the write-on-change dedupe)."""
+    api = MockTeslemetryAPI()
+    # No mock response registered for /operation -> _request returns None -> command fails.
+    run_async(api.select_event("select.predbat_teslemetry_operation_mode", "backup"))
+    assert api.requests_made == [("POST", "/api/1/energy_sites/123456/operation", {"default_real_mode": "backup"})]
+    assert "select.predbat_teslemetry_operation_mode" not in api.entity_states
+    assert "operation_mode" not in api._last_sent
+    # API recovers; the SAME value must still be sent - the cache was never populated on failure.
+    api.mock_responses["/api/1/energy_sites/123456/operation"] = {"response": {"code": 201}}
+    run_async(api.select_event("select.predbat_teslemetry_operation_mode", "backup"))
+    posts = [req for req in api.requests_made if req[0] == "POST"]
+    assert len(posts) == 2
+    assert api.entity_states["select.predbat_teslemetry_operation_mode"] == "backup"
+
+
+def test_teslemetry_dedupe_tariff_identical_body_skips_repeat_post():
+    """Two normal-tariff builds with an identical body POST only once."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/time_of_use_settings"] = {"response": {"code": 201}}
+    run_async(api.set_tariff("normal"))
+    run_async(api.set_tariff("normal"))
+    posts = [req for req in api.requests_made if req[0] == "POST"]
+    assert len(posts) == 1
+
+
+def test_teslemetry_dedupe_tariff_resends_when_rates_change():
+    """A tariff rebuild whose sell/buy price actually changed must re-POST rather than be deduped."""
+    from types import SimpleNamespace
+
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/time_of_use_settings"] = {"response": {"code": 201}}
+    api.base = SimpleNamespace(minutes_now=600, rate_import={600: 30.0}, rate_export={600: 15.0}, now_utc=None, local_tz=None)
+    run_async(api.set_tariff("normal"))
+    api.base.rate_export = {600: 60.0}  # Export rate jumps, so the sell-side signature changes.
+    run_async(api.set_tariff("normal"))
+    posts = [req for req in api.requests_made if req[0] == "POST"]
+    assert len(posts) == 2
+
+
+def test_teslemetry_drift_correction_refreshes_cache_and_reasserts():
+    """A site_info poll reporting a device mode that differs from what Predbat last sent must refresh
+    the dedupe cache to the ACTUAL device value, so the next assertion of Predbat's desired mode is not
+    skipped - this is how externally-changed (Tesla app) drift gets corrected rather than silently kept."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/operation"] = {"response": {"code": 201}}
+    run_async(api.select_event("select.predbat_teslemetry_operation_mode", "backup"))
+    assert api._last_sent["operation_mode"] == "backup"
+    # SITE_INFO reports default_real_mode = self_consumption, i.e. the user changed it externally.
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO
+    run_async(api.fetch_site_info())
+    assert api._last_sent["operation_mode"] == "self_consumption"
+    # Predbat's desired mode is still "backup" - the drifted cache means this must re-POST.
+    run_async(api.select_event("select.predbat_teslemetry_operation_mode", "backup"))
+    posts = [req for req in api.requests_made if req[0] == "POST" and req[1].endswith("/operation")]
+    assert len(posts) == 2
+
+
+def test_teslemetry_drift_correction_no_spurious_resend_when_matching():
+    """When site_info reports the SAME mode Predbat last sent, the dedupe cache is unchanged and the
+    next assertion of that mode is still skipped - no spurious re-send from the drift-refresh itself."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/operation"] = {"response": {"code": 201}}
+    run_async(api.select_event("select.predbat_teslemetry_operation_mode", "self_consumption"))
+    assert api._last_sent["operation_mode"] == "self_consumption"
+    # SITE_INFO's default_real_mode is also self_consumption - no drift.
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO
+    run_async(api.fetch_site_info())
+    assert api._last_sent["operation_mode"] == "self_consumption"
+    run_async(api.select_event("select.predbat_teslemetry_operation_mode", "self_consumption"))
+    posts = [req for req in api.requests_made if req[0] == "POST" and req[1].endswith("/operation")]
+    assert len(posts) == 1
+
+
+def test_teslemetry_reconcile_forces_write_even_if_cache_preseeded():
+    """reconcile_on_start's corrective writes must not be silently skipped by the dedupe cache even if
+    it already holds a value matching what recovery is about to send (e.g. a future cache-preseed
+    feature) - the recovery path always forces the POST regardless of cache state."""
+    import json as _json
+
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/tariff_rate"] = TARIFF_RATE_EXPORT_NOW
+    api.mock_responses["/api/1/energy_sites/123456/time_of_use_settings"] = {"response": {"code": 201}}
+    api.mock_responses["/api/1/energy_sites/123456/grid_import_export"] = {"response": {"code": 201}}
+    # Pre-seed the dedupe cache as if "normal"/"never" had already been confirmed-sent - a naive
+    # dedupe would treat the recovery writes below as no-ops and skip them entirely.
+    api._last_sent["tariff"] = _json.dumps(api.build_tariff("normal"), sort_keys=True)
+    api._last_sent["export_rule"] = "never"
+    run_async(api.reconcile_on_start())
+    assert any(req[1].endswith("/time_of_use_settings") for req in api.requests_made if req[0] == "POST")
+    assert any(req[1].endswith("/grid_import_export") for req in api.requests_made if req[0] == "POST")
+    assert api.entity_states["select.predbat_teslemetry_tariff_mode"] == "normal"
+    assert api.entity_states["select.predbat_teslemetry_allow_export"] == "never"
+
+
 def test_teslemetry(my_predbat=None):
     """Run all Teslemetry component tests (registry entry point).
 
@@ -736,5 +855,13 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_energy_today_requests_kind_and_period()
     test_teslemetry_select_event_preserves_control_attributes()
     test_teslemetry_number_event_guards_null_value()
+    test_teslemetry_dedupe_operation_mode_skips_repeat_post()
+    test_teslemetry_dedupe_operation_mode_resends_on_change()
+    test_teslemetry_dedupe_failed_post_not_cached_so_retries()
+    test_teslemetry_dedupe_tariff_identical_body_skips_repeat_post()
+    test_teslemetry_dedupe_tariff_resends_when_rates_change()
+    test_teslemetry_drift_correction_refreshes_cache_and_reasserts()
+    test_teslemetry_drift_correction_no_spurious_resend_when_matching()
+    test_teslemetry_reconcile_forces_write_even_if_cache_preseeded()
     print("**** Teslemetry tests passed ****")
     return 0
