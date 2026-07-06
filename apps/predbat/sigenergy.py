@@ -1681,11 +1681,11 @@ class SigenergyAPI(ComponentBase):
         # REST-sourced current_mode (fetch_current_mode) so this doesn't read "Unknown" before
         # MQTT has delivered its first message — e.g. during startup or while MQTT is unavailable.
         if "operationalMode" in flow_status:
-            op_mode_int = int(_safe_float(flow_status["operationalMode"]))
+            op_mode_int = int(_safe_float(flow_status["operationalMode"], -1))
         else:
             op_mode_int = self.current_mode.get(system_id, -1)
         op_mode_str = SIGENERGY_MODE_NAMES.get(op_mode_int, "Unknown ({})".format(op_mode_int) if op_mode_int >= 0 else "Unknown")
-        sys_status_int = int(_safe_float(flow_status.get("systemStatus", -1)))
+        sys_status_int = int(_safe_float(flow_status.get("systemStatus", -1), -1))
         sys_status_str = SIGENERGY_SYSTEM_STATUS_NAMES.get(sys_status_int, "Unknown ({})".format(sys_status_int) if sys_status_int >= 0 else "Unknown")
         self.dashboard_item(
             "sensor.{}_sigenergy_{}_operational_mode".format(self.prefix, slug),

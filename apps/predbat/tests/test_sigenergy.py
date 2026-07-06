@@ -101,8 +101,9 @@ class FakeStorage:
         self.data = {}
 
     async def save(self, module, filename, data, format="yaml", expiry=None):
-        """Store data under (module, filename), mirroring StorageBase.save's signature."""
+        """Store data under (module, filename), mirroring StorageBase.save's signature and return value."""
         self.data[(module, filename)] = data
+        return True
 
     async def load(self, module, filename):
         """Return previously saved data for (module, filename), or None if absent."""
@@ -417,6 +418,42 @@ def test_sigenergy_publish_system_entities_operational_mode_fallback(my_predbat)
     api.system_status[system_id] = {"operationalMode": SIGENERGY_MODE_MSC, "systemStatus": 1}
     run_async(api.publish_system_entities(system_id))
     assert api.dashboard_items[mode_key]["state"] == "Maximum Self-Consumption", "MQTT value takes priority once available, got {}".format(api.dashboard_items[mode_key]["state"])
+
+    return failed
+
+
+def test_sigenergy_publish_system_entities_operational_mode_invalid_value(my_predbat):
+    """Test operational_mode reads 'Unknown' rather than mode 0 when the MQTT value is unparsable.
+
+    _safe_float(value) with no explicit default falls back to 0.0 on a bad value, which maps to a
+    real mode (0 == Maximum Self-Consumption) instead of Unknown. Both operationalMode and
+    systemStatus must pass an explicit default of -1 so an invalid-but-present value still reads
+    as Unknown rather than silently reporting a specific (wrong) mode/status.
+    """
+    failed = False
+    api = MockSigenergyAPI()
+
+    system_id = "SIG12345"
+    slug = api._system_slug(system_id)
+    api.systems[system_id] = {"systemName": "My Site", "batteryCapacity": 10.0, "status": "online"}
+    api.devices[system_id] = [{"deviceType": "Inverter", "attrMap": {"ratedActivePower": 5.0}}]
+    api.energy_flow[system_id] = {"batterySoc": 60.0, "batteryPower": 2.0, "pvPower": 3.5, "gridPower": 1.0, "loadPower": 4.5, "evPower": 0.0}
+    api.daily_summary[system_id] = {"dailyPowerGeneration": 12.3}
+    api.history_totals[system_id] = {}
+    # Present but unparsable — must not be treated as mode/status 0.
+    api.system_status[system_id] = {"operationalMode": "", "systemStatus": None}
+
+    run_async(api.publish_system_entities(system_id))
+
+    mode_key = "sensor.predbat_sigenergy_{}_operational_mode".format(slug)
+    assert api.dashboard_items[mode_key]["state"] == "Unknown", "Unparsable operationalMode must read Unknown, not mode 0, got {}".format(api.dashboard_items[mode_key]["state"])
+    assert api.dashboard_items[mode_key]["attributes"]["mode_id"] is None, "mode_id must be None, not 0, got {}".format(api.dashboard_items[mode_key]["attributes"]["mode_id"])
+    assert api.dashboard_items[mode_key]["attributes"]["system_status"] == "Unknown", "Unparsable systemStatus must read Unknown, not status 0, got {}".format(
+        api.dashboard_items[mode_key]["attributes"]["system_status"]
+    )
+    assert api.dashboard_items[mode_key]["attributes"]["system_status_id"] is None, "system_status_id must be None, not 0, got {}".format(
+        api.dashboard_items[mode_key]["attributes"]["system_status_id"]
+    )
 
     return failed
 
@@ -2444,6 +2481,7 @@ def run_sigenergy_tests(my_predbat):
         ("battery_capacity", test_sigenergy_battery_capacity),
         ("publish_system_entities", test_sigenergy_publish_system_entities),
         ("publish_system_entities_operational_mode_fallback", test_sigenergy_publish_system_entities_operational_mode_fallback),
+        ("publish_system_entities_operational_mode_invalid_value", test_sigenergy_publish_system_entities_operational_mode_invalid_value),
         ("automatic_config", test_sigenergy_automatic_config),
         ("fetch_controls", test_sigenergy_fetch_controls),
         ("publish_controls", test_sigenergy_publish_controls),
