@@ -8,7 +8,7 @@
 from unittest.mock import MagicMock, patch, AsyncMock
 
 from tests.test_infra import create_aiohttp_mock_response, create_aiohttp_mock_session, run_async
-from teslemetry import TeslemetryAPI
+from teslemetry import TeslemetryAPI, OPERATION_MODES
 
 
 class MockTeslemetryAPI(TeslemetryAPI):
@@ -24,6 +24,7 @@ class MockTeslemetryAPI(TeslemetryAPI):
         self.last_live_poll = 0
         self.last_energy_poll = 0
         self.site_info_done = False
+        self.reconcile_done = False
         self.dashboard_items = {}
         self.log_messages = []
         self.entity_states = {}
@@ -35,8 +36,10 @@ class MockTeslemetryAPI(TeslemetryAPI):
         self.log_messages.append(msg)
 
     def dashboard_item(self, entity, state, attributes, app=None):
-        """Capture dashboard items."""
+        """Capture dashboard items (mirrors production dashboard_item, which also calls through to
+        set_state_wrapper - so entity_states reflects the latest write here too)."""
         self.dashboard_items[entity] = {"state": state, "attributes": attributes}
+        self.entity_states[entity] = state
 
     def set_state_wrapper(self, entity_id, state, attributes={}):
         """Capture entity state updates."""
@@ -138,7 +141,7 @@ def test_teslemetry_site_info_seeds_control_entity_states():
 def test_teslemetry_energy_today_publishes_kwh():
     """calendar_history energy series is aggregated into daily kWh sensors."""
     api = MockTeslemetryAPI()
-    api.mock_responses["/api/1/energy_sites/123456/calendar_history"] = ENERGY_HISTORY
+    api.mock_responses["/api/1/energy_sites/123456/calendar_history?kind=energy&period=day"] = ENERGY_HISTORY
     run_async(api.fetch_energy_today())
     assert api.dashboard_items["sensor.predbat_teslemetry_solar_today"]["state"] == 4.0
     assert api.dashboard_items["sensor.predbat_teslemetry_import_today"]["state"] == 2.5
@@ -555,6 +558,136 @@ def test_teslemetry_reconcile_on_start_partial_failure():
     assert "select.predbat_teslemetry_allow_export" not in api.entity_states
 
 
+def test_teslemetry_build_tariff_uses_site_local_time_not_utc():
+    """build_tariff's export_now window must be expressed in the SITE'S LOCAL wall-clock time (the
+    same clock Predbat schedules in), not raw UTC - the Powerwall applies tou_periods in local time.
+
+    A base whose local time is 15:40 during BST (UTC+1) must yield an ON_PEAK window starting at
+    15:30 local. A naive UTC-only implementation would instead read whatever the system clock (or,
+    as sabotaged here, a mocked bogus UTC time) reports, producing the wrong window boundaries.
+    """
+    import pytz
+    from datetime import datetime as real_datetime
+    from types import SimpleNamespace
+
+    api = MockTeslemetryAPI()
+    london = pytz.timezone("Europe/London")
+    local_now = london.localize(real_datetime(2026, 7, 2, 15, 40))
+    api.base = SimpleNamespace(now_utc=local_now, local_tz=london, minutes_now=None, rate_import=None, rate_export=None)
+
+    # Sabotage a naive implementation: if build_tariff ignores the base and calls datetime.now(timezone.utc)
+    # directly, it will see this deliberately-wrong bogus time (03:05) instead of the real 15:40 local time above.
+    with patch("teslemetry.datetime") as mock_datetime:
+        mock_datetime.now.return_value = real_datetime(2026, 7, 2, 3, 5)
+        tariff = api.build_tariff("export_now")
+
+    periods = tariff["seasons"]["AllYear"]["tou_periods"]["ON_PEAK"]["periods"]
+    assert periods[0]["fromHour"] == 15 and periods[0]["fromMinute"] == 30
+
+
+def test_teslemetry_reconcile_latch_survives_auth_failed_first_cycle():
+    """A first cycle that 401s (auth-failed, consuming `first`) must not permanently skip reconcile:
+    once the API recovers on a later cycle, reconcile_on_start still runs and restores a stuck export
+    state, because reconcile is gated on a `reconcile_done` latch rather than on `first`."""
+    api, calls = _make_run_api_with_fetch_capture()
+    api.api_auth_failed = True  # Simulate: the boot cycle already found the token dead.
+    assert api.reconcile_done is False
+    # Cycle 1 (first=True): auth-failed fast path, poll not yet due -> no HTTP traffic at all, no reconcile chance.
+    assert run_async(api.run(0, True)) is False
+    assert calls == []
+    assert api.reconcile_done is False
+
+    # Auth recovers (e.g. a live_status probe on an intervening cycle succeeded and cleared the flag).
+    api.api_auth_failed = False
+    api.mock_responses["/api/1/energy_sites/123456/tariff_rate"] = TARIFF_RATE_EXPORT_NOW
+    api.mock_responses["/api/1/energy_sites/123456/time_of_use_settings"] = {"response": {"code": 201}}
+    api.mock_responses["/api/1/energy_sites/123456/grid_import_export"] = {"response": {"code": 201}}
+    # Cycle 2 (first=False): reconcile must still run even though `first` was already consumed in cycle 1.
+    assert run_async(api.run(300, False)) is True
+    assert api.entity_states["select.predbat_teslemetry_tariff_mode"] == "normal"
+    assert api.entity_states["select.predbat_teslemetry_allow_export"] == "never"
+    assert api.reconcile_done is True
+
+
+def test_teslemetry_reconcile_latch_runs_once_on_healthy_boot():
+    """A healthy first cycle runs reconcile exactly once; the latch prevents a redundant reconcile
+    call (and its tariff_rate read) on every subsequent cycle."""
+    api, calls = _make_run_api_with_fetch_capture()
+    api.mock_responses["/api/1/energy_sites/123456/tariff_rate"] = TARIFF_RATE_NORMAL
+    assert run_async(api.run(0, True)) is True
+    assert api.reconcile_done is True
+    tariff_reads = [req for req in api.requests_made if req[1].endswith("/tariff_rate")]
+    assert len(tariff_reads) == 1
+    # A later cycle must not repeat the reconcile tariff_rate read.
+    assert run_async(api.run(600, False)) is True
+    tariff_reads = [req for req in api.requests_made if req[1].endswith("/tariff_rate")]
+    assert len(tariff_reads) == 1
+
+
+def test_teslemetry_site_info_returns_false_without_nameplate_so_soc_max_retries():
+    """fetch_site_info must return False when nameplate_energy is absent/zero so run()'s
+    site_info_done latch stays False and soc_max is retried on a later cycle - even though other
+    fields (control-entity seeding) were published from the same response."""
+    api = MockTeslemetryAPI()
+    site_info_no_nameplate = {"response": {"nameplate_energy": 0, "default_real_mode": "self_consumption", "backup_reserve_percent": 20}}
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = site_info_no_nameplate
+    assert run_async(api.fetch_site_info()) is False
+    assert "sensor.predbat_teslemetry_soc_max" not in api.dashboard_items
+    # Control-entity seeding still happens even though soc_max could not be published.
+    assert api.entity_states["select.predbat_teslemetry_operation_mode"] == "self_consumption"
+
+    # Nameplate becomes available on a later cycle - now it must succeed and return True.
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO
+    assert run_async(api.fetch_site_info()) is True
+    assert api.dashboard_items["sensor.predbat_teslemetry_soc_max"]["state"] == 13.5
+
+
+def test_teslemetry_run_site_info_latch_stays_false_without_nameplate():
+    """At the run() level, a site_info response without nameplate_energy must leave site_info_done
+    False so the fetch is retried on a later cycle, rather than latching done with no soc_max ever
+    published."""
+    api = MockTeslemetryAPI()
+    api.fetch_site_info = TeslemetryAPI.fetch_site_info.__get__(api)
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = {"response": {"nameplate_energy": 0}}
+    run_async(api.run(0, True))
+    assert api.site_info_done is False
+
+
+def test_teslemetry_energy_today_requests_kind_and_period():
+    """fetch_energy_today must query calendar_history with kind=energy&period=day - the Fleet/Teslemetry
+    endpoint requires both, and omitting them (the previous bare-path request) produces an invalid or
+    empty response."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/calendar_history?kind=energy&period=day"] = ENERGY_HISTORY
+    run_async(api.fetch_energy_today())
+    assert api.requests_made == [("GET", "/api/1/energy_sites/123456/calendar_history?kind=energy&period=day", None)]
+    assert api.dashboard_items["sensor.predbat_teslemetry_solar_today"]["state"] == 4.0
+
+
+def test_teslemetry_select_event_preserves_control_attributes():
+    """select_event must not wipe the options/min/max/friendly_name attributes that
+    register_control_entities set at init - every control write must re-apply them via
+    publish_control, verified here through the dashboard_items capture (which records attributes,
+    unlike the bare entity_states mirror)."""
+    api = MockTeslemetryAPI()
+    api.register_control_entities()
+    api.mock_responses["/api/1/energy_sites/123456/operation"] = {"response": {"code": 201}}
+    run_async(api.select_event("select.predbat_teslemetry_operation_mode", "backup"))
+    item = api.dashboard_items["select.predbat_teslemetry_operation_mode"]
+    assert item["state"] == "backup"
+    assert item["attributes"].get("options") == OPERATION_MODES
+
+
+def test_teslemetry_number_event_guards_null_value():
+    """number_event must not crash on a null value (e.g. forwarded from a number.increment/decrement
+    service call without an explicit value) - it should log a warning and post no command."""
+    api = MockTeslemetryAPI()
+    run_async(api.number_event("number.predbat_teslemetry_backup_reserve", None))
+    assert api.requests_made == []
+    assert "number.predbat_teslemetry_backup_reserve" not in api.entity_states
+    assert any("invalid" in msg.lower() for msg in api.log_messages)
+
+
 def test_teslemetry(my_predbat=None):
     """Run all Teslemetry component tests (registry entry point).
 
@@ -595,5 +728,13 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_build_tariff_export_now_midnight_exact()
     test_teslemetry_build_tariff_sell_clamp_above_export_rate()
     test_teslemetry_reconcile_on_start_partial_failure()
+    test_teslemetry_build_tariff_uses_site_local_time_not_utc()
+    test_teslemetry_reconcile_latch_survives_auth_failed_first_cycle()
+    test_teslemetry_reconcile_latch_runs_once_on_healthy_boot()
+    test_teslemetry_site_info_returns_false_without_nameplate_so_soc_max_retries()
+    test_teslemetry_run_site_info_latch_stays_false_without_nameplate()
+    test_teslemetry_energy_today_requests_kind_and_period()
+    test_teslemetry_select_event_preserves_control_attributes()
+    test_teslemetry_number_event_guards_null_value()
     print("**** Teslemetry tests passed ****")
     return 0

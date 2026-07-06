@@ -58,6 +58,7 @@ class TeslemetryAPI(ComponentBase):
         self.last_live_poll = 0
         self.last_energy_poll = 0
         self.site_info_done = False
+        self.reconcile_done = False
         self.log("Info: TeslemetryAPI initialising site_id={}".format(self.site_id))
         self.register_control_entities()
 
@@ -115,27 +116,39 @@ class TeslemetryAPI(ComponentBase):
         return True
 
     async def fetch_site_info(self):
-        """Fetch site info, publishing the battery capacity as soc_max and seeding control entity states."""
+        """Fetch site info, publishing the battery capacity as soc_max and seeding control entity states.
+
+        Returns True only once soc_max has actually been published. If nameplate_energy is absent or
+        zero, control-entity seeding still happens with whatever fields are present, but this returns
+        False so the run()-level site_info_done latch stays False and the fetch is retried on a later
+        cycle instead of permanently giving up on soc_max.
+        """
         data = await self._request("GET", "/api/1/energy_sites/{}/site_info".format(self.site_id))
         if not data:
             return False
         response = data.get("response", {})
         nameplate_wh = response.get("nameplate_energy", 0)
+        soc_max_published = False
         if nameplate_wh:
             self.publish_sensor("soc_max", round(nameplate_wh / 1000.0, 2), unit="kWh", state_class=None, friendly="Powerwall Capacity")
+            soc_max_published = True
         # Seed the control entity STATES (display only, no commands) from the device so they reflect
         # reality at boot instead of the hardcoded defaults set by register_control_entities().
         default_mode = response.get("default_real_mode")
         if default_mode in OPERATION_MODES:
-            self.set_state_wrapper(self.entity("operation_mode", domain="select"), default_mode)
+            self.publish_control(self.entity("operation_mode", domain="select"), default_mode)
         backup_reserve = response.get("backup_reserve_percent")
         if isinstance(backup_reserve, (int, float)):
-            self.set_state_wrapper(self.entity("backup_reserve", domain="number"), backup_reserve)
-        return True
+            self.publish_control(self.entity("backup_reserve", domain="number"), backup_reserve)
+        return soc_max_published
 
     async def fetch_energy_today(self):
-        """Fetch today's cumulative energy, publishing daily kWh sensors."""
-        data = await self._request("GET", "/api/1/energy_sites/{}/calendar_history".format(self.site_id))
+        """Fetch today's cumulative energy, publishing daily kWh sensors.
+
+        The Fleet/Teslemetry calendar_history endpoint requires a "kind" and a "period" query
+        parameter; without them it does not reliably return the daily energy time_series.
+        """
+        data = await self._request("GET", "/api/1/energy_sites/{}/calendar_history?kind=energy&period=day".format(self.site_id))
         if not data:
             return False
         series = data.get("response", {}).get("time_series", [])
@@ -157,6 +170,12 @@ class TeslemetryAPI(ComponentBase):
         Returns True on a successful (or gated no-op) cycle and False on failure —
         ComponentBase.start() uses this to set api_started, clear the startup flag
         and drive its retry backoff, so a failing cycle must return False.
+
+        Boot reconciliation is gated on the `reconcile_done` latch (mirroring the `site_info_done`
+        pattern) rather than on `first`: if the very first cycle 401s, the auth-failed fast-path
+        above returns before reconcile ever runs, but `first` is still consumed by that cycle. Gating
+        on a latch instead means reconcile still runs on the first cycle that is NOT auth-failed,
+        however many cycles that takes to arrive - a boot that 401s then recovers still reconciles.
         """
         if not self.api_key or not self.site_id:
             self.log("Warn: Teslemetry key or site_id not configured, skipping run")
@@ -172,8 +191,8 @@ class TeslemetryAPI(ComponentBase):
         success = True
         if not self.site_info_done:
             self.site_info_done = await self.fetch_site_info()
-        if first:
-            await self.reconcile_on_start()
+        if not self.reconcile_done:
+            self.reconcile_done = await self.reconcile_on_start()
         if first or (seconds - self.last_live_poll >= LIVE_POLL_SECONDS):
             self.last_live_poll = seconds
             success = await self.fetch_live_status()
@@ -183,12 +202,37 @@ class TeslemetryAPI(ComponentBase):
         return success
 
     def register_control_entities(self):
-        """Publish the virtual control entities with their initial states."""
-        self.dashboard_item(self.entity("operation_mode", domain="select"), "self_consumption", {"friendly_name": "Powerwall Operation Mode", "options": OPERATION_MODES}, app="teslemetry")
-        self.dashboard_item(self.entity("backup_reserve", domain="number"), 0, {"friendly_name": "Powerwall Backup Reserve", "min": 0, "max": 100, "step": 1, "unit_of_measurement": "%"}, app="teslemetry")
-        self.dashboard_item(self.entity("allow_charging_from_grid", domain="switch"), "on", {"friendly_name": "Powerwall Allow Grid Charging"}, app="teslemetry")
-        self.dashboard_item(self.entity("allow_export", domain="select"), "never", {"friendly_name": "Powerwall Allow Export", "options": EXPORT_RULES}, app="teslemetry")
-        self.dashboard_item(self.entity("tariff_mode", domain="select"), "normal", {"friendly_name": "Powerwall Tariff Mode", "options": TARIFF_MODES}, app="teslemetry")
+        """Publish the virtual control entities with their initial states.
+
+        Also records each entity's display attributes (options/min/max/friendly_name) in
+        self.control_attrs, so publish_control can re-apply them on every subsequent write instead
+        of a bare value-only write silently replacing them with an empty attributes dict.
+        """
+        controls = (
+            ("operation_mode", "select", "self_consumption", {"friendly_name": "Powerwall Operation Mode", "options": OPERATION_MODES}),
+            ("backup_reserve", "number", 0, {"friendly_name": "Powerwall Backup Reserve", "min": 0, "max": 100, "step": 1, "unit_of_measurement": "%"}),
+            ("allow_charging_from_grid", "switch", "on", {"friendly_name": "Powerwall Allow Grid Charging"}),
+            ("allow_export", "select", "never", {"friendly_name": "Powerwall Allow Export", "options": EXPORT_RULES}),
+            ("tariff_mode", "select", "normal", {"friendly_name": "Powerwall Tariff Mode", "options": TARIFF_MODES}),
+        )
+        self.control_attrs = {}
+        for suffix, domain, initial_state, attributes in controls:
+            entity_id = self.entity(suffix, domain=domain)
+            self.control_attrs[entity_id] = attributes
+            self.dashboard_item(entity_id, initial_state, attributes, app="teslemetry")
+
+    def publish_control(self, entity_id, value):
+        """Write a control entity's new state, re-applying the attributes register_control_entities
+        recorded for it at init (options/min/max/friendly_name).
+
+        A bare set_state_wrapper(entity, value) write defaults attributes to {}, which silently
+        replaces the options/min/max/friendly_name published once at startup and never resent, so
+        every select/number/switch write - and the reconcile/site_info writes that mirror device
+        state into these same entities - must route through here instead of calling
+        set_state_wrapper directly.
+        """
+        attrs = getattr(self, "control_attrs", {}).get(entity_id, {})
+        self.dashboard_item(entity_id, value, attrs, app="teslemetry")
 
     async def _command(self, path, body):
         """POST a command; return True only if both the transport and the application layer succeeded.
@@ -253,9 +297,22 @@ class TeslemetryAPI(ComponentBase):
         export_now: current 30-minute-aligned window becomes ON_PEAK with a
         high sell price so autonomous mode exports immediately; the window
         self-expires. normal: flat tariff from the customer's current rates.
+
+        The Powerwall applies tou_periods windows in the SITE'S LOCAL wall-clock time (the same
+        clock Predbat schedules against), not UTC, so when `now` is not injected (production use)
+        it defaults to the base's local time - base.now_utc converted to base.local_tz - rather than
+        a bare UTC clock read, which would misplace the window by the site's UTC offset. Falls back
+        to system UTC only when no base is wired up (e.g. some unit tests), since there is then no
+        site-local timezone to derive from.
         """
         if now is None:
-            now = datetime.now(timezone.utc)
+            base = getattr(self, "base", None)
+            base_now_utc = getattr(base, "now_utc", None) if base is not None else None
+            if base_now_utc is not None:
+                local_tz = getattr(base, "local_tz", None) or getattr(self, "local_tz", None) or timezone.utc
+                now = base_now_utc.astimezone(local_tz)
+            else:
+                now = datetime.now(timezone.utc)
         import_rate, export_rate = self.current_rates()
         # Keep the synthetic ON_PEAK sell strictly above the live export rate, otherwise the
         # export trick silently inverts at the highest-value moments.
@@ -379,21 +436,27 @@ class TeslemetryAPI(ComponentBase):
         for recovery is logged but no write is sent). If no tariff code can be determined
         (read failure or code-less response, each logged distinctly by
         get_current_tariff_code), this skips rather than guessing at the device state.
+
+        Returns True once this has actually executed against a live API (the tariff read
+        returned a usable code, whether or not a restore was needed), so run() can latch
+        reconcile_done and stop retrying. Returns False when the tariff read itself failed to
+        return anything usable, so run() retries on a later cycle instead of latching a no-op.
         """
         tariff_code = await self.get_current_tariff_code()
         if tariff_code is None:
-            return
+            return False
         export_now_code = self.build_tariff("export_now").get("code")
         if tariff_code != export_now_code:
-            return
+            return True
         if self._is_read_only():
             self.log("Warn: Teslemetry device tariff was left as {} - recovery needed but skipped (read-only mode)".format(tariff_code))
-            return
+            return True
         self.log("Warn: Teslemetry device tariff was left as {} - restoring normal tariff and disabling export".format(tariff_code))
         if await self.set_tariff("normal"):
-            self.set_state_wrapper(self.entity("tariff_mode", domain="select"), "normal")
+            self.publish_control(self.entity("tariff_mode", domain="select"), "normal")
         if await self.set_export_rule("never"):
-            self.set_state_wrapper(self.entity("allow_export", domain="select"), "never")
+            self.publish_control(self.entity("allow_export", domain="select"), "never")
+        return True
 
     async def select_event(self, entity_id, value):
         """Handle select changes routed from the service-hook loopback."""
@@ -408,16 +471,24 @@ class TeslemetryAPI(ComponentBase):
             self.log("Warn: Teslemetry unhandled select_event {} = {}".format(entity_id, value))
             return
         if success:
-            self.set_state_wrapper(entity_id, value)
+            self.publish_control(entity_id, value)
         else:
             self.log("Warn: Teslemetry command failed for {} = {} (state not updated)".format(entity_id, value))
 
     async def number_event(self, entity_id, value):
-        """Handle number changes routed from the service-hook loopback."""
+        """Handle number changes routed from the service-hook loopback.
+
+        Guards the int(float(value)) conversion: a number.increment/decrement service call can
+        forward value=None, which would otherwise raise a TypeError out of the dispatch loop.
+        """
         if entity_id.endswith("_backup_reserve"):
-            percent = max(0, min(100, int(float(value))))
+            try:
+                percent = max(0, min(100, int(float(value))))
+            except (ValueError, TypeError):
+                self.log("Warn: Teslemetry invalid number_event value for {}: {}".format(entity_id, value))
+                return
             if await self.set_backup_reserve(percent):
-                self.set_state_wrapper(entity_id, percent)
+                self.publish_control(entity_id, percent)
             else:
                 self.log("Warn: Teslemetry backup_reserve command failed (state not updated)")
         else:
@@ -428,7 +499,7 @@ class TeslemetryAPI(ComponentBase):
         if entity_id.endswith("_allow_charging_from_grid"):
             allow = service != "turn_off"
             if await self.set_grid_charging(allow):
-                self.set_state_wrapper(entity_id, "on" if allow else "off")
+                self.publish_control(entity_id, "on" if allow else "off")
             else:
                 self.log("Warn: Teslemetry grid charging command failed (state not updated)")
         else:
