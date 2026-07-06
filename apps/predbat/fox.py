@@ -1168,20 +1168,36 @@ class FoxAPI(ComponentBase, OAuthMixin):
                 extra_param[group_key] = value
         return extra_param
 
-    def update_settings_from_schedule(self, deviceSN, groups):
+    def update_settings_from_schedule(self, deviceSN, groups, properties):
         """
         Derive settings from a live schedule read that the settings/get endpoint may not
         support (e.g. errno 42015) or that are not part of FOX_SETTINGS at all (ImportLimit,
         PvLimit). exportLimit/importLimit/maxSoc/pvLimit use the max seen across all groups;
         minSocOnGrid uses the min. A setting that already has a working register-backed entry
         is left untouched so its range/precision metadata is not clobbered by a bare value.
+
+        properties supplies the real range/unit/precision Fox reports for each field, so the
+        derived setting publishes as a proper editable number entity - without it, automatic_
+        config still wires a hardcoded number.*_setting_xxx entity id (e.g. for export_limit)
+        that a bare {"value": ...} stub, having no range, would never actually publish as (it
+        would end up a sensor instead, leaving the number entity unresolvable). Required rather
+        than defaulted so a caller can't silently omit it and reintroduce that bug - pass {} if
+        a read genuinely has none.
         """
         for group_key, setting_key, aggregate in SCHEDULE_DERIVED_SETTINGS:
             values = [group[group_key] for group in groups if group_key in group]
             if not values:
                 continue
             if setting_key not in self.device_settings.get(deviceSN, {}) or self.is_setting_unavailable(deviceSN, setting_key):
-                self.device_settings.setdefault(deviceSN, {})[setting_key] = {"value": aggregate(values)}
+                entry = {"value": aggregate(values)}
+                prop = properties.get(group_key.lower(), {})
+                if "range" in prop:
+                    entry["range"] = prop["range"]
+                if "unit" in prop:
+                    entry["unit"] = prop["unit"]
+                if "precision" in prop:
+                    entry["precision"] = prop["precision"]
+                self.device_settings.setdefault(deviceSN, {})[setting_key] = entry
 
     async def set_scheduler_enabled(self, deviceSN, enabled):
         """
@@ -1438,7 +1454,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
             self.fdsoc_min[deviceSN] = result.get("properties", {}).get("fdsoc", {}).get("range", {}).get("min", 10)
             self.device_scheduler_count[deviceSN] = len(result.get("groups", []))
             self.device_scheduler[deviceSN] = result
-            self.update_settings_from_schedule(deviceSN, result.get("groups", []))
+            self.update_settings_from_schedule(deviceSN, result.get("groups", []), result.get("properties", {}))
             return result
         return None
 
@@ -1450,8 +1466,9 @@ class FoxAPI(ComponentBase, OAuthMixin):
         inverters (productType 812) even though those devices fully support the
         scheduler. The v2 response nests each group's SOC/power fields inside
         'extraParam'; flatten them back into the group so the rest of the code can
-        treat v1 and v2 results identically. v2 has no 'properties' block, so the
-        existing fdPwr/fdSoc defaults (capped to inverter capacity) apply.
+        treat v1 and v2 results identically. v2 does return a 'properties' block (unlike
+        earlier assumed) with real per-field ranges/units, so it is passed through unchanged
+        for get_scheduler() and update_settings_from_schedule() to use, exactly like v1.
 
         {'enable': 1, 'groups':
             [
@@ -1501,7 +1518,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
             groups.append(flat_group)
         # Default enable to 1 when the key is absent: v2 returned groups, so the scheduler
         # is active (compute_schedule treats a falsy enable as "scheduler disabled")
-        return {"enable": result.get("enable", 1), "groups": groups}
+        return {"enable": result.get("enable", 1), "groups": groups, "properties": result.get("properties", {})}
 
     async def get_device_list(self):
         """

@@ -2312,10 +2312,51 @@ def test_api_get_scheduler_v2_evo(my_predbat):
     assert group["maxSoc"] == 100.0
     assert "extraParam" not in group
 
-    # v2 has no properties block: fall back to defaults, capped at inverter capacity
+    # This mocked response has no properties block: fall back to defaults, capped at capacity
     assert fox.fdpwr_max[deviceSN] == 8000
     assert fox.fdsoc_min[deviceSN] == 10
     assert fox.device_scheduler_count[deviceSN] == 1
+
+    return False
+
+
+def test_api_get_scheduler_v2_uses_real_properties(my_predbat):
+    """
+    Test get_scheduler uses the real per-field ranges from a v2 response's properties block
+    instead of the generic defaults, when the device actually returns one.
+
+    Regression guard: get_scheduler_v2 used to discard the properties block entirely on the
+    (incorrect) assumption that v2 never returns one - production responses do include it.
+    """
+    print("  - test_api_get_scheduler_v2_uses_real_properties")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "EVO1234567"
+    fox.device_detail[deviceSN] = {"hasBattery": True, "capacity": 20, "productType": "812"}
+
+    fox.set_mock_response(
+        "/op/v2/device/scheduler/get",
+        {
+            "enable": 1,
+            "groups": [
+                {"enable": 1, "startHour": 0, "endHour": 5, "workMode": "ForceCharge", "extraParam": {"fdPwr": 5000.0, "fdSoc": 100.0}},
+            ],
+            "properties": {
+                "fdpwr": {"unit": "W", "precision": 1.0, "range": {"min": 0.0, "max": 12000.0}},
+                "fdsoc": {"unit": "%", "precision": 1.0, "range": {"min": 5.0, "max": 100.0}},
+                "exportlimit": {"unit": "W", "precision": 1.0, "range": {"min": 0.0, "max": 100000.0}},
+            },
+        },
+    )
+
+    result = asyncio.run(fox.get_scheduler(deviceSN))
+
+    # Real reported max (12000) must win over the generic 8000 default
+    assert fox.fdpwr_max[deviceSN] == 12000
+    # Real reported min (5) must win over the generic 10 default
+    assert fox.fdsoc_min[deviceSN] == 5
+    # The properties block itself must be preserved on the result, not discarded
+    assert result["properties"]["exportlimit"]["range"] == {"min": 0.0, "max": 100000.0}
 
     return False
 
@@ -2374,6 +2415,88 @@ def test_api_get_scheduler_derives_settings_from_schedule(my_predbat):
 
     # A setting with a real register-backed entry is left untouched
     assert settings["GridCode"] == {"value": "50Hz", "enumList": ["50Hz", "60Hz"]}
+
+    return False
+
+
+def test_api_get_scheduler_derives_settings_with_range_from_properties(my_predbat):
+    """
+    Test update_settings_from_schedule attaches the real range/unit/precision from a v2
+    response's properties block to a derived setting, not just a bare value.
+
+    Regression guard: without this, ExportLimit derived purely as {"value": ...} publishes as
+    a sensor (no range/enumList), but automatic_config wires export_limit to a hardcoded
+    number.*_setting_exportlimit entity id - leaving that entity unresolvable (HA reports
+    None) even though Predbat believes it configured a working export limit.
+    """
+    print("  - test_api_get_scheduler_derives_settings_with_range_from_properties")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "EVO1234567"
+    fox.device_detail[deviceSN] = {"hasBattery": True, "capacity": 20, "productType": "812"}
+
+    fox.set_mock_response(
+        "/op/v2/device/scheduler/get",
+        {
+            "enable": 1,
+            "groups": [
+                {"enable": 1, "startHour": 0, "endHour": 23, "workMode": "SelfUse", "extraParam": {"fdPwr": 5000.0, "fdSoc": 10.0, "exportLimit": 12000.0, "minSocOnGrid": 10.0, "maxSoc": 100.0}},
+            ],
+            "properties": {
+                "exportlimit": {"unit": "W", "precision": 1.0, "range": {"min": 0.0, "max": 100000.0}},
+            },
+        },
+    )
+
+    asyncio.run(fox.get_scheduler(deviceSN))
+
+    export_limit_setting = fox.device_settings[deviceSN]["ExportLimit"]
+    assert export_limit_setting["value"] == 12000.0
+    assert export_limit_setting["range"] == {"min": 0.0, "max": 100000.0}
+    assert export_limit_setting["unit"] == "W"
+    assert export_limit_setting["precision"] == 1.0
+
+    # A field with no matching properties entry (maxSoc here) still just gets a bare value
+    assert fox.device_settings[deviceSN]["MaxSoc"] == {"value": 100.0}
+
+    return False
+
+
+def test_publish_data_derived_export_limit_publishes_as_number(my_predbat):
+    """
+    End-to-end regression guard: a schedule-derived ExportLimit with real range metadata must
+    publish as a number entity, matching the hardcoded number.*_setting_exportlimit entity id
+    automatic_config wires export_limit to - not a sensor, which would leave that entity
+    unresolvable and fail apps.yaml validation (HA reports state None).
+    """
+    print("  - test_publish_data_derived_export_limit_publishes_as_number")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    fox.device_list = [{"deviceSN": deviceSN}]
+    fox.device_detail[deviceSN] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {}, "deviceType": "KH8", "stationName": "Test", "batteryList": []}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.device_values[deviceSN] = {}
+    fox.local_schedule[deviceSN] = {}
+
+    # Simulate a schedule-derived ExportLimit, with range metadata from a real properties block
+    fox.update_settings_from_schedule(
+        deviceSN,
+        [{"exportLimit": 12000.0}],
+        {"exportlimit": {"unit": "W", "precision": 1.0, "range": {"min": 0.0, "max": 100000.0}}},
+    )
+
+    run_async(fox.publish_data())
+
+    export_limit_entity = f"number.predbat_fox_{deviceSN.lower()}_setting_exportlimit"
+    assert export_limit_entity in fox.dashboard_items
+    assert fox.dashboard_items[export_limit_entity]["state"] == 12000.0
+    assert fox.dashboard_items[export_limit_entity]["attributes"]["max"] == 100000.0
+
+    # Must NOT have also published as a sensor
+    assert f"sensor.predbat_fox_{deviceSN.lower()}_setting_exportlimit" not in fox.dashboard_items
 
     return False
 
@@ -6538,7 +6661,9 @@ def run_fox_api_tests(my_predbat):
         failed |= test_api_set_battery_charging_time(my_predbat)
         failed |= test_api_get_scheduler(my_predbat)
         failed |= test_api_get_scheduler_v2_evo(my_predbat)
+        failed |= test_api_get_scheduler_v2_uses_real_properties(my_predbat)
         failed |= test_api_get_scheduler_derives_settings_from_schedule(my_predbat)
+        failed |= test_api_get_scheduler_derives_settings_with_range_from_properties(my_predbat)
         failed |= test_api_get_scheduler_v2_null_groups(my_predbat)
         failed |= test_api_get_scheduler_kh_stays_v1(my_predbat)
         failed |= test_api_get_scheduler_v2_evo_fails(my_predbat)
@@ -6658,6 +6783,7 @@ def run_fox_api_tests(my_predbat):
         failed |= test_publish_data_device_values_dual_soc(my_predbat)
         failed |= test_publish_data_device_settings(my_predbat)
         failed |= test_publish_data_workmode_default_publishes_as_select(my_predbat)
+        failed |= test_publish_data_derived_export_limit_publishes_as_number(my_predbat)
         failed |= test_publish_data_no_battery_skips_settings(my_predbat)
 
         # apply_battery_schedule tests
