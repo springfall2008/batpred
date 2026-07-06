@@ -395,8 +395,8 @@ TCWORLD
 tdata
 tdiff
 temperation
-teslemetry
 Teslemetry
+teslemetry
 testname
 thirdparty
 timea
