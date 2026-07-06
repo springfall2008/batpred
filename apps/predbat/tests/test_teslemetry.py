@@ -786,6 +786,93 @@ def test_teslemetry_drift_correction_no_spurious_resend_when_matching():
     assert len(posts) == 1
 
 
+def test_teslemetry_dedupe_tariff_resends_on_window_advance():
+    """A tariff rebuild whose live rate is UNCHANGED but whose export_now ON_PEAK window has
+    advanced (a later base local time crosses into the next 30-minute-aligned window) must still
+    re-POST - the dedupe signature is the full built tariff body (which embeds the window), not
+    just the mode string, so a window-only move is not silently skipped.
+
+    Would be RED under a hypothetical mode-string-keyed signature: if `set_tariff` deduped on
+    `_apply_command("tariff", mode, ...)` instead of the built-tariff JSON, both calls below pass
+    the identical mode "export_now", so `self._last_sent["tariff"] == "export_now"` would already
+    match on the second call and the POST would be skipped (posts == 1) even though the device's
+    ON_PEAK window moved from 14:30-15:30 to 15:00-16:00 - the customer would be left on a STALE,
+    now-expired export window. GREEN as-built: the signature is
+    `json.dumps(build_tariff(mode), sort_keys=True)`, which differs between the two builds purely
+    because fromHour/fromMinute/toHour/toMinute moved, so both calls POST.
+    """
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/time_of_use_settings"] = {"response": {"code": 201}}
+    # Live import/export rates held FIXED across both calls (same minutes_now, same rate tables) so
+    # only the base local time - and therefore the window - differs between the two builds.
+    api.base = SimpleNamespace(
+        now_utc=datetime(2026, 7, 2, 14, 40, tzinfo=timezone.utc),
+        local_tz=timezone.utc,
+        minutes_now=600,
+        rate_import={600: 28.0},
+        rate_export={600: 15.0},
+    )
+    run_async(api.set_tariff("export_now"))
+
+    # Advance base local time into the NEXT 30-minute window; rates untouched.
+    api.base.now_utc = datetime(2026, 7, 2, 15, 10, tzinfo=timezone.utc)
+    run_async(api.set_tariff("export_now"))
+
+    posts = [req for req in api.requests_made if req[0] == "POST"]
+    assert len(posts) == 2
+    first_tariff = posts[0][2]["tou_settings"]["tariff_content_v2"]
+    second_tariff = posts[1][2]["tou_settings"]["tariff_content_v2"]
+    first_window = first_tariff["seasons"]["AllYear"]["tou_periods"]["ON_PEAK"]["periods"][0]
+    second_window = second_tariff["seasons"]["AllYear"]["tou_periods"]["ON_PEAK"]["periods"][0]
+    assert (first_window["fromHour"], first_window["fromMinute"]) == (14, 30)
+    assert (second_window["fromHour"], second_window["fromMinute"]) == (15, 0)
+    # Confirm the live rate really was constant - only the window differs between the two builds.
+    first_on_peak_sell = first_tariff["sell_tariff"]["energy_charges"]["AllYear"]["rates"]["ON_PEAK"]
+    second_on_peak_sell = second_tariff["sell_tariff"]["energy_charges"]["AllYear"]["rates"]["ON_PEAK"]
+    assert first_on_peak_sell == second_on_peak_sell
+
+
+def test_teslemetry_backup_reserve_drift_correction_refreshes_cache_and_reasserts():
+    """A site_info poll reporting a device backup_reserve_percent that differs from what Predbat
+    last sent must refresh the dedupe cache to the ACTUAL device value, so the next assertion of
+    Predbat's desired reserve is not skipped - mirrors
+    test_teslemetry_drift_correction_refreshes_cache_and_reasserts (operation_mode) but exercises
+    the backup_reserve refresh path in fetch_site_info, which previously had no direct test."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/backup"] = {"response": {"code": 201}}
+    run_async(api.number_event("number.predbat_teslemetry_backup_reserve", 20))
+    assert api._last_sent["backup_reserve"] == 20
+    # Device now reports backup_reserve_percent = 50, i.e. the user changed it externally.
+    drifted_site_info = {"response": {"nameplate_energy": 13500, "default_real_mode": "self_consumption", "backup_reserve_percent": 50}}
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = drifted_site_info
+    run_async(api.fetch_site_info())
+    assert api._last_sent["backup_reserve"] == 50
+    # Predbat's desired reserve is still 20 - the drifted cache means this must re-POST.
+    run_async(api.number_event("number.predbat_teslemetry_backup_reserve", 20))
+    posts = [req for req in api.requests_made if req[0] == "POST" and req[1].endswith("/backup")]
+    assert len(posts) == 2
+
+
+def test_teslemetry_backup_reserve_drift_correction_no_spurious_resend_when_matching():
+    """When site_info reports the SAME backup_reserve Predbat last sent, the dedupe cache is
+    unchanged and the next assertion of that value is still skipped - no spurious re-send from the
+    drift-refresh itself."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/backup"] = {"response": {"code": 201}}
+    run_async(api.number_event("number.predbat_teslemetry_backup_reserve", 20))
+    assert api._last_sent["backup_reserve"] == 20
+    # SITE_INFO's backup_reserve_percent is also 20 - no drift.
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO
+    run_async(api.fetch_site_info())
+    assert api._last_sent["backup_reserve"] == 20
+    run_async(api.number_event("number.predbat_teslemetry_backup_reserve", 20))
+    posts = [req for req in api.requests_made if req[0] == "POST" and req[1].endswith("/backup")]
+    assert len(posts) == 1
+
+
 def test_teslemetry_reconcile_forces_write_even_if_cache_preseeded():
     """reconcile_on_start's corrective writes must not be silently skipped by the dedupe cache even if
     it already holds a value matching what recovery is about to send (e.g. a future cache-preseed
@@ -862,6 +949,9 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_dedupe_tariff_resends_when_rates_change()
     test_teslemetry_drift_correction_refreshes_cache_and_reasserts()
     test_teslemetry_drift_correction_no_spurious_resend_when_matching()
+    test_teslemetry_dedupe_tariff_resends_on_window_advance()
+    test_teslemetry_backup_reserve_drift_correction_refreshes_cache_and_reasserts()
+    test_teslemetry_backup_reserve_drift_correction_no_spurious_resend_when_matching()
     test_teslemetry_reconcile_forces_write_even_if_cache_preseeded()
     print("**** Teslemetry tests passed ****")
     return 0

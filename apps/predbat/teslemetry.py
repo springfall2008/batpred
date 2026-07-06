@@ -70,6 +70,7 @@ class TeslemetryAPI(ComponentBase):
         self.reconcile_done = False
         self._last_sent = {}
         self.log("Info: TeslemetryAPI initialising site_id={}".format(self.site_id))
+        self.log("Info: Teslemetry control drift-correction is transition-based (self-heals when Predbat's own desired value changes, plus a one-off refresh at boot) - full periodic device-state reconciliation is a pilot follow-up")
         self.register_control_entities()
 
     def entity(self, suffix, domain="sensor"):
@@ -144,6 +145,17 @@ class TeslemetryAPI(ComponentBase):
             soc_max_published = True
         # Seed the control entity STATES (display only, no commands) from the device so they reflect
         # reality at boot instead of the hardcoded defaults set by register_control_entities().
+        #
+        # Known limitation (accepted, not an oversight): fetch_site_info is only ever driven to
+        # completion ONCE per process - run()'s site_info_done latch stops calling it again once it
+        # returns True - so the operation_mode/backup_reserve drift-refresh below corrects drift at
+        # BOOT only. If the device drifts again mid-run (e.g. the customer changes mode/reserve via
+        # the Tesla app after startup), that drift is not detected again until the process restarts.
+        # In the meantime it self-heals only on a Predbat "transition" - i.e. whenever Predbat's OWN
+        # desired value actually changes, since a changed target never matches the stale cache
+        # regardless of the device's true state. A repeated assertion of the SAME target while the
+        # device has silently drifted away stays stuck until the next boot. This is a ship-now,
+        # close-in-pilot decision; continuous periodic device-state reconciliation is a follow-up.
         default_mode = response.get("default_real_mode")
         if default_mode in OPERATION_MODES:
             self.publish_control(self.entity("operation_mode", domain="select"), default_mode)
@@ -292,6 +304,14 @@ class TeslemetryAPI(ComponentBase):
         success. This is used by `reconcile_on_start` so its corrective writes can never be silently
         skipped by a (present or future) pre-seeded cache entry that happens to already match what the
         recovery is about to send.
+
+        Drift-refresh limitation (accepted, not an oversight): unlike "operation_mode" and
+        "backup_reserve" (refreshed once per process from the device's actual state - see the NOTE in
+        `fetch_site_info`), "grid_charging" and "export_rule" are NEVER device-drift-refreshed at all,
+        because the site_info response this component reads does not expose either field's actual
+        device state. If the device drifts on these two externally, the cache is never proactively
+        corrected; they self-heal only when Predbat's own desired value changes (a transition), since a
+        changed target never matches the stale cache irrespective of the device's true state.
         """
         if not force and self._last_sent.get(key) == signature:
             return True
