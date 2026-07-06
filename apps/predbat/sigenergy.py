@@ -203,6 +203,7 @@ SIGENERGY_HISTORY_NODES = [
     ("FROM_GRID", "grid_import_lifetime", "Grid Import Lifetime"),
     ("TO_GRID", "grid_export_lifetime", "Grid Export Lifetime"),
     ("FROM_SOLAR", "pv_lifetime", "PV Lifetime"),
+    ("FROM_THIRD_PARTY_INV", "third_party_pv_lifetime", "Third-Party PV Lifetime"),
     ("TO_BATTERY", "battery_charge_lifetime", "Battery Charge Lifetime"),
     ("FROM_BATTERY", "battery_discharge_lifetime", "Battery Discharge Lifetime"),
     ("TO_EVDC", "ev_charge_lifetime", "EV Charge Lifetime"),
@@ -772,10 +773,22 @@ class SigenergyAPI(ComponentBase):
 
         The Sigenergy Cloud API has no native "today" load/import/export sensor,
         so this polls the history endpoint at level=Lifetime for the ever-growing
-        Sankey node totals (TO_LOAD, FROM_GRID, TO_GRID, FROM_SOLAR, TO_BATTERY,
-        FROM_BATTERY, TO_EVDC, FROM_EVDC). Predbat derives "today" energy from
-        these by diffing against midnight — the same pattern already used for
-        lifetime energy counters on other inverter brands.
+        Sankey node totals (TO_LOAD, FROM_GRID, TO_GRID, FROM_SOLAR,
+        FROM_THIRD_PARTY_INV, TO_BATTERY, FROM_BATTERY, TO_EVDC, FROM_EVDC).
+        Predbat derives "today" energy from these by diffing against midnight —
+        the same pattern already used for lifetime energy counters on other
+        inverter brands.
+
+        The 'date' query parameter has no effect on the returned totals at
+        level=Lifetime (confirmed by requesting yesterday/today/tomorrow and
+        getting identical values back) — the API always returns its current
+        live cumulative total. That server-side total has been observed to
+        dip by some kWh for roughly the first 30 minutes after local midnight
+        each night before correcting itself — presumably a day-rollover job on
+        Sigenergy's side recalculating the total. Since these are one-directional
+        cumulative energy counters that can only legitimately increase, any
+        dip is clamped to the last known value rather than published, so the
+        transient glitch never reaches HA's history for these sensors.
 
         Args:
             system_id: Sigenergy system unique identifier.
@@ -783,18 +796,19 @@ class SigenergyAPI(ComponentBase):
         Returns:
             True on success, False on failure.
         """
-        today = datetime.now(self.local_tz).strftime("%Y-%m-%d")
         data = await self._request(
             "GET",
             "/openapi/systems/{}/v1/history".format(system_id),
-            params={"systemId": system_id, "date": today, "level": "Lifetime"},
+            params={"systemId": system_id, "date": datetime.now(self.local_tz).strftime("%Y-%m-%d"), "level": "Lifetime"},
         )
         if data is None or not isinstance(data, dict):
             self.log("Warn: SigenergyAPI: Failed to fetch history totals for {}".format(system_id))
             return False
 
         nodes = data.get("sankeyData", {}).get("nodes", [])
-        self.history_totals[system_id] = {node.get("id"): _safe_float(node.get("value", 0)) for node in nodes if node.get("id")}
+        new_totals = {node.get("id"): _safe_float(node.get("value", 0)) for node in nodes if node.get("id")}
+        previous_totals = self.history_totals.get(system_id, {})
+        self.history_totals[system_id] = {node_id: max(value, previous_totals.get(node_id, value)) for node_id, value in new_totals.items()}
         return True
 
     async def fetch_current_mode(self, system_id):
@@ -1736,7 +1750,13 @@ class SigenergyAPI(ComponentBase):
         self.set_arg("pv_power", ["sensor.{}_sigenergy_{}_pv_power".format(self.prefix, s) for s in slugs])
         self.set_arg("grid_power", ["sensor.{}_sigenergy_{}_grid_power".format(self.prefix, s) for s in slugs])
         self.set_arg("load_power", ["sensor.{}_sigenergy_{}_load_power".format(self.prefix, s) for s in slugs])
-        self.set_arg("pv_today", ["sensor.{}_sigenergy_{}_pv_lifetime".format(self.prefix, s) for s in slugs])
+        # pv_today accepts a flat list of entities that get summed, so include both the native PV
+        # lifetime total and the third-party inverter's PV lifetime total (FROM_THIRD_PARTY_INV) —
+        # Sigenergy systems can have a co-located third-party inverter feeding into the same battery.
+        self.set_arg(
+            "pv_today",
+            ["sensor.{}_sigenergy_{}_pv_lifetime".format(self.prefix, s) for s in slugs] + ["sensor.{}_sigenergy_{}_third_party_pv_lifetime".format(self.prefix, s) for s in slugs],
+        )
         self.set_arg("load_today", ["sensor.{}_sigenergy_{}_load_lifetime".format(self.prefix, s) for s in slugs])
         self.set_arg("import_today", ["sensor.{}_sigenergy_{}_grid_import_lifetime".format(self.prefix, s) for s in slugs])
         self.set_arg("export_today", ["sensor.{}_sigenergy_{}_grid_export_lifetime".format(self.prefix, s) for s in slugs])
