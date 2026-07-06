@@ -357,6 +357,42 @@ def test_sigenergy_publish_system_entities(my_predbat):
     return failed
 
 
+def test_sigenergy_publish_system_entities_operational_mode_fallback(my_predbat):
+    """Test operational_mode falls back to the REST-sourced current_mode when MQTT hasn't reported yet.
+
+    self.system_status is only ever populated by _handle_mqtt_period (MQTT). Before the first MQTT
+    message arrives (e.g. at startup, or if MQTT can't connect), it stays empty and the operational
+    mode sensor must not simply read "Unknown" when fetch_current_mode has already obtained a real
+    value via REST.
+    """
+    failed = False
+    api = MockSigenergyAPI()
+
+    system_id = "SIG12345"
+    slug = api._system_slug(system_id)
+    api.systems[system_id] = {"systemName": "My Site", "batteryCapacity": 10.0, "status": "online"}
+    api.devices[system_id] = [{"deviceType": "Inverter", "attrMap": {"ratedActivePower": 5.0}}]
+    api.energy_flow[system_id] = {"batterySoc": 60.0, "batteryPower": 2.0, "pvPower": 3.5, "gridPower": 1.0, "loadPower": 4.5, "evPower": 0.0}
+    api.daily_summary[system_id] = {"dailyPowerGeneration": 12.3}
+    api.history_totals[system_id] = {}
+    # No system_status entry — MQTT has not delivered a 'period' message yet.
+    api.current_mode[system_id] = SIGENERGY_MODE_VPP
+
+    run_async(api.publish_system_entities(system_id))
+
+    mode_key = "sensor.predbat_sigenergy_{}_operational_mode".format(slug)
+    assert mode_key in api.dashboard_items, "Operational mode entity published"
+    assert api.dashboard_items[mode_key]["state"] == "VPP", "Falls back to REST current_mode, got {}".format(api.dashboard_items[mode_key]["state"])
+    assert api.dashboard_items[mode_key]["attributes"]["mode_id"] == SIGENERGY_MODE_VPP, "mode_id reflects fallback current_mode"
+
+    # Once MQTT reports a value, it takes priority over the REST-sourced current_mode.
+    api.system_status[system_id] = {"operationalMode": SIGENERGY_MODE_MSC, "systemStatus": 1}
+    run_async(api.publish_system_entities(system_id))
+    assert api.dashboard_items[mode_key]["state"] == "Maximum Self-Consumption", "MQTT value takes priority once available, got {}".format(api.dashboard_items[mode_key]["state"])
+
+    return failed
+
+
 def test_sigenergy_automatic_config(my_predbat):
     """Test automatic_config wires the expected Predbat args."""
     failed = False
@@ -2129,6 +2165,7 @@ def run_sigenergy_tests(my_predbat):
         ("system_slug", test_sigenergy_system_slug),
         ("battery_capacity", test_sigenergy_battery_capacity),
         ("publish_system_entities", test_sigenergy_publish_system_entities),
+        ("publish_system_entities_operational_mode_fallback", test_sigenergy_publish_system_entities_operational_mode_fallback),
         ("automatic_config", test_sigenergy_automatic_config),
         ("fetch_controls", test_sigenergy_fetch_controls),
         ("publish_controls", test_sigenergy_publish_controls),
