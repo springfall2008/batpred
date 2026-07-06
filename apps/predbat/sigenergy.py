@@ -817,7 +817,13 @@ class SigenergyAPI(ComponentBase):
         nodes = data.get("sankeyData", {}).get("nodes", [])
         new_totals = {node.get("id"): _safe_float(node.get("value", 0)) for node in nodes if node.get("id")}
         previous_totals = self.history_totals.get(system_id, {})
-        self.history_totals[system_id] = {node_id: max(value, previous_totals.get(node_id, value)) for node_id, value in new_totals.items()}
+        # Start from previous_totals so a node ID transiently missing from this response (rather
+        # than genuinely dipping) keeps its last known value instead of vanishing and defaulting
+        # to 0 when published (publish_system_entities() reads missing nodes as 0).
+        merged_totals = dict(previous_totals)
+        for node_id, value in new_totals.items():
+            merged_totals[node_id] = max(value, previous_totals.get(node_id, value))
+        self.history_totals[system_id] = merged_totals
         return True
 
     async def fetch_current_mode(self, system_id):

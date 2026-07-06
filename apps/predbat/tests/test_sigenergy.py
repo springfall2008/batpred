@@ -837,6 +837,44 @@ def test_sigenergy_fetch_history_totals_clamps_dip(my_predbat):
     return failed
 
 
+def test_sigenergy_fetch_history_totals_keeps_missing_node(my_predbat):
+    """Test fetch_history_totals preserves a node ID that is transiently absent from the response.
+
+    Merging by only iterating new_totals.items() would drop any previously-seen node ID missing
+    from the latest response entirely. publish_system_entities() defaults a missing node to 0, so
+    that would publish a large false drop for it — exactly what the dip clamp is meant to prevent.
+    """
+    failed = False
+    api = MockSigenergyAPI()
+    api.access_token = "fake_token"
+    api.token_expires_at = 9_999_999_999
+    api._last_request_time = 0
+    api.history_totals["SIG001"] = {"TO_LOAD": 7028.33, "FROM_GRID": 500.5}
+
+    fake_response = {
+        "code": 0,
+        "data": {
+            "sankeyData": {
+                "nodes": [{"id": "TO_LOAD", "value": 7030.1}],  # FROM_GRID is absent from this response
+                "links": [],
+            },
+        },
+    }
+
+    mock_response = _make_mock_response(status=200, json_data=fake_response)
+    mock_session = _make_mock_session(mock_response)
+
+    with patch("sigenergy.aiohttp.ClientSession", return_value=mock_session):
+        ok = run_async(api.fetch_history_totals("SIG001"))
+
+    assert ok is True, "fetch_history_totals should return True, got {}".format(ok)
+    totals = api.history_totals.get("SIG001", {})
+    assert totals.get("TO_LOAD") == 7030.1, "TO_LOAD present in the response should update normally, got {}".format(totals.get("TO_LOAD"))
+    assert totals.get("FROM_GRID") == 500.5, "FROM_GRID missing from the response should keep its last known value, got {}".format(totals.get("FROM_GRID"))
+
+    return failed
+
+
 def test_sigenergy_save_load_cache_no_storage(my_predbat):
     """Test _save_cache/_load_cache no-op cleanly when no storage component is available."""
     failed = False
@@ -2420,6 +2458,7 @@ def run_sigenergy_tests(my_predbat):
         ("fetch_history_totals", test_sigenergy_fetch_history_totals),
         ("fetch_history_totals_empty_data", test_sigenergy_fetch_history_totals_empty_data),
         ("fetch_history_totals_clamps_dip", test_sigenergy_fetch_history_totals_clamps_dip),
+        ("fetch_history_totals_keeps_missing_node", test_sigenergy_fetch_history_totals_keeps_missing_node),
         ("save_load_cache_no_storage", test_sigenergy_save_load_cache_no_storage),
         ("save_load_cache_round_trip", test_sigenergy_save_load_cache_round_trip),
         ("load_cached_data", test_sigenergy_load_cached_data),
