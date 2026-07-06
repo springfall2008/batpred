@@ -12,7 +12,7 @@ import pytz
 import aiohttp
 import json
 from unittest.mock import MagicMock, patch, AsyncMock
-from fox import validate_schedule, minutes_to_schedule_time, end_minute_inclusive_to_exclusive, FoxAPI, schedules_are_equal, FOX_CACHE_KEYS, FOX_REFRESH_SETTINGS, FOX_REFRESH_REALTIME, OPTIONS_WORK_MODE
+from fox import validate_schedule, minutes_to_schedule_time, end_minute_inclusive_to_exclusive, FoxAPI, schedules_are_equal, FOX_CACHE_KEYS, FOX_REFRESH_SETTINGS, FOX_REFRESH_REALTIME, OPTIONS_WORK_MODE, FOX_SETTINGS_CACHE_VERSION
 from tests.test_infra import run_async, create_aiohttp_mock_response, create_aiohttp_mock_session
 
 
@@ -67,6 +67,9 @@ class MockFoxAPIWithRequests(FoxAPI):
         self.device_values = {}
         self.device_settings = {}
         self.device_settings_unavailable = {}
+        # Default to "current" so existing tests aren't affected by the stale-cache-version
+        # self-heal check; tests exercising that mechanism explicitly set an older value
+        self.device_settings_version = FOX_SETTINGS_CACHE_VERSION
         self.last_unsupported = False
         self.device_production_month = {}
         self.device_production_year = {}
@@ -4392,6 +4395,94 @@ def test_run_settings_refresh_on_age(my_predbat):
     return False
 
 
+def test_run_settings_refresh_forced_by_stale_cache_version(my_predbat):
+    """
+    Test run() forces a settings/scheduler refresh, regardless of cache age, when the
+    persisted device_settings_version predates FOX_SETTINGS_CACHE_VERSION - a one-time
+    self-heal so a customer isn't stuck reusing a stale-shaped cached setting (e.g. one
+    missing range/unit/precision from before that shape existed) for up to FOX_REFRESH_SETTINGS
+    after every restart. Also verifies the version is persisted afterwards so a subsequent,
+    still-fresh run does NOT force another refresh.
+    """
+    print("  - test_run_settings_refresh_forced_by_stale_cache_version")
+
+    from datetime import datetime, timezone
+
+    fox = MockFoxAPIWithRunTracking()
+    fox.device_list = [{"deviceSN": "TEST123"}]
+    fox.device_settings_version = 0  # Simulates a cache persisted before this version existed
+
+    # Everything else, including device_settings itself, is freshly updated
+    now = datetime.now(timezone.utc)
+    for key in FOX_CACHE_KEYS:
+        fox.data_age[key] = now
+
+    result = run_async(fox.run(0, first=False))
+
+    assert result == True
+    # Forced despite a fresh device_settings cache age, because the version is stale
+    assert "get_device_settings:TEST123" in fox.method_calls
+    assert "get_scheduler:TEST123" in fox.method_calls
+    # The version must be bumped to current so it stops forcing a refresh going forward
+    assert fox.device_settings_version == FOX_SETTINGS_CACHE_VERSION
+
+    # A second run, still with a fresh cache age, must NOT force another refresh now that the
+    # version matches - otherwise every restart would keep hammering the API forever
+    fox.method_calls = []
+    fox.data_age["device_settings"] = now
+    result2 = run_async(fox.run(0, first=False))
+    assert result2 == True
+    assert "get_device_settings:TEST123" not in fox.method_calls
+
+    return False
+
+
+def test_run_stale_cache_version_not_cleared_without_scheduler_success(my_predbat):
+    """
+    Regression guard: the stale cache version must only clear once get_scheduler() (via
+    update_settings_from_schedule()) has actually had a chance to produce the upgraded shape -
+    not merely because get_device_settings() succeeded. Otherwise a cycle where settings
+    succeed but the scheduler read fails would wrongly mark the migration "done", permanently
+    losing the retry and leaving the customer stuck with the stale-shaped cached value.
+    """
+    print("  - test_run_stale_cache_version_not_cleared_without_scheduler_success")
+
+    from datetime import datetime, timezone
+
+    class MockFoxAPISchedulerFails(MockFoxAPIWithRunTracking):
+        async def get_scheduler(self, deviceSN):
+            self.method_calls.append(f"get_scheduler:{deviceSN}")
+            return None  # Simulates a failed scheduler read this cycle
+
+    fox = MockFoxAPISchedulerFails()
+    fox.device_list = [{"deviceSN": "TEST123"}]
+    fox.device_settings_version = 0
+
+    now = datetime.now(timezone.utc)
+    for key in FOX_CACHE_KEYS:
+        fox.data_age[key] = now
+
+    result = run_async(fox.run(0, first=False))
+
+    assert result == True
+    # Settings still succeeded and get attempted every cycle while the version stays stale
+    assert "get_device_settings:TEST123" in fox.method_calls
+    assert "get_scheduler:TEST123" in fox.method_calls
+    # Version must remain stale - the scheduler read (and any range upgrade it would apply)
+    # never actually succeeded
+    assert fox.device_settings_version == 0
+
+    # A second run, still with a fresh device_settings cache age, must keep retrying rather
+    # than silently giving up because the version never cleared
+    fox.method_calls = []
+    result2 = run_async(fox.run(0, first=False))
+    assert result2 == True
+    assert "get_device_settings:TEST123" in fox.method_calls
+    assert "get_scheduler:TEST123" in fox.method_calls
+
+    return False
+
+
 def test_run_realtime_refresh_after_cache_expires(my_predbat):
     """
     Test run() leaves fresh real-time data alone but re-fetches it once the cache expires,
@@ -4458,8 +4549,9 @@ def test_run_device_list_failure_does_not_mark_cache_fresh(my_predbat):
 def test_run_first_refreshes_device_list_despite_fresh_cache(my_predbat):
     """
     Test run() always re-fetches the device list on first start, even when the cached data
-    is still fresh, so a new inverter or changed serial number is picked up.  Device detail
-    and all other age-gated categories are skipped while the cache is fresh.
+    is still fresh, so a new inverter or changed serial number is picked up. Device detail
+    and all other age-gated categories are skipped while the cache is fresh and the settings
+    cache version is current.
     """
     print("  - test_run_first_refreshes_device_list_despite_fresh_cache")
 
@@ -4467,6 +4559,7 @@ def test_run_first_refreshes_device_list_despite_fresh_cache(my_predbat):
 
     fox = MockFoxAPIWithRunTracking()
     fox.device_list = [{"deviceSN": "TEST123"}]
+    fox.device_settings_version = FOX_SETTINGS_CACHE_VERSION
 
     # Mark every cache category as freshly updated
     now = datetime.now(timezone.utc)
@@ -4478,7 +4571,8 @@ def test_run_first_refreshes_device_list_despite_fresh_cache(my_predbat):
     assert result == True
     # Device list must always refresh on first start regardless of cache age
     assert "get_device_list" in fox.method_calls
-    # Age-based categories with fresh data should NOT be re-fetched on first start
+    # Age-based categories with fresh data and a current settings cache version should NOT be
+    # re-fetched on first start
     assert "get_device_detail:TEST123" not in fox.method_calls
     assert "get_real_time_data:TEST123" not in fox.method_calls
     assert "get_device_settings:TEST123" not in fox.method_calls
@@ -4536,6 +4630,7 @@ def test_run_unchanged_device_list_preserves_cache(my_predbat):
 
     fox = MockFoxAPIWithRunTracking()
     fox.device_list = [{"deviceSN": "TEST123"}]
+    fox.device_settings_version = FOX_SETTINGS_CACHE_VERSION
     now = datetime.now(timezone.utc)
     for key in FOX_CACHE_KEYS:
         fox.data_age[key] = now
@@ -6735,6 +6830,8 @@ def run_fox_api_tests(my_predbat):
         failed |= test_run_first_call_no_devices(my_predbat)
         failed |= test_run_subsequent_call(my_predbat)
         failed |= test_run_settings_refresh_on_age(my_predbat)
+        failed |= test_run_settings_refresh_forced_by_stale_cache_version(my_predbat)
+        failed |= test_run_stale_cache_version_not_cleared_without_scheduler_success(my_predbat)
         failed |= test_run_realtime_refresh_after_cache_expires(my_predbat)
         failed |= test_run_device_list_failure_does_not_mark_cache_fresh(my_predbat)
         failed |= test_run_first_refreshes_device_list_despite_fresh_cache(my_predbat)

@@ -58,8 +58,14 @@ FOX_SETTINGS_DEFAULTS = {
     "minsoc": {"value": 10},
 }
 
+# Bump this whenever the shape/derivation of device_settings entries changes (e.g. adding
+# range/unit/precision to schedule-derived settings) so a persisted cache from before that
+# change is detected as stale and forces one settings/scheduler refresh regardless of age,
+# instead of being reused as-is - potentially forever, since nothing else would ever correct it.
+FOX_SETTINGS_CACHE_VERSION = 2
+
 # Storage cache keys for device data persisted between reboots
-FOX_CACHE_KEYS = ["device_list", "device_detail", "battery_charging_time", "device_settings", "device_settings_unavailable", "scheduler_state", "device_values", "device_production_month"]
+FOX_CACHE_KEYS = ["device_list", "device_detail", "battery_charging_time", "device_settings", "device_settings_unavailable", "device_settings_version", "scheduler_state", "device_values", "device_production_month"]
 
 # Maximum age (minutes) of cached data before an API refresh is triggered
 FOX_REFRESH_STATIC = 24 * 60  # Device list, detail and battery charge times rarely change
@@ -344,6 +350,10 @@ class FoxAPI(ComponentBase, OAuthMixin):
         # {deviceSN: [key_lower, ...]} of settings the device has reported as unsupported (errno
         # 42015/44096), so they are never polled or written to again
         self.device_settings_unavailable = {}
+        # Version of the persisted device_settings cache actually on disk; 0 (never matches
+        # FOX_SETTINGS_CACHE_VERSION) until load_cached_data() loads a real value, so a fresh
+        # install/first-ever poll is treated the same as a stale cache - both force one refresh
+        self.device_settings_version = 0
         # Set within request_get_func for the duration of a single request_get() call, so callers
         # can tell an "unsupported" failure (permanent) apart from a transient one
         self.last_unsupported = False
@@ -473,8 +483,14 @@ class FoxAPI(ComponentBase, OAuthMixin):
                 if sn:
                     await self.get_device_history(sn)
 
-        # Device settings and scheduler - refresh based on age
-        settings_refresh = self._needs_refresh("device_settings", FOX_REFRESH_SETTINGS)
+        # Device settings and scheduler - refresh based on age. Also force a refresh, regardless
+        # of age, when the persisted cache predates FOX_SETTINGS_CACHE_VERSION - a one-time
+        # self-heal after a code update changes how settings are derived/shaped (e.g. adding
+        # range/unit/precision), so a customer isn't stuck reusing a stale-shaped cached value
+        # for up to FOX_REFRESH_SETTINGS. Once refreshed, the version is saved and this stops
+        # firing - restarts do not otherwise force a refresh, to avoid hammering the API.
+        stale_cache_version = self.device_settings_version != FOX_SETTINGS_CACHE_VERSION
+        settings_refresh = stale_cache_version or self._needs_refresh("device_settings", FOX_REFRESH_SETTINGS)
         if settings_refresh:
             settings_updated = False
             scheduler_updated = False
@@ -486,8 +502,17 @@ class FoxAPI(ComponentBase, OAuthMixin):
                         settings_updated = True
                     if await self.get_scheduler(sn) is not None:
                         scheduler_updated = True
-            if settings_updated:
+            if settings_updated or scheduler_updated:
+                # update_settings_from_schedule() (called from get_scheduler()) mutates
+                # device_settings too, so this must save on scheduler_updated as well - not
+                # just settings_updated - or a schedule-derived upgrade is lost on restart
                 await self._save_cache("device_settings", self.device_settings)
+            if stale_cache_version and scheduler_updated:
+                # Only get_scheduler() -> update_settings_from_schedule() can actually produce
+                # the upgraded (range/unit/precision) shape this version tracks, so the version
+                # must not be marked current on settings_updated alone
+                self.device_settings_version = FOX_SETTINGS_CACHE_VERSION
+                await self._save_cache("device_settings_version", FOX_SETTINGS_CACHE_VERSION)
             if self.device_settings_unavailable:
                 await self._save_cache("device_settings_unavailable", self.device_settings_unavailable)
             if scheduler_updated:
@@ -620,6 +645,10 @@ class FoxAPI(ComponentBase, OAuthMixin):
         device_settings_unavailable = await self._load_cache("device_settings_unavailable")
         if device_settings_unavailable is not None:
             self.device_settings_unavailable = device_settings_unavailable
+
+        device_settings_version = await self._load_cache("device_settings_version")
+        if device_settings_version is not None:
+            self.device_settings_version = device_settings_version
 
         scheduler_state = await self._load_cache("scheduler_state")
         if isinstance(scheduler_state, dict):
