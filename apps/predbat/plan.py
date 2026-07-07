@@ -2854,6 +2854,105 @@ class Plan:
                 )
             )
 
+    def optimise_swap_charge(self, record_charge_windows, debug_mode=False):
+        """
+        Swap optimisation for charge windows.
+
+        Single-window coordinate descent (optimise_charge_limit) cannot perform a move that
+        turns one charge window off and another on when neither change improves the metric on
+        its own - it only ever sees one window changing against a fixed background. This pass
+        evaluates such pairwise moves directly: it exchanges the charge limits of two charge
+        windows on the same day and keeps the swap only if it strictly lowers the overall
+        metric. This lets the plan escape a local optimum where the same charge is better
+        placed in a different (equal or similar priced) window - for example charging later,
+        closer to when the energy is needed, or in a slot that interacts better with solar and
+        export windows.
+
+        Only strictly improving swaps are kept so the pass converges monotonically and can
+        never make the plan worse.
+        """
+        curr = self.currency_symbols[1]
+
+        if not (self.calculate_best_charge and record_charge_windows >= 2):
+            return
+
+        # Require a real improvement to keep a swap. The export swap's metric_min_improvement_swap
+        # defaults negative (it deliberately breaks ties towards later windows) which for a
+        # symmetric charge swap would let the metric increase and cause churn, so use a small
+        # positive gate here: a swap is only kept if it lowers the metric by at least this amount.
+        min_improvement_swap = 0.1
+
+        swapped_target = {}
+        swapped = True
+        while swapped:
+            selected_metric, selected_battery_value, selected_cost, selected_keep, selected_cycle, selected_carbon, selected_import, selected_export = self.run_prediction_metric(
+                self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
+            )
+            self.log("Swap charge optimisation started metric {}{}, cost {}{}, min_improvement_swap {}{}".format(dp2(selected_metric), curr, dp2(selected_cost), curr, min_improvement_swap, curr))
+            swapped = False
+
+            for window_n_target in range(record_charge_windows - 1, 0, -1):
+                window_start_target = self.charge_window_best[window_n_target]["start"]
+                charge_limit_target = self.charge_limit_best[window_n_target]
+                target_day = window_start_target // 1440
+
+                if window_start_target in self.manual_all_times:
+                    continue
+                if swapped_target.get(window_n_target, False):
+                    # Only swap each target once per pass to avoid churn
+                    continue
+                if not self.allow_this_charge_window(window_n_target):
+                    continue
+
+                # Try swapping the charge limit with an earlier window on the same day
+                for window_n in range(max(window_n_target - 32, 0), window_n_target, 1):
+                    window_start = self.charge_window_best[window_n]["start"]
+                    charge_limit = self.charge_limit_best[window_n]
+                    window_day = window_start // 1440
+
+                    if window_start in self.manual_all_times:
+                        continue
+                    if target_day != window_day:
+                        # Don't swap windows on different days
+                        continue
+                    if charge_limit == charge_limit_target:
+                        # Nothing to move between these two windows
+                        continue
+                    if not self.allow_this_charge_window(window_n):
+                        continue
+
+                    # Perform the swap and evaluate the resulting plan
+                    self.charge_limit_best[window_n] = charge_limit_target
+                    self.charge_limit_best[window_n_target] = charge_limit
+
+                    best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export = self.run_prediction_metric(
+                        self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
+                    )
+
+                    if self.debug_enable:
+                        self.log(
+                            "Try to swap charge window {} limit {} with window {} limit {} => metric {} (current best {}) cost {}".format(window_n, charge_limit, window_n_target, charge_limit_target, dp2(best_metric), dp2(selected_metric), dp2(best_cost))
+                        )
+
+                    if best_metric < (selected_metric - min_improvement_swap):
+                        if self.debug_enable:
+                            self.log(
+                                "Swap charge window {} limit {} with window {} limit {} metric {}{} (was {}{}), cost {}{}".format(
+                                    window_n, charge_limit, window_n_target, charge_limit_target, dp2(best_metric), curr, dp2(selected_metric), curr, dp2(best_cost), curr
+                                )
+                            )
+                        selected_metric = best_metric
+                        selected_cost = best_cost
+                        swapped = True
+                        swapped_target[window_n_target] = True
+                        break
+                    else:
+                        # Revert the change
+                        self.charge_limit_best[window_n] = charge_limit
+                        self.charge_limit_best[window_n_target] = charge_limit_target
+
+            self.log("Swap charge optimisation finished metric {}{}, cost {}{}".format(dp2(selected_metric), curr, dp2(selected_cost), curr))
+
     def allow_this_charge_window(self, charge_window_n):
         """
         Allowed to optimise this charge window?
@@ -2980,7 +3079,29 @@ class Plan:
             )
         )
 
-        for pass_type in ["trim", "freeze", "normal", "trim", "low"]:
+        # Run the fixed schedule once, then repeat just the trim/normal refinement pair until it
+        # makes no change, capped at a few iterations. The one-shot "freeze" and "low" sub-passes are
+        # structural and do not need repeating, but a normal/trim change can open up a further
+        # improvement in an earlier window that a single sweep never revisits - repeating the pair
+        # lets those cascade. Acceptance only ever keeps equal-or-better limits so the metric stays
+        # monotonic non-increasing and the extra iterations cannot make the plan worse.
+        base_sequence = ["trim", "freeze", "normal", "trim", "low"]
+        refine_sequence = ["trim", "normal"]
+        max_refine_iterations = 3
+        base_len = len(base_sequence)
+        refine_len = len(refine_sequence)
+        price_set_canonical = list(price_set)
+        changed_this_iteration = False
+
+        for idx, pass_type in enumerate(base_sequence + refine_sequence * max_refine_iterations):
+            # At the start of each refinement pair restore the canonical price band order (the base
+            # "low" sub-pass reverses price_set in place) and stop early once a pair changes nothing.
+            if idx >= base_len and ((idx - base_len) % refine_len) == 0:
+                if idx > base_len and not changed_this_iteration:
+                    break
+                changed_this_iteration = False
+                price_set[:] = price_set_canonical
+
             start_at_low = False
             if pass_type in ["low"]:
                 price_set.reverse()
@@ -3065,7 +3186,12 @@ class Plan:
                                 freeze_only=(typ == "cf"),
                                 allow_freeze=True,
                             )
-                            if n_best_metric <= best_metric and n_best_soc != self.charge_limit_best[window_n]:
+                            if n_best_metric < (best_metric + 0.01) and n_best_soc != self.charge_limit_best[window_n]:
+                                # Only a strict improvement drives another full iteration. Equal-metric
+                                # limit flips are still applied once (as before) but must not keep the
+                                # iteration alive - re-running to chase them over-optimises the
+                                # end_record proxy and can diverge from the post-clipping final metric.
+                                changed_this_iteration = True
                                 best_metric = n_best_metric
                                 best_cost = n_best_cost
                                 best_soc = n_best_soc
@@ -3186,7 +3312,10 @@ class Plan:
                                 allow_freeze=True,
                             )
                             self.export_window_best[window_n]["start"] = keep_start
-                            if n_best_metric <= best_metric and (n_best_soc != self.export_limits_best[window_n] or n_best_start != self.export_window_best[window_n]["start"]):
+                            if n_best_metric < (best_metric + 0.01) and (n_best_soc != self.export_limits_best[window_n] or n_best_start != self.export_window_best[window_n]["start"]):
+                                # Only a strict improvement drives another refinement iteration (see
+                                # the charge block above for why equal-metric flips must not).
+                                changed_this_iteration = True
                                 best_metric = n_best_metric
                                 best_cost = n_best_cost
                                 best_soc = n_best_soc
@@ -3467,6 +3596,10 @@ class Plan:
         # Export more solar - enable freeze export on idle solar windows if it doesn't cost too much
         if self.export_more_solar:
             best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import = self.optimise_solar(best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import, record_export_windows, debug_mode=debug_mode)
+
+        # Charge swap runs last, once all other passes have settled, so a strictly-improving pairwise
+        # charge move is not subsequently undone by a non-monotonic pass (tweak/second/solar).
+        self.optimise_swap_charge(record_charge_windows, debug_mode=debug_mode)
 
         self.plan_write_debug(debug_mode, "plan_raw.html", self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
 
