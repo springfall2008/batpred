@@ -203,11 +203,17 @@ SIGENERGY_HISTORY_NODES = [
     ("FROM_GRID", "grid_import_lifetime", "Grid Import Lifetime"),
     ("TO_GRID", "grid_export_lifetime", "Grid Export Lifetime"),
     ("FROM_SOLAR", "pv_lifetime", "PV Lifetime"),
+    ("FROM_THIRD_PARTY_INV", "third_party_pv_lifetime", "Third-Party PV Lifetime"),
     ("TO_BATTERY", "battery_charge_lifetime", "Battery Charge Lifetime"),
     ("FROM_BATTERY", "battery_discharge_lifetime", "Battery Discharge Lifetime"),
     ("TO_EVDC", "ev_charge_lifetime", "EV Charge Lifetime"),
     ("FROM_EVDC", "ev_discharge_lifetime", "EV Discharge Lifetime"),
 ]
+
+# Storage cache keys for poll-interval system state persisted between restarts (see
+# load_cached_data()). System/device discovery is deliberately excluded — it is always
+# re-fetched fresh on startup.
+SIGENERGY_CACHE_KEYS = ["energy_flow", "daily_summary", "history_totals", "onboard_status"]
 
 # Sentinel returned by _request() when the API responds with code=0 but an empty/null data field.
 # Distinguishes "success with no payload" from None which always means "request failed".
@@ -303,6 +309,10 @@ class SigenergyAPI(ComponentBase):
         self.mqtt_period_raw = {}  # systemId → merged raw 'period' fields (MQTT only sends fields that changed)
         self.current_mode = {}    # systemId → energyStorageOperationMode int
         self.onboard_status = {}  # systemId → onboarding status string (published for the SaaS UI)
+
+        # Age (datetime of last update) of each SIGENERGY_CACHE_KEYS category, used to avoid an
+        # unnecessary API refresh on restart when the persisted cache is still fresh
+        self.data_age = {}
 
         # Control state keyed by systemId
         self.controls = {}        # systemId → {charge: {…}, export: {…}, reserve: …}
@@ -772,10 +782,22 @@ class SigenergyAPI(ComponentBase):
 
         The Sigenergy Cloud API has no native "today" load/import/export sensor,
         so this polls the history endpoint at level=Lifetime for the ever-growing
-        Sankey node totals (TO_LOAD, FROM_GRID, TO_GRID, FROM_SOLAR, TO_BATTERY,
-        FROM_BATTERY, TO_EVDC, FROM_EVDC). Predbat derives "today" energy from
-        these by diffing against midnight — the same pattern already used for
-        lifetime energy counters on other inverter brands.
+        Sankey node totals (TO_LOAD, FROM_GRID, TO_GRID, FROM_SOLAR,
+        FROM_THIRD_PARTY_INV, TO_BATTERY, FROM_BATTERY, TO_EVDC, FROM_EVDC).
+        Predbat derives "today" energy from these by diffing against midnight —
+        the same pattern already used for lifetime energy counters on other
+        inverter brands.
+
+        The 'date' query parameter has no effect on the returned totals at
+        level=Lifetime (confirmed by requesting yesterday/today/tomorrow and
+        getting identical values back) — the API always returns its current
+        live cumulative total. That server-side total has been observed to
+        dip by some kWh for roughly the first 30 minutes after local midnight
+        each night before correcting itself — presumably a day-rollover job on
+        Sigenergy's side recalculating the total. Since these are one-directional
+        cumulative energy counters that can only legitimately increase, any
+        dip is clamped to the last known value rather than published, so the
+        transient glitch never reaches HA's history for these sensors.
 
         Args:
             system_id: Sigenergy system unique identifier.
@@ -783,18 +805,25 @@ class SigenergyAPI(ComponentBase):
         Returns:
             True on success, False on failure.
         """
-        today = datetime.now(self.local_tz).strftime("%Y-%m-%d")
         data = await self._request(
             "GET",
             "/openapi/systems/{}/v1/history".format(system_id),
-            params={"systemId": system_id, "date": today, "level": "Lifetime"},
+            params={"systemId": system_id, "date": datetime.now(self.local_tz).strftime("%Y-%m-%d"), "level": "Lifetime"},
         )
         if data is None or not isinstance(data, dict):
             self.log("Warn: SigenergyAPI: Failed to fetch history totals for {}".format(system_id))
             return False
 
         nodes = data.get("sankeyData", {}).get("nodes", [])
-        self.history_totals[system_id] = {node.get("id"): _safe_float(node.get("value", 0)) for node in nodes if node.get("id")}
+        new_totals = {node.get("id"): _safe_float(node.get("value", 0)) for node in nodes if node.get("id")}
+        previous_totals = self.history_totals.get(system_id, {})
+        # Start from previous_totals so a node ID transiently missing from this response (rather
+        # than genuinely dipping) keeps its last known value instead of vanishing and defaulting
+        # to 0 when published (publish_system_entities() reads missing nodes as 0).
+        merged_totals = dict(previous_totals)
+        for node_id, value in new_totals.items():
+            merged_totals[node_id] = max(value, previous_totals.get(node_id, value))
+        self.history_totals[system_id] = merged_totals
         return True
 
     async def fetch_current_mode(self, system_id):
@@ -1648,9 +1677,15 @@ class SigenergyAPI(ComponentBase):
         )
 
         # --- Operational mode (string) ---
-        op_mode_int = int(_safe_float(flow_status.get("operationalMode", -1)))
+        # flow_status (from MQTT) is preferred as it's the freshest, but fall back to the
+        # REST-sourced current_mode (fetch_current_mode) so this doesn't read "Unknown" before
+        # MQTT has delivered its first message — e.g. during startup or while MQTT is unavailable.
+        if "operationalMode" in flow_status:
+            op_mode_int = int(_safe_float(flow_status["operationalMode"], -1))
+        else:
+            op_mode_int = self.current_mode.get(system_id, -1)
         op_mode_str = SIGENERGY_MODE_NAMES.get(op_mode_int, "Unknown ({})".format(op_mode_int) if op_mode_int >= 0 else "Unknown")
-        sys_status_int = int(_safe_float(flow_status.get("systemStatus", -1)))
+        sys_status_int = int(_safe_float(flow_status.get("systemStatus", -1), -1))
         sys_status_str = SIGENERGY_SYSTEM_STATUS_NAMES.get(sys_status_int, "Unknown ({})".format(sys_status_int) if sys_status_int >= 0 else "Unknown")
         self.dashboard_item(
             "sensor.{}_sigenergy_{}_operational_mode".format(self.prefix, slug),
@@ -1736,7 +1771,13 @@ class SigenergyAPI(ComponentBase):
         self.set_arg("pv_power", ["sensor.{}_sigenergy_{}_pv_power".format(self.prefix, s) for s in slugs])
         self.set_arg("grid_power", ["sensor.{}_sigenergy_{}_grid_power".format(self.prefix, s) for s in slugs])
         self.set_arg("load_power", ["sensor.{}_sigenergy_{}_load_power".format(self.prefix, s) for s in slugs])
-        self.set_arg("pv_today", ["sensor.{}_sigenergy_{}_pv_lifetime".format(self.prefix, s) for s in slugs])
+        # pv_today accepts a flat list of entities that get summed, so include both the native PV
+        # lifetime total and the third-party inverter's PV lifetime total (FROM_THIRD_PARTY_INV) —
+        # Sigenergy systems can have a co-located third-party inverter feeding into the same battery.
+        self.set_arg(
+            "pv_today",
+            ["sensor.{}_sigenergy_{}_pv_lifetime".format(self.prefix, s) for s in slugs] + ["sensor.{}_sigenergy_{}_third_party_pv_lifetime".format(self.prefix, s) for s in slugs],
+        )
         self.set_arg("load_today", ["sensor.{}_sigenergy_{}_load_lifetime".format(self.prefix, s) for s in slugs])
         self.set_arg("import_today", ["sensor.{}_sigenergy_{}_grid_import_lifetime".format(self.prefix, s) for s in slugs])
         self.set_arg("export_today", ["sensor.{}_sigenergy_{}_grid_export_lifetime".format(self.prefix, s) for s in slugs])
@@ -2180,6 +2221,91 @@ class SigenergyAPI(ComponentBase):
             )
 
     # -----------------------------------------------------------------------
+    # Storage cache
+    # -----------------------------------------------------------------------
+
+    def _data_age_minutes(self, key):
+        """Return the age in minutes of the in-memory data for a cache key, or None if unknown."""
+        timestamp = self.data_age.get(key, None)
+        if timestamp is None:
+            return None
+        return (datetime.now(self.local_tz) - timestamp).total_seconds() / 60.0
+
+    def _needs_refresh(self, key, max_age_minutes):
+        """Return True if the data for a cache key is missing or older than max_age_minutes."""
+        age = self._data_age_minutes(key)
+        return age is None or age >= max_age_minutes
+
+    async def _save_cache(self, key, data):
+        """Save poll-interval system state to storage so it survives a Predbat restart.
+
+        Mirrors the pattern used by FoxAPI._save_cache().
+
+        Args:
+            key: Cache key, one of SIGENERGY_CACHE_KEYS.
+            data: JSON-serialisable data to persist.
+        """
+        now = datetime.now(self.local_tz)
+        self.data_age[key] = now
+        if self.storage:
+            # Expire after a day so stale data doesn't linger in the cache forever
+            await self.storage.save("sigenergy", key, data, format="json", expiry=now + timedelta(days=1))
+
+    async def _load_cache(self, key):
+        """Load previously persisted poll-interval system state for a cache key.
+
+        Also records the data's age (from storage) so _needs_refresh() can tell, right after a
+        restart, whether the restored value is still fresh enough to skip an immediate re-fetch.
+
+        Args:
+            key: Cache key, one of SIGENERGY_CACHE_KEYS.
+
+        Returns:
+            The cached data, or None if storage is unavailable or nothing is cached.
+        """
+        if not self.storage:
+            return None
+        data = await self.storage.load("sigenergy", key)
+        if data is None:
+            return None
+        age = await self.storage.age("sigenergy", key)
+        if age is None:
+            return None
+        self.data_age[key] = datetime.now(self.local_tz) - timedelta(minutes=age)
+        return data
+
+    async def load_cached_data(self):
+        """Restore poll-interval system state from storage on startup.
+
+        System/device discovery (self.systems, self.devices) is always re-fetched fresh on
+        startup and is not restored here. What matters most is history_totals — restoring it
+        preserves the monotonic-clamp baseline in fetch_history_totals() across a restart, so a
+        reboot during the API's own nightly dip window can't let a lower reading through. The
+        rest (energy_flow, daily_summary, onboard_status) is restored too so entities publish
+        sensible values immediately rather than "unknown"/0 while the first poll is in flight.
+        """
+        if not self.storage:
+            return
+
+        energy_flow = await self._load_cache("energy_flow")
+        if energy_flow is not None:
+            self.energy_flow = energy_flow
+
+        daily_summary = await self._load_cache("daily_summary")
+        if daily_summary is not None:
+            self.daily_summary = daily_summary
+
+        history_totals = await self._load_cache("history_totals")
+        if history_totals is not None:
+            self.history_totals = history_totals
+
+        onboard_status = await self._load_cache("onboard_status")
+        if onboard_status is not None:
+            self.onboard_status = onboard_status
+
+        self.log("SigenergyAPI: Restored cached poll-interval state from storage")
+
+    # -----------------------------------------------------------------------
     # Main run loop
     # -----------------------------------------------------------------------
 
@@ -2199,6 +2325,10 @@ class SigenergyAPI(ComponentBase):
         """
         if first:
             self.log("SigenergyAPI: First run — discovering systems")
+            # Restore poll-interval state (history_totals, energy_flow, daily_summary,
+            # onboard_status) before any fetch below runs, so fetch_history_totals()'s
+            # monotonic clamp has its last-known baseline from before the restart.
+            await self.load_cached_data()
             if not self.system_id_filter:
                 self.log("Warn: SigenergyAPI: No system_id configured — will use all authorised systems")
             token = await self.get_access_token()
@@ -2267,6 +2397,7 @@ class SigenergyAPI(ComponentBase):
                     self.onboard_status[str(sid)] = "active"
                 else:
                     self.onboard_status[str(sid)] = "pending_approval"
+            await self._save_cache("onboard_status", self.onboard_status)
 
         # Publish onboarding status for the SaaS UI.
         if first or seconds % SIGENERGY_POLL_INTERVAL == 0:
@@ -2281,18 +2412,46 @@ class SigenergyAPI(ComponentBase):
         # Realtime data refresh — skip live power/SOC fetch when MQTT is providing fresh data
         if first or seconds % SIGENERGY_POLL_INTERVAL == 0:
             now_ts = time.time()
+            energy_updated = False
+            summary_updated = False
+            history_updated = False
+            # On a normal poll tick these are always True (the block itself only runs every
+            # SIGENERGY_POLL_INTERVAL), so this only matters right after a restart: it stops
+            # load_cached_data()'s restored energy_flow/daily_summary/history_totals being
+            # re-fetched immediately when the persisted cache is still fresh.
+            refresh_energy = self._needs_refresh("energy_flow", SIGENERGY_POLL_INTERVAL / 60.0)
+            refresh_summary = self._needs_refresh("daily_summary", SIGENERGY_POLL_INTERVAL / 60.0)
+            refresh_history = self._needs_refresh("history_totals", SIGENERGY_POLL_INTERVAL / 60.0)
             for sid in list(self.systems.keys()):
                 last_update = self.last_mqtt_update.get(sid, 0)
                 mqtt_age = now_ts - last_update
                 mqtt_fresh = last_update > 0 and mqtt_age < SIGENERGY_POLL_INTERVAL
                 if mqtt_fresh:
+                    # MQTT is genuinely keeping energy_flow live — worth persisting/re-timestamping.
                     self.log("SigenergyAPI: Skipping REST energy poll for {} (MQTT data {:.0f}s old)".format(sid, mqtt_age))
+                    energy_updated = True
+                elif refresh_energy:
+                    if await self.fetch_inverter_realtime(sid) or await self.fetch_energy_flow(sid):
+                        energy_updated = True
                 else:
-                    if not await self.fetch_inverter_realtime(sid):
-                        await self.fetch_energy_flow(sid)
-                # Always poll daily summary and lifetime history totals — not provided by MQTT
-                await self.fetch_daily_summary(sid)
-                await self.fetch_history_totals(sid)
+                    # Neither MQTT nor a fresh REST fetch — leave data_age untouched so it keeps
+                    # ageing towards refresh_energy instead of being falsely renewed.
+                    self.log("SigenergyAPI: Skipping REST energy poll for {} (MQTT stale but cached data still fresh)".format(sid))
+                # Daily summary and lifetime history totals are not provided by MQTT, but are only
+                # refreshed when the cached copy has actually gone stale (see refresh_* above)
+                if refresh_summary and await self.fetch_daily_summary(sid):
+                    summary_updated = True
+                if refresh_history and await self.fetch_history_totals(sid):
+                    history_updated = True
+            # Each cache is only saved (and its freshness timestamp bumped) when the data was
+            # actually confirmed fresh this tick — an unconditional save would falsely renew
+            # data_age and defeat the refresh_* gates above.
+            if energy_updated:
+                await self._save_cache("energy_flow", self.energy_flow)
+            if summary_updated:
+                await self._save_cache("daily_summary", self.daily_summary)
+            if history_updated:
+                await self._save_cache("history_totals", self.history_totals)
 
         # Publish entities
         if first or seconds % SIGENERGY_POLL_INTERVAL == 0:
