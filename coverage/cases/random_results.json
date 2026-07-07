@@ -2,7 +2,7 @@
   "run_info": {
     "template_yaml": "cases/predbat_debug_agile1.yaml",
     "scenarios_file": "cases/random_scenarios.yaml",
-    "timestamp": "2026-07-07T07:25:41.550905+00:00"
+    "timestamp": "2026-07-07T10:34:17.185290+00:00"
   },
   "results": [
     {
@@ -17,9 +17,10 @@
       "soc_final": 9.5,
       "battery_cycles": 19.3241,
       "carbon_g": 13404.32,
-      "runtime_s": 0.7,
+      "runtime_s": 0.462,
       "failed": false,
-      "error": null
+      "error": null,
+      "end_record": 1440
     },
     {
       "id": 1,
@@ -33,25 +34,27 @@
       "soc_final": 4.579,
       "battery_cycles": 11.2511,
       "carbon_g": 5161.75,
-      "runtime_s": 0.345,
+      "runtime_s": 0.402,
       "failed": false,
-      "error": null
+      "error": null,
+      "end_record": 1440
     },
     {
       "id": 2,
       "seed": 2,
-      "metric": 470.2867,
-      "cost": 477.6651,
-      "import_kwh_battery": 0.5878,
-      "import_kwh_house": 0.9346,
-      "export_kwh": 10.8807,
+      "metric": 468.7479,
+      "cost": 476.1263,
+      "import_kwh_battery": 0.7336,
+      "import_kwh_house": 1.0005,
+      "export_kwh": 11.1044,
       "soc_min": 0.266,
       "soc_final": 0.38,
-      "battery_cycles": 4.3291,
-      "carbon_g": 8932.4,
-      "runtime_s": 1.075,
+      "battery_cycles": 4.1615,
+      "carbon_g": 8926.96,
+      "runtime_s": 1.435,
       "failed": false,
-      "error": null
+      "error": null,
+      "end_record": 1440
     },
     {
       "id": 3,
@@ -65,9 +68,10 @@
       "soc_final": 4.6647,
       "battery_cycles": 10.2125,
       "carbon_g": 11613.41,
-      "runtime_s": 0.625,
+      "runtime_s": 0.756,
       "failed": false,
-      "error": null
+      "error": null,
+      "end_record": 1440
     },
     {
       "id": 4,
@@ -81,9 +85,10 @@
       "soc_final": 4.6215,
       "battery_cycles": 12.0919,
       "carbon_g": 16185.48,
-      "runtime_s": 0.409,
+      "runtime_s": 0.55,
       "failed": false,
-      "error": null
+      "error": null,
+      "end_record": 1440
     },
     {
       "id": 5,
@@ -97,25 +102,27 @@
       "soc_final": 12.9568,
       "battery_cycles": 16.0606,
       "carbon_g": 5197.29,
-      "runtime_s": 0.304,
+      "runtime_s": 0.333,
       "failed": false,
-      "error": null
+      "error": null,
+      "end_record": 1440
     },
     {
       "id": 6,
       "seed": 6,
-      "metric": 246.8074,
-      "cost": 411.425,
-      "import_kwh_battery": 23.658,
-      "import_kwh_house": 0.0634,
-      "export_kwh": 21.148,
+      "metric": 249.4903,
+      "cost": 415.5059,
+      "import_kwh_battery": 23.8391,
+      "import_kwh_house": 0.3018,
+      "export_kwh": 21.3354,
       "soc_min": 0.38,
-      "soc_final": 13.0791,
-      "battery_cycles": 44.4141,
-      "carbon_g": 12372.19,
-      "runtime_s": 3.302,
+      "soc_final": 13.0816,
+      "battery_cycles": 44.7705,
+      "carbon_g": 12472.47,
+      "runtime_s": 3.981,
       "failed": false,
-      "error": null
+      "error": null,
+      "end_record": 1440
     },
     {
       "id": 7,
@@ -129,9 +136,10 @@
       "soc_final": 0.38,
       "battery_cycles": 0.9215,
       "carbon_g": 17836.83,
-      "runtime_s": 0.382,
+      "runtime_s": 0.442,
       "failed": false,
-      "error": null
+      "error": null,
+      "end_record": 1440
     },
     {
       "id": 8,
@@ -145,14 +153,15 @@
       "soc_final": 0.38,
       "battery_cycles": 6.9101,
       "carbon_g": 13346.35,
-      "runtime_s": 0.193,
+      "runtime_s": 0.225,
       "failed": false,
-      "error": null
+      "error": null,
+      "end_record": 1440
     },
     {
       "id": 9,
       "seed": 9,
-      "metric": 114.5006,
+      "metric": 115.3713,
       "cost": 233.0853,
       "import_kwh_battery": 13.0071,
       "import_kwh_house": 0.0,
@@ -161,41 +170,44 @@
       "soc_final": 7.3332,
       "battery_cycles": 26.1783,
       "carbon_g": 3997.87,
-      "runtime_s": 0.714,
+      "runtime_s": 1.186,
       "failed": false,
-      "error": null
+      "error": null,
+      "end_record": 1440
     },
     {
       "id": 10,
       "seed": 10,
-      "metric": 322.2225,
-      "cost": 468.1888,
-      "import_kwh_battery": 13.7159,
+      "metric": 314.1815,
+      "cost": 452.4177,
+      "import_kwh_battery": 13.8104,
       "import_kwh_house": 0.0,
-      "export_kwh": 20.6084,
+      "export_kwh": 20.9941,
       "soc_min": 0.7599,
-      "soc_final": 9.4872,
-      "battery_cycles": 34.1242,
-      "carbon_g": 9554.42,
-      "runtime_s": 2.151,
+      "soc_final": 9.1808,
+      "battery_cycles": 33.9669,
+      "carbon_g": 9466.33,
+      "runtime_s": 2.504,
       "failed": false,
-      "error": null
+      "error": null,
+      "end_record": 1440
     },
     {
       "id": 11,
       "seed": 11,
-      "metric": 732.6263,
-      "cost": 740.0047,
-      "import_kwh_battery": 11.4145,
-      "import_kwh_house": 0.1465,
+      "metric": 732.5029,
+      "cost": 739.8813,
+      "import_kwh_battery": 11.3824,
+      "import_kwh_house": 0.1743,
       "export_kwh": 9.4432,
       "soc_min": 0.38,
       "soc_final": 0.38,
-      "battery_cycles": 16.167,
-      "carbon_g": 13298.05,
-      "runtime_s": 1.045,
+      "battery_cycles": 16.1072,
+      "carbon_g": 13462.18,
+      "runtime_s": 1.322,
       "failed": false,
-      "error": null
+      "error": null,
+      "end_record": 1440
     },
     {
       "id": 12,
@@ -209,9 +221,10 @@
       "soc_final": 4.5028,
       "battery_cycles": 50.8526,
       "carbon_g": 17129.31,
-      "runtime_s": 2.238,
+      "runtime_s": 2.535,
       "failed": false,
-      "error": null
+      "error": null,
+      "end_record": 1440
     },
     {
       "id": 13,
@@ -225,14 +238,15 @@
       "soc_final": 0.38,
       "battery_cycles": 10.9678,
       "carbon_g": 10462.19,
-      "runtime_s": 0.635,
+      "runtime_s": 1.102,
       "failed": false,
-      "error": null
+      "error": null,
+      "end_record": 1440
     },
     {
       "id": 14,
       "seed": 14,
-      "metric": 915.2228,
+      "metric": 914.3216,
       "cost": 924.6169,
       "import_kwh_battery": 11.0497,
       "import_kwh_house": 3.043,
@@ -241,25 +255,27 @@
       "soc_final": 1.0744,
       "battery_cycles": 8.7572,
       "carbon_g": 16975.54,
-      "runtime_s": 0.307,
+      "runtime_s": 0.43,
       "failed": false,
-      "error": null
+      "error": null,
+      "end_record": 1440
     },
     {
       "id": 15,
       "seed": 15,
-      "metric": 764.0432,
-      "cost": 829.059,
-      "import_kwh_battery": 23.6404,
-      "import_kwh_house": 0.3863,
-      "export_kwh": 10.3789,
+      "metric": 762.2191,
+      "cost": 826.8768,
+      "import_kwh_battery": 23.9157,
+      "import_kwh_house": 0.5194,
+      "export_kwh": 10.7298,
       "soc_min": 0.2978,
       "soc_final": 4.6978,
-      "battery_cycles": 31.9475,
-      "carbon_g": 17381.37,
-      "runtime_s": 1.93,
+      "battery_cycles": 32.7641,
+      "carbon_g": 17402.12,
+      "runtime_s": 2.284,
       "failed": false,
-      "error": null
+      "error": null,
+      "end_record": 1440
     },
     {
       "id": 16,
@@ -273,9 +289,10 @@
       "soc_final": 0.38,
       "battery_cycles": 4.1652,
       "carbon_g": 15925.89,
-      "runtime_s": 0.422,
+      "runtime_s": 0.48,
       "failed": false,
-      "error": null
+      "error": null,
+      "end_record": 1440
     },
     {
       "id": 17,
@@ -289,9 +306,10 @@
       "soc_final": 13.4038,
       "battery_cycles": 36.1279,
       "carbon_g": 5283.62,
-      "runtime_s": 1.723,
+      "runtime_s": 1.903,
       "failed": false,
-      "error": null
+      "error": null,
+      "end_record": 1440
     },
     {
       "id": 18,
@@ -305,9 +323,10 @@
       "soc_final": 4.5266,
       "battery_cycles": 8.7378,
       "carbon_g": 11634.51,
-      "runtime_s": 0.211,
+      "runtime_s": 0.235,
       "failed": false,
-      "error": null
+      "error": null,
+      "end_record": 1440
     },
     {
       "id": 19,
@@ -321,9 +340,10 @@
       "soc_final": 19.9853,
       "battery_cycles": 29.7806,
       "carbon_g": 17665.55,
-      "runtime_s": 1.009,
+      "runtime_s": 1.104,
       "failed": false,
-      "error": null
+      "error": null,
+      "end_record": 1440
     }
   ]
 }
