@@ -93,6 +93,27 @@ def _make_mock_session(mock_response):
     return mock_session
 
 
+class FakeStorage:
+    """In-memory fake of the Storage component, for _save_cache/_load_cache/load_cached_data tests."""
+
+    def __init__(self):
+        """Initialise an empty in-memory store keyed by (module, filename)."""
+        self.data = {}
+
+    async def save(self, module, filename, data, format="yaml", expiry=None):
+        """Store data under (module, filename), mirroring StorageBase.save's signature and return value."""
+        self.data[(module, filename)] = data
+        return True
+
+    async def load(self, module, filename):
+        """Return previously saved data for (module, filename), or None if absent."""
+        return self.data.get((module, filename))
+
+    async def age(self, module, filename):
+        """Return 0 (fresh) if data exists for (module, filename), else None."""
+        return 0 if (module, filename) in self.data else None
+
+
 # ---------------------------------------------------------------------------
 # Mock class
 # ---------------------------------------------------------------------------
@@ -123,6 +144,14 @@ class MockSigenergyAPI(SigenergyAPI):
         self.api_stop = False
         # Skip mode-switch → command delay in unit tests
         self._command_delay = 0
+        # ComponentBase.storage looks at self.base.components, which this mock doesn't set up —
+        # override it directly so tests can plug in a FakeStorage via self._mock_storage.
+        self._mock_storage = None
+
+    @property
+    def storage(self):
+        """Override ComponentBase.storage — tests set self._mock_storage directly."""
+        return self._mock_storage
 
     def log(self, message):
         """Capture log messages for assertion."""
@@ -317,7 +346,7 @@ def test_sigenergy_publish_system_entities(my_predbat):
         "evPower": 0.0,
     }
     api.daily_summary[system_id] = {"dailyPowerGeneration": 12.3}
-    api.history_totals[system_id] = {"TO_LOAD": 987.6, "FROM_GRID": 500.5, "TO_GRID": 400.4}
+    api.history_totals[system_id] = {"TO_LOAD": 987.6, "FROM_GRID": 500.5, "TO_GRID": 400.4, "FROM_THIRD_PARTY_INV": 55.5}
 
     run_async(api.publish_system_entities(system_id))
 
@@ -328,6 +357,7 @@ def test_sigenergy_publish_system_entities(my_predbat):
     today_key = "sensor.predbat_sigenergy_{}_pv_today".format(slug)
     load_lifetime_key = "sensor.predbat_sigenergy_{}_load_lifetime".format(slug)
     grid_import_lifetime_key = "sensor.predbat_sigenergy_{}_grid_import_lifetime".format(slug)
+    third_party_pv_lifetime_key = "sensor.predbat_sigenergy_{}_third_party_pv_lifetime".format(slug)
 
     assert soc_key in api.dashboard_items, "Battery SOC entity published"
     soc_kwh = api.dashboard_items[soc_key]["state"]
@@ -350,6 +380,80 @@ def test_sigenergy_publish_system_entities(my_predbat):
     assert abs(api.dashboard_items[load_lifetime_key]["state"] - 987.6) < 0.01, "Load lifetime correct"
     assert grid_import_lifetime_key in api.dashboard_items, "Grid import lifetime entity published"
     assert abs(api.dashboard_items[grid_import_lifetime_key]["state"] - 500.5) < 0.01, "Grid import lifetime correct"
+    assert third_party_pv_lifetime_key in api.dashboard_items, "Third-party PV lifetime entity published"
+    assert abs(api.dashboard_items[third_party_pv_lifetime_key]["state"] - 55.5) < 0.01, "Third-party PV lifetime correct"
+
+    return failed
+
+
+def test_sigenergy_publish_system_entities_operational_mode_fallback(my_predbat):
+    """Test operational_mode falls back to the REST-sourced current_mode when MQTT hasn't reported yet.
+
+    self.system_status is only ever populated by _handle_mqtt_period (MQTT). Before the first MQTT
+    message arrives (e.g. at startup, or if MQTT can't connect), it stays empty and the operational
+    mode sensor must not simply read "Unknown" when fetch_current_mode has already obtained a real
+    value via REST.
+    """
+    failed = False
+    api = MockSigenergyAPI()
+
+    system_id = "SIG12345"
+    slug = api._system_slug(system_id)
+    api.systems[system_id] = {"systemName": "My Site", "batteryCapacity": 10.0, "status": "online"}
+    api.devices[system_id] = [{"deviceType": "Inverter", "attrMap": {"ratedActivePower": 5.0}}]
+    api.energy_flow[system_id] = {"batterySoc": 60.0, "batteryPower": 2.0, "pvPower": 3.5, "gridPower": 1.0, "loadPower": 4.5, "evPower": 0.0}
+    api.daily_summary[system_id] = {"dailyPowerGeneration": 12.3}
+    api.history_totals[system_id] = {}
+    # No system_status entry — MQTT has not delivered a 'period' message yet.
+    api.current_mode[system_id] = SIGENERGY_MODE_VPP
+
+    run_async(api.publish_system_entities(system_id))
+
+    mode_key = "sensor.predbat_sigenergy_{}_operational_mode".format(slug)
+    assert mode_key in api.dashboard_items, "Operational mode entity published"
+    assert api.dashboard_items[mode_key]["state"] == "VPP", "Falls back to REST current_mode, got {}".format(api.dashboard_items[mode_key]["state"])
+    assert api.dashboard_items[mode_key]["attributes"]["mode_id"] == SIGENERGY_MODE_VPP, "mode_id reflects fallback current_mode"
+
+    # Once MQTT reports a value, it takes priority over the REST-sourced current_mode.
+    api.system_status[system_id] = {"operationalMode": SIGENERGY_MODE_MSC, "systemStatus": 1}
+    run_async(api.publish_system_entities(system_id))
+    assert api.dashboard_items[mode_key]["state"] == "Maximum Self-Consumption", "MQTT value takes priority once available, got {}".format(api.dashboard_items[mode_key]["state"])
+
+    return failed
+
+
+def test_sigenergy_publish_system_entities_operational_mode_invalid_value(my_predbat):
+    """Test operational_mode reads 'Unknown' rather than mode 0 when the MQTT value is unparsable.
+
+    _safe_float(value) with no explicit default falls back to 0.0 on a bad value, which maps to a
+    real mode (0 == Maximum Self-Consumption) instead of Unknown. Both operationalMode and
+    systemStatus must pass an explicit default of -1 so an invalid-but-present value still reads
+    as Unknown rather than silently reporting a specific (wrong) mode/status.
+    """
+    failed = False
+    api = MockSigenergyAPI()
+
+    system_id = "SIG12345"
+    slug = api._system_slug(system_id)
+    api.systems[system_id] = {"systemName": "My Site", "batteryCapacity": 10.0, "status": "online"}
+    api.devices[system_id] = [{"deviceType": "Inverter", "attrMap": {"ratedActivePower": 5.0}}]
+    api.energy_flow[system_id] = {"batterySoc": 60.0, "batteryPower": 2.0, "pvPower": 3.5, "gridPower": 1.0, "loadPower": 4.5, "evPower": 0.0}
+    api.daily_summary[system_id] = {"dailyPowerGeneration": 12.3}
+    api.history_totals[system_id] = {}
+    # Present but unparsable — must not be treated as mode/status 0.
+    api.system_status[system_id] = {"operationalMode": "", "systemStatus": None}
+
+    run_async(api.publish_system_entities(system_id))
+
+    mode_key = "sensor.predbat_sigenergy_{}_operational_mode".format(slug)
+    assert api.dashboard_items[mode_key]["state"] == "Unknown", "Unparsable operationalMode must read Unknown, not mode 0, got {}".format(api.dashboard_items[mode_key]["state"])
+    assert api.dashboard_items[mode_key]["attributes"]["mode_id"] is None, "mode_id must be None, not 0, got {}".format(api.dashboard_items[mode_key]["attributes"]["mode_id"])
+    assert api.dashboard_items[mode_key]["attributes"]["system_status"] == "Unknown", "Unparsable systemStatus must read Unknown, not status 0, got {}".format(
+        api.dashboard_items[mode_key]["attributes"]["system_status"]
+    )
+    assert api.dashboard_items[mode_key]["attributes"]["system_status_id"] is None, "system_status_id must be None, not 0, got {}".format(
+        api.dashboard_items[mode_key]["attributes"]["system_status_id"]
+    )
 
     return failed
 
@@ -373,7 +477,12 @@ def test_sigenergy_automatic_config(my_predbat):
     assert "grid_power" in api.set_args, "grid_power wired"
     assert "inverter_time" in api.set_args, "inverter_time wired"
     assert len(api.set_args["inverter_time"]) == 2, "inverter_time has one entry per system"
-    assert api.set_args.get("pv_today") == ["sensor.predbat_sigenergy_sig001_pv_lifetime", "sensor.predbat_sigenergy_sig002_pv_lifetime"], "pv_today wired to lifetime totals"
+    assert api.set_args.get("pv_today") == [
+        "sensor.predbat_sigenergy_sig001_pv_lifetime",
+        "sensor.predbat_sigenergy_sig002_pv_lifetime",
+        "sensor.predbat_sigenergy_sig001_third_party_pv_lifetime",
+        "sensor.predbat_sigenergy_sig002_third_party_pv_lifetime",
+    ], "pv_today wired to native and third-party PV lifetime totals"
     assert api.set_args.get("load_today") == ["sensor.predbat_sigenergy_sig001_load_lifetime", "sensor.predbat_sigenergy_sig002_load_lifetime"], "load_today wired to lifetime totals"
     assert api.set_args.get("import_today") == ["sensor.predbat_sigenergy_sig001_grid_import_lifetime", "sensor.predbat_sigenergy_sig002_grid_import_lifetime"], "import_today wired to lifetime totals"
     assert api.set_args.get("export_today") == ["sensor.predbat_sigenergy_sig001_grid_export_lifetime", "sensor.predbat_sigenergy_sig002_grid_export_lifetime"], "export_today wired to lifetime totals"
@@ -717,6 +826,300 @@ def test_sigenergy_fetch_history_totals_empty_data(my_predbat):
 
     assert ok is False, "fetch_history_totals should return False for empty data, got {}".format(ok)
     assert "SIG001" not in api.history_totals, "history_totals not populated on failure"
+
+    return failed
+
+
+def test_sigenergy_fetch_history_totals_clamps_dip(my_predbat):
+    """Test fetch_history_totals ignores a transient dip in the API's cumulative totals.
+
+    The Sigenergy Cloud API has been observed to briefly report a lower "Lifetime"
+    total for roughly the first 30 minutes after local midnight each night before
+    correcting itself. These are one-directional cumulative energy counters that
+    can only legitimately increase, so a lower reading must be clamped to the last
+    known value rather than published (and overwrite it) — otherwise HA's history
+    for these sensors would show a false dip every night.
+    """
+    failed = False
+    api = MockSigenergyAPI()
+    api.access_token = "fake_token"
+    api.token_expires_at = 9_999_999_999
+    api._last_request_time = 0
+    api.history_totals["SIG001"] = {"TO_LOAD": 7028.33, "FROM_GRID": 500.5}
+
+    fake_response = {
+        "code": 0,
+        "data": {
+            "sankeyData": {
+                "nodes": [
+                    {"id": "TO_LOAD", "value": 7015.29},  # dip below the previous 7028.33
+                    {"id": "FROM_GRID", "value": 501.1},  # normal increase, should pass through
+                ],
+                "links": [],
+            },
+        },
+    }
+
+    mock_response = _make_mock_response(status=200, json_data=fake_response)
+    mock_session = _make_mock_session(mock_response)
+
+    with patch("sigenergy.aiohttp.ClientSession", return_value=mock_session):
+        ok = run_async(api.fetch_history_totals("SIG001"))
+
+    assert ok is True, "fetch_history_totals should return True, got {}".format(ok)
+    totals = api.history_totals.get("SIG001", {})
+    assert totals.get("TO_LOAD") == 7028.33, "TO_LOAD dip should be clamped to the previous value, got {}".format(totals.get("TO_LOAD"))
+    assert totals.get("FROM_GRID") == 501.1, "FROM_GRID increase should pass through, got {}".format(totals.get("FROM_GRID"))
+
+    return failed
+
+
+def test_sigenergy_fetch_history_totals_keeps_missing_node(my_predbat):
+    """Test fetch_history_totals preserves a node ID that is transiently absent from the response.
+
+    Merging by only iterating new_totals.items() would drop any previously-seen node ID missing
+    from the latest response entirely. publish_system_entities() defaults a missing node to 0, so
+    that would publish a large false drop for it — exactly what the dip clamp is meant to prevent.
+    """
+    failed = False
+    api = MockSigenergyAPI()
+    api.access_token = "fake_token"
+    api.token_expires_at = 9_999_999_999
+    api._last_request_time = 0
+    api.history_totals["SIG001"] = {"TO_LOAD": 7028.33, "FROM_GRID": 500.5}
+
+    fake_response = {
+        "code": 0,
+        "data": {
+            "sankeyData": {
+                "nodes": [{"id": "TO_LOAD", "value": 7030.1}],  # FROM_GRID is absent from this response
+                "links": [],
+            },
+        },
+    }
+
+    mock_response = _make_mock_response(status=200, json_data=fake_response)
+    mock_session = _make_mock_session(mock_response)
+
+    with patch("sigenergy.aiohttp.ClientSession", return_value=mock_session):
+        ok = run_async(api.fetch_history_totals("SIG001"))
+
+    assert ok is True, "fetch_history_totals should return True, got {}".format(ok)
+    totals = api.history_totals.get("SIG001", {})
+    assert totals.get("TO_LOAD") == 7030.1, "TO_LOAD present in the response should update normally, got {}".format(totals.get("TO_LOAD"))
+    assert totals.get("FROM_GRID") == 500.5, "FROM_GRID missing from the response should keep its last known value, got {}".format(totals.get("FROM_GRID"))
+
+    return failed
+
+
+def test_sigenergy_save_load_cache_no_storage(my_predbat):
+    """Test _save_cache/_load_cache no-op cleanly when no storage component is available."""
+    failed = False
+    api = MockSigenergyAPI()
+    assert api.storage is None, "No storage wired up by default"
+
+    run_async(api._save_cache("history_totals", {"TO_LOAD": 100.0}))  # must not raise
+    result = run_async(api._load_cache("history_totals"))
+    assert result is None, "_load_cache returns None when there is no storage, got {}".format(result)
+
+    return failed
+
+
+def test_sigenergy_save_load_cache_round_trip(my_predbat):
+    """Test _save_cache/_load_cache round-trip data through the storage component."""
+    failed = False
+    api = MockSigenergyAPI()
+    api._mock_storage = FakeStorage()
+
+    run_async(api._save_cache("history_totals", {"TO_LOAD": 987.6}))
+    result = run_async(api._load_cache("history_totals"))
+    assert result == {"TO_LOAD": 987.6}, "Round-tripped data should match what was saved, got {}".format(result)
+
+    missing = run_async(api._load_cache("daily_summary"))
+    assert missing is None, "Unsaved key should load as None, got {}".format(missing)
+
+    return failed
+
+
+def test_sigenergy_load_cached_data(my_predbat):
+    """Test load_cached_data restores energy_flow/daily_summary/history_totals/onboard_status."""
+    failed = False
+    api = MockSigenergyAPI()
+    api._mock_storage = FakeStorage()
+
+    run_async(api._save_cache("energy_flow", {"SIG001": {"batterySoc": 42.0}}))
+    run_async(api._save_cache("daily_summary", {"SIG001": {"dailyPowerGeneration": 5.5}}))
+    run_async(api._save_cache("history_totals", {"SIG001": {"TO_LOAD": 987.6}}))
+    run_async(api._save_cache("onboard_status", {"SIG001": "active"}))
+
+    run_async(api.load_cached_data())
+
+    assert api.energy_flow == {"SIG001": {"batterySoc": 42.0}}, "energy_flow restored, got {}".format(api.energy_flow)
+    assert api.daily_summary == {"SIG001": {"dailyPowerGeneration": 5.5}}, "daily_summary restored, got {}".format(api.daily_summary)
+    assert api.history_totals == {"SIG001": {"TO_LOAD": 987.6}}, "history_totals restored, got {}".format(api.history_totals)
+    assert api.onboard_status == {"SIG001": "active"}, "onboard_status restored, got {}".format(api.onboard_status)
+
+    return failed
+
+
+def test_sigenergy_load_cached_data_no_storage_leaves_defaults(my_predbat):
+    """Test load_cached_data is a no-op (keeps empty defaults) when there is no storage component."""
+    failed = False
+    api = MockSigenergyAPI()
+
+    run_async(api.load_cached_data())
+
+    assert api.energy_flow == {}, "energy_flow left at its default when there is no storage"
+    assert api.history_totals == {}, "history_totals left at its default when there is no storage"
+
+    return failed
+
+
+def test_sigenergy_needs_refresh(my_predbat):
+    """Test _data_age_minutes/_needs_refresh against fabricated data_age timestamps."""
+    failed = False
+    api = MockSigenergyAPI()
+
+    assert api._data_age_minutes("history_totals") is None, "No age recorded yet"
+    assert api._needs_refresh("history_totals", 5.0) is True, "Missing age always needs a refresh"
+
+    now = datetime.now(api.local_tz)
+    api.data_age["history_totals"] = now - timedelta(minutes=1)
+    assert api._needs_refresh("history_totals", 5.0) is False, "1 minute old data is within a 5 minute window"
+
+    api.data_age["history_totals"] = now - timedelta(minutes=10)
+    assert api._needs_refresh("history_totals", 5.0) is True, "10 minute old data has exceeded a 5 minute window"
+
+    return failed
+
+
+def test_sigenergy_run_skips_refresh_when_cache_fresh(my_predbat):
+    """run() skips REST energy/summary/history polling when the cached data is still fresh.
+
+    Mirrors FoxAPI's age-based refresh gating: right after a restart, if load_cached_data()
+    restored data that's still within SIGENERGY_POLL_INTERVAL, run() should not immediately
+    re-poll the Sigenergy API — and, since nothing was fetched, must not bump data_age either
+    (an unconditional save would falsely renew the freshness window and defeat the gate).
+    """
+    failed = False
+    sid = "SIG001"
+
+    def _make_api():
+        api = MockSigenergyAPI()
+        api.systems = {sid: {"deviceList": []}}
+        api.current_mode = {sid: SIGENERGY_MODE_VPP}
+        api.system_id_filter = {sid}
+        task = MagicMock()
+        task.done = MagicMock(return_value=False)
+        api._mqtt_task = task
+        api._manage_vpp_registration = AsyncMock(return_value=True)
+        api.fetch_inverter_realtime = AsyncMock(return_value=True)
+        api.fetch_energy_flow = AsyncMock(return_value=True)
+        api.fetch_daily_summary = AsyncMock(return_value=True)
+        api.fetch_history_totals = AsyncMock(return_value=True)
+        api.publish_system_entities = AsyncMock()
+        api.apply_controls = AsyncMock()
+        return api
+
+    # Fresh cache (as if just restored moments ago) — REST polling should be skipped entirely,
+    # and the pre-existing data_age timestamps must be left untouched.
+    api_fresh = _make_api()
+    stale_ts = datetime.now(api_fresh.local_tz) - timedelta(minutes=1)
+    api_fresh.data_age = {"energy_flow": stale_ts, "daily_summary": stale_ts, "history_totals": stale_ts}
+
+    run_async(api_fresh.run(seconds=300, first=False))
+
+    api_fresh.fetch_inverter_realtime.assert_not_called()
+    api_fresh.fetch_energy_flow.assert_not_called()
+    api_fresh.fetch_daily_summary.assert_not_called()
+    api_fresh.fetch_history_totals.assert_not_called()
+    assert api_fresh.data_age["energy_flow"] == stale_ts, "energy_flow age must not be bumped when nothing was fetched"
+    assert api_fresh.data_age["daily_summary"] == stale_ts, "daily_summary age must not be bumped when nothing was fetched"
+    assert api_fresh.data_age["history_totals"] == stale_ts, "history_totals age must not be bumped when nothing was fetched"
+
+    # No cached age at all (cold start) — everything should be fetched, and data_age advanced.
+    api_cold = _make_api()
+
+    run_async(api_cold.run(seconds=300, first=False))
+
+    api_cold.fetch_inverter_realtime.assert_called_once_with(sid)
+    api_cold.fetch_daily_summary.assert_called_once_with(sid)
+    api_cold.fetch_history_totals.assert_called_once_with(sid)
+    assert "energy_flow" in api_cold.data_age, "energy_flow age recorded after a real fetch"
+    assert "daily_summary" in api_cold.data_age, "daily_summary age recorded after a real fetch"
+    assert "history_totals" in api_cold.data_age, "history_totals age recorded after a real fetch"
+
+    return failed
+
+
+def test_sigenergy_run_energy_flow_not_bumped_on_fetch_failure(my_predbat):
+    """run() must not bump energy_flow's data_age when both realtime fetches fail.
+
+    If fetch_inverter_realtime and its fetch_energy_flow fallback both fail, self.energy_flow is
+    unchanged — treating that as "updated" would falsely renew the refresh_energy freshness
+    window and could mask a persistently broken realtime poll.
+    """
+    failed = False
+    sid = "SIG001"
+
+    api = MockSigenergyAPI()
+    api.systems = {sid: {"deviceList": []}}
+    api.current_mode = {sid: SIGENERGY_MODE_VPP}
+    api.system_id_filter = {sid}
+    task = MagicMock()
+    task.done = MagicMock(return_value=False)
+    api._mqtt_task = task
+    api._manage_vpp_registration = AsyncMock(return_value=True)
+    api.fetch_inverter_realtime = AsyncMock(return_value=False)
+    api.fetch_energy_flow = AsyncMock(return_value=False)
+    api.fetch_daily_summary = AsyncMock(return_value=True)
+    api.fetch_history_totals = AsyncMock(return_value=True)
+    api.publish_system_entities = AsyncMock()
+    api.apply_controls = AsyncMock()
+
+    run_async(api.run(seconds=300, first=False))
+
+    api.fetch_inverter_realtime.assert_called_once_with(sid)
+    api.fetch_energy_flow.assert_called_once_with(sid)
+    assert "energy_flow" not in api.data_age, "energy_flow age must not be recorded when both fetches fail"
+
+    return failed
+
+
+def test_sigenergy_history_totals_clamp_survives_restart(my_predbat):
+    """Test the monotonic dip-clamp in fetch_history_totals uses the persisted baseline after a restart.
+
+    Simulates a Predbat restart landing inside the API's nightly dip window (see
+    fetch_history_totals): a fresh SigenergyAPI instance with an empty in-memory
+    history_totals would otherwise accept the dip as if it were the first-ever reading.
+    load_cached_data() must restore the pre-restart baseline before that first fetch runs.
+    """
+    failed = False
+
+    # "Before restart": persist a known-good baseline to a storage backend that survives the restart.
+    shared_storage = FakeStorage()
+    run_async(shared_storage.save("sigenergy", "history_totals", {"SIG001": {"TO_LOAD": 7028.33}}))
+
+    # "After restart": a brand new instance, wired to the same persisted storage.
+    api = MockSigenergyAPI()
+    api._mock_storage = shared_storage
+    run_async(api.load_cached_data())
+    assert api.history_totals.get("SIG001", {}).get("TO_LOAD") == 7028.33, "Baseline restored before any fetch"
+
+    fake_response = {
+        "code": 0,
+        "data": {"sankeyData": {"nodes": [{"id": "TO_LOAD", "value": 7015.29}], "links": []}},  # the nightly dip
+    }
+    mock_response = _make_mock_response(status=200, json_data=fake_response)
+    mock_session = _make_mock_session(mock_response)
+    api.access_token = "fake_token"
+    api.token_expires_at = 9_999_999_999
+    api._last_request_time = 0
+
+    with patch("sigenergy.aiohttp.ClientSession", return_value=mock_session):
+        run_async(api.fetch_history_totals("SIG001"))
+
+    assert api.history_totals["SIG001"]["TO_LOAD"] == 7028.33, "Dip clamped to the restored pre-restart baseline, got {}".format(api.history_totals["SIG001"]["TO_LOAD"])
 
     return failed
 
@@ -2077,6 +2480,8 @@ def run_sigenergy_tests(my_predbat):
         ("system_slug", test_sigenergy_system_slug),
         ("battery_capacity", test_sigenergy_battery_capacity),
         ("publish_system_entities", test_sigenergy_publish_system_entities),
+        ("publish_system_entities_operational_mode_fallback", test_sigenergy_publish_system_entities_operational_mode_fallback),
+        ("publish_system_entities_operational_mode_invalid_value", test_sigenergy_publish_system_entities_operational_mode_invalid_value),
         ("automatic_config", test_sigenergy_automatic_config),
         ("fetch_controls", test_sigenergy_fetch_controls),
         ("publish_controls", test_sigenergy_publish_controls),
@@ -2090,6 +2495,16 @@ def run_sigenergy_tests(my_predbat):
         ("fetch_system_list_with_filter", test_sigenergy_fetch_system_list_with_filter),
         ("fetch_history_totals", test_sigenergy_fetch_history_totals),
         ("fetch_history_totals_empty_data", test_sigenergy_fetch_history_totals_empty_data),
+        ("fetch_history_totals_clamps_dip", test_sigenergy_fetch_history_totals_clamps_dip),
+        ("fetch_history_totals_keeps_missing_node", test_sigenergy_fetch_history_totals_keeps_missing_node),
+        ("save_load_cache_no_storage", test_sigenergy_save_load_cache_no_storage),
+        ("save_load_cache_round_trip", test_sigenergy_save_load_cache_round_trip),
+        ("load_cached_data", test_sigenergy_load_cached_data),
+        ("load_cached_data_no_storage_leaves_defaults", test_sigenergy_load_cached_data_no_storage_leaves_defaults),
+        ("history_totals_clamp_survives_restart", test_sigenergy_history_totals_clamp_survives_restart),
+        ("needs_refresh", test_sigenergy_needs_refresh),
+        ("run_skips_refresh_when_cache_fresh", test_sigenergy_run_skips_refresh_when_cache_fresh),
+        ("run_energy_flow_not_bumped_on_fetch_failure", test_sigenergy_run_energy_flow_not_bumped_on_fetch_failure),
         ("apply_controls_charge_mode", test_sigenergy_apply_controls_charge_mode),
         ("apply_controls_eco_mode", test_sigenergy_apply_controls_eco_mode),
         ("apply_controls_deduplication", test_sigenergy_apply_controls_deduplication),

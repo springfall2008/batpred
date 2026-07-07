@@ -425,6 +425,10 @@ pred_bat:
   - 14
   - 21
 
+  # Pinned to False so the wider test suite keeps exercising the fixed days_previous averaging path
+  # (test_load_forecast_history.py exercises days_previous_auto explicitly)
+  days_previous_auto: False
+
   # Days previous weight can be used to control the weighting of the previous load points, the values are multiplied by their
   # weights and then divided through by the total weight. E.g. if you used 1 and 0.5 then the first value would have 2/3rd of the weight and the second 1/3rd
   # Include one value for each days_previous value, each weighting on a separate line.

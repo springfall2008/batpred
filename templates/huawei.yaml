@@ -263,11 +263,10 @@ pred_bat:
   # ------------------------------------------------------------------
   # Load history and forecast horizon
   # ------------------------------------------------------------------
+  # Days previous sets how many days of load history Predbat searches when forecasting your future house load
+  # (weighted-bucket forecast by default via days_previous_auto - see documentation for other options)
   days_previous:
   - 7
-
-  days_previous_weight:
-  - 1
 
   forecast_hours: 48
 
