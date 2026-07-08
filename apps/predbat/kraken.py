@@ -941,8 +941,9 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             except ValueError:
                 return 9999.0
         try:
-            return (datetime.now() - fetched_at).total_seconds() / 60.0
-        except TypeError:
+            now = datetime.now(tz=fetched_at.tzinfo) if getattr(fetched_at, "tzinfo", None) else datetime.now()
+            return (now - fetched_at).total_seconds() / 60.0
+        except (TypeError, OverflowError):
             return 9999.0
 
     async def load_kraken_cache(self):
