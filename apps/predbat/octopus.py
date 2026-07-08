@@ -683,7 +683,7 @@ class OctopusAPI(ComponentBase):
         """
         import_tariff = self.tariffs.get("import", {})
         tariffCode = import_tariff.get("tariffCode", "")
-        if "INTELLI-" not in tariffCode:
+        if not self.is_intelligent_go_tariff(tariffCode):
             return
         deviceID = import_tariff.get("deviceID", None)
         if deviceID:
@@ -1217,6 +1217,16 @@ class OctopusAPI(ComponentBase):
                     best_rate = rate.get("value_inc_vat", None)
         return best_rate
 
+    @staticmethod
+    def is_intelligent_go_tariff(tariff_code):
+        """
+        Determine whether a tariff code is an Intelligent GO (IOG) tariff.
+        """
+        if not tariff_code:
+            return False
+        else:
+            return ("INTELLI-" in tariff_code) or ("IOG-" in tariff_code)
+
     async def async_get_day_night_rates(self, url, product_code="", tariff_code=""):
         """
         Get day and night rates from Octopus.
@@ -1235,7 +1245,7 @@ class OctopusAPI(ComponentBase):
         self.log("Info: OctopusAPI: Day rate entries: {} night rate entries: {}".format(len(result_day) if result_day else 0, len(result_night) if result_night else 0))
         if result_day and result_night:
             # Select night window based on tariff type
-            if ("INTELLI" in tariff_code) or ("IOG-" in tariff_code):
+            if self.is_intelligent_go_tariff(tariff_code):
                 window = OCTOPUS_NIGHT_RATE_WINDOWS["iog"]
             elif tariff_code and "GO-" in tariff_code:
                 window = OCTOPUS_NIGHT_RATE_WINDOWS["go"]
