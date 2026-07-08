@@ -22,6 +22,7 @@ Supports two modes:
 
 from datetime import datetime, timedelta, timezone
 import asyncio
+import json
 import aiohttp
 from component_base import ComponentBase
 from predbat_metrics import record_api_call
@@ -700,3 +701,99 @@ def fetch_axle_active(base):
 
     state = base.get_state_wrapper(entity_id=entity_id, default="off")
     return str(state).lower() == "on"
+
+
+class MockBase:  # pragma: no cover
+    """Mock base class for testing the Axle API from the command line."""
+
+    def __init__(self):
+        """Initialise a minimal mock of the PredBat base object."""
+        self.local_tz = datetime.now().astimezone().tzinfo
+        self.now_utc = datetime.now(self.local_tz)
+        self.now_utc_exact = self.now_utc
+        self.prefix = "predbat"
+        self.args = {}
+        self.midnight_utc = datetime.now(self.local_tz).replace(hour=0, minute=0, second=0, microsecond=0)
+        self.minutes_now = self.now_utc.hour * 60 + self.now_utc.minute
+        self.entities = {}
+        self.config_root = "./temp_axle"
+        self.plan_interval_minutes = 30
+        self.fatal_error = False
+        self.had_errors = False
+        self.components = None
+
+    def get_state_wrapper(self, entity_id=None, default=None, attribute=None, refresh=False, required_unit=None, raw=False):
+        """Return stored state or attribute for an entity."""
+        entity = self.entities.get(entity_id, {})
+        if raw:
+            return entity
+        if attribute is not None:
+            return entity.get("attributes", {}).get(attribute, default)
+        return entity.get("state", default)
+
+    def set_state_wrapper(self, entity_id, state, attributes=None, required_unit=None):
+        """Store state and attributes for an entity."""
+        self.entities[entity_id] = {"state": state, "attributes": attributes or {}}
+
+    def log(self, message):
+        """Print a timestamped log message."""
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
+
+    def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
+        """Print and store a dashboard item."""
+        print(f"ENTITY: {entity_id} = {state}")
+        if attributes:
+            print(f"  Attributes: {json.dumps(attributes, indent=2, default=str)}")
+        self.set_state_wrapper(entity_id, state, attributes)
+
+    def get_arg(self, key, default=None, indirect=True, attribute=None, combine=False, index=None, domain=None, can_override=False, required_unit=None):
+        """Return the default value for any requested argument."""
+        return default
+
+    def set_arg(self, key, value):
+        """Print a set argument request."""
+        print(f"Set arg {key} = {value}")
+
+    def call_notify(self, message):
+        """Print a notification message."""
+        print(f"NOTIFY: {message}")
+
+
+async def test_axle_api(api_key, pence_per_kwh):  # pragma: no cover
+    """
+    Test the Axle API using a real BYOK API key and run one fetch cycle.
+    """
+    print(f"Testing Axle API (pence_per_kwh={pence_per_kwh})")
+
+    mock_base = MockBase()
+
+    axle_api = AxleAPI(mock_base, api_key=api_key, pence_per_kwh=pence_per_kwh, automatic=True)
+    await axle_api.run(0, True)
+
+    print("\nCurrent event: {}".format(json.dumps(axle_api.current_event, indent=2, default=str)))
+    print("Event history ({} events):".format(len(axle_api.event_history)))
+    for event in axle_api.event_history:
+        print("  {}".format(json.dumps(event, default=str)))
+    print("Failures: {}".format(axle_api.failures_total))
+
+    await axle_api.final()
+    print("\nTest completed")
+
+
+def main():  # pragma: no cover
+    """
+    Main function for command line execution to test the Axle API.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Test Axle API")
+    parser.add_argument("--api-key", required=True, help="Axle BYOK API key")
+    parser.add_argument("--pence-per-kwh", type=float, default=0.0, help="VPP compensation rate in pence per kWh")
+
+    args = parser.parse_args()
+
+    asyncio.run(test_axle_api(args.api_key, args.pence_per_kwh))
+
+
+if __name__ == "__main__":
+    main()

@@ -15,7 +15,36 @@ def make_mock_base():
     base.prefix = "predbat"
     base.local_tz = "Europe/London"
     base.args = {"user_id": "test-instance-123"}
+    # No storage component by default — the `storage` property returns None, so cache
+    # load/save are no-ops. Tests that exercise caching inject a fake storage explicitly.
+    base.components = None
     return base
+
+
+class FakeStorage:
+    """In-memory stand-in for the storage component used by cache tests."""
+
+    def __init__(self):
+        self.data = {}
+
+    async def load(self, module, filename):
+        """Return the stored blob for (module, filename), or None."""
+        return self.data.get((module, filename))
+
+    async def save(self, module, filename, data, format="yaml", expiry=None):
+        """Store a blob for (module, filename)."""
+        self.data[(module, filename)] = data
+        return True
+
+
+def attach_fake_storage(api):
+    """Give an api a working in-memory storage and return it (bypasses the storage property)."""
+    storage = FakeStorage()
+    # `storage` is a read-only property on ComponentBase, so route base.components at it.
+    components = MagicMock()
+    components.get_component = MagicMock(return_value=storage)
+    api.base.components = components
+    return storage
 
 
 def make_kraken_api(provider="edf", account_id="A-TEST123", auth_method="api_key", key="test-key", **kwargs):
@@ -319,6 +348,7 @@ def test_run_first_discovers_tariff_and_fetches_rates():
         return discovered
 
     api.async_find_tariffs = AsyncMock(side_effect=find_tariffs_side_effect)
+    api.async_discover_smart_devices = AsyncMock()  # no SmartFlex devices — avoid a real network call
     api.async_fetch_rates = AsyncMock(
         return_value=[
             {"value_inc_vat": 24.5, "valid_from": "2026-03-23T00:00:00Z", "valid_to": "2026-03-24T00:00:00Z"},
@@ -347,6 +377,7 @@ def test_run_returns_false_on_auth_failure():
     api = make_kraken_api()
     api.oauth_failed = True
     api.async_find_tariffs = AsyncMock(return_value=None)
+    api.async_discover_smart_devices = AsyncMock()
     api.dashboard_item = MagicMock()
     api.update_success_timestamp = MagicMock()
 
@@ -356,23 +387,50 @@ def test_run_returns_false_on_auth_failure():
     api.update_success_timestamp.assert_not_called()
 
 
-def test_run_fetches_rates_on_10min_cycle():
-    """run() fetches rates on 10-minute boundaries, not every cycle."""
+def test_run_refetches_rates_when_stale():
+    """run() re-fetches rates when the cached rates are older than the refresh threshold."""
+    from datetime import datetime, timedelta
+    from kraken import KRAKEN_RATES_REFRESH_MINUTES
 
     api = make_kraken_api()
     api.current_tariff = {"tariff_code": "E-1R-VAR-01", "product_code": "VAR-01"}
+    api.tariff_fetched_at = datetime.now()  # fresh tariff → no re-discovery
+    api.rates_fetched_at = datetime.now() - timedelta(minutes=KRAKEN_RATES_REFRESH_MINUTES + 5)  # stale → re-fetch
     api.async_find_tariffs = AsyncMock(return_value=None)
     api.async_fetch_rates = AsyncMock(return_value=[{"value_inc_vat": 24.5}])
     api.async_fetch_standing_charges = AsyncMock(return_value=53.0)
     api.dashboard_item = MagicMock()
     api.update_success_timestamp = MagicMock()
 
-    # seconds=600 → count_minutes=10, 10%10==0, 10%30!=0 (so no tariff discovery, but rates fetch)
     result = asyncio.run(api.run(600, False))
 
     assert result is True
+    api.async_find_tariffs.assert_not_called()  # tariff still fresh
     api.async_fetch_rates.assert_called()
     api.async_fetch_standing_charges.assert_called_once()
+
+
+def test_run_skips_refetch_when_cache_fresh():
+    """run() does NOT re-query the API when both tariff and rates are freshly cached."""
+    from datetime import datetime
+
+    api = make_kraken_api()
+    api.current_tariff = {"tariff_code": "E-1R-VAR-01", "product_code": "VAR-01"}
+    api.import_rates = [{"value_inc_vat": 24.5}]
+    api.tariff_fetched_at = datetime.now()
+    api.rates_fetched_at = datetime.now()
+    api.async_find_tariffs = AsyncMock(return_value=None)
+    api.async_fetch_rates = AsyncMock(return_value=[{"value_inc_vat": 24.5}])
+    api.async_fetch_standing_charges = AsyncMock(return_value=53.0)
+    api.dashboard_item = MagicMock()
+    api.update_success_timestamp = MagicMock()
+
+    result = asyncio.run(api.run(120, False))
+
+    assert result is True
+    api.async_find_tariffs.assert_not_called()
+    api.async_fetch_rates.assert_not_called()
+    api.async_fetch_standing_charges.assert_not_called()
 
 
 def test_run_wires_export_when_discovered():
@@ -386,6 +444,7 @@ def test_run_wires_export_when_discovered():
         return discovered
 
     api.async_find_tariffs = AsyncMock(side_effect=find_tariffs_side_effect)
+    api.async_discover_smart_devices = AsyncMock()
     api.async_fetch_rates = AsyncMock(return_value=[{"value_inc_vat": 24.5}])
     api.async_fetch_standing_charges = AsyncMock(return_value=53.0)
     api.dashboard_item = MagicMock()
@@ -424,6 +483,7 @@ def test_run_does_not_wire_export_when_rates_unavailable():
         return [{"value_inc_vat": 24.5}]
 
     api.async_find_tariffs = AsyncMock(side_effect=find_tariffs_side_effect)
+    api.async_discover_smart_devices = AsyncMock()
     api.async_fetch_rates = AsyncMock(side_effect=fetch_rates_side_effect)
     api.async_fetch_standing_charges = AsyncMock(return_value=53.0)
     api.dashboard_item = MagicMock()
@@ -1011,7 +1071,7 @@ def test_fetch_rates_rest_404_falls_back_to_graphql_for_import():
         result = asyncio.run(api.async_fetch_rates())
 
     assert result is graphql_rates
-    api.async_fetch_rates_graphql.assert_called_once_with("1900000000456")
+    api.async_fetch_rates_graphql.assert_called_once_with("1900000000456", account_id="A-AA8A473C")
 
 
 def test_fetch_rates_rest_404_no_fallback_without_import_mpan():
@@ -1038,13 +1098,22 @@ def test_fetch_rates_rest_404_no_fallback_without_import_mpan():
     assert result is None
 
 
-def test_fetch_rates_rest_404_no_fallback_for_export_tariff():
-    """async_fetch_rates() does NOT fall back to GraphQL when REST 404 on export tariff."""
+def test_fetch_rates_rest_404_falls_back_to_graphql_for_export():
+    """async_fetch_rates() falls back to GraphQL applicableRates on export REST 404.
+
+    EDF SEG / export tariffs are frequently registered on the meter point while their
+    /standard-unit-rates/ REST endpoint returns 404. The fallback must recover them using
+    the export MPAN so the customer's export rates are not silently lost.
+    """
     api = make_kraken_api()
     api.current_tariff = {"tariff_code": "E-1R-IMP-01-J", "product_code": "IMP-01"}
     api.import_mpan = "1900000000456"
-    export_tariff = {"tariff_code": "E-1R-EXPORT-01-J", "product_code": "EXPORT-01"}
-    api.async_fetch_rates_graphql = AsyncMock()
+    export_tariff = {"tariff_code": "E-1R-EDF_EXPORT_SEG_12M_HH-B", "product_code": "EDF_EXPORT_SEG_12M"}
+    api.export_tariff = export_tariff
+    api.export_mpan = "2000000000789"
+
+    graphql_rates = [{"value_inc_vat": 15.0, "value_exc_vat": round(15.0 / 1.05, 4), "valid_from": "2026-04-10T00:00:00Z", "valid_to": "2026-04-12T00:00:00Z"}]
+    api.async_fetch_rates_graphql = AsyncMock(return_value=graphql_rates)
 
     mock_response = AsyncMock()
     mock_response.status = 404
@@ -1061,8 +1130,38 @@ def test_fetch_rates_rest_404_no_fallback_for_export_tariff():
     with patch("aiohttp.ClientSession", return_value=mock_session):
         result = asyncio.run(api.async_fetch_rates(tariff=export_tariff))
 
-    assert result is None
-    api.async_fetch_rates_graphql.assert_not_called()
+    assert result is graphql_rates
+    # Export fallback must use the export MPAN, defaulting to the import account here.
+    api.async_fetch_rates_graphql.assert_called_once_with("2000000000789", account_id="A-TEST123")
+
+
+def test_fetch_rates_export_404_uses_export_account_for_split_accounts():
+    """For E.ON split import/export accounts, the export fallback queries the export account."""
+    api = make_kraken_api(export_account_id="A-EXPORT456")
+    api.current_tariff = {"tariff_code": "E-1R-IMP-01-J", "product_code": "IMP-01"}
+    api.import_mpan = "1900000000456"
+    export_tariff = {"tariff_code": "E-1R-OUTGOING-FIX-12M-J", "product_code": "OUTGOING-FIX-12M"}
+    api.export_tariff = export_tariff
+    api.export_mpan = "2000000000789"
+
+    api.async_fetch_rates_graphql = AsyncMock(return_value=[])
+
+    mock_response = AsyncMock()
+    mock_response.status = 404
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_response),
+            __aexit__=AsyncMock(return_value=None),
+        )
+    )
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        asyncio.run(api.async_fetch_rates(tariff=export_tariff))
+
+    api.async_fetch_rates_graphql.assert_called_once_with("2000000000789", account_id="A-EXPORT456")
 
 
 def test_fetch_rates_rest_410_falls_back_to_graphql_for_import():
@@ -1090,7 +1189,7 @@ def test_fetch_rates_rest_410_falls_back_to_graphql_for_import():
         result = asyncio.run(api.async_fetch_rates())
 
     assert result is graphql_rates
-    api.async_fetch_rates_graphql.assert_called_once_with("1900000000456")
+    api.async_fetch_rates_graphql.assert_called_once_with("1900000000456", account_id="A-AA8A473C")
 
 
 def test_fetch_rates_transient_error_does_not_fall_back_to_graphql():
@@ -1120,6 +1219,554 @@ def test_fetch_rates_transient_error_does_not_fall_back_to_graphql():
         api.async_fetch_rates_graphql.assert_not_called()
 
 
+def test_find_active_tariff_uses_direction_for_seg_export_code():
+    """Export detection must use meterPoint.direction, not the 'EXPORT' substring.
+
+    Regression for missing customer export rates: many EDF/E.ON export tariff codes
+    (SEG, outgoing, agile export) do NOT contain the literal string 'EXPORT'. Keyed off
+    the tariff code alone these were never matched; keyed off direction they are.
+    """
+    api = make_kraken_api()
+    meter_points = [
+        {
+            "mpan": "1900000000456",
+            "direction": "IMPORT",
+            "agreements": [{"validFrom": "2026-01-01T00:00:00+00:00", "validTo": None, "tariff": {"productCode": "VAR-01", "tariffCode": "E-1R-VAR-01-J", "displayName": "Import"}}],
+        },
+        {
+            "mpan": "2000000000789",
+            "direction": "EXPORT",
+            # Note: tariff code contains NO 'EXPORT' substring — only direction identifies it.
+            "agreements": [{"validFrom": "2026-01-01T00:00:00+00:00", "validTo": None, "tariff": {"productCode": "EDF_SEG_12M", "tariffCode": "E-1R-EDF_SEG_12M-B", "displayName": "SEG"}}],
+        },
+    ]
+
+    export = api._find_active_tariff(meter_points, is_export=True)
+    assert export is not None, "Export tariff should be found via direction=EXPORT"
+    assert export["tariff_code"] == "E-1R-EDF_SEG_12M-B"
+    assert export["mpan"] == "2000000000789"
+
+    # And import discovery must NOT pick up the SEG export meter.
+    imp = api._find_active_tariff(meter_points, is_export=False)
+    assert imp["tariff_code"] == "E-1R-VAR-01-J"
+
+
+def test_find_active_tariff_direction_overrides_export_substring():
+    """direction=IMPORT wins even when the tariff code contains 'EXPORT'."""
+    api = make_kraken_api()
+    meter_points = [
+        {
+            "mpan": "1900000000456",
+            "direction": "IMPORT",
+            "agreements": [{"validFrom": "2026-01-01T00:00:00+00:00", "validTo": None, "tariff": {"productCode": "EXPORTVALUE-01", "tariffCode": "E-1R-EXPORTVALUE-01-J", "displayName": "Import"}}],
+        },
+    ]
+    assert api._find_active_tariff(meter_points, is_export=False) is not None
+    assert api._find_active_tariff(meter_points, is_export=True) is None
+
+
+def test_find_active_tariff_falls_back_to_substring_without_direction():
+    """When direction is absent/null, detection falls back to the tariff-code substring."""
+    api = make_kraken_api()
+    meter_points = [
+        {
+            "mpan": "2000000000789",
+            # No 'direction' key at all (older API response / cached shape).
+            "agreements": [{"validFrom": "2026-01-01T00:00:00+00:00", "validTo": None, "tariff": {"productCode": "EXPORT-FIX-01", "tariffCode": "E-1R-EXPORT-FIX-01-J", "displayName": "Export"}}],
+        },
+    ]
+    export = api._find_active_tariff(meter_points, is_export=True)
+    assert export is not None
+    assert export["tariff_code"] == "E-1R-EXPORT-FIX-01-J"
+
+
+def _mk_get_ctx(status, json_body=None):
+    """Build a mock aiohttp GET context manager yielding a response of the given status."""
+    resp = AsyncMock()
+    resp.status = status
+    resp.json = AsyncMock(return_value=json_body or {})
+    resp.text = AsyncMock(return_value="body")
+    ctx = AsyncMock()
+    ctx.__aenter__ = AsyncMock(return_value=resp)
+    ctx.__aexit__ = AsyncMock(return_value=None)
+    return ctx
+
+
+def test_build_rest_auth_uses_basic_auth_for_api_key():
+    """_build_rest_auth returns HTTP Basic auth (API key as username) in api_key mode."""
+    import aiohttp
+
+    api = make_kraken_api()  # api_key mode → _api_key = "test-key"
+    auth, headers = asyncio.run(api._build_rest_auth())
+    assert isinstance(auth, aiohttp.BasicAuth)
+    assert auth.login == "test-key"
+    assert headers == {}
+
+
+def test_build_rest_auth_uses_jwt_header_for_oauth():
+    """_build_rest_auth refreshes and returns a JWT bearer header when no API key is set."""
+    api = make_kraken_api()
+    api._api_key = None  # OAuth has no API key
+    api.access_token = "jwt-abc"
+    api.check_and_refresh_oauth_token = AsyncMock(return_value=True)
+
+    auth, headers = asyncio.run(api._build_rest_auth())
+    assert auth is None
+    assert headers.get("Authorization") == "JWT jwt-abc"
+    api.check_and_refresh_oauth_token.assert_awaited_once()
+
+
+def test_fetch_rates_404_retries_authenticated_and_succeeds():
+    """A 404 on the public REST endpoint retries WITH auth; private SEG export rates then load.
+
+    Reproduces the live EDF case: E-1R-EDF_EXPORT_SEG_12M_HH-B (a private product) 404s
+    unauthenticated, so the authenticated retry is what actually recovers the export rates.
+    """
+    api = make_kraken_api()  # api_key mode → authenticated retry uses HTTP Basic auth
+    export_tariff = {"tariff_code": "E-1R-EDF_EXPORT_SEG_12M_HH-B", "product_code": "EDF_EXPORT_SEG_12M"}
+    api.export_tariff = export_tariff
+    api.export_mpan = "1170001829927"
+
+    rates_body = {"count": 1, "next": None, "results": [{"value_inc_vat": 15.0, "value_exc_vat": 14.29, "valid_from": "2026-07-08T00:00:00Z", "valid_to": "2026-07-08T00:30:00Z"}]}
+
+    call_count = [0]
+
+    def get_side_effect(url, **kwargs):
+        call_count[0] += 1
+        # First call is unauthenticated (404), retry is authenticated (200).
+        return _mk_get_ctx(404) if call_count[0] == 1 else _mk_get_ctx(200, rates_body)
+
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(side_effect=get_side_effect)
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(api.async_fetch_rates(tariff=export_tariff))
+
+    assert result is not None and len(result) == 1
+    assert result[0]["value_inc_vat"] == 15.0
+    assert call_count[0] == 2, "expected an unauthenticated attempt then an authenticated retry"
+    # The first attempt carries no auth; the retry carries HTTP Basic auth.
+    assert mock_session.get.call_args_list[0].kwargs.get("auth") is None
+    assert mock_session.get.call_args_list[1].kwargs.get("auth") is not None
+
+
+def test_fetch_rates_404_authenticated_retry_still_404_falls_back_to_graphql():
+    """If the authenticated retry also 404s, we still fall back to GraphQL applicableRates."""
+    api = make_kraken_api()
+    export_tariff = {"tariff_code": "E-1R-EXPORT-01-J", "product_code": "EXPORT-01"}
+    api.export_tariff = export_tariff
+    api.export_mpan = "2000000000789"
+
+    graphql_rates = [{"value_inc_vat": 12.0, "value_exc_vat": round(12.0 / 1.05, 4), "valid_from": "2026-07-08T00:00:00Z", "valid_to": None}]
+    api.async_fetch_rates_graphql = AsyncMock(return_value=graphql_rates)
+
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(side_effect=lambda url, **kwargs: _mk_get_ctx(404))
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(api.async_fetch_rates(tariff=export_tariff))
+
+    assert result is graphql_rates
+    api.async_fetch_rates_graphql.assert_called_once_with("2000000000789", account_id="A-TEST123")
+    # Recovered via GraphQL — the expected private-product 404 must NOT count as a failure.
+    assert api.failures_total == 0
+
+
+def test_fetch_rates_404_graphql_fallback_empty_counts_one_failure():
+    """When REST 404s AND the GraphQL fallback returns nothing, that is a genuine failure."""
+    api = make_kraken_api()
+    export_tariff = {"tariff_code": "E-1R-EXPORT-01-J", "product_code": "EXPORT-01"}
+    api.export_tariff = export_tariff
+    api.export_mpan = "2000000000789"
+    api.async_fetch_rates_graphql = AsyncMock(return_value=None)
+
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(side_effect=lambda url, **kwargs: _mk_get_ctx(404))
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(api.async_fetch_rates(tariff=export_tariff))
+
+    assert result is None
+    assert api.failures_total == 1
+
+
+def test_connection_nodes_extracts_edges():
+    """_connection_nodes returns node dicts from a Relay connection and tolerates other shapes."""
+    from kraken import KrakenAPI
+
+    conn = {"edges": [{"node": {"value": 1}}, {"node": {"value": 2}}, {}, None]}
+    assert KrakenAPI._connection_nodes(conn) == [{"value": 1}, {"value": 2}]
+    # Backward-compat: a plain list is returned unchanged.
+    assert KrakenAPI._connection_nodes([{"value": 3}]) == [{"value": 3}]
+    # Empty / missing shapes → [].
+    assert KrakenAPI._connection_nodes(None) == []
+    assert KrakenAPI._connection_nodes({}) == []
+    assert KrakenAPI._connection_nodes({"edges": []}) == []
+
+
+def test_fetch_rates_graphql_parses_connection_edges():
+    """async_fetch_rates_graphql parses the applicableRates Relay connection (edges/node)."""
+    api = make_kraken_api()
+    api.account_id = "A-AA8A473C"
+    api.async_graphql_query = AsyncMock(
+        return_value={
+            "applicableRates": {
+                "edges": [
+                    {"node": {"value": 15.0, "validFrom": "2026-07-08T00:00:00Z", "validTo": "2026-07-08T00:30:00Z"}},
+                    {"node": {"value": 16.0, "validFrom": "2026-07-08T00:30:00Z", "validTo": "2026-07-08T01:00:00Z"}},
+                ]
+            }
+        }
+    )
+
+    result = asyncio.run(api.async_fetch_rates_graphql("1170001829927"))
+    assert result is not None and len(result) == 2
+    assert result[0]["value_inc_vat"] == 15.0
+    assert result[1]["value_inc_vat"] == 16.0
+    assert result[0]["valid_from"] == "2026-07-08T00:00:00Z"
+
+
+def test_fetch_rates_graphql_paginates_via_cursor():
+    """async_fetch_rates_graphql walks all connection pages via pageInfo.endCursor."""
+    api = make_kraken_api()
+    api.account_id = "A-AA8A473C"
+
+    page1 = {
+        "applicableRates": {
+            "edges": [{"node": {"value": 10.0, "validFrom": "2026-07-08T00:00:00Z", "validTo": "2026-07-08T00:30:00Z"}}],
+            "pageInfo": {"hasNextPage": True, "endCursor": "cursor-1"},
+        }
+    }
+    page2 = {
+        "applicableRates": {
+            "edges": [{"node": {"value": 11.0, "validFrom": "2026-07-08T00:30:00Z", "validTo": "2026-07-08T01:00:00Z"}}],
+            "pageInfo": {"hasNextPage": False, "endCursor": "cursor-2"},
+        }
+    }
+
+    captured = []
+
+    async def fake_query(query, context):
+        captured.append(query)
+        return page1 if len(captured) == 1 else page2
+
+    api.async_graphql_query = fake_query
+
+    result = asyncio.run(api.async_fetch_rates_graphql("1170001829927"))
+
+    assert result is not None and len(result) == 2, "both pages should be accumulated"
+    assert [r["value_inc_vat"] for r in result] == [10.0, 11.0]
+    # Two requests: first with after: null, second carrying the page-1 cursor.
+    assert len(captured) == 2
+    assert "after: null" in captured[0]
+    assert 'after: "cursor-1"' in captured[1]
+
+
+def test_fetch_standing_charges_graphql_parses_connection_edges():
+    """async_fetch_standing_charges_graphql parses the applicableStandingCharges connection."""
+    api = make_kraken_api()
+    api.account_id = "A-AA8A473C"
+    api.async_graphql_query = AsyncMock(
+        return_value={
+            "applicableStandingCharges": {
+                "edges": [
+                    {"node": {"value": 61.95, "validFrom": "2026-07-08T00:00:00Z", "validTo": None}},
+                ]
+            }
+        }
+    )
+
+    result = asyncio.run(api.async_fetch_standing_charges_graphql("1170001829927"))
+    assert result is not None
+    assert abs(result - 0.6195) < 1e-6
+
+
+def test_save_and_load_kraken_cache_round_trip():
+    """save_kraken_cache persists state that load_kraken_cache restores into a fresh instance."""
+    from datetime import datetime
+
+    api = make_kraken_api()
+    attach_fake_storage(api)
+    api.current_tariff = {"tariff_code": "E-1R-IMP-01-J", "product_code": "IMP-01"}
+    api.export_tariff = {"tariff_code": "E-1R-EDF_EXPORT_SEG_12M_HH-B", "product_code": "EDF_EXPORT_SEG_12M"}
+    api.import_mpan = "1100000946808"
+    api.export_mpan = "1170001829927"
+    api.import_rates = [{"value_inc_vat": 28.6, "valid_from": "2026-07-08T00:00:00Z", "valid_to": None}]
+    api.export_rates = [{"value_inc_vat": 15.0, "valid_from": "2026-07-08T00:00:00Z", "valid_to": None}]
+    api.import_standing_charge = 0.5676
+    api.export_rates_available = True
+    api.tariff_fetched_at = datetime.now()
+    api.rates_fetched_at = datetime.now()
+
+    asyncio.run(api.save_kraken_cache())
+
+    # Fresh instance sharing the same storage restores everything.
+    api2 = make_kraken_api(account_id="A-TEST123")
+    api2.base.components = api.base.components
+    api2.update_success_timestamp = MagicMock()
+    asyncio.run(api2.load_kraken_cache())
+
+    assert api2.current_tariff == {"tariff_code": "E-1R-IMP-01-J", "product_code": "IMP-01"}
+    assert api2.export_tariff["tariff_code"] == "E-1R-EDF_EXPORT_SEG_12M_HH-B"
+    assert api2.import_mpan == "1100000946808"
+    assert api2.export_mpan == "1170001829927"
+    assert api2.import_rates[0]["value_inc_vat"] == 28.6
+    assert api2.export_rates[0]["value_inc_vat"] == 15.0
+    assert api2.import_standing_charge == 0.5676
+    assert api2.export_rates_available is True
+
+
+def test_run_first_restores_cache_and_skips_fetch():
+    """On first run a fresh cache is restored, sensors are published, and no API calls are made."""
+    from datetime import datetime
+
+    api = make_kraken_api()
+    storage = attach_fake_storage(api)
+    storage.data[("kraken", "account_A-TEST123")] = {
+        "current_tariff": {"tariff_code": "E-1R-IMP-01-J", "product_code": "IMP-01"},
+        "export_tariff": {"tariff_code": "E-1R-EXPORT-01-J", "product_code": "EXPORT-01"},
+        "import_mpan": "1100000946808",
+        "export_mpan": "1170001829927",
+        "export_account_id": None,
+        "import_rates": [{"value_inc_vat": 28.6, "valid_from": "2026-07-08T00:00:00Z", "valid_to": None}],
+        "export_rates": [{"value_inc_vat": 15.0, "valid_from": "2026-07-08T00:00:00Z", "valid_to": None}],
+        "import_standing_charge": 0.5676,
+        "export_rates_available": True,
+        "tariff_fetched_at": datetime.now(),
+        "rates_fetched_at": datetime.now(),
+    }
+    api.async_find_tariffs = AsyncMock(return_value=None)
+    api.async_fetch_rates = AsyncMock(return_value=None)
+    api.async_fetch_standing_charges = AsyncMock(return_value=None)
+    api.dashboard_item = MagicMock()
+    api.set_arg = MagicMock()
+    api.update_success_timestamp = MagicMock()
+
+    result = asyncio.run(api.run(0, True))
+
+    assert result is True
+    # Fresh cache → no API calls at all.
+    api.async_find_tariffs.assert_not_called()
+    api.async_fetch_rates.assert_not_called()
+    api.async_fetch_standing_charges.assert_not_called()
+    # Sensors published from cache.
+    published = [c.args[0] for c in api.dashboard_item.call_args_list]
+    assert api.get_entity_name("sensor", "import_rates") in published
+    assert api.get_entity_name("sensor", "export_rates") in published
+    # Both import and export wired from cached data.
+    api.set_arg.assert_any_call("metric_octopus_import", api.get_entity_name("sensor", "import_rates"))
+    api.set_arg.assert_any_call("metric_octopus_export", api.get_entity_name("sensor", "export_rates"))
+
+
+def test_data_age_minutes():
+    """_data_age_minutes handles None, datetimes, and ISO strings."""
+    from datetime import datetime, timedelta
+    from kraken import KrakenAPI
+
+    assert KrakenAPI._data_age_minutes(None) >= 9999
+    recent = datetime.now() - timedelta(minutes=5)
+    assert 4 < KrakenAPI._data_age_minutes(recent) < 6
+    # ISO string (as YAML/JSON might round-trip) is parsed.
+    iso = (datetime.now() - timedelta(minutes=20)).isoformat()
+    assert 19 < KrakenAPI._data_age_minutes(iso) < 21
+    assert KrakenAPI._data_age_minutes("not-a-date") >= 9999
+
+
+def test_discover_smart_devices_filters_live_ev():
+    """async_discover_smart_devices keeps only LIVE ELECTRIC_VEHICLES devices."""
+    api = make_kraken_api()
+    api.async_graphql_query = AsyncMock(
+        return_value={
+            "devices": [
+                {"id": "dev-ev-1", "deviceType": "ELECTRIC_VEHICLES", "status": {"current": "LIVE"}, "__typename": "SmartFlexVehicle", "make": "Tesla", "model": "M3", "provider": "JEDLIX"},
+                {"id": "dev-meter", "deviceType": "ELECTRICITY_METERS", "status": {"current": "LIVE"}, "__typename": "SmartFlexDevice"},
+                {"id": "dev-ev-suspended", "deviceType": "ELECTRIC_VEHICLES", "status": {"current": "SUSPENDED"}, "__typename": "SmartFlexVehicle"},
+            ]
+        }
+    )
+    asyncio.run(api.async_discover_smart_devices())
+    assert set(api.intelligent_devices) == {"dev-ev-1"}
+    dev = api.intelligent_devices["dev-ev-1"]
+    assert dev["make"] == "Tesla" and dev["is_charger"] is False
+    assert dev["planned_dispatches"] == [] and dev["completed_dispatches"] == []
+
+
+def test_normalize_dispatches_field_mapping():
+    """_normalize_dispatches maps planned (energyAddedKwh/type) and completed (delta/meta) shapes."""
+    api = make_kraken_api()
+    planned = api._normalize_dispatches(
+        [
+            {"start": "2026-07-08T00:00:00Z", "end": "2026-07-08T00:30:00Z", "type": "SMART", "energyAddedKwh": "2.5"},
+            {"start": None, "end": "x"},  # missing start → dropped
+        ],
+        completed=False,
+    )
+    assert planned == [{"start": "2026-07-08T00:00:00Z", "end": "2026-07-08T00:30:00Z", "charge_in_kwh": 2.5, "source": "SMART", "location": None}]
+
+    completed = api._normalize_dispatches(
+        [{"start": "2026-07-07T00:00:00Z", "end": "2026-07-07T00:30:00Z", "delta": 1.25, "meta": {"source": "SMART", "location": "AT_HOME"}}],
+        completed=True,
+    )
+    assert completed[0]["charge_in_kwh"] == 1.25 and completed[0]["source"] == "SMART" and completed[0]["location"] == "AT_HOME"
+
+
+def test_normalize_dispatches_trims_in_progress_planned():
+    """A planned dispatch already in progress is trimmed: start advances to now, energy scaled."""
+    from datetime import datetime, timezone, timedelta
+
+    api = make_kraken_api()
+    now = datetime.now(timezone.utc)
+    start = (now - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")  # started 30m ago
+    end = (now + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")  # ends in 30m (half elapsed)
+
+    planned = api._normalize_dispatches([{"start": start, "end": end, "type": "SMART", "energyAddedKwh": 10.0}], completed=False)
+    assert len(planned) == 1
+    # ~half the window remains → ~half the energy, and start advanced to ~now.
+    assert 4.5 < planned[0]["charge_in_kwh"] < 5.5
+    trimmed_start = datetime.fromisoformat(planned[0]["start"])
+    assert abs((trimmed_start - now).total_seconds()) < 60
+
+    # A future (not-yet-started) planned dispatch is left untouched.
+    future_start = (now + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    future_end = (now + timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    future = api._normalize_dispatches([{"start": future_start, "end": future_end, "energyAddedKwh": 8.0}], completed=False)
+    assert future[0]["start"] == future_start and future[0]["charge_in_kwh"] == 8.0
+
+
+def test_normalize_dispatches_does_not_trim_completed():
+    """Completed dispatches are historical and never trimmed, even if end is in the future."""
+    from datetime import datetime, timezone, timedelta
+
+    api = make_kraken_api()
+    now = datetime.now(timezone.utc)
+    start = (now - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    end = (now + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    completed = api._normalize_dispatches([{"start": start, "end": end, "delta": 10.0, "meta": {}}], completed=True)
+    assert completed[0]["start"] == start and completed[0]["charge_in_kwh"] == 10.0
+
+
+def test_merge_completed_dispatches_dedup_and_prune():
+    """_merge_completed_dispatches dedup by start (newest wins) and prunes entries > history window."""
+    from datetime import datetime, timezone, timedelta
+
+    api = make_kraken_api()
+    old = (datetime.now(timezone.utc) - timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    recent = (datetime.now(timezone.utc) - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    cached = [
+        {"start": old, "end": old, "charge_in_kwh": 1.0},  # pruned (older than history window)
+        {"start": recent, "end": recent, "charge_in_kwh": 1.0},  # overwritten by new
+    ]
+    new = [{"start": recent, "end": recent, "charge_in_kwh": 2.0}]
+    merged = api._merge_completed_dispatches(cached, new)
+    assert old not in [d["start"] for d in merged]
+    assert len(merged) == 1 and merged[0]["charge_in_kwh"] == 2.0
+
+
+def test_fetch_dispatches_populates_device():
+    """async_fetch_dispatches fills planned + completed dispatches for each known device."""
+    api = make_kraken_api()
+    api.intelligent_devices = {"dev-1": {"device_id": "dev-1", "planned_dispatches": [], "completed_dispatches": []}}
+    api.async_graphql_query = AsyncMock(
+        return_value={
+            "flexPlannedDispatches": [{"start": "2026-07-08T02:00:00Z", "end": "2026-07-08T05:00:00Z", "type": "SMART", "energyAddedKwh": 10.0}],
+            "completedDispatches": [{"start": "2026-07-08T00:00:00Z", "end": "2026-07-08T01:00:00Z", "delta": 3.0, "meta": {"source": "SMART", "location": "AT_HOME"}}],
+        }
+    )
+    asyncio.run(api.async_fetch_dispatches())
+    dev = api.intelligent_devices["dev-1"]
+    assert len(dev["planned_dispatches"]) == 1 and dev["planned_dispatches"][0]["charge_in_kwh"] == 10.0
+    assert len(dev["completed_dispatches"]) == 1 and dev["completed_dispatches"][0]["charge_in_kwh"] == 3.0
+
+
+def test_publish_dispatch_sensors_active_state_and_wiring():
+    """_publish_dispatch_sensors publishes an on/off binary_sensor and wires slot + num_cars."""
+    from datetime import datetime, timezone, timedelta
+
+    api = make_kraken_api()
+    now = datetime.now(timezone.utc)
+    start = (now - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    end = (now + timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    api.intelligent_devices = {"aaa-bbb-12345": {"device_id": "aaa-bbb-12345", "planned_dispatches": [{"start": start, "end": end, "charge_in_kwh": 5.0}], "completed_dispatches": []}}
+    api.dashboard_item = MagicMock()
+    captured = {}
+    api.set_arg = MagicMock(side_effect=lambda k, v: captured.__setitem__(k, v))
+    api.get_arg = MagicMock(return_value=0)  # num_cars currently 0
+
+    api._publish_dispatch_sensors()
+
+    entity = api.get_entity_name("binary_sensor", "intelligent_dispatch_12345")
+    call = [c for c in api.dashboard_item.call_args_list if c.args[0] == entity][0]
+    assert call.args[1] == "on", "a dispatch spanning now should make the sensor active"
+    # Wired to the sensor list, and num_cars bumped so fetch.py actually consumes it.
+    assert captured["octopus_intelligent_slot"] == [entity]
+    assert captured["num_cars"] == 1
+
+
+def test_run_fetches_and_wires_dispatches():
+    """On a dispatch-due cycle, run() fetches dispatches and wires octopus_intelligent_slot."""
+    from datetime import datetime
+
+    api = make_kraken_api()
+    api.current_tariff = {"tariff_code": "E-1R-VAR-01", "product_code": "VAR-01"}
+    api.import_rates = [{"value_inc_vat": 24.5}]
+    api.tariff_fetched_at = datetime.now()  # fresh → no tariff work / device re-discovery
+    api.rates_fetched_at = datetime.now()  # fresh → no rate work
+    api.dispatch_fetched_at = None  # dispatch due
+    api.intelligent_devices = {"dev-1": {"device_id": "dev-1", "planned_dispatches": [], "completed_dispatches": []}}
+    api.async_find_tariffs = AsyncMock(return_value=None)
+    api.async_discover_smart_devices = AsyncMock()
+
+    async def fetch_disp():
+        api.intelligent_devices["dev-1"]["planned_dispatches"] = [{"start": "2026-07-08T02:00:00Z", "end": "2026-07-08T05:00:00Z", "charge_in_kwh": 10.0}]
+
+    api.async_fetch_dispatches = AsyncMock(side_effect=fetch_disp)
+    api.dashboard_item = MagicMock()
+    captured = {}
+    api.set_arg = MagicMock(side_effect=lambda k, v: captured.__setitem__(k, v))
+    api.get_arg = MagicMock(return_value=0)
+    api.update_success_timestamp = MagicMock()
+
+    result = asyncio.run(api.run(120, False))
+
+    assert result is True
+    api.async_discover_smart_devices.assert_not_called()  # tariff fresh
+    api.async_fetch_dispatches.assert_called_once()
+    assert captured.get("octopus_intelligent_slot") == [api.get_entity_name("binary_sensor", "intelligent_dispatch_1")]
+
+
+def test_run_no_devices_does_not_save_cache_every_cycle():
+    """With no SmartFlex devices and fresh tariff/rates, run() must not persist the cache each cycle.
+
+    Regression: dispatch_due stays permanently true when there are no devices (dispatch_fetched_at
+    is never set), so the save guard must key off an actual dispatch refresh, not dispatch_due.
+    """
+    from datetime import datetime
+
+    api = make_kraken_api()
+    api.current_tariff = {"tariff_code": "E-1R-VAR-01", "product_code": "VAR-01"}
+    api.import_rates = [{"value_inc_vat": 24.5}]
+    api.tariff_fetched_at = datetime.now()  # fresh
+    api.rates_fetched_at = datetime.now()  # fresh
+    api.dispatch_fetched_at = None  # no devices → never set → dispatch_due would be True
+    api.intelligent_devices = {}  # common no-EV account
+    api.async_find_tariffs = AsyncMock(return_value=None)
+    api.save_kraken_cache = AsyncMock()
+    api.dashboard_item = MagicMock()
+    api.set_arg = MagicMock()
+    api.update_success_timestamp = MagicMock()
+
+    result = asyncio.run(api.run(120, False))
+
+    assert result is True
+    api.save_kraken_cache.assert_not_called()
+
+
 def run_kraken_tests(my_predbat=None):
     """Run all KrakenAPI tests. Returns True on failure, False on success."""
     tests = [
@@ -1141,7 +1788,20 @@ def run_kraken_tests(my_predbat=None):
         test_get_entity_name,
         test_run_first_discovers_tariff_and_fetches_rates,
         test_run_returns_false_on_auth_failure,
-        test_run_fetches_rates_on_10min_cycle,
+        test_run_refetches_rates_when_stale,
+        test_run_skips_refetch_when_cache_fresh,
+        test_run_first_restores_cache_and_skips_fetch,
+        test_save_and_load_kraken_cache_round_trip,
+        test_data_age_minutes,
+        test_discover_smart_devices_filters_live_ev,
+        test_normalize_dispatches_field_mapping,
+        test_normalize_dispatches_trims_in_progress_planned,
+        test_normalize_dispatches_does_not_trim_completed,
+        test_merge_completed_dispatches_dedup_and_prune,
+        test_fetch_dispatches_populates_device,
+        test_publish_dispatch_sensors_active_state_and_wiring,
+        test_run_fetches_and_wires_dispatches,
+        test_run_no_devices_does_not_save_cache_every_cycle,
         test_run_wires_export_when_discovered,
         test_find_active_tariff_prefers_configured_mpan,
         test_standing_charge_converts_pence_to_pounds,
@@ -1163,8 +1823,21 @@ def run_kraken_tests(my_predbat=None):
         test_fetch_rates_graphql_window_default_forecast_hours,
         test_fetch_rates_rest_404_falls_back_to_graphql_for_import,
         test_fetch_rates_rest_404_no_fallback_without_import_mpan,
-        test_fetch_rates_rest_404_no_fallback_for_export_tariff,
+        test_fetch_rates_rest_404_falls_back_to_graphql_for_export,
+        test_fetch_rates_export_404_uses_export_account_for_split_accounts,
         test_fetch_rates_rest_410_falls_back_to_graphql_for_import,
+        test_find_active_tariff_uses_direction_for_seg_export_code,
+        test_find_active_tariff_direction_overrides_export_substring,
+        test_find_active_tariff_falls_back_to_substring_without_direction,
+        test_build_rest_auth_uses_basic_auth_for_api_key,
+        test_build_rest_auth_uses_jwt_header_for_oauth,
+        test_fetch_rates_404_retries_authenticated_and_succeeds,
+        test_fetch_rates_404_authenticated_retry_still_404_falls_back_to_graphql,
+        test_fetch_rates_404_graphql_fallback_empty_counts_one_failure,
+        test_connection_nodes_extracts_edges,
+        test_fetch_rates_graphql_parses_connection_edges,
+        test_fetch_rates_graphql_paginates_via_cursor,
+        test_fetch_standing_charges_graphql_parses_connection_edges,
         test_fetch_rates_transient_error_does_not_fall_back_to_graphql,
         test_fetch_standing_charges_rest_404_falls_back_to_graphql,
         test_fetch_standing_charges_rest_404_no_fallback_without_import_mpan,

@@ -124,6 +124,7 @@ evergen
 evse
 exog
 exportlimit
+exportvalue
 fdpwr
 fdsoc
 feedin
@@ -289,6 +290,7 @@ openweathermap
 overfitting
 overvoltage
 ownerapi
+parseable
 pbat
 pbgw
 pdata
@@ -329,7 +331,8 @@ randn
 rarr
 reactivepower
 recp
-Redownload
+redownload
+refetches
 regionid
 regname
 remainings
