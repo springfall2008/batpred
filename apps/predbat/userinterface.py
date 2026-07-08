@@ -1088,10 +1088,13 @@ class UserInterface:
         states = self.get_state_wrapper()
         state_keys = states.keys()
         disabled = []
-        self.unmatched_args = {}
+        enabled = []
+        
+        if not hasattr(self, "unmatched_args"):
+            self.unmatched_args = {}
 
         # Find each arg re to match
-        for arg in self.args:
+        for arg in list(self.args.keys()):
             arg_value = self.args[arg]
             matched, arg_value = self.resolve_arg_re(arg, arg_value, state_keys)
             if not matched:
@@ -1101,10 +1104,24 @@ class UserInterface:
             else:
                 self.args[arg] = arg_value
 
-        # Remove unmatched keys
+        # Check previously unmatched args
+        for arg in list(self.unmatched_args.keys()):
+            arg_value = self.unmatched_args[arg]
+            matched, arg_value = self.resolve_arg_re(arg, arg_value, state_keys)
+            if matched:
+                self.args[arg] = arg_value
+                enabled.append(arg)
+                self.log("Info: Regular expression argument: {} matched on retry".format(arg))
+
+        # Remove matched keys from unmatched list
+        for key in enabled:
+            del self.unmatched_args[key]
+
+        # Remove unmatched keys from args
         for key in disabled:
             self.unmatched_args[key] = self.args[key]
             del self.args[key]
+
 
     def split_command_index(self, command):
         """
