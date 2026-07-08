@@ -1616,6 +1616,41 @@ def test_normalize_dispatches_field_mapping():
     assert completed[0]["charge_in_kwh"] == 1.25 and completed[0]["source"] == "SMART" and completed[0]["location"] == "AT_HOME"
 
 
+def test_normalize_dispatches_trims_in_progress_planned():
+    """A planned dispatch already in progress is trimmed: start advances to now, energy scaled."""
+    from datetime import datetime, timezone, timedelta
+
+    api = make_kraken_api()
+    now = datetime.now(timezone.utc)
+    start = (now - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")  # started 30m ago
+    end = (now + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")  # ends in 30m (half elapsed)
+
+    planned = api._normalize_dispatches([{"start": start, "end": end, "type": "SMART", "energyAddedKwh": 10.0}], completed=False)
+    assert len(planned) == 1
+    # ~half the window remains → ~half the energy, and start advanced to ~now.
+    assert 4.5 < planned[0]["charge_in_kwh"] < 5.5
+    trimmed_start = datetime.fromisoformat(planned[0]["start"])
+    assert abs((trimmed_start - now).total_seconds()) < 60
+
+    # A future (not-yet-started) planned dispatch is left untouched.
+    future_start = (now + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    future_end = (now + timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    future = api._normalize_dispatches([{"start": future_start, "end": future_end, "energyAddedKwh": 8.0}], completed=False)
+    assert future[0]["start"] == future_start and future[0]["charge_in_kwh"] == 8.0
+
+
+def test_normalize_dispatches_does_not_trim_completed():
+    """Completed dispatches are historical and never trimmed, even if end is in the future."""
+    from datetime import datetime, timezone, timedelta
+
+    api = make_kraken_api()
+    now = datetime.now(timezone.utc)
+    start = (now - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    end = (now + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    completed = api._normalize_dispatches([{"start": start, "end": end, "delta": 10.0, "meta": {}}], completed=True)
+    assert completed[0]["start"] == start and completed[0]["charge_in_kwh"] == 10.0
+
+
 def test_merge_completed_dispatches_dedup_and_prune():
     """_merge_completed_dispatches dedup by start (newest wins) and prunes entries > history window."""
     from datetime import datetime, timezone, timedelta
@@ -1705,6 +1740,33 @@ def test_run_fetches_and_wires_dispatches():
     assert captured.get("octopus_intelligent_slot") == [api.get_entity_name("binary_sensor", "intelligent_dispatch_1")]
 
 
+def test_run_no_devices_does_not_save_cache_every_cycle():
+    """With no SmartFlex devices and fresh tariff/rates, run() must not persist the cache each cycle.
+
+    Regression: dispatch_due stays permanently true when there are no devices (dispatch_fetched_at
+    is never set), so the save guard must key off an actual dispatch refresh, not dispatch_due.
+    """
+    from datetime import datetime
+
+    api = make_kraken_api()
+    api.current_tariff = {"tariff_code": "E-1R-VAR-01", "product_code": "VAR-01"}
+    api.import_rates = [{"value_inc_vat": 24.5}]
+    api.tariff_fetched_at = datetime.now()  # fresh
+    api.rates_fetched_at = datetime.now()  # fresh
+    api.dispatch_fetched_at = None  # no devices → never set → dispatch_due would be True
+    api.intelligent_devices = {}  # common no-EV account
+    api.async_find_tariffs = AsyncMock(return_value=None)
+    api.save_kraken_cache = AsyncMock()
+    api.dashboard_item = MagicMock()
+    api.set_arg = MagicMock()
+    api.update_success_timestamp = MagicMock()
+
+    result = asyncio.run(api.run(120, False))
+
+    assert result is True
+    api.save_kraken_cache.assert_not_called()
+
+
 def run_kraken_tests(my_predbat=None):
     """Run all KrakenAPI tests. Returns True on failure, False on success."""
     tests = [
@@ -1733,10 +1795,13 @@ def run_kraken_tests(my_predbat=None):
         test_data_age_minutes,
         test_discover_smart_devices_filters_live_ev,
         test_normalize_dispatches_field_mapping,
+        test_normalize_dispatches_trims_in_progress_planned,
+        test_normalize_dispatches_does_not_trim_completed,
         test_merge_completed_dispatches_dedup_and_prune,
         test_fetch_dispatches_populates_device,
         test_publish_dispatch_sensors_active_state_and_wiring,
         test_run_fetches_and_wires_dispatches,
+        test_run_no_devices_does_not_save_cache_every_cycle,
         test_run_wires_export_when_discovered,
         test_find_active_tariff_prefers_configured_mpan,
         test_standing_charge_converts_pence_to_pounds,

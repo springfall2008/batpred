@@ -1161,6 +1161,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
 
     def _normalize_dispatches(self, raw, completed):
         """Convert raw GraphQL dispatch nodes to predbat's {start,end,charge_in_kwh,source,location} shape."""
+        now = datetime.now(timezone.utc)
         result = []
         for d in raw or []:
             start = d.get("start")
@@ -1180,6 +1181,23 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                 delta = round(float(delta), 4) if delta is not None else None
             except (ValueError, TypeError):
                 delta = None
+
+            # For a PLANNED dispatch already in progress, trim the elapsed portion: advance the
+            # start to now and scale the remaining energy. fetch.py's decode_octopus_slot does not
+            # trim a started slot when charge_in_kwh > 0, so without this the already-delivered
+            # energy would be double-counted, inflating predicted car SoC/cost for the active
+            # window. Completed dispatches are historical and left untouched. (Matches OctopusAPI.)
+            if not completed:
+                start_dt = self._parse_dispatch_dt(start)
+                end_dt = self._parse_dispatch_dt(end)
+                if start_dt and end_dt and start_dt < now < end_dt:
+                    total_minutes = (end_dt - start_dt).total_seconds() / 60.0
+                    remaining_minutes = (end_dt - now).total_seconds() / 60.0
+                    if total_minutes > 0:
+                        if delta is not None:
+                            delta = round(delta * remaining_minutes / total_minutes, 4)
+                        start = now.replace(microsecond=0).isoformat()
+
             result.append({"start": start, "end": end, "charge_in_kwh": delta, "source": source, "location": location})
         return result
 
@@ -1324,7 +1342,11 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             self._publish_rate_sensors()
 
         # Fetch SmartFlex intelligent dispatches for any known devices, then publish + wire them.
-        if self.intelligent_devices and dispatch_due:
+        # dispatch_due stays permanently true for accounts with no devices (dispatch_fetched_at
+        # never gets set), so track whether we actually refreshed to avoid saving the cache every
+        # cycle in the common no-EV case.
+        dispatches_refreshed = bool(self.intelligent_devices) and dispatch_due
+        if dispatches_refreshed:
             await self.async_fetch_dispatches()
             self.dispatch_fetched_at = datetime.now()
             had_success = True
@@ -1365,7 +1387,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
 
         # Persist to storage whenever we refreshed something, so the next restart restores it.
         # (Not every cycle — if the cache is lost it is simply re-fetched on the next due check.)
-        if tariff_due or rates_due or dispatch_due:
+        if tariff_due or rates_due or dispatches_refreshed:
             await self.save_kraken_cache()
 
         # Update liveness timestamp if we got data OR tariff is known (prevents
