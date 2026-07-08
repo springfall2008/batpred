@@ -650,6 +650,7 @@ def run_scenario(my_predbat, scenario, debug=False):
                 "battery_cycles": round(float(battery_cycle), 4),
                 "carbon_g": round(float(final_carbon_g), 2),
                 "runtime_s": round(t_elapsed, 3),
+                "end_record": int(my_predbat.end_record),
             }
         )
 
@@ -922,6 +923,13 @@ def compare_results(file_a, file_b):
         status = ""
         if ra.get("failed") or rb.get("failed"):
             status = "FAIL"
+
+        # Flag a differing end_record: the metric is measured over end_record, so if it changed
+        # between the two runs the metric diff is comparing different horizons and is not reliable.
+        era = ra.get("end_record")
+        erb = rb.get("end_record")
+        if era is not None and erb is not None and era != erb:
+            status = (status + " " if status else "") + "ER {}->{}".format(era, erb)
 
         ma = ra.get("metric")
         mb = rb.get("metric")
