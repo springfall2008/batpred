@@ -175,6 +175,12 @@ KRAKEN_AUTH_ERROR_CODES = ("KT-CT-1139", "KT-CT-1111", "KT-CT-1143")
 KRAKEN_RATES_PAGE_SIZE = 100
 KRAKEN_RATES_MAX_PAGES = 20
 
+# How stale cached data may get before run() re-queries the API (minutes). Tariff/account data
+# changes rarely so it is cached for hours; rates are published roughly daily so a 30-minute
+# refresh is ample. Cached data is restored on restart, so these also bound post-restart re-fetch.
+KRAKEN_TARIFF_REFRESH_MINUTES = 120
+KRAKEN_RATES_REFRESH_MINUTES = 30
+
 
 class KrakenAPI(ComponentBase, _AUTH_BASE):
     """Kraken GraphQL component for EDF/E.ON tariff discovery and rate fetching."""
@@ -212,6 +218,15 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         self.requests_total = 0
         self.failures_total = 0
         self.oauth_failed = False
+
+        # Last-fetched data, cached to storage so it survives a restart. Rates are the actual
+        # rate-period lists last published to the sensors; the *_fetched_at timestamps drive the
+        # age-based refresh in run() so a fast restart does not re-query the API needlessly.
+        self.import_rates = None
+        self.export_rates = None
+        self.import_standing_charge = None
+        self.tariff_fetched_at = None  # naive datetime of last successful tariff discovery
+        self.rates_fetched_at = None  # naive datetime of last successful import-rate fetch
 
         # Export account/MPAN from SaaS config (matched by address at onboarding time).
         # Tariff is always discovered dynamically via GraphQL so changes are detected.
@@ -907,85 +922,189 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             return value / 100.0 if value is not None else None
         return None
 
+    def _cache_filename(self):
+        """Logical storage filename for this account's cache blob."""
+        return f"account_{self.account_id}"
+
+    @staticmethod
+    def _data_age_minutes(fetched_at):
+        """Return minutes since fetched_at, or a large number if it was never fetched.
+
+        fetched_at is a naive local datetime (or an ISO string round-tripped through YAML).
+        A None/not parseable value is treated as very old so the data is refreshed.
+        """
+        if fetched_at is None:
+            return 9999.0
+        if isinstance(fetched_at, str):
+            try:
+                fetched_at = datetime.fromisoformat(fetched_at)
+            except ValueError:
+                return 9999.0
+        try:
+            return (datetime.now() - fetched_at).total_seconds() / 60.0
+        except TypeError:
+            return 9999.0
+
+    async def load_kraken_cache(self):
+        """Restore tariff, MPANs, rates and fetch timestamps from storage after a restart.
+
+        Populating these before the first run() means the sensors can be published immediately
+        from cache and the API is only re-queried once the data is actually stale.
+        """
+        data = await self.storage.load("kraken", self._cache_filename()) if self.storage else None
+        if not data:
+            return
+
+        self.current_tariff = data.get("current_tariff")
+        self.export_tariff = data.get("export_tariff")
+        self.import_mpan = data.get("import_mpan")
+        # Prefer cached discovered values but never clobber a configured value with None.
+        self.export_mpan = data.get("export_mpan") or self.export_mpan
+        self.export_account_id = data.get("export_account_id") or self.export_account_id
+        self.import_rates = data.get("import_rates")
+        self.export_rates = data.get("export_rates")
+        self.import_standing_charge = data.get("import_standing_charge")
+        self.export_rates_available = bool(data.get("export_rates_available"))
+        self.tariff_fetched_at = data.get("tariff_fetched_at")
+        self.rates_fetched_at = data.get("rates_fetched_at")
+
+        if self.current_tariff:
+            self.log(
+                "Kraken: Restored cache — tariff {} (age {:.0f}m), rates age {:.0f}m".format(
+                    self.current_tariff.get("tariff_code"),
+                    self._data_age_minutes(self.tariff_fetched_at),
+                    self._data_age_minutes(self.rates_fetched_at),
+                )
+            )
+            self.update_success_timestamp()
+
+    async def save_kraken_cache(self):
+        """Persist tariff, MPANs, rates and fetch timestamps to storage so they survive a restart."""
+        if not self.storage:
+            return
+        cache = {
+            "current_tariff": self.current_tariff,
+            "export_tariff": self.export_tariff,
+            "import_mpan": self.import_mpan,
+            "export_mpan": self.export_mpan,
+            "export_account_id": self.export_account_id,
+            "import_rates": self.import_rates,
+            "export_rates": self.export_rates,
+            "import_standing_charge": self.import_standing_charge,
+            "export_rates_available": self.export_rates_available,
+            "tariff_fetched_at": self.tariff_fetched_at,
+            "rates_fetched_at": self.rates_fetched_at,
+        }
+        await self.storage.save("kraken", self._cache_filename(), cache, format="yaml", expiry=datetime.now(timezone.utc) + timedelta(days=7))
+
+    def _publish_rate_sensors(self):
+        """Publish the import/export rate + standing-charge sensors from the current in-memory data.
+
+        Called on the first run (so cached data populates HA immediately) and whenever rates are
+        refreshed. No-ops for any datum that is not present yet.
+        """
+        if self.import_rates:
+            self.dashboard_item(
+                self.get_entity_name("sensor", "import_rates"),
+                state=len(self.import_rates),
+                attributes={
+                    "friendly_name": "Kraken Import Rates",
+                    "rates": self.import_rates,
+                    "tariff_code": self.current_tariff["tariff_code"],
+                    "product_code": self.current_tariff["product_code"],
+                    "icon": "mdi:currency-gbp",
+                },
+                app="kraken",
+            )
+        if self.import_standing_charge is not None:
+            self.dashboard_item(
+                self.get_entity_name("sensor", "import_standing"),
+                state=self.import_standing_charge,
+                attributes={
+                    "friendly_name": "Kraken Standing Charge",
+                    "unit_of_measurement": "£/day",
+                    "tariff_code": self.current_tariff["tariff_code"],
+                    "icon": "mdi:currency-gbp",
+                },
+                app="kraken",
+            )
+        if self.export_rates and self.export_tariff:
+            self.dashboard_item(
+                self.get_entity_name("sensor", "export_rates"),
+                state=len(self.export_rates),
+                attributes={
+                    "friendly_name": "Kraken Export Rates",
+                    "rates": self.export_rates,
+                    "tariff_code": self.export_tariff["tariff_code"],
+                    "product_code": self.export_tariff["product_code"],
+                    "icon": "mdi:currency-gbp",
+                },
+                app="kraken",
+            )
+
     async def run(self, seconds, first):
         """Component run method — called by ComponentBase.start() every 60s.
 
-        Timing (mirrors OctopusAPI pattern):
-        - First run + every 30 min: discover tariff via GraphQL
-        - First run + every 10 min: fetch rates + standing charges from REST
-        - First run: wire into fetch.py via set_arg
+        Data is cached to storage and only re-fetched when stale, so a restart restores the last
+        tariff + rates from disk and re-queries the API only when the cached data has aged out:
+        - Tariff discovery: when the cached tariff is >= KRAKEN_TARIFF_REFRESH_MINUTES old (or never fetched)
+        - Rates + standing charges: when the cached rates are >= KRAKEN_RATES_REFRESH_MINUTES old (or never fetched)
+        Sensors are always (re)published on the first run so HA is populated immediately from cache.
         """
-        count_minutes = seconds // 60
+        if first:
+            await self.load_kraken_cache()
+
         had_success = False
 
-        # Tariff discovery — first run + every 30 minutes
-        if first or (count_minutes % 30) == 0:
-            tariff_change = await self.async_find_tariffs()
+        # Age-based refresh — None (never fetched / cache miss) is treated as very old, so due.
+        tariff_due = self._data_age_minutes(self.tariff_fetched_at) >= KRAKEN_TARIFF_REFRESH_MINUTES
+        rates_due = self._data_age_minutes(self.rates_fetched_at) >= KRAKEN_RATES_REFRESH_MINUTES
 
-            if tariff_change or self.current_tariff:
+        # Tariff discovery
+        if tariff_due:
+            await self.async_find_tariffs()
+            if self.current_tariff:
+                self.tariff_fetched_at = datetime.now()
                 had_success = True
-                self.dashboard_item(
-                    self.get_entity_name("sensor", "tariff_code"),
-                    self.current_tariff["tariff_code"],
-                    attributes={
-                        "friendly_name": "Kraken Tariff Code",
-                        "product_code": self.current_tariff["product_code"],
-                        "icon": "mdi:lightning-bolt",
-                    },
-                    app="kraken",
-                )
 
-        # Fetch import rates + standing charges — first run + every 10 minutes
-        if self.current_tariff and (first or (count_minutes % 10) == 0):
+        # Publish tariff sensor from current state (cache or fresh)
+        if self.current_tariff and (first or tariff_due):
+            had_success = True
+            self.dashboard_item(
+                self.get_entity_name("sensor", "tariff_code"),
+                self.current_tariff["tariff_code"],
+                attributes={
+                    "friendly_name": "Kraken Tariff Code",
+                    "product_code": self.current_tariff["product_code"],
+                    "icon": "mdi:lightning-bolt",
+                },
+                app="kraken",
+            )
+
+        # Fetch import rates + standing charges + export rates when stale
+        if self.current_tariff and rates_due:
             rates = await self.async_fetch_rates()
             if rates:
                 had_success = True
-                self.dashboard_item(
-                    self.get_entity_name("sensor", "import_rates"),
-                    state=len(rates),
-                    attributes={
-                        "friendly_name": "Kraken Import Rates",
-                        "rates": rates,
-                        "tariff_code": self.current_tariff["tariff_code"],
-                        "product_code": self.current_tariff["product_code"],
-                        "icon": "mdi:currency-gbp",
-                    },
-                    app="kraken",
-                )
+                self.import_rates = rates
+                self.rates_fetched_at = datetime.now()
 
             standing_charge = await self.async_fetch_standing_charges()
             if standing_charge is not None:
                 had_success = True
-                self.dashboard_item(
-                    self.get_entity_name("sensor", "import_standing"),
-                    state=standing_charge,
-                    attributes={
-                        "friendly_name": "Kraken Standing Charge",
-                        "unit_of_measurement": "£/day",
-                        "tariff_code": self.current_tariff["tariff_code"],
-                        "icon": "mdi:currency-gbp",
-                    },
-                    app="kraken",
-                )
+                self.import_standing_charge = standing_charge
 
             # Fetch export rates if export tariff is known
             if self.export_tariff:
                 export_rates = await self.async_fetch_rates(tariff=self.export_tariff)
                 if export_rates:
                     had_success = True
+                    self.export_rates = export_rates
                     self.export_rates_available = True
-                    self.dashboard_item(
-                        self.get_entity_name("sensor", "export_rates"),
-                        state=len(export_rates),
-                        attributes={
-                            "friendly_name": "Kraken Export Rates",
-                            "rates": export_rates,
-                            "tariff_code": self.export_tariff["tariff_code"],
-                            "product_code": self.export_tariff["product_code"],
-                            "icon": "mdi:currency-gbp",
-                        },
-                        app="kraken",
-                    )
+
+        # Publish rate sensors from current in-memory data (cache or fresh)
+        if self.current_tariff and (first or rates_due):
+            self._publish_rate_sensors()
 
         # Wire import into fetch.py once tariff is discovered (retries until successful)
         if not self.wired and self.current_tariff:
@@ -1018,6 +1137,11 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             },
             app="kraken",
         )
+
+        # Persist to storage whenever we refreshed something, so the next restart restores it.
+        # (Not every cycle — if the cache is lost it is simply re-fetched on the next due check.)
+        if tariff_due or rates_due:
+            await self.save_kraken_cache()
 
         # Update liveness timestamp if we got data OR tariff is known (prevents
         # spurious liveness failures during transient rate-fetch outages)
@@ -1166,8 +1290,8 @@ async def test_kraken_api(
             return
         print(f"{type_info['name']} ({type_info['kind']}) fields:")
         for field in type_info.get("fields") or []:
-            ftype = field.get("type") or {}
-            type_name = ftype.get("name") or (ftype.get("ofType") or {}).get("name") or ftype.get("kind")
+            field_type = field.get("type") or {}
+            type_name = field_type.get("name") or (field_type.get("ofType") or {}).get("name") or field_type.get("kind")
             print(f"  {field['name']}: {type_name}")
         return
 

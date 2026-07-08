@@ -15,7 +15,36 @@ def make_mock_base():
     base.prefix = "predbat"
     base.local_tz = "Europe/London"
     base.args = {"user_id": "test-instance-123"}
+    # No storage component by default — the `storage` property returns None, so cache
+    # load/save are no-ops. Tests that exercise caching inject a fake storage explicitly.
+    base.components = None
     return base
+
+
+class FakeStorage:
+    """In-memory stand-in for the storage component used by cache tests."""
+
+    def __init__(self):
+        self.data = {}
+
+    async def load(self, module, filename):
+        """Return the stored blob for (module, filename), or None."""
+        return self.data.get((module, filename))
+
+    async def save(self, module, filename, data, format="yaml", expiry=None):
+        """Store a blob for (module, filename)."""
+        self.data[(module, filename)] = data
+        return True
+
+
+def attach_fake_storage(api):
+    """Give an api a working in-memory storage and return it (bypasses the storage property)."""
+    storage = FakeStorage()
+    # `storage` is a read-only property on ComponentBase, so route base.components at it.
+    components = MagicMock()
+    components.get_component = MagicMock(return_value=storage)
+    api.base.components = components
+    return storage
 
 
 def make_kraken_api(provider="edf", account_id="A-TEST123", auth_method="api_key", key="test-key", **kwargs):
@@ -356,23 +385,50 @@ def test_run_returns_false_on_auth_failure():
     api.update_success_timestamp.assert_not_called()
 
 
-def test_run_fetches_rates_on_10min_cycle():
-    """run() fetches rates on 10-minute boundaries, not every cycle."""
+def test_run_refetches_rates_when_stale():
+    """run() re-fetches rates when the cached rates are older than the refresh threshold."""
+    from datetime import datetime, timedelta
+    from kraken import KRAKEN_RATES_REFRESH_MINUTES
 
     api = make_kraken_api()
     api.current_tariff = {"tariff_code": "E-1R-VAR-01", "product_code": "VAR-01"}
+    api.tariff_fetched_at = datetime.now()  # fresh tariff → no re-discovery
+    api.rates_fetched_at = datetime.now() - timedelta(minutes=KRAKEN_RATES_REFRESH_MINUTES + 5)  # stale → re-fetch
     api.async_find_tariffs = AsyncMock(return_value=None)
     api.async_fetch_rates = AsyncMock(return_value=[{"value_inc_vat": 24.5}])
     api.async_fetch_standing_charges = AsyncMock(return_value=53.0)
     api.dashboard_item = MagicMock()
     api.update_success_timestamp = MagicMock()
 
-    # seconds=600 → count_minutes=10, 10%10==0, 10%30!=0 (so no tariff discovery, but rates fetch)
     result = asyncio.run(api.run(600, False))
 
     assert result is True
+    api.async_find_tariffs.assert_not_called()  # tariff still fresh
     api.async_fetch_rates.assert_called()
     api.async_fetch_standing_charges.assert_called_once()
+
+
+def test_run_skips_refetch_when_cache_fresh():
+    """run() does NOT re-query the API when both tariff and rates are freshly cached."""
+    from datetime import datetime
+
+    api = make_kraken_api()
+    api.current_tariff = {"tariff_code": "E-1R-VAR-01", "product_code": "VAR-01"}
+    api.import_rates = [{"value_inc_vat": 24.5}]
+    api.tariff_fetched_at = datetime.now()
+    api.rates_fetched_at = datetime.now()
+    api.async_find_tariffs = AsyncMock(return_value=None)
+    api.async_fetch_rates = AsyncMock(return_value=[{"value_inc_vat": 24.5}])
+    api.async_fetch_standing_charges = AsyncMock(return_value=53.0)
+    api.dashboard_item = MagicMock()
+    api.update_success_timestamp = MagicMock()
+
+    result = asyncio.run(api.run(120, False))
+
+    assert result is True
+    api.async_find_tariffs.assert_not_called()
+    api.async_fetch_rates.assert_not_called()
+    api.async_fetch_standing_charges.assert_not_called()
 
 
 def test_run_wires_export_when_discovered():
@@ -1427,6 +1483,97 @@ def test_fetch_standing_charges_graphql_parses_connection_edges():
     assert abs(result - 0.6195) < 1e-6
 
 
+def test_save_and_load_kraken_cache_round_trip():
+    """save_kraken_cache persists state that load_kraken_cache restores into a fresh instance."""
+    from datetime import datetime
+
+    api = make_kraken_api()
+    attach_fake_storage(api)
+    api.current_tariff = {"tariff_code": "E-1R-IMP-01-J", "product_code": "IMP-01"}
+    api.export_tariff = {"tariff_code": "E-1R-EDF_EXPORT_SEG_12M_HH-B", "product_code": "EDF_EXPORT_SEG_12M"}
+    api.import_mpan = "1100000946808"
+    api.export_mpan = "1170001829927"
+    api.import_rates = [{"value_inc_vat": 28.6, "valid_from": "2026-07-08T00:00:00Z", "valid_to": None}]
+    api.export_rates = [{"value_inc_vat": 15.0, "valid_from": "2026-07-08T00:00:00Z", "valid_to": None}]
+    api.import_standing_charge = 0.5676
+    api.export_rates_available = True
+    api.tariff_fetched_at = datetime.now()
+    api.rates_fetched_at = datetime.now()
+
+    asyncio.run(api.save_kraken_cache())
+
+    # Fresh instance sharing the same storage restores everything.
+    api2 = make_kraken_api(account_id="A-TEST123")
+    api2.base.components = api.base.components
+    api2.update_success_timestamp = MagicMock()
+    asyncio.run(api2.load_kraken_cache())
+
+    assert api2.current_tariff == {"tariff_code": "E-1R-IMP-01-J", "product_code": "IMP-01"}
+    assert api2.export_tariff["tariff_code"] == "E-1R-EDF_EXPORT_SEG_12M_HH-B"
+    assert api2.import_mpan == "1100000946808"
+    assert api2.export_mpan == "1170001829927"
+    assert api2.import_rates[0]["value_inc_vat"] == 28.6
+    assert api2.export_rates[0]["value_inc_vat"] == 15.0
+    assert api2.import_standing_charge == 0.5676
+    assert api2.export_rates_available is True
+
+
+def test_run_first_restores_cache_and_skips_fetch():
+    """On first run a fresh cache is restored, sensors are published, and no API calls are made."""
+    from datetime import datetime
+
+    api = make_kraken_api()
+    storage = attach_fake_storage(api)
+    storage.data[("kraken", "account_A-TEST123")] = {
+        "current_tariff": {"tariff_code": "E-1R-IMP-01-J", "product_code": "IMP-01"},
+        "export_tariff": {"tariff_code": "E-1R-EXPORT-01-J", "product_code": "EXPORT-01"},
+        "import_mpan": "1100000946808",
+        "export_mpan": "1170001829927",
+        "export_account_id": None,
+        "import_rates": [{"value_inc_vat": 28.6, "valid_from": "2026-07-08T00:00:00Z", "valid_to": None}],
+        "export_rates": [{"value_inc_vat": 15.0, "valid_from": "2026-07-08T00:00:00Z", "valid_to": None}],
+        "import_standing_charge": 0.5676,
+        "export_rates_available": True,
+        "tariff_fetched_at": datetime.now(),
+        "rates_fetched_at": datetime.now(),
+    }
+    api.async_find_tariffs = AsyncMock(return_value=None)
+    api.async_fetch_rates = AsyncMock(return_value=None)
+    api.async_fetch_standing_charges = AsyncMock(return_value=None)
+    api.dashboard_item = MagicMock()
+    api.set_arg = MagicMock()
+    api.update_success_timestamp = MagicMock()
+
+    result = asyncio.run(api.run(0, True))
+
+    assert result is True
+    # Fresh cache → no API calls at all.
+    api.async_find_tariffs.assert_not_called()
+    api.async_fetch_rates.assert_not_called()
+    api.async_fetch_standing_charges.assert_not_called()
+    # Sensors published from cache.
+    published = [c.args[0] for c in api.dashboard_item.call_args_list]
+    assert api.get_entity_name("sensor", "import_rates") in published
+    assert api.get_entity_name("sensor", "export_rates") in published
+    # Both import and export wired from cached data.
+    api.set_arg.assert_any_call("metric_octopus_import", api.get_entity_name("sensor", "import_rates"))
+    api.set_arg.assert_any_call("metric_octopus_export", api.get_entity_name("sensor", "export_rates"))
+
+
+def test_data_age_minutes():
+    """_data_age_minutes handles None, datetimes, and ISO strings."""
+    from datetime import datetime, timedelta
+    from kraken import KrakenAPI
+
+    assert KrakenAPI._data_age_minutes(None) >= 9999
+    recent = datetime.now() - timedelta(minutes=5)
+    assert 4 < KrakenAPI._data_age_minutes(recent) < 6
+    # ISO string (as YAML/JSON might round-trip) is parsed.
+    iso = (datetime.now() - timedelta(minutes=20)).isoformat()
+    assert 19 < KrakenAPI._data_age_minutes(iso) < 21
+    assert KrakenAPI._data_age_minutes("not-a-date") >= 9999
+
+
 def run_kraken_tests(my_predbat=None):
     """Run all KrakenAPI tests. Returns True on failure, False on success."""
     tests = [
@@ -1448,7 +1595,11 @@ def run_kraken_tests(my_predbat=None):
         test_get_entity_name,
         test_run_first_discovers_tariff_and_fetches_rates,
         test_run_returns_false_on_auth_failure,
-        test_run_fetches_rates_on_10min_cycle,
+        test_run_refetches_rates_when_stale,
+        test_run_skips_refetch_when_cache_fresh,
+        test_run_first_restores_cache_and_skips_fetch,
+        test_save_and_load_kraken_cache_round_trip,
+        test_data_age_minutes,
         test_run_wires_export_when_discovered,
         test_find_active_tariff_prefers_configured_mpan,
         test_standing_charge_converts_pence_to_pounds,
