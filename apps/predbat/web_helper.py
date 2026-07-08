@@ -159,8 +159,8 @@ def get_entity_detailed_row_js():
             // If batch mode is active, clicking toggles inclusion in the batch.
                 if (getBatchActive()) {
                     const selectedTimes = getSelectedTimeOverrides();
-                    const updated = selectedTimes.includes(time) 
-                        ? selectedTimes.filter(item => item !== time) 
+                    const updated = selectedTimes.includes(time)
+                        ? selectedTimes.filter(item => item !== time)
                         : selectedTimes.concat(time);
                     setSelectedTimeOverrides(updated);
                     openDropdown(dropdownId);
