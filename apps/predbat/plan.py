@@ -3186,7 +3186,7 @@ class Plan:
                                 freeze_only=(typ == "cf"),
                                 allow_freeze=True,
                             )
-                            if n_best_metric < (best_metric + 0.01) and n_best_soc != self.charge_limit_best[window_n]:
+                            if n_best_metric < best_metric and n_best_soc != self.charge_limit_best[window_n]:
                                 # Only a strict improvement drives another full iteration. Equal-metric
                                 # limit flips are still applied once (as before) but must not keep the
                                 # iteration alive - re-running to chase them over-optimises the
@@ -3312,7 +3312,7 @@ class Plan:
                                 allow_freeze=True,
                             )
                             self.export_window_best[window_n]["start"] = keep_start
-                            if n_best_metric < (best_metric + 0.01) and (n_best_soc != self.export_limits_best[window_n] or n_best_start != self.export_window_best[window_n]["start"]):
+                            if n_best_metric < best_metric and (n_best_soc != self.export_limits_best[window_n] or n_best_start != self.export_window_best[window_n]["start"]):
                                 # Only a strict improvement drives another refinement iteration (see
                                 # the charge block above for why equal-metric flips must not).
                                 changed_this_iteration = True
