@@ -348,6 +348,7 @@ def test_run_first_discovers_tariff_and_fetches_rates():
         return discovered
 
     api.async_find_tariffs = AsyncMock(side_effect=find_tariffs_side_effect)
+    api.async_discover_smart_devices = AsyncMock()  # no SmartFlex devices — avoid a real network call
     api.async_fetch_rates = AsyncMock(
         return_value=[
             {"value_inc_vat": 24.5, "valid_from": "2026-03-23T00:00:00Z", "valid_to": "2026-03-24T00:00:00Z"},
@@ -376,6 +377,7 @@ def test_run_returns_false_on_auth_failure():
     api = make_kraken_api()
     api.oauth_failed = True
     api.async_find_tariffs = AsyncMock(return_value=None)
+    api.async_discover_smart_devices = AsyncMock()
     api.dashboard_item = MagicMock()
     api.update_success_timestamp = MagicMock()
 
@@ -442,6 +444,7 @@ def test_run_wires_export_when_discovered():
         return discovered
 
     api.async_find_tariffs = AsyncMock(side_effect=find_tariffs_side_effect)
+    api.async_discover_smart_devices = AsyncMock()
     api.async_fetch_rates = AsyncMock(return_value=[{"value_inc_vat": 24.5}])
     api.async_fetch_standing_charges = AsyncMock(return_value=53.0)
     api.dashboard_item = MagicMock()
@@ -480,6 +483,7 @@ def test_run_does_not_wire_export_when_rates_unavailable():
         return [{"value_inc_vat": 24.5}]
 
     api.async_find_tariffs = AsyncMock(side_effect=find_tariffs_side_effect)
+    api.async_discover_smart_devices = AsyncMock()
     api.async_fetch_rates = AsyncMock(side_effect=fetch_rates_side_effect)
     api.async_fetch_standing_charges = AsyncMock(return_value=53.0)
     api.dashboard_item = MagicMock()
@@ -1574,6 +1578,133 @@ def test_data_age_minutes():
     assert KrakenAPI._data_age_minutes("not-a-date") >= 9999
 
 
+def test_discover_smart_devices_filters_live_ev():
+    """async_discover_smart_devices keeps only LIVE ELECTRIC_VEHICLES devices."""
+    api = make_kraken_api()
+    api.async_graphql_query = AsyncMock(
+        return_value={
+            "devices": [
+                {"id": "dev-ev-1", "deviceType": "ELECTRIC_VEHICLES", "status": {"current": "LIVE"}, "__typename": "SmartFlexVehicle", "make": "Tesla", "model": "M3", "provider": "JEDLIX"},
+                {"id": "dev-meter", "deviceType": "ELECTRICITY_METERS", "status": {"current": "LIVE"}, "__typename": "SmartFlexDevice"},
+                {"id": "dev-ev-suspended", "deviceType": "ELECTRIC_VEHICLES", "status": {"current": "SUSPENDED"}, "__typename": "SmartFlexVehicle"},
+            ]
+        }
+    )
+    asyncio.run(api.async_discover_smart_devices())
+    assert set(api.intelligent_devices) == {"dev-ev-1"}
+    dev = api.intelligent_devices["dev-ev-1"]
+    assert dev["make"] == "Tesla" and dev["is_charger"] is False
+    assert dev["planned_dispatches"] == [] and dev["completed_dispatches"] == []
+
+
+def test_normalize_dispatches_field_mapping():
+    """_normalize_dispatches maps planned (energyAddedKwh/type) and completed (delta/meta) shapes."""
+    api = make_kraken_api()
+    planned = api._normalize_dispatches(
+        [
+            {"start": "2026-07-08T00:00:00Z", "end": "2026-07-08T00:30:00Z", "type": "SMART", "energyAddedKwh": "2.5"},
+            {"start": None, "end": "x"},  # missing start → dropped
+        ],
+        completed=False,
+    )
+    assert planned == [{"start": "2026-07-08T00:00:00Z", "end": "2026-07-08T00:30:00Z", "charge_in_kwh": 2.5, "source": "SMART", "location": None}]
+
+    completed = api._normalize_dispatches(
+        [{"start": "2026-07-07T00:00:00Z", "end": "2026-07-07T00:30:00Z", "delta": 1.25, "meta": {"source": "SMART", "location": "AT_HOME"}}],
+        completed=True,
+    )
+    assert completed[0]["charge_in_kwh"] == 1.25 and completed[0]["source"] == "SMART" and completed[0]["location"] == "AT_HOME"
+
+
+def test_merge_completed_dispatches_dedup_and_prune():
+    """_merge_completed_dispatches dedup by start (newest wins) and prunes entries > history window."""
+    from datetime import datetime, timezone, timedelta
+
+    api = make_kraken_api()
+    old = (datetime.now(timezone.utc) - timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    recent = (datetime.now(timezone.utc) - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    cached = [
+        {"start": old, "end": old, "charge_in_kwh": 1.0},  # pruned (older than history window)
+        {"start": recent, "end": recent, "charge_in_kwh": 1.0},  # overwritten by new
+    ]
+    new = [{"start": recent, "end": recent, "charge_in_kwh": 2.0}]
+    merged = api._merge_completed_dispatches(cached, new)
+    assert old not in [d["start"] for d in merged]
+    assert len(merged) == 1 and merged[0]["charge_in_kwh"] == 2.0
+
+
+def test_fetch_dispatches_populates_device():
+    """async_fetch_dispatches fills planned + completed dispatches for each known device."""
+    api = make_kraken_api()
+    api.intelligent_devices = {"dev-1": {"device_id": "dev-1", "planned_dispatches": [], "completed_dispatches": []}}
+    api.async_graphql_query = AsyncMock(
+        return_value={
+            "flexPlannedDispatches": [{"start": "2026-07-08T02:00:00Z", "end": "2026-07-08T05:00:00Z", "type": "SMART", "energyAddedKwh": 10.0}],
+            "completedDispatches": [{"start": "2026-07-08T00:00:00Z", "end": "2026-07-08T01:00:00Z", "delta": 3.0, "meta": {"source": "SMART", "location": "AT_HOME"}}],
+        }
+    )
+    asyncio.run(api.async_fetch_dispatches())
+    dev = api.intelligent_devices["dev-1"]
+    assert len(dev["planned_dispatches"]) == 1 and dev["planned_dispatches"][0]["charge_in_kwh"] == 10.0
+    assert len(dev["completed_dispatches"]) == 1 and dev["completed_dispatches"][0]["charge_in_kwh"] == 3.0
+
+
+def test_publish_dispatch_sensors_active_state_and_wiring():
+    """_publish_dispatch_sensors publishes an on/off binary_sensor and wires slot + num_cars."""
+    from datetime import datetime, timezone, timedelta
+
+    api = make_kraken_api()
+    now = datetime.now(timezone.utc)
+    start = (now - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    end = (now + timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    api.intelligent_devices = {"aaa-bbb-12345": {"device_id": "aaa-bbb-12345", "planned_dispatches": [{"start": start, "end": end, "charge_in_kwh": 5.0}], "completed_dispatches": []}}
+    api.dashboard_item = MagicMock()
+    captured = {}
+    api.set_arg = MagicMock(side_effect=lambda k, v: captured.__setitem__(k, v))
+    api.get_arg = MagicMock(return_value=0)  # num_cars currently 0
+
+    api._publish_dispatch_sensors()
+
+    entity = api.get_entity_name("binary_sensor", "intelligent_dispatch_12345")
+    call = [c for c in api.dashboard_item.call_args_list if c.args[0] == entity][0]
+    assert call.args[1] == "on", "a dispatch spanning now should make the sensor active"
+    # Wired to the sensor list, and num_cars bumped so fetch.py actually consumes it.
+    assert captured["octopus_intelligent_slot"] == [entity]
+    assert captured["num_cars"] == 1
+
+
+def test_run_fetches_and_wires_dispatches():
+    """On a dispatch-due cycle, run() fetches dispatches and wires octopus_intelligent_slot."""
+    from datetime import datetime
+
+    api = make_kraken_api()
+    api.current_tariff = {"tariff_code": "E-1R-VAR-01", "product_code": "VAR-01"}
+    api.import_rates = [{"value_inc_vat": 24.5}]
+    api.tariff_fetched_at = datetime.now()  # fresh → no tariff work / device re-discovery
+    api.rates_fetched_at = datetime.now()  # fresh → no rate work
+    api.dispatch_fetched_at = None  # dispatch due
+    api.intelligent_devices = {"dev-1": {"device_id": "dev-1", "planned_dispatches": [], "completed_dispatches": []}}
+    api.async_find_tariffs = AsyncMock(return_value=None)
+    api.async_discover_smart_devices = AsyncMock()
+
+    async def fetch_disp():
+        api.intelligent_devices["dev-1"]["planned_dispatches"] = [{"start": "2026-07-08T02:00:00Z", "end": "2026-07-08T05:00:00Z", "charge_in_kwh": 10.0}]
+
+    api.async_fetch_dispatches = AsyncMock(side_effect=fetch_disp)
+    api.dashboard_item = MagicMock()
+    captured = {}
+    api.set_arg = MagicMock(side_effect=lambda k, v: captured.__setitem__(k, v))
+    api.get_arg = MagicMock(return_value=0)
+    api.update_success_timestamp = MagicMock()
+
+    result = asyncio.run(api.run(120, False))
+
+    assert result is True
+    api.async_discover_smart_devices.assert_not_called()  # tariff fresh
+    api.async_fetch_dispatches.assert_called_once()
+    assert captured.get("octopus_intelligent_slot") == [api.get_entity_name("binary_sensor", "intelligent_dispatch_1")]
+
+
 def run_kraken_tests(my_predbat=None):
     """Run all KrakenAPI tests. Returns True on failure, False on success."""
     tests = [
@@ -1600,6 +1731,12 @@ def run_kraken_tests(my_predbat=None):
         test_run_first_restores_cache_and_skips_fetch,
         test_save_and_load_kraken_cache_round_trip,
         test_data_age_minutes,
+        test_discover_smart_devices_filters_live_ev,
+        test_normalize_dispatches_field_mapping,
+        test_merge_completed_dispatches_dedup_and_prune,
+        test_fetch_dispatches_populates_device,
+        test_publish_dispatch_sensors_active_state_and_wiring,
+        test_run_fetches_and_wires_dispatches,
         test_run_wires_export_when_discovered,
         test_find_active_tariff_prefers_configured_mpan,
         test_standing_charge_converts_pence_to_pounds,

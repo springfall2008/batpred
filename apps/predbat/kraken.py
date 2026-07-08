@@ -161,6 +161,43 @@ KRAKEN_INTROSPECT_TYPE_QUERY = """{{
   }}
 }}"""
 
+# SmartFlex device discovery — a connected EV / charge point the customer enrolled for provider-
+# managed smart charging (Octopus Intelligent Go, E.ON NextDrive, EDF GoElectric SmartFlex, …).
+# Schema matches the reference EDF/E.ON HA integration. Also used by the CLI --dispatches check.
+KRAKEN_DEVICES_QUERY = """{{
+  devices(accountNumber: "{account_number}") {{
+    id
+    provider
+    deviceType
+    status {{ current }}
+    __typename
+    ... on SmartFlexVehicle {{ make model }}
+    ... on SmartFlexChargePoint {{ make model }}
+  }}
+}}"""
+
+# Planned + completed SmartFlex dispatches for one device — the provider-scheduled cheap-charge
+# windows Predbat consumes (via octopus_intelligent_slot) to extend cheap import beyond the fixed
+# tariff window, exactly like Octopus Intelligent Go.
+KRAKEN_DISPATCHES_QUERY = """{{
+  devices(accountNumber: "{account_number}", deviceId: "{device_id}") {{
+    id
+    status {{ currentState }}
+  }}
+  flexPlannedDispatches(deviceId: "{device_id}") {{
+    start
+    end
+    type
+    energyAddedKwh
+  }}
+  completedDispatches(accountNumber: "{account_number}") {{
+    start
+    end
+    delta
+    meta {{ source location }}
+  }}
+}}"""
+
 KRAKEN_BASE_URLS = {
     "edf": "https://api.edfgb-kraken.energy",
     "eon": "https://api.eonnext-kraken.energy",
@@ -180,6 +217,14 @@ KRAKEN_RATES_MAX_PAGES = 20
 # refresh is ample. Cached data is restored on restart, so these also bound post-restart re-fetch.
 KRAKEN_TARIFF_REFRESH_MINUTES = 120
 KRAKEN_RATES_REFRESH_MINUTES = 30
+
+# How often to re-fetch SmartFlex intelligent dispatches (minutes). Dispatches change more often
+# than rates as the provider re-plans smart charging, but not minute-to-minute. Smart devices
+# themselves are only re-discovered on the (slower) tariff cycle, so accounts with no EV enrolment
+# never pay the per-device dispatch query.
+KRAKEN_DISPATCH_REFRESH_MINUTES = 2
+# Drop completed dispatches older than this many days when merging history.
+KRAKEN_DISPATCH_HISTORY_DAYS = 5
 
 
 class KrakenAPI(ComponentBase, _AUTH_BASE):
@@ -227,6 +272,12 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         self.import_standing_charge = None
         self.tariff_fetched_at = None  # naive datetime of last successful tariff discovery
         self.rates_fetched_at = None  # naive datetime of last successful import-rate fetch
+
+        # SmartFlex intelligent dispatches (provider-managed smart charging). intelligent_devices
+        # maps device_id -> device metadata + planned/completed dispatch lists. Empty for the common
+        # case of an account with no connected EV/charger. Cached to storage so it survives restart.
+        self.intelligent_devices = {}
+        self.dispatch_fetched_at = None
 
         # Export account/MPAN from SaaS config (matched by address at onboarding time).
         # Tariff is always discovered dynamically via GraphQL so changes are detected.
@@ -968,6 +1019,9 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         self.export_rates_available = bool(data.get("export_rates_available"))
         self.tariff_fetched_at = data.get("tariff_fetched_at")
         self.rates_fetched_at = data.get("rates_fetched_at")
+        if isinstance(data.get("intelligent_devices"), dict):
+            self.intelligent_devices = data.get("intelligent_devices")
+        self.dispatch_fetched_at = data.get("dispatch_fetched_at")
 
         if self.current_tariff:
             self.log(
@@ -995,6 +1049,8 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             "export_rates_available": self.export_rates_available,
             "tariff_fetched_at": self.tariff_fetched_at,
             "rates_fetched_at": self.rates_fetched_at,
+            "intelligent_devices": self.intelligent_devices,
+            "dispatch_fetched_at": self.dispatch_fetched_at,
         }
         await self.storage.save("kraken", self._cache_filename(), cache, format="yaml", expiry=datetime.now(timezone.utc) + timedelta(days=7))
 
@@ -1043,6 +1099,160 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                 app="kraken",
             )
 
+    # ------------------------------------------------------------------
+    # SmartFlex intelligent dispatches (provider-managed smart charging)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _device_index_suffix(device_id):
+        """Entity-name index suffix for a device id — the last hyphen-separated segment."""
+        return device_id.split("-")[-1] if device_id and "-" in device_id else (device_id or "")
+
+    @staticmethod
+    def _parse_dispatch_dt(value):
+        """Parse an ISO datetime string (tolerating a trailing Z) to an aware datetime, or None."""
+        if not value or not isinstance(value, str):
+            return None
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
+    async def async_discover_smart_devices(self):
+        """Discover live SmartFlex EV devices (connected car / charge point) on the account.
+
+        Rebuilds self.intelligent_devices with current device metadata, preserving any dispatches
+        already fetched for a device and dropping devices that are no longer live. Provider-agnostic
+        — accounts with no smart-charging enrolment simply get an empty set (the common case).
+        """
+        data = await self.async_graphql_query(KRAKEN_DEVICES_QUERY.format(account_number=self.account_id), "devices")
+        if data is None:
+            return  # Network/auth failure — keep whatever we had (possibly restored from cache)
+
+        live = {}
+        for dev in data.get("devices") or []:
+            status = (dev.get("status") or {}).get("current")
+            if status != "LIVE" or dev.get("deviceType") != "ELECTRIC_VEHICLES":
+                continue
+            device_id = dev.get("id")
+            if not device_id:
+                continue
+            existing = self.intelligent_devices.get(device_id, {})
+            live[device_id] = {
+                "device_id": device_id,
+                "provider": dev.get("provider"),
+                "make": dev.get("make"),
+                "model": dev.get("model"),
+                "is_charger": dev.get("__typename") == "SmartFlexChargePoint",
+                # Product-catalogue lookups aren't available here; predbat falls back to config.
+                "vehicle_battery_size_in_kwh": existing.get("vehicle_battery_size_in_kwh"),
+                "charge_point_power_in_kw": existing.get("charge_point_power_in_kw"),
+                "planned_dispatches": existing.get("planned_dispatches", []),
+                "completed_dispatches": existing.get("completed_dispatches", []),
+            }
+
+        added = sorted(set(live) - set(self.intelligent_devices))
+        removed = sorted(set(self.intelligent_devices) - set(live))
+        if added:
+            self.log(f"Kraken: SmartFlex devices discovered: {added}")
+        if removed:
+            self.log(f"Kraken: SmartFlex devices no longer live: {removed}")
+        self.intelligent_devices = live
+
+    def _normalize_dispatches(self, raw, completed):
+        """Convert raw GraphQL dispatch nodes to predbat's {start,end,charge_in_kwh,source,location} shape."""
+        result = []
+        for d in raw or []:
+            start = d.get("start")
+            end = d.get("end")
+            if not (start and end):
+                continue
+            if completed:
+                delta = d.get("delta")
+                meta = d.get("meta") or {}
+                source = meta.get("source")
+                location = meta.get("location")
+            else:
+                delta = d.get("energyAddedKwh", d.get("delta"))
+                source = d.get("type")
+                location = None
+            try:
+                delta = round(float(delta), 4) if delta is not None else None
+            except (ValueError, TypeError):
+                delta = None
+            result.append({"start": start, "end": end, "charge_in_kwh": delta, "source": source, "location": location})
+        return result
+
+    def _merge_completed_dispatches(self, cached, new_completed):
+        """Merge new completed dispatches with cached history, dedup by start, prune old ones."""
+        by_start = {d["start"]: d for d in cached if d.get("start")}
+        for d in new_completed:
+            if d.get("start"):
+                by_start[d["start"]] = d  # newest wins
+        cutoff = datetime.now(timezone.utc) - timedelta(days=KRAKEN_DISPATCH_HISTORY_DAYS)
+        merged = []
+        for d in by_start.values():
+            dt = self._parse_dispatch_dt(d.get("start"))
+            if dt is None or dt > cutoff:
+                merged.append(d)
+        merged.sort(key=lambda d: d.get("start") or "")
+        return merged
+
+    async def async_fetch_dispatches(self):
+        """Fetch planned + completed dispatches for each known device and merge them in.
+
+        Planned dispatches replace the previous set (they are the current optimiser schedule);
+        completed dispatches merge with the cached history so metered charging is retained across
+        the API's rolling window and restarts.
+        """
+        for device_id, device in self.intelligent_devices.items():
+            data = await self.async_graphql_query(
+                KRAKEN_DISPATCHES_QUERY.format(account_number=self.account_id, device_id=device_id),
+                "dispatches",
+            )
+            if data is None:
+                continue
+            device["planned_dispatches"] = self._normalize_dispatches(data.get("flexPlannedDispatches"), completed=False)
+            new_completed = self._normalize_dispatches(data.get("completedDispatches"), completed=True)
+            device["completed_dispatches"] = self._merge_completed_dispatches(device.get("completed_dispatches", []), new_completed)
+
+    def _publish_dispatch_sensors(self):
+        """Publish an intelligent_dispatch binary_sensor per device and wire octopus_intelligent_slot.
+
+        Sensor format matches OctopusAPI so predbat's fetch consumes it identically: state on/off if a
+        dispatch is active now, with planned_dispatches / completed_dispatches attributes (and battery/
+        charger sizing) for the planner. Wiring octopus_intelligent_slot makes predbat treat the
+        provider-scheduled windows as cheap car-charging slots, exactly like Octopus Intelligent Go.
+        """
+        if not self.intelligent_devices:
+            return
+        now = datetime.now(timezone.utc)
+        slot_list = []
+        for device_id, device in self.intelligent_devices.items():
+            index_suffix = self._device_index_suffix(device_id)
+            suffix = "intelligent_dispatch_" + index_suffix if index_suffix else "intelligent_dispatch"
+            entity = self.get_entity_name("binary_sensor", suffix)
+            slot_list.append(entity)
+
+            active = False
+            for dispatch in (device.get("planned_dispatches") or []) + (device.get("completed_dispatches") or []):
+                start = self._parse_dispatch_dt(dispatch.get("start"))
+                end = self._parse_dispatch_dt(dispatch.get("end"))
+                if start and end and start <= now < end:
+                    active = True
+                    break
+
+            attributes = {"friendly_name": "Kraken Intelligent Dispatches", "icon": "mdi:flash", **device}
+            self.dashboard_item(entity, "on" if active else "off", attributes=attributes, app="kraken")
+
+        # Wire the dispatch sensors so predbat treats them as car-charging slots (like Octopus IOG),
+        # exactly as OctopusAPI.automatic_config does. octopus_intelligent_slot is a per-car sensor
+        # list, and fetch.py only reads it for car indices within num_cars — so, like octopus, bump
+        # num_cars up to the device count or the sensors would be connected but never consumed.
+        self.set_arg("octopus_intelligent_slot", slot_list)
+        if self.get_arg("num_cars", 0) < len(slot_list):
+            self.set_arg("num_cars", len(slot_list))
+
     async def run(self, seconds, first):
         """Component run method — called by ComponentBase.start() every 60s.
 
@@ -1050,6 +1260,8 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         tariff + rates from disk and re-queries the API only when the cached data has aged out:
         - Tariff discovery: when the cached tariff is >= KRAKEN_TARIFF_REFRESH_MINUTES old (or never fetched)
         - Rates + standing charges: when the cached rates are >= KRAKEN_RATES_REFRESH_MINUTES old (or never fetched)
+        - Intelligent dispatches: when >= KRAKEN_DISPATCH_REFRESH_MINUTES old, for accounts with a
+          SmartFlex EV device (discovered on the tariff cycle); wired to octopus_intelligent_slot.
         Sensors are always (re)published on the first run so HA is populated immediately from cache.
         """
         if first:
@@ -1060,6 +1272,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         # Age-based refresh — None (never fetched / cache miss) is treated as very old, so due.
         tariff_due = self._data_age_minutes(self.tariff_fetched_at) >= KRAKEN_TARIFF_REFRESH_MINUTES
         rates_due = self._data_age_minutes(self.rates_fetched_at) >= KRAKEN_RATES_REFRESH_MINUTES
+        dispatch_due = self._data_age_minutes(self.dispatch_fetched_at) >= KRAKEN_DISPATCH_REFRESH_MINUTES
 
         # Tariff discovery
         if tariff_due:
@@ -1067,6 +1280,9 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             if self.current_tariff:
                 self.tariff_fetched_at = datetime.now()
                 had_success = True
+            # Re-discover SmartFlex devices on the (slow) tariff cycle — cheap and infrequent, so
+            # accounts with no EV enrolment never pay the per-device dispatch query below.
+            await self.async_discover_smart_devices()
 
         # Publish tariff sensor from current state (cache or fresh)
         if self.current_tariff and (first or tariff_due):
@@ -1107,6 +1323,14 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         if self.current_tariff and (first or rates_due):
             self._publish_rate_sensors()
 
+        # Fetch SmartFlex intelligent dispatches for any known devices, then publish + wire them.
+        if self.intelligent_devices and dispatch_due:
+            await self.async_fetch_dispatches()
+            self.dispatch_fetched_at = datetime.now()
+            had_success = True
+        if self.intelligent_devices and (first or dispatch_due):
+            self._publish_dispatch_sensors()
+
         # Wire import into fetch.py once tariff is discovered (retries until successful)
         if not self.wired and self.current_tariff:
             self.set_arg("metric_octopus_import", self.get_entity_name("sensor", "import_rates"))
@@ -1141,7 +1365,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
 
         # Persist to storage whenever we refreshed something, so the next restart restores it.
         # (Not every cycle — if the cache is lost it is simply re-fetched on the next due check.)
-        if tariff_due or rates_due:
+        if tariff_due or rates_due or dispatch_due:
             await self.save_kraken_cache()
 
         # Update liveness timestamp if we got data OR tariff is known (prevents
@@ -1230,6 +1454,7 @@ async def test_kraken_api(
     base_url=None,
     discover=False,
     introspect_type=None,
+    dispatches=False,
 ):  # pragma: no cover
     """Run a live Kraken (EDF/E.ON) API test from the command line.
 
@@ -1282,6 +1507,34 @@ async def test_kraken_api(
         export_mpan=export_mpan,
         base_url=base_url,
     )
+
+    if dispatches:
+        print("\n=== Discovering SmartFlex devices (intelligent dispatch check) ===")
+        data = await kraken.async_graphql_query(KRAKEN_DEVICES_QUERY.format(account_number=account_id), "devices")
+        devices = (data or {}).get("devices") or []
+        if not devices:
+            print("No SmartFlex devices found — this account has no intelligent dispatches to integrate.")
+            print("(Import/export rates already cover the fixed tariff windows; dispatches only apply to EDF-managed smart charging.)")
+            return
+        for dev in devices:
+            status = dev.get("status") or {}
+            print(f"  device id={dev.get('id')} type={dev.get('deviceType')} ({dev.get('__typename')}) make={dev.get('make')} model={dev.get('model')} state={status.get('current')}")
+        for dev in devices:
+            device_id = dev.get("id")
+            print(f"\n=== Dispatches for device {device_id} ===")
+            dispatch_data = await kraken.async_graphql_query(KRAKEN_DISPATCHES_QUERY.format(account_number=account_id, device_id=device_id), "dispatches")
+            if not dispatch_data:
+                print("  (dispatch query returned no data / errored — see log above)")
+                continue
+            planned = dispatch_data.get("flexPlannedDispatches") or []
+            completed = dispatch_data.get("completedDispatches") or []
+            print(f"  planned={len(planned)}  completed={len(completed)}")
+            for p in planned[:5]:
+                print(f"    planned  {p.get('start')} -> {p.get('end')}  +{p.get('energyAddedKwh')}kWh  type={p.get('type')}")
+            for c in completed[:5]:
+                meta = c.get("meta") or {}
+                print(f"    done     {c.get('start')} -> {c.get('end')}  delta={c.get('delta')}  src={meta.get('source')} loc={meta.get('location')}")
+        return
 
     if introspect_type:
         print(f"\n=== Introspecting type {introspect_type} ===")
@@ -1350,6 +1603,7 @@ def main():  # pragma: no cover
     parser.add_argument("--base-url", help="Override the provider base URL")
     parser.add_argument("--discover", action="store_true", help="List all accounts and their import/export tariffs instead of a full run")
     parser.add_argument("--introspect-type", help="Print the fields of a schema type (e.g. ApplicableRateConnectionType) instead of a full run")
+    parser.add_argument("--dispatches", action="store_true", help="Check for SmartFlex devices and print their planned/completed intelligent dispatches")
 
     args = parser.parse_args()
 
@@ -1375,6 +1629,7 @@ def main():  # pragma: no cover
             base_url=args.base_url,
             discover=args.discover,
             introspect_type=args.introspect_type,
+            dispatches=args.dispatches,
         )
     )
 
