@@ -1011,7 +1011,7 @@ def test_fetch_rates_rest_404_falls_back_to_graphql_for_import():
         result = asyncio.run(api.async_fetch_rates())
 
     assert result is graphql_rates
-    api.async_fetch_rates_graphql.assert_called_once_with("1900000000456")
+    api.async_fetch_rates_graphql.assert_called_once_with("1900000000456", account_id="A-AA8A473C")
 
 
 def test_fetch_rates_rest_404_no_fallback_without_import_mpan():
@@ -1038,13 +1038,22 @@ def test_fetch_rates_rest_404_no_fallback_without_import_mpan():
     assert result is None
 
 
-def test_fetch_rates_rest_404_no_fallback_for_export_tariff():
-    """async_fetch_rates() does NOT fall back to GraphQL when REST 404 on export tariff."""
+def test_fetch_rates_rest_404_falls_back_to_graphql_for_export():
+    """async_fetch_rates() falls back to GraphQL applicableRates on export REST 404.
+
+    EDF SEG / export tariffs are frequently registered on the meter point while their
+    /standard-unit-rates/ REST endpoint returns 404. The fallback must recover them using
+    the export MPAN so the customer's export rates are not silently lost.
+    """
     api = make_kraken_api()
     api.current_tariff = {"tariff_code": "E-1R-IMP-01-J", "product_code": "IMP-01"}
     api.import_mpan = "1900000000456"
-    export_tariff = {"tariff_code": "E-1R-EXPORT-01-J", "product_code": "EXPORT-01"}
-    api.async_fetch_rates_graphql = AsyncMock()
+    export_tariff = {"tariff_code": "E-1R-EDF_EXPORT_SEG_12M_HH-B", "product_code": "EDF_EXPORT_SEG_12M"}
+    api.export_tariff = export_tariff
+    api.export_mpan = "2000000000789"
+
+    graphql_rates = [{"value_inc_vat": 15.0, "value_exc_vat": round(15.0 / 1.05, 4), "valid_from": "2026-04-10T00:00:00Z", "valid_to": "2026-04-12T00:00:00Z"}]
+    api.async_fetch_rates_graphql = AsyncMock(return_value=graphql_rates)
 
     mock_response = AsyncMock()
     mock_response.status = 404
@@ -1061,8 +1070,38 @@ def test_fetch_rates_rest_404_no_fallback_for_export_tariff():
     with patch("aiohttp.ClientSession", return_value=mock_session):
         result = asyncio.run(api.async_fetch_rates(tariff=export_tariff))
 
-    assert result is None
-    api.async_fetch_rates_graphql.assert_not_called()
+    assert result is graphql_rates
+    # Export fallback must use the export MPAN, defaulting to the import account here.
+    api.async_fetch_rates_graphql.assert_called_once_with("2000000000789", account_id="A-TEST123")
+
+
+def test_fetch_rates_export_404_uses_export_account_for_split_accounts():
+    """For E.ON split import/export accounts, the export fallback queries the export account."""
+    api = make_kraken_api(export_account_id="A-EXPORT456")
+    api.current_tariff = {"tariff_code": "E-1R-IMP-01-J", "product_code": "IMP-01"}
+    api.import_mpan = "1900000000456"
+    export_tariff = {"tariff_code": "E-1R-OUTGOING-FIX-12M-J", "product_code": "OUTGOING-FIX-12M"}
+    api.export_tariff = export_tariff
+    api.export_mpan = "2000000000789"
+
+    api.async_fetch_rates_graphql = AsyncMock(return_value=[])
+
+    mock_response = AsyncMock()
+    mock_response.status = 404
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_response),
+            __aexit__=AsyncMock(return_value=None),
+        )
+    )
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        asyncio.run(api.async_fetch_rates(tariff=export_tariff))
+
+    api.async_fetch_rates_graphql.assert_called_once_with("2000000000789", account_id="A-EXPORT456")
 
 
 def test_fetch_rates_rest_410_falls_back_to_graphql_for_import():
@@ -1090,7 +1129,7 @@ def test_fetch_rates_rest_410_falls_back_to_graphql_for_import():
         result = asyncio.run(api.async_fetch_rates())
 
     assert result is graphql_rates
-    api.async_fetch_rates_graphql.assert_called_once_with("1900000000456")
+    api.async_fetch_rates_graphql.assert_called_once_with("1900000000456", account_id="A-AA8A473C")
 
 
 def test_fetch_rates_transient_error_does_not_fall_back_to_graphql():
@@ -1118,6 +1157,274 @@ def test_fetch_rates_transient_error_does_not_fall_back_to_graphql():
 
         assert result is None, f"Expected None for HTTP {status_code}, got {result}"
         api.async_fetch_rates_graphql.assert_not_called()
+
+
+def test_find_active_tariff_uses_direction_for_seg_export_code():
+    """Export detection must use meterPoint.direction, not the 'EXPORT' substring.
+
+    Regression for missing customer export rates: many EDF/E.ON export tariff codes
+    (SEG, outgoing, agile export) do NOT contain the literal string 'EXPORT'. Keyed off
+    the tariff code alone these were never matched; keyed off direction they are.
+    """
+    api = make_kraken_api()
+    meter_points = [
+        {
+            "mpan": "1900000000456",
+            "direction": "IMPORT",
+            "agreements": [{"validFrom": "2026-01-01T00:00:00+00:00", "validTo": None, "tariff": {"productCode": "VAR-01", "tariffCode": "E-1R-VAR-01-J", "displayName": "Import"}}],
+        },
+        {
+            "mpan": "2000000000789",
+            "direction": "EXPORT",
+            # Note: tariff code contains NO 'EXPORT' substring — only direction identifies it.
+            "agreements": [{"validFrom": "2026-01-01T00:00:00+00:00", "validTo": None, "tariff": {"productCode": "EDF_SEG_12M", "tariffCode": "E-1R-EDF_SEG_12M-B", "displayName": "SEG"}}],
+        },
+    ]
+
+    export = api._find_active_tariff(meter_points, is_export=True)
+    assert export is not None, "Export tariff should be found via direction=EXPORT"
+    assert export["tariff_code"] == "E-1R-EDF_SEG_12M-B"
+    assert export["mpan"] == "2000000000789"
+
+    # And import discovery must NOT pick up the SEG export meter.
+    imp = api._find_active_tariff(meter_points, is_export=False)
+    assert imp["tariff_code"] == "E-1R-VAR-01-J"
+
+
+def test_find_active_tariff_direction_overrides_export_substring():
+    """direction=IMPORT wins even when the tariff code contains 'EXPORT'."""
+    api = make_kraken_api()
+    meter_points = [
+        {
+            "mpan": "1900000000456",
+            "direction": "IMPORT",
+            "agreements": [{"validFrom": "2026-01-01T00:00:00+00:00", "validTo": None, "tariff": {"productCode": "EXPORTVALUE-01", "tariffCode": "E-1R-EXPORTVALUE-01-J", "displayName": "Import"}}],
+        },
+    ]
+    assert api._find_active_tariff(meter_points, is_export=False) is not None
+    assert api._find_active_tariff(meter_points, is_export=True) is None
+
+
+def test_find_active_tariff_falls_back_to_substring_without_direction():
+    """When direction is absent/null, detection falls back to the tariff-code substring."""
+    api = make_kraken_api()
+    meter_points = [
+        {
+            "mpan": "2000000000789",
+            # No 'direction' key at all (older API response / cached shape).
+            "agreements": [{"validFrom": "2026-01-01T00:00:00+00:00", "validTo": None, "tariff": {"productCode": "EXPORT-FIX-01", "tariffCode": "E-1R-EXPORT-FIX-01-J", "displayName": "Export"}}],
+        },
+    ]
+    export = api._find_active_tariff(meter_points, is_export=True)
+    assert export is not None
+    assert export["tariff_code"] == "E-1R-EXPORT-FIX-01-J"
+
+
+def _mk_get_ctx(status, json_body=None):
+    """Build a mock aiohttp GET context manager yielding a response of the given status."""
+    resp = AsyncMock()
+    resp.status = status
+    resp.json = AsyncMock(return_value=json_body or {})
+    resp.text = AsyncMock(return_value="body")
+    ctx = AsyncMock()
+    ctx.__aenter__ = AsyncMock(return_value=resp)
+    ctx.__aexit__ = AsyncMock(return_value=None)
+    return ctx
+
+
+def test_build_rest_auth_uses_basic_auth_for_api_key():
+    """_build_rest_auth returns HTTP Basic auth (API key as username) in api_key mode."""
+    import aiohttp
+
+    api = make_kraken_api()  # api_key mode → _api_key = "test-key"
+    auth, headers = asyncio.run(api._build_rest_auth())
+    assert isinstance(auth, aiohttp.BasicAuth)
+    assert auth.login == "test-key"
+    assert headers == {}
+
+
+def test_build_rest_auth_uses_jwt_header_for_oauth():
+    """_build_rest_auth refreshes and returns a JWT bearer header when no API key is set."""
+    api = make_kraken_api()
+    api._api_key = None  # OAuth has no API key
+    api.access_token = "jwt-abc"
+    api.check_and_refresh_oauth_token = AsyncMock(return_value=True)
+
+    auth, headers = asyncio.run(api._build_rest_auth())
+    assert auth is None
+    assert headers.get("Authorization") == "JWT jwt-abc"
+    api.check_and_refresh_oauth_token.assert_awaited_once()
+
+
+def test_fetch_rates_404_retries_authenticated_and_succeeds():
+    """A 404 on the public REST endpoint retries WITH auth; private SEG export rates then load.
+
+    Reproduces the live EDF case: E-1R-EDF_EXPORT_SEG_12M_HH-B (a private product) 404s
+    unauthenticated, so the authenticated retry is what actually recovers the export rates.
+    """
+    api = make_kraken_api()  # api_key mode → authenticated retry uses HTTP Basic auth
+    export_tariff = {"tariff_code": "E-1R-EDF_EXPORT_SEG_12M_HH-B", "product_code": "EDF_EXPORT_SEG_12M"}
+    api.export_tariff = export_tariff
+    api.export_mpan = "1170001829927"
+
+    rates_body = {"count": 1, "next": None, "results": [{"value_inc_vat": 15.0, "value_exc_vat": 14.29, "valid_from": "2026-07-08T00:00:00Z", "valid_to": "2026-07-08T00:30:00Z"}]}
+
+    call_count = [0]
+
+    def get_side_effect(url, **kwargs):
+        call_count[0] += 1
+        # First call is unauthenticated (404), retry is authenticated (200).
+        return _mk_get_ctx(404) if call_count[0] == 1 else _mk_get_ctx(200, rates_body)
+
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(side_effect=get_side_effect)
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(api.async_fetch_rates(tariff=export_tariff))
+
+    assert result is not None and len(result) == 1
+    assert result[0]["value_inc_vat"] == 15.0
+    assert call_count[0] == 2, "expected an unauthenticated attempt then an authenticated retry"
+    # The first attempt carries no auth; the retry carries HTTP Basic auth.
+    assert mock_session.get.call_args_list[0].kwargs.get("auth") is None
+    assert mock_session.get.call_args_list[1].kwargs.get("auth") is not None
+
+
+def test_fetch_rates_404_authenticated_retry_still_404_falls_back_to_graphql():
+    """If the authenticated retry also 404s, we still fall back to GraphQL applicableRates."""
+    api = make_kraken_api()
+    export_tariff = {"tariff_code": "E-1R-EXPORT-01-J", "product_code": "EXPORT-01"}
+    api.export_tariff = export_tariff
+    api.export_mpan = "2000000000789"
+
+    graphql_rates = [{"value_inc_vat": 12.0, "value_exc_vat": round(12.0 / 1.05, 4), "valid_from": "2026-07-08T00:00:00Z", "valid_to": None}]
+    api.async_fetch_rates_graphql = AsyncMock(return_value=graphql_rates)
+
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(side_effect=lambda url, **kwargs: _mk_get_ctx(404))
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(api.async_fetch_rates(tariff=export_tariff))
+
+    assert result is graphql_rates
+    api.async_fetch_rates_graphql.assert_called_once_with("2000000000789", account_id="A-TEST123")
+    # Recovered via GraphQL — the expected private-product 404 must NOT count as a failure.
+    assert api.failures_total == 0
+
+
+def test_fetch_rates_404_graphql_fallback_empty_counts_one_failure():
+    """When REST 404s AND the GraphQL fallback returns nothing, that is a genuine failure."""
+    api = make_kraken_api()
+    export_tariff = {"tariff_code": "E-1R-EXPORT-01-J", "product_code": "EXPORT-01"}
+    api.export_tariff = export_tariff
+    api.export_mpan = "2000000000789"
+    api.async_fetch_rates_graphql = AsyncMock(return_value=None)
+
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(side_effect=lambda url, **kwargs: _mk_get_ctx(404))
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = asyncio.run(api.async_fetch_rates(tariff=export_tariff))
+
+    assert result is None
+    assert api.failures_total == 1
+
+
+def test_connection_nodes_extracts_edges():
+    """_connection_nodes returns node dicts from a Relay connection and tolerates other shapes."""
+    from kraken import KrakenAPI
+
+    conn = {"edges": [{"node": {"value": 1}}, {"node": {"value": 2}}, {}, None]}
+    assert KrakenAPI._connection_nodes(conn) == [{"value": 1}, {"value": 2}]
+    # Backward-compat: a plain list is returned unchanged.
+    assert KrakenAPI._connection_nodes([{"value": 3}]) == [{"value": 3}]
+    # Empty / missing shapes → [].
+    assert KrakenAPI._connection_nodes(None) == []
+    assert KrakenAPI._connection_nodes({}) == []
+    assert KrakenAPI._connection_nodes({"edges": []}) == []
+
+
+def test_fetch_rates_graphql_parses_connection_edges():
+    """async_fetch_rates_graphql parses the applicableRates Relay connection (edges/node)."""
+    api = make_kraken_api()
+    api.account_id = "A-AA8A473C"
+    api.async_graphql_query = AsyncMock(
+        return_value={
+            "applicableRates": {
+                "edges": [
+                    {"node": {"value": 15.0, "validFrom": "2026-07-08T00:00:00Z", "validTo": "2026-07-08T00:30:00Z"}},
+                    {"node": {"value": 16.0, "validFrom": "2026-07-08T00:30:00Z", "validTo": "2026-07-08T01:00:00Z"}},
+                ]
+            }
+        }
+    )
+
+    result = asyncio.run(api.async_fetch_rates_graphql("1170001829927"))
+    assert result is not None and len(result) == 2
+    assert result[0]["value_inc_vat"] == 15.0
+    assert result[1]["value_inc_vat"] == 16.0
+    assert result[0]["valid_from"] == "2026-07-08T00:00:00Z"
+
+
+def test_fetch_rates_graphql_paginates_via_cursor():
+    """async_fetch_rates_graphql walks all connection pages via pageInfo.endCursor."""
+    api = make_kraken_api()
+    api.account_id = "A-AA8A473C"
+
+    page1 = {
+        "applicableRates": {
+            "edges": [{"node": {"value": 10.0, "validFrom": "2026-07-08T00:00:00Z", "validTo": "2026-07-08T00:30:00Z"}}],
+            "pageInfo": {"hasNextPage": True, "endCursor": "cursor-1"},
+        }
+    }
+    page2 = {
+        "applicableRates": {
+            "edges": [{"node": {"value": 11.0, "validFrom": "2026-07-08T00:30:00Z", "validTo": "2026-07-08T01:00:00Z"}}],
+            "pageInfo": {"hasNextPage": False, "endCursor": "cursor-2"},
+        }
+    }
+
+    captured = []
+
+    async def fake_query(query, context):
+        captured.append(query)
+        return page1 if len(captured) == 1 else page2
+
+    api.async_graphql_query = fake_query
+
+    result = asyncio.run(api.async_fetch_rates_graphql("1170001829927"))
+
+    assert result is not None and len(result) == 2, "both pages should be accumulated"
+    assert [r["value_inc_vat"] for r in result] == [10.0, 11.0]
+    # Two requests: first with after: null, second carrying the page-1 cursor.
+    assert len(captured) == 2
+    assert "after: null" in captured[0]
+    assert 'after: "cursor-1"' in captured[1]
+
+
+def test_fetch_standing_charges_graphql_parses_connection_edges():
+    """async_fetch_standing_charges_graphql parses the applicableStandingCharges connection."""
+    api = make_kraken_api()
+    api.account_id = "A-AA8A473C"
+    api.async_graphql_query = AsyncMock(
+        return_value={
+            "applicableStandingCharges": {
+                "edges": [
+                    {"node": {"value": 61.95, "validFrom": "2026-07-08T00:00:00Z", "validTo": None}},
+                ]
+            }
+        }
+    )
+
+    result = asyncio.run(api.async_fetch_standing_charges_graphql("1170001829927"))
+    assert result is not None
+    assert abs(result - 0.6195) < 1e-6
 
 
 def run_kraken_tests(my_predbat=None):
@@ -1163,8 +1470,21 @@ def run_kraken_tests(my_predbat=None):
         test_fetch_rates_graphql_window_default_forecast_hours,
         test_fetch_rates_rest_404_falls_back_to_graphql_for_import,
         test_fetch_rates_rest_404_no_fallback_without_import_mpan,
-        test_fetch_rates_rest_404_no_fallback_for_export_tariff,
+        test_fetch_rates_rest_404_falls_back_to_graphql_for_export,
+        test_fetch_rates_export_404_uses_export_account_for_split_accounts,
         test_fetch_rates_rest_410_falls_back_to_graphql_for_import,
+        test_find_active_tariff_uses_direction_for_seg_export_code,
+        test_find_active_tariff_direction_overrides_export_substring,
+        test_find_active_tariff_falls_back_to_substring_without_direction,
+        test_build_rest_auth_uses_basic_auth_for_api_key,
+        test_build_rest_auth_uses_jwt_header_for_oauth,
+        test_fetch_rates_404_retries_authenticated_and_succeeds,
+        test_fetch_rates_404_authenticated_retry_still_404_falls_back_to_graphql,
+        test_fetch_rates_404_graphql_fallback_empty_counts_one_failure,
+        test_connection_nodes_extracts_edges,
+        test_fetch_rates_graphql_parses_connection_edges,
+        test_fetch_rates_graphql_paginates_via_cursor,
+        test_fetch_standing_charges_graphql_parses_connection_edges,
         test_fetch_rates_transient_error_does_not_fall_back_to_graphql,
         test_fetch_standing_charges_rest_404_falls_back_to_graphql,
         test_fetch_standing_charges_rest_404_no_fallback_without_import_mpan,
