@@ -20,6 +20,7 @@ plans and select the one with the lowest cost metric.
 from datetime import timedelta
 from const import PREDICT_STEP, RUN_EVERY, TIME_FORMAT
 from utils import remove_intersecting_windows, get_charge_rate_curve_cached, get_discharge_rate_curve_cached, find_charge_rate, calc_percent_limit, in_iboost_slot, in_car_slot, charge_curve_to_tuple
+from prediction_kernel import create_kernel_context, kernel_supported, run_prediction_kernel
 
 
 # Only assign globals once to avoid re-creating them with processes are forked
@@ -195,6 +196,12 @@ class Prediction:
             self.prediction_cache = {}
             self.plan_interval_minutes = base.plan_interval_minutes
             self.charge_scaling10 = base.charge_scaling10
+
+            # C++ prediction kernel context (0 = kernel unavailable, Python engine is used)
+            self.prediction_kernel_enable = getattr(base, "prediction_kernel_enable", False)
+            self.kernel_handle = 0
+            if self.prediction_kernel_enable:
+                self.kernel_handle = create_kernel_context(self)
 
             # Store this dictionary in global so we can reconstruct it in the thread without passing the data
             PRED_GLOBAL["dict"] = self.__dict__.copy()
@@ -385,6 +392,11 @@ class Prediction:
     def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv10, end_record, save=None, step=PREDICT_STEP, cache=False):
         """
         Run a prediction scenario given a charge limit, return the results
+
+        PARITY RULE: The hot loop below is mirrored by the C++ kernel in prediction_kernel.cpp
+        for the scenarios it supports. Any behavioural change here MUST be mirrored there,
+        KERNEL_PARITY_REVISION (prediction_kernel.py) and PK_PARITY_REVISION (prediction_kernel.cpp)
+        must both be bumped, and the kernel_parity test must pass (cd coverage && ./run_all --test kernel_parity).
         """
         window_hash = 0
         for window in charge_window:
@@ -397,6 +409,15 @@ class Prediction:
         if not save and cache and sim_hash in self.prediction_cache:
             # Return cached result
             return self.prediction_cache[sim_hash]
+
+        # Try the C++ prediction kernel first; unsupported scenarios fall through to the Python engine
+        if kernel_supported(self, save, step):
+            kernel_result = run_prediction_kernel(self, charge_limit, charge_window, export_window, export_limits, pv10, end_record, step, cache)
+            if kernel_result is not None:
+                if not save and cache:
+                    # Store in cache without the SoC/car data to save memory, mirroring the Python engine
+                    self.prediction_cache[sim_hash] = kernel_result[:11] + ([], []) + kernel_result[13:]
+                return kernel_result
 
         # Fetch data from globals, optimised away from class to avoid passing it between threads
         if pv10:

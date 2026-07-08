@@ -4,6 +4,7 @@ Tests for GatewayMQTT component.
 import sys
 import os
 import math
+import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -723,7 +724,7 @@ class TestDebugLogging:
 
         assert gw.log.call_count == 1
         msg = gw.log.call_args[0][0]
-        assert "plan_version: 7" in msg
+        assert '"plan_version": 7' in msg
 
     def test_initialize_reads_gateway_debug_arg(self):
         """initialize() picks up the gateway_debug flag from apps.yaml args."""
@@ -2672,6 +2673,37 @@ class TestPublishPredbatData:
         assert payload["marginal_costs"] == []
         assert payload["marginal_time_labels"] == []
 
+    # ------------------------------------------------------------------
+    # Rate anchors
+    # ------------------------------------------------------------------
+
+    def test_payload_includes_rate_anchors(self):
+        """rate_min/rate_max/import_rate/export_rate are published (rounded to 0.01p) from the marginal sensor attributes."""
+        gw = self._make_gateway(
+            {
+                "sensor.predbat_marginal_energy_costs#rate_min": "8.04",
+                "sensor.predbat_marginal_energy_costs#rate_max": "28.97",
+                "sensor.predbat_marginal_energy_costs#import_rate_base": "15.23",
+                "sensor.predbat_marginal_energy_costs#export_rate_base": "12.01",
+            }
+        )
+        self._run(gw._publish_predbat_data())
+        payload = self._get_published_payload(gw)
+        assert approx_equal(payload["rate_min"], 8.04), f"rate_min: {payload.get('rate_min')}"
+        assert approx_equal(payload["rate_max"], 28.97), f"rate_max: {payload.get('rate_max')}"
+        assert approx_equal(payload["import_rate"], 15.23), f"import_rate: {payload.get('import_rate')}"
+        assert approx_equal(payload["export_rate"], 12.01), f"export_rate: {payload.get('export_rate')}"
+
+    def test_payload_rate_anchors_null_when_attrs_absent(self):
+        """When the marginal sensor lacks the rate attributes, the anchor keys publish as None so firmware falls back."""
+        gw = self._make_gateway()
+        self._run(gw._publish_predbat_data())
+        payload = self._get_published_payload(gw)
+        assert payload["rate_min"] is None
+        assert payload["rate_max"] is None
+        assert payload["import_rate"] is None
+        assert payload["export_rate"] is None
+
 
 class TestIanaToPosixTz:
     """Tests for GatewayMQTT.iana_to_posix_tz() — IANA to POSIX TZ string conversion."""
@@ -4150,6 +4182,34 @@ class TestEvControl:
         assert published[0]["current_a"] == 32
 
 
+class TestRateAnchors(unittest.TestCase):
+    """extract_rate_anchors() validates and rounds the four rate fields."""
+
+    def test_valid_anchors_rounded(self):
+        from gateway import extract_rate_anchors
+
+        self.assertEqual(
+            extract_rate_anchors(8.04, 28.97, 15.23, 12.01),
+            {"rate_min": 8.04, "rate_max": 28.97, "import_rate": 15.23, "export_rate": 12.01},
+        )
+
+    def test_missing_value_returns_none(self):
+        from gateway import extract_rate_anchors
+
+        self.assertIsNone(extract_rate_anchors(None, 29.0, 15.0, 12.0))
+
+    def test_non_numeric_returns_none(self):
+        from gateway import extract_rate_anchors
+
+        self.assertIsNone(extract_rate_anchors("n/a", 29.0, 15.0, 12.0))
+
+    def test_non_finite_returns_none(self):
+        from gateway import extract_rate_anchors
+
+        self.assertIsNone(extract_rate_anchors(float("nan"), 29.0, 15.0, 12.0))
+        self.assertIsNone(extract_rate_anchors(8.0, float("inf"), 15.0, 12.0))
+
+
 def run_gateway_tests(my_predbat=None):
     """Run all GatewayMQTT tests. Returns True on failure, False on success."""
     from tests.test_gateway_token_refresh import TestIsAuthFailure, TestApplyRefreshResponse, TestMaybeRefreshOnAuthError
@@ -4183,6 +4243,7 @@ def run_gateway_tests(my_predbat=None):
         TestIsAuthFailure,
         TestApplyRefreshResponse,
         TestMaybeRefreshOnAuthError,
+        TestRateAnchors,
     ]
     for cls in test_classes:
         instance = cls()

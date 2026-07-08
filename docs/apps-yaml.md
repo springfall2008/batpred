@@ -302,6 +302,23 @@ This significantly reduces planning time while maintaining near-optimal results.
   enable_coarse_fine_levels: true
 ```
 
+### prediction_kernel_enable
+
+Enables a compiled C++ prediction kernel that replaces Predbat's Python simulation engine for the vast majority of the scenario evaluations run during planning, giving a significant (several-times) speedup with identical results.
+
+The default is `true` but if it fails to load the correct binary it will automatically fall back to the python version. It can be disabled in the event of a problem with:
+
+```yaml
+  prediction_kernel_enable: false
+```
+
+Notes:
+
+- This is an `apps.yaml`-only setting - there is no HA switch for it.
+- Predbat automatically falls back to the Python engine if the compiled kernel isn't available for your system's CPU architecture, so it is always safe to enable.
+- Predbat logs its status once per plan cycle, e.g. `Prediction kernel: enabled and active (...)` or `Prediction kernel: enabled but NOT available (...) - falling back to the Python engine` - check your Predbat log if you enable this and want to confirm it's actually being used.
+- Results are bit-for-bit identical to the Python engine; this option only affects performance, not the plan produced.
+
 ### Web interface
 
 Docker users can change the web port for the Predbat web interface by setting **web_port** to a new port number. The default port of 5052 must always be used for the Predbat app.
@@ -323,9 +340,10 @@ A list of device names to notify when Predbat sends a notification. The default 
 
 Predbat needs to know what your likely future house load will be to set and manage the battery level to support it.
 days_previous defines a list (which has to be entered as one entry per line) of the previous days of historical house load that are to be used to predict your future daily load.<BR>
-It's recommended that you set days_previous so Predbat calculates an average house load using multiple days' history so that 'unusual' load activity (e.g. saving sessions, "big washing day", etc) get averaged out.
+By default, [days_previous_auto](#days_previous_auto-weighted-historical-load-forecast) is enabled, in which case days_previous only sets the size (in days) of the history window that's searched - see below for details.
+If you disable days_previous_auto, it's recommended that you set days_previous so Predbat calculates an average house load using multiple days' history so that 'unusual' load activity (e.g. saving sessions, "big washing day", etc) get averaged out.
 
-For example, if you want Predbat to average house load for the past week:
+For example, with days_previous_auto disabled, if you want Predbat to average house load for the past week:
 
 ```yaml
   days_previous:
@@ -357,11 +375,18 @@ Further details and worked examples of [how days_previous works](#understanding-
 
 #### days_previous_auto (weighted historical load forecast)
 
-Setting **days_previous_auto** to `True` in `apps.yaml` switches house-load prediction from the fixed
-list/weighting approach above to a weighted-bucket forecast:
+**days_previous_auto** switches house-load prediction from the fixed list/weighting approach above to a
+weighted-bucket forecast, and is `True` by default:
 
 ```yaml
   days_previous_auto: True
+```
+
+Set it to `False` in `apps.yaml` if you want to go back to the fixed **days_previous**/**days_previous_weight**
+averaging described above:
+
+```yaml
+  days_previous_auto: False
 ```
 
 In this mode Predbat ignores the fixed averaging and instead builds a forward load forecast from **all** of
@@ -385,6 +410,10 @@ weight of every sample is the product of three factors:
 Buckets with no recorded data (zero) are ignored entirely so gaps in the history do not drag the estimate
 down. As with Load ML, this replaces the normal days_previous averaging; if [Load ML](load-ml.md) is enabled
 it takes precedence over `days_previous_auto`.
+
+Because the Holiday weighting factor above already accounts for [holiday mode](customisation.md#holiday-mode)
+when `days_previous_auto` is enabled, Predbat does not separately force days_previous to `1` while holiday
+mode is active (unlike when `days_previous_auto` is disabled).
 
 Do keep in mind that Home Assistant only keeps 10 days of history by default, so if you want to access more than this for Predbat you might need to increase the number of days of history
 kept in HA before it is purged by editing and adding the following to the `/homeassistant/configuration.yaml` configuration file and restarting Home Assistant afterwards:

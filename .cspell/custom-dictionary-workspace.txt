@@ -19,6 +19,8 @@ appkey
 Apprent
 appsyaml
 argname
+armhf
+armv
 ASHP
 asyncio
 autodocstring
@@ -116,6 +118,7 @@ energydataservice
 energythroughput
 epod
 euids
+EVDC
 evergen
 evse
 exog
@@ -125,6 +128,7 @@ fdsoc
 feedin
 fentry
 figsize
+finaliser
 Fingerbot
 firstparty
 fline
@@ -133,6 +137,7 @@ fontsize
 fontweight
 Forestfire
 foxess
+foxesscloud
 freephase
 fronius
 funcs
@@ -147,6 +152,8 @@ getall
 Ginlong
 GivEnergy
 givtcp
+gnueabihf
+gridcode
 gridconsumption
 gridconsumptionpower
 growatt
@@ -176,6 +183,7 @@ idag
 idetails
 idxs
 iflux
+importlimit
 inday
 INTELLI
 intelligentdevice
@@ -203,6 +211,7 @@ kwhb
 labelcolor
 labelnames
 larr
+libc
 linebreak
 linestyle
 loadml
@@ -237,6 +246,7 @@ minsocongrid
 minuteb
 Mixergy
 mkdocs
+mlugg
 Modbus
 mogons
 monokai
@@ -304,6 +314,7 @@ psum
 pvbat
 pvenergytotal
 pvlib
+pvlimit
 pvpower
 pvwatts
 pwindow
@@ -314,6 +325,7 @@ pytest
 pytz
 randn
 rarr
+reactivepower
 recp
 Redownload
 regionid
@@ -424,6 +436,7 @@ visibilitychange
 Wallbox
 weblink
 welink
+Werror
 workmode
 writeonly
 wrongsha

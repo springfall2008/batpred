@@ -369,6 +369,48 @@ async def test_octopus_day_night_rates(my_predbat):
         print("PASS: None returned when timestamp falls exactly on valid_to boundary")
 
     # ------------------------------------------------------------------
+    # Test 9: is_intelligent_go_tariff — shared IOG/Intelligent detection helper.
+    # Covers the bug where async_update_intelligent_devices only checked for
+    # "INTELLI-" and missed plain "IOG-" tariff codes.
+    # ------------------------------------------------------------------
+    print("\n*** Test 9: is_intelligent_go_tariff detects INTELLI and IOG- tariff codes ***")
+    intelligent_go_cases = [
+        ("E-1R-INTELLI-VAR-25-01-01-H", True),
+        ("E-1R-IOG-SMB-TOU-25-12-12-H", True),
+        ("E-1R-INTELLI-FLUX-IMPORT-23-07-14-A", True),
+        ("E-1R-GO-VAR-22-10-14-H", False),
+        ("E-2R-VAR-22-11-01-A", False),
+        ("", False),
+    ]
+    case_failed = False
+    for tariff_code, expected in intelligent_go_cases:
+        actual = OctopusAPI.is_intelligent_go_tariff(tariff_code)
+        if actual != expected:
+            print(f"ERROR: is_intelligent_go_tariff({tariff_code!r}) returned {actual}, expected {expected}")
+            failed = True
+            case_failed = True
+    if not case_failed:
+        print("PASS: is_intelligent_go_tariff correctly classifies INTELLI, IOG-, and non-intelligent tariff codes")
+
+    # ------------------------------------------------------------------
+    # Test 10: async_update_intelligent_devices regression — an IOG-only tariff
+    # code (no "INTELLI" substring) must still be treated as an intelligent
+    # tariff and proceed to fetch devices, rather than returning early.
+    # ------------------------------------------------------------------
+    print("\n*** Test 10: async_update_intelligent_devices proceeds for IOG-only tariff code ***")
+    api10 = OctopusAPI(my_predbat, key="test-key", account_id="test-account", automatic=False)
+    api10.tariffs = {"import": {"tariffCode": "E-1R-IOG-SMB-TOU-25-12-12-H", "deviceID": "test-device-789"}}
+    api10.async_get_intelligent_devices = AsyncMock(return_value={})
+
+    await api10.async_update_intelligent_devices("test-account")
+
+    if api10.async_get_intelligent_devices.call_count != 1:
+        print(f"ERROR: Expected async_get_intelligent_devices to be called for IOG-only tariff code, got {api10.async_get_intelligent_devices.call_count} calls")
+        failed = True
+    else:
+        print("PASS: async_update_intelligent_devices proceeds for IOG-only tariff code (no INTELLI substring)")
+
+    # ------------------------------------------------------------------
     if failed:
         print("\n**** ❌ async_get_day_night_rates tests FAILED ****")
     else:

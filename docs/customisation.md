@@ -93,6 +93,11 @@ Note: Combining export slots may prevent optimal forced export. Combining charge
 The number of CPU threads you use can change your performance, you can set **threads** in `apps.yaml` to 0 to disable threading if you don't have multiple CPUs available,
 or set it to 'auto' (the default) to use one thread per CPU. It is recommended you don't set this to an odd number of threads.
 
+Predbat has a compiled C++ prediction kernel that can give a significant speedup to planning with identical results.
+It is On by default but if it fails to load on your architecture you may want to look at why.
+
+See [prediction_kernel_enable](apps-yaml.md#prediction_kernel_enable) for details.
+
 ## Battery loss options
 
 **input_number.predbat_battery_loss** is an assumed percentage figure for energy lost when charging the battery, the default 0.03 is 3%.
@@ -597,13 +602,18 @@ Whilst the holiday days left are non-zero, Predbat's 'holiday mode' is active.
 
 When Predbat is in 'Demand' mode (i.e. not actively charging or discharging) and 'holiday mode' is active, Predbat's status will show as 'Demand (Holiday)'.
 
-When Predbat's 'holiday mode' is active the historical load data will be taken from yesterday's data (1 day ago) rather than from the **days_previous** setting in `apps.yaml`.
+With `days_previous_auto` enabled (the default), holiday mode is instead accounted for automatically by the
+weighted-bucket forecast, which down-weights historical days whose holiday mode state doesn't match today's.
+
+In this case just set holiday mode for the days you are away and Predbat does the rest.
+
+### Holiday mode with days_previous_auto off
+
+If [days_previous_auto](apps-yaml.md#days_previous_auto-weighted-historical-load-forecast) is disabled, when Predbat's 'holiday mode' is active the historical load data will be taken from yesterday's data (1 day ago) rather than from the **days_previous** setting in `apps.yaml`.
 This means Predbat will adjust more quickly to the new usage pattern.
 
 If you have been away for a longer period (more than your normal days_previous setting) then obviously it's going
 to take longer for the historical data to catch up, you could then enable holiday mode for another 7 days after your return.
-
-In summary:
 
 - For short holidays set holiday_days_left to the number of full days you are away, including today but excluding the return day
 - For longer holidays set holiday_days_left to the number of days you are away plus another 7 days until the data catches back up
