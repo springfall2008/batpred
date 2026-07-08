@@ -1189,9 +1189,10 @@ class KrakenMockBase:  # pragma: no cover
     def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
         print(f"ENTITY: {entity_id} = {state}")
         if attributes:
-            if "options" in attributes:
-                attributes["options"] = "..."
-            print(f"  Attributes: {json.dumps(attributes, indent=2)}")
+            print_attrs = dict(attributes)
+            if "options" in print_attrs:
+                print_attrs["options"] = "..."
+            print(f"  Attributes: {json.dumps(print_attrs, indent=2)}")
         self.set_state_wrapper(entity_id, state, attributes)
 
     def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
