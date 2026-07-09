@@ -948,7 +948,7 @@ def run_hainterface_service_tests(my_predbat):
     if failed == 0:
         print("PASS: All HAInterface service tests passed!")
     else:
-        print(f"❌ {failed} HAInterface service test(s) failed")
+        print(f"ERROR: {failed} HAInterface service test(s) failed")
     print("=" * 80)
 
     return failed

@@ -267,7 +267,7 @@ async def test_octopus_read_response_retry(my_predbat):
             print("PASS: Auth error triggers retry with exponential backoff")
 
     if failed:
-        print("\n**** ❌ Octopus async_read_response_retry tests FAILED ****")
+        print("\n**** ERROR: Octopus async_read_response_retry tests FAILED ****")
         return 1
     else:
         print("\n**** PASS: All Octopus async_read_response_retry tests PASSED ****")

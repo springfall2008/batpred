@@ -464,7 +464,7 @@ def run_hainterface_lifecycle_tests(my_predbat):
     if failed == 0:
         print("PASS: All HAInterface lifecycle tests passed!")
     else:
-        print(f"❌ {failed} HAInterface lifecycle test(s) failed")
+        print(f"ERROR: {failed} HAInterface lifecycle test(s) failed")
     print("=" * 80)
 
     return failed
