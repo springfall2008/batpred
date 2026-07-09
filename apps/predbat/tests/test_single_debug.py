@@ -155,6 +155,10 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         return
 
     # Reset load model
+    # Mirror the load model rebuild done by calculate_plan (plan.py) so the original plan metric is
+    # evaluated against the same load data as the re-calculated plan - in particular load_scaling.
+    # Otherwise the two metrics printed by this harness differ by the load scaling and look like a
+    # plan regression when the plans are identical.
     if reset_load_model:
         print("Reset load model")
         my_predbat.load_minutes_step = my_predbat.step_data_history(
@@ -162,11 +166,13 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
             my_predbat.minutes_now,
             forward=False,
             scale_today=my_predbat.load_inday_adjustment,
-            scale_fixed=1.0 * load_override,
+            scale_fixed=my_predbat.load_scaling * load_override,
             type_load=True,
             load_forecast=my_predbat.load_forecast,
             load_scaling_dynamic=my_predbat.load_scaling_dynamic,
             cloud_factor=my_predbat.metric_load_divergence,
+            load_adjust=my_predbat.manual_load_adjust,
+            load_baseline=my_predbat.dynamic_load_baseline,
         )
         my_predbat.load_minutes_step10 = my_predbat.step_data_history(
             my_predbat.load_minutes,
@@ -178,6 +184,8 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
             load_forecast=my_predbat.load_forecast,
             load_scaling_dynamic=my_predbat.load_scaling_dynamic,
             cloud_factor=min(my_predbat.metric_load_divergence + 0.5, 1.0) if my_predbat.metric_load_divergence else None,
+            load_adjust=my_predbat.manual_load_adjust,
+            load_baseline=my_predbat.dynamic_load_baseline,
         )
         my_predbat.pv_forecast_minute_step = my_predbat.step_data_history(my_predbat.pv_forecast_minute, my_predbat.minutes_now, forward=True, cloud_factor=my_predbat.metric_cloud_coverage)
         my_predbat.pv_forecast_minute10_step = my_predbat.step_data_history(
