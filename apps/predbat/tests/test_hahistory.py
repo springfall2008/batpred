@@ -1014,7 +1014,7 @@ def run_hahistory_tests(my_predbat):
     if failed == 0:
         print("PASS: All HAHistory tests passed!")
     else:
-        print(f"❌ {failed} HAHistory test(s) failed")
+        print(f"ERROR: {failed} HAHistory test(s) failed")
     print("=" * 80 + "\n")
 
     return failed

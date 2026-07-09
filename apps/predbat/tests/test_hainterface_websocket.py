@@ -878,7 +878,7 @@ def run_hainterface_websocket_tests(my_predbat):
     if failed == 0:
         print("PASS: All HAInterface websocket tests passed!")
     else:
-        print(f"❌ {failed} HAInterface websocket test(s) failed")
+        print(f"ERROR: {failed} HAInterface websocket test(s) failed")
     print("=" * 80)
 
     return failed
