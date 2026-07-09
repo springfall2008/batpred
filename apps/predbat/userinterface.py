@@ -1045,8 +1045,8 @@ class UserInterface:
             for item_value in arg_value:
                 item_matched, item_value = self.resolve_arg_re(arg, item_value, state_keys)
                 if not item_matched:
-                    self.log("Warn: Regular argument {} expression {} failed to match - disabling this item".format(arg, item_value))
-                    new_list.append(None)
+                    self.log("Warn: Regular argument {} expression {} failed to match - will retry".format(arg, item_value))
+                    new_list.append(item_value)
                 else:
                     new_list.append(item_value)
             arg_value = new_list
@@ -1056,8 +1056,8 @@ class UserInterface:
                 item_value = arg_value[item_name]
                 item_matched, item_value = self.resolve_arg_re(arg, item_value, state_keys)
                 if not item_matched:
-                    self.log("Warn: Regular argument {} expression {} failed to match - disabling this item".format(arg, item_value))
-                    new_dict[item_name] = None
+                    self.log("Warn: Regular argument {} expression {} failed to match - will retry".format(arg, item_value))
+                    new_dict[item_name] = item_value
                 else:
                     new_dict[item_name] = item_value
             arg_value = new_dict
