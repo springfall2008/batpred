@@ -24,7 +24,7 @@ import os
 from datetime import datetime, timezone, timedelta
 import math
 from component_base import ComponentBase
-from utils import get_now_from_cumulative, dp2, dp4, minute_data
+from utils import get_now_from_cumulative, dp2, dp4, minute_data, safe_float
 from load_predictor import LoadPredictor, MODEL_VERSION
 from const import TIME_FORMAT, PREDICT_STEP
 import json
@@ -1055,17 +1055,6 @@ class LoadMLComponent(ComponentBase):
             },
             app="load_ml",
         )
-
-        def safe_float(v):
-            if v is None:
-                return None
-            try:
-                v = float(v)
-                if math.isnan(v) or math.isinf(v):
-                    return None
-                return round(v, 4)
-            except (ValueError, TypeError):
-                return None
 
         self.dashboard_item(
             "sensor." + self.prefix + "_load_ml_stats",
