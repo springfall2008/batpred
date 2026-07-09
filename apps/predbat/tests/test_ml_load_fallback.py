@@ -11,7 +11,7 @@ class TestFetchMLFallback(Fetch):
         self.minute_data = {}
         
     def get_state_wrapper(self, entity_id, attribute=None, default=None):
-        if attribute == "status":
+        if attribute is None:
             if "inactive_test" in entity_id:
                 return "error"
             else:
