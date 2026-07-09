@@ -1046,6 +1046,7 @@ class UserInterface:
                 item_matched, item_value = self.resolve_arg_re(arg, item_value, state_keys)
                 if not item_matched:
                     self.log("Warn: Regular argument {} expression {} failed to match - will retry".format(arg, item_value))
+                    matched = False
                 new_list.append(item_value)
             arg_value = new_list
         elif isinstance(arg_value, dict):
@@ -1055,6 +1056,7 @@ class UserInterface:
                 item_matched, item_value = self.resolve_arg_re(arg, item_value, state_keys)
                 if not item_matched:
                     self.log("Warn: Regular argument {} expression {} failed to match - will retry".format(arg, item_value))
+                    matched = False
                 new_dict[item_name] = item_value
             arg_value = new_dict
         elif isinstance(arg_value, str) and arg_value.startswith("re:"):
