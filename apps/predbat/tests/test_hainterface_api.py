@@ -570,7 +570,7 @@ def run_hainterface_api_tests(my_predbat):
 
     print("\n" + "=" * 80)
     if failed == 0:
-        print("✅ All HAInterface API tests passed!")
+        print("PASS: All HAInterface API tests passed!")
     else:
         print(f"❌ {failed} HAInterface API test(s) failed")
     print("=" * 80)

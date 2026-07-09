@@ -414,6 +414,6 @@ async def test_octopus_day_night_rates(my_predbat):
     if failed:
         print("\n**** ❌ async_get_day_night_rates tests FAILED ****")
     else:
-        print("\n**** ✅ All async_get_day_night_rates tests PASSED ****")
+        print("\n**** PASS: All async_get_day_night_rates tests PASSED ****")
 
     return 1 if failed else 0

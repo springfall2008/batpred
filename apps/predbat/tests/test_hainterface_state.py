@@ -565,7 +565,7 @@ def run_hainterface_state_tests(my_predbat):
 
     print("\n" + "=" * 80)
     if failed == 0:
-        print("✅ All HAInterface state tests passed!")
+        print("PASS: All HAInterface state tests passed!")
     else:
         print(f"❌ {failed} HAInterface state test(s) failed")
     print("=" * 80 + "\n")

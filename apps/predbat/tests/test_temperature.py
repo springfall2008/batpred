@@ -1228,7 +1228,7 @@ def test_temperature(my_predbat=None):
                 print("  ❌ FAILED")
             else:
                 passed += 1
-                print("  ✅ PASSED")
+                print("  PASS: PASSED")
         except Exception as e:
             print("  ❌ EXCEPTION: {}".format(e))
             import traceback

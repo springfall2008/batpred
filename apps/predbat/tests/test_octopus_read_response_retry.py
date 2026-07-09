@@ -270,5 +270,5 @@ async def test_octopus_read_response_retry(my_predbat):
         print("\n**** ❌ Octopus async_read_response_retry tests FAILED ****")
         return 1
     else:
-        print("\n**** ✅ All Octopus async_read_response_retry tests PASSED ****")
+        print("\n**** PASS: All Octopus async_read_response_retry tests PASSED ****")
         return 0
