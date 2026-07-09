@@ -378,7 +378,7 @@ def test_fill_load_from_power_negative_power_corrupts_load_total():
     for minute in range(0, 31):
         load_minutes[minute] = 10.0
     for minute in range(31, 61):
-        load_minutes[minute] = 10.0 - (minute - 30) * (2.0 / 30)  # 9.933 → 8.0
+        load_minutes[minute] = 10.0 - (minute - 30) * (2.0 / 30)  # 9.933 -> 8.0
 
     expected_total = load_minutes[0] - load_minutes[60]  # 10.0 - 8.0 = 2.0 kWh
 

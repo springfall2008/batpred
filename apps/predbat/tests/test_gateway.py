@@ -22,7 +22,7 @@ def approx_equal(actual, expected, abs_tol=0.01):
 
 
 class TestProtobufDecode:
-    """Test protobuf telemetry → entity mapping."""
+    """Test protobuf telemetry -> entity mapping."""
 
     def _make_status(self, soc=50, battery_power=1000, pv_power=2000, grid_power=-500, load_power=1500, mode=0):
         status = pb.GatewayStatus()
@@ -300,7 +300,7 @@ class TestInjectEntities:
         gw._last_status = None
         gw.args = {}
         gw.local_tz = pytz.timezone("Europe/London")
-        gw._dashboard_calls = {}  # entity_id → (state, attributes)
+        gw._dashboard_calls = {}  # entity_id -> (state, attributes)
 
         def capture_dashboard(entity_id, state=None, attributes=None, app=None):
             gw._dashboard_calls[entity_id] = (state, attributes)
@@ -386,7 +386,7 @@ class TestInjectEntities:
         status = self._make_status()
         gw._inject_entities(status)
 
-        # Serial "CE123456789" (len > 6) → last 6 chars lowercase = "456789"
+        # Serial "CE123456789" (len > 6) -> last 6 chars lowercase = "456789"
         entity = "sensor.predbat_gateway_456789_inverter_time"
         assert entity in gw._dashboard_calls
         state, attrs = gw._dashboard_calls[entity]
@@ -414,7 +414,7 @@ class TestInjectEntities:
         assert "sensor.predbat_gateway_000001_soc" in gw._dashboard_calls
 
     def test_battery_power_negated(self):
-        """Battery power sign is inverted: firmware +ve=charging → PredBat +ve=discharging."""
+        """Battery power sign is inverted: firmware +ve=charging -> PredBat +ve=discharging."""
         gw = self._make_gateway()
         gw._inject_entities(self._make_status(battery_power=1000))
 
@@ -449,20 +449,20 @@ class TestInjectEntities:
         gw._inject_entities(self._make_status())
 
         suffix = "456789"
-        # charge_start = 130 → 01:30:00
+        # charge_start = 130 -> 01:30:00
         state, attrs = gw._dashboard_calls[f"select.predbat_gateway_{suffix}_charge_slot1_start"]
         assert state == "01:30:00"
         assert attrs == GATEWAY_ATTRIBUTE_TABLE.get("charge_slot1_start", {})
 
-        # charge_end = 430 → 04:30:00
+        # charge_end = 430 -> 04:30:00
         state, _ = gw._dashboard_calls[f"select.predbat_gateway_{suffix}_charge_slot1_end"]
         assert state == "04:30:00"
 
-        # discharge_start = 1600 → 16:00:00
+        # discharge_start = 1600 -> 16:00:00
         state, _ = gw._dashboard_calls[f"select.predbat_gateway_{suffix}_discharge_slot1_start"]
         assert state == "16:00:00"
 
-        # discharge_end = 1900 → 19:00:00
+        # discharge_end = 1900 -> 19:00:00
         state, _ = gw._dashboard_calls[f"select.predbat_gateway_{suffix}_discharge_slot1_end"]
         assert state == "19:00:00"
 
@@ -1256,7 +1256,7 @@ class TestPlanRepublish:
         second_plan.ParseFromString(second_payload)
 
         assert second_plan.timestamp >= first_plan.timestamp  # rebuilt with current clock
-        assert second_plan.plan_version == first_plan.plan_version  # content unchanged → same version
+        assert second_plan.plan_version == first_plan.plan_version  # content unchanged -> same version
         # The cached bytes are refreshed so subsequent reads reflect the new timestamp.
         assert gw._last_plan_data == second_payload
 
@@ -1898,7 +1898,7 @@ class TestSelectEvent:
     # ------------------------------------------------------------------
 
     def test_midnight_time_converts_correctly(self):
-        """00:00:00 → HHMM 0 (midnight)."""
+        """00:00:00 -> HHMM 0 (midnight)."""
         import json
 
         gw = self._make_gateway()
@@ -1949,7 +1949,7 @@ class TestSelectEvent:
 
 
 class TestNumberEvent:
-    """Tests for GatewayMQTT.number_event() — numeric entity → command routing."""
+    """Tests for GatewayMQTT.number_event() — numeric entity -> command routing."""
 
     def _make_gateway(self):
         from gateway import GatewayMQTT
@@ -1980,25 +1980,25 @@ class TestNumberEvent:
     # ------------------------------------------------------------------
 
     def test_charge_rate_routes_correctly(self):
-        """charge_rate entity → set_charge_rate with power_w."""
+        """charge_rate entity -> set_charge_rate with power_w."""
         gw = self._make_gateway()
         self._run(gw.number_event("number.predbat_gateway_456789_charge_rate", "3000"))
         assert gw._published == [("set_charge_rate", {"power_w": 3000, "serial": "CE123456789"})]
 
     def test_discharge_rate_routes_correctly(self):
-        """discharge_rate entity → set_discharge_rate with power_w (not charge_rate)."""
+        """discharge_rate entity -> set_discharge_rate with power_w (not charge_rate)."""
         gw = self._make_gateway()
         self._run(gw.number_event("number.predbat_gateway_456789_discharge_rate", "2500"))
         assert gw._published == [("set_discharge_rate", {"power_w": 2500, "serial": "CE123456789"})]
 
     def test_reserve_soc_routes_correctly(self):
-        """reserve_soc entity → set_reserve with target_soc."""
+        """reserve_soc entity -> set_reserve with target_soc."""
         gw = self._make_gateway()
         self._run(gw.number_event("number.predbat_gateway_456789_reserve_soc", "10"))
         assert gw._published == [("set_reserve", {"target_soc": 10, "serial": "CE123456789"})]
 
     def test_target_soc_routes_correctly(self):
-        """target_soc entity → set_target_soc with target_soc."""
+        """target_soc entity -> set_target_soc with target_soc."""
         gw = self._make_gateway()
         self._run(gw.number_event("number.predbat_gateway_456789_target_soc", "100"))
         assert gw._published == [("set_target_soc", {"target_soc": 100, "serial": "CE123456789"})]
@@ -2079,7 +2079,7 @@ class TestNumberEvent:
 
 
 class TestSwitchEvent:
-    """Tests for GatewayMQTT.switch_event() — charge/discharge enable → mode commands."""
+    """Tests for GatewayMQTT.switch_event() — charge/discharge enable -> mode commands."""
 
     def _make_gateway(self):
         from gateway import GatewayMQTT
@@ -2130,7 +2130,7 @@ class TestSwitchEvent:
     def test_charge_enabled_toggle(self):
         """Toggling charge_enabled flips based on current state from get_state_wrapper."""
         gw = self._make_gateway()
-        # currently on → toggle → off
+        # currently on -> toggle -> off
         gw._state["switch.predbat_gateway_456789_charge_enabled"] = True
         self._run(gw.switch_event("switch.predbat_gateway_456789_charge_enabled", "toggle"))
         assert gw._published == [("set_charge_enable", {"enable": False, "serial": "CE123456789"})]
@@ -2154,7 +2154,7 @@ class TestSwitchEvent:
     def test_discharge_enabled_toggle(self):
         """Toggling discharge_enabled flips based on current state from get_state_wrapper."""
         gw = self._make_gateway()
-        # currently off → toggle → on (get_state_wrapper returns False by default)
+        # currently off -> toggle -> on (get_state_wrapper returns False by default)
         self._run(gw.switch_event("switch.predbat_gateway_456789_discharge_enabled", "toggle"))
         assert gw._published == [("set_discharge_enable", {"enable": True, "serial": "CE123456789"})]
 
@@ -2381,49 +2381,49 @@ class TestPublishPredbatData:
         return json.loads(raw_bytes.decode())
 
     def test_timeline_charging_maps_to_1(self):
-        """Charging state → timeline code 1."""
+        """Charging state -> timeline code 1."""
         rows = self._make_rows([{"state": "Chrg", "soc_percent": 60}])
         payload = self._get_payload_with_plan(rows)
         assert payload["timeline"][0] == 1
 
     def test_timeline_freeze_charging_maps_to_1(self):
-        """Freeze charging state → timeline code 1."""
+        """Freeze charging state -> timeline code 1."""
         rows = self._make_rows([{"state": "FrzChrg", "soc_percent": 60}])
         payload = self._get_payload_with_plan(rows)
         assert payload["timeline"][0] == 1
 
     def test_timeline_hold_charging_maps_to_1(self):
-        """Hold charging state → timeline code 1."""
+        """Hold charging state -> timeline code 1."""
         rows = self._make_rows([{"state": "HoldChrg", "soc_percent": 60}])
         payload = self._get_payload_with_plan(rows)
         assert payload["timeline"][0] == 1
 
     def test_timeline_discharging_maps_to_2(self):
-        """Discharging state → timeline code 2."""
+        """Discharging state -> timeline code 2."""
         rows = self._make_rows([{"state": "Exp", "soc_percent": 40}])
         payload = self._get_payload_with_plan(rows)
         assert payload["timeline"][0] == 2
 
     def test_timeline_freeze_discharging_maps_to_2(self):
-        """Freeze discharging state → timeline code 2."""
+        """Freeze discharging state -> timeline code 2."""
         rows = self._make_rows([{"state": "FrzExp", "soc_percent": 40}])
         payload = self._get_payload_with_plan(rows)
         assert payload["timeline"][0] == 2
 
     def test_timeline_hold_discharging_maps_to_2(self):
-        """Hold export/discharge state → timeline code 2."""
+        """Hold export/discharge state -> timeline code 2."""
         rows = self._make_rows([{"state": "HoldExp", "soc_percent": 40}])
         payload = self._get_payload_with_plan(rows)
         assert payload["timeline"][0] == 2
 
     def test_timeline_solar_maps_to_3(self):
-        """Unknown state with pv_forecast > 0.1 → timeline code 3 (solar)."""
+        """Unknown state with pv_forecast > 0.1 -> timeline code 3 (solar)."""
         rows = self._make_rows([{"state": "Idle", "soc_percent": 50, "pv_forecast": 0.5}])
         payload = self._get_payload_with_plan(rows)
         assert payload["timeline"][0] == 3
 
     def test_timeline_grid_import_maps_to_4(self):
-        """Unknown state with pv_forecast <= 0.1 → timeline code 4 (grid import)."""
+        """Unknown state with pv_forecast <= 0.1 -> timeline code 4 (grid import)."""
         rows = self._make_rows([{"state": "Idle", "soc_percent": 50, "pv_forecast": 0.0}])
         payload = self._get_payload_with_plan(rows)
         assert payload["timeline"][0] == 4
@@ -2740,13 +2740,13 @@ class TestIanaToPosixTz:
         tz = _pytz.timezone("Australia/Sydney")
         # Manually compute what the fallback would produce using just January (wrong)
         off_jan = tz.utcoffset(datetime.datetime(2024, 1, 15, 12, 0, 0)).total_seconds() / 60
-        # January is DST in Sydney: UTC+11 → posix_total = -660 → hours = -11 (wrong)
+        # January is DST in Sydney: UTC+11 -> posix_total = -660 -> hours = -11 (wrong)
         # The correct standard offset is UTC+10 (July)
         off_jul = tz.utcoffset(datetime.datetime(2024, 7, 15, 12, 0, 0)).total_seconds() / 60
         assert off_jan > off_jul, "Precondition: Sydney has higher offset in Jan (DST) than Jul (standard)"
         # The actual conversion should use the smaller offset (July = standard time)
         result = self._convert("Australia/Sydney")
-        # Standard AEST is UTC+10; POSIX sign flips → "-10" must appear # cspell:disable-line
+        # Standard AEST is UTC+10; POSIX sign flips -> "-10" must appear # cspell:disable-line
         assert "-10" in result, f"Expected standard offset -10 in POSIX string, got {result!r}"  # cspell:disable-line
 
     def test_asia_kolkata_half_hour_offset(self):
@@ -2788,7 +2788,7 @@ class TestIanaToPosixTz:
         assert "3:30" in result, f"Expected '3:30' in POSIX string, got {result!r}"  # cspell:disable-line
 
     def test_fallback_northern_hemisphere(self):
-        """Fallback path (TZif file bypassed): Europe/London standard time is GMT (UTC+0) → 'GMT0'."""
+        """Fallback path (TZif file bypassed): Europe/London standard time is GMT (UTC+0) -> 'GMT0'."""
         from unittest.mock import patch
         from gateway import GatewayMQTT
 
@@ -2808,7 +2808,7 @@ class TestIanaToPosixTz:
         assert "-11" not in result, f"DST offset -11 must not appear in fallback result, got {result!r}"  # cspell:disable-line
 
     def test_fallback_negative_fractional_offset(self):
-        """Fallback path divmod fix: America/St_Johns standard time is NST (UTC-3:30) → '3:30'."""
+        """Fallback path divmod fix: America/St_Johns standard time is NST (UTC-3:30) -> '3:30'."""
         from unittest.mock import patch
         from gateway import GatewayMQTT
 
@@ -3179,7 +3179,7 @@ class TestCheckInverterResets:
         gw._suffix_to_serial = {}
         gw._inverter_reset_done = set()
         gw._mqtt_connected = alive
-        gw._gateway_online = False  # broker-connected but LWT-offline → is_alive() True when _mqtt_connected
+        gw._gateway_online = False  # broker-connected but LWT-offline -> is_alive() True when _mqtt_connected
         gw._last_telemetry_time = 0
         gw._auto_configured = auto_configured
         gw._published = []
@@ -3651,7 +3651,7 @@ class TestSetChargeSlotPayload:
         import json
 
         gw = self._make_gateway()
-        # 02:00:00 → HHMM 200, matching the expected {"start":200} in the hub spec
+        # 02:00:00 -> HHMM 200, matching the expected {"start":200} in the hub spec
         self._run(gw.select_event("select.predbat_gateway_30g499_charge_slot1_start", "02:00:00"))
 
         assert gw._raw_published, "No payload was published — serial lookup may have failed"
@@ -3673,7 +3673,7 @@ class TestSetChargeSlotPayload:
 
 
 class TestEvTelemetry:
-    """Tests for GatewayMQTT._inject_ev_entities() — EvCharger telemetry → entities."""
+    """Tests for GatewayMQTT._inject_ev_entities() — EvCharger telemetry -> entities."""
 
     def _make_gateway(self, battery_size=100):
         from gateway import GatewayMQTT
@@ -3683,7 +3683,7 @@ class TestEvTelemetry:
         gw.base = MagicMock()
         gw.log = MagicMock()
         gw.prefix = "predbat"
-        gw._dashboard_calls = {}  # entity_id → (state, attributes)
+        gw._dashboard_calls = {}  # entity_id -> (state, attributes)
 
         def capture_dashboard(entity_id, state=None, attributes=None, app=None):
             gw._dashboard_calls[entity_id] = (state, attributes)
@@ -3717,11 +3717,11 @@ class TestEvTelemetry:
 
         base = "predbat_gateway_ev"
         assert gw._dashboard_calls[f"binary_sensor.{base}_online"][0] is True
-        assert gw._dashboard_calls[f"binary_sensor.{base}_connected"][0] is True  # status="Charging" → car connected
+        assert gw._dashboard_calls[f"binary_sensor.{base}_connected"][0] is True  # status="Charging" -> car connected
         assert gw._dashboard_calls[f"binary_sensor.{base}_session_active"][0] is True
         assert gw._dashboard_calls[f"sensor.{base}_status"][0] == "Charging"
         assert gw._dashboard_calls[f"sensor.{base}_power"][0] == 7200
-        # Wh → kWh
+        # Wh -> kWh
         assert approx_equal(gw._dashboard_calls[f"sensor.{base}_session_energy"][0], 12.4)
         assert gw._dashboard_calls[f"sensor.{base}_current_limit"][0] == 16
         assert gw._dashboard_calls[f"sensor.{base}_soc"][0] == 55
@@ -3743,7 +3743,7 @@ class TestEvTelemetry:
     def test_not_reported_fields_skipped(self):
         """Zero/empty 'not reported' fields are not published, except soc which falls back to session energy."""
         gw = self._make_gateway(battery_size=100)
-        # session_energy_wh=12400 → 12.4 kWh; battery_size=100 → fallback soc = 12.4%
+        # session_energy_wh=12400 -> 12.4 kWh; battery_size=100 -> fallback soc = 12.4%
         status = self._status_with_ev(soc_percent=0, voltage_v=0, max_current_a=0, current_limit_a=0, eco_mode="", status="")
         gw._inject_ev_entities(status)
 
@@ -3757,7 +3757,7 @@ class TestEvTelemetry:
         assert f"sensor.{base}_status" not in gw._dashboard_calls
         # Always-published fields remain
         assert f"binary_sensor.{base}_online" in gw._dashboard_calls
-        assert gw._dashboard_calls[f"binary_sensor.{base}_connected"][0] is False  # status="" → no car
+        assert gw._dashboard_calls[f"binary_sensor.{base}_connected"][0] is False  # status="" -> no car
         assert f"sensor.{base}_power" in gw._dashboard_calls
         # Charge rate falls back to 7.4 kW when capability is not reported
         assert approx_equal(gw._dashboard_calls[f"sensor.{base}_charge_rate"][0], 7.4)
@@ -3765,7 +3765,7 @@ class TestEvTelemetry:
     def test_soc_fallback_uses_battery_size(self):
         """When soc is not reported, the fallback is session_energy / battery_size * 100."""
         gw = self._make_gateway(battery_size=50)
-        # session_energy_wh=12400 → 12.4 kWh; battery_size=50 → 12.4/50*100 = 24.8%
+        # session_energy_wh=12400 -> 12.4 kWh; battery_size=50 -> 12.4/50*100 = 24.8%
         gw._inject_ev_entities(self._status_with_ev(soc_percent=0))
         assert approx_equal(gw._dashboard_calls["sensor.predbat_gateway_ev_soc"][0], 24.8)
 

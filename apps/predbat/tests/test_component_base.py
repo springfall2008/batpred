@@ -92,8 +92,8 @@ def test_component_base_immediate_success(my_predbat):
             # Start component in background
             task = asyncio.create_task(component.start())
 
-            # Wait briefly for it to start (1.0 → 0.01s real via fast_sleep; must be
-            # shorter than the component's 5s loop sleep → 0.05s real)
+            # Wait briefly for it to start (1.0 -> 0.01s real via fast_sleep; must be
+            # shorter than the component's 5s loop sleep -> 0.05s real)
             await asyncio.sleep(1.0)
 
             # Check it started successfully
@@ -128,7 +128,7 @@ def test_component_base_backoff_sequence(my_predbat):
             assert not component.api_started, "Component should not have started yet (failed first attempt)"
 
             # Wait slightly longer - should still be 1 run (waiting for backoff)
-            # Backoff = 60s real → 0.6s real via fast_sleep; we wait 0.5 → 0.005s real
+            # Backoff = 60s real -> 0.6s real via fast_sleep; we wait 0.5 -> 0.005s real
             await asyncio.sleep(0.5)
             assert component.run_count == 1, f"Should still be 1 run (waiting for backoff), got {component.run_count}"
 
@@ -189,7 +189,7 @@ def test_component_base_normal_operation_after_start(my_predbat):
             initial_run_count = component.run_count
 
             # Wait a bit more - should not run again immediately (only every 60 seconds)
-            # Component loop sleep = 5s → 0.05s real; we wait 0.5 → 0.005s real
+            # Component loop sleep = 5s -> 0.05s real; we wait 0.5 -> 0.005s real
             await asyncio.sleep(0.5)
             assert component.run_count == initial_run_count, f"Should not run again immediately, expected {initial_run_count}, got {component.run_count}"
 
@@ -333,7 +333,7 @@ def test_component_base_first_cleared_when_run_presets_api_started(my_predbat):
 
             task = asyncio.create_task(component.start())
 
-            # Wait long enough (sped up 100x by fast_sleep → ~2s real) for the component
+            # Wait long enough (sped up 100x by fast_sleep -> ~2s real) for the component
             # loop to advance past simulated seconds=60 so a steady-state run can occur.
             await asyncio.sleep(200)
 

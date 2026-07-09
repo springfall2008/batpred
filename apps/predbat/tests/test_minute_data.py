@@ -42,10 +42,10 @@ def test_minute_data(my_predbat):
     # older period (transition+1..minutes_to) is filled with last_state.
     # Gap-fill propagates newest state (30.0) back to minute 0.
     # minute  0: gap-filled with newest=30.0
-    # minute  5: transition minute for item@12:00 → state=30.0
-    # minute 34: fill from item@12:00 → last_state=20.0
-    # minute 35: transition minute for item@11:30 → state=20.0
-    # minute 65: transition minute for item@11:00 → state=10.0
+    # minute  5: transition minute for item@12:00 -> state=30.0
+    # minute 34: fill from item@12:00 -> last_state=20.0
+    # minute 35: transition minute for item@11:30 -> state=20.0
+    # minute 65: transition minute for item@11:00 -> state=10.0
     expected_points = [30.0, 30.0, 20.0, 20.0, 10.0]
 
     # Check that we have data and it's reasonable
@@ -428,7 +428,7 @@ def test_minute_data(my_predbat):
         # Item@11:00 (2.5kW=2500W): first item, transition at minute 60 only (minutes==minutes_to)
         # Gap-fill propagates newest (3500W) back to minute 0.
 
-        # Minute 15: transition minute for item@11:45 → state=3500W
+        # Minute 15: transition minute for item@11:45 -> state=3500W
         if 15 not in result_data:
             print("ERROR: kW to W conversion test failed - no data at minute 15")
             failed = True
@@ -436,7 +436,7 @@ def test_minute_data(my_predbat):
             print("ERROR: kW to W conversion test failed - expected 3500 W at minute 15, got {}".format(result_data[15]))
             failed = True
 
-        # Minute 30: transition minute for item@11:30 → state=3000W
+        # Minute 30: transition minute for item@11:30 -> state=3000W
         if 30 not in result_data:
             print("ERROR: kW to W conversion test failed - no data at minute 30")
             failed = True
@@ -444,7 +444,7 @@ def test_minute_data(my_predbat):
             print("ERROR: kW to W conversion test failed - expected 3000 W at minute 30, got {}".format(result_data[30]))
             failed = True
 
-        # Minute 45: fill from item@11:30 → last_state=2500W
+        # Minute 45: fill from item@11:30 -> last_state=2500W
         if 45 not in result_data:
             print("ERROR: kW to W conversion test failed - no data at minute 45")
             failed = True
@@ -865,9 +865,9 @@ def test_minute_data_no_smoothing_backwards(my_predbat):
     # ------------------------------------------------------------------
     # now = 12:00, item-1 at 11:30 (30 min ago), item-2 at 11:50 (10 min ago).
     # Expected layout (minutes ago from now):
-    #   0-9   → 20.0  (newest state, gap-filled by the post-process logic)
-    #   10    → 20.0  (transition minute for item-2, state written explicitly)
-    #   11-30 → 10.0  (older-period fill with last_state from item-1)
+    #   0-9   -> 20.0  (newest state, gap-filled by the post-process logic)
+    #   10    -> 20.0  (transition minute for item-2, state written explicitly)
+    #   11-30 -> 10.0  (older-period fill with last_state from item-1)
     print("Test 1: two entries – transition minute and older-period fill")
     now = datetime(2024, 10, 4, 12, 0, 0, tzinfo=utc)
     history = [
@@ -902,9 +902,9 @@ def test_minute_data_no_smoothing_backwards(my_predbat):
     # ------------------------------------------------------------------
     # now = 12:00, items at 11:00 (60 min), 11:20 (40 min), 11:40 (20 min)
     # Expected:
-    #   0-20  → 20.0  (newest; transition at 20 written explicitly then gap-filled forward)
-    #   21-40 → 10.0  (fill for item-3's older period)
-    #   41-60 → 5.0   (fill for item-2's older period)
+    #   0-20  -> 20.0  (newest; transition at 20 written explicitly then gap-filled forward)
+    #   21-40 -> 10.0  (fill for item-3's older period)
+    #   41-60 -> 5.0   (fill for item-2's older period)
     print("Test 2: three entries – chained transitions")
     history3 = [
         {"state": "5.0", "last_updated": "2024-10-04T11:00:00+00:00"},  # 60 min ago
@@ -916,7 +916,7 @@ def test_minute_data_no_smoothing_backwards(my_predbat):
     checks3 = {
         0: 20.0,  # gap-filled with newest
         20: 20.0,  # transition minute for item-3
-        21: 10.0,  # start of older-period fill (item-3 → item-2's state)
+        21: 10.0,  # start of older-period fill (item-3 -> item-2's state)
         40: 10.0,  # last minute of that fill (item-2 transition is overwritten by fill from item-3)
         41: 5.0,  # start of item-2's older-period fill
         60: 5.0,  # last minute (item-1 set minutes==minutes_to, then overwritten to 5.0 by item-2's fill)
@@ -1009,8 +1009,8 @@ def test_minute_data_no_smoothing_forward(my_predbat):
     # ------------------------------------------------------------------
     # With to_key set, the gap-fill logic does NOT run (guarded by `if not to_key:`).
     # Only the explicitly-defined half-open windows are populated.
-    # Window 1: last_updated=12:10, last_changed=12:20 → mdata[10..19] = 10.0
-    # Window 2: last_updated=12:20, last_changed=12:40 → mdata[20..39] = 20.0
+    # Window 1: last_updated=12:10, last_changed=12:20 -> mdata[10..19] = 10.0
+    # Window 2: last_updated=12:20, last_changed=12:40 -> mdata[20..39] = 20.0
     # Anything outside those ranges is absent from the result dict.
     print("Test 1: forward with to_key – state fills half-open window [start, end)")
     history_fwd = [
@@ -1129,19 +1129,19 @@ def test_minute_data_no_smoothing_forward(my_predbat):
         smoothing=False,
     )
 
-    # Window 1 → 5..9 = 3.0
+    # Window 1 -> 5..9 = 3.0
     for m in range(5, 10):
         if result_gap.get(m) != 3.0:
             print(f"ERROR: Test 4 failed – minute {m} (window 1) expected 3.0, got {result_gap.get(m)}")
             failed = True
             break
-    # Gap → 10..19 is absent because to_key prevents gap-fill
+    # Gap -> 10..19 is absent because to_key prevents gap-fill
     for m in range(10, 20):
         if result_gap.get(m) is not None:
             print(f"ERROR: Test 4 failed – minute {m} (gap) expected None (no fill with to_key), got {result_gap.get(m)}")
             failed = True
             break
-    # Window 2 → 20..29 = 9.0
+    # Window 2 -> 20..29 = 9.0
     for m in range(20, 30):
         if result_gap.get(m) != 9.0:
             print(f"ERROR: Test 4 failed – minute {m} (window 2) expected 9.0, got {result_gap.get(m)}")

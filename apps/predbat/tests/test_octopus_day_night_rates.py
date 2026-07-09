@@ -4,9 +4,9 @@
 Tests for OctopusAPI.async_get_day_night_rates — verifies that the correct night-window
 is selected for each of the three tariff families:
 
-  1. IOG TOU  (INTELLI or IOG+TOU in tariff_code)  → 23:30–05:30, cross_midnight=True
-  2. GO / generic day-night (not E-2R-*)            → 00:30–05:30, cross_midnight=False
-  3. Economy 7 (E-2R-* tariff_code)                → 00:30–07:30, cross_midnight=False
+  1. IOG TOU  (INTELLI or IOG+TOU in tariff_code)  -> 23:30–05:30, cross_midnight=True
+  2. GO / generic day-night (not E-2R-*)            -> 00:30–05:30, cross_midnight=False
+  3. Economy 7 (E-2R-* tariff_code)                -> 00:30–07:30, cross_midnight=False
 """
 
 import asyncio
@@ -67,11 +67,11 @@ async def test_octopus_day_night_rates(my_predbat):
     Test async_get_day_night_rates for all three tariff window cases.
 
     Tests:
-    - Test 1: IOG TOU tariff → night window 23:30–05:30 (crosses midnight)
-    - Test 2: INTELLI tariff → same IOG 23:30–05:30 window
-    - Test 3: GO-style tariff (non E-2R-) → night window 00:30–05:30
-    - Test 4: Economy 7 tariff (E-2R-*) → night window 00:30–07:30
-    - Test 5: Missing rates → returns empty list
+    - Test 1: IOG TOU tariff -> night window 23:30–05:30 (crosses midnight)
+    - Test 2: INTELLI tariff -> same IOG 23:30–05:30 window
+    - Test 3: GO-style tariff (non E-2R-) -> night window 00:30–05:30
+    - Test 4: Economy 7 tariff (E-2R-*) -> night window 00:30–07:30
+    - Test 5: Missing rates -> returns empty list
     """
     print("\n**** Running async_get_day_night_rates tests ****")
     failed = False
@@ -81,7 +81,7 @@ async def test_octopus_day_night_rates(my_predbat):
     # ------------------------------------------------------------------
     # Test 1: IOG TOU — night window must be 23:30–05:30, cross-midnight
     # ------------------------------------------------------------------
-    print("\n*** Test 1: IOG TOU tariff → night 23:30–05:30 ***")
+    print("\n*** Test 1: IOG TOU tariff -> night 23:30–05:30 ***")
     api1 = _make_api(my_predbat, day_rate=29.14, night_rate=7.00)
 
     with patch.object(type(api1), "now_utc_exact", new_callable=PropertyMock) as mock_now:
@@ -118,7 +118,7 @@ async def test_octopus_day_night_rates(my_predbat):
     # ------------------------------------------------------------------
     # Test 2: INTELLI tariff — same IOG window
     # ------------------------------------------------------------------
-    print("\n*** Test 2: INTELLI tariff → same IOG 23:30–05:30 window ***")
+    print("\n*** Test 2: INTELLI tariff -> same IOG 23:30–05:30 window ***")
     api2 = _make_api(my_predbat, day_rate=29.14, night_rate=7.00)
 
     with patch.object(type(api2), "now_utc_exact", new_callable=PropertyMock) as mock_now:
@@ -137,7 +137,7 @@ async def test_octopus_day_night_rates(my_predbat):
     # ------------------------------------------------------------------
     # Test 3: GO-style tariff (non E-2R-) — night 00:30–05:30
     # ------------------------------------------------------------------
-    print("\n*** Test 3: GO-style tariff → night 00:30–05:30 ***")
+    print("\n*** Test 3: GO-style tariff -> night 00:30–05:30 ***")
     api3 = _make_api(my_predbat, day_rate=24.0, night_rate=8.5)
 
     with patch.object(type(api3), "now_utc_exact", new_callable=PropertyMock) as mock_now:
@@ -162,7 +162,7 @@ async def test_octopus_day_night_rates(my_predbat):
     # ------------------------------------------------------------------
     # Test 4: Economy 7 (E-2R-*) — night 00:30–07:30
     # ------------------------------------------------------------------
-    print("\n*** Test 4: Economy 7 tariff → night 00:30–07:30 ***")
+    print("\n*** Test 4: Economy 7 tariff -> night 00:30–07:30 ***")
     api4 = _make_api(my_predbat, day_rate=20.0, night_rate=10.0)
 
     with patch.object(type(api4), "now_utc_exact", new_callable=PropertyMock) as mock_now:
@@ -185,9 +185,9 @@ async def test_octopus_day_night_rates(my_predbat):
         print("PASS: Economy 7 night window is 00:30–07:30")
 
     # ------------------------------------------------------------------
-    # Test 5: Missing day/night rate data → returns empty list
+    # Test 5: Missing day/night rate data -> returns empty list
     # ------------------------------------------------------------------
-    print("\n*** Test 5: Missing rates → returns empty list ***")
+    print("\n*** Test 5: Missing rates -> returns empty list ***")
     api5 = OctopusAPI(my_predbat, key="test-key", account_id="test-account", automatic=False)
     api5.fetch_url_cached = AsyncMock(return_value=[])
 
@@ -208,7 +208,7 @@ async def test_octopus_day_night_rates(my_predbat):
     # of the older rate (32.11992, valid from 2025-11-24) because the API
     # returns results newest-first and the loop was keeping the last match.
     # ------------------------------------------------------------------
-    print("\n*** Test 6: Multiple historical day rates (newest first) → most-recent rate selected ***")
+    print("\n*** Test 6: Multiple historical day rates (newest first) -> most-recent rate selected ***")
     _NOW6 = datetime(2026, 5, 16, 12, 0, 0, tzinfo=timezone.utc)
     api6 = OctopusAPI(my_predbat, key="test-key", account_id="test-account", automatic=False)
 
@@ -263,9 +263,9 @@ async def test_octopus_day_night_rates(my_predbat):
     # rate snapshotted at "now".
     # Setup: now = 2026-04-02 12:00 UTC (2 days after rate change at 2026-03-31 23:00 UTC)
     # Schedule starts 2 days back = 2026-03-31 00:30 UTC (eco7 night start)
-    # Slots starting before 2026-03-31 23:00 → old rates; slots from 2026-04-01 onwards → new rates
+    # Slots starting before 2026-03-31 23:00 -> old rates; slots from 2026-04-01 onwards -> new rates
     # ------------------------------------------------------------------
-    print("\n*** Test 7: Rate change within schedule window → per-day rate lookup ***")
+    print("\n*** Test 7: Rate change within schedule window -> per-day rate lookup ***")
     _NOW7 = datetime(2026, 4, 2, 12, 0, 0, tzinfo=timezone.utc)
     api7 = OctopusAPI(my_predbat, key="test-key", account_id="test-account", automatic=False)
 
@@ -292,8 +292,8 @@ async def test_octopus_day_night_rates(my_predbat):
         mdata7 = await api7.async_get_day_night_rates(base_url, tariff_code="E-2R-OE-FIX-12M-25-11-24-J")
 
     # The rate change is 2026-03-31T23:00Z.
-    # Eco7 night starts at 00:30 and day at 07:30, both before 23:00 on 03-31 → old rates.
-    # From 2026-04-01 00:30 onwards → new rates.
+    # Eco7 night starts at 00:30 and day at 07:30, both before 23:00 on 03-31 -> old rates.
+    # From 2026-04-01 00:30 onwards -> new rates.
     rate_change_dt = datetime(2026, 3, 31, 23, 0, 0, tzinfo=timezone.utc)
     old_rates = {11.55, 32.11992}
     new_rates = {13.65, 28.61292}
@@ -330,9 +330,9 @@ async def test_octopus_day_night_rates(my_predbat):
     _TS = datetime(2026, 5, 16, 12, 0, 0, tzinfo=timezone.utc)
     api8 = OctopusAPI(my_predbat, key="test-key", account_id="test-account", automatic=False)
 
-    # Entry A: valid_from missing (epoch), valid_to in the future → should match
-    # Entry B: valid_from very recent but valid_to already expired → must NOT match
-    # Entry C: valid_from set, valid_to absent (forever) → should match and beats A
+    # Entry A: valid_from missing (epoch), valid_to in the future -> should match
+    # Entry B: valid_from very recent but valid_to already expired -> must NOT match
+    # Entry C: valid_from set, valid_to absent (forever) -> should match and beats A
     rates8 = [
         {"value_inc_vat": 10.0, "valid_from": None, "valid_to": "2027-01-01T00:00:00+0000"},
         {"value_inc_vat": 99.0, "valid_from": "2026-05-16T11:00:00+0000", "valid_to": "2026-05-16T11:30:00+0000"},

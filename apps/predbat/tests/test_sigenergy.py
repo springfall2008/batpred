@@ -142,7 +142,7 @@ class MockSigenergyAPI(SigenergyAPI):
         # ComponentBase attributes not set by initialize() — wire them manually
         self.api_started = False
         self.api_stop = False
-        # Skip mode-switch → command delay in unit tests
+        # Skip mode-switch -> command delay in unit tests
         self._command_delay = 0
         # ComponentBase.storage looks at self.base.components, which this mock doesn't set up —
         # override it directly so tests can plug in a FakeStorage via self._mock_storage.
@@ -204,15 +204,15 @@ def test_sigenergy_helper_functions(my_predbat):
     # _safe_float
     assert _safe_float(3.14) == 3.14, "_safe_float: float passthrough"
     assert _safe_float("2.5") == 2.5, "_safe_float: string to float"
-    assert _safe_float(None) == 0.0, "_safe_float: None → 0.0"
-    assert _safe_float("abc") == 0.0, "_safe_float: invalid string → 0.0"
+    assert _safe_float(None) == 0.0, "_safe_float: None -> 0.0"
+    assert _safe_float("abc") == 0.0, "_safe_float: invalid string -> 0.0"
     assert _safe_float(None, default=99.0) == 99.0, "_safe_float: None with custom default"
 
     # _safe_int
     assert _safe_int(42) == 42, "_safe_int: int passthrough"
     assert _safe_int("7") == 7, "_safe_int: string to int"
-    assert _safe_int(None) == 0, "_safe_int: None → 0"
-    assert _safe_int("bad") == 0, "_safe_int: invalid → 0"
+    assert _safe_int(None) == 0, "_safe_int: None -> 0"
+    assert _safe_int("bad") == 0, "_safe_int: invalid -> 0"
     assert _safe_int(None, default=5) == 5, "_safe_int: None with custom default"
 
     return failed
@@ -250,7 +250,7 @@ def test_sigenergy_system_slug(my_predbat):
     failed = False
     api = MockSigenergyAPI()
 
-    # Long ID → last 12 chars
+    # Long ID -> last 12 chars
     slug = api._system_slug("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
     assert len(slug) <= 12, "Slug max 12 chars: {}".format(slug)
 
@@ -571,10 +571,10 @@ def test_sigenergy_apply_service_to_toggle(my_predbat):
     failed = False
     api = MockSigenergyAPI()
 
-    assert api._apply_service_to_toggle(False, "turn_on") is True, "turn_on → True"
-    assert api._apply_service_to_toggle(True, "turn_off") is False, "turn_off → False"
-    assert api._apply_service_to_toggle(False, "toggle") is True, "toggle False → True"
-    assert api._apply_service_to_toggle(True, "toggle") is False, "toggle True → False"
+    assert api._apply_service_to_toggle(False, "turn_on") is True, "turn_on -> True"
+    assert api._apply_service_to_toggle(True, "turn_off") is False, "turn_off -> False"
+    assert api._apply_service_to_toggle(False, "toggle") is True, "toggle False -> True"
+    assert api._apply_service_to_toggle(True, "toggle") is False, "toggle True -> False"
     assert api._apply_service_to_toggle(True, "unknown") is True, "unknown keeps current"
 
     return failed
@@ -1773,9 +1773,9 @@ def test_sigenergy_fetch_inverter_realtime(my_predbat):
             "deviceType": "Inverter",
             "realTimeInfo": {
                 "batSoc": 72.0,
-                "batPower": 3.0,   # discharging → batteryPower should be -3.0
+                "batPower": 3.0,   # discharging -> batteryPower should be -3.0
                 "pvPower": 5.0,
-                "activePower": 1.5,  # export → gridPower = 1.5
+                "activePower": 1.5,  # export -> gridPower = 1.5
                 "pvEnergyDaily": 12.5,
             },
         },
@@ -1870,22 +1870,22 @@ def test_sigenergy_get_inverter_serial(my_predbat):
     failed = False
     api = MockSigenergyAPI()
 
-    # No devices → None
+    # No devices -> None
     api.devices["SYS1"] = []
     assert api._get_inverter_serial("SYS1") is None, "Empty device list returns None"
 
-    # Only battery → None
+    # Only battery -> None
     api.devices["SYS1"] = [{"deviceType": "Battery", "serialNumber": "BAT001"}]
     assert api._get_inverter_serial("SYS1") is None, "Battery-only list returns None"
 
-    # Inverter type → found
+    # Inverter type -> found
     api.devices["SYS1"] = [
         {"deviceType": "Battery", "serialNumber": "BAT001"},
         {"deviceType": "Inverter", "serialNumber": "INV001"},
     ]
     assert api._get_inverter_serial("SYS1") == "INV001", "Inverter serial returned"
 
-    # AIO type → found
+    # AIO type -> found
     api.devices["SYS2"] = [{"deviceType": "AIO", "serialNumber": "AIO001"}]
     assert api._get_inverter_serial("SYS2") == "AIO001", "AIO serial returned"
 
@@ -1992,7 +1992,7 @@ def _make_api_with_system(system_id="SIG001"):
 
 
 def test_sigenergy_manage_vpp_registration_switch_to_msc(my_predbat):
-    """Readonly=True + VPP active → set_operating_mode(MSC) called, returns False."""
+    """Readonly=True + VPP active -> set_operating_mode(MSC) called, returns False."""
     from sigenergy import SIGENERGY_MODE_MSC
     failed = False
     sid = "SIG001"
@@ -2017,7 +2017,7 @@ def test_sigenergy_manage_vpp_registration_switch_to_msc(my_predbat):
 
 
 def test_sigenergy_manage_vpp_registration_switch_to_vpp(my_predbat):
-    """Readonly=False + not VPP → set_operating_mode(VPP) called, returns False (activating async)."""
+    """Readonly=False + not VPP -> set_operating_mode(VPP) called, returns False (activating async)."""
     failed = False
     sid = "SIG001"
     api = _make_api_with_system(sid)
@@ -2041,7 +2041,7 @@ def test_sigenergy_manage_vpp_registration_switch_to_vpp(my_predbat):
 
 
 def test_sigenergy_onboard_systems_pending_per_item(my_predbat):
-    """onboard_systems: real API per-item response result=False codeList=[1116] → returns None and logs warning."""
+    """onboard_systems: real API per-item response result=False codeList=[1116] -> returns None and logs warning."""
     failed = False
     sid = "SIG001"
     api = _make_api_with_system(sid)
@@ -2062,7 +2062,7 @@ def test_sigenergy_onboard_systems_pending_per_item(my_predbat):
 
 
 def test_sigenergy_onboard_systems_other_vpp(my_predbat):
-    """onboard_systems: per-item codeList=[1103] (other VPP) → returns False and logs warning."""
+    """onboard_systems: per-item codeList=[1103] (other VPP) -> returns False and logs warning."""
     failed = False
     sid = "SIG001"
     api = _make_api_with_system(sid)
@@ -2082,7 +2082,7 @@ def test_sigenergy_onboard_systems_other_vpp(my_predbat):
 
 
 def test_sigenergy_manage_vpp_registration_ready(my_predbat):
-    """Readonly=False + VPP active → no onboard/offboard, returns True."""
+    """Readonly=False + VPP active -> no onboard/offboard, returns True."""
     failed = False
     sid = "SIG001"
     api = _make_api_with_system(sid)
@@ -2109,7 +2109,7 @@ def test_sigenergy_manage_vpp_registration_ready(my_predbat):
 
 
 def test_sigenergy_manage_vpp_registration_readonly_no_vpp(my_predbat):
-    """Readonly=True + VPP not active → nothing to do, returns False."""
+    """Readonly=True + VPP not active -> nothing to do, returns False."""
     failed = False
     sid = "SIG001"
     api = _make_api_with_system(sid)
@@ -2244,7 +2244,7 @@ def test_sigenergy_update_control_time_validation(my_predbat):
 
 
 def test_sigenergy_offboard_toggle_in_vpp(my_predbat):
-    """offboard=True → return False immediately regardless of VPP state (no mode switch)."""
+    """offboard=True -> return False immediately regardless of VPP state (no mode switch)."""
     failed = False
     sid = "SIG001"
     api = _make_api_with_system(sid)
@@ -2266,7 +2266,7 @@ def test_sigenergy_offboard_toggle_in_vpp(my_predbat):
 
 
 def test_sigenergy_offboard_toggle_not_in_vpp(my_predbat):
-    """offboard=True + not in VPP → return False, no mode switch."""
+    """offboard=True + not in VPP -> return False, no mode switch."""
     failed = False
     sid = "SIG001"
     api = _make_api_with_system(sid)
@@ -2330,14 +2330,14 @@ def test_sigenergy_onboard_status(my_predbat):
     api = MockSigenergyAPI()
     assert api.onboard_status == {}, "onboard_status starts empty"
 
-    # Pending approval (1116) → pending_approval, returns None
+    # Pending approval (1116) -> pending_approval, returns None
     api._request = AsyncMock(return_value=None)
     api._last_api_code = SIGENERGY_CODE_SYSTEM_PENDING_REVIEW
     result = run_async(api.onboard_systems(["sys-1"]))
     assert result is None, "pending review returns None"
     assert api.onboard_status["sys-1"] == "pending_approval", "pending_approval status set"
 
-    # Registered to another VPP (1103) → in_other_vpp, returns False
+    # Registered to another VPP (1103) -> in_other_vpp, returns False
     api2 = MockSigenergyAPI()
     api2._request = AsyncMock(return_value=None)
     api2._last_api_code = SIGENERGY_CODE_IN_OTHER_VPP
@@ -2420,7 +2420,7 @@ def test_sigenergy_run_derives_onboard_status(my_predbat):
         api.apply_controls = AsyncMock()
         return api
 
-    # System in VPP mode → active
+    # System in VPP mode -> active
     api_active = _make_api(SIGENERGY_MODE_VPP)
     ok = run_async(api_active.run(seconds=300, first=False))
     assert ok is True, "run() returns True on success"
@@ -2429,13 +2429,13 @@ def test_sigenergy_run_derives_onboard_status(my_predbat):
     assert api_active.dashboard_items[sensor_key]["state"] == "active", "active sensor published"
     assert api_active.dashboard_items[sensor_key]["attributes"]["in_vpp"] is True
 
-    # System in MSC mode, not offboarded → pending_approval
+    # System in MSC mode, not offboarded -> pending_approval
     api_pending = _make_api(SIGENERGY_MODE_MSC)
     run_async(api_pending.run(seconds=300, first=False))
     assert api_pending.onboard_status[sid] == "pending_approval", "pending_approval derived from MSC mode"
     assert api_pending.dashboard_items[sensor_key]["state"] == "pending_approval"
 
-    # Offboard toggle on → offboarded regardless of mode
+    # Offboard toggle on -> offboarded regardless of mode
     api_offboard = _make_api(SIGENERGY_MODE_VPP, offboard_on=True)
     run_async(api_offboard.run(seconds=300, first=False))
     assert api_offboard.onboard_status[sid] == "offboarded", "offboarded when toggle is on"

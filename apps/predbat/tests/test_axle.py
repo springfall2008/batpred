@@ -1228,11 +1228,11 @@ def _test_axle_managed_price_curve_processing(my_predbat=None):
     assert len(export_events) == 2
     assert len(import_events) == 2
 
-    # First export: 50 GBP/MWh → 5.0 p/kWh
+    # First export: 50 GBP/MWh -> 5.0 p/kWh
     first_export = [e for e in export_events if "14:00:00" in e["start_time"]][0]
     assert first_export["pence_per_kwh"] == 5.0, f"Expected 5.0, got {first_export['pence_per_kwh']}"
 
-    # First import: negated → -5.0 p/kWh
+    # First import: negated -> -5.0 p/kWh
     first_import = [e for e in import_events if "14:00:00" in e["start_time"]][0]
     assert first_import["pence_per_kwh"] == -5.0, f"Expected -5.0, got {first_import['pence_per_kwh']}"
 
@@ -1247,7 +1247,7 @@ def _test_axle_managed_price_curve_processing(my_predbat=None):
     null_events = [e for e in axle.event_history if "15:00:00" in e.get("start_time", "")]
     assert len(null_events) == 0, "Null price slots should be skipped"
 
-    print("  PASS: Price curve conversion correct (GBP/MWh → p/kWh)")
+    print("  PASS: Price curve conversion correct (GBP/MWh -> p/kWh)")
     print("  PASS: Export and import sessions created per slot")
     print("  PASS: Null prices skipped")
     return False
