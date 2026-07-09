@@ -906,7 +906,7 @@ def test_battery_size_tracking_no_nominal(my_predbat):
 
     try:
         inv.battery_size_tracking()
-        # nominal_in_sensor=0 \u2192 use trimmed_mean directly without clamping
+        # nominal_in_sensor=0 -> use trimmed_mean directly without clamping
         expected_soc_max = round(9.2, 3)
         if abs(inv.soc_max - expected_soc_max) > 0.001:
             print("ERROR: soc_max {} does not match expected {:.3f} (no-nominal path)".format(inv.soc_max, expected_soc_max))

@@ -425,21 +425,21 @@ def test_hainterface_async_call_service_connection_drop_queued(my_predbat=None):
         print(f"ERROR: Caller blocked for {elapsed:.2f}s — should have returned promptly on connection_lost")
         failed += 1
     else:
-        print(f"\u2713 Caller returned promptly in {elapsed:.3f}s (not the 2-minute timeout)")
+        print(f"PASS: Caller returned promptly in {elapsed:.3f}s (not the 2-minute timeout)")
 
     # Must log the 'connection_lost' failure warning
     if not any("Service call" in log and "failed" in log for log in mock_base.log_messages):
         print("ERROR: Should log warning that service call failed with connection_lost")
         failed += 1
     else:
-        print("\u2713 Warning logged for connection_lost")
+        print("PASS: Warning logged for connection_lost")
 
     # Must return None (failure)
     if result is not None:
         print(f"ERROR: Expected None on connection_lost, got {result}")
         failed += 1
     else:
-        print("\u2713 Returned None on connection_lost")
+        print("PASS: Returned None on connection_lost")
 
     return failed
 
