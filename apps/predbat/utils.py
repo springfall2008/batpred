@@ -931,6 +931,22 @@ def dp4(value):
     return round(value, 4)
 
 
+def safe_float(v):
+    """
+    Convert a value to a float safely, returning None for invalid values (None, NaN, Inf)
+    """
+    import math
+    if v is None:
+        return None
+    try:
+        v = float(v)
+        if math.isnan(v) or math.isinf(v):
+            return None
+        return round(v, 4)
+    except (ValueError, TypeError):
+        return None
+
+
 def minutes_to_time(updated, now):
     """
     Compute the number of minutes between a time (now) and the updated time
