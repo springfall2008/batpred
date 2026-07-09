@@ -1093,7 +1093,7 @@ def _test_component_run_data_merge():
         assert save_call_count[0] == 0, f"save_database_history should NOT be called on first run (deferred), called {save_call_count[0]} times"
         assert training_call_count[0] == 0, f"Training should NOT run on first run, ran {training_call_count[0]} times"
 
-        print("    \u2713 Run 1: data populated, training deferred, no save")
+        print("    PASS: Run 1: data populated, training deferred, no save")
 
         # ── Advance time by ELAPSED_MINUTES ─────────────────────────────────────
         mock_base.now_utc = mock_base.now_utc + timedelta(minutes=ELAPSED_MINUTES)
@@ -1121,7 +1121,7 @@ def _test_component_run_data_merge():
             actual = component.load_data.get(minute)
             assert actual == expected_value, f"At minute {minute}: expected {expected_value} (fetch_data_2) but got {actual}"
 
-        print("    \u2713 Run 2: initial training fired, keys shifted, fresh data merged, save called")
+        print("    PASS: Run 2: initial training fired, keys shifted, fresh data merged, save called")
 
         # ── Advance time by another ELAPSED_MINUTES ──────────────────────────────
         mock_base.now_utc = mock_base.now_utc + timedelta(minutes=ELAPSED_MINUTES)
@@ -1139,7 +1139,7 @@ def _test_component_run_data_merge():
         assert training_call_count[0] == 1, f"Training should NOT run again on third run (model too fresh), ran {training_call_count[0]} times total"
         assert save_call_count[0] == 2, f"save_database_history should be called again on third run, called {save_call_count[0]} times"
 
-        print("    \u2713 Run 3: fetch-only cycle (model fresh), save called without retraining")
+        print("    PASS: Run 3: fetch-only cycle (model fresh), save called without retraining")
 
     run_async(run_test())
 
