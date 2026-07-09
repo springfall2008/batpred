@@ -42,14 +42,14 @@ def test_hainterface_api_call_get(my_predbat=None):
                 print("ERROR: Authorization header missing")
                 failed += 1
             else:
-                print("✓ GET request made correctly")
+                print("PASS: GET request made correctly")
 
         # Verify result
         if result != {"result": "success"}:
             print(f"ERROR: Wrong result: {result}")
             failed += 1
         else:
-            print("✓ Result returned correctly")
+            print("PASS: Result returned correctly")
 
     return failed
 
@@ -80,14 +80,14 @@ def test_hainterface_api_call_post(my_predbat=None):
                 print("ERROR: Wrong JSON data")
                 failed += 1
             else:
-                print("✓ POST request made correctly")
+                print("PASS: POST request made correctly")
 
         # Verify result
         if result != {"status": "ok"}:
             print(f"ERROR: Wrong result: {result}")
             failed += 1
         else:
-            print("✓ Result returned correctly")
+            print("PASS: Result returned correctly")
 
     return failed
 
@@ -106,7 +106,7 @@ def test_hainterface_api_call_no_key(my_predbat=None):
         print(f"ERROR: Should return None, got {result}")
         failed += 1
     else:
-        print("✓ Returned None when no API key")
+        print("PASS: Returned None when no API key")
 
     return failed
 
@@ -139,7 +139,7 @@ def test_hainterface_api_call_supervisor(my_predbat=None):
                 print("ERROR: Supervisor token not used")
                 failed += 1
             else:
-                print("✓ Supervisor endpoint called correctly")
+                print("PASS: Supervisor endpoint called correctly")
 
     return failed
 
@@ -166,14 +166,14 @@ def test_hainterface_api_call_json_decode_error(my_predbat=None):
             print(f"ERROR: Should return None on JSON error, got {result}")
             failed += 1
         else:
-            print("✓ Returned None on JSON decode error")
+            print("PASS: Returned None on JSON decode error")
 
         # Verify error count incremented
         if ha_interface.api_errors != 1:
             print(f"ERROR: api_errors should be 1, got {ha_interface.api_errors}")
             failed += 1
         else:
-            print("✓ api_errors incremented")
+            print("PASS: api_errors incremented")
 
     return failed
 
@@ -197,14 +197,14 @@ def test_hainterface_api_call_timeout(my_predbat=None):
             print(f"ERROR: Should return None on timeout, got {result}")
             failed += 1
         else:
-            print("✓ Returned None on timeout")
+            print("PASS: Returned None on timeout")
 
         # Verify error count incremented
         if ha_interface.api_errors != 1:
             print(f"ERROR: api_errors should be 1, got {ha_interface.api_errors}")
             failed += 1
         else:
-            print("✓ api_errors incremented")
+            print("PASS: api_errors incremented")
 
     return failed
 
@@ -228,14 +228,14 @@ def test_hainterface_api_call_read_timeout(my_predbat=None):
             print(f"ERROR: Should return None on read timeout, got {result}")
             failed += 1
         else:
-            print("✓ Returned None on ReadTimeout")
+            print("PASS: Returned None on ReadTimeout")
 
         # Verify error count incremented
         if ha_interface.api_errors != 1:
             print(f"ERROR: api_errors should be 1, got {ha_interface.api_errors}")
             failed += 1
         else:
-            print("✓ api_errors incremented")
+            print("PASS: api_errors incremented")
 
     return failed
 
@@ -273,7 +273,7 @@ def test_hainterface_api_call_silent_mode(my_predbat=None):
             print("ERROR: Warning should be suppressed in silent mode")
             failed += 1
         else:
-            print("✓ Warning suppressed in silent mode")
+            print("PASS: Warning suppressed in silent mode")
 
     return failed
 
@@ -303,7 +303,7 @@ def test_hainterface_api_call_error_limit(my_predbat=None):
             print("ERROR: fatal_error_occurred should be called at 10 errors")
             failed += 1
         else:
-            print("✓ fatal_error_occurred called at error limit")
+            print("PASS: fatal_error_occurred called at error limit")
 
     return failed
 
@@ -327,7 +327,7 @@ def test_hainterface_api_call_error_reset(my_predbat=None):
             print(f"ERROR: api_errors should be reset to 0, got {ha_interface.api_errors}")
             failed += 1
         else:
-            print("✓ api_errors reset on success")
+            print("PASS: api_errors reset on success")
 
     return failed
 
@@ -367,7 +367,7 @@ def test_hainterface_initialize_addon_check(my_predbat=None):
             print(f"ERROR: Slug should be 'predbat_addon', got {ha_interface.slug}")
             failed += 1
         else:
-            print("✓ Addon slug detected correctly")
+            print("PASS: Addon slug detected correctly")
 
     return failed
 
@@ -408,7 +408,7 @@ def test_hainterface_initialize_no_addon(my_predbat=None):
             print(f"ERROR: Slug should be None, got {ha_interface.slug}")
             failed += 1
         else:
-            print("✓ Missing addon handled gracefully")
+            print("PASS: Missing addon handled gracefully")
 
     return failed
 
@@ -444,7 +444,7 @@ def test_hainterface_get_history_basic(my_predbat=None):
             print("ERROR: API should be called")
             failed += 1
         else:
-            print("✓ API called")
+            print("PASS: API called")
 
         # Verify result structure - get_history returns the list directly
         if not isinstance(result, list):
@@ -457,7 +457,7 @@ def test_hainterface_get_history_basic(my_predbat=None):
             print(f"ERROR: History array should have 10 items, got {len(result[0])}")
             failed += 1
         else:
-            print("✓ History data returned correctly")
+            print("PASS: History data returned correctly")
 
     return failed
 
@@ -482,7 +482,7 @@ def test_hainterface_get_history_no_key(my_predbat=None):
         print(f"ERROR: Should return empty list from DB, got {result}")
         failed += 1
     else:
-        print("✓ Used database when no API key")
+        print("PASS: Used database when no API key")
 
     return failed
 
@@ -505,7 +505,7 @@ def test_hainterface_get_history_api_error(my_predbat=None):
             print(f"ERROR: Should return None on API error, got {result}")
             failed += 1
         else:
-            print("✓ Returned None on API error")
+            print("PASS: Returned None on API error")
 
     return failed
 
@@ -539,7 +539,7 @@ def test_hainterface_get_history_from_time(my_predbat=None):
                 print(f"ERROR: from_time {expected_time_str} not in URL: {url}")
                 failed += 1
             else:
-                print("✓ from_time parameter used correctly")
+                print("PASS: from_time parameter used correctly")
 
     return failed
 

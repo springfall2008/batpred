@@ -95,13 +95,13 @@ def test_download(my_predbat):
         try:
             test_result = test_func(my_predbat)
             if test_result:
-                print(f"✗ FAILED: {test_name}")
+                print(f"FAIL: FAILED: {test_name}")
                 failed += 1
             else:
-                print(f"✓ PASSED: {test_name}")
+                print(f"PASS: PASSED: {test_name}")
                 passed += 1
         except Exception as e:
-            print(f"✗ EXCEPTION in {test_name}: {e}")
+            print(f"FAIL: EXCEPTION in {test_name}: {e}")
             import traceback
 
             traceback.print_exc()

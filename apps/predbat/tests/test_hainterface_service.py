@@ -49,7 +49,7 @@ def test_hainterface_call_service_websocket(my_predbat=None):
             print(f"ERROR: Expected entity_id 'switch.test', got '{data.get('entity_id')}'")
             failed += 1
         else:
-            print("✓ call_service_websocket_command called correctly")
+            print("PASS: call_service_websocket_command called correctly")
 
     ha_interface.call_service_websocket_command = original_method
     return failed
@@ -89,7 +89,7 @@ def test_hainterface_call_service_loopback(my_predbat=None):
             print(f"ERROR: Expected value 42, got {data.get('service_data', {}).get('value')}")
             failed += 1
         else:
-            print("✓ Loopback trigger_callback called correctly")
+            print("PASS: Loopback trigger_callback called correctly")
 
     return failed
 
@@ -119,7 +119,7 @@ def test_hainterface_async_call_service_basic(my_predbat=None):
 
                     # Verify command details
                     if domain == "switch" and service == "turn_on" and service_data.get("entity_id") == "switch.test":
-                        print("✓ Command queued correctly")
+                        print("PASS: Command queued correctly")
 
                     # Simulate socketLoop processing
                     result_holder["success"] = True
@@ -140,7 +140,7 @@ def test_hainterface_async_call_service_basic(my_predbat=None):
     failed += test_failed
 
     if test_failed == 0:
-        print("✓ Command processed successfully")
+        print("PASS: Command processed successfully")
 
     return failed
 
@@ -193,8 +193,8 @@ def test_hainterface_async_call_service_return_response(my_predbat=None):
         processor_thread.join(timeout=2.0)
 
         if result_data.get("checks_passed"):
-            print("✓ return_response removed from service_data")
-            print("✓ return_response flag set correctly")
+            print("PASS: return_response removed from service_data")
+            print("PASS: return_response flag set correctly")
 
         return result, 0
 
@@ -202,7 +202,7 @@ def test_hainterface_async_call_service_return_response(my_predbat=None):
     failed += test_failed
 
     if test_failed == 0 and result == "test_value":
-        print("✓ Response returned correctly")
+        print("PASS: Response returned correctly")
     elif test_failed == 0:
         print(f"ERROR: Expected result 'test_value', got {result}")
         failed += 1
@@ -256,13 +256,13 @@ def test_hainterface_async_call_service_failed(my_predbat=None):
         print("ERROR: Should log warning on failure")
         failed += 1
     else:
-        print("✓ Warning logged on failure")
+        print("PASS: Warning logged on failure")
 
     if result is not None:
         print(f"ERROR: Expected None result on failure, got {result}")
         failed += 1
     else:
-        print("✓ Returned None on failure")
+        print("PASS: Returned None on failure")
 
     return failed
 
@@ -300,13 +300,13 @@ def test_hainterface_async_call_service_exception(my_predbat=None):
         print("ERROR: Should log warning on timeout")
         failed += 1
     else:
-        print("✓ Warning logged on timeout")
+        print("PASS: Warning logged on timeout")
 
     if result is not None:
         print(f"ERROR: Expected None result on timeout, got {result}")
         failed += 1
     else:
-        print("✓ Returned None on timeout")
+        print("PASS: Returned None on timeout")
 
     return failed
 
@@ -357,13 +357,13 @@ def test_hainterface_async_call_service_error_limit(my_predbat=None):
         print("ERROR: Should log warning on error")
         failed += 1
     else:
-        print("✓ Warning logged on error")
+        print("PASS: Warning logged on error")
 
     if result is not None:
         print(f"ERROR: Expected None result on error, got {result}")
         failed += 1
     else:
-        print("✓ Returned None on error")
+        print("PASS: Returned None on error")
 
     return failed
 
@@ -479,7 +479,7 @@ def test_hainterface_set_state_external_config_item_switch(my_predbat=None):
             print(f"ERROR: Expected entity_id 'switch.test_switch'")
             failed += 1
         else:
-            print("✓ CONFIG_ITEMS switch handled correctly")
+            print("PASS: CONFIG_ITEMS switch handled correctly")
 
     return failed
 
@@ -518,7 +518,7 @@ def test_hainterface_set_state_external_config_item_number(my_predbat=None):
             print(f"ERROR: Expected value 42")
             failed += 1
         else:
-            print("✓ CONFIG_ITEMS input_number handled correctly")
+            print("PASS: CONFIG_ITEMS input_number handled correctly")
 
     return failed
 
@@ -557,7 +557,7 @@ def test_hainterface_set_state_external_config_item_select(my_predbat=None):
             print(f"ERROR: Expected option 'option2'")
             failed += 1
         else:
-            print("✓ CONFIG_ITEMS select handled correctly")
+            print("PASS: CONFIG_ITEMS select handled correctly")
 
     return failed
 
@@ -586,7 +586,7 @@ def test_hainterface_set_state_external_domain_switch(my_predbat=None):
             print(f"ERROR: Expected service 'turn_on'")
             failed += 1
         else:
-            print("✓ Domain-based switch handled correctly")
+            print("PASS: Domain-based switch handled correctly")
 
     return failed
 
@@ -618,7 +618,7 @@ def test_hainterface_set_state_external_domain_number(my_predbat=None):
             print(f"ERROR: Expected value 50")
             failed += 1
         else:
-            print("✓ Domain-based number handled correctly")
+            print("PASS: Domain-based number handled correctly")
 
     return failed
 
@@ -650,7 +650,7 @@ def test_hainterface_set_state_external_domain_select(my_predbat=None):
             print(f"ERROR: Expected option 'option1'")
             failed += 1
         else:
-            print("✓ Domain-based select handled correctly")
+            print("PASS: Domain-based select handled correctly")
 
     return failed
 
@@ -684,7 +684,7 @@ def test_hainterface_set_state_external_domain_input_datetime_time(my_predbat=No
             print("ERROR: Expected time '12:30:00'")
             failed += 1
         else:
-            print("✓ Domain-based input_datetime time handled correctly")
+            print("PASS: Domain-based input_datetime time handled correctly")
 
     return failed
 
@@ -722,7 +722,7 @@ def test_hainterface_set_state_external_domain_input_datetime_datetime(my_predba
             print("ERROR: Expected datetime payload")
             failed += 1
         else:
-            print("✓ input_datetime datetime payload handled correctly")
+            print("PASS: input_datetime datetime payload handled correctly")
 
     return failed
 
@@ -760,7 +760,7 @@ def test_hainterface_set_state_external_domain_input_datetime_date(my_predbat=No
             print("ERROR: Expected date payload")
             failed += 1
         else:
-            print("✓ input_datetime date payload handled correctly")
+            print("PASS: input_datetime date payload handled correctly")
 
     return failed
 
@@ -794,7 +794,7 @@ def test_hainterface_set_state_external_domain_input_text(my_predbat=None):
             print("ERROR: Expected value 'abc'")
             failed += 1
         else:
-            print("✓ Domain-based input_text handled correctly")
+            print("PASS: Domain-based input_text handled correctly")
 
     return failed
 
@@ -831,7 +831,7 @@ def test_hainterface_set_state_external_sensor(my_predbat=None):
             print(f"ERROR: Expected state 123, got {state}")
             failed += 1
         else:
-            print("✓ Sensor set_state called correctly")
+            print("PASS: Sensor set_state called correctly")
 
     ha_interface.set_state = original_set_state
     return failed
@@ -877,7 +877,7 @@ def test_hainterface_set_state_external_watch_list(my_predbat=None):
             print(f"ERROR: Expected new_state 200")
             failed += 1
         else:
-            print("✓ watch_list triggered on value change")
+            print("PASS: watch_list triggered on value change")
 
     return failed
 
@@ -910,7 +910,7 @@ def test_hainterface_set_state_external_no_change(my_predbat=None):
         print("ERROR: watch_list should not be triggered when value unchanged")
         failed += 1
     else:
-        print("✓ watch_list not triggered when value unchanged")
+        print("PASS: watch_list not triggered when value unchanged")
 
     return failed
 

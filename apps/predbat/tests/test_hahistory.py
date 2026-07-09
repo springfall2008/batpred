@@ -117,7 +117,7 @@ def test_hahistory_initialize(my_predbat=None):
         print("ERROR: history_entities should be empty after initialisation")
         failed += 1
     else:
-        print("✓ history_entities initialised correctly")
+        print("PASS: history_entities initialised correctly")
 
     if not isinstance(ha_history.history_data, dict):
         print("ERROR: history_data should be a dict")
@@ -126,7 +126,7 @@ def test_hahistory_initialize(my_predbat=None):
         print("ERROR: history_data should be empty after initialisation")
         failed += 1
     else:
-        print("✓ history_data initialised correctly")
+        print("PASS: history_data initialised correctly")
 
     return failed
 
@@ -146,7 +146,7 @@ def test_hahistory_add_entity(my_predbat=None):
         print("ERROR: Failed to add new entity with 30 days")
         failed += 1
     else:
-        print("✓ Added new entity with 30 days")
+        print("PASS: Added new entity with 30 days")
 
     # Test updating entity with fewer days (should not update)
     ha_history.add_entity("sensor.battery", 7)
@@ -154,7 +154,7 @@ def test_hahistory_add_entity(my_predbat=None):
         print("ERROR: Should not update entity to fewer days")
         failed += 1
     else:
-        print("✓ Correctly kept maximum days (30)")
+        print("PASS: Correctly kept maximum days (30)")
 
     # Test updating entity with more days (should update)
     ha_history.add_entity("sensor.battery", 60)
@@ -162,7 +162,7 @@ def test_hahistory_add_entity(my_predbat=None):
         print("ERROR: Failed to update entity to more days")
         failed += 1
     else:
-        print("✓ Updated entity to more days (60)")
+        print("PASS: Updated entity to more days (60)")
 
     # Test adding multiple entities
     ha_history.add_entity("sensor.solar", 14)
@@ -171,7 +171,7 @@ def test_hahistory_add_entity(my_predbat=None):
         print("ERROR: Should have 3 entities tracked")
         failed += 1
     else:
-        print("✓ Multiple entities tracked correctly")
+        print("PASS: Multiple entities tracked correctly")
 
     return failed
 
@@ -192,7 +192,7 @@ def test_hahistory_get_history_no_interface(my_predbat=None):
         print("ERROR: Should return None when no HAInterface")
         failed += 1
     else:
-        print("✓ Returned None when no HAInterface")
+        print("PASS: Returned None when no HAInterface")
 
     # Check for error log
     error_found = any("No HAInterface available" in msg for msg in mock_base.log_messages)
@@ -200,7 +200,7 @@ def test_hahistory_get_history_no_interface(my_predbat=None):
         print("ERROR: Should log error when no HAInterface")
         failed += 1
     else:
-        print("✓ Logged error when no HAInterface")
+        print("PASS: Logged error when no HAInterface")
 
     return failed
 
@@ -239,7 +239,7 @@ def test_hahistory_get_history_fetch_and_cache(my_predbat=None):
         print(f"ERROR: Expected {len(mock_history)} entries, got {len(result[0])}")
         failed += 1
     else:
-        print(f"✓ Fetched history with {len(result[0])} entries")
+        print(f"PASS: Fetched history with {len(result[0])} entries")
 
     # Verify entity was tracked
     if entity_id not in ha_history.history_entities:
@@ -249,14 +249,14 @@ def test_hahistory_get_history_fetch_and_cache(my_predbat=None):
         print("ERROR: Entity should be tracked with 30 days")
         failed += 1
     else:
-        print("✓ Entity tracked correctly")
+        print("PASS: Entity tracked correctly")
 
     # Verify data was cached
     if entity_id not in ha_history.history_data:
         print("ERROR: History should be cached")
         failed += 1
     else:
-        print("✓ History cached correctly")
+        print("PASS: History cached correctly")
 
     # Test 2: Get from cache (should not call HAInterface again)
     initial_call_count = len(mock_ha.get_history_calls)
@@ -266,7 +266,7 @@ def test_hahistory_get_history_fetch_and_cache(my_predbat=None):
         print("ERROR: Should use cache, not call HAInterface again")
         failed += 1
     else:
-        print("✓ Used cache instead of fetching again")
+        print("PASS: Used cache instead of fetching again")
 
     # Test 3: Request more days (should fetch again)
     result3 = ha_history.get_history(entity_id, days=60, tracked=True)
@@ -274,14 +274,14 @@ def test_hahistory_get_history_fetch_and_cache(my_predbat=None):
         print("ERROR: Should fetch when requesting more days")
         failed += 1
     else:
-        print("✓ Fetched when requesting more days")
+        print("PASS: Fetched when requesting more days")
 
     # Verify entity tracking was updated
     if ha_history.history_entities[entity_id] != 60:
         print("ERROR: Entity tracking should be updated to 60 days")
         failed += 1
     else:
-        print("✓ Entity tracking updated to 60 days")
+        print("PASS: Entity tracking updated to 60 days")
 
     # Test 4: Request more days again - cache should have them populated
     result4 = ha_history.get_history(entity_id, days=60, tracked=True)
@@ -289,14 +289,14 @@ def test_hahistory_get_history_fetch_and_cache(my_predbat=None):
         print("ERROR: Cache did not correctly return 60 days")
         failed += 1
     else:
-        print("✓ Cache correctly populated with longer history")
+        print("PASS: Cache correctly populated with longer history")
 
     sorted_result4 = sorted(result4[0], key=lambda x: x["last_updated"])
     if sorted_result4 != result4[0]:
         print("ERROR: Cache population did not correctly order entries when adding longer history")
         failed += 1
     else:
-        print("✓ Cache order correct after adding longer history")
+        print("PASS: Cache order correct after adding longer history")
 
     return failed
 
@@ -325,21 +325,21 @@ def test_hahistory_get_history_untracked(my_predbat=None):
         print("ERROR: Should return history data")
         failed += 1
     else:
-        print("✓ Fetched untracked history")
+        print("PASS: Fetched untracked history")
 
     # Verify entity was NOT tracked
     if entity_id in ha_history.history_entities:
         print("ERROR: Entity should not be tracked when tracked=False")
         failed += 1
     else:
-        print("✓ Entity not tracked correctly")
+        print("PASS: Entity not tracked correctly")
 
     # Verify data was NOT cached
     if entity_id in ha_history.history_data:
         print("ERROR: History should not be cached when tracked=False")
         failed += 1
     else:
-        print("✓ History not cached correctly")
+        print("PASS: History not cached correctly")
 
     return failed
 
@@ -376,14 +376,14 @@ def test_hahistory_expand_from_7_to_30_days(my_predbat=None):
         print(f"ERROR: Expected {length_7_days} entries for 7 days, got {len(result_7[0])}")
         failed += 1
     else:
-        print(f"✓ Fetched and cached 7 days ({len(result_7[0])} entries)")
+        print(f"PASS: Fetched and cached 7 days ({len(result_7[0])} entries)")
 
     # Verify entity is tracked with 7 days
     if ha_history.history_entities.get(entity_id) != 7:
         print(f"ERROR: Entity should be tracked with 7 days, but has {ha_history.history_entities.get(entity_id)}")
         failed += 1
     else:
-        print("✓ Entity tracked with 7 days")
+        print("PASS: Entity tracked with 7 days")
 
     # Step 2: Now request 30 days (more than cached)
     print("\n  Step 2: Requesting 30 days (more than cached 7 days)...")
@@ -395,7 +395,7 @@ def test_hahistory_expand_from_7_to_30_days(my_predbat=None):
         print("ERROR: Should fetch from HAInterface when requesting more days than cached")
         failed += 1
     else:
-        print("✓ Correctly triggered new fetch from HAInterface")
+        print("PASS: Correctly triggered new fetch from HAInterface")
 
     # Verify we got the FULL 30 days, not just 7
     if result_30 is None:
@@ -406,14 +406,14 @@ def test_hahistory_expand_from_7_to_30_days(my_predbat=None):
         print(f"       This suggests only {len(result_30[0]) / FIVE_MINUTE_ENTRIES_PER_DAY:.1f} days were returned")
         failed += 1
     else:
-        print(f"✓ Correctly returned FULL 30 days of history ({len(result_30[0])} entries)")
+        print(f"PASS: Correctly returned FULL 30 days of history ({len(result_30[0])} entries)")
 
     # Verify entity tracking was updated to 30 days
     if ha_history.history_entities.get(entity_id) != 30:
         print(f"ERROR: Entity should be tracked with 30 days, but has {ha_history.history_entities.get(entity_id)}")
         failed += 1
     else:
-        print("✓ Entity tracking updated to 30 days")
+        print("PASS: Entity tracking updated to 30 days")
 
     # Verify the last fetch call requested 30 days
     last_call = mock_ha.get_history_calls[-1]
@@ -421,7 +421,7 @@ def test_hahistory_expand_from_7_to_30_days(my_predbat=None):
         print(f"ERROR: Last fetch should have requested 30 days, but requested {last_call['days']}")
         failed += 1
     else:
-        print("✓ Fetch correctly requested 30 days from backend")
+        print("PASS: Fetch correctly requested 30 days from backend")
 
     # Step 3: Request 30 days again - should use cache now
     print("\n  Step 3: Requesting 30 days again (should use cache)...")
@@ -432,13 +432,13 @@ def test_hahistory_expand_from_7_to_30_days(my_predbat=None):
         print("ERROR: Should use cache when requesting same or fewer days")
         failed += 1
     else:
-        print("✓ Correctly used cache for subsequent request")
+        print("PASS: Correctly used cache for subsequent request")
 
     if len(result_30_again[0]) != length_30_days:
         print(f"ERROR: Cached result should still have {length_30_days} entries, got {len(result_30_again[0])}")
         failed += 1
     else:
-        print("✓ Cache correctly returns full 30 days")
+        print("PASS: Cache correctly returns full 30 days")
 
     return failed
 
@@ -516,7 +516,7 @@ def test_hahistory_update_entity_filter_attributes(my_predbat=None):
             failed += 1
 
         if failed == 0:
-            print("✓ Attributes filtered correctly")
+            print("PASS: Attributes filtered correctly")
 
     return failed
 
@@ -547,7 +547,7 @@ def test_hahistory_update_entity_merge_new(my_predbat=None):
         print(f"ERROR: Should have 3 initial entries, got {initial_count}")
         failed += 1
     else:
-        print("✓ Initial history loaded correctly")
+        print("PASS: Initial history loaded correctly")
 
     # New history with overlapping and new entries
     new_history = [
@@ -563,7 +563,7 @@ def test_hahistory_update_entity_merge_new(my_predbat=None):
         print(f"ERROR: Should have 5 entries after merge (3 old + 2 new), got {final_count}")
         failed += 1
     else:
-        print("✓ New entries merged correctly")
+        print("PASS: New entries merged correctly")
 
     # Verify ordering (oldest to newest) - numeric states come back as floats from the columnar store
     states = [entry["state"] for entry in ha_history.history_data[entity_id]]
@@ -572,7 +572,7 @@ def test_hahistory_update_entity_merge_new(my_predbat=None):
         print(f"ERROR: Expected states {expected_states}, got {states}")
         failed += 1
     else:
-        print("✓ History maintained correct order")
+        print("PASS: History maintained correct order")
 
     return failed
 
@@ -613,14 +613,14 @@ def test_hahistory_prune_history(my_predbat=None):
             break
 
     if failed == 0:
-        print("✓ All entries within 30-day window")
+        print("PASS: All entries within 30-day window")
 
     # Verify some entries were removed
     if final_count >= initial_count:
         print("ERROR: Expected entries to be removed")
         failed += 1
     else:
-        print(f"✓ Pruned {initial_count - final_count} old entries")
+        print(f"PASS: Pruned {initial_count - final_count} old entries")
 
     return failed
 
@@ -643,7 +643,7 @@ def test_hahistory_prune_empty_history(my_predbat=None):
     # Should not crash with empty history
     try:
         ha_history.prune_history(now)
-        print("✓ Handled empty history without error")
+        print("PASS: Handled empty history without error")
     except Exception as e:
         print(f"ERROR: Exception with empty history: {e}")
         failed += 1
@@ -684,21 +684,21 @@ def test_hahistory_run_first_call(my_predbat=None):
             print("ERROR: Should log startup message")
             return 1
         else:
-            print("✓ Logged startup message")
+            print("PASS: Logged startup message")
 
         # Verify history was fetched for tracked entity
         if len(mock_ha.get_history_calls) == 0:
             print("ERROR: Should fetch history on first run")
             return 1
         else:
-            print(f"✓ Fetched history for {len(mock_ha.get_history_calls)} entity(ies)")
+            print(f"PASS: Fetched history for {len(mock_ha.get_history_calls)} entity(ies)")
 
         # Verify history was cached
         if entity_id not in ha_history.history_data:
             print("ERROR: History should be cached")
             return 1
         else:
-            print("✓ History cached correctly")
+            print("PASS: History cached correctly")
 
         return 0
 
@@ -729,7 +729,7 @@ def test_hahistory_run_no_ha_interface(my_predbat=None):
             print("ERROR: Should log error when no HAInterface")
             return 1
         else:
-            print("✓ Returned False and logged error")
+            print("PASS: Returned False and logged error")
 
         return 0
 
@@ -776,7 +776,7 @@ def test_hahistory_run_periodic_update(my_predbat=None):
             print("ERROR: Should fetch history at 2-minute interval")
             return 1
         else:
-            print("✓ Fetched history at 2-minute interval")
+            print("PASS: Fetched history at 2-minute interval")
 
         # Verify incremental fetch (with from_time)
         last_call = mock_ha.get_history_calls[-1]
@@ -784,7 +784,7 @@ def test_hahistory_run_periodic_update(my_predbat=None):
             print("ERROR: Should use from_time for incremental fetch")
             return 1
         else:
-            print("✓ Used incremental fetch with from_time")
+            print("PASS: Used incremental fetch with from_time")
 
         return 0
 
@@ -829,7 +829,7 @@ def test_hahistory_run_hourly_prune(my_predbat=None):
             print("ERROR: Should log pruning message")
             return 1
         else:
-            print("✓ Logged pruning message")
+            print("PASS: Logged pruning message")
 
         # Verify entries were pruned
         final_count = len(ha_history.history_data[entity_id])
@@ -837,7 +837,7 @@ def test_hahistory_run_hourly_prune(my_predbat=None):
             print("ERROR: Expected entries to be pruned")
             return 1
         else:
-            print(f"✓ Pruned {initial_count - final_count} entries")
+            print(f"PASS: Pruned {initial_count - final_count} entries")
 
         return 0
 
@@ -875,7 +875,7 @@ def test_hahistory_run_no_update_timing(my_predbat=None):
             print("ERROR: Should not fetch history at 60 seconds")
             return 1
         else:
-            print("✓ Correctly skipped update at non-trigger time")
+            print("PASS: Correctly skipped update at non-trigger time")
 
         return 0
 
@@ -904,7 +904,7 @@ def test_entity_history_store(my_predbat=None):
         print(f"ERROR: Expected 5 records in store, got {len(store)}")
         failed += 1
     else:
-        print("✓ Store holds all records")
+        print("PASS: Store holds all records")
 
     # Test 2: round-trip states - numeric become floats, non-numeric preserved exactly
     output = store.to_records()
@@ -914,7 +914,7 @@ def test_entity_history_store(my_predbat=None):
         print(f"ERROR: Expected states {expected}, got {states}")
         failed += 1
     else:
-        print("✓ States round-trip correctly (numeric as float, non-numeric preserved)")
+        print("PASS: States round-trip correctly (numeric as float, non-numeric preserved)")
 
     # Test 3: round-trip timestamps parse back to the same instant
     times_in = [str2time(entry["last_updated"]) for entry in records]
@@ -923,7 +923,7 @@ def test_entity_history_store(my_predbat=None):
         print(f"ERROR: Timestamps did not round-trip, in {times_in} out {times_out}")
         failed += 1
     else:
-        print("✓ Timestamps round-trip to the same instant")
+        print("PASS: Timestamps round-trip to the same instant")
 
     # Test 4: attribute exceptions are preserved, shared attributes for the rest
     if output[2]["attributes"] != {"special": True}:
@@ -933,7 +933,7 @@ def test_entity_history_store(my_predbat=None):
         print(f"ERROR: Expected empty shared attributes, got {output[0]['attributes']} and {output[4]['attributes']}")
         failed += 1
     else:
-        print("✓ Attribute exceptions preserved, shared attributes returned for the rest")
+        print("PASS: Attribute exceptions preserved, shared attributes returned for the rest")
 
     # Test 5: mutation of materialised records does not corrupt the store
     output[0]["state"] = "corrupted"
@@ -943,14 +943,14 @@ def test_entity_history_store(my_predbat=None):
         print(f"ERROR: Store was corrupted by mutating materialised records: {fresh[0]}")
         failed += 1
     else:
-        print("✓ Materialised records are safe to mutate")
+        print("PASS: Materialised records are safe to mutate")
 
     # Test 6: indexing (including negative) and iteration match to_records
     if store[0]["state"] != 10.5 or store[-1]["state"] != 30.0 or [entry["state"] for entry in store] != expected:
         print(f"ERROR: Indexing/iteration mismatch: first {store[0]} last {store[-1]}")
         failed += 1
     else:
-        print("✓ Indexing and iteration materialise records correctly")
+        print("PASS: Indexing and iteration materialise records correctly")
 
     # Test 7: prune drops older records and their exceptions
     store.prune((base_time + timedelta(minutes=12)).timestamp())
@@ -965,7 +965,7 @@ def test_entity_history_store(my_predbat=None):
         print(f"ERROR: Prune left stale attribute exceptions: {store.attribute_exceptions}")
         failed += 1
     else:
-        print("✓ Prune drops old records and stale exceptions")
+        print("PASS: Prune drops old records and stale exceptions")
 
     # Test 8: records without a valid last_updated are not stored
     bad_store = EntityHistory.from_records([{"state": "1"}, {"state": "2", "last_updated": "junk"}, {"state": "3", "last_updated": base_time.isoformat()}])
@@ -973,7 +973,7 @@ def test_entity_history_store(my_predbat=None):
         print(f"ERROR: Expected 1 valid record stored, got {len(bad_store)}")
         failed += 1
     else:
-        print("✓ Records without a valid last_updated are dropped")
+        print("PASS: Records without a valid last_updated are dropped")
 
     return failed
 

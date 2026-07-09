@@ -153,7 +153,7 @@ def test_fetch_config_options(my_predbat):
     assert my_predbat.iboost_max_power == 0.05, "iboost_max_power should be 0.05 (3000 / 60000)"
     assert abs(my_predbat.iboost_min_power - 0.00833) < 0.001, "iboost_min_power should be ~0.00833 (500 / 60000)"
 
-    print("✓ Basic configuration test passed")
+    print("PASS: Basic configuration test passed")
 
     # Test 2: Axle control enabled with active event
     print("\n*** Test 2: Axle control enabled with active event ***")
@@ -170,7 +170,7 @@ def test_fetch_config_options(my_predbat):
     assert my_predbat.set_read_only == True, "set_read_only should be True when Axle event is active"
     assert my_predbat.set_read_only_axle == True, "set_read_only_axle should be True when Axle event is active"
 
-    print("✓ Axle control with active event test passed")
+    print("PASS: Axle control with active event test passed")
 
     # Test 3: Axle control enabled but no active event
     print("\n*** Test 3: Axle control enabled but no active event ***")
@@ -184,7 +184,7 @@ def test_fetch_config_options(my_predbat):
     assert my_predbat.set_read_only == False, "set_read_only should be False when no Axle event is active"
     assert my_predbat.set_read_only_axle == False, "set_read_only_axle should be False when no Axle event is active"
 
-    print("✓ Axle control with no active event test passed")
+    print("PASS: Axle control with no active event test passed")
 
     # Test 4: Manual read-only mode (overrides Axle)
     print("\n*** Test 4: Manual read-only mode (overrides Axle) ***")
@@ -200,7 +200,7 @@ def test_fetch_config_options(my_predbat):
     assert my_predbat.set_read_only == True, "set_read_only should be True from manual setting"
     assert my_predbat.set_read_only_axle == False, "set_read_only_axle should be False when manual read-only is set"
 
-    print("✓ Manual read-only mode test passed")
+    print("PASS: Manual read-only mode test passed")
 
     # Test 5: Monitor mode configuration
     print("\n*** Test 5: Monitor mode configuration ***")
@@ -220,7 +220,7 @@ def test_fetch_config_options(my_predbat):
     assert my_predbat.set_export_window == False, "set_export_window should be False in Monitor mode"
     assert my_predbat.set_soc_enable == False, "set_soc_enable should be False in Monitor mode"
 
-    print("✓ Monitor mode configuration test passed")
+    print("PASS: Monitor mode configuration test passed")
 
     # Test 6: Control SOC only mode
     print("\n*** Test 6: Control SOC only mode ***")
@@ -236,7 +236,7 @@ def test_fetch_config_options(my_predbat):
     assert my_predbat.set_export_window == False, "set_export_window should be False"
     assert my_predbat.set_soc_enable == True, "set_soc_enable should be True"
 
-    print("✓ Control SOC only mode test passed")
+    print("PASS: Control SOC only mode test passed")
 
     # Test 7: Control charge mode
     print("\n*** Test 7: Control charge mode ***")
@@ -252,7 +252,7 @@ def test_fetch_config_options(my_predbat):
     assert my_predbat.set_export_window == False, "set_export_window should be False"
     assert my_predbat.set_soc_enable == True, "set_soc_enable should be True"
 
-    print("✓ Control charge mode test passed")
+    print("PASS: Control charge mode test passed")
 
     # Test 8: Control charge & discharge mode
     print("\n*** Test 8: Control charge & discharge mode ***")
@@ -268,7 +268,7 @@ def test_fetch_config_options(my_predbat):
     assert my_predbat.set_export_window == True, "set_export_window should be True"
     assert my_predbat.set_soc_enable == True, "set_soc_enable should be True"
 
-    print("✓ Control charge & discharge mode test passed")
+    print("PASS: Control charge & discharge mode test passed")
 
     # Test 9: Invalid mode defaults to Monitor
     print("\n*** Test 9: Invalid mode defaults to Monitor ***")
@@ -281,7 +281,7 @@ def test_fetch_config_options(my_predbat):
     assert my_predbat.calculate_best_charge == False, "calculate_best_charge should be False for invalid mode"
     assert my_predbat.set_soc_enable == False, "set_soc_enable should be False for invalid mode"
 
-    print("✓ Invalid mode defaults to Monitor test passed")
+    print("PASS: Invalid mode defaults to Monitor test passed")
 
     # Test 10: Holiday mode override
     print("\n*** Test 10: Holiday mode configuration ***")
@@ -297,7 +297,7 @@ def test_fetch_config_options(my_predbat):
     assert my_predbat.days_previous == [1], "days_previous should be [1] in holiday mode"
     assert my_predbat.max_days_previous == 2, "max_days_previous should be 2 (1 + 1) in holiday mode"
 
-    print("✓ Holiday mode configuration test passed")
+    print("PASS: Holiday mode configuration test passed")
 
     # Test 11: Forecast calculations
     print("\n*** Test 11: Forecast calculations ***")
@@ -312,7 +312,7 @@ def test_fetch_config_options(my_predbat):
     assert my_predbat.forecast_days == 2, "forecast_days should be 2 for 25 hours"
     assert my_predbat.forecast_minutes == 25 * 60, "forecast_minutes should be 1500"
 
-    print("✓ Forecast calculations test passed")
+    print("PASS: Forecast calculations test passed")
 
     # Test 12: LoadML should not modify the in-day adjustment config setting
     print("\n*** Test 12: LoadML does not change in-day adjustment config setting ***")
@@ -327,7 +327,7 @@ def test_fetch_config_options(my_predbat):
     assert my_predbat.calculate_inday_adjustment is True, "calculate_inday_adjustment config should remain unchanged"
     assert ("calculate_inday_adjustment", False) not in exposed_config_calls, "calculate_inday_adjustment should not be force-updated in config"
 
-    print("✓ LoadML config-preservation test passed")
+    print("PASS: LoadML config-preservation test passed")
 
     # Restore original methods
     my_predbat.get_arg = original_get_arg

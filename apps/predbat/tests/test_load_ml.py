@@ -1913,7 +1913,7 @@ def _test_component_fetch_load_data():
         assert result_age == 28, f"Expected 28 days, got {result_age}"
         assert len(result_data) > 0, "Load data should not be empty"
         assert result_now >= 0, f"Current load should be non-negative, got {result_now}"
-        print("    ✓ Basic fetch successful")
+        print("    PASS: Basic fetch successful")
 
     # Test 2: Missing sensor (should return None)
     async def test_missing_sensor():
@@ -1949,7 +1949,7 @@ def _test_component_fetch_load_data():
         assert result_data is None, "Should return None when sensor missing"
         assert result_age == 0, "Age should be 0 when sensor missing"
         assert result_now == 0, "Current load should be 0 when sensor missing"
-        print("    ✓ Missing sensor handled correctly")
+        print("    PASS: Missing sensor handled correctly")
 
     # Test 3: Car charging subtraction
     async def test_car_charging_subtraction():
@@ -2031,7 +2031,7 @@ def _test_component_fetch_load_data():
             expected = 0.7  # One step of (1.0 - 0.3) in per-step format
             assert abs(value_1435 - expected) < 0.01, f"At minute 1435, expected ~{expected} kWh, got {value_1435:.4f}"
 
-        print("    ✓ Car charging subtraction works")
+        print("    PASS: Car charging subtraction works")
 
     # Test 3b: Car charging threshold-based detection (without sensor)
     async def test_car_charging_threshold_detection():
@@ -2130,7 +2130,7 @@ def _test_component_fetch_load_data():
             expected = 0.375  # Car detected, subtract estimate
             assert abs(value_1420 - expected) < 0.01, f"At minute 1420 (high load again), expected ~{expected} kWh, got {value_1420:.4f}"
 
-        print("    ✓ Car charging threshold detection works")
+        print("    PASS: Car charging threshold detection works")
 
     # Test 4: Load power fill
     async def test_load_power_fill():
@@ -2171,7 +2171,7 @@ def _test_component_fetch_load_data():
         assert result_data is not None, "Should return load data"
         assert mock_base_with_power.fill_load_from_power.called, "fill_load_from_power should be called"
         assert result_now >= 0, f"Current load should be non-negative, got {result_now}"
-        print("    ✓ Load power fill invoked")
+        print("    PASS: Load power fill invoked")
 
     # Test 5: Exception handling
     async def test_exception_handling():
@@ -2194,7 +2194,7 @@ def _test_component_fetch_load_data():
         assert result_data is None, "Should return None on exception"
         assert result_age == 0, "Age should be 0 on exception"
         assert result_now == 0, "Current load should be 0 on exception"
-        print("    ✓ Exception handling works")
+        print("    PASS: Exception handling works")
 
     # Test 6: Empty load data
     async def test_empty_load_data():
@@ -2218,7 +2218,7 @@ def _test_component_fetch_load_data():
         assert result_data is None, "Should return None when load data is empty"
         assert result_age == 0, "Age should be 0 when load data is empty"
         assert result_now == 0, "Current load should be 0 when load data is empty"
-        print("    ✓ Empty load data handled correctly")
+        print("    PASS: Empty load data handled correctly")
 
     # Test 7: Temperature data fetch with future predictions only
     async def test_temperature_data_fetch():
@@ -2275,7 +2275,7 @@ def _test_component_fetch_load_data():
         # Verify get_state_wrapper was called correctly
         assert mock_base_with_temp.get_state_wrapper.called, "get_state_wrapper should be called"
 
-        print("    ✓ Temperature data fetch (future predictions) works")
+        print("    PASS: Temperature data fetch (future predictions) works")
 
     # Test 8: Temperature data with no predictions (None return)
     async def test_temperature_no_data():
@@ -2305,7 +2305,7 @@ def _test_component_fetch_load_data():
         assert isinstance(result_temp, dict), "Temperature data should be a dict"
         assert len(result_temp) == 0, "Temperature data should be empty when no predictions available"
 
-        print("    ✓ Temperature data with no predictions handled correctly")
+        print("    PASS: Temperature data with no predictions handled correctly")
 
     # Test 9: Step-size calculation correctness (bug #3384 regression test)
     async def test_step_size_calculation():
@@ -2400,7 +2400,7 @@ def _test_component_fetch_load_data():
         # Verify current load is reasonable (not near-zero)
         assert result_now > 0.05, f"Current load should be > 0.05 kWh (got {result_now:.4f}). Bug #3384 would cause near-zero."
 
-        print("    ✓ Step-size calculation correct (bug #3384 regression test passed)")
+        print("    PASS: Step-size calculation correct (bug #3384 regression test passed)")
 
     # Run all sub-tests
     print("  Running LoadMLComponent._fetch_load_data tests:")
@@ -2589,7 +2589,7 @@ def _test_component_publish_entity():
     assert attrs["icon"] == "mdi:chart-line", "icon should be 'mdi:chart-line'"
     assert attrs2["icon"] == "mdi:chart-line", "icon should be 'mdi:chart-line'"
 
-    print("    ✓ Entity published with correct attributes")
+    print("    PASS: Entity published with correct attributes")
 
     # Test 2: Empty predictions
     mock_base.dashboard_calls = []
@@ -2602,7 +2602,7 @@ def _test_component_publish_entity():
     assert call2["state"] == 0, "State should be 0 with empty predictions"
     assert call["attributes"]["results"] == {}, "results should be empty dict"
 
-    print("    ✓ Empty predictions handled correctly")
+    print("    PASS: Empty predictions handled correctly")
 
     print("  All _publish_entity tests passed!")
 

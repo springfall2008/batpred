@@ -123,13 +123,13 @@ def test_carbon(my_predbat=None):
         try:
             test_result = test_func(my_predbat)
             if test_result:
-                print(f"✗ FAILED: {test_name}")
+                print(f"FAIL: FAILED: {test_name}")
                 failed += 1
             else:
-                print(f"✓ PASSED: {test_name}")
+                print(f"PASS: PASSED: {test_name}")
                 passed += 1
         except Exception as e:
-            print(f"✗ EXCEPTION in {test_name}: {e}")
+            print(f"FAIL: EXCEPTION in {test_name}: {e}")
             import traceback
 
             traceback.print_exc()
@@ -156,23 +156,23 @@ def _test_carbon_initialization(my_predbat=None):
     api.automatic = True
 
     if api.postcode != "SW1A 1AA":
-        print("  ✗ ERROR: Postcode not set correctly")
+        print("  FAIL: ERROR: Postcode not set correctly")
         failed = 1
 
     if api.automatic != True:
-        print("  ✗ ERROR: Automatic flag not set correctly")
+        print("  FAIL: ERROR: Automatic flag not set correctly")
         failed = 1
 
     if api.failures_total != 0:
-        print("  ✗ ERROR: failures_total should be 0")
+        print("  FAIL: ERROR: failures_total should be 0")
         failed = 1
 
     if api.carbon_data_points != []:
-        print("  ✗ ERROR: carbon_data_points should be empty list")
+        print("  FAIL: ERROR: carbon_data_points should be empty list")
         failed = 1
 
     if not failed:
-        print("  ✓ CarbonAPI initialised correctly")
+        print("  PASS: CarbonAPI initialised correctly")
     return failed
 
 
@@ -211,7 +211,7 @@ def _test_fetch_carbon_data_success(my_predbat=None):
             print(f"ERROR: Expected intensity 265, got {first_point['intensity']}")
             return 1
 
-    print("  ✓ Carbon data fetched successfully")
+    print("  PASS: Carbon data fetched successfully")
     return failed
 
 
@@ -240,7 +240,7 @@ def _test_fetch_carbon_data_http_error(my_predbat=None):
             print(f"ERROR: Should not have collected data on HTTP error")
             return 1
 
-    print("  ✓ HTTP error handled correctly")
+    print("  PASS: HTTP error handled correctly")
     return 0
 
 
@@ -267,7 +267,7 @@ def _test_fetch_carbon_data_timeout(my_predbat=None):
             print(f"ERROR: Should not have collected data on timeout")
             return 1
 
-    print("  ✓ Timeout handled correctly")
+    print("  PASS: Timeout handled correctly")
     return 0
 
 
@@ -296,7 +296,7 @@ def _test_fetch_carbon_data_json_error(my_predbat=None):
             print(f"ERROR: Should not have collected data on JSON error")
             return 1
 
-    print("  ✓ JSON error handled correctly")
+    print("  PASS: JSON error handled correctly")
     return 0
 
 
@@ -326,7 +326,7 @@ def _test_fetch_carbon_data_empty(my_predbat=None):
             print("ERROR: Should log warning about empty data")
             return 1
 
-    print("  ✓ Empty data handled correctly")
+    print("  PASS: Empty data handled correctly")
     return 0
 
 
@@ -348,7 +348,7 @@ def _test_fetch_carbon_data_cache_skip(my_predbat=None):
             print(f"ERROR: Expected 0 API calls (cache), got {mock_session_class.call_count}")
             return 1
 
-    print("  ✓ Cache skip working correctly")
+    print("  PASS: Cache skip working correctly")
     return 0
 
 
@@ -379,7 +379,7 @@ def _test_fetch_carbon_data_cache_refresh(my_predbat=None):
             print("ERROR: Should have collected data after cache refresh")
             return 1
 
-    print("  ✓ Cache refresh working correctly")
+    print("  PASS: Cache refresh working correctly")
     return 0
 
 
@@ -434,7 +434,7 @@ def _test_publish_carbon_data_current(my_predbat=None):
             print("ERROR: Forecast attribute doesn't match data points")
             return 1
 
-    print("  ✓ Current intensity published correctly")
+    print("  PASS: Current intensity published correctly")
     return 0
 
 
@@ -484,7 +484,7 @@ def _test_publish_carbon_data_forecast(my_predbat=None):
             print(f"ERROR: Expected intensity=265, got {first_item['intensity']}")
             return 1
 
-    print("  ✓ Forecast attribute published correctly")
+    print("  PASS: Forecast attribute published correctly")
     return 0
 
 
@@ -514,7 +514,7 @@ def _test_publish_carbon_data_unknown(my_predbat=None):
             print(f"ERROR: Expected state 'unknown', got '{item['state']}'")
             return 1
 
-    print("  ✓ Unknown state handled correctly")
+    print("  PASS: Unknown state handled correctly")
     return 0
 
 
@@ -548,7 +548,7 @@ def _test_postcode_stripping(my_predbat=None):
                 print("ERROR: Stripped postcode 'BS16' not found in URL")
                 return 1
 
-    print("  ✓ Postcode stripping working correctly")
+    print("  PASS: Postcode stripping working correctly")
     return 0
 
 
@@ -591,7 +591,7 @@ def _test_multiple_date_fetches(my_predbat=None):
                 print(f"ERROR: Second call should contain date 2025-12-22")
                 return 1
 
-    print("  ✓ Multiple date fetches working correctly")
+    print("  PASS: Multiple date fetches working correctly")
     return 0
 
 
@@ -626,7 +626,7 @@ def _test_time_format_conversion(my_predbat=None):
             print(f"ERROR: Expected to to start with '2025-12-20T14:30:00', got '{point['to']}'")
             return 1
 
-    print("  ✓ Time format conversion working correctly")
+    print("  PASS: Time format conversion working correctly")
     return 0
 
 
@@ -668,7 +668,7 @@ def _test_timezone_handling(my_predbat=None):
             print(f"ERROR: Failed to parse stored time: {e}")
             return 1
 
-    print("  ✓ Timezone handling working correctly")
+    print("  PASS: Timezone handling working correctly")
     return 0
 
 
@@ -733,7 +733,7 @@ def _test_json_data_collection(my_predbat=None):
             print(f"ERROR: Missing expected intensities. Got: {intensities}")
             return 1
 
-    print("  ✓ Data collection from multiple dates working correctly")
+    print("  PASS: Data collection from multiple dates working correctly")
     return 0
 
 
@@ -769,7 +769,7 @@ def _test_failure_counter(my_predbat=None):
             print(f"ERROR: Expected failures_total=4 after timeout, got {failures_after_timeout}")
             return 1
 
-    print("  ✓ Failure counter working correctly")
+    print("  PASS: Failure counter working correctly")
     return 0
 
 
@@ -802,7 +802,7 @@ def _test_run_first_call(my_predbat=None):
             print(f"ERROR: Expected 2 API calls on first run, got {mock_session.get.call_count}")
             return 1
 
-    print("  ✓ First run calling fetch correctly")
+    print("  PASS: First run calling fetch correctly")
     return 0
 
 
@@ -834,7 +834,7 @@ def _test_run_15min_interval(my_predbat=None):
             print(f"ERROR: Expected 0 API calls at non-15-min interval, got {mock_session.get.call_count}")
             return 1
 
-    print("  ✓ 15-minute interval working correctly")
+    print("  PASS: 15-minute interval working correctly")
     return 0
 
 
@@ -878,5 +878,5 @@ def _test_automatic_config_flow(my_predbat=None):
             print("ERROR: carbon_intensity config should not be set when automatic=False")
             return 1
 
-    print("  ✓ Automatic config flow working correctly")
+    print("  PASS: Automatic config flow working correctly")
     return 0
