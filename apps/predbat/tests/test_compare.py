@@ -296,7 +296,7 @@ def test_compare(my_predbat):
     # Do NOT restore – replicate the old buggy code
 
     # Now run a second tariff with no config – value should still be 2.0 (bleed)
-    cmp.fetch_config({})  # empty config → no changes
+    cmp.fetch_config({})  # empty config -> no changes
 
     if pb.config_index["best_soc_min"]["value"] == 0.5:
         print("ERROR T10: expected to detect config bleed when restore is skipped")

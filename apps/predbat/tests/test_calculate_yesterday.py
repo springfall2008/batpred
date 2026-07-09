@@ -345,7 +345,7 @@ def _test_car_slot_subtraction(my_predbat, failed):
     in_car_slot returns 1.2 kW = 0.1 kWh per 5-min step).  The
     step_data_history mock returns FLAT_LOAD_KWH (0.1 kWh) for every step.
 
-    After the fix (kW → kWh/step conversion):
+    After the fix (kW -> kWh/step conversion):
       - Inside-slot steps: max(0.1 - 1.2 * 5/60, 0) = max(0.0, 0) = 0.0
       - Outside-slot steps: unchanged at FLAT_LOAD_KWH
 
@@ -360,7 +360,7 @@ def _test_car_slot_subtraction(my_predbat, failed):
     # calculate_yesterday will NOT re-run load_octopus_slots; it will use
     # whatever we put in car_charging_slots directly.
     my_predbat.num_cars = 1
-    # Slot: minute 60..180, 2.4 kWh total over 2 hours → 1.2 kW = 0.1 kWh/step
+    # Slot: minute 60..180, 2.4 kWh total over 2 hours -> 1.2 kW = 0.1 kWh/step
     car_slot = {"start": 60, "end": 180, "kwh": 2.4, "average": 20}
     my_predbat.car_charging_slots[0] = [car_slot]
     car_charging_slots_before = copy.deepcopy(my_predbat.car_charging_slots)
@@ -371,7 +371,7 @@ def _test_car_slot_subtraction(my_predbat, failed):
     my_predbat.car_charging_limit = [80.0, 100.0, 100.0, 100.0]
     car_charging_soc_before = list(my_predbat.car_charging_soc)
 
-    # octopus_intelligent_slot not configured → entity_id_list is empty
+    # octopus_intelligent_slot not configured -> entity_id_list is empty
     # so the re-load loop in calculate_yesterday is skipped
     my_predbat.args["octopus_intelligent_slot"] = None
 
@@ -445,7 +445,7 @@ def _test_car_slot_from_energy_sensor(my_predbat, failed):
     synthesise a slot for that window and subtract the corresponding kWh from the
     load step data before handing it to the Prediction.
 
-    Slot: start=60, end=90, kwh=1.5 → load rate = 1.5/0.5h = 3.0 kW
+    Slot: start=60, end=90, kwh=1.5 -> load rate = 1.5/0.5h = 3.0 kW
     Subtraction per 5-min step: 3.0 * 5/60 = 0.25 kWh > FLAT_LOAD_KWH (0.1)
     Expected inside-slot value: max(0.1 - 0.25, 0) = 0.0
 
@@ -466,7 +466,7 @@ def _test_car_slot_from_energy_sensor(my_predbat, failed):
     my_predbat.car_charging_limit = [80.0, 100.0, 100.0, 100.0]
     car_charging_soc_before = list(my_predbat.car_charging_soc)
 
-    # No octopus slot configured → entity_id_list is empty, octopus path skipped.
+    # No octopus slot configured -> entity_id_list is empty, octopus path skipped.
     my_predbat.args["octopus_intelligent_slot"] = None
     my_predbat.octopus_slots = [[], [], [], []]
     my_predbat.octopus_intelligent_consider_full = False
@@ -621,7 +621,7 @@ def _test_reconstruct_car_slots(my_predbat, failed):
             failed = True
         # With car_energy_reported_load=True, the slot kwh is capped to load_reported
         # * car_charging_loss.  load_reported = plan_iv/PREDICT_STEP * FLAT_LOAD_KWH
-        # = 6 * 0.1 = 0.6 kWh; car_charging_loss=1.0 → expected kwh = 0.6.
+        # = 6 * 0.1 = 0.6 kWh; car_charging_loss=1.0 -> expected kwh = 0.6.
         load_steps_in_slot = plan_iv // PREDICT_STEP
         expected_slot_kwh = load_steps_in_slot * FLAT_LOAD_KWH * my_predbat.car_charging_loss
         if abs(slot.get("kwh", -1) - expected_slot_kwh) > 1e-9:
@@ -632,7 +632,7 @@ def _test_reconstruct_car_slots(my_predbat, failed):
             failed = True
 
     # Steps inside the slot [60, 90) should be zeroed out.
-    # slot kwh adjusted to 0.6 → rate = 0.6/0.5h = 1.2 kW; 1.2*5/60 = 0.1 kWh/step = FLAT_LOAD_KWH → max(0.1-0.1,0)=0.0
+    # slot kwh adjusted to 0.6 -> rate = 0.6/0.5h = 1.2 kW; 1.2*5/60 = 0.1 kWh/step = FLAT_LOAD_KWH -> max(0.1-0.1,0)=0.0
     slot_end = 60 + my_predbat.plan_interval_minutes
     for inside_min in range(60, slot_end, PREDICT_STEP):
         val = yesterday_load_step.get(inside_min, -1)
@@ -739,9 +739,9 @@ def _test_reconstruct_car_slots(my_predbat, failed):
     my_predbat.car_charging_energy = {}
 
     plan_iv = my_predbat.plan_interval_minutes  # 30
-    # A slot claiming 3.0 kWh → kwh_drain = 3.0 kWh; needs load ≥ 0.3 kWh to survive.
-    # Provide only 0.01 kWh per step → load_reported = 6 * 0.01 = 0.06 kWh.
-    # 0.06 * 10 = 0.6 < 3.0 → slot should be cancelled (kwh set to 0).
+    # A slot claiming 3.0 kWh -> kwh_drain = 3.0 kWh; needs load ≥ 0.3 kWh to survive.
+    # Provide only 0.01 kWh per step -> load_reported = 6 * 0.01 = 0.06 kWh.
+    # 0.06 * 10 = 0.6 < 3.0 -> slot should be cancelled (kwh set to 0).
     TINY_LOAD = 0.01
     cancelled_slot = {"start": 60, "end": 60 + plan_iv, "kwh": 3.0, "octopus": True}
     my_predbat.car_charging_slots = [[cancelled_slot], [], [], []]
@@ -754,7 +754,7 @@ def _test_reconstruct_car_slots(my_predbat, failed):
         print("ERROR 5d: slot kwh should be 0 after cancellation, got {}".format(cancelled_slot.get("kwh")))
         failed = True
 
-    # Because kwh=0, subtract_amount=0 → load values should be completely unchanged.
+    # Because kwh=0, subtract_amount=0 -> load values should be completely unchanged.
     for m in range(60, 60 + plan_iv, PREDICT_STEP):
         val = yesterday_load_step_5d.get(m, -1)
         if abs(val - TINY_LOAD) > 1e-9:
@@ -776,8 +776,8 @@ def _test_reconstruct_car_slots(my_predbat, failed):
     my_predbat.car_charging_energy = {}
 
     plan_iv = my_predbat.plan_interval_minutes  # 30
-    # Slot claims 2.4 kWh → kwh_drain = 2.4; load = 6 * 0.2 = 1.2 kWh.
-    # 1.2 * 10 = 12.0 ≥ 2.4 → adjusted: slot["kwh"] = 1.2 * 1.0 = 1.2 kWh.
+    # Slot claims 2.4 kWh -> kwh_drain = 2.4; load = 6 * 0.2 = 1.2 kWh.
+    # 1.2 * 10 = 12.0 ≥ 2.4 -> adjusted: slot["kwh"] = 1.2 * 1.0 = 1.2 kWh.
     # Subtraction: 1.2 kWh / 0.5 h = 2.4 kW; 2.4 * 5/60 = 0.2 kWh/step.
     # After subtraction: max(0.2 - 0.2, 0) = 0.0 inside slot.
     MEDIUM_LOAD = 0.2
@@ -820,13 +820,13 @@ def _test_reconstruct_car_slots(my_predbat, failed):
     my_predbat.args["octopus_intelligent_slot"] = None
     my_predbat.car_charging_energy = {}
 
-    plan_iv = my_predbat.plan_interval_minutes  # 30 minutes → 6 steps
+    plan_iv = my_predbat.plan_interval_minutes  # 30 minutes -> 6 steps
     # Load: 0.2 kWh/step × 6 steps = 1.2 kWh total in the window.
-    # Car 0: kwh=0.6, kwh_drain=0.6 → load 1.2 ≥ 0.6 → no scaling.
-    #   subtract: 0.6/0.5h × 5/60 = 0.1 kWh/step → residual = 0.1 kWh/step.
-    # Car 1: kwh=0.9, kwh_drain=0.9 → load 6×0.1=0.6 < 0.9.
-    #   0.6×10=6.0 ≥ 0.9 → adjusted to 0.6 kWh.
-    #   subtract: 0.6/0.5h × 5/60 = 0.1 kWh/step → residual = 0.0.
+    # Car 0: kwh=0.6, kwh_drain=0.6 -> load 1.2 ≥ 0.6 -> no scaling.
+    #   subtract: 0.6/0.5h × 5/60 = 0.1 kWh/step -> residual = 0.1 kWh/step.
+    # Car 1: kwh=0.9, kwh_drain=0.9 -> load 6×0.1=0.6 < 0.9.
+    #   0.6×10=6.0 ≥ 0.9 -> adjusted to 0.6 kWh.
+    #   subtract: 0.6/0.5h × 5/60 = 0.1 kWh/step -> residual = 0.0.
     TWO_CAR_LOAD = 0.2
     slot_car0 = {"start": 60, "end": 60 + plan_iv, "kwh": 0.6, "octopus": True}
     slot_car1 = {"start": 60, "end": 60 + plan_iv, "kwh": 0.9, "octopus": True}
@@ -846,7 +846,7 @@ def _test_reconstruct_car_slots(my_predbat, failed):
         print("ERROR 5f: car 1 slot kwh should be {} after scaling, got {}".format(expected_car1_kwh, slot_car1.get("kwh")))
         failed = True
 
-    # Both cars have subtracted their full amounts → inside-slot load should be 0.
+    # Both cars have subtracted their full amounts -> inside-slot load should be 0.
     for m in range(60, 60 + plan_iv, PREDICT_STEP):
         val = yesterday_load_step_5f.get(m, -1)
         if abs(val) > 1e-9:
@@ -886,7 +886,7 @@ def _test_soc_not_mutated_and_override_passed(my_predbat, failed):
 
     # soc_yesterday is read from the HA entity prefix+".savings_total_soc".
     # No entity is registered in the test dummy store, so get_state_wrapper
-    # returns the default 0.0 → soc_yesterday == 0.0.
+    # returns the default 0.0 -> soc_yesterday == 0.0.
     expected_soc_yesterday = 0.0
 
     # Capture (base_soc_kw, prediction_soc_kw, prediction_soc_max) for each

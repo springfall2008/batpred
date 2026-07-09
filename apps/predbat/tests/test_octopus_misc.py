@@ -858,8 +858,8 @@ async def test_octopus_fetch_tariffs(my_predbat):
     else:
         print("PASS: All dashboard_item calls use app='octopus'")
 
-    # Test 7: Product info returns day/night links → async_get_day_night_rates is used
-    print("\n*** Test 7: Product info with day_unit_rates links → routes to async_get_day_night_rates ***")
+    # Test 7: Product info returns day/night links -> async_get_day_night_rates is used
+    print("\n*** Test 7: Product info with day_unit_rates links -> routes to async_get_day_night_rates ***")
     api7 = OctopusAPI(my_predbat, key="test-api-key-7", account_id="test-account-7", automatic=False)
 
     iog_tariff_code = "E-1R-IOG-SMB-TOU-25-12-12-H"
@@ -926,8 +926,8 @@ async def test_octopus_fetch_tariffs(my_predbat):
     else:
         print("PASS: Day/night rate data stored correctly in tariff")
 
-    # Test 8: INTELLI-FLUX-EXPORT 404s → fetches FLUX-IMPORT as fallback
-    print("\n*** Test 8: INTELLI-FLUX-EXPORT 404s → fetches FLUX-IMPORT as fallback ***")
+    # Test 8: INTELLI-FLUX-EXPORT 404s -> fetches FLUX-IMPORT as fallback
+    print("\n*** Test 8: INTELLI-FLUX-EXPORT 404s -> fetches FLUX-IMPORT as fallback ***")
     api8 = OctopusAPI(my_predbat, key="test-api-key-8", account_id="test-account-8", automatic=False)
 
     flux_export_product = "INTELLI-FLUX-EXPORT-23-07-14"
@@ -981,8 +981,8 @@ async def test_octopus_fetch_tariffs(my_predbat):
     else:
         print("PASS: FLUX-IMPORT URL constructed correctly with correct product and tariff codes")
 
-    # Test 9: INTELLI-FLUX-EXPORT 404s, FLUX-IMPORT also 404s → falls back to current import data
-    print("\n*** Test 9: FLUX-EXPORT and FLUX-IMPORT both fail → falls back to current import data ***")
+    # Test 9: INTELLI-FLUX-EXPORT 404s, FLUX-IMPORT also 404s -> falls back to current import data
+    print("\n*** Test 9: FLUX-EXPORT and FLUX-IMPORT both fail -> falls back to current import data ***")
     api9 = OctopusAPI(my_predbat, key="test-api-key-9", account_id="test-account-9", automatic=False)
 
     fix_import_rates = [{"valid_from": "2025-01-01T00:00:00Z", "valid_to": "2025-01-01T00:30:00Z", "value_inc_vat": 28.14}]
@@ -1888,7 +1888,7 @@ async def test_octopus_run(my_predbat):
     # Test 1: First run with no cache — all methods should be called
     print("\n*** Test 1: First run calls all expected methods ***")
     api = _mock_run_api(my_predbat, key="test-api-key", account_id="test-account")
-    # tariff_fetched_at and device_fetched_at are None → _data_age_minutes returns 9999
+    # tariff_fetched_at and device_fetched_at are None -> _data_age_minutes returns 9999
 
     result = await api.run(seconds=0, first=True)
 

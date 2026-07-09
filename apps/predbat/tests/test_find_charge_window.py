@@ -28,16 +28,16 @@ def test_find_charge_window(my_predbat):
     """
     Comprehensive tests for find_charge_window covering all code paths:
 
-      Path A - mixed rate exceeds combine_rate_threshold → window closed early
-      Path B - combine_export_slots=False hits export_slot_split → split
-      Path C - combine_charge_slots=False hits charge_slot_split → split
+      Path A - mixed rate exceeds combine_rate_threshold -> window closed early
+      Path B - combine_export_slots=False hits export_slot_split -> split
+      Path C - combine_charge_slots=False hits charge_slot_split -> split
       Path D - manual_all_times slot split at plan_interval_minutes
       Path E - alt_rates alternate_rate_boundary terminates export window;
                also 24-hour export cap
       Path F - window start (rate_low_start set for first time)
       Path G - window continuation and correct average calculation
-      Path H - rate outside threshold while window in progress → closes window
-      Path I - gap in rates while window in progress → closes window (regression
+      Path H - rate outside threshold while window in progress -> closes window
+      Path I - gap in rates while window in progress -> closes window (regression
                for previous break-too-early bug)
       Misc  - no qualifying rates, find_high=False, find_high=True, zero rate
                excluded for find_high, scan from non-zero minute, scan stops at
@@ -70,7 +70,7 @@ def test_find_charge_window(my_predbat):
     scan_end = my_predbat.forecast_minutes + my_predbat.minutes_now + 12 * 60
 
     # -----------------------------------------------------------------------
-    # Test: no rates → no window found
+    # Test: no rates -> no window found
     # -----------------------------------------------------------------------
     print("Test find_charge_window: empty rates dict returns no window")
     s, e, avg = my_predbat.find_charge_window({}, 0, thresh_lo, find_high=False)
@@ -80,7 +80,7 @@ def test_find_charge_window(my_predbat):
 
     # -----------------------------------------------------------------------
     # Test: simple charge window (find_high=False) — Path F + G
-    # Rates start at 0, low for 120 min, high after → window [0, 120]
+    # Rates start at 0, low for 120 min, high after -> window [0, 120]
     # -----------------------------------------------------------------------
     print("Test find_charge_window: simple charge window (find_high=False)")
     rates = {}
@@ -94,7 +94,7 @@ def test_find_charge_window(my_predbat):
 
     # -----------------------------------------------------------------------
     # Test: simple export window (find_high=True) — Path F + G
-    # Rates start at 0, high for 120 min, low after → window [0, 120]
+    # Rates start at 0, high for 120 min, low after -> window [0, 120]
     # -----------------------------------------------------------------------
     print("Test find_charge_window: simple export window (find_high=True)")
     rates2 = {}
@@ -118,7 +118,7 @@ def test_find_charge_window(my_predbat):
 
     # -----------------------------------------------------------------------
     # Test: rate goes ABOVE threshold while window in progress — Path H
-    # Low rates 0..59, high rate at 60.. → window closes at 60
+    # Low rates 0..59, high rate at 60.. -> window closes at 60
     # -----------------------------------------------------------------------
     print("Test find_charge_window: rate above threshold closes window (Path H)")
     rates_h = {}
@@ -133,7 +133,7 @@ def test_find_charge_window(my_predbat):
     # -----------------------------------------------------------------------
     # Test: Path A — combine_rate_threshold: second rate too different
     # Low rate 5 for 0..55, then rate 8 at 60 (diff = 3 > threshold 1.0)
-    # → window closes at 60 due to combine_rate_threshold
+    # -> window closes at 60 due to combine_rate_threshold
     # -----------------------------------------------------------------------
     print("Test find_charge_window: combine_rate_threshold closes mixed window (Path A)")
     my_predbat.combine_rate_threshold = 2.0   # allow up to 2p difference
@@ -149,7 +149,7 @@ def test_find_charge_window(my_predbat):
 
     # -----------------------------------------------------------------------
     # Test: Path C — combine_charge_slots=False splits charge at charge_slot_split
-    # Low rates from 0 to 120, charge_slot_split=30 → window [0, 30]
+    # Low rates from 0 to 120, charge_slot_split=30 -> window [0, 30]
     # -----------------------------------------------------------------------
     print("Test find_charge_window: combine_charge_slots=False splits slot (Path C)")
     my_predbat.combine_charge_slots = False
@@ -162,7 +162,7 @@ def test_find_charge_window(my_predbat):
 
     # -----------------------------------------------------------------------
     # Test: Path B — combine_export_slots=False splits export at export_slot_split
-    # High rates from 0 to 120, export_slot_split=30 → window [0, 30]
+    # High rates from 0 to 120, export_slot_split=30 -> window [0, 30]
     # -----------------------------------------------------------------------
     print("Test find_charge_window: combine_export_slots=False splits slot (Path B)")
     my_predbat.combine_export_slots = False
@@ -176,7 +176,7 @@ def test_find_charge_window(my_predbat):
     # -----------------------------------------------------------------------
     # Test: Path D — manual_all_times slot split at plan_interval_minutes
     # rate_low_start=0 is in manual_all_times; low rates from 0 to 120;
-    # plan_interval_minutes=30 → window closes at minute 30
+    # plan_interval_minutes=30 -> window closes at minute 30
     # -----------------------------------------------------------------------
     print("Test find_charge_window: manual_all_times split at plan_interval_minutes (Path D)")
     my_predbat.plan_interval_minutes = 30
@@ -190,14 +190,14 @@ def test_find_charge_window(my_predbat):
 
     # -----------------------------------------------------------------------
     # Test: Path E — alternate_rate_boundary splits export window
-    # find_high=True; alt_rates changes significantly between minutes 25→30;
+    # find_high=True; alt_rates changes significantly between minutes 25->30;
     # high export rates throughout; plan_interval_minutes=30;
-    # → export window should end at 30 (boundary reached after plan_interval)
+    # -> export window should end at 30 (boundary reached after plan_interval)
     # -----------------------------------------------------------------------
     print("Test find_charge_window: alternate_rate_boundary splits export window (Path E)")
     my_predbat.plan_interval_minutes = 30
     my_predbat.export_slot_split = 30
-    # alt_rates min=0, max=20 → alt_rate_threshold=2.0; jump of 10 qualifies
+    # alt_rates min=0, max=20 -> alt_rate_threshold=2.0; jump of 10 qualifies
     alt_rates_e = {}
     for m in range(0, 30, 5):
         alt_rates_e[m] = 0.0      # low alt rate
@@ -207,7 +207,7 @@ def test_find_charge_window(my_predbat):
     rates_e = {m: high_rate for m in range(0, scan_end, 5)}  # all qualify
 
     # Window starts at 0; alternate_rate_boundary is set at minute 30;
-    # at minute 30, (30 - 0) = 30 >= plan_interval_minutes=30 → break
+    # at minute 30, (30 - 0) = 30 >= plan_interval_minutes=30 -> break
     s, e, _ = my_predbat.find_charge_window(rates_e, 0, thresh_hi, find_high=True, alt_rates=alt_rates_e)
     failed |= _assert_window("path E alt rate boundary", s, e, _, 0, 30)
 
@@ -224,7 +224,7 @@ def test_find_charge_window(my_predbat):
 
     # -----------------------------------------------------------------------
     # Test: correct average over varying rates (Path G)
-    # Three rate bands: 4, 6, 8 each for 1 slot (5 min) → average = (4+6+8)/3 = 6
+    # Three rate bands: 4, 6, 8 each for 1 slot (5 min) -> average = (4+6+8)/3 = 6
     # Raise combine_rate_threshold so all three rates are combined into one window.
     # -----------------------------------------------------------------------
     print("Test find_charge_window: correct average calculation (Path G)")

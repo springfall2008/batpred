@@ -58,7 +58,7 @@ def _make_ensemble_response(times=None, members=None):
 
 def test_ensemble_returns_p10_values(my_predbat):
     """
-    download_open_meteo_ensemble_data should return a dict of ts→kW10
+    download_open_meteo_ensemble_data should return a dict of ts->kW10
     where each value is the 10th-percentile GTI across members, converted to kW.
     """
     print("  - test_ensemble_returns_p10_values")
@@ -133,7 +133,7 @@ def test_ensemble_empty_on_http_failure(my_predbat):
     test_api = create_test_solar_api()
     try:
         test_api.solar.open_meteo_forecast_max_age = 1.0
-        # No mock response registered → cache_get_url will return None
+        # No mock response registered -> cache_get_url will return None
 
         def create_mock_session(*args, **kwargs):
             return test_api.mock_aiohttp_session()
@@ -235,7 +235,7 @@ def test_download_open_meteo_data_temperature_derating(my_predbat):
         test_api.solar.open_meteo_forecast_max_age = 1.0
 
         # GTI=1000, T=45°C, wind=1.0 m/s: T_cell via SAPM model, eta = 1 - 0.004*(T_cell-25)
-        # pv50 = (1000/1000) * 4.0 * eta_temp  (same at both ends → trapz average equals point value)
+        # pv50 = (1000/1000) * 4.0 * eta_temp  (same at both ends -> trapz average equals point value)
         forecast_response = _make_forecast_response(times=["2025-06-15T12:00", "2025-06-15T13:00"], gti=[1000.0, 1000.0], temp=[45.0, 45.0], wind=[1.0, 1.0])
         ensemble_response = _make_ensemble_response(times=["2025-06-15T12:00", "2025-06-15T13:00"], members={"global_tilted_irradiance_member01": [900.0, 900.0]})
         test_api.set_mock_response("api.open-meteo.com", forecast_response)
@@ -273,7 +273,7 @@ def test_download_open_meteo_data_multi_config(my_predbat):
 
     test_api = create_test_solar_api()
     try:
-        # Two identical 2 kWp arrays → combined should be 4 kWp
+        # Two identical 2 kWp arrays -> combined should be 4 kWp
         test_api.solar.open_meteo_forecast = [
             {"latitude": 51.5, "longitude": -0.1, "declination": 35, "azimuth": 180, "kwp": 2.0, "efficiency": 1.0},
             {"latitude": 51.5, "longitude": -0.1, "declination": 35, "azimuth": 180, "kwp": 2.0, "efficiency": 1.0},
@@ -295,8 +295,8 @@ def test_download_open_meteo_data_multi_config(my_predbat):
             print(f"ERROR: max_kwh expected 4.0, got {max_kwh}")
             failed = True
 
-        # Each array: GTI=1000, T=25°C, wind=1.0 m/s → cell temp via SAPM, pv50 = (1000/1000)*2.0*eta
-        # Same at both ends → trapz average equals point value
+        # Each array: GTI=1000, T=25°C, wind=1.0 m/s -> cell temp via SAPM, pv50 = (1000/1000)*2.0*eta
+        # Same at both ends -> trapz average equals point value
         if sorted_data:
             pv50 = sorted_data[0].get("pv_estimate", 0)
             t_cell = pvwatts_cell_temperature(1000.0, 25.0, 1.0)
@@ -369,7 +369,7 @@ def test_download_open_meteo_data_cool_temp_efficiency(my_predbat):
         test_api.solar.open_meteo_forecast_max_age = 1.0
 
         # 10 degC ambient, 200 W/m2, 1 m/s wind: SAPM T_cell < 25 degC -> eta > 1.0
-        # Same at both ends → trapz average equals point value
+        # Same at both ends -> trapz average equals point value
         forecast_response = _make_forecast_response(times=["2025-04-15T12:00", "2025-04-15T13:00"], gti=[200.0, 200.0], temp=[10.0, 10.0], wind=[1.0, 1.0])
         ensemble_response = _make_ensemble_response(times=["2025-04-15T12:00", "2025-04-15T13:00"], members={"global_tilted_irradiance_member01": [150.0, 150.0]})
         test_api.set_mock_response("api.open-meteo.com", forecast_response)
@@ -456,8 +456,8 @@ def test_download_open_meteo_data_two_aspect_configs(my_predbat):
 
     test_api = create_test_solar_api()
     try:
-        # Array 1: WSW-facing, shallow tilt  (az -133 Solcast → convert_azimuth → -47 OM)
-        # Array 2: NW-facing, steep tilt     (az +45 Solcast  → convert_azimuth → 135 OM)
+        # Array 1: WSW-facing, shallow tilt  (az -133 Solcast -> convert_azimuth -> -47 OM)
+        # Array 2: NW-facing, steep tilt     (az +45 Solcast  -> convert_azimuth -> 135 OM)
         test_api.solar.open_meteo_forecast = [
             {"latitude": 51.49, "longitude": -2.49, "declination": 23.0, "azimuth": -133.0, "kwp": 1.56, "efficiency": 1.0},
             {"latitude": 51.49, "longitude": -2.49, "declination": 45.0, "azimuth": 45.0, "kwp": 2.73, "efficiency": 1.0},
@@ -465,7 +465,7 @@ def test_download_open_meteo_data_two_aspect_configs(my_predbat):
         test_api.solar.open_meteo_forecast_max_age = 1.0
 
         times = ["2025-06-15T12:00", "2025-06-15T13:00"]
-        # Array 1 (WSW): 400 W/m²   Array 2 (NW): 200 W/m²  (same at both ends → trapz average = point value)
+        # Array 1 (WSW): 400 W/m²   Array 2 (NW): 200 W/m²  (same at both ends -> trapz average = point value)
         forecast_wsw = {"hourly": {"time": times, "global_tilted_irradiance": [400.0, 400.0], "temperature_2m": [25.0, 25.0], "wind_speed_10m": [1.0, 1.0]}}
         forecast_nw = {"hourly": {"time": times, "global_tilted_irradiance": [200.0, 200.0], "temperature_2m": [25.0, 25.0], "wind_speed_10m": [1.0, 1.0]}}
         ensemble_wsw = {"hourly": {"time": times, "global_tilted_irradiance_member01": [320.0, 320.0]}}
@@ -542,7 +542,7 @@ def test_download_open_meteo_data_http_failure(my_predbat):
     try:
         test_api.solar.open_meteo_forecast = [{"latitude": 51.5, "longitude": -0.1, "declination": 35, "azimuth": 180, "kwp": 3.0, "efficiency": 0.86}]
         test_api.solar.open_meteo_forecast_max_age = 1.0
-        # No mocks set → cache_get_url returns None
+        # No mocks set -> cache_get_url returns None
 
         def create_mock_session(*args, **kwargs):
             return test_api.mock_aiohttp_session()
@@ -714,7 +714,7 @@ def test_download_open_meteo_data_azimuth_zero_south(my_predbat):
         test_api.cleanup()
 
     # --- Case 2: azimuth_zero_south=False (default), azimuth=0 (North in Predbat convention) ---
-    # convert_azimuth(0) → 180; URL should contain azimuth=180
+    # convert_azimuth(0) -> 180; URL should contain azimuth=180
     test_api = create_test_solar_api()
     try:
         test_api.solar.open_meteo_forecast = [{"latitude": 51.5, "longitude": -0.1, "declination": 35, "azimuth": 0, "kwp": 3.0, "efficiency": 1.0}]
