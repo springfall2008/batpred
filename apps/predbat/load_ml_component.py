@@ -22,6 +22,7 @@ every 30 minutes.
 import asyncio
 import os
 from datetime import datetime, timezone, timedelta
+import math
 from component_base import ComponentBase
 from utils import get_now_from_cumulative, dp2, dp4, minute_data
 from load_predictor import LoadPredictor, MODEL_VERSION
@@ -1054,9 +1055,21 @@ class LoadMLComponent(ComponentBase):
             },
             app="load_ml",
         )
+
+        def safe_float(v):
+            if v is None:
+                return None
+            try:
+                v = float(v)
+                if math.isnan(v) or math.isinf(v):
+                    return None
+                return round(v, 4)
+            except (ValueError, TypeError):
+                return None
+
         self.dashboard_item(
             "sensor." + self.prefix + "_load_ml_stats",
-            state=round(total_kwh, 2),
+            state=safe_float(round(total_kwh, 2)),
             attributes={
                 "load_today": dp2(self.load_minutes_now),
                 "load_today_h1": dp2(load_today_h1),
@@ -1065,10 +1078,10 @@ class LoadMLComponent(ComponentBase):
                 "power_today_now": dp2(power_today_now),
                 "power_today_h1": dp2(power_today_h1),
                 "power_today_h8": dp2(power_today_h8),
-                "mae_kwh": round(float(self.predictor.validation_mae), 4) if self.predictor and self.predictor.validation_mae is not None else None,
-                "bias_kwh": round(self.predictor.validation_bias, 4) if self.predictor and self.predictor.validation_bias is not None else None,
+                "mae_kwh": safe_float(self.predictor.validation_mae) if self.predictor else None,
+                "bias_kwh": safe_float(self.predictor.validation_bias) if self.predictor else None,
                 "last_trained": self.last_train_time.isoformat() if self.last_train_time else None,
-                "model_age_hours": round(model_age_hours, 1) if model_age_hours is not None else None,
+                "model_age_hours": safe_float(model_age_hours),
                 "training_days": self.load_data_age_days,
                 "status": self.model_status,
                 "model_version": MODEL_VERSION,
