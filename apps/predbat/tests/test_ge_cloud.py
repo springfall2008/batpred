@@ -4444,7 +4444,44 @@ def _test_publish_info_soh(my_predbat):
         return 1
     print("OK case4: empty battery list SOH=1.0")
 
-    # --- Case 5: battery_scaling config uses battery_dod_soh entity after async_automatic_config ---
+    # --- Case 5: batteries with missing/None capacity fields are skipped, not counted as zero ---
+    ge_cloud.dashboard_items.clear()
+    info_missing_capacity = {
+        "info": {"battery": {"nominal_capacity": 186, "nominal_voltage": 51.2, "depth_of_discharge": 0.9}, "model": "GIV-HY3.6", "max_charge_rate": 6000},
+        "connections": {
+            "batteries": [
+                {"capacity": {"full": 90.0, "design": 100.0}},  # valid
+                {"capacity": {"full": None, "design": 100.0}},  # missing full - skipped
+                {"capacity": {"design": 100.0}},  # missing full key entirely - skipped
+                {"capacity": {"full": 50.0}},  # missing design - skipped
+                {"capacity": {}},  # missing both - skipped
+            ]
+        },
+    }
+    run_async(ge_cloud.publish_info("dev5", info_missing_capacity))
+
+    expected_soh_missing = 90.0 / 100.0  # only the valid battery counts
+    actual_soh_missing = ge_cloud.dashboard_items.get("sensor.predbat_gecloud_dev5_battery_soh", {}).get("state")
+    if actual_soh_missing is None or abs(actual_soh_missing - expected_soh_missing) > 1e-9:
+        print("ERROR case5: expected soh={} (batteries with missing capacity skipped), got {}".format(expected_soh_missing, actual_soh_missing))
+        return 1
+    print("OK case5: batteries with missing/None capacity skipped, SOH={}".format(actual_soh_missing))
+
+    # --- Case 6: SOH is clamped to 1.0 when reported full capacity exceeds design capacity ---
+    ge_cloud.dashboard_items.clear()
+    info_over_full = {
+        "info": {"battery": {"nominal_capacity": 186, "nominal_voltage": 51.2, "depth_of_discharge": 0.9}, "model": "GIV-HY3.6", "max_charge_rate": 6000},
+        "connections": {"batteries": [{"capacity": {"full": 210.0, "design": 200.0}}]},
+    }
+    run_async(ge_cloud.publish_info("dev6", info_over_full))
+
+    actual_soh_over_full = ge_cloud.dashboard_items.get("sensor.predbat_gecloud_dev6_battery_soh", {}).get("state")
+    if actual_soh_over_full != 1.0:
+        print("ERROR case6: expected soh clamped to 1.0 (full > design), got {}".format(actual_soh_over_full))
+        return 1
+    print("OK case6: SOH clamped to 1.0 when full capacity exceeds design capacity")
+
+    # --- Case 7: battery_scaling config uses battery_dod_soh entity after async_automatic_config ---
     ge_cloud.dashboard_items.clear()
     ge_cloud.config_args = {}
     ge_cloud.settings = {"battery001": {}}
@@ -4456,9 +4493,9 @@ def _test_publish_info_soh(my_predbat):
     run_async(_check_battery_scaling())
     battery_scaling = ge_cloud.config_args.get("battery_scaling", [])
     if not battery_scaling or "battery_dod_soh" not in battery_scaling[0]:
-        print("ERROR case5: expected battery_scaling to use battery_dod_soh entity, got {}".format(battery_scaling))
+        print("ERROR case7: expected battery_scaling to use battery_dod_soh entity, got {}".format(battery_scaling))
         return 1
-    print("OK case5: battery_scaling uses battery_dod_soh entity: {}".format(battery_scaling))
+    print("OK case7: battery_scaling uses battery_dod_soh entity: {}".format(battery_scaling))
 
     return 0
 
