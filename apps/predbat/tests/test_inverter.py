@@ -1202,11 +1202,11 @@ def test_call_adjust_charge_immediate(test_name, my_predbat, ha, inv, dummy_item
     elif soc == inv.soc_percent or freeze:
         if stop_discharge:
             expected.append(["discharge_stop", {"device_id": "DID0"}])
-        expected.append(["charge_freeze", {"device_id": "DID0", "target_soc": soc, "power": power}])
+        expected.append(["charge_freeze", {"device_id": "DID0", "target_soc": int(soc), "power": power}])
     elif soc > 0 and (inv.has_target_soc or soc > inv.soc_percent):
         if stop_discharge:
             expected.append(["discharge_stop", {"device_id": "DID0"}])
-        expected.append(["charge_start", {"device_id": "DID0", "target_soc": soc, "power": power}])
+        expected.append(["charge_start", {"device_id": "DID0", "target_soc": int(soc), "power": power}])
     else:
         expected.append(["charge_stop", {"device_id": "DID0"}])
     if json.dumps(expected) != json.dumps(result):
@@ -1253,11 +1253,11 @@ def test_call_adjust_export_immediate(test_name, my_predbat, ha, inv, dummy_item
     elif freeze or soc == inv.soc_percent:
         if charge_stop:
             expected.append(["charge_stop", {"device_id": "DID0"}])
-        expected.append(["discharge_freeze", {"device_id": "DID0", "target_soc": soc, "power": power}])
+        expected.append(["discharge_freeze", {"device_id": "DID0", "target_soc": int(soc), "power": power}])
     elif soc < inv.soc_percent:
         if charge_stop:
             expected.append(["charge_stop", {"device_id": "DID0"}])
-        expected.append(["discharge_start", {"device_id": "DID0", "target_soc": soc, "power": power}])
+        expected.append(["discharge_start", {"device_id": "DID0", "target_soc": int(soc), "power": power}])
     else:
         if charge_stop:
             expected.append(["charge_stop", {"device_id": "DID0"}])
@@ -2491,6 +2491,7 @@ charge_start_service:
     failed |= test_call_adjust_charge_immediate("charge_immediate6", my_predbat, ha, inv, dummy_items, 49, charge_start_time="00:00:00", charge_end_time="11:00:00")
     failed |= test_call_adjust_charge_immediate("charge_immediate7", my_predbat, ha, inv, dummy_items, 50, freeze=True)
     failed |= test_call_adjust_charge_immediate("charge_immediate8", my_predbat, ha, inv, dummy_items, 50, freeze=False, no_freeze=True)
+    failed |= test_call_adjust_charge_immediate("charge_immediate9", my_predbat, ha, inv, dummy_items, 51.0)
     if failed:
         return failed
 
@@ -2502,6 +2503,7 @@ charge_start_service:
     failed |= test_call_adjust_export_immediate("export_immediate6", my_predbat, ha, inv, dummy_items, 49, discharge_start_time="00:00:00", discharge_end_time="09:00:00")
     failed |= test_call_adjust_export_immediate("export_immediate7", my_predbat, ha, inv, dummy_items, 50, freeze=True)
     failed |= test_call_adjust_export_immediate("export_immediate8", my_predbat, ha, inv, dummy_items, 50, freeze=False, no_freeze=True)
+    failed |= test_call_adjust_export_immediate("export_immediate9", my_predbat, ha, inv, dummy_items, 30.0)
     if failed:
         return failed
 
