@@ -2758,7 +2758,7 @@ class Inverter:
             current_rate = self.get_current_charge_rate()
             service_data = {
                 "device_id": self.base.get_arg("device_id", index=self.id, default=""),
-                "target_soc": target_soc,
+                "target_soc": int(target_soc),
                 "power": int(current_rate),
             }
 
@@ -2786,7 +2786,7 @@ class Inverter:
         if target_soc < 100:
             service_data = {
                 "device_id": self.base.get_arg("device_id", index=self.id, default=""),
-                "target_soc": target_soc,
+                "target_soc": int(target_soc),
                 "power": int(self.battery_rate_max_discharge * MINUTE_WATT),
             }
 
