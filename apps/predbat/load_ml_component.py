@@ -22,7 +22,6 @@ every 30 minutes.
 import asyncio
 import os
 from datetime import datetime, timezone, timedelta
-import math
 from component_base import ComponentBase
 from utils import get_now_from_cumulative, dp2, dp4, minute_data, safe_float
 from load_predictor import LoadPredictor, MODEL_VERSION
