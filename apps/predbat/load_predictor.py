@@ -1345,7 +1345,7 @@ class LoadPredictor:
             )
 
         total_passes = len(window_sizes) + 1  # intermediate passes + final full pass
-        self.log("ML Predictor: Curriculum training - {} passes, window {:.1f}→{:.1f} days + final full pass ({:.1f} days)".format(total_passes, window_sizes[0] / day_minutes, window_sizes[-1] / day_minutes, max_minute / day_minutes))
+        self.log("ML Predictor: Curriculum training - {} passes, window {:.1f}->{:.1f} days + final full pass ({:.1f} days)".format(total_passes, window_sizes[0] / day_minutes, window_sizes[-1] / day_minutes, max_minute / day_minutes))
 
         val_mae = None
         for pass_idx, window in enumerate(window_sizes):
