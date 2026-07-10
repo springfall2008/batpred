@@ -936,6 +936,7 @@ def safe_float(v):
     Convert a value to a float safely, returning None for invalid values (None, NaN, Inf)
     """
     import math
+
     if v is None:
         return None
     try:
