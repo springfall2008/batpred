@@ -1087,7 +1087,7 @@ class UserInterface:
         state_keys = states.keys()
         disabled = []
         enabled = []
-        
+
         if not hasattr(self, "unmatched_args"):
             self.unmatched_args = {}
 
@@ -1119,7 +1119,6 @@ class UserInterface:
         for key in disabled:
             self.unmatched_args[key] = self.args[key]
             del self.args[key]
-
 
     def split_command_index(self, command):
         """
