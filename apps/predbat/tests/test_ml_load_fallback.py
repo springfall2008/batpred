@@ -2,6 +2,7 @@ from tests.test_infra import TestHAInterface
 from fetch import Fetch
 from datetime import datetime, timezone
 
+
 class TestFetchMLFallback(Fetch):
     def __init__(self, ha_interface, base):
         self.ha_interface = ha_interface
@@ -11,7 +12,7 @@ class TestFetchMLFallback(Fetch):
         self.midnight_utc = datetime.now(timezone.utc)
         self.minutes_now = 0
         self.queried_results = False
-        
+
     def get_state_wrapper(self, entity_id, attribute=None, default=None):
         if attribute is None:
             if "inactive_test" in entity_id:
@@ -23,9 +24,10 @@ class TestFetchMLFallback(Fetch):
             # Return an empty dict so minute_data doesn't crash on mocked data
             return {}
         return default
-        
+
     def log(self, msg):
         pass
+
 
 def run_ml_load_fallback_tests(my_predbat):
     failed = False
@@ -36,7 +38,7 @@ def run_ml_load_fallback_tests(my_predbat):
     ha = TestHAInterface()
     fetch = TestFetchMLFallback(ha, my_predbat)
     now_utc = datetime.now(timezone.utc)
-    
+
     # Test 1: Active status proceeds
     fetch.prefix = "active_test"
     fetch.queried_results = False
@@ -46,7 +48,7 @@ def run_ml_load_fallback_tests(my_predbat):
         failed = True
     else:
         print("PASS: ML Load forecast active status proceeds past early return")
-        
+
     # Test 2: Inactive status falls back
     fetch.prefix = "inactive_test"
     fetch.queried_results = False
@@ -63,5 +65,5 @@ def run_ml_load_fallback_tests(my_predbat):
     else:
         print("PASS: ALL TESTS PASSED")
     print("============================================================")
-    
+
     return failed
