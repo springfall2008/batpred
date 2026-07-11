@@ -86,22 +86,29 @@ def energy_today(payload, channel):
 def derive_power(prev_sample, new_kwh, now_utc):
     """Estimate average watts from the change in a cumulative kWh counter since the previous sample.
 
-    A sample is a `(kwh, datetime)` tuple. Returns `(watts, new_sample)`. Watts is clamped to
-    zero (rather than a spurious huge/negative value) when there is no previous sample, when the
-    window since the previous sample is under 60 seconds, or when the counter has gone backwards
-    (e.g. a daily reset at midnight) - in the reset case the new sample is still returned so the
-    next call has a fresh baseline, but the previous sample is kept when the window is too short.
+    A sample is a `(kwh, datetime)` tuple. Returns `(watts, new_sample)`. The baseline sample is
+    only advanced (`new_sample != prev_sample`) when the cumulative kWh value has actually
+    changed, so a caller that polls far more often than the underlying counter refreshes (e.g.
+    every 60 seconds against a value that only updates every 15 minutes) can tell "no change yet"
+    apart from "just changed" and compute watts over the true elapsed time since the last change,
+    rather than diluting a full-window delta by a much shorter tick interval. Watts is clamped to
+    zero, with the previous sample kept unchanged (caller should hold its last computed watts),
+    when there is no previous sample, when the kWh value is unchanged, or when the window since
+    the previous sample is under 60 seconds. When the counter has gone backwards (e.g. a daily
+    reset at midnight) watts is clamped to zero and the baseline is re-seeded to the new value.
     """
     new_sample = (new_kwh, now_utc)
     if not prev_sample:
         return 0.0, new_sample
     prev_kwh, prev_time = prev_sample
+    delta = new_kwh - prev_kwh
+    if delta == 0:
+        return 0.0, prev_sample
+    if delta < 0:
+        return 0.0, new_sample
     seconds = (now_utc - prev_time).total_seconds()
     if seconds < 60:
         return 0.0, prev_sample
-    delta = new_kwh - prev_kwh
-    if delta < 0:
-        return 0.0, new_sample
     return round(delta * 1000.0 * 3600.0 / seconds, 1), new_sample
 
 
@@ -186,8 +193,10 @@ class EnphaseAPI(ComponentBase):
         # Local (HA-side) schedule model, written by events, applied on write switch
         self.local_schedule = {}
 
-        # Derived power state: previous cumulative kWh samples per channel
+        # Derived power state: previous cumulative kWh samples per channel, and the last
+        # computed watts per channel (republished when the kWh value hasn't changed yet)
         self.prev_energy_sample = {}
+        self.last_power_w = {}
 
         # Pending writes awaiting cloud settle confirmation
         self.pending_writes = {}
@@ -399,16 +408,26 @@ class EnphaseAPI(ComponentBase):
             app="enphase",
         )
 
-        # Derived instantaneous power from cumulative kWh deltas, kept per site/channel.
+        # Derived instantaneous power from cumulative kWh deltas, kept per site/channel. A
+        # channel's baseline sample only advances when its cumulative kWh has actually changed
+        # (see derive_power); when it hasn't (or the window since the last change is under 60s)
+        # the previously computed watts value is republished rather than recomputed or zeroed,
+        # which avoids the ~15x inflation that would otherwise occur when lifetime_energy (only
+        # refreshed every 15 minutes) is read on a component polled every 60 seconds.
         samples = self.prev_energy_sample.setdefault(site_id, {})
-        pv_power, samples["production"] = derive_power(samples.get("production"), energy_values["production"], now_utc)
-        import_power, samples["import"] = derive_power(samples.get("import"), energy_values["import"], now_utc)
-        export_power, samples["export"] = derive_power(samples.get("export"), energy_values["export"], now_utc)
-        charge_power, samples["charge"] = derive_power(samples.get("charge"), energy_values["charge"], now_utc)
-        discharge_power, samples["discharge"] = derive_power(samples.get("discharge"), energy_values["discharge"], now_utc)
+        channel_watts = self.last_power_w.setdefault(site_id, {})
+        for channel in ("production", "import", "export", "charge", "discharge"):
+            prev_sample = samples.get(channel)
+            watts, new_sample = derive_power(prev_sample, energy_values[channel], now_utc)
+            if new_sample == prev_sample:
+                watts = channel_watts.get(channel, 0.0)
+            else:
+                channel_watts[channel] = watts
+            samples[channel] = new_sample
 
-        grid_power = import_power - export_power
-        battery_power = discharge_power - charge_power
+        pv_power = channel_watts.get("production", 0.0)
+        grid_power = channel_watts.get("import", 0.0) - channel_watts.get("export", 0.0)
+        battery_power = channel_watts.get("discharge", 0.0) - channel_watts.get("charge", 0.0)
 
         self.dashboard_item(
             f"{entity_base}_pv_power",
@@ -672,7 +691,10 @@ class EnphaseAPI(ComponentBase):
         if desired_reserve and desired_reserve != int(cloud.get("reserve", -1)):
             profile_name = cloud.get("profile") or PROFILE_SELF_CONSUMPTION
             self.log(f"Enphase: Setting reserve to {desired_reserve}% (profile {profile_name}) on site {site_id}")
-            await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/profile/{site_id}", family="battery_config", params={"source": "enho", "userId": self.user_id}, json_body={"profile": profile_name, "batteryBackupPercentage": desired_reserve})
+            params = {"source": "enho"}
+            if self.user_id:
+                params["userId"] = self.user_id
+            await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/profile/{site_id}", family="battery_config", params=params, json_body={"profile": profile_name, "batteryBackupPercentage": desired_reserve})
             wrote = True
 
         # Forced charge window (CFG)
@@ -761,7 +783,10 @@ class EnphaseAPI(ComponentBase):
 
     async def get_profile(self, site_id):
         """Fetch and store the battery operating profile and backup reserve for a site."""
-        data = await self.request_json("GET", f"{BATTERY_CONFIG_BASE}/profile/{site_id}", family="battery_config", params={"source": "enho", "userId": self.user_id})
+        params = {"source": "enho"}
+        if self.user_id:
+            params["userId"] = self.user_id
+        data = await self.request_json("GET", f"{BATTERY_CONFIG_BASE}/profile/{site_id}", family="battery_config", params=params)
         if data is None:
             return None
         self.profile[site_id] = {

@@ -445,6 +445,50 @@ def test_publish_data_sensors():
     assert "sensor.predbat_enphase_12345_pv_power" in items
 
 
+def test_publish_data_derived_power_multicycle():
+    """Derived power must not be inflated by the 60s poll vs 15-minute lifetime_energy refresh mismatch.
+
+    Simulates several `publish_data` calls with an unchanged `lifetime_energy` (the normal case for
+    ~14 out of every 15 one-minute ticks), asserting the baseline is held (not advanced) and pv_power
+    stays at its seeded value rather than drifting or spiking. Then simulates the 15-minute refresh by
+    bumping the production total and back-dating the stored baseline sample by ~900 seconds, asserting
+    the resulting watts reflects the true average over the true elapsed window (about 4000W for a 1.0
+    kWh delta over 900s) rather than the ~15x-inflated value that would result from dividing by a ~60s
+    window.
+    """
+    api = MockEnphaseAPI()
+    site_id = "12345"
+    api.battery_status[site_id] = {"soc_percent": 55.0, "available_energy": 5.5, "max_capacity": 10.0, "max_power_kw": 3.84, "status": "normal", "batteries": []}
+    api.profile[site_id] = {"profile": "self-consumption", "reserve": 20}
+    api.battery_settings[site_id] = {"chargeFromGrid": True, "veryLowSoc": 10, "veryLowSocMin": 5, "veryLowSocMax": 25}
+    api.lifetime_energy[site_id] = {"production": [5.0], "consumption": [2.2], "import": [1.0], "export": [0.4], "charge": [0.8], "discharge": [0.6]}
+    api.latest_power[site_id] = {"watts": 450.0, "time": 1760000000}
+
+    # Seed call: no previous sample, so pv_power must be 0 and the baseline is recorded.
+    run_async(api.publish_data(site_id))
+    assert api.dashboard_items["sensor.predbat_enphase_12345_pv_power"]["state"] == 0.0
+    seeded_sample = api.prev_energy_sample[site_id]["production"]
+    assert seeded_sample[0] == 5.0
+
+    # Several more ticks with the SAME lifetime_energy (as happens for ~14 of every 15 one-minute
+    # polls): pv_power must stay stable (0, the last computed value) and the baseline must not drift.
+    for _ in range(5):
+        run_async(api.publish_data(site_id))
+        assert api.dashboard_items["sensor.predbat_enphase_12345_pv_power"]["state"] == 0.0
+        assert api.prev_energy_sample[site_id]["production"] == seeded_sample
+
+    # Simulate the 15-minute lifetime_energy refresh: bump production and back-date the stored
+    # baseline timestamp by ~900 seconds so the elapsed-time window is the true (long) one, not the
+    # ~60s tick interval.
+    api.lifetime_energy[site_id]["production"] = [6.0]
+    api.prev_energy_sample[site_id]["production"] = (5.0, datetime.now(timezone.utc) - timedelta(seconds=900))
+    run_async(api.publish_data(site_id))
+    pv_power = api.dashboard_items["sensor.predbat_enphase_12345_pv_power"]["state"]
+    # 1.0 kWh over ~900s ~= 4000W. Must NOT be inflated to ~60000W (dividing by a ~60s tick window).
+    assert 3500 <= pv_power <= 4500
+    assert pv_power < 10000
+
+
 def test_publish_schedule_entities():
     """Control entities are published for charge, and export only when dtg supported."""
     api = MockEnphaseAPI()
@@ -613,6 +657,7 @@ def run_enphase_api_tests(my_predbat):
     test_run_first_polls_all_tiers()
     test_derive_power()
     test_publish_data_sensors()
+    test_publish_data_derived_power_multicycle()
     test_publish_schedule_entities()
     test_event_handlers_update_local_schedule()
     test_write_switch_triggers_apply()
