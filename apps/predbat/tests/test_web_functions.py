@@ -156,6 +156,23 @@ def run_web_functions_tests(my_predbat):
     my_predbat.dashboard_index = original_dashboard_index
 
     # -------------------------------------------------------------------------
+    # Last Started/Last Updated date format consistency (issue #4223)
+    print("Test: Last Started date is displayed in the same format as Last Updated")
+    status_entity = prefix + ".status"
+    last_started_entity = prefix + ".last_started"
+    set_entity(my_predbat, status_entity, state="Idle", last_updated="2026-07-10 14:40:10.512590")
+    set_entity(my_predbat, last_started_entity, state="2026-07-10T01:10:39+0100")
+    my_predbat.dashboard_index = [status_entity]
+    status_html = web.get_status_html("1.0")
+    my_predbat.dashboard_index = original_dashboard_index
+    if "2026-07-10 01:10:39" not in status_html:
+        print(f"  ERROR: expected 'Last Started' to be reformatted without 'T'/timezone offset, got: {status_html}")
+        failed += 1
+    if "2026-07-10T01:10:39+0100" in status_html:
+        print(f"  ERROR: 'Last Started' should not show the raw stored ISO format, got: {status_html}")
+        failed += 1
+
+    # -------------------------------------------------------------------------
     # Currency unit display in the web config pages (issue #4071)
     # The web UI must show the user's configured currency symbol, not the raw "p".
     failed += run_currency_unit_tests(my_predbat, web)
