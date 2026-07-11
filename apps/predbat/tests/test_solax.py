@@ -12,7 +12,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, AsyncMock
 import json
-from solax import SolaxAPI
+from solax import SolaxAPI, SOLAX_MIN_RESERVE_PERCENT
 from tests.test_infra import create_aiohttp_mock_response, create_aiohttp_mock_session
 
 
@@ -113,6 +113,7 @@ def run_solax_tests(my_predbat):
         # Run tests
         failed |= asyncio.run(test_get_access_token_main(my_predbat))
         failed |= asyncio.run(test_request_wrapper_main(my_predbat))
+        failed |= asyncio.run(test_token_refresh_retry_main(my_predbat))
         failed |= asyncio.run(test_request_get_impl_get(my_predbat))
         if failed:
             assert not failed
@@ -1559,6 +1560,96 @@ async def test_request_wrapper_main(my_predbat):
     return failed
 
 
+async def test_token_refresh_retry_main(my_predbat):
+    """
+    Regression test: if the server rejects the current token mid-request (e.g. it was revoked
+    server-side even though our local token_expiry says it's still valid), request_get() must
+    refresh the token and retry the SAME logical request immediately, rather than dropping this
+    poll's fetch and only recovering on the next poll cycle.
+    """
+    print("=" * 60)
+    print("Testing token refresh retry on auth error")
+    print("=" * 60)
+
+    failed = False
+    from unittest.mock import MagicMock
+
+    solax_api = MockSolaxAPI()
+    # Locally the token looks valid (not expired) but the server will reject it.
+    solax_api.access_token = "stale_but_locally_unexpired_token"
+    solax_api.token_expiry = datetime.now(timezone.utc) + timedelta(hours=1)
+
+    auth_response = create_aiohttp_mock_response(status=200, json_data={"code": 0, "result": {"access_token": "brand_new_token", "expires_in": 2592000}})
+    get_fail_response = create_aiohttp_mock_response(status=200, json_data={"code": 10402, "message": "Request access_token authentication failed"})
+    get_success_response = create_aiohttp_mock_response(status=200, json_data={"code": 10000, "result": {"plantId": "123"}})
+
+    get_responses = [get_fail_response, get_success_response]
+
+    def get_side_effect(*args, **kwargs):
+        response = get_responses.pop(0)
+        context = MagicMock()
+
+        async def aenter(*a):
+            return response
+
+        async def aexit(*a):
+            return None
+
+        context.__aenter__ = aenter
+        context.__aexit__ = aexit
+        return context
+
+    def post_side_effect(*args, **kwargs):
+        context = MagicMock()
+
+        async def aenter(*a):
+            return auth_response
+
+        async def aexit(*a):
+            return None
+
+        context.__aenter__ = aenter
+        context.__aexit__ = aexit
+        return context
+
+    mock_session = MagicMock()
+    mock_session.get = MagicMock(side_effect=get_side_effect)
+    mock_session.post = MagicMock(side_effect=post_side_effect)
+
+    async def session_aenter(*args):
+        return mock_session
+
+    async def session_aexit(*args):
+        return None
+
+    mock_session.__aenter__ = session_aenter
+    mock_session.__aexit__ = session_aexit
+
+    with patch("solax.aiohttp.ClientSession") as mock_session_class, patch("asyncio.sleep", new_callable=AsyncMock):
+        mock_session_class.return_value = mock_session
+        result = await solax_api.request_get("/openapi/v2/plant/realtime_data", params={"plantId": "123"})
+
+    if result != {"code": 10000, "result": {"plantId": "123"}}:
+        print(f"**** ERROR: Expected the retried request to succeed, got {result} ****")
+        failed = True
+    elif mock_session.get.call_count != 2:
+        print(f"**** ERROR: Expected 2 GET attempts (1 failed + 1 retried), got {mock_session.get.call_count} ****")
+        failed = True
+    elif mock_session.post.call_count != 1:
+        print(f"**** ERROR: Expected exactly 1 token refresh, got {mock_session.post.call_count} ****")
+        failed = True
+    elif solax_api.access_token != "brand_new_token":
+        print(f"**** ERROR: Expected access_token to be refreshed, got {solax_api.access_token} ****")
+        failed = True
+    else:
+        print(f"✓ Auth error triggers immediate refresh-and-retry within the same call")
+
+    if not failed:
+        print("✓ token refresh retry test passed")
+
+    return failed
+
+
 async def test_request_get_impl_get(my_predbat):
     """
     Test _request_get_impl() GET requests
@@ -1709,12 +1800,18 @@ async def test_request_get_impl_get(my_predbat):
     mock_response = create_aiohttp_mock_response(status=200, json_data={"code": 10401, "message": "Invalid token"})
     mock_session = create_aiohttp_mock_session(mock_response)
 
+    from solax import SolaxAuthError
+
+    raised = None
     with patch("solax.aiohttp.ClientSession") as mock_session_class:
         mock_session_class.return_value = mock_session
-        result = await solax_api._request_get_impl("/test/path")
+        try:
+            await solax_api._request_get_impl("/test/path")
+        except SolaxAuthError as e:
+            raised = e
 
-    if result is not None:
-        print(f"**** ERROR: Expected None for auth error, got {result} ****")
+    if raised is None:
+        print(f"**** ERROR: Expected SolaxAuthError to be raised for auth error ****")
         failed = True
     elif solax_api.access_token is not None or solax_api.token_expiry is not None:
         print(f"**** ERROR: Expected token to be cleared, but access_token={solax_api.access_token}, token_expiry={solax_api.token_expiry} ****")
@@ -1865,12 +1962,18 @@ async def test_request_get_impl_post(my_predbat):
     mock_response = create_aiohttp_mock_response(status=200, json_data={"code": 10400, "message": "Token expired"})
     mock_session = create_aiohttp_mock_session(mock_response)
 
+    from solax import SolaxAuthError
+
+    raised = None
     with patch("solax.aiohttp.ClientSession") as mock_session_class:
         mock_session_class.return_value = mock_session
-        result = await solax_api._request_get_impl("/test/command", post=True, json_data=post_data)
+        try:
+            await solax_api._request_get_impl("/test/command", post=True, json_data=post_data)
+        except SolaxAuthError as e:
+            raised = e
 
-    if result is not None:
-        print(f"**** ERROR: Expected None for auth error, got {result} ****")
+    if raised is None:
+        print(f"**** ERROR: Expected SolaxAuthError to be raised for auth error ****")
         failed = True
     elif solax_api.access_token is not None or solax_api.token_expiry is not None:
         print(f"**** ERROR: Expected token to be cleared ****")
@@ -5431,6 +5534,9 @@ async def test_automatic_config_main():
     elif api.get_arg("battery_scaling") != ["sensor.predbat_solax_plant1_INV001_battery_soh"]:
         print(f"**** ERROR: battery_scaling not set to SOH sensor, got {api.get_arg('battery_scaling')} ****")
         failed = True
+    elif api.get_arg("battery_min_soc") != [SOLAX_MIN_RESERVE_PERCENT]:
+        print(f"**** ERROR: battery_min_soc should be [{SOLAX_MIN_RESERVE_PERCENT}] so Predbat's reserve logic never targets below what SolaX allows, got {api.get_arg('battery_min_soc')} ****")
+        failed = True
     else:
         print(f"PASS: Single plant configuration correct")
 
@@ -5457,6 +5563,9 @@ async def test_automatic_config_main():
         failed = True
     elif api2.get_arg("inverter_type") != ["SolaxCloud", "SolaxCloud"]:
         print(f"**** ERROR: Expected 2 SolaxCloud inverters ****")
+        failed = True
+    elif api2.get_arg("battery_min_soc") != [SOLAX_MIN_RESERVE_PERCENT, SOLAX_MIN_RESERVE_PERCENT]:
+        print(f"**** ERROR: battery_min_soc should have one entry per plant, got {api2.get_arg('battery_min_soc')} ****")
         failed = True
     else:
         print(f"PASS: Multiple plant configuration correct")
