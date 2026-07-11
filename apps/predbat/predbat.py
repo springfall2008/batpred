@@ -354,6 +354,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.max_days_previous = max(self.days_previous) + 1
         self.forecast_days = 0
         self.forecast_minutes = 0
+        self.inverter_clock_skew_start = 0
+        self.inverter_clock_skew_end = 0
+        self.inverter_clock_skew_discharge_start = 0
+        self.inverter_clock_skew_discharge_end = 0
         self.soc_kw = 0
         self.soc_percent = 0
         self.soc_max = 10.0
