@@ -263,7 +263,8 @@ class EnphaseAPI(ComponentBase):
             "max_capacity": float(data.get("max_capacity", total_capacity) or 0),
             "max_power_kw": float(data.get("max_power", 0) or 0),
             "status": str(data.get("status", "")),
-            "profile_label": str(data.get("profile", "")),
+            # Note: this payload has no "profile" key. The battery profile name is
+            # sourced from self.profile[site_id]["profile"], populated by get_profile().
             "batteries": batteries,
         }
         await self._save_cache("battery_status", self.battery_status)
