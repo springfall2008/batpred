@@ -140,6 +140,42 @@ def test_login_success():
     assert api.login_reject_count == 0
 
 
+def test_is_too_many_sessions():
+    """is_too_many_sessions matches the specific phrase, never a bare 'session' substring."""
+    from enphase import is_too_many_sessions
+
+    assert is_too_many_sessions("Too many active sessions") is True
+    assert is_too_many_sessions("Error: too many active sessions for this account") is True
+    assert is_too_many_sessions("too many logins; active sessions exceeded") is True
+    # Happy-path bodies contain 'session_id'/'session' but must NOT match:
+    assert is_too_many_sessions('{"success": true, "session_id": "abc"}') is False
+    assert is_too_many_sessions("session created") is False
+    assert is_too_many_sessions("") is False
+    assert is_too_many_sessions(None) is False
+
+
+def test_login_happy_path_with_session_text():
+    """A successful login whose response body text contains 'session_id' must not be mis-read as 'too many sessions'."""
+    api = MockEnphaseAPI()
+    jwt = "eyJhbGciOiJIUzI1NiJ9." + _b64({"user_id": "9999", "exp": 4102444800}) + ".sig"
+    # Real Enlighten returns the JSON body as text too - it contains 'session_id' and session cookies.
+    api.set_http_response("/login/login.json", 200, {"success": True, "session_id": "sess1"}, text_data='{"success": true, "session_id": "sess1", "message": "session created"}')
+    api.set_http_response("/users/self/token", 200, {"token": jwt, "expires_at": 4102444800})
+    api.set_http_response("/app-api/search_sites.json", 200, [{"site_id": 12345, "name": "Home"}])
+    assert run_async(api.login()) is True
+    assert api.login_reject_count == 0
+    assert api.fatal_signalled is False
+
+
+def test_login_too_many_sessions():
+    """A body reporting 'too many active sessions' (even with HTTP 200) rejects the login and cools down."""
+    api = MockEnphaseAPI()
+    api.set_http_response("/login/login.json", 200, None, text_data="Error: Too many active sessions for this account")
+    assert run_async(api.login()) is False
+    assert api.login_reject_count == 1
+    assert api.login_cooldown_until is not None
+
+
 def test_login_mfa_rejected():
     """MFA-required accounts must fail with a fatal error immediately, not retry."""
     api = MockEnphaseAPI()
@@ -305,6 +341,68 @@ def test_get_battery_status():
     assert status["max_capacity"] == 10.0
     assert status["soc_percent"] == 55.0  # (2.5+3.0)/(5+5)*100
     assert status["max_power_kw"] == 3.84
+
+
+def test_safe_float_int_handle_na():
+    """safe_float/safe_int coerce Enphase 'N/A'/blank/None strings to the default without raising."""
+    from enphase import safe_float, safe_int
+
+    assert safe_float("N/A") == 0.0
+    assert safe_float("N/A", None) is None
+    assert safe_float(None) == 0.0
+    assert safe_float("") == 0.0
+    assert safe_float("3.5") == 3.5
+    assert safe_float(4) == 4.0
+    assert safe_int("N/A") == 0
+    assert safe_int("N/A", None) is None
+    assert safe_int(None) == 0
+    assert safe_int("5.0") == 5
+    assert safe_int(7) == 7
+
+
+def test_get_battery_status_handles_na():
+    """A real-world battery_status payload with 'N/A' numeric fields must not crash get_battery_status."""
+    api = MockEnphaseAPI()
+    payload = {
+        "current_charge": "N/A",
+        "available_energy": "N/A",
+        "max_capacity": "N/A",
+        "max_power": "N/A",
+        "status": "unknown",
+        "storages": [{"id": 1, "serial_num": "B1", "current_charge": "N/A", "available_energy": "N/A", "max_capacity": "N/A", "status": "sleeping"}],
+    }
+    api.set_http_response("/pv/settings/12345/battery_status.json", 200, payload)
+    result = run_async(api.get_battery_status("12345"))
+    assert result is not None
+    status = api.battery_status["12345"]
+    # Total capacity is 0 (all N/A -> 0), so SOC falls back to site current_charge (also N/A -> 0)
+    assert status["soc_percent"] == 0.0
+    assert status["max_capacity"] == 0.0
+    assert status["max_power_kw"] == 0.0
+
+
+def test_reads_handle_na_values():
+    """latest_power, profile and battery_settings tolerate 'N/A' numeric fields from the live API."""
+    api = MockEnphaseAPI()
+    api.set_http_response("/app-api/12345/get_latest_power", 200, {"latest_power": {"value": "N/A", "time": "N/A"}})
+    run_async(api.get_latest_power("12345"))
+    assert api.latest_power["12345"]["watts"] == 0.0
+    assert api.latest_power["12345"]["time"] is None
+
+    api.set_http_response("/service/batteryConfig/api/v1/profile/12345", 200, {"profile": "self-consumption", "batteryBackupPercentage": "N/A"})
+    run_async(api.get_profile("12345"))
+    assert api.profile["12345"]["reserve"] == 0
+
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 200, {"chargeFromGrid": True, "veryLowSoc": "N/A", "veryLowSocMin": "N/A", "veryLowSocMax": "N/A"})
+    run_async(api.get_battery_settings("12345"))
+    assert api.battery_settings["12345"]["veryLowSocMin"] is None
+    # Publishing must not crash when veryLowSocMin is None (reserve_min falls back to 5)
+    api.battery_status["12345"] = {"soc_percent": 55.0, "available_energy": 5.5, "max_capacity": 10.0, "max_power_kw": 3.84, "status": "normal", "batteries": []}
+    api.profile["12345"] = {"profile": "self-consumption", "reserve": 20}
+    api.lifetime_energy["12345"] = {"production": [1.0], "consumption": [1.0], "import": [0.5], "export": [0.2], "charge": [0.1], "discharge": [0.1]}
+    api.latest_power["12345"] = {"watts": 100.0, "time": 1760000000}
+    run_async(api.publish_data("12345"))
+    assert api.dashboard_items["sensor.predbat_enphase_12345_battery_reserve_min"]["state"] == 5
 
 
 def test_energy_today():
@@ -638,7 +736,13 @@ def run_enphase_api_tests(my_predbat):
     test_needs_refresh()
     test_is_alive()
     test_login_success()
+    test_is_too_many_sessions()
+    test_login_happy_path_with_session_text()
+    test_login_too_many_sessions()
     test_login_mfa_rejected()
+    test_safe_float_int_handle_na()
+    test_get_battery_status_handles_na()
+    test_reads_handle_na_values()
     test_login_transient_rejection_not_fatal()
     test_login_guard_rails()
     test_login_reuse_window()

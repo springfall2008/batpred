@@ -72,15 +72,32 @@ ENPHASE_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKi
 BATTERY_UI_ORIGIN = "https://battery-profile-ui.enphaseenergy.com"
 
 
+def safe_float(value, default=0.0):
+    """Convert a value to float, returning default for None or non-numeric values.
+
+    The Enphase cloud returns the string "N/A" (and occasionally blank strings) for fields it
+    cannot report, so a bare float() would raise; this coerces those to the supplied default.
+    """
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def safe_int(value, default=0):
+    """Convert a value to int, returning default for None or non-numeric values (e.g. Enphase 'N/A')."""
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
 def energy_today(payload, channel):
     """Return today's kWh for a lifetime_energy channel (last array entry), 0.0 if absent."""
     values = (payload or {}).get(channel) or []
     if not values:
         return 0.0
-    try:
-        return float(values[-1] or 0.0)
-    except (TypeError, ValueError):
-        return 0.0
+    return safe_float(values[-1])
 
 
 def derive_power(prev_sample, new_kwh, now_utc):
@@ -148,6 +165,18 @@ def decode_jwt_claims(token):
         return json.loads(base64.urlsafe_b64decode(payload.encode("ascii")))
     except (IndexError, ValueError):
         return {}
+
+
+def is_too_many_sessions(text):
+    """Return True only when a login response body reports Enlighten's 'too many active sessions' error.
+
+    Matches the specific phrase, not a bare 'session' substring: a successful login body contains keys
+    like 'session_id' and Enlighten session cookies, so a loose match would falsely reject valid logins.
+    """
+    lowered = str(text or "").lower()
+    if "too many active sessions" in lowered:
+        return True
+    return "active sessions" in lowered and "too many" in lowered
 
 
 class EnphaseAPI(ComponentBase):
@@ -737,17 +766,17 @@ class EnphaseAPI(ComponentBase):
         if data is None:
             return None
         batteries = data.get("storages") or []
-        total_capacity = sum(float(b.get("max_capacity", 0) or 0) for b in batteries)
-        total_available = sum(float(b.get("available_energy", 0) or 0) for b in batteries)
+        total_capacity = sum(safe_float(b.get("max_capacity")) for b in batteries)
+        total_available = sum(safe_float(b.get("available_energy")) for b in batteries)
         if total_capacity > 0:
             soc_percent = round(total_available / total_capacity * 100.0, 1)
         else:
-            soc_percent = float(data.get("current_charge", 0) or 0)
+            soc_percent = safe_float(data.get("current_charge"))
         self.battery_status[site_id] = {
             "soc_percent": soc_percent,
-            "available_energy": float(data.get("available_energy", total_available) or 0),
-            "max_capacity": float(data.get("max_capacity", total_capacity) or 0),
-            "max_power_kw": float(data.get("max_power", 0) or 0),
+            "available_energy": safe_float(data.get("available_energy"), total_available),
+            "max_capacity": safe_float(data.get("max_capacity"), total_capacity),
+            "max_power_kw": safe_float(data.get("max_power")),
             "status": str(data.get("status", "")),
             # Note: this payload has no "profile" key. The battery profile name is
             # sourced from self.profile[site_id]["profile"], populated by get_profile().
@@ -771,11 +800,11 @@ class EnphaseAPI(ComponentBase):
         if data is None:
             return None
         latest_power = data.get("latest_power") or {}
-        timestamp = latest_power.get("time")
+        timestamp = safe_float(latest_power.get("time"), None)
         if timestamp is not None and timestamp > 1e12:
             timestamp = timestamp / 1000.0
         self.latest_power[site_id] = {
-            "watts": float(latest_power.get("value", 0) or 0),
+            "watts": safe_float(latest_power.get("value")),
             "time": timestamp,
         }
         await self._save_cache("latest_power", self.latest_power)
@@ -791,7 +820,7 @@ class EnphaseAPI(ComponentBase):
             return None
         self.profile[site_id] = {
             "profile": str(data.get("profile", "")),
-            "reserve": int(data.get("batteryBackupPercentage", 0) or 0),
+            "reserve": safe_int(data.get("batteryBackupPercentage")),
         }
         await self._save_cache("profile", self.profile)
         return self.profile[site_id]
@@ -803,9 +832,9 @@ class EnphaseAPI(ComponentBase):
             return None
         self.battery_settings[site_id] = {
             "chargeFromGrid": bool(data.get("chargeFromGrid", False)),
-            "veryLowSoc": data.get("veryLowSoc"),
-            "veryLowSocMin": data.get("veryLowSocMin"),
-            "veryLowSocMax": data.get("veryLowSocMax"),
+            "veryLowSoc": safe_int(data.get("veryLowSoc"), None),
+            "veryLowSocMin": safe_int(data.get("veryLowSocMin"), None),
+            "veryLowSocMax": safe_int(data.get("veryLowSocMax"), None),
         }
         await self._save_cache("battery_settings", self.battery_settings)
         return self.battery_settings[site_id]
@@ -825,7 +854,7 @@ class EnphaseAPI(ComponentBase):
                 "id": entry.get("id"),
                 "startTime": entry.get("startTime"),
                 "endTime": entry.get("endTime"),
-                "limit": entry.get("limit"),
+                "limit": safe_int(entry.get("limit"), None),
                 "enabled": bool(entry.get("isEnabled", False)),
                 "supported": supported,
             }
@@ -932,7 +961,7 @@ class EnphaseAPI(ComponentBase):
         if isinstance(data, dict) and data.get("isBlocked"):
             self._login_rejected("account is blocked", unrecoverable=True)
             return False
-        if "session" in str(text).lower():
+        if is_too_many_sessions(text):
             # "Too many active sessions" - detect regardless of HTTP status, Enlighten sometimes returns 200
             self._login_rejected("too many active sessions")
             return False
