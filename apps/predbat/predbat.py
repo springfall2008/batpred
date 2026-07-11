@@ -35,7 +35,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v8.44.8"
+THIS_VERSION = "v8.44.11"
 
 from download import predbat_update_move, predbat_update_download, check_install, DEFAULT_PREDBAT_REPOSITORY
 from const import MINUTE_WATT
@@ -74,7 +74,7 @@ from predheat import PredHeat
 from octopus import Octopus
 from energydataservice import Energidataservice
 from stromligning import Stromligning
-from components import Components
+from components import Components, COMPONENT_LIST
 from execute import Execute
 from marginal import Marginal
 from plan import Plan
@@ -749,6 +749,67 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.plan_valid = True
         self.log("Restored saved plan from {:.0f} minutes ago: {} charge windows, {} export windows".format(age_minutes, len(self.charge_window_best), len(self.export_window_best)))
 
+    def record_final_run_status(self, status, status_extra):
+        """
+        Publish the component health dashboard item and record the final run status for this cycle.
+        Any component that is active but not alive fails the run, even if the plan itself computed successfully.
+        """
+        failed_components = []
+        if self.components:
+            all_components = self.components.get_all()
+            active_components = self.components.get_active()
+            error_count = 0
+            component_status = {}
+            component_error_count = {}
+            all_healthy = True
+            for component_name in all_components:
+                is_active = self.components.is_active(component_name)
+                is_alive = self.components.is_alive(component_name)
+                component_error_count[component_name] = self.components.get_error_count(component_name)
+                if is_active and not is_alive:
+                    # Component is active but not alive - error state
+                    component_status[component_name] = "error"
+                    all_healthy = False
+                    error_count += 1
+                    failed_components.append(COMPONENT_LIST.get(component_name, {}).get("name", component_name))
+                elif is_active:
+                    component_status[component_name] = "running"
+                else:
+                    component_status[component_name] = "disabled"
+            self.dashboard_item(
+                "binary_sensor." + self.prefix + "_components_healthy",
+                state="on" if all_healthy else "off",
+                attributes={
+                    "friendly_name": "Predbat components healthy",
+                    "icon": "mdi:cog-outline" if all_healthy else "mdi:cog-off-outline",
+                    "components": component_status,
+                    "component_error_count": component_error_count,
+                    "active_count": len(active_components),
+                    "total_count": len(all_components),
+                    "error_count": error_count,
+                },
+            )
+
+        if self.had_errors:
+            self.log("Error: Completed run status {} with Errors reported (check log)".format(status))
+        elif failed_components:
+            error_status = "Error: Complete run status {} with component errors: {}".format(status, ", ".join(failed_components))
+            self.log(error_status)
+            self.record_status(
+                error_status,
+                debug="best_charge_limit={} best_charge_window={} best_export_limit= {} best_export_window={}".format(self.charge_limit_best, self.charge_window_best, self.export_limits_best, self.export_window_best),
+                notify=True,
+                had_errors=True,
+            )
+        else:
+            self.log("Info: Completed run status {}".format(status))
+            self.record_status(
+                status,
+                debug="best_charge_limit={} best_charge_window={} best_export_limit= {} best_export_window={}".format(self.charge_limit_best, self.charge_window_best, self.export_limits_best, self.export_window_best),
+                notify=True,
+                extra=status_extra,
+            )
+
     def update_pred(self, scheduled=True):
         """
         Update the prediction state, everything is called from here right now
@@ -1030,51 +1091,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         if self.debug_enable:
             self.create_debug_yaml()
 
-        if self.had_errors:
-            self.log("Completed run status {} with Errors reported (check log)".format(status))
-        else:
-            self.log("Completed run status {}".format(status))
-            self.record_status(
-                status,
-                debug="best_charge_limit={} best_charge_window={} best_export_limit= {} best_export_window={}".format(self.charge_limit_best, self.charge_window_best, self.export_limits_best, self.export_window_best),
-                notify=True,
-                extra=status_extra,
-            )
-
-        # Publish component status dashboard item
-        if self.components:
-            all_components = self.components.get_all()
-            active_components = self.components.get_active()
-            error_count = 0
-            component_status = {}
-            component_error_count = {}
-            all_healthy = True
-            for component_name in all_components:
-                is_active = self.components.is_active(component_name)
-                is_alive = self.components.is_alive(component_name)
-                component_error_count[component_name] = self.components.get_error_count(component_name)
-                if is_active and not is_alive:
-                    # Component is active but not alive - error state
-                    component_status[component_name] = "error"
-                    all_healthy = False
-                    error_count += 1
-                elif is_active:
-                    component_status[component_name] = "running"
-                else:
-                    component_status[component_name] = "disabled"
-            self.dashboard_item(
-                "binary_sensor." + self.prefix + "_components_healthy",
-                state="on" if all_healthy else "off",
-                attributes={
-                    "friendly_name": "Predbat components healthy",
-                    "icon": "mdi:cog-outline" if all_healthy else "mdi:cog-off-outline",
-                    "components": component_status,
-                    "component_error_count": component_error_count,
-                    "active_count": len(active_components),
-                    "total_count": len(all_components),
-                    "error_count": error_count,
-                },
-            )
+        self.record_final_run_status(status, status_extra)
 
         self.expose_config("active", False)
         self.save_current_config()
