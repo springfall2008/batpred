@@ -302,7 +302,7 @@ pred_bat:
   # is used for car_charging_hold feature to filter out car charging from the previous load data
   # Automatically set to detect Wallbox and Zappi, if it doesn't match manually enter your sensor name
   # Also adjust car_charging_energy_scale if it's not in kwH to fix the units
-  car_charging_energy: 're:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|sensor.wallbox_portal_added_energy)'
+  car_charging_energy: 're:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|sensor.wallbox_portal_added_energy|sensor.tesla_wall_connector_session_energy)'
 
   # Defines the number of cars modelled by the system, set to 0 for no car
   num_cars: 1
@@ -313,7 +313,7 @@ pred_bat:
   # Auto matches Zappi and Wallbox, or change it for your own
   # One entry per car
   car_charging_planned:
-    - 're:(sensor.wallbox_portal_status_description|sensor.myenergi_zappi_[0-9a-z]+_plug_status)'
+    - 're:(sensor.wallbox_portal_status_description|sensor.myenergi_zappi_[0-9a-z]+_plug_status|sensor.tesla_wall_connector_status)'
 
   car_charging_planned_response:
     - 'yes'
@@ -331,6 +331,7 @@ pred_bat:
     - 'locked'
     - 'plugged in'
     - 'waiting'
+    - 'waiting_car'
 
   # In some cases car planning is difficult (e.g. Ohme with Intelligent doesn't report slots)
   # The car charging now can be set to a sensor to indicate the car is charging and to plan
@@ -343,6 +344,7 @@ pred_bat:
     - 'yes'
     - 'on'
     - 'true'
+    - 'charging'
 
   # To make planned car charging more accurate, either using car_charging_planned or the Octopus Energy plugin,
   # specify your battery size in kwh, charge limit % and current car battery soc % sensors/values.
