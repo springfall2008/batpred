@@ -115,6 +115,7 @@ The Azimuth value is the number of degrees angled away from North, with the sign
 (both equal to your array peak kW). Otherwise, Solcast will provide forecast data clipped at your inverter capacity. Let Predbat handle any necessary clipping instead.
 When supplied with the unclipped Solcast forecast data, Predbat can allow in its model for PV over the inverter capacity going to battery charging
 (bypassing the hybrid inverter).
+*(Note: If you are using a Home Assistant integration to provide this forecast data, we recommend using the [Solcast Clearsky Integration](https://github.com/autoSteve/ha-solcast-clearsky) to easily pass this detailed unclipped forecast).*
 
 You will need your API key for the next steps:
 
