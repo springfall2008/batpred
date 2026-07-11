@@ -118,6 +118,8 @@ Energidata
 Energidataservice
 energydataservice
 energythroughput
+enho
+enlm
 enphase
 enphaseenergy
 epod

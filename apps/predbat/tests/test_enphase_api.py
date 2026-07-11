@@ -284,6 +284,74 @@ def test_battery_config_variant_fallback():
     assert calls["n"] == 2
 
 
+BATTERY_STATUS_PAYLOAD = {
+    "current_charge": 55,
+    "available_energy": 5.5,
+    "max_capacity": 10.0,
+    "max_power": 3.84,
+    "storages": [
+        {"id": 1, "serial_num": "B1", "current_charge": 50, "available_energy": 2.5, "max_capacity": 5.0, "status": "normal"},
+        {"id": 2, "serial_num": "B2", "current_charge": 60, "available_energy": 3.0, "max_capacity": 5.0, "status": "normal"},
+    ],
+}
+
+
+def test_get_battery_status():
+    """battery_status parses site totals and capacity-weighted SOC."""
+    api = MockEnphaseAPI()
+    api.set_http_response("/pv/settings/12345/battery_status.json", 200, BATTERY_STATUS_PAYLOAD)
+    run_async(api.get_battery_status("12345"))
+    status = api.battery_status["12345"]
+    assert status["max_capacity"] == 10.0
+    assert status["soc_percent"] == 55.0  # (2.5+3.0)/(5+5)*100
+    assert status["max_power_kw"] == 3.84
+
+
+def test_energy_today():
+    """energy_today returns the final (today's) entry of a channel array."""
+    payload = {"start_date": "2026-07-09", "last_report_date": "2026-07-11", "production": [10.0, 12.0, 3.5], "consumption": [8.0, 9.0, 2.2]}
+    from enphase import energy_today
+
+    assert energy_today(payload, "production") == 3.5
+    assert energy_today(payload, "consumption") == 2.2
+    assert energy_today(payload, "import") == 0.0  # missing channel -> 0
+
+
+def test_get_schedules_parses_families():
+    """Schedules read stores cfg/dtg/rbd entries and dtg support flag."""
+    api = MockEnphaseAPI()
+    payload = {
+        "cfg": {"scheduleSupported": True, "details": [{"id": "u1", "startTime": "02:00", "endTime": "05:00", "limit": 90, "isEnabled": True}]},
+        "dtg": {"scheduleSupported": False, "details": []},
+        "rbd": {"scheduleSupported": True, "details": []},
+    }
+    api.set_http_response("/service/batteryConfig/api/v1/battery/sites/12345/schedules", 200, payload)
+    run_async(api.get_schedules("12345"))
+    cfg = api.schedules["12345"]["cfg"]
+    assert cfg["id"] == "u1" and cfg["limit"] == 90 and cfg["enabled"] is True
+    assert api.dtg_supported("12345") is False
+
+
+def test_run_first_polls_all_tiers():
+    """First run() logs in, fetches every tier and publishes."""
+    api = MockEnphaseAPI()
+    # prime auth short-circuit
+    api.login_last_success = datetime.now(timezone.utc)
+    api.eauth_token = "tok"
+    api.sites = [{"site_id": "12345", "name": "Home"}]
+    api.set_http_response("/pv/settings/12345/battery_status.json", 200, BATTERY_STATUS_PAYLOAD)
+    api.set_http_response("/pv/systems/12345/lifetime_energy", 200, {"production": [1.0], "consumption": [1.0], "import": [0.5], "export": [0.2], "charge": [0.1], "discharge": [0.1], "start_date": "2026-07-11"})
+    api.set_http_response("/app-api/12345/get_latest_power", 200, {"latest_power": {"value": 450, "units": "w", "time": 1760000000}})
+    api.set_http_response("/service/batteryConfig/api/v1/profile/12345", 200, {"profile": "self-consumption", "batteryBackupPercentage": 20})
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 200, {"chargeFromGrid": True, "veryLowSoc": 10, "veryLowSocMin": 5, "veryLowSocMax": 25})
+    api.set_http_response("/service/batteryConfig/api/v1/battery/sites/12345/schedules", 200, {"cfg": {"scheduleSupported": True, "details": []}, "dtg": {"scheduleSupported": True, "details": []}, "rbd": {"scheduleSupported": True, "details": []}})
+    result = run_async(api.run(0, True))
+    assert result
+    assert api.battery_status["12345"]["soc_percent"] == 55.0
+    assert api.profile["12345"]["reserve"] == 20
+    assert api.latest_power["12345"]["watts"] == 450
+
+
 def run_enphase_api_tests(my_predbat):
     """Run all Enphase API tests, returning 0 on success."""
     test_initialize_defaults()
@@ -300,5 +368,9 @@ def run_enphase_api_tests(my_predbat):
     test_request_json_401_relogin()
     test_request_json_login_wall()
     test_battery_config_variant_fallback()
+    test_get_battery_status()
+    test_energy_today()
+    test_get_schedules_parses_families()
+    test_run_first_polls_all_tiers()
     print("**** Enphase API tests passed ****")
     return 0

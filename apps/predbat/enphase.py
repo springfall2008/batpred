@@ -68,6 +68,17 @@ ENPHASE_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKi
 BATTERY_UI_ORIGIN = "https://battery-profile-ui.enphaseenergy.com"
 
 
+def energy_today(payload, channel):
+    """Return today's kWh for a lifetime_energy channel (last array entry), 0.0 if absent."""
+    values = (payload or {}).get(channel) or []
+    if not values:
+        return 0.0
+    try:
+        return float(values[-1] or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def decode_jwt_claims(token):
     """Decode the payload segment of a JWT without verifying the signature."""
     try:
@@ -194,8 +205,147 @@ class EnphaseAPI(ComponentBase):
         """Main polling body, invoked every 60 seconds by ComponentBase."""
         if first:
             await self.load_cached_data()
-        # Later tasks fill in: login, per-tier refresh, publishing
+
+        # Midnight counter reset
+        current_midnight = self.midnight_utc
+        if self.last_midnight_utc is not None and self.last_midnight_utc != current_midnight:
+            self.log(f"Enphase: Midnight reset - requests_today: {self.requests_today}")
+            self.requests_today = 0
+        self.last_midnight_utc = current_midnight
+
+        # Ensure we are logged in (guard rails inside login())
+        if not self.eauth_token:
+            if not await self.login():
+                return bool(self.sites)  # stay alive on cached data if we have it
+
+        if first or self._needs_refresh("sites", ENPHASE_REFRESH_STATIC):
+            if not await self.login():
+                return bool(self.sites)
+
+        for site in self.sites:
+            site_id = site["site_id"]
+            if self._needs_refresh("battery_status", ENPHASE_REFRESH_SETTINGS):
+                await self.get_battery_status(site_id)
+                await self.get_profile(site_id)
+                await self.get_battery_settings(site_id)
+                await self.get_schedules(site_id)
+            if self._needs_refresh("lifetime_energy", ENPHASE_REFRESH_ENERGY):
+                await self.get_lifetime_energy(site_id)
+            if self._needs_refresh("latest_power", ENPHASE_REFRESH_POWER):
+                await self.get_latest_power(site_id)
+            await self.publish_data(site_id)
+            await self.publish_schedule_settings_ha(site_id)
         return True
+
+    async def publish_data(self, site_id):
+        """Publish monitoring sensors for a site (implemented in a later task)."""
+        pass
+
+    async def publish_schedule_settings_ha(self, site_id):
+        """Publish schedule control entities for a site (implemented in a later task)."""
+        pass
+
+    async def get_battery_status(self, site_id):
+        """Fetch and normalise battery SOC/capacity/power for a site."""
+        data = await self.request_json("GET", f"/pv/settings/{site_id}/battery_status.json")
+        if data is None:
+            return None
+        batteries = data.get("storages") or []
+        total_capacity = sum(float(b.get("max_capacity", 0) or 0) for b in batteries)
+        total_available = sum(float(b.get("available_energy", 0) or 0) for b in batteries)
+        if total_capacity > 0:
+            soc_percent = round(total_available / total_capacity * 100.0, 1)
+        else:
+            soc_percent = float(data.get("current_charge", 0) or 0)
+        self.battery_status[site_id] = {
+            "soc_percent": soc_percent,
+            "available_energy": float(data.get("available_energy", total_available) or 0),
+            "max_capacity": float(data.get("max_capacity", total_capacity) or 0),
+            "max_power_kw": float(data.get("max_power", 0) or 0),
+            "status": str(data.get("status", "")),
+            "profile_label": str(data.get("profile", "")),
+            "batteries": batteries,
+        }
+        await self._save_cache("battery_status", self.battery_status)
+        return self.battery_status[site_id]
+
+    async def get_lifetime_energy(self, site_id):
+        """Fetch and store the raw lifetime energy payload for a site."""
+        data = await self.request_json("GET", f"/pv/systems/{site_id}/lifetime_energy")
+        if data is None:
+            return None
+        self.lifetime_energy[site_id] = data
+        await self._save_cache("lifetime_energy", self.lifetime_energy)
+        return data
+
+    async def get_latest_power(self, site_id):
+        """Fetch and normalise the latest instantaneous power reading for a site."""
+        data = await self.request_json("GET", f"/app-api/{site_id}/get_latest_power")
+        if data is None:
+            return None
+        latest_power = data.get("latest_power") or {}
+        timestamp = latest_power.get("time")
+        if timestamp is not None and timestamp > 1e12:
+            timestamp = timestamp / 1000.0
+        self.latest_power[site_id] = {
+            "watts": float(latest_power.get("value", 0) or 0),
+            "time": timestamp,
+        }
+        await self._save_cache("latest_power", self.latest_power)
+        return self.latest_power[site_id]
+
+    async def get_profile(self, site_id):
+        """Fetch and store the battery operating profile and backup reserve for a site."""
+        data = await self.request_json("GET", f"{BATTERY_CONFIG_BASE}/profile/{site_id}", family="battery_config", params={"source": "enho", "userId": self.user_id})
+        if data is None:
+            return None
+        self.profile[site_id] = {
+            "profile": str(data.get("profile", "")),
+            "reserve": int(data.get("batteryBackupPercentage", 0) or 0),
+        }
+        await self._save_cache("profile", self.profile)
+        return self.profile[site_id]
+
+    async def get_battery_settings(self, site_id):
+        """Fetch and store the battery charge-from-grid and low-SOC settings for a site."""
+        data = await self.request_json("GET", f"{BATTERY_CONFIG_BASE}/batterySettings/{site_id}", family="battery_config", params={"source": "enlm"})
+        if data is None:
+            return None
+        self.battery_settings[site_id] = {
+            "chargeFromGrid": bool(data.get("chargeFromGrid", False)),
+            "veryLowSoc": data.get("veryLowSoc"),
+            "veryLowSocMin": data.get("veryLowSocMin"),
+            "veryLowSocMax": data.get("veryLowSocMax"),
+        }
+        await self._save_cache("battery_settings", self.battery_settings)
+        return self.battery_settings[site_id]
+
+    async def get_schedules(self, site_id):
+        """Fetch and normalise the charge/export/freeze battery schedules for a site."""
+        data = await self.request_json("GET", f"{BATTERY_CONFIG_BASE}/battery/sites/{site_id}/schedules", family="battery_config")
+        if data is None:
+            return None
+        parsed = {}
+        for family_key in ("cfg", "dtg", "rbd"):
+            family_data = data.get(family_key) or {}
+            details = family_data.get("details") or []
+            entry = details[0] if details else {}
+            supported = bool(family_data.get("scheduleSupported") or family_data.get("forceScheduleSupported"))
+            parsed[family_key] = {
+                "id": entry.get("id"),
+                "startTime": entry.get("startTime"),
+                "endTime": entry.get("endTime"),
+                "limit": entry.get("limit"),
+                "enabled": bool(entry.get("isEnabled", False)),
+                "supported": supported,
+            }
+        self.schedules[site_id] = parsed
+        await self._save_cache("schedules", self.schedules)
+        return parsed
+
+    def dtg_supported(self, site_id):
+        """Return True when the export-to-grid (dtg) schedule family is supported for a site."""
+        return bool(self.schedules.get(site_id, {}).get("dtg", {}).get("supported", False))
 
     def login_allowed(self):
         """Return True when a password login attempt is currently permitted by the guard rails."""
