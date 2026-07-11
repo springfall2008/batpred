@@ -352,6 +352,45 @@ def test_run_first_polls_all_tiers():
     assert api.latest_power["12345"]["watts"] == 450
 
 
+def test_derive_power():
+    """derive_power converts kWh deltas over elapsed time into watts."""
+    from enphase import derive_power
+
+    now = datetime.now(timezone.utc)
+    prev = (1.0, now - timedelta(minutes=5))
+    watts, sample = derive_power(prev, 1.1, now)
+    assert abs(watts - 1200.0) < 1.0  # 0.1 kWh in 5 min = 1.2 kW
+    assert sample == (1.1, now)
+    # Negative delta (midnight reset) clamps to zero
+    watts, _ = derive_power((5.0, now - timedelta(minutes=5)), 0.0, now)
+    assert watts == 0.0
+    # No previous sample yields zero
+    watts, _ = derive_power(None, 2.0, now)
+    assert watts == 0.0
+
+
+def test_publish_data_sensors():
+    """publish_data creates the full monitoring sensor set."""
+    api = MockEnphaseAPI()
+    api.battery_status["12345"] = {"soc_percent": 55.0, "available_energy": 5.5, "max_capacity": 10.0, "max_power_kw": 3.84, "status": "normal", "batteries": []}
+    api.profile["12345"] = {"profile": "self-consumption", "reserve": 20}
+    api.battery_settings["12345"] = {"chargeFromGrid": True, "veryLowSoc": 10, "veryLowSocMin": 5, "veryLowSocMax": 25}
+    api.lifetime_energy["12345"] = {"production": [3.5], "consumption": [2.2], "import": [1.0], "export": [0.4], "charge": [0.8], "discharge": [0.6]}
+    api.latest_power["12345"] = {"watts": 450.0, "time": 1760000000}
+    run_async(api.publish_data("12345"))
+    items = api.dashboard_items
+    assert items["sensor.predbat_enphase_12345_soc_percent"]["state"] == 55.0
+    assert items["sensor.predbat_enphase_12345_battery_capacity"]["state"] == 10.0
+    assert items["sensor.predbat_enphase_12345_battery_rate_max"]["state"] == 3840.0
+    assert items["sensor.predbat_enphase_12345_pv_today"]["state"] == 3.5
+    assert items["sensor.predbat_enphase_12345_load_today"]["state"] == 2.2
+    assert items["sensor.predbat_enphase_12345_import_today"]["state"] == 1.0
+    assert items["sensor.predbat_enphase_12345_export_today"]["state"] == 0.4
+    assert items["sensor.predbat_enphase_12345_load_power"]["state"] == 450.0
+    assert items["sensor.predbat_enphase_12345_battery_reserve_min"]["state"] == 5
+    assert "sensor.predbat_enphase_12345_pv_power" in items
+
+
 def run_enphase_api_tests(my_predbat):
     """Run all Enphase API tests, returning 0 on success."""
     test_initialize_defaults()
@@ -372,5 +411,7 @@ def run_enphase_api_tests(my_predbat):
     test_energy_today()
     test_get_schedules_parses_families()
     test_run_first_polls_all_tiers()
+    test_derive_power()
+    test_publish_data_sensors()
     print("**** Enphase API tests passed ****")
     return 0

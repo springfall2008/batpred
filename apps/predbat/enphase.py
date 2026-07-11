@@ -79,6 +79,28 @@ def energy_today(payload, channel):
         return 0.0
 
 
+def derive_power(prev_sample, new_kwh, now_utc):
+    """Estimate average watts from the change in a cumulative kWh counter since the previous sample.
+
+    A sample is a `(kwh, datetime)` tuple. Returns `(watts, new_sample)`. Watts is clamped to
+    zero (rather than a spurious huge/negative value) when there is no previous sample, when the
+    window since the previous sample is under 60 seconds, or when the counter has gone backwards
+    (e.g. a daily reset at midnight) - in the reset case the new sample is still returned so the
+    next call has a fresh baseline, but the previous sample is kept when the window is too short.
+    """
+    new_sample = (new_kwh, now_utc)
+    if not prev_sample:
+        return 0.0, new_sample
+    prev_kwh, prev_time = prev_sample
+    seconds = (now_utc - prev_time).total_seconds()
+    if seconds < 60:
+        return 0.0, prev_sample
+    delta = new_kwh - prev_kwh
+    if delta < 0:
+        return 0.0, new_sample
+    return round(delta * 1000.0 * 3600.0 / seconds, 1), new_sample
+
+
 def decode_jwt_claims(token):
     """Decode the payload segment of a JWT without verifying the signature."""
     try:
@@ -238,8 +260,133 @@ class EnphaseAPI(ComponentBase):
         return True
 
     async def publish_data(self, site_id):
-        """Publish monitoring sensors for a site (implemented in a later task)."""
-        pass
+        """Publish battery, energy-today and derived instantaneous power sensors for a site.
+
+        Reads from the normalised per-site data stores populated by the various `get_*()`
+        methods, guarding every lookup with `.get()` defaults so a site missing one data
+        category (e.g. no lifetime_energy fetched yet) cannot crash the whole publish. The
+        battery profile name is read from `self.profile`, not `self.battery_status` (the latter
+        has no profile field - see the note in `get_battery_status`).
+        """
+        entity_base = f"sensor.{self.prefix}_enphase_{site_id}"
+        now_utc = datetime.now(timezone.utc)
+
+        status = self.battery_status.get(site_id, {})
+        profile = self.profile.get(site_id, {})
+        settings = self.battery_settings.get(site_id, {})
+        energy = self.lifetime_energy.get(site_id, {})
+        power = self.latest_power.get(site_id, {})
+
+        self.dashboard_item(
+            f"{entity_base}_soc_percent",
+            state=status.get("soc_percent"),
+            attributes={"unit_of_measurement": "%", "friendly_name": "Enphase Battery SOC", "icon": "mdi:battery-50"},
+            app="enphase",
+        )
+        self.dashboard_item(
+            f"{entity_base}_soc_kw",
+            state=status.get("available_energy"),
+            attributes={"unit_of_measurement": "kWh", "device_class": "energy", "state_class": "measurement", "friendly_name": "Enphase Battery Available Energy", "icon": "mdi:battery-charging-50"},
+            app="enphase",
+        )
+        self.dashboard_item(
+            f"{entity_base}_battery_capacity",
+            state=status.get("max_capacity"),
+            attributes={"unit_of_measurement": "kWh", "device_class": "energy", "state_class": "measurement", "friendly_name": "Enphase Battery Capacity", "icon": "mdi:battery-high"},
+            app="enphase",
+        )
+        max_power_kw = status.get("max_power_kw")
+        battery_rate_max = max_power_kw * 1000.0 if max_power_kw is not None else None
+        self.dashboard_item(
+            f"{entity_base}_battery_rate_max",
+            state=battery_rate_max,
+            attributes={"unit_of_measurement": "W", "device_class": "power", "state_class": "measurement", "friendly_name": "Enphase Battery Max Rate", "icon": "mdi:battery-charging-high"},
+            app="enphase",
+        )
+        self.dashboard_item(
+            f"{entity_base}_battery_status",
+            state=status.get("status"),
+            attributes={"friendly_name": "Enphase Battery Status", "icon": "mdi:information-outline"},
+            app="enphase",
+        )
+        self.dashboard_item(
+            f"{entity_base}_battery_profile",
+            state=profile.get("profile"),
+            attributes={"friendly_name": "Enphase Battery Profile", "icon": "mdi:cog-outline"},
+            app="enphase",
+        )
+        self.dashboard_item(
+            f"{entity_base}_battery_reserve",
+            state=profile.get("reserve"),
+            attributes={"unit_of_measurement": "%", "friendly_name": "Enphase Battery Reserve", "icon": "mdi:battery-lock"},
+            app="enphase",
+        )
+        reserve_min = settings.get("veryLowSocMin")
+        if reserve_min is None:
+            reserve_min = 5
+        self.dashboard_item(
+            f"{entity_base}_battery_reserve_min",
+            state=reserve_min,
+            attributes={"unit_of_measurement": "%", "friendly_name": "Enphase Battery Reserve Minimum", "icon": "mdi:battery-alert"},
+            app="enphase",
+        )
+
+        # Today's cumulative energy totals, one dashboard sensor per lifetime_energy channel.
+        energy_channels = {
+            "production": ("pv_today", "Enphase PV Today", "mdi:solar-power"),
+            "consumption": ("load_today", "Enphase Load Today", "mdi:home-lightning-bolt"),
+            "import": ("import_today", "Enphase Import Today", "mdi:transmission-tower-import"),
+            "export": ("export_today", "Enphase Export Today", "mdi:transmission-tower-export"),
+            "charge": ("battery_charge_today", "Enphase Battery Charge Today", "mdi:battery-plus"),
+            "discharge": ("battery_discharge_today", "Enphase Battery Discharge Today", "mdi:battery-minus"),
+        }
+        energy_values = {}
+        for channel, (name, friendly, icon) in energy_channels.items():
+            value = energy_today(energy, channel)
+            energy_values[channel] = value
+            self.dashboard_item(
+                f"{entity_base}_{name}",
+                state=value,
+                attributes={"unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total_increasing", "friendly_name": friendly, "icon": icon},
+                app="enphase",
+            )
+
+        self.dashboard_item(
+            f"{entity_base}_load_power",
+            state=power.get("watts"),
+            attributes={"unit_of_measurement": "W", "device_class": "power", "state_class": "measurement", "friendly_name": "Enphase Load Power", "icon": "mdi:home-lightning-bolt"},
+            app="enphase",
+        )
+
+        # Derived instantaneous power from cumulative kWh deltas, kept per site/channel.
+        samples = self.prev_energy_sample.setdefault(site_id, {})
+        pv_power, samples["production"] = derive_power(samples.get("production"), energy_values["production"], now_utc)
+        import_power, samples["import"] = derive_power(samples.get("import"), energy_values["import"], now_utc)
+        export_power, samples["export"] = derive_power(samples.get("export"), energy_values["export"], now_utc)
+        charge_power, samples["charge"] = derive_power(samples.get("charge"), energy_values["charge"], now_utc)
+        discharge_power, samples["discharge"] = derive_power(samples.get("discharge"), energy_values["discharge"], now_utc)
+
+        grid_power = import_power - export_power
+        battery_power = discharge_power - charge_power
+
+        self.dashboard_item(
+            f"{entity_base}_pv_power",
+            state=pv_power,
+            attributes={"unit_of_measurement": "W", "device_class": "power", "state_class": "measurement", "friendly_name": "Enphase PV Power", "icon": "mdi:solar-power"},
+            app="enphase",
+        )
+        self.dashboard_item(
+            f"{entity_base}_grid_power",
+            state=grid_power,
+            attributes={"unit_of_measurement": "W", "device_class": "power", "state_class": "measurement", "friendly_name": "Enphase Grid Power", "icon": "mdi:transmission-tower"},
+            app="enphase",
+        )
+        self.dashboard_item(
+            f"{entity_base}_battery_power",
+            state=battery_power,
+            attributes={"unit_of_measurement": "W", "device_class": "power", "state_class": "measurement", "friendly_name": "Enphase Battery Power", "icon": "mdi:battery-charging"},
+            app="enphase",
+        )
 
     async def publish_schedule_settings_ha(self, site_id):
         """Publish schedule control entities for a site (implemented in a later task)."""
