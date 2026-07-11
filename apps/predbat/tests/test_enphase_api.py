@@ -391,6 +391,54 @@ def test_publish_data_sensors():
     assert "sensor.predbat_enphase_12345_pv_power" in items
 
 
+def test_publish_schedule_entities():
+    """Control entities are published for charge, and export only when dtg supported."""
+    api = MockEnphaseAPI()
+    api.schedules["12345"] = {"cfg": {"supported": True}, "dtg": {"supported": False}, "rbd": {"supported": True}}
+    api.battery_settings["12345"] = {"veryLowSocMin": 5}
+    run_async(api.publish_schedule_settings_ha("12345"))
+    items = api.dashboard_items
+    assert "select.predbat_enphase_12345_battery_schedule_charge_start_time" in items
+    assert "number.predbat_enphase_12345_battery_schedule_charge_soc" in items
+    assert "switch.predbat_enphase_12345_battery_schedule_charge_write" in items
+    assert "number.predbat_enphase_12345_battery_schedule_reserve" in items
+    assert "select.predbat_enphase_12345_battery_schedule_export_start_time" not in items
+
+
+def test_event_handlers_update_local_schedule():
+    """select/number/switch events mutate the local schedule model."""
+    api = MockEnphaseAPI()
+    api.sites = [{"site_id": "12345", "name": "Home"}]
+    api.local_schedule["12345"] = {
+        "reserve": 20,
+        "charge": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 100, "enable": False},
+        "export": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 5, "enable": False},
+        "freeze": {"enable": False},
+    }
+    run_async(api.select_event("select.predbat_enphase_12345_battery_schedule_charge_start_time", "02:30:00"))
+    assert api.local_schedule["12345"]["charge"]["start_time"] == "02:30:00"
+    run_async(api.number_event("number.predbat_enphase_12345_battery_schedule_charge_soc", 85))
+    assert api.local_schedule["12345"]["charge"]["soc"] == 85
+    run_async(api.switch_event("switch.predbat_enphase_12345_battery_schedule_charge_enable", "turn_on"))
+    assert api.local_schedule["12345"]["charge"]["enable"] is True
+
+
+def test_write_switch_triggers_apply():
+    """Turning on the write switch calls apply_battery_schedule for the site."""
+    api = MockEnphaseAPI()
+    api.sites = [{"site_id": "12345", "name": "Home"}]
+    api.local_schedule["12345"] = {"reserve": 20, "charge": {"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": True}, "export": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 5, "enable": False}, "freeze": {"enable": False}}
+    applied = []
+
+    async def fake_apply(site_id):
+        """Record the applied site."""
+        applied.append(site_id)
+
+    api.apply_battery_schedule = fake_apply
+    run_async(api.switch_event("switch.predbat_enphase_12345_battery_schedule_charge_write", "turn_on"))
+    assert applied == ["12345"]
+
+
 def run_enphase_api_tests(my_predbat):
     """Run all Enphase API tests, returning 0 on success."""
     test_initialize_defaults()
@@ -413,5 +461,8 @@ def run_enphase_api_tests(my_predbat):
     test_run_first_polls_all_tiers()
     test_derive_power()
     test_publish_data_sensors()
+    test_publish_schedule_entities()
+    test_event_handlers_update_local_schedule()
+    test_write_switch_triggers_apply()
     print("**** Enphase API tests passed ****")
     return 0

@@ -101,6 +101,17 @@ def derive_power(prev_sample, new_kwh, now_utc):
     return round(delta * 1000.0 * 3600.0 / seconds, 1), new_sample
 
 
+def ha_time_to_enphase(value):
+    """Convert an HA 'HH:MM:SS' option time to Enphase 'HH:MM' format."""
+    return str(value)[:5]
+
+
+def enphase_time_to_ha(value):
+    """Convert an Enphase 'HH:MM' time to the HA 'HH:MM:SS' option format."""
+    text = str(value or "00:00")[:5]
+    return text + ":00"
+
+
 def decode_jwt_claims(token):
     """Decode the payload segment of a JWT without verifying the signature."""
     try:
@@ -388,8 +399,167 @@ class EnphaseAPI(ComponentBase):
             app="enphase",
         )
 
+    def _default_local_schedule(self):
+        """Return an empty local schedule model."""
+        return {
+            "reserve": 0,
+            "charge": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 100, "enable": False},
+            "export": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 5, "enable": False},
+            "freeze": {"enable": False},
+        }
+
     async def publish_schedule_settings_ha(self, site_id):
-        """Publish schedule control entities for a site (implemented in a later task)."""
+        """Publish the schedule control entities for a site.
+
+        Always publishes the reserve control plus the charge-from-grid window controls.
+        The export-to-grid (discharge-to-grid) window controls are only published when
+        `dtg_supported(site_id)` is True, since not every Enphase system supports that
+        schedule family. A freeze-enable switch is also published; its window reuses the
+        charge window and is written to the "rbd" schedule family at apply time (Task 7).
+        """
+        local = self.local_schedule.setdefault(site_id, self._default_local_schedule())
+        reserve_min = int(self.battery_settings.get(site_id, {}).get("veryLowSocMin", 5) or 5)
+        base_name = f"{self.prefix}_enphase_{site_id}_battery_schedule"
+
+        self.dashboard_item(
+            f"number.{base_name}_reserve",
+            state=local.get("reserve", 0),
+            attributes={"min": reserve_min, "max": 100, "step": 1, "unit_of_measurement": "%", "friendly_name": f"Enphase {site_id} Battery Schedule Reserve", "icon": "mdi:gauge"},
+            app="enphase",
+        )
+
+        directions = ["charge"]
+        if self.dtg_supported(site_id):
+            directions.append("export")
+        for direction in directions:
+            window = local.get(direction, {})
+            for attribute in ["start_time", "end_time"]:
+                value = window.get(attribute, "00:00:00")
+                if value not in OPTIONS_TIME_FULL:
+                    value = "00:00:00"
+                self.dashboard_item(
+                    f"select.{base_name}_{direction}_{attribute}",
+                    state=value,
+                    attributes={
+                        "options": OPTIONS_TIME_FULL,
+                        "friendly_name": f"Enphase {site_id} Battery Schedule {direction.capitalize()} {attribute.replace('_', ' ').capitalize()}",
+                        "icon": "mdi:clock-outline",
+                    },
+                    app="enphase",
+                )
+            self.dashboard_item(
+                f"number.{base_name}_{direction}_soc",
+                state=int(window.get("soc", 100 if direction == "charge" else reserve_min)),
+                attributes={"min": 5, "max": 100, "step": 1, "unit_of_measurement": "%", "friendly_name": f"Enphase {site_id} Battery Schedule {direction.capitalize()} Soc", "icon": "mdi:gauge"},
+                app="enphase",
+            )
+            self.dashboard_item(
+                f"switch.{base_name}_{direction}_enable",
+                state="on" if window.get("enable") else "off",
+                attributes={"friendly_name": f"Enphase {site_id} Battery Schedule {direction.capitalize()} Enable", "icon": "mdi:check-circle-outline"},
+                app="enphase",
+            )
+            self.dashboard_item(
+                f"switch.{base_name}_{direction}_write",
+                state="off",
+                attributes={"friendly_name": f"Enphase {site_id} Battery Schedule {direction.capitalize()} Write", "icon": "mdi:upload"},
+                app="enphase",
+            )
+        self.dashboard_item(
+            f"switch.{base_name}_freeze_enable",
+            state="on" if local.get("freeze", {}).get("enable") else "off",
+            attributes={"friendly_name": f"Enphase {site_id} Battery Schedule Freeze Enable", "icon": "mdi:snowflake"},
+            app="enphase",
+        )
+
+    async def get_schedule_settings_ha(self, site_id):
+        """Read the current schedule control entity states from HA into the local schedule model."""
+        local = self.local_schedule.setdefault(site_id, self._default_local_schedule())
+        base_name = f"{self.prefix}_enphase_{site_id}_battery_schedule"
+        local["reserve"] = int(float(self.get_state_wrapper(f"number.{base_name}_reserve", local.get("reserve", 0)) or 0))
+        for direction in ["charge", "export"]:
+            window = local.setdefault(direction, {})
+            for attribute in ["start_time", "end_time"]:
+                value = self.get_state_wrapper(f"select.{base_name}_{direction}_{attribute}", window.get(attribute, "00:00:00"))
+                if value in OPTIONS_TIME_FULL:
+                    window[attribute] = value
+            window["soc"] = int(float(self.get_state_wrapper(f"number.{base_name}_{direction}_soc", window.get("soc", 100)) or 0))
+            window["enable"] = str(self.get_state_wrapper(f"switch.{base_name}_{direction}_enable", "on" if window.get("enable") else "off")).lower() == "on"
+        local.setdefault("freeze", {})["enable"] = str(self.get_state_wrapper(f"switch.{base_name}_freeze_enable", "off")).lower() == "on"
+
+    def _parse_entity(self, entity_id):
+        """Split a published entity id into (site_id, attribute_name), or (None, None) if not ours."""
+        try:
+            name = entity_id.split(".", 1)[1]
+        except IndexError:
+            return None, None
+        marker = f"{self.prefix}_enphase_"
+        if not name.startswith(marker):
+            return None, None
+        remainder = name[len(marker) :]
+        for site in self.sites:
+            site_id = site["site_id"]
+            if remainder.startswith(site_id + "_"):
+                return site_id, remainder[len(site_id) + 1 :]
+        return None, None
+
+    def _toggle_to_bool(self, service, current):
+        """Convert an HA switch service call into the resulting boolean state."""
+        if service == "turn_on":
+            return True
+        if service == "turn_off":
+            return False
+        return not current
+
+    async def select_event(self, entity_id, value):
+        """Handle a select entity change routed from HA, updating the local schedule model."""
+        site_id, attribute = self._parse_entity(entity_id)
+        if not site_id or not attribute.startswith("battery_schedule_"):
+            return
+        field = attribute[len("battery_schedule_") :]
+        local = self.local_schedule.setdefault(site_id, self._default_local_schedule())
+        for direction in ["charge", "export"]:
+            for time_key in ["start_time", "end_time"]:
+                if field == f"{direction}_{time_key}" and value in OPTIONS_TIME_FULL:
+                    local[direction][time_key] = value
+        await self.publish_schedule_settings_ha(site_id)
+
+    async def number_event(self, entity_id, value):
+        """Handle a number entity change routed from HA, updating the local schedule model."""
+        site_id, attribute = self._parse_entity(entity_id)
+        if not site_id or not attribute.startswith("battery_schedule_"):
+            return
+        field = attribute[len("battery_schedule_") :]
+        local = self.local_schedule.setdefault(site_id, self._default_local_schedule())
+        if field == "reserve":
+            local["reserve"] = int(float(value))
+        for direction in ["charge", "export"]:
+            if field == f"{direction}_soc":
+                local[direction]["soc"] = int(float(value))
+        await self.publish_schedule_settings_ha(site_id)
+
+    async def switch_event(self, entity_id, service):
+        """Handle a switch service call routed from HA, updating the local schedule model.
+
+        Turning on a "_write" switch triggers `apply_battery_schedule(site_id)` (the real
+        cloud write path, implemented in Task 7 - this only calls the stub for now).
+        """
+        site_id, attribute = self._parse_entity(entity_id)
+        if not site_id or not attribute.startswith("battery_schedule_"):
+            return
+        field = attribute[len("battery_schedule_") :]
+        local = self.local_schedule.setdefault(site_id, self._default_local_schedule())
+        if field == "freeze_enable":
+            local["freeze"]["enable"] = self._toggle_to_bool(service, local["freeze"]["enable"])
+        for direction in ["charge", "export"]:
+            if field == f"{direction}_enable":
+                local[direction]["enable"] = self._toggle_to_bool(service, local[direction]["enable"])
+            if field == f"{direction}_write" and self._toggle_to_bool(service, False):
+                await self.apply_battery_schedule(site_id)
+        await self.publish_schedule_settings_ha(site_id)
+
+    async def apply_battery_schedule(self, site_id):
+        """Write the local schedule model to the Enphase cloud for a site (implemented in Task 7)."""
         pass
 
     async def get_battery_status(self, site_id):
