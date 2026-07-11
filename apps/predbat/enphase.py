@@ -127,7 +127,8 @@ def schedules_equal(cloud_entry, start_hm, end_hm, limit, enabled):
         return True  # both disabled - window/limit are irrelevant
     if str(cloud_entry.get("startTime", ""))[:5] != start_hm or str(cloud_entry.get("endTime", ""))[:5] != end_hm:
         return False
-    if limit is not None and int(cloud_entry.get("limit", -1)) != int(limit):
+    cloud_limit = cloud_entry.get("limit")
+    if limit is not None and (cloud_limit is None or int(cloud_limit) != int(limit)):
         return False
     return True
 

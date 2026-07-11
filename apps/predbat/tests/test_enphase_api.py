@@ -451,6 +451,17 @@ def test_schedules_equal():
     assert not schedules_equal(None, "02:00", "05:00", 90, True)
 
 
+def test_schedules_equal_none_limit():
+    """schedules_equal must not crash when the cloud entry has a present-but-None limit key."""
+    from enphase import schedules_equal
+
+    cloud = {"id": "u1", "startTime": "02:00", "endTime": "05:00", "limit": None, "enabled": True}
+    # We want a specific limit but the cloud entry has none - not equal, no crash.
+    assert not schedules_equal(cloud, "02:00", "05:00", 90, True)
+    # We don't require a limit at all and windows match - equal.
+    assert schedules_equal(cloud, "02:00", "05:00", None, True)
+
+
 def test_apply_charge_schedule_creates():
     """apply writes a CFG schedule via POST when none exists, enabling charge-from-grid first."""
     api = MockEnphaseAPI()
@@ -549,6 +560,7 @@ def run_enphase_api_tests(my_predbat):
     test_event_handlers_update_local_schedule()
     test_write_switch_triggers_apply()
     test_schedules_equal()
+    test_schedules_equal_none_limit()
     test_apply_charge_schedule_creates()
     test_apply_updates_existing_by_id()
     test_apply_no_change_no_write()
