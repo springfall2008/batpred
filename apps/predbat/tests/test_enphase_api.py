@@ -439,6 +439,90 @@ def test_write_switch_triggers_apply():
     assert applied == ["12345"]
 
 
+def test_schedules_equal():
+    """schedules_equal compares window, limit and enable state."""
+    from enphase import schedules_equal
+
+    cloud = {"id": "u1", "startTime": "02:00", "endTime": "05:00", "limit": 90, "enabled": True}
+    assert schedules_equal(cloud, "02:00", "05:00", 90, True)
+    assert not schedules_equal(cloud, "02:00", "05:30", 90, True)
+    assert not schedules_equal(cloud, "02:00", "05:00", 80, True)
+    assert not schedules_equal(cloud, "02:00", "05:00", 90, False)
+    assert not schedules_equal(None, "02:00", "05:00", 90, True)
+
+
+def test_apply_charge_schedule_creates():
+    """apply writes a CFG schedule via POST when none exists, enabling charge-from-grid first."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.sites = [{"site_id": "12345", "name": "Home"}]
+    api.schedules["12345"] = {"cfg": {"supported": True}, "dtg": {"supported": True}, "rbd": {"supported": True}}
+    api.profile["12345"] = {"profile": "self-consumption", "reserve": 20}
+    api.battery_settings["12345"] = {"chargeFromGrid": False, "veryLowSocMin": 5}
+    api.local_schedule["12345"] = {"reserve": 20, "charge": {"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": True}, "export": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 5, "enable": False}, "freeze": {"enable": False}}
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/acceptDisclaimer/12345", 200, {})
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 200, {})
+    api.set_http_response("/service/batteryConfig/api/v1/battery/sites/12345/schedules", 200, {"cfg": {"scheduleSupported": True, "details": []}, "dtg": {"scheduleSupported": True, "details": []}, "rbd": {"scheduleSupported": True, "details": []}})
+    run_async(api.apply_battery_schedule("12345"))
+    posts = [r for r in api.request_log if r["method"] == "POST" and r["path"].endswith("/schedules")]
+    assert len(posts) == 1
+    body = posts[0]["json"]
+    assert body["scheduleType"] == "CFG" and body["startTime"] == "02:00" and body["endTime"] == "05:00" and body["limit"] == 90 and body["isEnabled"] is True
+    disclaimers = [r for r in api.request_log if "acceptDisclaimer" in r["path"]]
+    assert len(disclaimers) == 1
+
+
+def test_apply_updates_existing_by_id():
+    """apply uses PUT /schedules/<id> when the family already has a schedule."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.sites = [{"site_id": "12345", "name": "Home"}]
+    api.schedules["12345"] = {"cfg": {"supported": True, "id": "u1", "startTime": "01:00", "endTime": "04:00", "limit": 80, "enabled": True}, "dtg": {"supported": True}, "rbd": {"supported": True}}
+    api.profile["12345"] = {"profile": "self-consumption", "reserve": 20}
+    api.battery_settings["12345"] = {"chargeFromGrid": True, "veryLowSocMin": 5}
+    api.local_schedule["12345"] = {"reserve": 20, "charge": {"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": True}, "export": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 5, "enable": False}, "freeze": {"enable": False}}
+    api.set_http_response("/service/batteryConfig/api/v1/battery/sites/12345/schedules/u1", 200, {})
+    api.set_http_response(
+        "/service/batteryConfig/api/v1/battery/sites/12345/schedules",
+        200,
+        {"cfg": {"scheduleSupported": True, "details": [{"id": "u1", "startTime": "02:00", "endTime": "05:00", "limit": 90, "isEnabled": True}]}, "dtg": {"scheduleSupported": True, "details": []}, "rbd": {"scheduleSupported": True, "details": []}},
+    )
+    run_async(api.apply_battery_schedule("12345"))
+    puts = [r for r in api.request_log if r["method"] == "PUT" and r["path"].endswith("/schedules/u1")]
+    assert len(puts) == 1
+    # After the confirming re-read matches, no pending write remains
+    assert ("12345", "CFG") not in api.pending_writes
+
+
+def test_apply_no_change_no_write():
+    """apply issues no schedule writes when cloud already matches the local schedule."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.sites = [{"site_id": "12345", "name": "Home"}]
+    api.schedules["12345"] = {"cfg": {"supported": True, "id": "u1", "startTime": "02:00", "endTime": "05:00", "limit": 90, "enabled": True}, "dtg": {"supported": True}, "rbd": {"supported": True}}
+    api.profile["12345"] = {"profile": "self-consumption", "reserve": 20}
+    api.battery_settings["12345"] = {"chargeFromGrid": True, "veryLowSocMin": 5}
+    api.local_schedule["12345"] = {"reserve": 20, "charge": {"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": True}, "export": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 5, "enable": False}, "freeze": {"enable": False}}
+    run_async(api.apply_battery_schedule("12345"))
+    writes = [r for r in api.request_log if r["method"] in ("POST", "PUT")]
+    assert writes == []
+
+
+def test_pending_write_suppresses_duplicate():
+    """While a write is pending confirmation, apply does not re-issue the same PUT."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.sites = [{"site_id": "12345", "name": "Home"}]
+    api.schedules["12345"] = {"cfg": {"supported": True, "id": "u1", "startTime": "01:00", "endTime": "04:00", "limit": 80, "enabled": True}, "dtg": {"supported": True}, "rbd": {"supported": True}}
+    api.profile["12345"] = {"profile": "self-consumption", "reserve": 20}
+    api.battery_settings["12345"] = {"chargeFromGrid": True, "veryLowSocMin": 5}
+    api.local_schedule["12345"] = {"reserve": 20, "charge": {"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": True}, "export": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 5, "enable": False}, "freeze": {"enable": False}}
+    api.pending_writes[("12345", "CFG")] = {"start": "02:00", "end": "05:00", "limit": 90, "enabled": True, "time": datetime.now(timezone.utc)}
+    run_async(api.apply_battery_schedule("12345"))
+    writes = [r for r in api.request_log if r["method"] in ("POST", "PUT") and "/schedules" in r["path"]]
+    assert writes == []
+
+
 def run_enphase_api_tests(my_predbat):
     """Run all Enphase API tests, returning 0 on success."""
     test_initialize_defaults()
@@ -464,5 +548,10 @@ def run_enphase_api_tests(my_predbat):
     test_publish_schedule_entities()
     test_event_handlers_update_local_schedule()
     test_write_switch_triggers_apply()
+    test_schedules_equal()
+    test_apply_charge_schedule_creates()
+    test_apply_updates_existing_by_id()
+    test_apply_no_change_no_write()
+    test_pending_write_suppresses_duplicate()
     print("**** Enphase API tests passed ****")
     return 0

@@ -63,6 +63,10 @@ SCHEDULE_FREEZE = "RBD"  # restrict battery discharge
 
 ENPHASE_RETRIES = 5
 
+# How long a schedule/profile write is kept as "pending" awaiting cloud confirmation
+# before it is dropped and eligible to be re-attempted.
+ENPHASE_PENDING_TIMEOUT_MINUTES = 15
+
 # Browser mimicry - Enlighten rejects non-browser requests with 406/login walls
 ENPHASE_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15"
 BATTERY_UI_ORIGIN = "https://battery-profile-ui.enphaseenergy.com"
@@ -110,6 +114,22 @@ def enphase_time_to_ha(value):
     """Convert an Enphase 'HH:MM' time to the HA 'HH:MM:SS' option format."""
     text = str(value or "00:00")[:5]
     return text + ":00"
+
+
+def schedules_equal(cloud_entry, start_hm, end_hm, limit, enabled):
+    """Return True when a cloud schedule entry already matches the desired window/limit/enable state."""
+    if not cloud_entry or "startTime" not in cloud_entry:
+        # No cloud schedule: equal only when we want it disabled
+        return not enabled
+    if bool(cloud_entry.get("enabled")) != bool(enabled):
+        return False
+    if not enabled:
+        return True  # both disabled - window/limit are irrelevant
+    if str(cloud_entry.get("startTime", ""))[:5] != start_hm or str(cloud_entry.get("endTime", ""))[:5] != end_hm:
+        return False
+    if limit is not None and int(cloud_entry.get("limit", -1)) != int(limit):
+        return False
+    return True
 
 
 def decode_jwt_claims(token):
@@ -245,6 +265,10 @@ class EnphaseAPI(ComponentBase):
             self.log(f"Enphase: Midnight reset - requests_today: {self.requests_today}")
             self.requests_today = 0
         self.last_midnight_utc = current_midnight
+
+        # Drop any schedule/profile writes that never got confirmed by the cloud within
+        # the settle timeout, so a future apply_battery_schedule() can retry them.
+        self.clear_expired_pending_writes()
 
         # Ensure we are logged in (guard rails inside login())
         if not self.eauth_token:
@@ -541,8 +565,8 @@ class EnphaseAPI(ComponentBase):
     async def switch_event(self, entity_id, service):
         """Handle a switch service call routed from HA, updating the local schedule model.
 
-        Turning on a "_write" switch triggers `apply_battery_schedule(site_id)` (the real
-        cloud write path, implemented in Task 7 - this only calls the stub for now).
+        Turning on a "_write" switch triggers `apply_battery_schedule(site_id)`, which
+        diffs the local schedule model against the cloud and issues only the changed writes.
         """
         site_id, attribute = self._parse_entity(entity_id)
         if not site_id or not attribute.startswith("battery_schedule_"):
@@ -558,9 +582,126 @@ class EnphaseAPI(ComponentBase):
                 await self.apply_battery_schedule(site_id)
         await self.publish_schedule_settings_ha(site_id)
 
+    def _site_timezone(self, site_id):
+        """Return the IANA timezone to use for schedule writes."""
+        timezone_name = self.site_settings.get(site_id, {}).get("timezone")
+        return timezone_name or str(self.local_tz)
+
+    def _pending_active(self, site_id, family):
+        """Return True when a write for this family is still awaiting cloud confirmation."""
+        pending = self.pending_writes.get((site_id, family))
+        if not pending:
+            return False
+        age_minutes = (datetime.now(timezone.utc) - pending["time"]).total_seconds() / 60.0
+        if age_minutes > ENPHASE_PENDING_TIMEOUT_MINUTES:
+            self.log(f"Warn: Enphase: Pending {family} write for site {site_id} timed out after {ENPHASE_PENDING_TIMEOUT_MINUTES} minutes")
+            del self.pending_writes[(site_id, family)]
+            return False
+        return True
+
+    async def _write_schedule(self, site_id, family, start_time_ha, end_time_ha, limit, enabled):
+        """Create/update one Enphase schedule family if it differs from the cloud state.
+
+        Converts the HA "HH:MM:SS" option times to Enphase "HH:MM" format, then compares
+        against the cached cloud schedule via `schedules_equal()`. A matching schedule is a
+        no-op (and clears any stale pending record); a write already pending confirmation for
+        this family is left alone rather than re-issued. Otherwise updates the existing
+        schedule by id (`PUT`) or creates a new one (`POST`), then records the write as pending
+        regardless of the HTTP result, since Enphase writes can settle even after a non-200
+        response. Returns True if a write was issued (not whether it was confirmed).
+        """
+        start_hm = ha_time_to_enphase(start_time_ha)
+        end_hm = ha_time_to_enphase(end_time_ha)
+        family_key = family.lower()
+        cloud_entry = self.schedules.get(site_id, {}).get(family_key, {})
+        if schedules_equal(cloud_entry, start_hm, end_hm, limit, enabled):
+            self.pending_writes.pop((site_id, family), None)  # confirmed
+            return False
+        if self._pending_active(site_id, family):
+            return False  # a matching write is still settling; don't spam duplicates
+
+        payload = {"timezone": self._site_timezone(site_id), "startTime": start_hm, "endTime": end_hm, "scheduleType": family, "days": [1, 2, 3, 4, 5, 6, 7], "isEnabled": bool(enabled)}
+        if limit is not None:
+            payload["limit"] = int(limit)
+        schedule_id = cloud_entry.get("id")
+        if schedule_id:
+            self.log(f"Enphase: Updating {family} schedule {schedule_id} on site {site_id}: {start_hm}-{end_hm} limit={limit} enabled={enabled}")
+            result = await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/battery/sites/{site_id}/schedules/{schedule_id}", family="battery_config", json_body=payload)
+        else:
+            self.log(f"Enphase: Creating {family} schedule on site {site_id}: {start_hm}-{end_hm} limit={limit} enabled={enabled}")
+            result = await self.request_json("POST", f"{BATTERY_CONFIG_BASE}/battery/sites/{site_id}/schedules", family="battery_config", json_body=payload)
+        # Record as pending regardless of result - Enphase writes can 400 yet still land
+        self.pending_writes[(site_id, family)] = {"start": start_hm, "end": end_hm, "limit": limit, "enabled": enabled, "time": datetime.now(timezone.utc)}
+        return result is not None
+
+    async def _ensure_charge_from_grid(self, site_id):
+        """Enable the charge-from-grid setting, accepting the one-time ITC disclaimer first."""
+        if self.battery_settings.get(site_id, {}).get("chargeFromGrid"):
+            return
+        self.log(f"Enphase: Enabling charge-from-grid on site {site_id}")
+        await self.request_json("POST", f"{BATTERY_CONFIG_BASE}/batterySettings/acceptDisclaimer/{site_id}", family="battery_config", json_body={"disclaimer-type": "itc"})
+        await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/batterySettings/{site_id}", family="battery_config", json_body={"chargeFromGrid": True})
+        self.battery_settings.setdefault(site_id, {})["chargeFromGrid"] = True
+
     async def apply_battery_schedule(self, site_id):
-        """Write the local schedule model to the Enphase cloud for a site (implemented in Task 7)."""
-        pass
+        """Diff the local schedule model against the cloud and issue only the changed writes.
+
+        Reads the latest control-entity state into `local_schedule` first, then writes (only
+        where the desired state differs from the cached cloud state):
+        1. Reserve, via a profile PUT that preserves the current profile name.
+        2. Forced charge-from-grid window (schedule family "CFG"), enabling the
+           `chargeFromGrid` battery setting first if required.
+        3. Forced export-to-grid window (schedule family "DTG"), only on sites that support it.
+        4. Freeze/restrict-discharge (schedule family "RBD"), reusing the charge window times.
+        After any write, schedules and profile are re-fetched so pending writes can be
+        confirmed (and cleared) as soon as the cloud reflects them.
+        """
+        await self.get_schedule_settings_ha(site_id)
+        local = self.local_schedule.get(site_id, self._default_local_schedule())
+        wrote = False
+
+        # Reserve via profile PUT, preserving the current profile name
+        desired_reserve = int(local.get("reserve", 0))
+        cloud = self.profile.get(site_id, {})
+        if desired_reserve and desired_reserve != int(cloud.get("reserve", -1)):
+            profile_name = cloud.get("profile") or PROFILE_SELF_CONSUMPTION
+            self.log(f"Enphase: Setting reserve to {desired_reserve}% (profile {profile_name}) on site {site_id}")
+            await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/profile/{site_id}", family="battery_config", params={"source": "enho", "userId": self.user_id}, json_body={"profile": profile_name, "batteryBackupPercentage": desired_reserve})
+            wrote = True
+
+        # Forced charge window (CFG)
+        charge = local.get("charge", {})
+        if charge.get("enable"):
+            await self._ensure_charge_from_grid(site_id)
+        wrote |= await self._write_schedule(site_id, SCHEDULE_CHARGE, charge.get("start_time", "00:00:00"), charge.get("end_time", "00:00:00"), charge.get("soc", 100), charge.get("enable", False))
+
+        # Forced export window (DTG), only where supported
+        export = local.get("export", {})
+        if self.dtg_supported(site_id):
+            wrote |= await self._write_schedule(site_id, SCHEDULE_EXPORT, export.get("start_time", "00:00:00"), export.get("end_time", "00:00:00"), export.get("soc", 5), export.get("enable", False))
+
+        # Freeze (RBD) reuses the charge window times
+        freeze_enabled = local.get("freeze", {}).get("enable", False)
+        wrote |= await self._write_schedule(site_id, SCHEDULE_FREEZE, charge.get("start_time", "00:00:00"), charge.get("end_time", "00:00:00"), None, freeze_enabled)
+
+        if wrote:
+            # Re-read to confirm; writes settle asynchronously so pending writes may persist for minutes
+            await self.get_schedules(site_id)
+            for family in (SCHEDULE_CHARGE, SCHEDULE_EXPORT, SCHEDULE_FREEZE):
+                pending = self.pending_writes.get((site_id, family))
+                if pending and schedules_equal(self.schedules.get(site_id, {}).get(family.lower(), {}), pending["start"], pending["end"], pending["limit"], pending["enabled"]):
+                    del self.pending_writes[(site_id, family)]
+            await self.get_profile(site_id)
+
+    def clear_expired_pending_writes(self):
+        """Drop any pending schedule writes whose settle timeout has elapsed.
+
+        Called once per `run()` cycle so a write that never gets confirmed by the cloud
+        (e.g. it was rejected server-side) does not block a future re-attempt forever.
+        """
+        for key in list(self.pending_writes.keys()):
+            site_id, family = key
+            self._pending_active(site_id, family)  # drops the entry itself if expired
 
     async def get_battery_status(self, site_id):
         """Fetch and normalise battery SOC/capacity/power for a site."""
