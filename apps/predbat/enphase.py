@@ -20,6 +20,11 @@ publishing and battery control are added by later tasks.
 """
 
 from datetime import datetime, timedelta, timezone
+import base64
+import json
+import uuid
+
+import aiohttp
 
 from component_base import ComponentBase
 
@@ -63,8 +68,24 @@ ENPHASE_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKi
 BATTERY_UI_ORIGIN = "https://battery-profile-ui.enphaseenergy.com"
 
 
+def decode_jwt_claims(token):
+    """Decode the payload segment of a JWT without verifying the signature."""
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        return json.loads(base64.urlsafe_b64decode(payload.encode("ascii")))
+    except (IndexError, ValueError):
+        return {}
+
+
 class EnphaseAPI(ComponentBase):
     """Enphase Enlighten cloud API client component."""
+
+    # Login guard-rail tunables - protect the Enphase account from lockout
+    LOGIN_REUSE_SECONDS = 30
+    LOGIN_COOLDOWN_SECONDS = 300
+    LOGIN_SUSPEND_SECONDS = 24 * 3600
+    LOGIN_MAX_REJECTS = 3
 
     def initialize(self, username, password, site_id=None, automatic=False, automatic_ignore_pv=False):
         """Initialise the Enphase API component state."""
@@ -174,3 +195,160 @@ class EnphaseAPI(ComponentBase):
             await self.load_cached_data()
         # Later tasks fill in: login, per-tier refresh, publishing
         return True
+
+    def login_allowed(self):
+        """Return True when a password login attempt is currently permitted by the guard rails."""
+        if self.login_cooldown_until and datetime.now(timezone.utc) < self.login_cooldown_until:
+            return False
+        return True
+
+    def _login_rejected(self, reason):
+        """Record a rejected login and set the appropriate cooldown."""
+        self.login_reject_count += 1
+        if self.login_reject_count >= self.LOGIN_MAX_REJECTS:
+            delay = self.LOGIN_SUSPEND_SECONDS
+        else:
+            delay = self.LOGIN_COOLDOWN_SECONDS
+        self.login_cooldown_until = datetime.now(timezone.utc) + timedelta(seconds=delay)
+        self.log(f"Warn: Enphase: Login rejected ({reason}), cooling down for {delay} seconds (rejection {self.login_reject_count})")
+        self.fatal_error_occurred()
+
+    async def login(self):
+        """Authenticate with Enlighten: password login, token mint, site discovery."""
+        # Reuse a very recent successful login (coalesces concurrent 401 refreshes)
+        if self.login_last_success and (datetime.now(timezone.utc) - self.login_last_success).total_seconds() < self.LOGIN_REUSE_SECONDS and self.eauth_token:
+            return True
+        if not self.login_allowed():
+            self.log("Warn: Enphase: Login suppressed by cooldown after previous rejections")
+            return False
+
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "X-Requested-With": "XMLHttpRequest",
+            "User-Agent": ENPHASE_USER_AGENT,
+            "Referer": BASE_URL + "/",
+        }
+        status, data, text, cookies = await self.request_raw("POST", BASE_URL + LOGIN_PATH, headers=headers, data={"user[email]": self.username, "user[password]": self.password})
+
+        if status in (401, 403):
+            self._login_rejected("invalid credentials")
+            return False
+        if isinstance(data, dict) and data.get("requires_mfa"):
+            self._login_rejected("account requires MFA - disable MFA on the Enphase account to use this component")
+            return False
+        if isinstance(data, dict) and data.get("isBlocked"):
+            self._login_rejected("account is blocked")
+            return False
+        if status != 200:
+            # Includes "too many active sessions" responses - treat as rejection
+            reason = "too many active sessions" if "session" in str(text).lower() else f"http status {status}"
+            self._login_rejected(reason)
+            return False
+
+        # Persist cookies from the login (session cookie + manager token JWT)
+        self._absorb_cookies(cookies)
+
+        # Mint the e-auth/bearer token; Enlighten may rotate the session cookie here
+        status, token_data, text, cookies = await self.request_raw("GET", BASE_URL + SELF_TOKEN_PATH, headers=self.get_headers("site"))
+        self._absorb_cookies(cookies)
+        if status == 200 and isinstance(token_data, dict):
+            token = token_data.get("token") or token_data.get("auth_token") or token_data.get("access_token")
+            if token:
+                self.eauth_token = token
+                claims = decode_jwt_claims(token)
+                self.user_id = str(claims.get("user_id") or claims.get("userId") or claims.get("sub") or "") or None
+                self.token_expires_at = token_data.get("expires_at") or token_data.get("expiresAt") or claims.get("exp")
+        if not self.eauth_token:
+            self._login_rejected("no auth token returned")
+            return False
+
+        # Discover sites
+        status, sites_data, text, cookies = await self.request_raw("GET", BASE_URL + SITE_SEARCH_PATH, headers=self.get_headers("site"), params={"searchText": "", "favourite": "false"})
+        sites = []
+        if status == 200:
+            entries = sites_data if isinstance(sites_data, list) else (sites_data or {}).get("sites", [])
+            for entry in entries:
+                sid = str(entry.get("site_id") or entry.get("id") or "")
+                if sid and (not self.site_id or sid == self.site_id):
+                    sites.append({"site_id": sid, "name": entry.get("name", sid)})
+        if sites:
+            self.sites = sites
+            await self._save_cache("sites", sites)
+
+        self.login_last_success = datetime.now(timezone.utc)
+        self.login_reject_count = 0
+        self.login_cooldown_until = None
+        self.log(f"Enphase: Login successful, {len(self.sites)} site(s)")
+        return True
+
+    def _absorb_cookies(self, cookies):
+        """Merge response cookies into the serialised cookie header and pick out special tokens."""
+        if not cookies:
+            return
+        current = {}
+        for part in self.cookie_header.split("; "):
+            if "=" in part:
+                name, value = part.split("=", 1)
+                current[name] = value
+        current.update(cookies)
+        self.cookie_header = "; ".join(f"{k}={v}" for k, v in current.items() if v)
+        self.manager_token = current.get("enlighten_manager_token_production", self.manager_token)
+        self.xsrf_token = current.get("XSRF-TOKEN", current.get("BP-XSRF-Token", self.xsrf_token))
+
+    def get_headers(self, family, write=False):
+        """Build request headers for an endpoint family ('site' or 'battery_config')."""
+        if family == "battery_config":
+            headers = {
+                "Accept": "application/json, text/plain, */*",
+                "Origin": BATTERY_UI_ORIGIN,
+                "Referer": BATTERY_UI_ORIGIN + "/",
+                "User-Agent": ENPHASE_USER_AGENT,
+                "e-auth-token": self.eauth_token or "",
+            }
+            if self.battery_config_variant == "cookie_eauth":
+                # Fallback variant needed on some regions/firmware: cookie-backed with XHR marker
+                headers["X-Requested-With"] = "XMLHttpRequest"
+                if self.cookie_header:
+                    headers["Cookie"] = self.cookie_header
+            else:
+                headers["requestid"] = str(uuid.uuid4())
+            bearer = self.manager_token or self.eauth_token
+            if bearer:
+                headers["Authorization"] = f"Bearer {bearer}"
+            if self.user_id:
+                headers["Username"] = self.user_id
+            if write:
+                headers["Content-Type"] = "application/json"
+                if self.xsrf_token:
+                    headers["X-XSRF-Token"] = self.xsrf_token
+            return headers
+
+        headers = {
+            "Accept": "application/json, text/plain, */*",
+            "User-Agent": ENPHASE_USER_AGENT,
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": BASE_URL + "/",
+        }
+        if self.cookie_header:
+            headers["Cookie"] = self.cookie_header
+        if self.eauth_token:
+            headers["Authorization"] = f"Bearer {self.eauth_token}"
+            headers["e-auth-token"] = self.eauth_token
+        if self.xsrf_token:
+            headers["X-CSRF-Token"] = self.xsrf_token
+        return headers
+
+    async def request_raw(self, method, url, headers=None, data=None, json_body=None, params=None):
+        """Perform one HTTP request, returning (status, json_or_none, text, cookie_dict). Overridden in tests."""
+        async with aiohttp.ClientSession() as session:
+            async with session.request(method, url, headers=headers, data=data, json=json_body, params=params, timeout=aiohttp.ClientTimeout(total=60)) as response:
+                text = await response.text()
+                cookies = {key: morsel.value for key, morsel in response.cookies.items()}
+                json_data = None
+                content_type = response.headers.get("Content-Type", "")
+                if "json" in content_type:
+                    try:
+                        json_data = await response.json(content_type=None)
+                    except ValueError:
+                        json_data = None
+                return response.status, json_data, text, cookies

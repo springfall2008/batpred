@@ -121,6 +121,7 @@ energythroughput
 enphase
 enphaseenergy
 epod
+etok
 euids
 EVDC
 evergen
@@ -262,6 +263,7 @@ mppt
 mprn
 mpxn
 mqtt
+mtok
 mult
 myenergi
 mypy
@@ -335,6 +337,7 @@ rarr
 reactivepower
 recp
 redownload
+Referer
 refetches
 regionid
 regname
@@ -362,6 +365,7 @@ Selfrun
 Selfuse
 semodbus
 Sergoe
+sess
 SFMB
 sigcloud
 sigen
@@ -429,6 +433,7 @@ tottime
 trapz
 Trefor
 treforsiphone
+tunables
 twinx
 tzfile
 tzpath
