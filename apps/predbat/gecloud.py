@@ -417,10 +417,13 @@ class GECloudDirect(ComponentBase):
         full_capacity = 0
         design_capacity = 0
         for battery in batteries:
-            full_capacity += battery.get("capacity", {}).get("full", 0)
-            design_capacity += battery.get("capacity", {}).get("design", 0)
+            full_this = battery.get("capacity", {}).get("full", None)
+            design_this = battery.get("capacity", {}).get("design", None)
+            if full_this and design_this:
+                full_capacity += full_this
+                design_capacity += design_this
         if full_capacity > 0 and design_capacity > 0:
-            soh = full_capacity / design_capacity
+            soh = min(full_capacity / design_capacity, 1.0)
         self.dashboard_item(entity_name + "_battery_soh", dp4(soh), attributes=attribute_table.get("battery_soh", {}), app="gecloud")
 
         # Device device info
