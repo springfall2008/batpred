@@ -59,10 +59,6 @@ class MockEnphaseAPI(EnphaseAPI):
         """Swallow log output in tests."""
         pass
 
-    def record_api_call(self, *args, **kwargs):
-        """Swallow telemetry in tests."""
-        pass
-
     def update_success_timestamp(self):
         """Swallow health-tracking in tests."""
         pass
@@ -223,6 +219,71 @@ def test_get_headers_battery_config():
     assert "requestid" in headers
 
 
+def test_request_json_success():
+    """request_json returns parsed JSON and counts the request."""
+    api = MockEnphaseAPI()
+    api.set_http_response("/pv/settings/12345/battery_status.json", 200, {"storages": []})
+    result = run_async(api.request_json("GET", "/pv/settings/12345/battery_status.json"))
+    assert result == {"storages": []}
+    assert api.requests_today == 1
+
+
+def test_request_json_401_relogin():
+    """A 401 triggers one re-login and one retry."""
+    api = MockEnphaseAPI()
+    api.eauth_token = "expired"
+    calls = {"n": 0}
+
+    async def fake_raw(method, url, headers=None, data=None, json_body=None, params=None):
+        """Return 401 once then 200, and 200 for the login chain."""
+        path = url.split("enphaseenergy.com", 1)[-1].split("?")[0]
+        api.request_log.append({"method": method, "path": path})
+        if path == "/login/login.json":
+            return 200, {"success": True, "session_id": "s"}, "", {}
+        if path == "/users/self/token":
+            return 200, {"token": "newtok"}, "", {}
+        if path == "/app-api/search_sites.json":
+            return 200, [{"site_id": 12345, "name": "Home"}], "", {}
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return 401, None, "", {}
+        return 200, {"ok": True}, "", {}
+
+    api.request_raw = fake_raw
+    result = run_async(api.request_json("GET", "/some/data.json"))
+    assert result == {"ok": True}
+    assert api.eauth_token == "newtok"
+
+
+def test_request_json_login_wall():
+    """An HTML body on a JSON endpoint is treated as auth failure, not a crash."""
+    api = MockEnphaseAPI()
+    api.login_cooldown_until = datetime.now(timezone.utc) + timedelta(hours=1)  # block re-login
+    api.set_http_response("/some/data.json", 200, None, text_data="<!DOCTYPE html><html>login</html>")
+    result = run_async(api.request_json("GET", "/some/data.json"))
+    assert result is None
+
+
+def test_battery_config_variant_fallback():
+    """A BatteryConfig auth failure switches header variant before re-logging in."""
+    api = MockEnphaseAPI()
+    api.eauth_token = "tok"
+    calls = {"n": 0}
+
+    async def fake_raw(method, url, headers=None, data=None, json_body=None, params=None):
+        """Reject the primary variant once, accept the cookie variant."""
+        calls["n"] += 1
+        if "requestid" in (headers or {}):
+            return 401, None, "", {}
+        return 200, {"ok": True}, "", {}
+
+    api.request_raw = fake_raw
+    result = run_async(api.request_json("GET", "/service/batteryConfig/api/v1/profile/12345", family="battery_config"))
+    assert result == {"ok": True}
+    assert api.battery_config_variant == "cookie_eauth"
+    assert calls["n"] == 2
+
+
 def run_enphase_api_tests(my_predbat):
     """Run all Enphase API tests, returning 0 on success."""
     test_initialize_defaults()
@@ -235,5 +296,9 @@ def run_enphase_api_tests(my_predbat):
     test_login_reuse_window()
     test_get_headers_site()
     test_get_headers_battery_config()
+    test_request_json_success()
+    test_request_json_401_relogin()
+    test_request_json_login_wall()
+    test_battery_config_variant_fallback()
     print("**** Enphase API tests passed ****")
     return 0

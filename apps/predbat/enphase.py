@@ -20,19 +20,19 @@ publishing and battery control are added by later tasks.
 """
 
 from datetime import datetime, timedelta, timezone
+import asyncio
 import base64
 import json
+import random
 import uuid
 
 import aiohttp
 
 from component_base import ComponentBase
+from predbat_metrics import record_api_call
 
 # Defined locally (not imported from utils) - every cloud component defines its own
 # copy of this table rather than sharing one, matching the pattern used by fox.py.
-# Note: record_api_call() is a module-level function in predbat_metrics.py (see
-# `from predbat_metrics import record_api_call` in fox.py); it is not called by this
-# skeleton and is intentionally left unimported until a later task needs it.
 BASE_TIME = datetime.strptime("00:00", "%H:%M")
 OPTIONS_TIME_FULL = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M") + ":00") for minute in range(0, 24 * 60, 1)]
 
@@ -136,6 +136,7 @@ class EnphaseAPI(ComponentBase):
         self.failures_total = 0
         self.requests_today = 0
         self.last_midnight_utc = None
+        self.last_error_status = None  # HTTP status (or None) of the most recent request_json() failure
 
     def is_alive(self):
         """Return True when the component has started and discovered a site."""
@@ -361,3 +362,79 @@ class EnphaseAPI(ComponentBase):
                     except ValueError:
                         json_data = None
                 return response.status, json_data, text, cookies
+
+    def _is_login_wall(self, json_data, text):
+        """Return True when a JSON endpoint answered with an HTML login page instead of JSON.
+
+        Enlighten sometimes responds to an expired/invalid session with a 200 status and an
+        HTML login page body rather than a 401, so this must be checked independently of status.
+        """
+        if json_data is not None:
+            return False
+        stripped = (text or "").lstrip().lower()
+        return stripped.startswith("<!doctype") or stripped.startswith("<html")
+
+    async def request_json(self, method, path, family="site", json_body=None, data=None, params=None):
+        """Perform an authenticated JSON request with retries and a single 401 re-login.
+
+        Builds the request URL from BASE_URL + path and attaches family-appropriate headers
+        via get_headers(). Handles failure modes as follows:
+        - A 401/403 status, or an HTML login-wall body on what should be a JSON endpoint, is
+          treated as an auth failure: for the "battery_config" family this first tries the
+          "cookie_eauth" header variant fallback (without consuming the single re-login
+          attempt); otherwise it performs one login() and retries once.
+        - HTTP 429 and 5xx responses, plus timeouts/connection errors, are retried with
+          jittered backoff up to ENPHASE_RETRIES times.
+        - Any other non-200 status is treated as a terminal failure.
+        Every outcome is recorded via record_api_call("enphase", ...) for metrics/health.
+        Returns the parsed JSON body on success, or None on failure (self.last_error_status is
+        set to the last HTTP status seen, where available).
+        """
+        url = BASE_URL + path
+        relogin_done = False
+        self.last_error_status = None
+        for retry in range(ENPHASE_RETRIES):
+            headers = self.get_headers(family, write=(method != "GET"))
+            try:
+                status, json_data, text, cookies = await self.request_raw(method, url, headers=headers, data=data, json_body=json_body, params=params)
+            except (asyncio.TimeoutError, aiohttp.ClientError) as error:
+                self.log(f"Warn: Enphase: Request error on {path}: {error}")
+                record_api_call("enphase", False, "connection_error")
+                await asyncio.sleep(1 + retry * random.random() * 5)
+                continue
+
+            self.requests_today += 1
+            auth_failed = status in (401, 403) or self._is_login_wall(json_data, text)
+            if auth_failed:
+                record_api_call("enphase", False, "auth_error")
+                if family == "battery_config" and self.battery_config_variant == "primary":
+                    # Some regions/firmware reject the primary BatteryConfig header shape;
+                    # switch to the cookie-backed fallback variant before burning a re-login.
+                    self.log("Enphase: BatteryConfig auth failed, switching to cookie header variant")
+                    self.battery_config_variant = "cookie_eauth"
+                    continue
+                if relogin_done or not await self.login():
+                    self.last_error_status = status
+                    self.failures_total += 1
+                    return None
+                relogin_done = True
+                continue
+
+            if status == 429 or status >= 500:
+                record_api_call("enphase", False, "rate_limit" if status == 429 else "server_error")
+                await asyncio.sleep(min(30, (retry + 1) * (2 + random.random() * 3)))
+                continue
+
+            if status != 200:
+                self.log(f"Warn: Enphase: HTTP {status} on {path}")
+                record_api_call("enphase", False, "client_error")
+                self.last_error_status = status
+                self.failures_total += 1
+                return None
+
+            record_api_call("enphase", True)
+            self.update_success_timestamp()
+            return json_data
+
+        self.failures_total += 1
+        return None
