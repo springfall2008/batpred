@@ -33,6 +33,7 @@ def test_fetch_config_options(my_predbat):
     original_update_save_restore_list = my_predbat.update_save_restore_list
     original_expose_config = my_predbat.expose_config
     original_args = my_predbat.args
+    original_components = getattr(my_predbat, "components", None)
 
     # Create mock config provider
     mock_config = MockConfigProvider()
@@ -75,6 +76,22 @@ def test_fetch_config_options(my_predbat):
     def mock_expose_config(key, value):
         exposed_config_calls.append((key, value))
 
+    # Minimal components stand-in so axle_component_healthy() resolves without
+    # depending on whatever components a previously-run test left on the shared
+    # my_predbat instance. Axle is present and healthy here (active + alive), so
+    # the Axle control path is exercised rather than skipped. The unhealthy path
+    # is covered directly in test_axle.py.
+    class _FakeComponents:
+        """Components stand-in exposing the interface axle_component_healthy() needs."""
+
+        def is_active(self, name):
+            """Report the axle component as active."""
+            return name == "axle"
+
+        def is_alive(self, name):
+            """Report every component including axle as alive and healthy."""
+            return True
+
     # Apply mocks
     my_predbat.manual_times = mock_manual_times
     my_predbat.manual_rates = mock_manual_rates
@@ -82,6 +99,7 @@ def test_fetch_config_options(my_predbat):
     my_predbat.get_state_wrapper = mock_get_state_wrapper
     my_predbat.update_save_restore_list = mock_update_save_restore_list
     my_predbat.expose_config = mock_expose_config
+    my_predbat.components = _FakeComponents()
 
     # Mock the args dict for battery curves
     my_predbat.args = {
@@ -338,6 +356,7 @@ def test_fetch_config_options(my_predbat):
     my_predbat.update_save_restore_list = original_update_save_restore_list
     my_predbat.expose_config = original_expose_config
     my_predbat.args = original_args
+    my_predbat.components = original_components
 
     print("\n**** All fetch_config_options tests passed! ****")
     return False
