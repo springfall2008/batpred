@@ -955,8 +955,10 @@ class Fetch:
             # Allow all zero export rates, as some users have a feed-in tariff that is zero
             self.rate_export = self.basic_rates(rate_export_dict, "rates_export")
 
-        # Fetch Axle sessions first so Octopus auto-join can skip saving sessions that overlap an Axle VPP session
-        self.axle_sessions = fetch_axle_sessions(self)
+        # Fetch Axle sessions first so Octopus auto-join can skip saving sessions that overlap an Axle VPP session.
+        # If the Axle component is unhealthy (e.g. an expired API key erroring every run) ignore its sessions so a
+        # failed VPP integration degrades to absent rather than injecting stale/phantom forced import/export slots.
+        self.axle_sessions = fetch_axle_sessions(self) if self.axle_component_healthy() else []
         # Fetch octopus saving sessions and free sessions
         self.octopus_free_slots, self.octopus_saving_slots = self.fetch_octopus_sessions(self.axle_sessions)
 
@@ -2254,6 +2256,23 @@ class Fetch:
 
         return validated_curve
 
+    def axle_component_healthy(self):
+        """Return True unless the Axle component is configured but in an error state.
+
+        Uses the same "active but not alive" definition as the components_healthy
+        dashboard sensor (see predbat.py). A failed Axle VPP integration must not
+        influence the plan: when it is unhealthy we ignore its sessions and never
+        hand battery control to it, so the integration degrades to absent (warn and
+        continue) rather than thrashing charge/discharge.
+        """
+        components = getattr(self, "components", None)
+        if not components or not components.is_active("axle"):
+            return True
+        if components.is_alive("axle"):
+            return True
+        self.log("Warn: Axle Energy component is unhealthy - ignoring Axle VPP sessions and skipping Axle read-only control this run (warn and continue)")
+        return False
+
     def fetch_config_options(self):
         """
         Fetch all the configuration options
@@ -2401,8 +2420,10 @@ class Fetch:
         self.set_read_only = self.get_arg("set_read_only")
         self.set_read_only_axle = False
 
-        # Check if Axle control is enabled and an event is active
-        if self.get_arg("axle_control", False) and not self.set_read_only:
+        # Check if Axle control is enabled and an event is active. Skip entirely when the Axle component
+        # is unhealthy so a failed VPP integration can never hand battery control to a broken Axle - it
+        # warns and continues with the normal plan (see axle_component_healthy()).
+        if self.get_arg("axle_control", False) and not self.set_read_only and self.axle_component_healthy():
             if fetch_axle_active(self):
                 self.log("Axle VPP event is active - enabling read-only mode")
                 self.set_read_only = True

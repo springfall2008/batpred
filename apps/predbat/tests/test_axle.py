@@ -1596,4 +1596,65 @@ def _test_axle_managed_token_retry(my_predbat=None):
     assert any("No price curve data after retry" in msg for msg in axle2.log_messages)
     print("  ✓ Complete failure after retry records failure correctly")
 
+    _run_axle_component_health_tests()
+
     return False
+
+
+def _run_axle_component_health_tests():
+    """Unit tests for Fetch.axle_component_healthy() - the warn-and-continue guard.
+
+    A failed/erroring Axle component (active but not alive) must be ignored so its
+    stale sessions and read-only handoff cannot thrash battery control; a healthy or
+    absent Axle must be left untouched.
+    """
+    from fetch import Fetch
+
+    class _FakeComponents:
+        """Minimal components stand-in exposing is_active/is_alive for the axle component."""
+
+        def __init__(self, active, alive):
+            """Store the desired active/alive flags for the axle component."""
+            self._active = active
+            self._alive = alive
+
+        def is_active(self, name):
+            """Return the configured active flag for the axle component."""
+            return self._active if name == "axle" else False
+
+        def is_alive(self, name):
+            """Return the configured alive flag for the axle component."""
+            return self._alive if name == "axle" else True
+
+    class _FakeSelf:
+        """Minimal self exposing components + log for the unbound method call."""
+
+        def __init__(self, components):
+            """Store the components stand-in and a log capture buffer."""
+            self.components = components
+            self.log_messages = []
+
+        def log(self, message):
+            """Capture log messages for assertions."""
+            self.log_messages.append(message)
+
+    # No components object -> nothing to ignore, healthy, no warning
+    s = _FakeSelf(None)
+    assert Fetch.axle_component_healthy(s) is True
+    assert s.log_messages == []
+
+    # Axle not configured/active -> healthy, no warning
+    s = _FakeSelf(_FakeComponents(active=False, alive=True))
+    assert Fetch.axle_component_healthy(s) is True
+    assert s.log_messages == []
+
+    # Axle active and alive -> healthy, no warning
+    s = _FakeSelf(_FakeComponents(active=True, alive=True))
+    assert Fetch.axle_component_healthy(s) is True
+    assert s.log_messages == []
+
+    # Axle active but NOT alive (errored, e.g. expired key) -> ignored and warns
+    s = _FakeSelf(_FakeComponents(active=True, alive=False))
+    assert Fetch.axle_component_healthy(s) is False
+    assert any("Axle Energy component is unhealthy" in m for m in s.log_messages), s.log_messages
+    print("  ✓ axle_component_healthy: ignore Axle only when active-but-not-alive (warn and continue)")
