@@ -504,6 +504,68 @@ def test_run_first_polls_all_tiers():
     assert api.latest_power["12345"]["watts"] == 450
 
 
+def test_login_dedupes_sites():
+    """Duplicate sites in the search response collapse to a single entry (no double-publish)."""
+    api = MockEnphaseAPI()
+    jwt = "eyJhbGciOiJIUzI1NiJ9." + _b64({"user_id": "9999", "exp": 4102444800}) + ".sig"
+    api.set_http_response("/login/login.json", 200, {"success": True, "session_id": "sess1"})
+    api.set_http_response("/users/self/token", 200, {"token": jwt})
+    # Enlighten returns the same site twice
+    api.set_http_response("/app-api/search_sites.json", 200, [{"site_id": 2627346, "name": "Home"}, {"site_id": 2627346, "name": "Home"}])
+    assert run_async(api.login()) is True
+    assert len(api.sites) == 1
+    assert api.sites[0]["site_id"] == "2627346"
+
+
+def test_run_single_site_publishes_once():
+    """run() operates on one active site, so duplicate site entries publish sensors only once."""
+    api = MockEnphaseAPI()
+    api.login_last_success = datetime.now(timezone.utc)
+    api.eauth_token = "tok"
+    # Two identical site entries (as an un-deduped cache might hold)
+    api.sites = [{"site_id": "2627346", "name": "Home"}, {"site_id": "2627346", "name": "Home"}]
+    api.set_http_response("/pv/settings/2627346/battery_status.json", 200, {"current_charge": "N/A", "storages": []})
+    api.set_http_response("/pv/systems/2627346/lifetime_energy", 200, {"production": [1.0]})
+    api.set_http_response("/app-api/2627346/get_latest_power", 200, {"latest_power": {"value": 454, "time": 1760000000}})
+    api.set_http_response("/service/batteryConfig/api/v1/profile/2627346", 200, {"profile": "self-consumption", "batteryBackupPercentage": 0})
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/2627346", 200, {"chargeFromGrid": False})
+    api.set_http_response("/service/batteryConfig/api/v1/battery/sites/2627346/schedules", 200, {"cfg": {"scheduleSupported": True, "details": []}, "dtg": {"scheduleSupported": False, "details": []}, "rbd": {"scheduleSupported": True, "details": []}})
+    # Count how many times the soc_percent sensor is published in one run cycle
+    published = []
+    real_dashboard_item = api.dashboard_item
+
+    def counting_dashboard_item(entity_id, state, attributes, app=None):
+        """Record publications of the soc_percent sensor."""
+        if entity_id.endswith("_soc_percent"):
+            published.append(entity_id)
+        real_dashboard_item(entity_id, state, attributes, app)
+
+    api.dashboard_item = counting_dashboard_item
+    assert run_async(api.run(0, True)) is True
+    assert published == ["sensor.predbat_enphase_2627346_soc_percent"]  # published exactly once, not twice
+
+
+def test_run_no_battery_returns_false_without_raising():
+    """A PV-only site (no controllable battery) must not crash automatic_config - run() returns False."""
+    api = MockEnphaseAPI()
+    api.automatic = True
+    api.login_last_success = datetime.now(timezone.utc)
+    api.eauth_token = "tok"
+    api.sites = [{"site_id": "2627346", "name": "Home"}]
+    # PV-only: battery_status has no capacity
+    api.set_http_response("/pv/settings/2627346/battery_status.json", 200, {"current_charge": "N/A", "storages": []})
+    api.set_http_response("/pv/systems/2627346/lifetime_energy", 200, {"production": [1.0]})
+    api.set_http_response("/app-api/2627346/get_latest_power", 200, {"latest_power": {"value": 454, "time": 1760000000}})
+    api.set_http_response("/service/batteryConfig/api/v1/profile/2627346", 200, {"profile": "self-consumption", "batteryBackupPercentage": 0})
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/2627346", 200, {"chargeFromGrid": False})
+    api.set_http_response("/service/batteryConfig/api/v1/battery/sites/2627346/schedules", 200, {"cfg": {"scheduleSupported": True, "details": []}, "dtg": {"scheduleSupported": False, "details": []}, "rbd": {"scheduleSupported": True, "details": []}})
+    # Must return False (not raise), and must not have set inverter_type
+    assert run_async(api.run(0, True)) is False
+    assert "inverter_type" not in api.args_set
+    # Sensors were still published (monitoring works)
+    assert "sensor.predbat_enphase_2627346_pv_today" in api.dashboard_items
+
+
 def test_derive_power():
     """derive_power converts kWh deltas over elapsed time into watts."""
     from enphase import derive_power
@@ -743,6 +805,9 @@ def run_enphase_api_tests(my_predbat):
     test_safe_float_int_handle_na()
     test_get_battery_status_handles_na()
     test_reads_handle_na_values()
+    test_login_dedupes_sites()
+    test_run_single_site_publishes_once()
+    test_run_no_battery_returns_false_without_raising()
     test_login_transient_rejection_not_fatal()
     test_login_guard_rails()
     test_login_reuse_window()

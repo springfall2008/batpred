@@ -318,8 +318,11 @@ class EnphaseAPI(ComponentBase):
             if not await self.login():
                 return bool(self.sites)
 
-        for site in self.sites:
-            site_id = site["site_id"]
+        # Predbat controls a single battery system: operate on one active site (the configured
+        # enphase_site_id, else the first discovered). The per-category refresh gates below are
+        # keyed globally, so processing one site per cycle also keeps them correct.
+        site_id = self.sites[0]["site_id"] if self.sites else None
+        if site_id:
             if self._needs_refresh("battery_status", ENPHASE_REFRESH_SETTINGS):
                 await self.get_battery_status(site_id)
                 await self.get_profile(site_id)
@@ -332,9 +335,15 @@ class EnphaseAPI(ComponentBase):
             await self.publish_data(site_id)
             await self.publish_schedule_settings_ha(site_id)
 
-        # Automatic configuration on first successful data load
+        # Automatic configuration on first successful data load. A site with no controllable
+        # battery (e.g. PV-only) cannot be configured as a Predbat inverter - log and report
+        # not-ready rather than letting the ValueError abort the whole poll.
         if first and self.automatic:
-            await self.automatic_config()
+            try:
+                await self.automatic_config()
+            except ValueError as error:
+                self.log(f"Warn: Enphase: Automatic configuration skipped - {error}")
+                return False
 
         return True
 
@@ -996,8 +1005,17 @@ class EnphaseAPI(ComponentBase):
                 if sid and (not self.site_id or sid == self.site_id):
                     sites.append({"site_id": sid, "name": entry.get("name", sid)})
         if sites:
-            self.sites = sites
-            await self._save_cache("sites", sites)
+            # Deduplicate by site id preserving order - Enlighten can return the same site more than once
+            seen = set()
+            deduped = []
+            for site in sites:
+                if site["site_id"] not in seen:
+                    seen.add(site["site_id"])
+                    deduped.append(site)
+            self.sites = deduped
+            await self._save_cache("sites", self.sites)
+            if len(self.sites) > 1 and not self.site_id:
+                self.log(f"Warn: Enphase: {len(self.sites)} sites found; using the first ({self.sites[0]['site_id']}). Set enphase_site_id to choose a specific site.")
 
         self.login_last_success = datetime.now(timezone.utc)
         self.login_reject_count = 0
@@ -1221,6 +1239,15 @@ async def test_enphase_api(username, password, site_id):  # pragma: no cover
         print(f"battery_settings: {api.battery_settings.get(sid)}")
         print(f"schedules: {json.dumps(api.schedules.get(sid, {}), default=str, indent=2)}")
         print(f"dtg_supported: {api.dtg_supported(sid)}")
+
+        # Dump the raw lifetime_energy channels so the units (Wh vs kWh) and whether the arrays
+        # are per-day increments or cumulative totals can be checked against the published *_today values.
+        le = api.lifetime_energy.get(sid, {})
+        print("lifetime_energy raw (last 5 entries per channel):")
+        for channel in ("production", "consumption", "import", "export", "charge", "discharge"):
+            values = le.get(channel) or []
+            print(f"  {channel}: len={len(values)} last5={values[-5:]}")
+        print(f"  start_date={le.get('start_date')} last_report_date={le.get('last_report_date')} interval_minutes={le.get('interval_minutes')}")
 
     print("\nDone")
 
