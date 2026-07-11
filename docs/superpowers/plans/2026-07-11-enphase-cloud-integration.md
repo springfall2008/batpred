@@ -28,6 +28,7 @@
 ### Task 0: Branch and spec commit
 
 **Files:**
+
 - Commit: `docs/superpowers/specs/2026-07-11-enphase-cloud-integration-design.md`
 
 - [ ] **Step 1: Create the feature branch from main and commit the spec**
@@ -50,6 +51,7 @@ Expected: branch `feature/enphase_cloud` exists with the spec committed. If `git
 ### Task 1: Component skeleton, registration, config schema
 
 **Files:**
+
 - Create: `apps/predbat/enphase.py`
 - Modify: `apps/predbat/components.py` (import near line 35; `COMPONENT_LIST` entry after the `"fox"` entry ending at line 242)
 - Modify: `apps/predbat/config.py` (APPS_SCHEMA, after `fox_token_hash` at line 2202)
@@ -57,6 +59,7 @@ Expected: branch `feature/enphase_cloud` exists with the spec committed. If `git
 - Modify: `apps/predbat/unit_test.py` (import + registry entry — follow the pattern of `run_fox_api_tests` at lines ~107 and ~283)
 
 **Interfaces:**
+
 - Produces: `class EnphaseAPI(ComponentBase)` with `initialize(username, password, site_id=None, automatic=False, automatic_ignore_pv=False)`, `is_alive()`, cache helpers `_save_cache(key, data)`, `_load_cache(key)`, `_needs_refresh(key, max_age_minutes)`, `_data_age_minutes(key)`, `load_cached_data()`; module constants `ENPHASE_REFRESH_STATIC=1440`, `ENPHASE_REFRESH_SETTINGS=5`, `ENPHASE_REFRESH_ENERGY=15`, `ENPHASE_REFRESH_POWER=1`, `ENPHASE_CACHE_KEYS`, `ENPHASE_CACHE_VERSION=1`, URL constants.
 - Produces (tests): `MockEnphaseAPI(EnphaseAPI)` test double and `run_enphase_api_tests(my_predbat)` entry point that later tasks extend.
 
@@ -450,17 +453,19 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 2: Authentication — login flow, headers, guard rails
 
 **Files:**
+
 - Modify: `apps/predbat/enphase.py`
 - Test: `apps/predbat/tests/test_enphase_api.py`
 
 **Interfaces:**
+
 - Consumes: Task 1 skeleton (`request_raw` overridable seam, auth state fields).
 - Produces:
-  - `async login(self) -> bool` — full login chain; sets `cookie_header`, `eauth_token`, `manager_token`, `xsrf_token`, `user_id`, `token_expires_at`, `sites` (list of dicts with at least `site_id` and `name`); respects guard rails; returns True on success.
-  - `login_allowed(self) -> bool` — guard-rail check.
-  - `get_headers(self, family, write=False) -> dict` — `family` in `("site", "battery_config")`.
-  - `async request_raw(self, method, url, headers=None, data=None, json_body=None, params=None) -> (status, json_data, text, cookies)` — the only method that touches aiohttp; overridden in tests.
-  - Module function `decode_jwt_claims(token) -> dict` (unverified payload decode for `exp` and user id).
+    - `async login(self) -> bool` — full login chain; sets `cookie_header`, `eauth_token`, `manager_token`, `xsrf_token`, `user_id`, `token_expires_at`, `sites` (list of dicts with at least `site_id` and `name`); respects guard rails; returns True on success.
+    - `login_allowed(self) -> bool` — guard-rail check.
+    - `get_headers(self, family, write=False) -> dict` — `family` in `("site", "battery_config")`.
+    - `async request_raw(self, method, url, headers=None, data=None, json_body=None, params=None) -> (status, json_data, text, cookies)` — the only method that touches aiohttp; overridden in tests.
+    - Module function `decode_jwt_claims(token) -> dict` (unverified payload decode for `exp` and user id).
 
 - [ ] **Step 1: Write failing tests**
 
@@ -769,10 +774,12 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 3: Request helper with retries and 401 re-login
 
 **Files:**
+
 - Modify: `apps/predbat/enphase.py`
 - Test: `apps/predbat/tests/test_enphase_api.py`
 
 **Interfaces:**
+
 - Consumes: `login()`, `get_headers()`, `request_raw()` from Task 2.
 - Produces: `async request_json(self, method, path, family="site", json_body=None, data=None, params=None) -> data_or_None`. Behaviour contract: builds `BASE_URL + path`; on 401 performs one `login()` + one retry; detects HTML login walls (text starting `<!DOCTYPE`/`<html` on a JSON endpoint) as auth failure; retries transient errors (timeouts, 5xx, 429) up to `ENPHASE_RETRIES` with jittered sleep, honouring `Retry-After`; increments `requests_today`; calls `record_api_call`; returns parsed JSON or None on failure (sets `self.last_error_status`).
 
@@ -924,20 +931,22 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 4: Cloud reads, parsers, and the run() polling loop
 
 **Files:**
+
 - Modify: `apps/predbat/enphase.py`
 - Test: `apps/predbat/tests/test_enphase_api.py`
 
 **Interfaces:**
+
 - Consumes: `request_json()` (Task 3), cache helpers (Task 1).
 - Produces:
-  - `async get_battery_status(site_id)` → stores normalised dict in `self.battery_status[site_id]`: `{"soc_percent": float, "available_energy": float, "max_capacity": float, "max_power_kw": float, "batteries": [...], "status": str, "profile_label": str}` from `GET /pv/settings/<site>/battery_status.json` (site fields `current_charge`, `available_energy`, `max_capacity`, `max_power`; per-battery list under `storages`; aggregate SOC = capacity-weighted `available_energy/max_capacity*100`, fallback site `current_charge`).
-  - `async get_lifetime_energy(site_id)` → stores raw payload; module function `energy_today(payload, channel)` returns today's kWh (last element of the `channel` array; today's index = days between `start_date` and `last_report_date`, defensively the last element).
-  - `async get_latest_power(site_id)` → stores `{"watts": float, "time": ts}` from `GET /app-api/<site>/get_latest_power` (`latest_power.value`, `latest_power.time`; timestamps may be seconds or milliseconds — treat > 10^12 as ms).
-  - `async get_profile(site_id)` → `GET {BATTERY_CONFIG_BASE}/profile/<site>?source=enho&userId=<uid>` (family `battery_config`) → stores `{"profile": str, "reserve": int}` (keys `profile`, `batteryBackupPercentage`).
-  - `async get_battery_settings(site_id)` → `GET {BATTERY_CONFIG_BASE}/batterySettings/<site>?source=enlm` → stores `chargeFromGrid`, `veryLowSoc`, `veryLowSocMin`, `veryLowSocMax`.
-  - `async get_schedules(site_id)` → `GET {BATTERY_CONFIG_BASE}/battery/sites/<site>/schedules` → stores per-family (`cfg`/`dtg`/`rbd`) dict: `{"id", "startTime", "endTime", "limit", "enabled", "supported"}` — parse each family's `details` list (first entry) plus control flags (`scheduleSupported`, `forceScheduleSupported`).
-  - `dtg_supported(site_id) -> bool` — from schedules control flags / site settings.
-  - `run(seconds, first)` extended: ensures login when `eauth_token` is None; refresh tiers — sites daily (`ENPHASE_REFRESH_STATIC`), battery_status/profile/settings/schedules every `ENPHASE_REFRESH_SETTINGS`, lifetime_energy every `ENPHASE_REFRESH_ENERGY`, latest_power every `ENPHASE_REFRESH_POWER`; midnight counter reset; each successful fetch `_save_cache`d.
+    - `async get_battery_status(site_id)` → stores normalised dict in `self.battery_status[site_id]`: `{"soc_percent": float, "available_energy": float, "max_capacity": float, "max_power_kw": float, "batteries": [...], "status": str, "profile_label": str}` from `GET /pv/settings/<site>/battery_status.json` (site fields `current_charge`, `available_energy`, `max_capacity`, `max_power`; per-battery list under `storages`; aggregate SOC = capacity-weighted `available_energy/max_capacity*100`, fallback site `current_charge`).
+    - `async get_lifetime_energy(site_id)` → stores raw payload; module function `energy_today(payload, channel)` returns today's kWh (last element of the `channel` array; today's index = days between `start_date` and `last_report_date`, defensively the last element).
+    - `async get_latest_power(site_id)` → stores `{"watts": float, "time": ts}` from `GET /app-api/<site>/get_latest_power` (`latest_power.value`, `latest_power.time`; timestamps may be seconds or milliseconds — treat > 10^12 as ms).
+    - `async get_profile(site_id)` → `GET {BATTERY_CONFIG_BASE}/profile/<site>?source=enho&userId=<uid>` (family `battery_config`) → stores `{"profile": str, "reserve": int}` (keys `profile`, `batteryBackupPercentage`).
+    - `async get_battery_settings(site_id)` → `GET {BATTERY_CONFIG_BASE}/batterySettings/<site>?source=enlm` → stores `chargeFromGrid`, `veryLowSoc`, `veryLowSocMin`, `veryLowSocMax`.
+    - `async get_schedules(site_id)` → `GET {BATTERY_CONFIG_BASE}/battery/sites/<site>/schedules` → stores per-family (`cfg`/`dtg`/`rbd`) dict: `{"id", "startTime", "endTime", "limit", "enabled", "supported"}` — parse each family's `details` list (first entry) plus control flags (`scheduleSupported`, `forceScheduleSupported`).
+    - `dtg_supported(site_id) -> bool` — from schedules control flags / site settings.
+    - `run(seconds, first)` extended: ensures login when `eauth_token` is None; refresh tiers — sites daily (`ENPHASE_REFRESH_STATIC`), battery_status/profile/settings/schedules every `ENPHASE_REFRESH_SETTINGS`, lifetime_energy every `ENPHASE_REFRESH_ENERGY`, latest_power every `ENPHASE_REFRESH_POWER`; midnight counter reset; each successful fetch `_save_cache`d.
 
 - [ ] **Step 1: Write failing tests** — canned payloads through `set_http_response`, e.g.:
 
@@ -1116,10 +1125,12 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 5: Monitoring sensor publishing (incl. derived power)
 
 **Files:**
+
 - Modify: `apps/predbat/enphase.py` (replace `publish_data` stub)
 - Test: `apps/predbat/tests/test_enphase_api.py`
 
 **Interfaces:**
+
 - Consumes: normalised data stores from Task 4.
 - Produces: `publish_data(site_id)` creating (entity ids all prefixed `sensor.{prefix}_enphase_{site_id}_`): `soc_percent` (%), `soc_kw` (kWh available), `battery_capacity` (kWh), `battery_rate_max` (W = `max_power_kw*1000`), `battery_reserve` (%), `battery_reserve_min` (% = `veryLowSocMin` fallback 5), `battery_status`, `battery_profile`, `pv_today`/`load_today`/`import_today`/`export_today`/`battery_charge_today`/`battery_discharge_today` (kWh, `state_class: total_increasing`, `device_class: energy`), `load_power` (W from latest_power), `pv_power`/`grid_power`/`battery_power` (W, derived). Also module function `derive_power(prev_sample, new_kwh, now_utc) -> (watts, new_sample)` where a sample is `(kwh, datetime)`; watts = `(new_kwh - prev_kwh) * 1000 / hours_elapsed`, clamped to 0 when the delta is negative (daily reset) or the window is < 60 seconds.
 - Sign conventions: `grid_power` positive = import (derive from `import` minus `export` deltas); `battery_power` positive = discharge (`discharge` minus `charge` deltas); `pv_power` from `production` delta.
@@ -1202,19 +1213,21 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 6: Control entities, local schedule model, HA events
 
 **Files:**
+
 - Modify: `apps/predbat/enphase.py` (replace `publish_schedule_settings_ha` stub; add `get_schedule_settings_ha`, event handlers)
 - Test: `apps/predbat/tests/test_enphase_api.py`
 
 **Interfaces:**
+
 - Consumes: `self.schedules`, `self.profile`, `dtg_supported()` (Task 4).
 - Produces:
-  - `publish_schedule_settings_ha(site_id)` — entities (pattern `{domain}.{prefix}_enphase_{site_id}_battery_schedule_...`):
-    - `number ..._reserve` (min = `veryLowSocMin` fallback 5, max 100, step 1, %)
-    - per direction `charge` and (only if `dtg_supported`) `export`: `select ..._{direction}_start_time` / `..._end_time` (options `OPTIONS_TIME_FULL`, value "HH:MM:SS"), `number ..._{direction}_soc` (min 5 max 100 step 1 %), `switch ..._{direction}_enable`, `switch ..._{direction}_write` (always published "off")
-    - `switch ..._freeze_enable` plus freeze times reuse the charge window (rbd written during apply when freeze enabled)
-  - `get_schedule_settings_ha(site_id)` — reads entity states back from HA into `self.local_schedule[site_id]` = `{"reserve": int, "charge": {"start_time", "end_time", "soc", "enable"}, "export": {...}, "freeze": {"enable"}}`.
-  - `select_event(entity_id, value)`, `number_event(entity_id, value)`, `switch_event(entity_id, service)` — update `local_schedule`; a `turn_on` of a `_write` switch calls `apply_battery_schedule(site_id)` (Task 7 — stub `async def apply_battery_schedule(self, site_id)` now, docstring + `pass`). Entity id parsing: strip `{domain}.{prefix}_enphase_`, split off `site_id`, remainder names the attribute. `switch` services: `turn_on`/`turn_off`/`toggle` (see fox `apply_service_to_toggle`, fox.py:2004).
-  - Times: HA selects hold "HH:MM:SS" (`OPTIONS_TIME_FULL`); Enphase wants "HH:MM" — module functions `ha_time_to_enphase(value)` (`value[:5]`) and `enphase_time_to_ha(value)` (`value + ":00"`).
+    - `publish_schedule_settings_ha(site_id)` — entities (pattern `{domain}.{prefix}_enphase_{site_id}_battery_schedule_...`):
+        - `number ..._reserve` (min = `veryLowSocMin` fallback 5, max 100, step 1, %)
+        - per direction `charge` and (only if `dtg_supported`) `export`: `select ..._{direction}_start_time` / `..._end_time` (options `OPTIONS_TIME_FULL`, value "HH:MM:SS"), `number ..._{direction}_soc` (min 5 max 100 step 1 %), `switch ..._{direction}_enable`, `switch ..._{direction}_write` (always published "off")
+        - `switch ..._freeze_enable` plus freeze times reuse the charge window (rbd written during apply when freeze enabled)
+    - `get_schedule_settings_ha(site_id)` — reads entity states back from HA into `self.local_schedule[site_id]` = `{"reserve": int, "charge": {"start_time", "end_time", "soc", "enable"}, "export": {...}, "freeze": {"enable"}}`.
+    - `select_event(entity_id, value)`, `number_event(entity_id, value)`, `switch_event(entity_id, service)` — update `local_schedule`; a `turn_on` of a `_write` switch calls `apply_battery_schedule(site_id)` (Task 7 — stub `async def apply_battery_schedule(self, site_id)` now, docstring + `pass`). Entity id parsing: strip `{domain}.{prefix}_enphase_`, split off `site_id`, remainder names the attribute. `switch` services: `turn_on`/`turn_off`/`toggle` (see fox `apply_service_to_toggle`, fox.py:2004).
+    - Times: HA selects hold "HH:MM:SS" (`OPTIONS_TIME_FULL`); Enphase wants "HH:MM" — module functions `ha_time_to_enphase(value)` (`value[:5]`) and `enphase_time_to_ha(value)` (`value + ":00"`).
 
 - [ ] **Step 1: Write failing tests**
 
@@ -1439,21 +1452,23 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 7: Write path — apply_battery_schedule
 
 **Files:**
+
 - Modify: `apps/predbat/enphase.py`
 - Test: `apps/predbat/tests/test_enphase_api.py`
 
 **Interfaces:**
+
 - Consumes: `local_schedule` (Task 6), `schedules`/`profile`/`battery_settings` cloud state (Task 4), `request_json` (Task 3).
 - Produces:
-  - `async apply_battery_schedule(site_id)` — top-level diff-and-write:
+    - `async apply_battery_schedule(site_id)` — top-level diff-and-write:
     1. Desired state from `local_schedule[site_id]`.
     2. Reserve/profile: if desired reserve != cloud `profile["reserve"]`, `PUT {BATTERY_CONFIG_BASE}/profile/<site>` body `{"profile": <current or self-consumption>, "batteryBackupPercentage": reserve}` (family `battery_config`, params `{"source": "enho", "userId": self.user_id}`).
     3. Charge: if `charge.enable` — ensure `chargeFromGrid` true first (if false: `POST {BATTERY_CONFIG_BASE}/batterySettings/acceptDisclaimer/<site>` body `{"disclaimer-type": "itc"}` once — track `self.disclaimer_accepted`; then `PUT batterySettings` `{"chargeFromGrid": True}`), then `_write_schedule(site_id, "CFG", start, end, limit=charge.soc, enabled=True)`. If not enabled and a cloud cfg schedule is enabled → `_write_schedule(..., enabled=False)`.
     4. Export: same via `"DTG"` with `limit=export.soc`, only when `dtg_supported(site_id)`.
     5. Freeze: `freeze.enable` → `_write_schedule(site_id, "RBD", charge window times, limit=None, enabled=True)`; else disable if cloud-enabled.
-  - `async _write_schedule(site_id, family, start_time_ha, end_time_ha, limit, enabled)` — converts "HH:MM:SS"→"HH:MM"; no-op when the cloud entry already matches (`schedules_equal`); update by id when the family has an existing schedule (`PUT .../schedules/<id>`), else create (`POST .../schedules`); payload `{"timezone": tz, "startTime": "HH:MM", "endTime": "HH:MM", "scheduleType": family, "days": [1,2,3,4,5,6,7], "limit": limit, "isEnabled": enabled}` (omit `limit` when None). Timezone from site settings if present else `str(self.local_tz)`.
-  - Module function `schedules_equal(cloud_entry, start_hm, end_hm, limit, enabled) -> bool`.
-  - Write-settle: after any write, mark `self.pending_writes[(site_id, family)] = desired`; re-fetch schedules; if the read does not yet reflect the write, keep pending (do not re-PUT) until it confirms or `ENPHASE_PENDING_TIMEOUT_MINUTES = 15` passes. `run()` clears confirmed/expired pendings each cycle.
+    - `async _write_schedule(site_id, family, start_time_ha, end_time_ha, limit, enabled)` — converts "HH:MM:SS"→"HH:MM"; no-op when the cloud entry already matches (`schedules_equal`); update by id when the family has an existing schedule (`PUT .../schedules/<id>`), else create (`POST .../schedules`); payload `{"timezone": tz, "startTime": "HH:MM", "endTime": "HH:MM", "scheduleType": family, "days": [1,2,3,4,5,6,7], "limit": limit, "isEnabled": enabled}` (omit `limit` when None). Timezone from site settings if present else `str(self.local_tz)`.
+    - Module function `schedules_equal(cloud_entry, start_hm, end_hm, limit, enabled) -> bool`.
+    - Write-settle: after any write, mark `self.pending_writes[(site_id, family)] = desired`; re-fetch schedules; if the read does not yet reflect the write, keep pending (do not re-PUT) until it confirms or `ENPHASE_PENDING_TIMEOUT_MINUTES = 15` passes. `run()` clears confirmed/expired pendings each cycle.
 
 - [ ] **Step 1: Write failing tests**
 
@@ -1670,12 +1685,14 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 8: INVERTER_DEF, automatic_config, template
 
 **Files:**
+
 - Modify: `apps/predbat/config.py` (add `"EnphaseCloud"` after the `"FoxCloud"` dict ending at line 1919)
 - Modify: `apps/predbat/enphase.py` (add `automatic_config`)
 - Create: `templates/enphase_cloud.yaml` (copy `templates/fox_cloud.yaml` as the base, swap fox keys for `enphase_username`/`enphase_password`/`enphase_automatic`)
 - Test: `apps/predbat/tests/test_enphase_api.py`
 
 **Interfaces:**
+
 - Consumes: entity naming from Tasks 5/6.
 - Produces: `INVERTER_DEF["EnphaseCloud"]`; `automatic_config()` setting all inverter args.
 
@@ -1836,12 +1853,14 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 9: Documentation, spell dictionary, full validation
 
 **Files:**
+
 - Modify: `docs/components.md` (new section after the Fox section ending ~line 523; add TOC entry near line 19)
 - Modify: `docs/inverter-setup.md` (new "Enphase Cloud" section near the "Fox Cloud" section at line 233; template table rows near lines 42-43)
 - Modify: `docs/apps-yaml.md` (`enphase_username` etc. near fox_key at line 188; `EnphaseCloud` in the inverter_type list near lines 773-774)
 - Modify: `.cspell/custom-dictionary-workspace.txt`
 
 **Interfaces:**
+
 - Consumes: everything prior; this task gates the branch on repo-wide checks.
 
 - [ ] **Step 1: Write docs**
@@ -1912,6 +1931,5 @@ The unofficial API cannot be fully validated by unit tests. Before raising a PR:
 
 ## Notes for implementers
 
-- The reference implementation is cloned at `/private/tmp/claude-501/-Users-treforsouthwell-predbat-batpred/1c6147ca-7c80-4457-95be-562fc8092e24/scratchpad/ha-enphase-energy` (custom_components/enphase_ev/api.py, battery_runtime.py). Re-clone from https://github.com/barneyonline/ha-enphase-energy if missing. Use it to answer payload-shape questions; do not copy code wholesale (different licence and style).
+- The reference implementation is cloned at `/private/tmp/claude-501/-Users-treforsouthwell-predbat-batpred/1c6147ca-7c80-4457-95be-562fc8092e24/scratchpad/ha-enphase-energy` (custom_components/enphase_ev/api.py, battery_runtime.py). Re-clone from <https://github.com/barneyonline/ha-enphase-energy> if missing. Use it to answer payload-shape questions; do not copy code wholesale (different licence and style).
 - Fox reference points: `FoxAPI.initialize` fox.py:338, `run` fox.py:407, cache helpers fox.py:565-643, schedule entities fox.py:1290, events fox.py:1985-2116, `automatic_config` fox.py:2158, registry components.py:204, INVERTER_DEF config.py:1891, schema config.py:2196, mock pattern tests/test_fox_api.py:50.
-```

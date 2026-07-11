@@ -3,6 +3,7 @@ activepower
 adata
 adbase
 afci
+agentic
 AIO
 AIO's
 aiofiles
@@ -108,10 +109,12 @@ Eddi
 elif
 emqx
 emszzzz
+Encharge
 enctype
 endfor
 endhour
 endminute
+endswith
 endt
 Energi
 Energidata
@@ -119,9 +122,12 @@ Energidataservice
 energydataservice
 energythroughput
 enho
+Enlighten
 enlm
 enphase
 enphaseenergy
+Enpower
+entrez
 epod
 etok
 euids
@@ -173,6 +179,7 @@ hainterface
 halfhourly
 hanres
 HAOS
+hasattr
 hass
 hassapi
 hassio
@@ -197,8 +204,10 @@ inday
 INTELLI
 intelligentdevice
 interp
+intraday
 invbatpower
 invname
+isinstance
 isoformat
 isort
 itemtype
@@ -233,6 +242,7 @@ lockstep
 logdata
 loglines
 lookback
+lstrip
 luxpower
 markdownlint
 matplotlib
@@ -304,6 +314,7 @@ pbat
 pbgw
 pdata
 pdetails
+pendings
 perc
 percnt
 peterhaban
@@ -333,6 +344,7 @@ pvwatts
 pwindow
 pyjwt
 pylint
+pypi
 pyproject
 pytest
 pytz
@@ -355,6 +367,7 @@ rname
 Roboto
 rowspan
 rstart
+rstrip
 rtype
 ruamel
 Rvrt
@@ -371,6 +384,8 @@ Selfuse
 semodbus
 Sergoe
 sess
+setattr
+setdefault
 SFMB
 sigcloud
 sigen
@@ -405,6 +420,7 @@ stepline
 Stromligning
 strptime
 Strømligning
+subclassing
 submessage
 substep
 sunspec
@@ -438,6 +454,7 @@ tottime
 trapz
 Trefor
 treforsiphone
+treforsouthwell
 tunables
 twinx
 tzfile
@@ -445,6 +462,7 @@ tzpath
 unconfigured
 unsmoothed
 unstaged
+urlsafe
 useid
 userinterface
 varh

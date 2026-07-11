@@ -40,37 +40,37 @@ client, no pypi dependency). Key facts verified from its source:
   No refresh token: on 401, re-run the password login. MFA is signalled by
   `requires_mfa` / `login_otp_nonce`.
 - **Reads**:
-  - `/pv/settings/<site>/battery_status.json` — per-battery and site SOC
+    - `/pv/settings/<site>/battery_status.json` — per-battery and site SOC
     (`current_charge` %), `available_energy` kWh, `max_capacity` kWh,
     `available_power`/`max_power` kW, status, live profile label.
-  - `/pv/systems/<site>/lifetime_energy` — daily kWh arrays since
+    - `/pv/systems/<site>/lifetime_energy` — daily kWh arrays since
     `start_date`: `production`, `consumption`, `import`, `export`, `charge`,
     `discharge` plus flow decomposition (`solar_home`, `solar_grid`,
     `grid_home`, `battery_home`, `battery_grid`, `grid_battery`,
     `solar_battery`). Today's (last) entry updates intraday (~5 min cadence).
-  - `/app-api/<site>/get_latest_power` — latest real consumption power sample.
-  - `/app-api/search_sites.json` — site discovery;
+    - `/app-api/<site>/get_latest_power` — latest real consumption power sample.
+    - `/app-api/search_sites.json` — site discovery;
     `/app-api/<site>/devices.json` — device inventory.
 - **Battery control** ("BatteryConfig" microservice,
   `/service/batteryConfig/api/v1/...`; needs Bearer JWT +
   `Origin/Referer: https://battery-profile-ui.enphaseenergy.com`, `username`
   and `requestid` headers; multiple regional header variants exist):
-  - `PUT /profile/<site>` — set profile: `self-consumption`, `cost_savings`,
+    - `PUT /profile/<site>` — set profile: `self-consumption`, `cost_savings`,
     `backup_only`, `ai_optimisation`; body includes `batteryBackupPercentage`
     (reserve %).
-  - `GET/PUT /batterySettings/<site>` — `chargeFromGrid` toggle, shutdown SOC
+    - `GET/PUT /batterySettings/<site>` — `chargeFromGrid` toggle, shutdown SOC
     (`veryLowSoc`); `POST /batterySettings/acceptDisclaimer/<site>` — one-time
     ITC disclaimer required before charge-from-grid.
-  - `GET/POST /battery/sites/<site>/schedules`, `PUT /schedules/<id>`,
+    - `GET/POST /battery/sites/<site>/schedules`, `PUT /schedules/<id>`,
     `POST /schedules/<id>/delete` — persistent schedule objects with families:
-    - `cfg` (charge from grid): `startTime`/`endTime` (HH:MM), `days`,
+        - `cfg` (charge from grid): `startTime`/`endTime` (HH:MM), `days`,
       `timezone`, `enabled`, `limit` = **charge target SOC %** (5–100).
-    - `dtg` (discharge to grid): same shape; `limit` = **SOC floor** the
+        - `dtg` (discharge to grid): same shape; `limit` = **SOC floor** the
       battery discharges down to. **Feature-gated per site** — availability
       flags (`scheduleSupported`, `forceScheduleSupported`,
       `forceScheduleOpted`, `batteryLimitSupport`, country/region) come from
       site settings and the schedule control payload.
-    - `rbd` (restrict battery discharge): a window in which the battery will
+        - `rbd` (restrict battery discharge): a window in which the battery will
       not discharge — used for Predbat freeze modes.
 - **Quirks to design for**: writes settle asynchronously (re-read to confirm;
   profile changes can stay "pending" for minutes); Enlighten rejects logins
@@ -89,11 +89,11 @@ OAuth). Same shape as `FoxAPI`:
   `initialize(**kwargs)`).
 - `async run(seconds, first)` — polled every 60 s by `ComponentBase.start()`,
   with age-based refresh tiers (constants mirroring `FOX_REFRESH_*`):
-  - static (site discovery, devices, site settings/capability flags): 1440 min
-  - battery settings + profile + schedules: 5 min
-  - `battery_status.json` (SOC/power limits): 5 min
-  - `lifetime_energy` (+ `today` snapshot): 15 min
-  - `get_latest_power`: 1 min
+    - static (site discovery, devices, site settings/capability flags): 1440 min
+    - battery settings + profile + schedules: 5 min
+    - `battery_status.json` (SOC/power limits): 5 min
+    - `lifetime_energy` (+ `today` snapshot): 15 min
+    - `get_latest_power`: 1 min
 - Persistent cache through Storage (`ENPHASE_CACHE_KEYS` +
   `ENPHASE_CACHE_VERSION`), restored on first run (`load_cached_data()`
   pattern), so restarts do not hammer the API and data survives outages.
