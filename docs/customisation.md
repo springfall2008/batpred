@@ -752,6 +752,24 @@ The manual SoC target works in conjunction with the [weather alert system](apps-
 
 This is described in detail in [Manual API](manual-api.md) and is mentioned here just for completeness.
 
+## Clipping Configuration
+
+Predbat includes advanced controls to manage solar clipping scenarios and ensure accurate simulation of your inverter's maximum capabilities. These configurations determine how clipping is modeled and how Predbat should buffer energy.
+
+- **switch.predbat_clipping_buffer_enable** - Enables or disables the use of a clipping buffer in Predbat's modeling (Default is True).
+- **select.predbat_clipping_clearsky_source** - Determines the source used for the clearsky solar forecast (e.g., `ha_solcast_clearsky`), used to model unclipped generation capabilities.
+- **switch.predbat_clipping_auto_tune** - When enabled, Predbat will automatically tune the clipping parameters for better plan optimization.
+- **input_number.predbat_clipping_cost_weight** - Multiplier used to weight the cost of clipped energy in the optimization algorithm.
+- **input_number.predbat_clipping_amplification** - Amplification factor applied to the clipping buffer.
+- **input_number.predbat_clipping_buffer_start_offset** - Allows you to offset the start of the clipping buffer window (in minutes).
+- **input_number.predbat_clipping_buffer_end_offset** - Allows you to offset the end of the clipping buffer window (in minutes).
+- **input_number.predbat_clipping_limit_override** - Can be used to manually override the inverter limit for clipping purposes (in Watts). Set to 0 to disable override.
+- **input_number.predbat_clipping_buffer_max_kwh** - Manual override for the maximum size of the clipping buffer in kWh.
+- **select.predbat_clipping_buffer_start_time** - Specific start time to define the clipping buffer window.
+- **select.predbat_clipping_buffer_end_time** - Specific end time to define the clipping buffer window.
+
+You can view the clipping plan by setting up the appropriate Apex Chart — see [creating the Predbat charts](creating-charts.md) or viewing the clipping chart in the [Predbat web interface](web-interface.md#charts-view).
+
 ## Debug
 
 **switch.predbat_debug_enable** When turned On will create lots of debugging information to aid diagnosis of Predbat issues. By default this is turned Off and its recommended that its only switched on when debug logs are requested. With the switch on:
