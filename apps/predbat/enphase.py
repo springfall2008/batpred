@@ -14,9 +14,6 @@
 
 Talks to the unofficial Enphase Enlighten web-app API used by the Enlighten
 web/mobile apps, since there is no official API offering battery control.
-This module currently provides the component skeleton: initialisation,
-cache load/save helpers and staleness checks. Login, data reads, sensor
-publishing and battery control are added by later tasks.
 """
 
 from datetime import datetime, timedelta, timezone
