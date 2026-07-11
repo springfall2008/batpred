@@ -202,8 +202,14 @@ class EnphaseAPI(ComponentBase):
             return False
         return True
 
-    def _login_rejected(self, reason):
-        """Record a rejected login and set the appropriate cooldown."""
+    def _login_rejected(self, reason, unrecoverable=False):
+        """Record a rejected login and set the appropriate cooldown.
+
+        Fatal (app-wide) error signalling is reserved for genuinely unrecoverable
+        states (MFA required, account blocked) or once the suspend tier is reached
+        after repeated transient rejections - a single 401/403/no-token/session
+        rejection must not mark the whole app as not-running.
+        """
         self.login_reject_count += 1
         if self.login_reject_count >= self.LOGIN_MAX_REJECTS:
             delay = self.LOGIN_SUSPEND_SECONDS
@@ -211,7 +217,8 @@ class EnphaseAPI(ComponentBase):
             delay = self.LOGIN_COOLDOWN_SECONDS
         self.login_cooldown_until = datetime.now(timezone.utc) + timedelta(seconds=delay)
         self.log(f"Warn: Enphase: Login rejected ({reason}), cooling down for {delay} seconds (rejection {self.login_reject_count})")
-        self.fatal_error_occurred()
+        if unrecoverable or self.login_reject_count >= self.LOGIN_MAX_REJECTS:
+            self.fatal_error_occurred()
 
     async def login(self):
         """Authenticate with Enlighten: password login, token mint, site discovery."""
@@ -234,15 +241,17 @@ class EnphaseAPI(ComponentBase):
             self._login_rejected("invalid credentials")
             return False
         if isinstance(data, dict) and data.get("requires_mfa"):
-            self._login_rejected("account requires MFA - disable MFA on the Enphase account to use this component")
+            self._login_rejected("account requires MFA - disable MFA on the Enphase account to use this component", unrecoverable=True)
             return False
         if isinstance(data, dict) and data.get("isBlocked"):
-            self._login_rejected("account is blocked")
+            self._login_rejected("account is blocked", unrecoverable=True)
+            return False
+        if "session" in str(text).lower():
+            # "Too many active sessions" - detect regardless of HTTP status, Enlighten sometimes returns 200
+            self._login_rejected("too many active sessions")
             return False
         if status != 200:
-            # Includes "too many active sessions" responses - treat as rejection
-            reason = "too many active sessions" if "session" in str(text).lower() else f"http status {status}"
-            self._login_rejected(reason)
+            self._login_rejected(f"http status {status}")
             return False
 
         # Persist cookies from the login (session cookie + manager token JWT)

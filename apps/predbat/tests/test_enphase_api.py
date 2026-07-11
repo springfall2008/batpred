@@ -53,6 +53,7 @@ class MockEnphaseAPI(EnphaseAPI):
         self.dashboard_items = {}
         self.mock_ha_states = {}
         self.args_set = {}
+        self.fatal_signalled = False
 
     def log(self, message):
         """Swallow log output in tests."""
@@ -67,8 +68,8 @@ class MockEnphaseAPI(EnphaseAPI):
         pass
 
     def fatal_error_occurred(self):
-        """Swallow fatal-error signalling in tests."""
-        pass
+        """Record that a fatal error was signalled, for test assertions."""
+        self.fatal_signalled = True
 
     def dashboard_item(self, entity_id, state, attributes, app=None):
         """Record dashboard items instead of publishing to HA."""
@@ -144,22 +145,37 @@ def test_login_success():
 
 
 def test_login_mfa_rejected():
-    """MFA-required accounts must fail with a fatal error, not retry."""
+    """MFA-required accounts must fail with a fatal error immediately, not retry."""
     api = MockEnphaseAPI()
     api.set_http_response("/login/login.json", 200, {"requires_mfa": True})
     assert run_async(api.login()) is False
     assert api.login_reject_count == 1
     assert api.login_cooldown_until is not None
+    assert api.fatal_signalled is True
+
+
+def test_login_transient_rejection_not_fatal():
+    """A single transient 401 must set a cooldown but must NOT signal a fatal, app-wide error."""
+    api = MockEnphaseAPI()
+    api.set_http_response("/login/login.json", 401, None)
+    assert run_async(api.login()) is False
+    assert api.login_reject_count == 1
+    assert api.login_cooldown_until is not None
+    assert api.fatal_signalled is False
 
 
 def test_login_guard_rails():
-    """Three consecutive rejections suspend login for 24 hours."""
+    """Three consecutive rejections suspend login for 24 hours and only then signal fatal."""
     api = MockEnphaseAPI()
     api.set_http_response("/login/login.json", 401, None)
-    for _ in range(3):
+    for i in range(3):
         api.login_cooldown_until = None  # expire cooldown to allow next attempt
         run_async(api.login())
+        if i == 0:
+            # A single transient rejection must not be fatal on its own.
+            assert api.fatal_signalled is False
     assert api.login_reject_count == 3
+    assert api.fatal_signalled is True
     remaining = (api.login_cooldown_until - datetime.now(timezone.utc)).total_seconds()
     assert remaining > 23 * 3600
     # While suspended, login() refuses without making a request
@@ -214,6 +230,7 @@ def run_enphase_api_tests(my_predbat):
     test_is_alive()
     test_login_success()
     test_login_mfa_rejected()
+    test_login_transient_rejection_not_fatal()
     test_login_guard_rails()
     test_login_reuse_window()
     test_get_headers_site()
