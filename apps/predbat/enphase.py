@@ -1123,3 +1123,136 @@ class EnphaseAPI(ComponentBase):
 
         self.failures_total += 1
         return None
+
+
+class MockBase:  # pragma: no cover
+    """Minimal stand-in for the Predbat base object so EnphaseAPI can run standalone.
+
+    Provides just the attributes and methods ComponentBase and EnphaseAPI read
+    from ``self.base`` (prefix, args, timezone/clock, state/arg accessors and a
+    logger). It deliberately has no ``components`` attribute, so ``self.storage``
+    resolves to None and the disk cache is skipped for a standalone run.
+    """
+
+    def __init__(self):
+        """Initialise the mock base with the current clock and empty state stores."""
+        self.local_tz = datetime.now().astimezone().tzinfo
+        self.now_utc = datetime.now(self.local_tz)
+        self.prefix = "predbat"
+        self.args = {}
+        self.midnight_utc = self.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        self.minutes_now = self.now_utc.hour * 60 + self.now_utc.minute
+        self.fatal_error = False
+        self.had_errors = False
+        self.entities = {}
+
+    def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=None):
+        """Return the stored state (or full record when raw) for an entity id."""
+        if raw:
+            return self.entities.get(entity_id, {})
+        return self.entities.get(entity_id, {}).get("state", default)
+
+    def set_state_wrapper(self, entity_id, state, attributes=None, app=None):
+        """Store an entity's state and attributes in memory."""
+        self.entities[entity_id] = {"state": state, "attributes": attributes or {}}
+
+    def log(self, message):
+        """Print a timestamped log line to stdout."""
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
+
+    def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
+        """Print and store a published entity, so a standalone run shows what it publishes."""
+        print(f"ENTITY: {entity_id} = {state}")
+        self.set_state_wrapper(entity_id, state, attributes)
+
+    def get_arg(self, key, default=None, **kwargs):
+        """Return the default for any requested arg (no real config in standalone mode)."""
+        return default
+
+    def set_arg(self, key, value):
+        """Print an arg that automatic_config would set on the real base object."""
+        print(f"Set arg {key} = {value}")
+
+
+async def test_enphase_api(username, password, site_id):  # pragma: no cover
+    """Log in and run one poll cycle, printing the discovered sites and read data."""
+    mock_base = MockBase()
+    api = EnphaseAPI(mock_base, username=username, password=password, site_id=site_id, automatic=True)
+
+    print("Calling run() once (login, reads, publish, automatic_config)...")
+    result = await api.run(seconds=0, first=True)
+    print(f"run() returned: {result}")
+    print(f"Discovered sites: {api.sites}")
+
+    for site in api.sites:
+        sid = site["site_id"]
+        print(f"\n--- Site {sid} ({site.get('name', '')}) ---")
+        print(f"battery_status: {json.dumps(api.battery_status.get(sid, {}), default=str, indent=2)}")
+        print(f"profile: {api.profile.get(sid)}")
+        print(f"battery_settings: {api.battery_settings.get(sid)}")
+        print(f"schedules: {json.dumps(api.schedules.get(sid, {}), default=str, indent=2)}")
+        print(f"dtg_supported: {api.dtg_supported(sid)}")
+
+    print("\nDone")
+
+
+async def test_write_schedule(username, password, site_id, start_time, end_time, soc):  # pragma: no cover
+    """Write a test charge-from-grid window via the control entities, read it back, then disable it.
+
+    Drives the same path Predbat uses: it sets the published control entities to the requested
+    window, calls apply_battery_schedule (which reads those entities and writes an Enphase CFG
+    schedule), reads the schedules back, then restores by disabling the charge window again.
+    """
+    mock_base = MockBase()
+    api = EnphaseAPI(mock_base, username=username, password=password, site_id=site_id, automatic=False)
+
+    print("Logging in and loading current state...")
+    await api.run(seconds=0, first=True)
+    if not api.sites:
+        print("No sites found")
+        return
+    sid = api.sites[0]["site_id"]
+    print(f"Existing schedules for {sid}:\n{json.dumps(api.schedules.get(sid, {}), default=str, indent=2)}")
+
+    base_name = f"{api.prefix}_enphase_{sid}_battery_schedule"
+
+    # Set the charge control entities to the requested window and enable it
+    mock_base.set_state_wrapper(f"select.{base_name}_charge_start_time", start_time)
+    mock_base.set_state_wrapper(f"select.{base_name}_charge_end_time", end_time)
+    mock_base.set_state_wrapper(f"number.{base_name}_charge_soc", soc)
+    mock_base.set_state_wrapper(f"switch.{base_name}_charge_enable", "on")
+    print(f"Applying test CFG charge window {start_time}-{end_time} @ {soc}%...")
+    await api.apply_battery_schedule(sid)
+    await api.get_schedules(sid)
+    print(f"Read-back schedules after write:\n{json.dumps(api.schedules.get(sid, {}), default=str, indent=2)}")
+
+    # Restore: disable the test charge window again
+    print("Restoring: disabling the test charge window...")
+    mock_base.set_state_wrapper(f"switch.{base_name}_charge_enable", "off")
+    await api.apply_battery_schedule(sid)
+    print("Done")
+
+
+def main():  # pragma: no cover
+    """Command-line entry point for exercising the Enphase component standalone."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Test the Enphase Enlighten cloud component")
+    parser.add_argument("--username", required=True, help="Enlighten account e-mail")
+    parser.add_argument("--password", required=True, help="Enlighten account password")
+    parser.add_argument("--site-id", default=None, help="Restrict to a single Enphase site id")
+    parser.add_argument("--write-schedule", action="store_true", help="Write a test charge window and read it back instead of a read-only run")
+    parser.add_argument("--start-time", default="02:00:00", help="Test charge window start (HH:MM:SS)")
+    parser.add_argument("--end-time", default="05:00:00", help="Test charge window end (HH:MM:SS)")
+    parser.add_argument("--soc", type=int, default=80, help="Test charge target SOC percent")
+
+    args = parser.parse_args()
+
+    if args.write_schedule:
+        asyncio.run(test_write_schedule(args.username, args.password, args.site_id, args.start_time, args.end_time, args.soc))
+    else:
+        asyncio.run(test_enphase_api(args.username, args.password, args.site_id))
+
+
+if __name__ == "__main__":
+    main()
