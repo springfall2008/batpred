@@ -1990,7 +1990,7 @@ class Fetch:
         if status and status != "active":
             self.log("ML load forecast is not active (status: {}), falling back to historical data".format(status))
             return {}
-            
+
         load_ml_forecast = self.get_state_wrapper("sensor." + self.prefix + "_load_ml_forecast", attribute="results")
         if load_ml_forecast:
             self.log("Loading ML load forecast from sensor.{}_load_ml_forecast".format(self.prefix))

@@ -2,6 +2,7 @@
 # Predbat Home Battery System
 # -----------------------------------------------------------------------------
 
+
 def run_auto_config_tests(my_predbat):
     """
     Test auto_config retry logic and list/dict matching
@@ -18,14 +19,12 @@ def run_auto_config_tests(my_predbat):
     try:
         # Test 1: List matching retains 're:' elements if they fail
         print("\n=== Test 1: List regex matching ===")
-        my_predbat.args = {
-            "pv_forecast_raw": ["sensor.inv1", "re:.*inv2"]
-        }
+        my_predbat.args = {"pv_forecast_raw": ["sensor.inv1", "re:.*inv2"]}
         my_predbat.unmatched_args = {}
-        
+
         # This simulates < 10 mins, so final=False
         my_predbat.auto_config(final=False)
-        
+
         # It should still be in args exactly as it was, because matched=True for lists
         val = my_predbat.args.get("pv_forecast_raw")
         if val != ["sensor.inv1", "re:.*inv2"]:
@@ -36,13 +35,11 @@ def run_auto_config_tests(my_predbat):
 
         # Test 2: Dict matching retains 're:' elements if they fail
         print("\n=== Test 2: Dict regex matching ===")
-        my_predbat.args = {
-            "my_dict": {"foo": "sensor.foo", "bar": "re:.*bar"}
-        }
+        my_predbat.args = {"my_dict": {"foo": "sensor.foo", "bar": "re:.*bar"}}
         my_predbat.unmatched_args = {}
-        
+
         my_predbat.auto_config(final=False)
-        
+
         val = my_predbat.args.get("my_dict")
         if val != {"foo": "sensor.foo", "bar": "re:.*bar"}:
             print(f"FAIL: Dict regex matching failed to retain string. Got {val}")
@@ -52,13 +49,11 @@ def run_auto_config_tests(my_predbat):
 
         # Test 3: Standard unmatched arg is moved to unmatched_args after 10 mins (final=True)
         print("\n=== Test 3: Final=True moves unmatched args ===")
-        my_predbat.args = {
-            "inverter_limit": "re:.*missing_limit.*"
-        }
+        my_predbat.args = {"inverter_limit": "re:.*missing_limit.*"}
         my_predbat.unmatched_args = {}
-        
+
         my_predbat.auto_config(final=True)
-        
+
         if "inverter_limit" in my_predbat.args:
             print(f"FAIL: inverter_limit still in args: {my_predbat.args['inverter_limit']}")
             failed = True
@@ -78,5 +73,5 @@ def run_auto_config_tests(my_predbat):
     else:
         print("PASS: ALL TESTS PASSED")
     print("============================================================")
-    
+
     return failed
