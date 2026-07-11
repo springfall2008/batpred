@@ -63,6 +63,7 @@ compareform
 configform
 connack
 Consolas
+cooldown
 coro
 cprofile
 creds
@@ -102,6 +103,7 @@ docstrings
 dstamp
 dstart
 dwindow
+eauth
 Eddi
 elif
 emqx
@@ -116,6 +118,8 @@ Energidata
 Energidataservice
 energydataservice
 energythroughput
+enphase
+enphaseenergy
 epod
 euids
 EVDC
@@ -199,6 +203,7 @@ jedlix
 jsyaml
 kaiming
 keepalive
+khtml
 killall
 kopt
 Kostal
