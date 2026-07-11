@@ -196,6 +196,10 @@ class EnphaseAPI(ComponentBase):
         self.automatic = automatic
         self.automatic_ignore_pv = automatic_ignore_pv
 
+        # Verbose API-call logging (each request + a truncated, token-redacted response).
+        # On for now to aid diagnosis of the unofficial API's real responses; can be disabled later.
+        self.debug_api = True
+
         # Auth state
         self.cookie_header = ""  # serialised cookie header for Enlighten
         self.eauth_token = None  # JWT from /users/self/token
@@ -960,6 +964,8 @@ class EnphaseAPI(ComponentBase):
             "Referer": BASE_URL + "/",
         }
         status, data, text, cookies = await self.request_raw("POST", BASE_URL + LOGIN_PATH, headers=headers, data={"user[email]": self.username, "user[password]": self.password})
+        # Log the response only - the request body (password) is never passed to the logger.
+        self._log_api_call("POST", LOGIN_PATH, None, status, data, text)
 
         if status in (401, 403):
             self._login_rejected("invalid credentials")
@@ -983,6 +989,7 @@ class EnphaseAPI(ComponentBase):
 
         # Mint the e-auth/bearer token; Enlighten may rotate the session cookie here
         status, token_data, text, cookies = await self.request_raw("GET", BASE_URL + SELF_TOKEN_PATH, headers=self.get_headers("site"))
+        self._log_api_call("GET", SELF_TOKEN_PATH, None, status, token_data, text)
         self._absorb_cookies(cookies)
         if status == 200 and isinstance(token_data, dict):
             token = token_data.get("token") or token_data.get("auth_token") or token_data.get("access_token")
@@ -997,6 +1004,7 @@ class EnphaseAPI(ComponentBase):
 
         # Discover sites
         status, sites_data, text, cookies = await self.request_raw("GET", BASE_URL + SITE_SEARCH_PATH, headers=self.get_headers("site"), params={"searchText": "", "favourite": "false"})
+        self._log_api_call("GET", SITE_SEARCH_PATH, None, status, sites_data, text)
         sites = []
         if status == 200:
             entries = sites_data if isinstance(sites_data, list) else (sites_data or {}).get("sites", [])
@@ -1095,6 +1103,25 @@ class EnphaseAPI(ComponentBase):
                         json_data = None
                 return response.status, json_data, text, cookies
 
+    def _log_api_call(self, method, path, params, status, json_data, text):
+        """Log one API call and a truncated, token-redacted view of its response (when debug_api is on)."""
+        if not self.debug_api:
+            return
+        if isinstance(json_data, dict):
+            redacted = dict(json_data)
+            for key in ("token", "auth_token", "access_token"):
+                if key in redacted:
+                    redacted[key] = "***redacted***"
+            preview = json.dumps(redacted, default=str)
+        elif json_data is not None:
+            preview = json.dumps(json_data, default=str)
+        else:
+            preview = text or ""
+        if len(preview) > 600:
+            preview = preview[:600] + f"...(+{len(preview) - 600} more chars)"
+        param_str = f" params={params}" if params else ""
+        self.log(f"Enphase API: {method} {path}{param_str} -> {status} {preview}")
+
     def _is_login_wall(self, json_data, text):
         """Return True when a JSON endpoint answered with an HTML login page instead of JSON.
 
@@ -1136,6 +1163,7 @@ class EnphaseAPI(ComponentBase):
                 continue
 
             self.requests_today += 1
+            self._log_api_call(method, path, params, status, json_data, text)
             auth_failed = status in (401, 403) or self._is_login_wall(json_data, text)
             if auth_failed:
                 record_api_call("enphase", False, "auth_error")

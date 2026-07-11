@@ -504,6 +504,26 @@ def test_run_first_polls_all_tiers():
     assert api.latest_power["12345"]["watts"] == 450
 
 
+def test_log_api_call_redacts_token():
+    """API-call logging redacts JWT token fields and truncates long bodies, and is gated by debug_api."""
+    api = MockEnphaseAPI()
+    captured = []
+    api.log = lambda message: captured.append(message)
+
+    api.debug_api = True
+    api._log_api_call("GET", "/users/self/token", None, 200, {"token": "secret-jwt-value", "expires_at": 123}, "")
+    assert len(captured) == 1
+    assert "secret-jwt-value" not in captured[0]
+    assert "***redacted***" in captured[0]
+    assert "expires_at" in captured[0]
+
+    # When disabled, nothing is logged
+    captured.clear()
+    api.debug_api = False
+    api._log_api_call("GET", "/pv/settings/1/battery_status.json", None, 200, {"x": 1}, "")
+    assert captured == []
+
+
 def test_login_dedupes_sites():
     """Duplicate sites in the search response collapse to a single entry (no double-publish)."""
     api = MockEnphaseAPI()
@@ -805,6 +825,7 @@ def run_enphase_api_tests(my_predbat):
     test_safe_float_int_handle_na()
     test_get_battery_status_handles_na()
     test_reads_handle_na_values()
+    test_log_api_call_redacts_token()
     test_login_dedupes_sites()
     test_run_single_site_publishes_once()
     test_run_no_battery_returns_false_without_raising()
