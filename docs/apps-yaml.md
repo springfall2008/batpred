@@ -988,7 +988,7 @@ Example:
   inverter_limit: 5000   # 5 kW — must be in watts when set as a literal
 ```
 
-NB: inverter_limit is ONLY used by Predbat to improve the quality of the plan, any solar clipping is done by the inverter and is not controlled by Predbat.
+NB: inverter_limit is ONLY used by Predbat to improve the quality of the plan, any solar clipping is done by the inverter and is not controlled by Predbat. To provide Predbat with the unclipped solar forecast data required for this modeling, we recommend using the [Solcast Clearsky Integration](https://github.com/autoSteve/ha-solcast-clearsky).
 
 ### **pv_ac_limit**
 
@@ -1010,7 +1010,7 @@ Example:
   pv_ac_limit: 3600
 ```
 
-NB: pv_ac_limit is ONLY used by Predbat to improve the quality of the plan, any solar clipping is done by the inverter and is not controlled by Predbat.
+NB: pv_ac_limit is ONLY used by Predbat to improve the quality of the plan, any solar clipping is done by the inverter and is not controlled by Predbat. To provide Predbat with the unclipped solar forecast data required for this modeling, we recommend using the [Solcast Clearsky Integration](https://github.com/autoSteve/ha-solcast-clearsky).
 
 ### **export_limit**
 
