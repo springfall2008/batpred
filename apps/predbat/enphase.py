@@ -93,11 +93,18 @@ def safe_int(value, default=0):
 
 
 def energy_today(payload, channel):
-    """Return today's kWh for a lifetime_energy channel (last array entry), 0.0 if absent."""
+    """Return today's kWh for a lifetime_energy channel, 0.0 if absent.
+
+    The lifetime_energy endpoint returns per-day energy increments expressed in Wh: the array is
+    indexed daily from start_date, so the last element is today's running total (in Wh). Predbat
+    works in kWh, so the raw value is divided by 1000. Note: this assumes the daily cadence seen on
+    real accounts; a site configured for sub-daily (15-minute) buckets would need summing today's
+    buckets instead - see the /pv/systems/<site>/today endpoint for a cadence-independent total.
+    """
     values = (payload or {}).get(channel) or []
     if not values:
         return 0.0
-    return safe_float(values[-1])
+    return round(safe_float(values[-1]) / 1000.0, 3)
 
 
 def derive_power(prev_sample, new_kwh, now_utc):
@@ -853,7 +860,15 @@ class EnphaseAPI(ComponentBase):
         return self.battery_settings[site_id]
 
     async def get_schedules(self, site_id):
-        """Fetch and normalise the charge/export/freeze battery schedules for a site."""
+        """Fetch and normalise the charge/export/freeze battery schedules for a site.
+
+        NOTE: the real response for a battery-less account is
+        ``{"cfg": {"scheduleStatus": "active", "count": 0}, "dtg": {...}, "rbd": {...}}`` -
+        the per-schedule window/limit fields (when count > 0) have not yet been observed against
+        a real battery account, so the ``details``/``scheduleSupported`` parsing below is a
+        best-effort placeholder that must be verified once a battery site is available. ``count``
+        and ``scheduleStatus`` are captured for diagnostics/gating in the meantime.
+        """
         data = await self.request_json("GET", f"{BATTERY_CONFIG_BASE}/battery/sites/{site_id}/schedules", family="battery_config")
         if data is None:
             return None
@@ -862,7 +877,12 @@ class EnphaseAPI(ComponentBase):
             family_data = data.get(family_key) or {}
             details = family_data.get("details") or []
             entry = details[0] if details else {}
-            supported = bool(family_data.get("scheduleSupported") or family_data.get("forceScheduleSupported"))
+            # "supported" gates whether Predbat can use this schedule family. Real accounts report
+            # a per-family scheduleStatus ("active" seen so far); treat the usable statuses as
+            # supported, with a fallback to the (unverified) boolean flags. Needs confirmation
+            # against a battery account where an unsupported family's status value is known.
+            status_text = str(family_data.get("scheduleStatus", "")).strip().lower()
+            supported = status_text in ("active", "enabled", "supported", "available") or bool(family_data.get("scheduleSupported") or family_data.get("forceScheduleSupported"))
             parsed[family_key] = {
                 "id": entry.get("id"),
                 "startTime": entry.get("startTime"),
@@ -870,6 +890,8 @@ class EnphaseAPI(ComponentBase):
                 "limit": safe_int(entry.get("limit"), None),
                 "enabled": bool(entry.get("isEnabled", False)),
                 "supported": supported,
+                "count": safe_int(family_data.get("count"), 0),
+                "status": family_data.get("scheduleStatus"),
             }
         self.schedules[site_id] = parsed
         await self._save_cache("schedules", self.schedules)
@@ -893,6 +915,11 @@ class EnphaseAPI(ComponentBase):
         status = self.battery_status.get(site_id, {})
         if not status.get("max_capacity"):
             raise ValueError("Enphase API: No battery found on site, cannot configure")
+        # Predbat controls charging via the charge-from-grid (CFG) schedule family. If the site
+        # does not support CFG scheduling there is nothing to control, so fail configuration
+        # rather than publishing an inverter Predbat cannot drive.
+        if not self.schedules.get(site_id, {}).get("cfg", {}).get("supported", False):
+            raise ValueError("Enphase API: Charge-from-grid (CFG) scheduling not supported on this site, cannot configure")
         entity = f"{self.prefix}_enphase_{site_id}"
         has_dtg = self.dtg_supported(site_id)
 
@@ -1276,6 +1303,11 @@ async def test_enphase_api(username, password, site_id):  # pragma: no cover
             values = le.get(channel) or []
             print(f"  {channel}: len={len(values)} last5={values[-5:]}")
         print(f"  start_date={le.get('start_date')} last_report_date={le.get('last_report_date')} interval_minutes={le.get('interval_minutes')}")
+
+        # Read-only probe of the /today endpoint (a cadence-independent source of today's totals),
+        # so its response shape can be inspected before wiring the *_today sensors to it.
+        today = await api.request_json("GET", f"/pv/systems/{sid}/today")
+        print(f"today endpoint raw: {json.dumps(today, default=str)[:1500] if today is not None else None}")
 
     print("\nDone")
 

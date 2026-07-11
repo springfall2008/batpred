@@ -406,13 +406,15 @@ def test_reads_handle_na_values():
 
 
 def test_energy_today():
-    """energy_today returns the final (today's) entry of a channel array."""
-    payload = {"start_date": "2026-07-09", "last_report_date": "2026-07-11", "production": [10.0, 12.0, 3.5], "consumption": [8.0, 9.0, 2.2]}
+    """energy_today returns today's kWh (last daily bucket), converting the raw Wh value to kWh."""
+    # Real lifetime_energy arrays are per-day increments in Wh; the last element is today.
+    payload = {"start_date": "2026-07-09", "last_report_date": "2026-07-11", "production": [10000, 12000, 3500], "consumption": [8000, 9000, 2200]}
     from enphase import energy_today
 
-    assert energy_today(payload, "production") == 3.5
-    assert energy_today(payload, "consumption") == 2.2
+    assert energy_today(payload, "production") == 3.5  # 3500 Wh -> 3.5 kWh
+    assert energy_today(payload, "consumption") == 2.2  # 2200 Wh -> 2.2 kWh
     assert energy_today(payload, "import") == 0.0  # missing channel -> 0
+    assert energy_today({"production": ["N/A"]}, "production") == 0.0  # N/A bucket -> 0
 
 
 def test_get_schedules_parses_families():
@@ -468,6 +470,36 @@ def test_automatic_config_no_dtg():
     run_async(api.automatic_config())
     assert "discharge_start_time" not in api.args_set
     assert "scheduled_discharge_enable" not in api.args_set
+
+
+def test_automatic_config_no_charge_support_raises():
+    """A battery site that does not support CFG (charge-from-grid) scheduling must fail to configure."""
+    api = MockEnphaseAPI()
+    api.sites = [{"site_id": "12345", "name": "Home"}]
+    api.battery_status["12345"] = {"soc_percent": 55.0, "available_energy": 5.5, "max_capacity": 10.0, "max_power_kw": 3.84, "status": "normal", "batteries": []}
+    # Has a battery, but charge scheduling is not supported
+    api.schedules["12345"] = {"cfg": {"supported": False}, "dtg": {"supported": False}, "rbd": {"supported": True}}
+    raised = False
+    try:
+        run_async(api.automatic_config())
+    except ValueError as error:
+        raised = True
+        assert "CFG" in str(error) or "charge" in str(error).lower()
+    assert raised
+    assert "inverter_type" not in api.args_set
+
+
+def test_get_schedules_supported_from_status():
+    """scheduleStatus 'active' marks a family supported; the real battery-less response is handled."""
+    api = MockEnphaseAPI()
+    # Real response shape for a site (no scheduleSupported / details fields, just status + count)
+    payload = {"type": "BATTERY_SCHEDULES_CONFIG", "cfg": {"scheduleStatus": "active", "count": 0}, "dtg": {"scheduleStatus": "not_supported", "count": 0}, "rbd": {"scheduleStatus": "active", "count": 0}}
+    api.set_http_response("/service/batteryConfig/api/v1/battery/sites/12345/schedules", 200, payload)
+    run_async(api.get_schedules("12345"))
+    assert api.schedules["12345"]["cfg"]["supported"] is True
+    assert api.schedules["12345"]["cfg"]["count"] == 0
+    assert api.schedules["12345"]["cfg"]["status"] == "active"
+    assert api.dtg_supported("12345") is False  # 'not_supported' status
 
 
 def test_inverter_def_enphase():
@@ -609,7 +641,8 @@ def test_publish_data_sensors():
     api.battery_status["12345"] = {"soc_percent": 55.0, "available_energy": 5.5, "max_capacity": 10.0, "max_power_kw": 3.84, "status": "normal", "batteries": []}
     api.profile["12345"] = {"profile": "self-consumption", "reserve": 20}
     api.battery_settings["12345"] = {"chargeFromGrid": True, "veryLowSoc": 10, "veryLowSocMin": 5, "veryLowSocMax": 25}
-    api.lifetime_energy["12345"] = {"production": [3.5], "consumption": [2.2], "import": [1.0], "export": [0.4], "charge": [0.8], "discharge": [0.6]}
+    # lifetime_energy values are per-day Wh increments; energy_today converts to kWh.
+    api.lifetime_energy["12345"] = {"production": [3500], "consumption": [2200], "import": [1000], "export": [400], "charge": [800], "discharge": [600]}
     api.latest_power["12345"] = {"watts": 450.0, "time": 1760000000}
     run_async(api.publish_data("12345"))
     items = api.dashboard_items
@@ -641,7 +674,8 @@ def test_publish_data_derived_power_multicycle():
     api.battery_status[site_id] = {"soc_percent": 55.0, "available_energy": 5.5, "max_capacity": 10.0, "max_power_kw": 3.84, "status": "normal", "batteries": []}
     api.profile[site_id] = {"profile": "self-consumption", "reserve": 20}
     api.battery_settings[site_id] = {"chargeFromGrid": True, "veryLowSoc": 10, "veryLowSocMin": 5, "veryLowSocMax": 25}
-    api.lifetime_energy[site_id] = {"production": [5.0], "consumption": [2.2], "import": [1.0], "export": [0.4], "charge": [0.8], "discharge": [0.6]}
+    # Production in Wh (per-day bucket); energy_today converts to 5.0 kWh.
+    api.lifetime_energy[site_id] = {"production": [5000], "consumption": [2200], "import": [1000], "export": [400], "charge": [800], "discharge": [600]}
     api.latest_power[site_id] = {"watts": 450.0, "time": 1760000000}
 
     # Seed call: no previous sample, so pv_power must be 0 and the baseline is recorded.
@@ -660,7 +694,7 @@ def test_publish_data_derived_power_multicycle():
     # Simulate the 15-minute lifetime_energy refresh: bump production and back-date the stored
     # baseline timestamp by ~900 seconds so the elapsed-time window is the true (long) one, not the
     # ~60s tick interval.
-    api.lifetime_energy[site_id]["production"] = [6.0]
+    api.lifetime_energy[site_id]["production"] = [6000]  # 6.0 kWh today (was 5.0)
     api.prev_energy_sample[site_id]["production"] = (5.0, datetime.now(timezone.utc) - timedelta(seconds=900))
     run_async(api.publish_data(site_id))
     pv_power = api.dashboard_items["sensor.predbat_enphase_12345_pv_power"]["state"]
@@ -843,6 +877,8 @@ def run_enphase_api_tests(my_predbat):
     test_get_schedules_parses_families()
     test_automatic_config()
     test_automatic_config_no_dtg()
+    test_automatic_config_no_charge_support_raises()
+    test_get_schedules_supported_from_status()
     test_inverter_def_enphase()
     test_run_first_polls_all_tiers()
     test_derive_power()
