@@ -399,22 +399,40 @@ def test_reads_handle_na_values():
     # Publishing must not crash when veryLowSocMin is None (reserve_min falls back to 5)
     api.battery_status["12345"] = {"soc_percent": 55.0, "available_energy": 5.5, "max_capacity": 10.0, "max_power_kw": 3.84, "status": "normal", "batteries": []}
     api.profile["12345"] = {"profile": "self-consumption", "reserve": 20}
-    api.lifetime_energy["12345"] = {"production": [1.0], "consumption": [1.0], "import": [0.5], "export": [0.2], "charge": [0.1], "discharge": [0.1]}
+    api.today["12345"] = {"totals": {"production": 1000}, "arrays": {}, "start_time": None, "interval_length": 900}
     api.latest_power["12345"] = {"watts": 100.0, "time": 1760000000}
     run_async(api.publish_data("12345"))
     assert api.dashboard_items["sensor.predbat_enphase_12345_battery_reserve_min"]["state"] == 5
 
 
-def test_energy_today():
-    """energy_today returns today's kWh (last daily bucket), converting the raw Wh value to kWh."""
-    # Real lifetime_energy arrays are per-day increments in Wh; the last element is today.
-    payload = {"start_date": "2026-07-09", "last_report_date": "2026-07-11", "production": [10000, 12000, 3500], "consumption": [8000, 9000, 2200]}
-    from enphase import energy_today
+def test_today_channel_kwh():
+    """today_channel_kwh reads today's per-channel total (Wh) and converts to kWh, 0.0 if absent."""
+    from enphase import today_channel_kwh
 
-    assert energy_today(payload, "production") == 3.5  # 3500 Wh -> 3.5 kWh
-    assert energy_today(payload, "consumption") == 2.2  # 2200 Wh -> 2.2 kWh
-    assert energy_today(payload, "import") == 0.0  # missing channel -> 0
-    assert energy_today({"production": ["N/A"]}, "production") == 0.0  # N/A bucket -> 0
+    today = {"totals": {"production": 45287, "consumption": 12000}}
+    assert today_channel_kwh(today, "production") == 45.287  # 45287 Wh -> 45.287 kWh
+    assert today_channel_kwh(today, "consumption") == 12.0
+    assert today_channel_kwh(today, "import") == 0.0  # channel absent -> 0
+    assert today_channel_kwh({"totals": {"production": "N/A"}}, "production") == 0.0
+    assert today_channel_kwh({}, "production") == 0.0
+
+
+def test_interval_power():
+    """interval_power converts the most recent completed 15-minute Wh bucket into watts."""
+    from enphase import interval_power
+
+    # 96 fifteen-minute buckets from midnight; interval_length 900s. now = start + 82.5 intervals.
+    start = 1783724400
+    interval = 900
+    values = [0] * 96
+    values[80] = 199  # 199 Wh in the 15-min bucket -> 199 / 0.25h = 796 W
+    values[81] = 103
+    now_ts = start + int(81.5 * interval)  # current interval index 81 -> last completed = 80
+    assert interval_power(values, start, interval, now_ts) == 796.0
+    # Missing/empty data -> 0
+    assert interval_power([], start, interval, now_ts) == 0.0
+    assert interval_power(values, None, interval, now_ts) == 0.0
+    assert interval_power(values, start, 0, now_ts) == 0.0
 
 
 def test_get_schedules_parses_families():
@@ -524,7 +542,7 @@ def test_run_first_polls_all_tiers():
     api.eauth_token = "tok"
     api.sites = [{"site_id": "12345", "name": "Home"}]
     api.set_http_response("/pv/settings/12345/battery_status.json", 200, BATTERY_STATUS_PAYLOAD)
-    api.set_http_response("/pv/systems/12345/lifetime_energy", 200, {"production": [1.0], "consumption": [1.0], "import": [0.5], "export": [0.2], "charge": [0.1], "discharge": [0.1], "start_date": "2026-07-11"})
+    api.set_http_response("/pv/systems/12345/today", 200, {"stats": [{"totals": {"production": 1000}, "production": [1000], "start_time": 1783724400, "interval_length": 900}]})
     api.set_http_response("/app-api/12345/get_latest_power", 200, {"latest_power": {"value": 450, "units": "w", "time": 1760000000}})
     api.set_http_response("/service/batteryConfig/api/v1/profile/12345", 200, {"profile": "self-consumption", "batteryBackupPercentage": 20})
     api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 200, {"chargeFromGrid": True, "veryLowSoc": 10, "veryLowSocMin": 5, "veryLowSocMax": 25})
@@ -577,7 +595,7 @@ def test_run_single_site_publishes_once():
     # Two identical site entries (as an un-deduped cache might hold)
     api.sites = [{"site_id": "2627346", "name": "Home"}, {"site_id": "2627346", "name": "Home"}]
     api.set_http_response("/pv/settings/2627346/battery_status.json", 200, {"current_charge": "N/A", "storages": []})
-    api.set_http_response("/pv/systems/2627346/lifetime_energy", 200, {"production": [1.0]})
+    api.set_http_response("/pv/systems/2627346/today", 200, {"stats": [{"totals": {"production": 1000}, "production": [1000], "start_time": 1783724400, "interval_length": 900}]})
     api.set_http_response("/app-api/2627346/get_latest_power", 200, {"latest_power": {"value": 454, "time": 1760000000}})
     api.set_http_response("/service/batteryConfig/api/v1/profile/2627346", 200, {"profile": "self-consumption", "batteryBackupPercentage": 0})
     api.set_http_response("/service/batteryConfig/api/v1/batterySettings/2627346", 200, {"chargeFromGrid": False})
@@ -606,7 +624,7 @@ def test_run_no_battery_returns_false_without_raising():
     api.sites = [{"site_id": "2627346", "name": "Home"}]
     # PV-only: battery_status has no capacity
     api.set_http_response("/pv/settings/2627346/battery_status.json", 200, {"current_charge": "N/A", "storages": []})
-    api.set_http_response("/pv/systems/2627346/lifetime_energy", 200, {"production": [1.0]})
+    api.set_http_response("/pv/systems/2627346/today", 200, {"stats": [{"totals": {"production": 1000}, "production": [1000], "start_time": 1783724400, "interval_length": 900}]})
     api.set_http_response("/app-api/2627346/get_latest_power", 200, {"latest_power": {"value": 454, "time": 1760000000}})
     api.set_http_response("/service/batteryConfig/api/v1/profile/2627346", 200, {"profile": "self-consumption", "batteryBackupPercentage": 0})
     api.set_http_response("/service/batteryConfig/api/v1/batterySettings/2627346", 200, {"chargeFromGrid": False})
@@ -618,89 +636,64 @@ def test_run_no_battery_returns_false_without_raising():
     assert "sensor.predbat_enphase_2627346_pv_today" in api.dashboard_items
 
 
-def test_derive_power():
-    """derive_power converts kWh deltas over elapsed time into watts."""
-    from enphase import derive_power
-
-    now = datetime.now(timezone.utc)
-    prev = (1.0, now - timedelta(minutes=5))
-    watts, sample = derive_power(prev, 1.1, now)
-    assert abs(watts - 1200.0) < 1.0  # 0.1 kWh in 5 min = 1.2 kW
-    assert sample == (1.1, now)
-    # Negative delta (midnight reset) clamps to zero
-    watts, _ = derive_power((5.0, now - timedelta(minutes=5)), 0.0, now)
-    assert watts == 0.0
-    # No previous sample yields zero
-    watts, _ = derive_power(None, 2.0, now)
-    assert watts == 0.0
+def test_get_today():
+    """get_today normalises the /today payload into totals (Wh) and intra-day bucket metadata."""
+    api = MockEnphaseAPI()
+    payload = {"stats": [{"totals": {"production": 45287}, "production": [0, 100, 200], "start_time": 1783724400, "interval_length": 900}]}
+    api.set_http_response("/pv/systems/12345/today", 200, payload)
+    run_async(api.get_today("12345"))
+    today = api.today["12345"]
+    assert today["totals"] == {"production": 45287}
+    assert today["arrays"]["production"] == [0, 100, 200]
+    assert today["arrays"]["consumption"] == []  # missing channel -> empty
+    assert today["interval_length"] == 900
+    assert today["start_time"] == 1783724400
 
 
 def test_publish_data_sensors():
-    """publish_data creates the full monitoring sensor set."""
+    """publish_data creates the full monitoring sensor set from the /today totals and buckets."""
     api = MockEnphaseAPI()
     api.battery_status["12345"] = {"soc_percent": 55.0, "available_energy": 5.5, "max_capacity": 10.0, "max_power_kw": 3.84, "status": "normal", "batteries": []}
     api.profile["12345"] = {"profile": "self-consumption", "reserve": 20}
     api.battery_settings["12345"] = {"chargeFromGrid": True, "veryLowSoc": 10, "veryLowSocMin": 5, "veryLowSocMax": 25}
-    # lifetime_energy values are per-day Wh increments; energy_today converts to kWh.
-    api.lifetime_energy["12345"] = {"production": [3500], "consumption": [2200], "import": [1000], "export": [400], "charge": [800], "discharge": [600]}
+    # today.totals are per-channel Wh totals for today; publish converts to kWh.
+    start = 1783724400
+    prod_buckets = [0] * 96
+    prod_buckets[80] = 1000  # 1000 Wh in a 15-min bucket -> 4000 W
+    api.today["12345"] = {
+        "totals": {"production": 3500, "consumption": 2200, "import": 1000, "export": 400, "charge": 800, "discharge": 600},
+        "arrays": {"production": prod_buckets, "import": [], "export": [], "charge": [], "discharge": []},
+        "start_time": start,
+        "interval_length": 900,
+    }
     api.latest_power["12345"] = {"watts": 450.0, "time": 1760000000}
-    run_async(api.publish_data("12345"))
+    # Freeze "now" so interval_power selects bucket 80 (last completed at index 81 -> 80).
+    import enphase as enphase_module
+
+    original_datetime = enphase_module.datetime
+
+    class _FixedDatetime(original_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            """Return a fixed time inside interval index 81."""
+            return original_datetime.fromtimestamp(start + int(81.5 * 900), tz)
+
+    enphase_module.datetime = _FixedDatetime
+    try:
+        run_async(api.publish_data("12345"))
+    finally:
+        enphase_module.datetime = original_datetime
     items = api.dashboard_items
     assert items["sensor.predbat_enphase_12345_soc_percent"]["state"] == 55.0
     assert items["sensor.predbat_enphase_12345_battery_capacity"]["state"] == 10.0
     assert items["sensor.predbat_enphase_12345_battery_rate_max"]["state"] == 3840.0
-    assert items["sensor.predbat_enphase_12345_pv_today"]["state"] == 3.5
+    assert items["sensor.predbat_enphase_12345_pv_today"]["state"] == 3.5  # 3500 Wh -> 3.5 kWh
     assert items["sensor.predbat_enphase_12345_load_today"]["state"] == 2.2
     assert items["sensor.predbat_enphase_12345_import_today"]["state"] == 1.0
     assert items["sensor.predbat_enphase_12345_export_today"]["state"] == 0.4
     assert items["sensor.predbat_enphase_12345_load_power"]["state"] == 450.0
     assert items["sensor.predbat_enphase_12345_battery_reserve_min"]["state"] == 5
-    assert "sensor.predbat_enphase_12345_pv_power" in items
-
-
-def test_publish_data_derived_power_multicycle():
-    """Derived power must not be inflated by the 60s poll vs 15-minute lifetime_energy refresh mismatch.
-
-    Simulates several `publish_data` calls with an unchanged `lifetime_energy` (the normal case for
-    ~14 out of every 15 one-minute ticks), asserting the baseline is held (not advanced) and pv_power
-    stays at its seeded value rather than drifting or spiking. Then simulates the 15-minute refresh by
-    bumping the production total and back-dating the stored baseline sample by ~900 seconds, asserting
-    the resulting watts reflects the true average over the true elapsed window (about 4000W for a 1.0
-    kWh delta over 900s) rather than the ~15x-inflated value that would result from dividing by a ~60s
-    window.
-    """
-    api = MockEnphaseAPI()
-    site_id = "12345"
-    api.battery_status[site_id] = {"soc_percent": 55.0, "available_energy": 5.5, "max_capacity": 10.0, "max_power_kw": 3.84, "status": "normal", "batteries": []}
-    api.profile[site_id] = {"profile": "self-consumption", "reserve": 20}
-    api.battery_settings[site_id] = {"chargeFromGrid": True, "veryLowSoc": 10, "veryLowSocMin": 5, "veryLowSocMax": 25}
-    # Production in Wh (per-day bucket); energy_today converts to 5.0 kWh.
-    api.lifetime_energy[site_id] = {"production": [5000], "consumption": [2200], "import": [1000], "export": [400], "charge": [800], "discharge": [600]}
-    api.latest_power[site_id] = {"watts": 450.0, "time": 1760000000}
-
-    # Seed call: no previous sample, so pv_power must be 0 and the baseline is recorded.
-    run_async(api.publish_data(site_id))
-    assert api.dashboard_items["sensor.predbat_enphase_12345_pv_power"]["state"] == 0.0
-    seeded_sample = api.prev_energy_sample[site_id]["production"]
-    assert seeded_sample[0] == 5.0
-
-    # Several more ticks with the SAME lifetime_energy (as happens for ~14 of every 15 one-minute
-    # polls): pv_power must stay stable (0, the last computed value) and the baseline must not drift.
-    for _ in range(5):
-        run_async(api.publish_data(site_id))
-        assert api.dashboard_items["sensor.predbat_enphase_12345_pv_power"]["state"] == 0.0
-        assert api.prev_energy_sample[site_id]["production"] == seeded_sample
-
-    # Simulate the 15-minute lifetime_energy refresh: bump production and back-date the stored
-    # baseline timestamp by ~900 seconds so the elapsed-time window is the true (long) one, not the
-    # ~60s tick interval.
-    api.lifetime_energy[site_id]["production"] = [6000]  # 6.0 kWh today (was 5.0)
-    api.prev_energy_sample[site_id]["production"] = (5.0, datetime.now(timezone.utc) - timedelta(seconds=900))
-    run_async(api.publish_data(site_id))
-    pv_power = api.dashboard_items["sensor.predbat_enphase_12345_pv_power"]["state"]
-    # 1.0 kWh over ~900s ~= 4000W. Must NOT be inflated to ~60000W (dividing by a ~60s tick window).
-    assert 3500 <= pv_power <= 4500
-    assert pv_power < 10000
+    assert items["sensor.predbat_enphase_12345_pv_power"]["state"] == 4000.0  # 1000 Wh / 0.25h
 
 
 def test_publish_schedule_entities():
@@ -873,7 +866,8 @@ def run_enphase_api_tests(my_predbat):
     test_request_json_login_wall()
     test_battery_config_variant_fallback()
     test_get_battery_status()
-    test_energy_today()
+    test_today_channel_kwh()
+    test_interval_power()
     test_get_schedules_parses_families()
     test_automatic_config()
     test_automatic_config_no_dtg()
@@ -881,9 +875,8 @@ def run_enphase_api_tests(my_predbat):
     test_get_schedules_supported_from_status()
     test_inverter_def_enphase()
     test_run_first_polls_all_tiers()
-    test_derive_power()
+    test_get_today()
     test_publish_data_sensors()
-    test_publish_data_derived_power_multicycle()
     test_publish_schedule_entities()
     test_event_handlers_update_local_schedule()
     test_write_switch_triggers_apply()

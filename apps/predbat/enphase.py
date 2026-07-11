@@ -48,8 +48,8 @@ ENPHASE_REFRESH_SETTINGS = 5
 ENPHASE_REFRESH_ENERGY = 15
 ENPHASE_REFRESH_POWER = 1
 
-ENPHASE_CACHE_KEYS = ["sites", "battery_status", "battery_settings", "profile", "schedules", "site_settings", "lifetime_energy", "latest_power"]
-ENPHASE_CACHE_VERSION = 1
+ENPHASE_CACHE_KEYS = ["sites", "battery_status", "battery_settings", "profile", "schedules", "site_settings", "today", "latest_power"]
+ENPHASE_CACHE_VERSION = 2
 
 # Battery profiles accepted by the profile endpoint
 PROFILE_SELF_CONSUMPTION = "self-consumption"
@@ -92,48 +92,39 @@ def safe_int(value, default=0):
         return default
 
 
-def energy_today(payload, channel):
-    """Return today's kWh for a lifetime_energy channel, 0.0 if absent.
+def today_channel_kwh(today_data, channel):
+    """Return today's kWh total for a channel from a /today payload's totals (Wh), 0.0 if absent.
 
-    The lifetime_energy endpoint returns per-day energy increments expressed in Wh: the array is
-    indexed daily from start_date, so the last element is today's running total (in Wh). Predbat
-    works in kWh, so the raw value is divided by 1000. Note: this assumes the daily cadence seen on
-    real accounts; a site configured for sub-daily (15-minute) buckets would need summing today's
-    buckets instead - see the /pv/systems/<site>/today endpoint for a cadence-independent total.
+    The /today endpoint reports each channel's running total for the current day in Wh under
+    `stats[0].totals`; Predbat works in kWh so the value is divided by 1000. This is cadence-
+    independent (unlike indexing the daily lifetime_energy array) - the cloud provides the total
+    directly regardless of whether the site buckets energy per 15 minutes or per day.
     """
-    values = (payload or {}).get(channel) or []
-    if not values:
+    totals = (today_data or {}).get("totals") or {}
+    return round(safe_float(totals.get(channel)) / 1000.0, 3)
+
+
+def interval_power(values, start_time, interval_length, now_ts):
+    """Estimate current watts from the most recent completed intra-day energy bucket.
+
+    `values` is the /today array of per-interval energy in Wh (each bucket covers `interval_length`
+    seconds starting at `start_time`, a Unix timestamp at local midnight). The bucket index for the
+    current time is (now - start_time) / interval_length; the last COMPLETED bucket is one before
+    that. Its energy divided by the bucket duration in hours gives average watts over that bucket -
+    a stable, correct instantaneous estimate that needs no cross-poll delta tracking. Returns 0.0
+    when the data is missing/empty or the timing is unusable.
+    """
+    if not values or not interval_length or start_time is None or now_ts is None:
         return 0.0
-    return round(safe_float(values[-1]) / 1000.0, 3)
-
-
-def derive_power(prev_sample, new_kwh, now_utc):
-    """Estimate average watts from the change in a cumulative kWh counter since the previous sample.
-
-    A sample is a `(kwh, datetime)` tuple. Returns `(watts, new_sample)`. The baseline sample is
-    only advanced (`new_sample != prev_sample`) when the cumulative kWh value has actually
-    changed, so a caller that polls far more often than the underlying counter refreshes (e.g.
-    every 60 seconds against a value that only updates every 15 minutes) can tell "no change yet"
-    apart from "just changed" and compute watts over the true elapsed time since the last change,
-    rather than diluting a full-window delta by a much shorter tick interval. Watts is clamped to
-    zero, with the previous sample kept unchanged (caller should hold its last computed watts),
-    when there is no previous sample, when the kWh value is unchanged, or when the window since
-    the previous sample is under 60 seconds. When the counter has gone backwards (e.g. a daily
-    reset at midnight) watts is clamped to zero and the baseline is re-seeded to the new value.
-    """
-    new_sample = (new_kwh, now_utc)
-    if not prev_sample:
-        return 0.0, new_sample
-    prev_kwh, prev_time = prev_sample
-    delta = new_kwh - prev_kwh
-    if delta == 0:
-        return 0.0, prev_sample
-    if delta < 0:
-        return 0.0, new_sample
-    seconds = (now_utc - prev_time).total_seconds()
-    if seconds < 60:
-        return 0.0, prev_sample
-    return round(delta * 1000.0 * 3600.0 / seconds, 1), new_sample
+    hours = interval_length / 3600.0
+    if hours <= 0:
+        return 0.0
+    index = int((now_ts - start_time) / interval_length) - 1
+    if index < 0:
+        index = 0
+    if index >= len(values):
+        index = len(values) - 1
+    return round(safe_float(values[index]) / hours, 1)
 
 
 def ha_time_to_enphase(value):
@@ -227,16 +218,11 @@ class EnphaseAPI(ComponentBase):
         self.profile = {}
         self.schedules = {}
         self.site_settings = {}
-        self.lifetime_energy = {}
+        self.today = {}  # per-site today totals (Wh) + intra-day 15-minute buckets, from /today
         self.latest_power = {}
 
         # Local (HA-side) schedule model, written by events, applied on write switch
         self.local_schedule = {}
-
-        # Derived power state: previous cumulative kWh samples per channel, and the last
-        # computed watts per channel (republished when the kWh value hasn't changed yet)
-        self.prev_energy_sample = {}
-        self.last_power_w = {}
 
         # Pending writes awaiting cloud settle confirmation
         self.pending_writes = {}
@@ -339,8 +325,8 @@ class EnphaseAPI(ComponentBase):
                 await self.get_profile(site_id)
                 await self.get_battery_settings(site_id)
                 await self.get_schedules(site_id)
-            if self._needs_refresh("lifetime_energy", ENPHASE_REFRESH_ENERGY):
-                await self.get_lifetime_energy(site_id)
+            if self._needs_refresh("today", ENPHASE_REFRESH_ENERGY):
+                await self.get_today(site_id)
             if self._needs_refresh("latest_power", ENPHASE_REFRESH_POWER):
                 await self.get_latest_power(site_id)
             await self.publish_data(site_id)
@@ -363,7 +349,7 @@ class EnphaseAPI(ComponentBase):
 
         Reads from the normalised per-site data stores populated by the various `get_*()`
         methods, guarding every lookup with `.get()` defaults so a site missing one data
-        category (e.g. no lifetime_energy fetched yet) cannot crash the whole publish. The
+        category (e.g. no today data fetched yet) cannot crash the whole publish. The
         battery profile name is read from `self.profile`, not `self.battery_status` (the latter
         has no profile field - see the note in `get_battery_status`).
         """
@@ -373,7 +359,7 @@ class EnphaseAPI(ComponentBase):
         status = self.battery_status.get(site_id, {})
         profile = self.profile.get(site_id, {})
         settings = self.battery_settings.get(site_id, {})
-        energy = self.lifetime_energy.get(site_id, {})
+        today = self.today.get(site_id, {})
         power = self.latest_power.get(site_id, {})
 
         self.dashboard_item(
@@ -430,7 +416,8 @@ class EnphaseAPI(ComponentBase):
             app="enphase",
         )
 
-        # Today's cumulative energy totals, one dashboard sensor per lifetime_energy channel.
+        # Today's energy totals (kWh), one dashboard sensor per channel, sourced from the /today
+        # totals (which are cadence-independent - the cloud reports the running daily total directly).
         energy_channels = {
             "production": ("pv_today", "Enphase PV Today", "mdi:solar-power"),
             "consumption": ("load_today", "Enphase Load Today", "mdi:home-lightning-bolt"),
@@ -439,13 +426,10 @@ class EnphaseAPI(ComponentBase):
             "charge": ("battery_charge_today", "Enphase Battery Charge Today", "mdi:battery-plus"),
             "discharge": ("battery_discharge_today", "Enphase Battery Discharge Today", "mdi:battery-minus"),
         }
-        energy_values = {}
         for channel, (name, friendly, icon) in energy_channels.items():
-            value = energy_today(energy, channel)
-            energy_values[channel] = value
             self.dashboard_item(
                 f"{entity_base}_{name}",
-                state=value,
+                state=today_channel_kwh(today, channel),
                 attributes={"unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total_increasing", "friendly_name": friendly, "icon": icon},
                 app="enphase",
             )
@@ -457,22 +441,15 @@ class EnphaseAPI(ComponentBase):
             app="enphase",
         )
 
-        # Derived instantaneous power from cumulative kWh deltas, kept per site/channel. A
-        # channel's baseline sample only advances when its cumulative kWh has actually changed
-        # (see derive_power); when it hasn't (or the window since the last change is under 60s)
-        # the previously computed watts value is republished rather than recomputed or zeroed,
-        # which avoids the ~15x inflation that would otherwise occur when lifetime_energy (only
-        # refreshed every 15 minutes) is read on a component polled every 60 seconds.
-        samples = self.prev_energy_sample.setdefault(site_id, {})
-        channel_watts = self.last_power_w.setdefault(site_id, {})
-        for channel in ("production", "import", "export", "charge", "discharge"):
-            prev_sample = samples.get(channel)
-            watts, new_sample = derive_power(prev_sample, energy_values[channel], now_utc)
-            if new_sample == prev_sample:
-                watts = channel_watts.get(channel, 0.0)
-            else:
-                channel_watts[channel] = watts
-            samples[channel] = new_sample
+        # Instantaneous power from the most recent completed intra-day 15-minute energy bucket of
+        # the /today arrays (Wh per interval -> average watts over that interval). This reads a
+        # single bucket value per poll, so it is inherently stable within an interval and needs no
+        # cross-poll delta tracking.
+        arrays = today.get("arrays", {})
+        start_time = today.get("start_time")
+        interval_length = today.get("interval_length")
+        now_ts = now_utc.timestamp()
+        channel_watts = {channel: interval_power(arrays.get(channel, []), start_time, interval_length, now_ts) for channel in ("production", "import", "export", "charge", "discharge")}
 
         pv_power = channel_watts.get("production", 0.0)
         grid_power = channel_watts.get("import", 0.0) - channel_watts.get("export", 0.0)
@@ -805,14 +782,28 @@ class EnphaseAPI(ComponentBase):
         await self._save_cache("battery_status", self.battery_status)
         return self.battery_status[site_id]
 
-    async def get_lifetime_energy(self, site_id):
-        """Fetch and store the raw lifetime energy payload for a site."""
-        data = await self.request_json("GET", f"/pv/systems/{site_id}/lifetime_energy")
+    async def get_today(self, site_id):
+        """Fetch today's per-channel totals and intra-day 15-minute buckets for a site.
+
+        Uses GET /pv/systems/<site>/today, whose stats[0].totals gives each channel's running
+        total for today (in Wh) and whose per-channel arrays are intra-day energy buckets of
+        stats[0].interval_length seconds starting at stats[0].start_time. Stored normalised for
+        publish_data to turn into the *_today (kWh) and instantaneous power (W) sensors.
+        """
+        data = await self.request_json("GET", f"/pv/systems/{site_id}/today")
         if data is None:
             return None
-        self.lifetime_energy[site_id] = data
-        await self._save_cache("lifetime_energy", self.lifetime_energy)
-        return data
+        stats = data.get("stats") or []
+        stat = stats[0] if isinstance(stats, list) and stats else {}
+        channels = ("production", "consumption", "import", "export", "charge", "discharge")
+        self.today[site_id] = {
+            "totals": stat.get("totals") or {},
+            "arrays": {channel: (stat.get(channel) or []) for channel in channels},
+            "start_time": stat.get("start_time"),
+            "interval_length": stat.get("interval_length"),
+        }
+        await self._save_cache("today", self.today)
+        return self.today[site_id]
 
     async def get_latest_power(self, site_id):
         """Fetch and normalise the latest instantaneous power reading for a site."""
@@ -1295,19 +1286,14 @@ async def test_enphase_api(username, password, site_id):  # pragma: no cover
         print(f"schedules: {json.dumps(api.schedules.get(sid, {}), default=str, indent=2)}")
         print(f"dtg_supported: {api.dtg_supported(sid)}")
 
-        # Dump the raw lifetime_energy channels so the units (Wh vs kWh) and whether the arrays
-        # are per-day increments or cumulative totals can be checked against the published *_today values.
-        le = api.lifetime_energy.get(sid, {})
-        print("lifetime_energy raw (last 5 entries per channel):")
-        for channel in ("production", "consumption", "import", "export", "charge", "discharge"):
-            values = le.get(channel) or []
-            print(f"  {channel}: len={len(values)} last5={values[-5:]}")
-        print(f"  start_date={le.get('start_date')} last_report_date={le.get('last_report_date')} interval_minutes={le.get('interval_minutes')}")
-
-        # Read-only probe of the /today endpoint (a cadence-independent source of today's totals),
-        # so its response shape can be inspected before wiring the *_today sensors to it.
-        today = await api.request_json("GET", f"/pv/systems/{sid}/today")
-        print(f"today endpoint raw: {json.dumps(today, default=str)[:1500] if today is not None else None}")
+        # Dump the normalised today data: per-channel totals (Wh) and 15-minute bucket metadata,
+        # so the published *_today (kWh) and instantaneous power values can be sanity-checked.
+        today = api.today.get(sid, {})
+        print(f"today totals (Wh): {today.get('totals')}")
+        print(f"today interval_length={today.get('interval_length')} start_time={today.get('start_time')}")
+        for channel, values in (today.get("arrays") or {}).items():
+            if values:
+                print(f"  {channel}: len={len(values)} last5={values[-5:]}")
 
     print("\nDone")
 
