@@ -116,7 +116,6 @@ The Azimuth value is the number of degrees angled away from North, with the sign
 When supplied with the unclipped Solcast forecast data, Predbat can allow in its model for PV over the inverter capacity going to battery charging
 (bypassing the hybrid inverter).
 
-
 You will need your API key for the next steps:
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/e6cce04f-2677-4722-b269-eb051be5c769)
