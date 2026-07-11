@@ -332,6 +332,60 @@ def test_get_schedules_parses_families():
     assert api.dtg_supported("12345") is False
 
 
+def test_automatic_config():
+    """automatic_config points every inverter arg at the published entities."""
+    api = MockEnphaseAPI()
+    api.sites = [{"site_id": "12345", "name": "Home"}]
+    api.battery_status["12345"] = {"soc_percent": 55.0, "available_energy": 5.5, "max_capacity": 10.0, "max_power_kw": 3.84, "status": "normal", "batteries": []}
+    api.schedules["12345"] = {"cfg": {"supported": True}, "dtg": {"supported": True}, "rbd": {"supported": True}}
+    run_async(api.automatic_config())
+    args = api.args_set
+    assert args["inverter_type"] == ["EnphaseCloud"]
+    assert args["num_inverters"] == 1
+    assert args["soc_percent"] == ["sensor.predbat_enphase_12345_soc_percent"]
+    assert args["soc_max"] == ["sensor.predbat_enphase_12345_battery_capacity"]
+    assert args["battery_rate_max"] == ["sensor.predbat_enphase_12345_battery_rate_max"]
+    assert args["load_today"] == ["sensor.predbat_enphase_12345_load_today"]
+    assert args["import_today"] == ["sensor.predbat_enphase_12345_import_today"]
+    assert args["export_today"] == ["sensor.predbat_enphase_12345_export_today"]
+    assert args["pv_today"] == ["sensor.predbat_enphase_12345_pv_today"]
+    assert args["charge_start_time"] == ["select.predbat_enphase_12345_battery_schedule_charge_start_time"]
+    assert args["charge_limit"] == ["number.predbat_enphase_12345_battery_schedule_charge_soc"]
+    assert args["scheduled_charge_enable"] == ["switch.predbat_enphase_12345_battery_schedule_charge_enable"]
+    assert args["scheduled_discharge_enable"] == ["switch.predbat_enphase_12345_battery_schedule_export_enable"]
+    assert args["discharge_start_time"] == ["select.predbat_enphase_12345_battery_schedule_export_start_time"]
+    assert args["discharge_target_soc"] == ["number.predbat_enphase_12345_battery_schedule_export_soc"]
+    assert args["reserve"] == ["number.predbat_enphase_12345_battery_schedule_reserve"]
+    assert args["battery_min_soc"] == ["sensor.predbat_enphase_12345_battery_reserve_min"]
+    assert args["schedule_write_button"] == ["switch.predbat_enphase_12345_battery_schedule_charge_write"]
+    assert args["export_limit"] == [99999]
+
+
+def test_automatic_config_no_dtg():
+    """Without dtg support, discharge args are not set."""
+    api = MockEnphaseAPI()
+    api.sites = [{"site_id": "12345", "name": "Home"}]
+    api.battery_status["12345"] = {"soc_percent": 55.0, "available_energy": 5.5, "max_capacity": 10.0, "max_power_kw": 3.84, "status": "normal", "batteries": []}
+    api.schedules["12345"] = {"cfg": {"supported": True}, "dtg": {"supported": False}, "rbd": {"supported": True}}
+    run_async(api.automatic_config())
+    assert "discharge_start_time" not in api.args_set
+    assert "scheduled_discharge_enable" not in api.args_set
+
+
+def test_inverter_def_enphase():
+    """EnphaseCloud INVERTER_DEF exists with the agreed capability flags."""
+    from config import INVERTER_DEF
+
+    idef = INVERTER_DEF["EnphaseCloud"]
+    assert idef["has_rest_api"] is False
+    assert idef["has_target_soc"] is True
+    assert idef["time_button_press"] is True
+    assert idef["charge_time_entity_is_option"] is True
+    assert idef["can_span_midnight"] is False
+    assert idef["target_soc_used_for_discharge"] is True
+    assert idef["has_fox_inverter_mode"] is False
+
+
 def test_run_first_polls_all_tiers():
     """First run() logs in, fetches every tier and publishes."""
     api = MockEnphaseAPI()
@@ -553,6 +607,9 @@ def run_enphase_api_tests(my_predbat):
     test_get_battery_status()
     test_energy_today()
     test_get_schedules_parses_families()
+    test_automatic_config()
+    test_automatic_config_no_dtg()
+    test_inverter_def_enphase()
     test_run_first_polls_all_tiers()
     test_derive_power()
     test_publish_data_sensors()

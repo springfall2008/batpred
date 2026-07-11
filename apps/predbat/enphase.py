@@ -293,6 +293,11 @@ class EnphaseAPI(ComponentBase):
                 await self.get_latest_power(site_id)
             await self.publish_data(site_id)
             await self.publish_schedule_settings_ha(site_id)
+
+        # Automatic configuration on first successful data load
+        if first and self.automatic:
+            await self.automatic_config()
+
         return True
 
     async def publish_data(self, site_id):
@@ -806,6 +811,51 @@ class EnphaseAPI(ComponentBase):
     def dtg_supported(self, site_id):
         """Return True when the export-to-grid (dtg) schedule family is supported for a site."""
         return bool(self.schedules.get(site_id, {}).get("dtg", {}).get("supported", False))
+
+    async def automatic_config(self):
+        """Automatically configure Predbat inverter args from the discovered Enphase site.
+
+        Single-site only: the first discovered site is used. Points every generic Predbat
+        inverter arg at the entities published by `publish_data()` / `publish_schedule_settings_ha()`
+        for that site. Export/discharge args are only set when the site supports the "dtg"
+        (discharge-to-grid) schedule family, since not every Enphase system offers it.
+        """
+        if not self.sites:
+            raise ValueError("Enphase API: No sites found, cannot configure")
+        site_id = self.sites[0]["site_id"]
+        status = self.battery_status.get(site_id, {})
+        if not status.get("max_capacity"):
+            raise ValueError("Enphase API: No battery found on site, cannot configure")
+        entity = f"{self.prefix}_enphase_{site_id}"
+        has_dtg = self.dtg_supported(site_id)
+
+        self.set_arg("inverter_type", ["EnphaseCloud"])
+        self.set_arg("num_inverters", 1)
+        self.set_arg("load_today", [f"sensor.{entity}_load_today"])
+        self.set_arg("import_today", [f"sensor.{entity}_import_today"])
+        self.set_arg("export_today", [f"sensor.{entity}_export_today"])
+        if not self.automatic_ignore_pv:
+            self.set_arg("pv_today", [f"sensor.{entity}_pv_today"])
+            self.set_arg("pv_power", [f"sensor.{entity}_pv_power"])
+        self.set_arg("soc_percent", [f"sensor.{entity}_soc_percent"])
+        self.set_arg("soc_max", [f"sensor.{entity}_battery_capacity"])
+        self.set_arg("battery_rate_max", [f"sensor.{entity}_battery_rate_max"])
+        self.set_arg("battery_power", [f"sensor.{entity}_battery_power"])
+        self.set_arg("grid_power", [f"sensor.{entity}_grid_power"])
+        self.set_arg("load_power", [f"sensor.{entity}_load_power"])
+        self.set_arg("reserve", [f"number.{entity}_battery_schedule_reserve"])
+        self.set_arg("battery_min_soc", [f"sensor.{entity}_battery_reserve_min"])
+        self.set_arg("charge_start_time", [f"select.{entity}_battery_schedule_charge_start_time"])
+        self.set_arg("charge_end_time", [f"select.{entity}_battery_schedule_charge_end_time"])
+        self.set_arg("charge_limit", [f"number.{entity}_battery_schedule_charge_soc"])
+        self.set_arg("scheduled_charge_enable", [f"switch.{entity}_battery_schedule_charge_enable"])
+        if has_dtg:
+            self.set_arg("scheduled_discharge_enable", [f"switch.{entity}_battery_schedule_export_enable"])
+            self.set_arg("discharge_start_time", [f"select.{entity}_battery_schedule_export_start_time"])
+            self.set_arg("discharge_end_time", [f"select.{entity}_battery_schedule_export_end_time"])
+            self.set_arg("discharge_target_soc", [f"number.{entity}_battery_schedule_export_soc"])
+        self.set_arg("schedule_write_button", [f"switch.{entity}_battery_schedule_charge_write"])
+        self.set_arg("export_limit", [99999])
 
     def login_allowed(self):
         """Return True when a password login attempt is currently permitted by the guard rails."""

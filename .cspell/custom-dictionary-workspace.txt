@@ -188,6 +188,7 @@ husforbrukning
 hypervolt
 iboost
 idag
+idef
 idetails
 idxs
 iflux
