@@ -16,16 +16,57 @@ from prediction import Prediction
 # Attributes these tests mutate on the shared my_predbat instance. They are snapshotted on
 # entry and restored on exit so this test does not pollute state for later tests in the suite.
 _SNAPSHOT_ATTRS = [
-    "io_adjusted", "minutes_now", "calculate_best_charge", "calculate_best_export", "set_charge_freeze",
-    "carbon_enable", "inverter_loss", "battery_loss", "battery_loss_discharge", "metric_battery_cycle",
-    "metric_self_sufficiency", "soc_max", "soc_kw", "reserve", "best_soc_keep", "best_soc_keep_weight",
-    "inverter_hybrid", "battery_rate_max_charge", "battery_rate_max_charge_dc", "battery_rate_max_discharge",
-    "charge_rate_now", "discharge_rate_now", "inverter_limit", "export_limit", "prediction", "inverters",
-    "load_minutes_step", "load_minutes_step10", "pv_forecast_minute_step", "pv_forecast_minute10_step",
-    "debug_enable", "prediction_kernel_enable", "rate_min_forward", "calculate_second_pass", "rate_import",
-    "rate_export", "rate_export_min", "rate_min", "rate_max", "rate_min_base", "rate_max_base",
-    "combine_charge_slots", "charge_limit_best", "export_limits_best", "charge_window_best", "export_window_best",
-    "num_inverters", "current_charge_limit", "charge_window", "export_window", "export_limits",
+    "io_adjusted",
+    "minutes_now",
+    "calculate_best_charge",
+    "calculate_best_export",
+    "set_charge_freeze",
+    "carbon_enable",
+    "inverter_loss",
+    "battery_loss",
+    "battery_loss_discharge",
+    "metric_battery_cycle",
+    "metric_self_sufficiency",
+    "soc_max",
+    "soc_kw",
+    "reserve",
+    "best_soc_keep",
+    "best_soc_keep_weight",
+    "inverter_hybrid",
+    "battery_rate_max_charge",
+    "battery_rate_max_charge_dc",
+    "battery_rate_max_discharge",
+    "charge_rate_now",
+    "discharge_rate_now",
+    "inverter_limit",
+    "export_limit",
+    "prediction",
+    "inverters",
+    "load_minutes_step",
+    "load_minutes_step10",
+    "pv_forecast_minute_step",
+    "pv_forecast_minute10_step",
+    "debug_enable",
+    "prediction_kernel_enable",
+    "rate_min_forward",
+    "calculate_second_pass",
+    "rate_import",
+    "rate_export",
+    "rate_export_min",
+    "rate_min",
+    "rate_max",
+    "rate_min_base",
+    "rate_max_base",
+    "combine_charge_slots",
+    "charge_limit_best",
+    "export_limits_best",
+    "charge_window_best",
+    "export_window_best",
+    "num_inverters",
+    "current_charge_limit",
+    "charge_window",
+    "export_window",
+    "export_limits",
 ]
 # Objects with back-references to my_predbat must not be deep-copied (would clone the whole instance)
 _SNAPSHOT_BY_REFERENCE = {"prediction", "inverters"}
@@ -322,9 +363,7 @@ def run_iog_integration_tests(my_predbat):
     # First 8 slots (4h) are an imminent IOG run; the rest are firm
     iog_front_starts = [charge_window_best[n]["start"] for n in range(8)]
 
-    _, charged_iog_front = run_iog_skew_scenario(
-        "iog_front_run", my_predbat, [dict(w) for w in charge_window_best], io_adjusted_starts=iog_front_starts
-    )
+    _, charged_iog_front = run_iog_skew_scenario("iog_front_run", my_predbat, [dict(w) for w in charge_window_best], io_adjusted_starts=iog_front_starts)
 
     if not charged_iog_front:
         print("  ERROR: IOG-front scenario charged nothing")
