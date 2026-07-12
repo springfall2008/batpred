@@ -777,6 +777,9 @@ class EnphaseAPI(ComponentBase):
         Preserves the current profile name (so only the reserve changes). Returns the parsed
         response, or None on failure.
         """
+        # Bootstrap a fresh XSRF token immediately before the write (its x-csrf-token response header
+        # and XSRF cookie are absorbed for the double-submit the PUT needs).
+        await self.get_site_settings(site_id)
         cloud = self.profile.get(site_id, {})
         profile_name = cloud.get("profile") or PROFILE_SELF_CONSUMPTION
         self.log(f"Enphase: Setting reserve to {int(reserve)}% (profile {profile_name}) on site {site_id}")
@@ -1205,7 +1208,12 @@ class EnphaseAPI(ComponentBase):
         current.update(cookies)
         self.cookie_header = "; ".join(f"{k}={v}" for k, v in current.items() if v)
         self.manager_token = current.get("enlighten_manager_token_production", self.manager_token)
-        self.xsrf_token = current.get("XSRF-TOKEN", current.get("BP-XSRF-Token", self.xsrf_token))
+        # The XSRF token cookie is named XSRF-TOKEN or BP-XSRF-Token (case varies); take the first
+        # match. It is used for BatteryConfig writes as both the X-XSRF-Token header and cookie.
+        for name, value in current.items():
+            if value and "xsrf" in name.lower() and "token" in name.lower():
+                self.xsrf_token = value
+                break
 
     def get_headers(self, family, write=False):
         """Build request headers for an endpoint family ('site' or 'battery_config')."""
@@ -1362,11 +1370,12 @@ class EnphaseAPI(ComponentBase):
                 self.failures_total += 1
                 return None
 
-            # Capture only a fresh XSRF token from a genuine success. Do NOT merge the whole cookie
-            # jar here: an HTML login-wall response (handled above) carries anonymous session cookies
-            # that would corrupt our authenticated session. Session-cookie rotation is handled in login().
-            if isinstance(cookies, dict) and cookies.get("XSRF-TOKEN"):
-                self.xsrf_token = cookies["XSRF-TOKEN"]
+            # Absorb cookies from a genuine success only: this keeps the session cookie current
+            # and captures the fresh XSRF token (into both self.cookie_header and self.xsrf_token),
+            # which BatteryConfig writes require as a double-submit (XSRF-TOKEN cookie + X-XSRF-Token
+            # header). It is deliberately NOT done for login-wall/error responses (handled above),
+            # whose anonymous cookies would otherwise corrupt our authenticated session.
+            self._absorb_cookies(cookies)
 
             record_api_call("enphase", True)
             self.update_success_timestamp()

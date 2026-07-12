@@ -505,9 +505,14 @@ def test_set_reserve_writes_profile_put():
 
 
 def test_request_json_absorbs_xsrf_token():
-    """A BatteryConfig response's XSRF token (folded into cookies) refreshes self.xsrf_token."""
+    """A successful BatteryConfig response refreshes the XSRF token AND puts it in the cookie header.
+
+    BatteryConfig writes need it as a double-submit: the X-XSRF-Token header (from self.xsrf_token)
+    and the XSRF-TOKEN cookie (in the Cookie header) must both be present and match.
+    """
     api = MockEnphaseAPI()
     api.eauth_token = "tok"
+    api.battery_config_variant = "cookie_eauth"
 
     async def raw_with_xsrf(method, url, headers=None, data=None, json_body=None, params=None):
         """Return a 200 with a fresh XSRF token in the cookie dict (as request_raw folds the header)."""
@@ -516,6 +521,17 @@ def test_request_json_absorbs_xsrf_token():
     api.request_raw = raw_with_xsrf
     run_async(api.request_json("GET", "/service/batteryConfig/api/v1/siteSettings/12345", family="battery_config"))
     assert api.xsrf_token == "fresh-token-123"
+    assert "XSRF-TOKEN=fresh-token-123" in api.cookie_header  # cookie side of the double-submit
+    write_headers = api.get_headers("battery_config", write=True)
+    assert write_headers["X-XSRF-Token"] == "fresh-token-123"  # header side
+    assert "XSRF-TOKEN=fresh-token-123" in write_headers["Cookie"]
+
+
+def test_absorb_cookies_bp_xsrf_name():
+    """The XSRF token cookie is captured whatever its exact name (e.g. BP-XSRF-Token)."""
+    api = MockEnphaseAPI()
+    api._absorb_cookies({"BP-XSRF-Token": "bp-token-9"})
+    assert api.xsrf_token == "bp-token-9"
 
 
 def test_login_wall_does_not_corrupt_session():
@@ -1117,6 +1133,7 @@ def run_enphase_api_tests(my_predbat):
     test_set_reserve_writes_profile_put()
     test_request_json_absorbs_xsrf_token()
     test_login_wall_does_not_corrupt_session()
+    test_absorb_cookies_bp_xsrf_name()
     test_get_battery_status_percent_soc()
     test_today_channel_kwh()
     test_interval_power()
