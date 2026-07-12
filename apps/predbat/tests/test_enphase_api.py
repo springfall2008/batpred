@@ -353,6 +353,11 @@ def test_safe_float_int_handle_na():
     assert safe_float("") == 0.0
     assert safe_float("3.5") == 3.5
     assert safe_float(4) == 4.0
+    # Percentage strings (e.g. battery current_charge is "0%"/"50%")
+    assert safe_float("0%") == 0.0
+    assert safe_float("50%") == 50.0
+    assert safe_int("0%") == 0
+    assert safe_int("55%") == 55
     assert safe_int("N/A") == 0
     assert safe_int("N/A", None) is None
     assert safe_int(None) == 0
@@ -405,6 +410,47 @@ def test_reads_handle_na_values():
     assert api.dashboard_items["sensor.predbat_enphase_12345_battery_reserve_min"]["state"] == 5
 
 
+def test_reads_nested_data_shape():
+    """profile and batterySettings responses wrap their fields in a 'data' object - parse it."""
+    api = MockEnphaseAPI()
+    # Real profile response shape from a battery account
+    api.set_http_response(
+        "/service/batteryConfig/api/v1/profile/12345",
+        200,
+        {"type": "profile-details", "data": {"profile": "self-consumption", "batteryBackupPercentage": 30, "batteryBackupPercentageMin": 5, "batteryBackupPercentageMax": 100}},
+    )
+    run_async(api.get_profile("12345"))
+    assert api.profile["12345"]["profile"] == "self-consumption"
+    assert api.profile["12345"]["reserve"] == 30
+
+    api.set_http_response(
+        "/service/batteryConfig/api/v1/batterySettings/12345",
+        200,
+        {"type": "battery-details", "data": {"chargeFromGrid": True, "veryLowSoc": 5, "veryLowSocMin": 5, "veryLowSocMax": 25}},
+    )
+    run_async(api.get_battery_settings("12345"))
+    settings = api.battery_settings["12345"]
+    assert settings["chargeFromGrid"] is True
+    assert settings["veryLowSocMin"] == 5
+    assert settings["veryLowSocMax"] == 25
+
+
+def test_get_battery_status_percent_soc():
+    """Site current_charge like '0%' must parse; capacity-weighted SOC uses storages."""
+    api = MockEnphaseAPI()
+    payload = {
+        "current_charge": "50%",
+        "available_energy": 10.0,
+        "max_capacity": 20.0,
+        "max_power": 6.33,
+        "storages": [],  # no per-battery breakdown -> fall back to current_charge
+    }
+    api.set_http_response("/pv/settings/12345/battery_status.json", 200, payload)
+    run_async(api.get_battery_status("12345"))
+    assert api.battery_status["12345"]["soc_percent"] == 50.0  # "50%" fallback parsed
+    assert api.battery_status["12345"]["max_power_kw"] == 6.33
+
+
 def test_today_channel_kwh():
     """today_channel_kwh reads today's per-channel total (Wh) and converts to kWh, 0.0 if absent."""
     from enphase import today_channel_kwh
@@ -415,6 +461,13 @@ def test_today_channel_kwh():
     assert today_channel_kwh(today, "import") == 0.0  # channel absent -> 0
     assert today_channel_kwh({"totals": {"production": "N/A"}}, "production") == 0.0
     assert today_channel_kwh({}, "production") == 0.0
+    # Battery charge/discharge/export have no single total - summed from source_dest flow components.
+    flows = {"totals": {"solar_battery": 3000, "grid_battery": 1000, "battery_home": 2500, "battery_grid": 500, "solar_grid": 4000}}
+    assert today_channel_kwh(flows, "charge") == 4.0  # solar_battery + grid_battery = 4000 Wh
+    assert today_channel_kwh(flows, "discharge") == 3.0  # battery_home + battery_grid = 3000 Wh
+    assert today_channel_kwh(flows, "export") == 4.5  # solar_grid + battery_grid = 4500 Wh
+    # A direct total key wins over the flow sum when present.
+    assert today_channel_kwh({"totals": {"charge": 9000, "solar_battery": 1000}}, "charge") == 9.0
 
 
 def test_interval_power():
@@ -436,18 +489,23 @@ def test_interval_power():
 
 
 def test_get_schedules_parses_families():
-    """Schedules read stores cfg/dtg/rbd entries and dtg support flag."""
+    """Schedules read stores cfg/dtg/rbd entries (real detail shape with scheduleId) and dtg support."""
     api = MockEnphaseAPI()
+    # Real detail shape from a battery account: scheduleId (not id), scheduleStatus per family.
     payload = {
-        "cfg": {"scheduleSupported": True, "details": [{"id": "u1", "startTime": "02:00", "endTime": "05:00", "limit": 90, "isEnabled": True}]},
-        "dtg": {"scheduleSupported": False, "details": []},
-        "rbd": {"scheduleSupported": True, "details": []},
+        "type": "BATTERY_SCHEDULES_CONFIG",
+        "cfg": {"scheduleStatus": "active", "count": 1, "details": [{"scheduleId": "2e2e08a8-b3b7", "startTime": "01:10", "endTime": "05:29", "limit": 100, "scheduleType": "CFG", "days": [1, 2, 3, 4, 5, 6, 7], "isDeleted": False, "isEnabled": True}]},
+        "dtg": {"scheduleStatus": "not_supported", "count": 0, "details": []},
+        "rbd": {"scheduleStatus": "active", "count": 0, "details": []},
     }
     api.set_http_response("/service/batteryConfig/api/v1/battery/sites/12345/schedules", 200, payload)
     run_async(api.get_schedules("12345"))
     cfg = api.schedules["12345"]["cfg"]
-    assert cfg["id"] == "u1" and cfg["limit"] == 90 and cfg["enabled"] is True
-    assert api.dtg_supported("12345") is False
+    assert cfg["id"] == "2e2e08a8-b3b7"  # sourced from scheduleId
+    assert cfg["startTime"] == "01:10" and cfg["endTime"] == "05:29"
+    assert cfg["limit"] == 100 and cfg["enabled"] is True and cfg["supported"] is True
+    assert cfg["count"] == 1
+    assert api.dtg_supported("12345") is False  # 'not_supported' status
 
 
 def test_automatic_config():
@@ -866,6 +924,8 @@ def run_enphase_api_tests(my_predbat):
     test_request_json_login_wall()
     test_battery_config_variant_fallback()
     test_get_battery_status()
+    test_reads_nested_data_shape()
+    test_get_battery_status_percent_soc()
     test_today_channel_kwh()
     test_interval_power()
     test_get_schedules_parses_families()

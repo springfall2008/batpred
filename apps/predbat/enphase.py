@@ -72,21 +72,39 @@ BATTERY_UI_ORIGIN = "https://battery-profile-ui.enphaseenergy.com"
 def safe_float(value, default=0.0):
     """Convert a value to float, returning default for None or non-numeric values.
 
-    The Enphase cloud returns the string "N/A" (and occasionally blank strings) for fields it
-    cannot report, so a bare float() would raise; this coerces those to the supplied default.
+    The Enphase cloud returns strings like "N/A" (fields it cannot report), blanks, and percentages
+    with a trailing "%" (e.g. current_charge is "0%"/"50%"), so a bare float() would raise; this
+    coerces "N/A"/blank to the default and strips a trailing "%" so a percentage parses to its number.
     """
     try:
         return float(value)
     except (TypeError, ValueError):
-        return default
+        pass
+    if isinstance(value, str):
+        cleaned = value.strip().rstrip("%").strip()
+        try:
+            return float(cleaned)
+        except ValueError:
+            return default
+    return default
 
 
 def safe_int(value, default=0):
-    """Convert a value to int, returning default for None or non-numeric values (e.g. Enphase 'N/A')."""
-    try:
-        return int(float(value))
-    except (TypeError, ValueError):
-        return default
+    """Convert a value to int, returning default for None or non-numeric values (e.g. Enphase 'N/A'/'0%')."""
+    result = safe_float(value, None)
+    return default if result is None else int(result)
+
+
+# Battery/grid flow decomposition in the /today totals. Enphase reports energy as source_dest
+# pairs rather than single "charge"/"discharge"/"export" totals, so those channels are summed from
+# their component flows when a direct total is not present. (source_dest = energy from source to
+# dest, in Wh.) Verified key names against a battery account; the summed values themselves still
+# need confirmation on a healthy (non-error) battery.
+TODAY_FLOW_COMPONENTS = {
+    "charge": ("solar_battery", "grid_battery"),  # energy into the battery
+    "discharge": ("battery_home", "battery_grid"),  # energy out of the battery
+    "export": ("solar_grid", "battery_grid", "generator_grid"),  # energy to the grid
+}
 
 
 def today_channel_kwh(today_data, channel):
@@ -95,10 +113,18 @@ def today_channel_kwh(today_data, channel):
     The /today endpoint reports each channel's running total for the current day in Wh under
     `stats[0].totals`; Predbat works in kWh so the value is divided by 1000. This is cadence-
     independent (unlike indexing the daily lifetime_energy array) - the cloud provides the total
-    directly regardless of whether the site buckets energy per 15 minutes or per day.
+    directly regardless of whether the site buckets energy per 15 minutes or per day. Battery
+    charge/discharge and export have no single total key, so they are summed from their component
+    source-to-destination flows (see TODAY_FLOW_COMPONENTS) when no direct total is present.
     """
     totals = (today_data or {}).get("totals") or {}
-    return round(safe_float(totals.get(channel)) / 1000.0, 3)
+    if channel in totals:
+        return round(safe_float(totals.get(channel)) / 1000.0, 3)
+    components = TODAY_FLOW_COMPONENTS.get(channel)
+    if components:
+        total_wh = sum(safe_float(totals.get(component)) for component in components)
+        return round(total_wh / 1000.0, 3)
+    return 0.0
 
 
 def interval_power(values, start_time, interval_length, now_ts):
@@ -826,9 +852,11 @@ class EnphaseAPI(ComponentBase):
         data = await self.request_json("GET", f"{BATTERY_CONFIG_BASE}/profile/{site_id}", family="battery_config", params=params)
         if data is None:
             return None
+        # The real response wraps the fields in a "data" object: {"type": "profile-details", "data": {...}}
+        body = data.get("data") if isinstance(data.get("data"), dict) else data
         self.profile[site_id] = {
-            "profile": str(data.get("profile", "")),
-            "reserve": safe_int(data.get("batteryBackupPercentage")),
+            "profile": str(body.get("profile", "")),
+            "reserve": safe_int(body.get("batteryBackupPercentage")),
         }
         await self._save_cache("profile", self.profile)
         return self.profile[site_id]
@@ -838,11 +866,13 @@ class EnphaseAPI(ComponentBase):
         data = await self.request_json("GET", f"{BATTERY_CONFIG_BASE}/batterySettings/{site_id}", family="battery_config", params={"source": "enlm"})
         if data is None:
             return None
+        # The real response wraps the fields in a "data" object: {"type": "battery-details", "data": {...}}
+        body = data.get("data") if isinstance(data.get("data"), dict) else data
         self.battery_settings[site_id] = {
-            "chargeFromGrid": bool(data.get("chargeFromGrid", False)),
-            "veryLowSoc": safe_int(data.get("veryLowSoc"), None),
-            "veryLowSocMin": safe_int(data.get("veryLowSocMin"), None),
-            "veryLowSocMax": safe_int(data.get("veryLowSocMax"), None),
+            "chargeFromGrid": bool(body.get("chargeFromGrid", False)),
+            "veryLowSoc": safe_int(body.get("veryLowSoc"), None),
+            "veryLowSocMin": safe_int(body.get("veryLowSocMin"), None),
+            "veryLowSocMax": safe_int(body.get("veryLowSocMax"), None),
         }
         await self._save_cache("battery_settings", self.battery_settings)
         return self.battery_settings[site_id]
@@ -850,12 +880,11 @@ class EnphaseAPI(ComponentBase):
     async def get_schedules(self, site_id):
         """Fetch and normalise the charge/export/freeze battery schedules for a site.
 
-        NOTE: the real response for a battery-less account is
-        ``{"cfg": {"scheduleStatus": "active", "count": 0}, "dtg": {...}, "rbd": {...}}`` -
-        the per-schedule window/limit fields (when count > 0) have not yet been observed against
-        a real battery account, so the ``details``/``scheduleSupported`` parsing below is a
-        best-effort placeholder that must be verified once a battery site is available. ``count``
-        and ``scheduleStatus`` are captured for diagnostics/gating in the meantime.
+        Each family (cfg/dtg/rbd) reports ``scheduleStatus``, ``count`` and, when count > 0, a
+        ``details`` list of schedule objects. A schedule object (confirmed against a battery
+        account) carries ``scheduleId``, ``startTime``/``endTime`` (HH:MM), ``limit``, ``days``,
+        ``isEnabled`` and ``isDeleted``. Only the first schedule per family is used (Predbat drives
+        one window per direction); the ``scheduleId`` is what the write path updates in place.
         """
         data = await self.request_json("GET", f"{BATTERY_CONFIG_BASE}/battery/sites/{site_id}/schedules", family="battery_config")
         if data is None:
@@ -864,15 +893,15 @@ class EnphaseAPI(ComponentBase):
         for family_key in ("cfg", "dtg", "rbd"):
             family_data = data.get(family_key) or {}
             details = family_data.get("details") or []
-            entry = details[0] if details else {}
+            # Prefer the first non-deleted schedule
+            entry = next((item for item in details if isinstance(item, dict) and not item.get("isDeleted")), details[0] if details else {})
             # "supported" gates whether Predbat can use this schedule family. Real accounts report
             # a per-family scheduleStatus ("active" seen so far); treat the usable statuses as
-            # supported, with a fallback to the (unverified) boolean flags. Needs confirmation
-            # against a battery account where an unsupported family's status value is known.
+            # supported, with a fallback to the (unverified) boolean flags.
             status_text = str(family_data.get("scheduleStatus", "")).strip().lower()
             supported = status_text in ("active", "enabled", "supported", "available") or bool(family_data.get("scheduleSupported") or family_data.get("forceScheduleSupported"))
             parsed[family_key] = {
-                "id": entry.get("id"),
+                "id": entry.get("scheduleId") or entry.get("id"),
                 "startTime": entry.get("startTime"),
                 "endTime": entry.get("endTime"),
                 "limit": safe_int(entry.get("limit"), None),
