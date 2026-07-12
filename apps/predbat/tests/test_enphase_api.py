@@ -921,6 +921,47 @@ def test_apply_charge_schedule_creates():
     assert len(disclaimers) == 1
 
 
+def _apply_export_case(export_soc):
+    """Run apply with a given export target SOC and return the schedule POST scheduleTypes."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.sites = [{"site_id": "12345", "name": "Home"}]
+    api.schedules["12345"] = {"cfg": {"supported": True}, "dtg": {"supported": True}, "rbd": {"supported": True}}
+    api.profile["12345"] = {"profile": "self-consumption", "reserve": 20}
+    api.battery_settings["12345"] = {"chargeFromGrid": True, "veryLowSocMin": 5}
+    api.local_schedule["12345"] = {
+        "reserve": 20,
+        "charge": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 100, "enable": False},
+        "export": {"start_time": "23:00:00", "end_time": "23:30:00", "soc": export_soc, "enable": True},
+    }
+    api.set_http_response("/service/batteryConfig/api/v1/battery/sites/12345/schedules", 200, {"cfg": {"scheduleSupported": True, "details": []}, "dtg": {"scheduleSupported": True, "details": []}, "rbd": {"scheduleSupported": True, "details": []}})
+    run_async(api.apply_battery_schedule("12345"))
+    posts = [r for r in api.request_log if r["method"] == "POST" and r["path"].endswith("/schedules")]
+    return posts
+
+
+def test_apply_export_target_selects_dtg_rbd_or_none():
+    """Export target drives the family: <99 -> DTG (real export), ==99 -> RBD (freeze), ==100 -> none."""
+    # Freeze export: target exactly 99 -> restrict battery discharge (RBD), no DTG.
+    freeze_posts = _apply_export_case(99)
+    freeze_types = [p["json"]["scheduleType"] for p in freeze_posts]
+    assert "RBD" in freeze_types and "DTG" not in freeze_types
+    rbd = next(p["json"] for p in freeze_posts if p["json"]["scheduleType"] == "RBD")
+    assert rbd["startTime"] == "23:00" and rbd["endTime"] == "23:30" and rbd["isEnabled"] is True
+
+    # Real export: target below 99 -> DTG to that floor, no RBD.
+    export_posts = _apply_export_case(30)
+    export_types = [p["json"]["scheduleType"] for p in export_posts]
+    assert "DTG" in export_types and "RBD" not in export_types
+    dtg = next(p["json"] for p in export_posts if p["json"]["scheduleType"] == "DTG")
+    assert dtg["limit"] == 30 and dtg["isEnabled"] is True
+
+    # Target of 100 is the same as disabled: neither DTG nor RBD is written.
+    none_posts = _apply_export_case(100)
+    none_types = [p["json"]["scheduleType"] for p in none_posts]
+    assert "DTG" not in none_types and "RBD" not in none_types
+
+
 def test_apply_updates_existing_by_id():
     """apply uses PUT /schedules/<id> when the family already has a schedule."""
     api = MockEnphaseAPI()
@@ -1021,6 +1062,7 @@ def run_enphase_api_tests(my_predbat):
     test_schedules_equal()
     test_schedules_equal_none_limit()
     test_apply_charge_schedule_creates()
+    test_apply_export_target_selects_dtg_rbd_or_none()
     test_apply_updates_existing_by_id()
     test_apply_no_change_no_write()
     test_pending_write_suppresses_duplicate()

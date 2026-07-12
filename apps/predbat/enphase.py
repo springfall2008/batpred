@@ -539,7 +539,6 @@ class EnphaseAPI(ComponentBase):
             "reserve": 0,
             "charge": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 100, "enable": False},
             "export": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 5, "enable": False},
-            "freeze": {"enable": False},
         }
 
     def sync_local_schedule_from_cloud(self, site_id):
@@ -569,7 +568,6 @@ class EnphaseAPI(ComponentBase):
                 if entry.get("limit") is not None:
                     local[direction]["soc"] = entry.get("limit")
                 local[direction]["enable"] = bool(entry.get("enabled"))
-        local["freeze"]["enable"] = bool((schedules or {}).get("rbd", {}).get("enabled"))
         self._schedule_seeded.add(site_id)
 
     async def publish_schedule_settings_ha(self, site_id):
@@ -578,8 +576,8 @@ class EnphaseAPI(ComponentBase):
         Always publishes the reserve control plus the charge-from-grid window controls.
         The export-to-grid (discharge-to-grid) window controls are only published when
         `dtg_supported(site_id)` is True, since not every Enphase system supports that
-        schedule family. A freeze-enable switch is also published; its window reuses the
-        charge window and is written to the "rbd" schedule family at apply time (Task 7).
+        schedule family. There is no separate freeze control: Predbat freezes charge via the
+        reserve, and freeze-export is derived automatically from an export target SOC of 99%.
         """
         local = self.local_schedule.setdefault(site_id, self._default_local_schedule())
         reserve_min = int(self.battery_settings.get(site_id, {}).get("veryLowSocMin", 5) or 5)
@@ -629,12 +627,6 @@ class EnphaseAPI(ComponentBase):
                 attributes={"friendly_name": f"Enphase {site_id} Battery Schedule {direction.capitalize()} Write", "icon": "mdi:upload"},
                 app="enphase",
             )
-        self.dashboard_item(
-            f"switch.{base_name}_freeze_enable",
-            state="on" if local.get("freeze", {}).get("enable") else "off",
-            attributes={"friendly_name": f"Enphase {site_id} Battery Schedule Freeze Enable", "icon": "mdi:snowflake"},
-            app="enphase",
-        )
 
     async def get_schedule_settings_ha(self, site_id):
         """Read the current schedule control entity states from HA into the local schedule model."""
@@ -649,7 +641,6 @@ class EnphaseAPI(ComponentBase):
                     window[attribute] = value
             window["soc"] = int(float(self.get_state_wrapper(f"number.{base_name}_{direction}_soc", window.get("soc", 100)) or 0))
             window["enable"] = str(self.get_state_wrapper(f"switch.{base_name}_{direction}_enable", "on" if window.get("enable") else "off")).lower() == "on"
-        local.setdefault("freeze", {})["enable"] = str(self.get_state_wrapper(f"switch.{base_name}_freeze_enable", "off")).lower() == "on"
 
     def _parse_entity(self, entity_id):
         """Split a published entity id into (site_id, attribute_name), or (None, None) if not ours."""
@@ -713,8 +704,6 @@ class EnphaseAPI(ComponentBase):
             return
         field = attribute[len("battery_schedule_") :]
         local = self.local_schedule.setdefault(site_id, self._default_local_schedule())
-        if field == "freeze_enable":
-            local["freeze"]["enable"] = self._toggle_to_bool(service, local["freeze"]["enable"])
         for direction in ["charge", "export"]:
             if field == f"{direction}_enable":
                 local[direction]["enable"] = self._toggle_to_bool(service, local[direction]["enable"])
@@ -791,10 +780,18 @@ class EnphaseAPI(ComponentBase):
         1. Reserve, via a profile PUT that preserves the current profile name.
         2. Forced charge-from-grid window (schedule family "CFG"), enabling the
            `chargeFromGrid` battery setting first if required.
-        3. Forced export-to-grid window (schedule family "DTG"), only on sites that support it.
-        4. Freeze/restrict-discharge (schedule family "RBD"), reusing the charge window times.
+        3. The export window, derived from Predbat's export/discharge target SOC:
+           - target below 99% -> a real forced export to that floor (schedule family "DTG"),
+             only on sites that support it;
+           - target of exactly 99% -> "freeze export" (hold, don't discharge), mapped to the
+             restrict-battery-discharge family ("RBD") over the export window;
+           - target of 100% -> disabled (same as no export).
         After any write, schedules and profile are re-fetched so pending writes can be
         confirmed (and cleared) as soon as the cloud reflects them.
+
+        Freeze *charge* is not handled here - Predbat freezes charge via the reserve (raising it
+        to the current SOC) and disabling the charge window, using the existing reserve/charge
+        controls.
         """
         await self.get_schedule_settings_ha(site_id)
         local = self.local_schedule.get(site_id, self._default_local_schedule())
@@ -818,14 +815,24 @@ class EnphaseAPI(ComponentBase):
             await self._ensure_charge_from_grid(site_id)
         wrote |= await self._write_schedule(site_id, SCHEDULE_CHARGE, charge.get("start_time", "00:00:00"), charge.get("end_time", "00:00:00"), charge.get("soc", 100), charge.get("enable", False))
 
-        # Forced export window (DTG), only where supported
+        # Export window. Predbat encodes the mode in the export/discharge target SOC:
+        #   < 99  -> real forced export to that floor (DTG)
+        #   == 99 -> freeze export / restrict discharge (RBD)
+        #   == 100 (or disabled) -> no export
         export = local.get("export", {})
-        if self.dtg_supported(site_id):
-            wrote |= await self._write_schedule(site_id, SCHEDULE_EXPORT, export.get("start_time", "00:00:00"), export.get("end_time", "00:00:00"), export.get("soc", 5), export.get("enable", False))
+        export_enabled = bool(export.get("enable", False))
+        export_soc = int(export.get("soc", 5))
+        export_start = export.get("start_time", "00:00:00")
+        export_end = export.get("end_time", "00:00:00")
+        real_export = export_enabled and export_soc < 99
+        freeze_export = export_enabled and export_soc == 99
 
-        # Freeze (RBD) reuses the charge window times
-        freeze_enabled = local.get("freeze", {}).get("enable", False)
-        wrote |= await self._write_schedule(site_id, SCHEDULE_FREEZE, charge.get("start_time", "00:00:00"), charge.get("end_time", "00:00:00"), None, freeze_enabled)
+        # Forced export to a target (DTG), only where supported
+        if self.dtg_supported(site_id):
+            wrote |= await self._write_schedule(site_id, SCHEDULE_EXPORT, export_start, export_end, export_soc, real_export)
+
+        # Freeze export = restrict battery discharge (RBD) over the export window
+        wrote |= await self._write_schedule(site_id, SCHEDULE_FREEZE, export_start, export_end, None, freeze_export)
 
         if wrote:
             # Re-read to confirm; writes settle asynchronously so pending writes may persist for minutes
