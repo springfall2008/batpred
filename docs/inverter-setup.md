@@ -198,7 +198,7 @@ Predbat has a built-in Enphase Cloud integration that logs in to the Enphase Enl
 
 - Copy the [enphase_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/enphase_cloud.yaml) template over the top of the supplied `apps.yaml` and set `enphase_username` and `enphase_password` to your Enlighten account credentials.
 - Set `enphase_automatic: True` to have Predbat wire up all the sensor and control entities automatically - no manual `apps.yaml` sensor configuration is required.
-- Predbat controls the battery by writing Enphase schedules: charge windows become charge-from-grid (CFG) schedules, export windows become discharge-to-grid (DTG) schedules (only where the site supports DTG), freeze windows use restrict-battery-discharge (RBD) schedules, and the reserve is set through the battery profile. Cloud writes can take a few minutes to settle before Predbat's entities reflect the change.
+- Predbat controls the battery by writing Enphase schedules: charge windows become charge-from-grid (CFG) schedules, export windows become discharge-to-grid (DTG) schedules, and freeze-export windows use restrict-battery-discharge (RBD) schedules, with the reserve set through the battery profile. `automatic_config` requires the site to support both CFG and DTG and fails configuration otherwise. Writes are cached optimistically and corrected by the next periodic re-read if they didn't land.
 
 See the components documentation for details [Components - Enphase API](components.md#enphase-api-enphase)
 
