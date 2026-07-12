@@ -836,8 +836,13 @@ class EnphaseAPI(ComponentBase):
         real_export = export_enabled and export_soc < 99
         freeze_export = export_enabled and export_soc == 99
 
+        # Clamp the DTG floor to at least the reserve: Enphase will not discharge below the backup
+        # reserve, and Predbat's own discharge target is max(export, reserve), so keep the written
+        # limit consistent rather than requesting an export below the reserve it can never reach.
+        dtg_limit = max(export_soc, int(local.get("reserve", 0)))
+
         # Forced export to a target (DTG). A configured inverter always supports DTG.
-        wrote |= await self._write_schedule(site_id, SCHEDULE_EXPORT, export_start, export_end, export_soc, real_export)
+        wrote |= await self._write_schedule(site_id, SCHEDULE_EXPORT, export_start, export_end, dtg_limit, real_export)
 
         # Freeze export = restrict battery discharge (RBD) over the export window
         wrote |= await self._write_schedule(site_id, SCHEDULE_FREEZE, export_start, export_end, None, freeze_export)

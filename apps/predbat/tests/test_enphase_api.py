@@ -1066,6 +1066,26 @@ def test_apply_export_target_selects_dtg_rbd_or_none():
     assert "DTG" not in none_types and "RBD" not in none_types
 
 
+def test_apply_export_dtg_limit_clamped_to_reserve():
+    """An export target below the reserve is clamped up to the reserve (Enphase won't go below it)."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.sites = [{"site_id": "12345", "name": "Home"}]
+    api.schedules["12345"] = {"cfg": {"supported": True}, "dtg": {"supported": True}, "rbd": {"supported": True}}
+    api.profile["12345"] = {"profile": "self-consumption", "reserve": 30}
+    api.battery_settings["12345"] = {"chargeFromGrid": True, "veryLowSocMin": 5}
+    api.local_schedule["12345"] = {
+        "reserve": 30,
+        "charge": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 100, "enable": False},
+        "export": {"start_time": "16:00:00", "end_time": "19:00:00", "soc": 10, "enable": True},  # target 10 < reserve 30
+    }
+    api.set_http_response("/service/batteryConfig/api/v1/battery/sites/12345/schedules", 200, {"cfg": {"scheduleSupported": True, "details": []}, "dtg": {"scheduleSupported": True, "details": []}, "rbd": {"scheduleSupported": True, "details": []}})
+    run_async(api.apply_battery_schedule("12345"))
+    dtg = next(r["json"] for r in api.request_log if r["method"] == "POST" and r["path"].endswith("/schedules") and r["json"]["scheduleType"] == "DTG")
+    assert dtg["limit"] == 30  # clamped up to the reserve, not the requested 10
+    assert dtg["isEnabled"] is True
+
+
 def test_apply_updates_existing_by_id():
     """apply uses PUT /schedules/<id> when the family already has a schedule."""
     api = MockEnphaseAPI()
@@ -1186,6 +1206,7 @@ def run_enphase_api_tests(my_predbat):
     test_schedules_equal_none_limit()
     test_apply_charge_schedule_creates()
     test_apply_export_target_selects_dtg_rbd_or_none()
+    test_apply_export_dtg_limit_clamped_to_reserve()
     test_apply_updates_existing_by_id()
     test_apply_caches_write_no_rewrite()
     test_set_reserve_caches_written_value()
