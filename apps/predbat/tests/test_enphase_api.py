@@ -1066,8 +1066,36 @@ def test_apply_updates_existing_by_id():
     run_async(api.apply_battery_schedule("12345"))
     puts = [r for r in api.request_log if r["method"] == "PUT" and r["path"].endswith("/schedules/u1")]
     assert len(puts) == 1
-    # After the confirming re-read matches, no pending write remains
-    assert ("12345", "CFG") not in api.pending_writes
+    # On success the cached cloud copy is optimistically updated to the written state (no re-read on update).
+    cfg = api.schedules["12345"]["cfg"]
+    assert cfg["startTime"] == "02:00" and cfg["endTime"] == "05:00" and cfg["limit"] == 90 and cfg["enabled"] is True
+    assert cfg["id"] == "u1"  # id preserved
+
+
+def test_apply_caches_write_no_rewrite():
+    """After a successful update, a second apply with the same desired state issues no write (cache hit)."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.sites = [{"site_id": "12345", "name": "Home"}]
+    api.schedules["12345"] = {"cfg": {"supported": True, "id": "u1", "startTime": "01:00", "endTime": "04:00", "limit": 80, "enabled": True}, "dtg": {"supported": True}, "rbd": {"supported": True}}
+    api.profile["12345"] = {"profile": "self-consumption", "reserve": 20}
+    api.battery_settings["12345"] = {"chargeFromGrid": True, "veryLowSocMin": 5}
+    api.local_schedule["12345"] = {"reserve": 20, "charge": {"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": True}, "export": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 5, "enable": False}}
+    api.set_http_response("/service/batteryConfig/api/v1/battery/sites/12345/schedules/u1", 200, {})
+    run_async(api.apply_battery_schedule("12345"))
+    run_async(api.apply_battery_schedule("12345"))  # second apply, unchanged desired state
+    puts = [r for r in api.request_log if r["method"] == "PUT" and r["path"].endswith("/schedules/u1")]
+    assert len(puts) == 1  # written once, not re-written (optimistic cache prevents churn)
+
+
+def test_set_reserve_caches_written_value():
+    """set_reserve optimistically caches the written reserve on success (no confirm re-read needed)."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.profile["12345"] = {"profile": "self-consumption", "reserve": 30}
+    api.set_http_response("/service/batteryConfig/api/v1/profile/12345", 200, {"message": "success"})
+    run_async(api.set_reserve("12345", 25))
+    assert api.profile["12345"]["reserve"] == 25
 
 
 def test_apply_no_change_no_write():
@@ -1081,21 +1109,6 @@ def test_apply_no_change_no_write():
     api.local_schedule["12345"] = {"reserve": 20, "charge": {"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": True}, "export": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 5, "enable": False}, "freeze": {"enable": False}}
     run_async(api.apply_battery_schedule("12345"))
     writes = [r for r in api.request_log if r["method"] in ("POST", "PUT")]
-    assert writes == []
-
-
-def test_pending_write_suppresses_duplicate():
-    """While a write is pending confirmation, apply does not re-issue the same PUT."""
-    api = MockEnphaseAPI()
-    api.user_id = "9999"
-    api.sites = [{"site_id": "12345", "name": "Home"}]
-    api.schedules["12345"] = {"cfg": {"supported": True, "id": "u1", "startTime": "01:00", "endTime": "04:00", "limit": 80, "enabled": True}, "dtg": {"supported": True}, "rbd": {"supported": True}}
-    api.profile["12345"] = {"profile": "self-consumption", "reserve": 20}
-    api.battery_settings["12345"] = {"chargeFromGrid": True, "veryLowSocMin": 5}
-    api.local_schedule["12345"] = {"reserve": 20, "charge": {"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": True}, "export": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 5, "enable": False}, "freeze": {"enable": False}}
-    api.pending_writes[("12345", "CFG")] = {"start": "02:00", "end": "05:00", "limit": 90, "enabled": True, "time": datetime.now(timezone.utc)}
-    run_async(api.apply_battery_schedule("12345"))
-    writes = [r for r in api.request_log if r["method"] in ("POST", "PUT") and "/schedules" in r["path"]]
     assert writes == []
 
 
@@ -1155,7 +1168,8 @@ def run_enphase_api_tests(my_predbat):
     test_apply_charge_schedule_creates()
     test_apply_export_target_selects_dtg_rbd_or_none()
     test_apply_updates_existing_by_id()
+    test_apply_caches_write_no_rewrite()
+    test_set_reserve_caches_written_value()
     test_apply_no_change_no_write()
-    test_pending_write_suppresses_duplicate()
     print("**** Enphase API tests passed ****")
     return 0
