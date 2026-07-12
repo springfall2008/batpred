@@ -947,6 +947,24 @@ def test_event_handlers_update_local_schedule():
     assert api.local_schedule["12345"]["charge"]["enable"] is True
 
 
+def test_reserve_number_event_writes_immediately():
+    """A reserve number change is written to Enphase at once (like Fox), not deferred to the button."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.sites = [{"site_id": "12345", "name": "Home"}]
+    api.profile["12345"] = {"profile": "self-consumption", "reserve": 30}
+    api.set_http_response("/service/batteryConfig/api/v1/profile/12345", 200, {"message": "success"})
+    run_async(api.number_event("number.predbat_enphase_12345_battery_schedule_reserve", 25))
+    puts = [r for r in api.request_log if r["method"] == "PUT" and r["path"].endswith("/profile/12345")]
+    assert len(puts) == 1  # written immediately
+    assert puts[0]["json"]["batteryBackupPercentage"] == 25
+    assert api.profile["12345"]["reserve"] == 25  # cached
+    # A no-op change (already 25) does not write again
+    api.request_log.clear()
+    run_async(api.number_event("number.predbat_enphase_12345_battery_schedule_reserve", 25))
+    assert [r for r in api.request_log if r["method"] == "PUT"] == []
+
+
 def test_write_switch_triggers_apply():
     """Turning on the write switch calls apply_battery_schedule for the site."""
     api = MockEnphaseAPI()
@@ -1162,6 +1180,7 @@ def run_enphase_api_tests(my_predbat):
     test_sync_local_schedule_from_cloud()
     test_publish_schedule_entities()
     test_event_handlers_update_local_schedule()
+    test_reserve_number_event_writes_immediately()
     test_write_switch_triggers_apply()
     test_schedules_equal()
     test_schedules_equal_none_limit()

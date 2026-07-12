@@ -668,7 +668,12 @@ class EnphaseAPI(ComponentBase):
         await self.publish_schedule_settings_ha(site_id)
 
     async def number_event(self, entity_id, value):
-        """Handle a number entity change routed from HA, updating the local schedule model."""
+        """Handle a number entity change routed from HA, updating the local schedule model.
+
+        The reserve is a live setting (Predbat's freeze-charge relies on it taking effect at once),
+        so a reserve change is written to Enphase immediately here - like Fox - rather than waiting
+        for the write button. The per-window target-SOC numbers are staged and applied on the button.
+        """
         site_id, attribute = self._parse_entity(entity_id)
         if not site_id or not attribute.startswith("battery_schedule_"):
             return
@@ -676,6 +681,9 @@ class EnphaseAPI(ComponentBase):
         local = self.local_schedule.setdefault(site_id, self._default_local_schedule())
         if field == "reserve":
             local["reserve"] = int(float(value))
+            # Apply immediately (skipping a redundant write when it already matches the cached cloud value)
+            if local["reserve"] and local["reserve"] != int(self.profile.get(site_id, {}).get("reserve", -1)):
+                await self.set_reserve(site_id, local["reserve"])
         for direction in ["charge", "export"]:
             if field == f"{direction}_soc":
                 local[direction]["soc"] = int(float(value))
