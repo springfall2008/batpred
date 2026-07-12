@@ -1050,7 +1050,9 @@ class EnphaseAPI(ComponentBase):
         self.set_arg("discharge_end_time", [f"select.{entity}_battery_schedule_export_end_time"])
         self.set_arg("discharge_target_soc", [f"number.{entity}_battery_schedule_export_soc"])
         self.set_arg("schedule_write_button", [f"switch.{entity}_battery_schedule_charge_write"])
-        self.set_arg("export_limit", [99999])
+        # export_limit is deliberately not set here: the Enphase cloud does not report a grid
+        # export power limit, and hardcoding one would override the user's apps.yaml export_limit.
+        # Leaving it unset lets the user configure it (Predbat defaults to unlimited otherwise).
 
     def login_allowed(self):
         """Return True when a password login attempt is currently permitted by the guard rails."""

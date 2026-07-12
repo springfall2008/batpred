@@ -574,7 +574,8 @@ def test_automatic_config():
     assert args["battery_min_soc"] == ["sensor.predbat_enphase_12345_battery_reserve_min"]
     assert args["inverter_time"] == ["sensor.predbat_enphase_12345_inverter_time"]
     assert args["schedule_write_button"] == ["switch.predbat_enphase_12345_battery_schedule_charge_write"]
-    assert args["export_limit"] == [99999]
+    # export_limit is left unset so the user's apps.yaml value (if any) is respected.
+    assert "export_limit" not in args
 
 
 def test_automatic_config_no_dtg_raises():
