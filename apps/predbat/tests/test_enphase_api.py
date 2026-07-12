@@ -577,15 +577,20 @@ def test_automatic_config():
     assert args["export_limit"] == [99999]
 
 
-def test_automatic_config_no_dtg():
-    """Without dtg support, discharge args are not set."""
+def test_automatic_config_no_dtg_raises():
+    """A site without DTG (export) support must fail to configure - Predbat needs export control."""
     api = MockEnphaseAPI()
     api.sites = [{"site_id": "12345", "name": "Home"}]
     api.battery_status["12345"] = {"soc_percent": 55.0, "available_energy": 5.5, "max_capacity": 10.0, "max_power_kw": 3.84, "status": "normal", "batteries": []}
     api.schedules["12345"] = {"cfg": {"supported": True}, "dtg": {"supported": False}, "rbd": {"supported": True}}
-    run_async(api.automatic_config())
-    assert "discharge_start_time" not in api.args_set
-    assert "scheduled_discharge_enable" not in api.args_set
+    raised = False
+    try:
+        run_async(api.automatic_config())
+    except ValueError as error:
+        raised = True
+        assert "DTG" in str(error) or "export" in str(error).lower()
+    assert raised
+    assert "inverter_type" not in api.args_set
 
 
 def test_automatic_config_no_charge_support_raises():
@@ -830,9 +835,9 @@ def test_sync_local_schedule_from_cloud():
 
 
 def test_publish_schedule_entities():
-    """Control entities are published for charge, and export only when dtg supported."""
+    """Both the charge and export window controls are published (a configured inverter has DTG)."""
     api = MockEnphaseAPI()
-    api.schedules["12345"] = {"cfg": {"supported": True}, "dtg": {"supported": False}, "rbd": {"supported": True}}
+    api.schedules["12345"] = {"cfg": {"supported": True}, "dtg": {"supported": True}, "rbd": {"supported": True}}
     api.battery_settings["12345"] = {"veryLowSocMin": 5}
     run_async(api.publish_schedule_settings_ha("12345"))
     items = api.dashboard_items
@@ -840,7 +845,8 @@ def test_publish_schedule_entities():
     assert "number.predbat_enphase_12345_battery_schedule_charge_soc" in items
     assert "switch.predbat_enphase_12345_battery_schedule_charge_write" in items
     assert "number.predbat_enphase_12345_battery_schedule_reserve" in items
-    assert "select.predbat_enphase_12345_battery_schedule_export_start_time" not in items
+    assert "select.predbat_enphase_12345_battery_schedule_export_start_time" in items
+    assert "number.predbat_enphase_12345_battery_schedule_export_soc" in items
 
 
 def test_event_handlers_update_local_schedule():
@@ -1048,7 +1054,7 @@ def run_enphase_api_tests(my_predbat):
     test_interval_power()
     test_get_schedules_parses_families()
     test_automatic_config()
-    test_automatic_config_no_dtg()
+    test_automatic_config_no_dtg_raises()
     test_automatic_config_no_charge_support_raises()
     test_get_schedules_supported_from_status()
     test_inverter_def_enphase()

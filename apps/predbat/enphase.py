@@ -573,11 +573,10 @@ class EnphaseAPI(ComponentBase):
     async def publish_schedule_settings_ha(self, site_id):
         """Publish the schedule control entities for a site.
 
-        Always publishes the reserve control plus the charge-from-grid window controls.
-        The export-to-grid (discharge-to-grid) window controls are only published when
-        `dtg_supported(site_id)` is True, since not every Enphase system supports that
-        schedule family. There is no separate freeze control: Predbat freezes charge via the
-        reserve, and freeze-export is derived automatically from an export target SOC of 99%.
+        Publishes the reserve control plus both the charge-from-grid and export (discharge-to-grid)
+        window controls (a configured inverter always supports both - automatic_config requires
+        DTG). There is no separate freeze control: Predbat freezes charge via the reserve, and
+        freeze-export is derived automatically from an export target SOC of 99%.
         """
         local = self.local_schedule.setdefault(site_id, self._default_local_schedule())
         reserve_min = int(self.battery_settings.get(site_id, {}).get("veryLowSocMin", 5) or 5)
@@ -590,10 +589,9 @@ class EnphaseAPI(ComponentBase):
             app="enphase",
         )
 
-        directions = ["charge"]
-        if self.dtg_supported(site_id):
-            directions.append("export")
-        for direction in directions:
+        # A configured Enphase inverter always supports both charge and export (automatic_config
+        # requires DTG), so both window controls are always published.
+        for direction in ["charge", "export"]:
             window = local.get(direction, {})
             for attribute in ["start_time", "end_time"]:
                 value = window.get(attribute, "00:00:00")
@@ -827,9 +825,8 @@ class EnphaseAPI(ComponentBase):
         real_export = export_enabled and export_soc < 99
         freeze_export = export_enabled and export_soc == 99
 
-        # Forced export to a target (DTG), only where supported
-        if self.dtg_supported(site_id):
-            wrote |= await self._write_schedule(site_id, SCHEDULE_EXPORT, export_start, export_end, export_soc, real_export)
+        # Forced export to a target (DTG). A configured inverter always supports DTG.
+        wrote |= await self._write_schedule(site_id, SCHEDULE_EXPORT, export_start, export_end, export_soc, real_export)
 
         # Freeze export = restrict battery discharge (RBD) over the export window
         wrote |= await self._write_schedule(site_id, SCHEDULE_FREEZE, export_start, export_end, None, freeze_export)
@@ -1018,13 +1015,14 @@ class EnphaseAPI(ComponentBase):
         status = self.battery_status.get(site_id, {})
         if not status.get("max_capacity"):
             raise ValueError("Enphase API: No battery found on site, cannot configure")
-        # Predbat controls charging via the charge-from-grid (CFG) schedule family. If the site
-        # does not support CFG scheduling there is nothing to control, so fail configuration
-        # rather than publishing an inverter Predbat cannot drive.
+        # Predbat needs both charge and export control to plan properly, so require the
+        # charge-from-grid (CFG) and discharge-to-grid (DTG) schedule families. If either is
+        # unsupported, fail configuration rather than publishing an inverter Predbat cannot drive.
         if not self.schedules.get(site_id, {}).get("cfg", {}).get("supported", False):
             raise ValueError("Enphase API: Charge-from-grid (CFG) scheduling not supported on this site, cannot configure")
+        if not self.dtg_supported(site_id):
+            raise ValueError("Enphase API: Discharge-to-grid (DTG) scheduling not supported on this site, cannot configure")
         entity = f"{self.prefix}_enphase_{site_id}"
-        has_dtg = self.dtg_supported(site_id)
 
         self.set_arg("inverter_type", ["EnphaseCloud"])
         self.set_arg("num_inverters", 1)
@@ -1047,11 +1045,10 @@ class EnphaseAPI(ComponentBase):
         self.set_arg("charge_end_time", [f"select.{entity}_battery_schedule_charge_end_time"])
         self.set_arg("charge_limit", [f"number.{entity}_battery_schedule_charge_soc"])
         self.set_arg("scheduled_charge_enable", [f"switch.{entity}_battery_schedule_charge_enable"])
-        if has_dtg:
-            self.set_arg("scheduled_discharge_enable", [f"switch.{entity}_battery_schedule_export_enable"])
-            self.set_arg("discharge_start_time", [f"select.{entity}_battery_schedule_export_start_time"])
-            self.set_arg("discharge_end_time", [f"select.{entity}_battery_schedule_export_end_time"])
-            self.set_arg("discharge_target_soc", [f"number.{entity}_battery_schedule_export_soc"])
+        self.set_arg("scheduled_discharge_enable", [f"switch.{entity}_battery_schedule_export_enable"])
+        self.set_arg("discharge_start_time", [f"select.{entity}_battery_schedule_export_start_time"])
+        self.set_arg("discharge_end_time", [f"select.{entity}_battery_schedule_export_end_time"])
+        self.set_arg("discharge_target_soc", [f"number.{entity}_battery_schedule_export_soc"])
         self.set_arg("schedule_write_button", [f"switch.{entity}_battery_schedule_charge_write"])
         self.set_arg("export_limit", [99999])
 
