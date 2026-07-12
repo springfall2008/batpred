@@ -69,6 +69,9 @@ ENPHASE_PENDING_TIMEOUT_MINUTES = 15
 ENPHASE_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15"
 BATTERY_UI_ORIGIN = "https://battery-profile-ui.enphaseenergy.com"
 
+# Format for the published inverter_time sensor - matches INVERTER_DEF["EnphaseCloud"] clock_time_format
+ENPHASE_CLOCK_FORMAT = "%Y-%m-%d %H:%M:%S"
+
 
 def safe_float(value, default=0.0):
     """Convert a value to float, returning default for None or non-numeric values.
@@ -445,6 +448,30 @@ class EnphaseAPI(ComponentBase):
             f"{entity_base}_battery_reserve_min",
             state=reserve_min,
             attributes={"unit_of_measurement": "%", "friendly_name": "Enphase Battery Reserve Minimum", "icon": "mdi:battery-alert"},
+            app="enphase",
+        )
+
+        # Site communication/health status (siteStatus "normal"/"comm" etc.), with the cloud's
+        # human-readable description as an attribute so a gateway-not-reporting fault is visible.
+        self.dashboard_item(
+            f"{entity_base}_system_status",
+            state=today.get("site_status"),
+            attributes={"friendly_name": "Enphase System Status", "icon": "mdi:cloud-check-outline", "severity": today.get("status_severity"), "description": today.get("status_desc")},
+            app="enphase",
+        )
+
+        # Inverter time: the last time the battery/gateway actually reported to the Enphase cloud.
+        # Predbat uses this for liveness - it stays current while the system is online and freezes
+        # when the gateway goes offline, so its growing skew tells Predbat the inverter is stale.
+        last_report_ts = status.get("last_report") or today.get("last_report_date")
+        if last_report_ts:
+            inverter_time = datetime.fromtimestamp(float(last_report_ts), self.local_tz)
+        else:
+            inverter_time = datetime.now(self.local_tz)
+        self.dashboard_item(
+            f"{entity_base}_inverter_time",
+            state=inverter_time.strftime(ENPHASE_CLOCK_FORMAT),
+            attributes={"friendly_name": "Enphase Inverter Time", "icon": "mdi:clock-outline"},
             app="enphase",
         )
 
@@ -831,12 +858,18 @@ class EnphaseAPI(ComponentBase):
             soc_percent = round(total_available / total_capacity * 100.0, 1)
         else:
             soc_percent = safe_float(data.get("current_charge"))
+        # Most recent per-battery report time (Unix seconds) - the "last time the battery was
+        # online". This stays fresh while the battery reports and freezes when the gateway goes
+        # offline, so it drives Predbat's inverter-time liveness/skew detection.
+        report_times = [safe_float(b.get("last_report"), None) for b in batteries]
+        last_report = max([t for t in report_times if t], default=None)
         self.battery_status[site_id] = {
             "soc_percent": soc_percent,
             "available_energy": safe_float(data.get("available_energy"), total_available),
             "max_capacity": safe_float(data.get("max_capacity"), total_capacity),
             "max_power_kw": safe_float(data.get("max_power")),
             "status": str(data.get("status", "")),
+            "last_report": last_report,
             # Note: this payload has no "profile" key. The battery profile name is
             # sourced from self.profile[site_id]["profile"], populated by get_profile().
             "batteries": batteries,
@@ -858,11 +891,18 @@ class EnphaseAPI(ComponentBase):
         stats = data.get("stats") or []
         stat = stats[0] if isinstance(stats, list) and stats else {}
         channels = ("production", "consumption", "import", "export", "charge", "discharge")
+        status_details = data.get("statusDetails") or {}
         self.today[site_id] = {
             "totals": stat.get("totals") or {},
             "arrays": {channel: (stat.get(channel) or []) for channel in channels},
             "start_time": stat.get("start_time"),
             "interval_length": stat.get("interval_length"),
+            # Site health: siteStatus is "normal"/"comm" (communication fault) etc., with a
+            # human-readable status description when there is a problem (e.g. gateway not reporting).
+            "site_status": data.get("siteStatus"),
+            "status_severity": status_details.get("statusSeverity"),
+            "status_desc": status_details.get("statusDesc"),
+            "last_report_date": data.get("last_report_date"),
         }
         await self._save_cache("today", self.today)
         return self.today[site_id]
@@ -995,6 +1035,7 @@ class EnphaseAPI(ComponentBase):
         self.set_arg("load_power", [f"sensor.{entity}_load_power"])
         self.set_arg("reserve", [f"number.{entity}_battery_schedule_reserve"])
         self.set_arg("battery_min_soc", [f"sensor.{entity}_battery_reserve_min"])
+        self.set_arg("inverter_time", [f"sensor.{entity}_inverter_time"])
         self.set_arg("charge_start_time", [f"select.{entity}_battery_schedule_charge_start_time"])
         self.set_arg("charge_end_time", [f"select.{entity}_battery_schedule_charge_end_time"])
         self.set_arg("charge_limit", [f"number.{entity}_battery_schedule_charge_soc"])
@@ -1198,6 +1239,10 @@ class EnphaseAPI(ComponentBase):
             preview = json.dumps(redacted, default=str)
         elif json_data is not None:
             preview = json.dumps(json_data, default=str)
+        elif self._is_login_wall(json_data, text):
+            # Don't dump the full HTML login/marketing page (tens of KB) - it is noise, and it is
+            # the expected trigger for the BatteryConfig header-variant fallback.
+            preview = f"(HTML page, {len(text or '')} chars - login wall / variant fallback)"
         else:
             preview = text or ""
         param_str = f" params={params}" if params else ""

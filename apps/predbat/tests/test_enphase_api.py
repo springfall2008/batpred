@@ -326,8 +326,8 @@ BATTERY_STATUS_PAYLOAD = {
     "max_capacity": 10.0,
     "max_power": 3.84,
     "storages": [
-        {"id": 1, "serial_num": "B1", "current_charge": 50, "available_energy": 2.5, "max_capacity": 5.0, "status": "normal"},
-        {"id": 2, "serial_num": "B2", "current_charge": 60, "available_energy": 3.0, "max_capacity": 5.0, "status": "normal"},
+        {"id": 1, "serial_num": "B1", "current_charge": 50, "available_energy": 2.5, "max_capacity": 5.0, "status": "normal", "last_report": 1783548194},
+        {"id": 2, "serial_num": "B2", "current_charge": 60, "available_energy": 3.0, "max_capacity": 5.0, "status": "normal", "last_report": 1783549411},
     ],
 }
 
@@ -341,6 +341,45 @@ def test_get_battery_status():
     assert status["max_capacity"] == 10.0
     assert status["soc_percent"] == 55.0  # (2.5+3.0)/(5+5)*100
     assert status["max_power_kw"] == 3.84
+    assert status["last_report"] == 1783549411  # most recent per-battery report time
+
+
+def test_inverter_time_and_system_status_sensors():
+    """publish_data publishes system_status from siteStatus and inverter_time from the last report."""
+    api = MockEnphaseAPI()
+    site_id = "12345"
+    # An offline system: batteries last reported days ago; siteStatus reports a comm fault.
+    api.battery_status[site_id] = {"soc_percent": 0.0, "available_energy": 0.0, "max_capacity": 20.0, "max_power_kw": 6.33, "status": "", "last_report": 1783549411, "batteries": []}
+    api.profile[site_id] = {"profile": "self-consumption", "reserve": 30}
+    api.today[site_id] = {"totals": {"production": 0}, "arrays": {}, "start_time": None, "interval_length": 900, "site_status": "comm", "status_severity": "warning", "status_desc": "Your gateway has not reported since Jul 8"}
+    api.latest_power[site_id] = {"watts": 100.0, "time": 1760000000}
+    run_async(api.publish_data(site_id))
+    items = api.dashboard_items
+
+    status_item = items["sensor.predbat_enphase_12345_system_status"]
+    assert status_item["state"] == "comm"
+    assert status_item["attributes"]["severity"] == "warning"
+    assert "gateway" in status_item["attributes"]["description"]
+
+    # inverter_time = the battery last_report (1783549411) formatted with the clock format, in local tz.
+    from enphase import ENPHASE_CLOCK_FORMAT
+
+    expected = datetime.fromtimestamp(1783549411, api.local_tz).strftime(ENPHASE_CLOCK_FORMAT)
+    assert items["sensor.predbat_enphase_12345_inverter_time"]["state"] == expected
+
+
+def test_log_api_call_suppresses_html():
+    """The verbose logger must not dump a full HTML login/marketing page - just a short marker."""
+    api = MockEnphaseAPI()
+    captured = []
+    api.log = lambda message: captured.append(message)
+    api.debug_api = True
+    html = "<!DOCTYPE html><html>" + ("x" * 50000) + "</html>"
+    api._log_api_call("GET", "/service/batteryConfig/api/v1/profile/12345", None, 200, None, html)
+    assert len(captured) == 1
+    assert "<html>" not in captured[0]
+    assert "HTML page" in captured[0]
+    assert "xxxxx" not in captured[0]
 
 
 def test_safe_float_int_handle_na():
@@ -533,6 +572,7 @@ def test_automatic_config():
     assert args["discharge_target_soc"] == ["number.predbat_enphase_12345_battery_schedule_export_soc"]
     assert args["reserve"] == ["number.predbat_enphase_12345_battery_schedule_reserve"]
     assert args["battery_min_soc"] == ["sensor.predbat_enphase_12345_battery_reserve_min"]
+    assert args["inverter_time"] == ["sensor.predbat_enphase_12345_inverter_time"]
     assert args["schedule_write_button"] == ["switch.predbat_enphase_12345_battery_schedule_charge_write"]
     assert args["export_limit"] == [99999]
 
@@ -959,6 +999,8 @@ def run_enphase_api_tests(my_predbat):
     test_request_json_login_wall()
     test_battery_config_variant_fallback()
     test_get_battery_status()
+    test_inverter_time_and_system_status_sensors()
+    test_log_api_call_suppresses_html()
     test_reads_nested_data_shape()
     test_get_battery_status_percent_soc()
     test_today_channel_kwh()
