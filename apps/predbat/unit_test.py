@@ -105,6 +105,7 @@ from tests.test_load_free_slot import test_load_free_slot
 from tests.test_add_now_to_octopus_slot import test_add_now_to_octopus_slot
 from tests.test_dynamic_load import test_dynamic_load_car_slot_cancellation
 from tests.test_fox_api import run_fox_api_tests
+from tests.test_enphase_api import run_enphase_api_tests
 from tests.test_solcast import run_solcast_tests
 from tests.test_open_meteo import run_open_meteo_tests
 from tests.test_rate_add_io_slots import run_rate_add_io_slots_tests
@@ -282,6 +283,7 @@ def main():
         ("saving_session_auto_join_toggle", test_saving_session_auto_join_toggle, "Saving session auto-join toggle test (issue #4120)", False),
         ("alert_feed", test_alert_feed, "Alert feed tests", False),
         ("fox_api", run_fox_api_tests, "Fox API tests", False),
+        ("enphase_api", run_enphase_api_tests, "Enphase API tests", False),
         ("solcast", run_solcast_tests, "Solcast API tests", False),
         ("open_meteo", run_open_meteo_tests, "Open-Meteo solar forecast provider tests", False),
         ("solax", run_solax_tests, "SolaX API tests", False),

@@ -17,6 +17,7 @@ This document provides a comprehensive overview of all Predbat components, their
     - [Axle Energy VPP (axle)](#axle-energy-vpp-axle)
     - [Ohme Charger (ohme)](#ohme-charger-ohme)
     - [Fox ESS API (fox)](#fox-ess-api-fox)
+    - [Enphase API (enphase)](#enphase-api-enphase)
     - [Solax Cloud API (Solax)](#solax-cloud-api-solax)
     - [Solis Cloud API (Solis)](#solis-cloud-api-solis)
     - [Sigenergy Cloud API (Sigenergy)](#sigenergy-cloud-api-sigenergy)
@@ -521,6 +522,78 @@ Integrates with Fox ESS inverters for monitoring and controlling Fox ESS battery
 | `key` | String | Yes | - | `fox_key` | Your Fox ESS API key |
 | `automatic` | Boolean | No | false | `fox_automatic` | Set to `true` to automatically configured Predbat to use the Fox inverter (no manual apps.yaml updates required) |
 | `automatic_ignore_pv` | Boolean | No | false | `fox_automatic_ignore_pv` | When `automatic` is enabled, set to `true` to prevent Fox Cloud from overwriting `pv_power` and `pv_today` config. Useful for AC-coupled setups where PV is measured independently and Fox Cloud reports zero/absent PV data |
+
+---
+
+### Enphase API (enphase)
+
+**Can be restarted:** Yes
+
+#### What it does (enphase)
+
+Connects Predbat to the Enphase Enlighten cloud for monitoring and battery control of Enphase IQ Battery systems, with no local hardware access required. Predbat logs in through the same web endpoints used by the Enlighten app/web site, publishes monitoring sensors, and can write battery schedules to control charging and discharging.
+
+#### When to enable (enphase)
+
+- You have an Enphase IQ Battery system managed through the Enlighten app
+- You want cloud-based monitoring and control without any local integration
+- Your Enphase account does not have multi-factor authentication (MFA) enabled
+
+#### Important notes (enphase)
+
+- **EXPERIMENTAL**: this uses the unofficial Enlighten web-app API - there is no official Enphase API with battery control, and Enphase may change it without notice
+- Accounts with multi-factor authentication (MFA) enabled are **not supported** - disable MFA on the Enphase account before use
+- Predbat controls the battery by writing Enphase schedules: charge windows become charge-from-grid (CFG) schedules with a target SOC, export windows become discharge-to-grid (DTG) schedules, freeze-export windows use restrict-battery-discharge (RBD) schedules, and the reserve is set through the battery profile. `automatic_config` requires both CFG and DTG support and fails configuration if either is missing
+- On a successful write, Predbat optimistically updates its local cache and moves on rather than waiting to re-read the cloud - the periodic schedule/profile re-read (every 30 minutes) corrects the cache later if a write didn't actually land
+- Repeated login failures back off automatically to protect the Enphase account from lockout: a 5 minute cooldown after each rejection, rising to a 24 hour suspension after 3 consecutive rejections
+
+#### Configuration Options (enphase)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `username` | String | Yes | - | `enphase_username` | Your Enphase Enlighten account e-mail address |
+| `password` | String | Yes | - | `enphase_password` | Your Enphase Enlighten account password |
+| `site_id` | String | No | First site found | `enphase_site_id` | Restrict Predbat to a single Enlighten site id |
+| `automatic` | Boolean | No | false | `enphase_automatic` | Set to `true` to automatically configure Predbat to use the Enphase inverter (no manual apps.yaml sensor updates required) |
+| `automatic_ignore_pv` | Boolean | No | false | `enphase_automatic_ignore_pv` | When `automatic` is enabled, set to `true` to prevent Enphase Cloud from overwriting `pv_power` and `pv_today` config |
+
+#### Published Entities (enphase)
+
+For each site (`{site_id}` in the entity names), the component creates:
+
+**Battery Sensors:**
+
+- Battery SOC (%)
+- Battery available energy (kWh)
+- Battery capacity (kWh)
+- Battery max rate (W)
+- Battery status
+- Battery profile
+- Battery reserve (%)
+- Battery reserve minimum (%)
+
+**Energy Sensors:**
+
+- PV/load/import/export today (kWh)
+- Battery charge/discharge today (kWh)
+
+**Power Sensors (derived from the most recent completed 15-minute energy bucket):**
+
+- PV power, grid power, battery power, load power (W)
+
+**Control Entities (per site):**
+
+- Battery schedule reserve (number, %) - written to Enphase immediately on change, like Fox
+- Charge/export start and end time (select, HH:MM:SS format)
+- Charge/export target SOC (number, %)
+- Charge/export enable (switch)
+- Charge/export write (switch) - triggers the cloud write for that schedule
+
+A configured site always supports both charge and export control - `automatic_config` requires both
+the charge-from-grid (CFG) and discharge-to-grid (DTG) schedule families to be available, so both sets
+of controls are always published. There is no separate freeze control: freeze-export is derived
+automatically (and written as a restrict-battery-discharge schedule) whenever the export target SOC is
+set to exactly 99%; 100% already means export is disabled.
 
 ---
 

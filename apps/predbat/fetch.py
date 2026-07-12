@@ -1970,8 +1970,8 @@ class Fetch:
         self.car_charging_slots = [[] for c in range(self.num_cars)]
         self.car_charging_exclusive = [False for c in range(self.num_cars)]
 
-        self.car_charging_planned_response = self.get_arg("car_charging_planned_response", ["yes", "on", "enable", "true"])
-        self.car_charging_now_response = self.get_arg("car_charging_now_response", ["yes", "on", "enable", "true"])
+        self.car_charging_planned_response = [str(response).lower() for response in self.get_arg("car_charging_planned_response", ["yes", "on", "enable", "true"])]
+        self.car_charging_now_response = [str(response).lower() for response in self.get_arg("car_charging_now_response", ["yes", "on", "enable", "true"])]
         self.car_charging_from_battery = self.get_arg("car_charging_from_battery")
 
         # Car charging planned sensor
