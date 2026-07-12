@@ -166,6 +166,7 @@ from tests.test_annual_load import test_annual_load, test_annual_load_octopus
 from tests.test_annual_weather import test_annual_weather
 from tests.test_annual_tariff import test_annual_tariff
 from tests.test_rate_add_io_slots import run_rate_add_io_slots_tests
+from tests.test_iog_charge_skew import run_iog_charge_skew_tests
 from tests.test_battery_curve_keys import run_battery_curve_keys_tests
 from tests.test_balance_inverters import run_balance_inverters_tests
 from tests.test_octopus_download_rates import test_octopus_download_rates_wrapper
@@ -410,6 +411,7 @@ def main():
         ("octopus_slots", run_load_octopus_slots_tests, "Load Octopus slots tests", False),
         ("multi_car_iog", run_multi_car_iog_tests, "Multi-car IOG tests", False),
         ("rate_add_io_slots", run_rate_add_io_slots_tests, "Rate add IO slots tests", False),
+        ("iog_charge_skew", run_iog_charge_skew_tests, "IOG earlier-charge skew characterisation tests", False),
         ("rate_replicate", test_rate_replicate, "Rate replicate comprehensive tests (missing slots, IO, offsets, gas)", False),
         ("find_charge_window", test_find_charge_window, "Find charge window gap handling tests", False),
         ("find_charge_rate", test_find_charge_rate, "Find charge rate tests", False),
