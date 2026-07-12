@@ -518,6 +518,25 @@ def test_request_json_absorbs_xsrf_token():
     assert api.xsrf_token == "fresh-token-123"
 
 
+def test_login_wall_does_not_corrupt_session():
+    """An HTML login-wall response must NOT merge its anonymous cookies into our live session."""
+    api = MockEnphaseAPI()
+    api.eauth_token = "tok"
+    api.cookie_header = "_enlighten_4_session=good; e-auth=x"
+    api.battery_config_variant = "cookie_eauth"  # already on fallback, so no variant switch
+    api.login_cooldown_until = datetime.now(timezone.utc) + timedelta(hours=1)  # block re-login
+
+    async def raw_login_wall(method, url, headers=None, data=None, json_body=None, params=None):
+        """Return an HTML login wall carrying a fresh anonymous session cookie."""
+        return 200, None, "<!DOCTYPE html><html>please sign in</html>", {"_enlighten_4_session": "ANONYMOUS", "XSRF-TOKEN": "wall"}
+
+    api.request_raw = raw_login_wall
+    result = run_async(api.request_json("GET", "/service/batteryConfig/api/v1/profile/12345", family="battery_config"))
+    assert result is None  # login wall is treated as failure
+    assert api.cookie_header == "_enlighten_4_session=good; e-auth=x"  # session cookie NOT clobbered
+    assert api.xsrf_token != "wall"  # no XSRF captured from a failed/login-wall response
+
+
 def test_get_battery_status_percent_soc():
     """Site current_charge like '0%' must parse; capacity-weighted SOC uses storages."""
     api = MockEnphaseAPI()
@@ -1097,6 +1116,7 @@ def run_enphase_api_tests(my_predbat):
     test_get_site_settings()
     test_set_reserve_writes_profile_put()
     test_request_json_absorbs_xsrf_token()
+    test_login_wall_does_not_corrupt_session()
     test_get_battery_status_percent_soc()
     test_today_channel_kwh()
     test_interval_power()

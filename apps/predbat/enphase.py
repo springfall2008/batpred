@@ -1333,9 +1333,6 @@ class EnphaseAPI(ComponentBase):
                 continue
 
             self.requests_today += 1
-            # Keep the session cookie and XSRF token current - Enlighten rotates the session cookie,
-            # and BatteryConfig hands back a fresh XSRF token, on ordinary responses.
-            self._absorb_cookies(cookies)
             self._log_api_call(method, path, params, status, json_data, text)
             auth_failed = status in (401, 403) or self._is_login_wall(json_data, text)
             if auth_failed:
@@ -1364,6 +1361,12 @@ class EnphaseAPI(ComponentBase):
                 self.last_error_status = status
                 self.failures_total += 1
                 return None
+
+            # Capture only a fresh XSRF token from a genuine success. Do NOT merge the whole cookie
+            # jar here: an HTML login-wall response (handled above) carries anonymous session cookies
+            # that would corrupt our authenticated session. Session-cookie rotation is handled in login().
+            if isinstance(cookies, dict) and cookies.get("XSRF-TOKEN"):
+                self.xsrf_token = cookies["XSRF-TOKEN"]
 
             record_api_call("enphase", True)
             self.update_success_timestamp()
