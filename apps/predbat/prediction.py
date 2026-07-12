@@ -722,7 +722,7 @@ class Prediction:
                 battery_headroom = max(soc_max - soc, 0) * battery_loss
                 if battery_headroom < target_headroom:
                     # Apply a severe penalty to force the optimizer to respect the manual buffer limit
-                    clipping_penalty = (target_headroom - battery_headroom) * max(export_rate, 0) * clipping_cost_weight * (step / 60.0)
+                    clipping_penalty = (target_headroom - battery_headroom) * max(export_rate, 0.1) * clipping_cost_weight * (step / 60.0)
                     metric += clipping_penalty
                     clipping_penalty_total += clipping_penalty
             elif pv_forecast_peak_step and clipping_limit_step > 0 and clipping_cost_weight > 0:
@@ -737,7 +737,7 @@ class Prediction:
                     unmitigated_clip = max(potential_clip - absorbable, 0)
 
                     if unmitigated_clip > 0:
-                        clipping_penalty = unmitigated_clip * max(export_rate, 0) * clipping_cost_weight
+                        clipping_penalty = unmitigated_clip * max(export_rate, 0.1) * clipping_cost_weight
                         metric += clipping_penalty
                         clipping_penalty_total += clipping_penalty
 

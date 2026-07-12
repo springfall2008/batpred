@@ -1793,14 +1793,20 @@ class Plan:
         # Start the loop at the max soc setting
         if self.best_soc_max > 0:
             loop_soc = min(loop_soc, self.best_soc_max)
-
         # Cap charge limit to preserve clipping headroom during active clipping export windows
-        if not all_n:
-            hit_export = self.hit_charge_window(export_window, charge_window[window_n]["start"], charge_window[window_n]["end"])
-            if hit_export >= 0:
-                clip_target = export_window[hit_export].get("clipping_target_soc_pct", None)
-                if clip_target is not None:
-                    loop_soc = min(loop_soc, clip_target)
+        clip_target = None
+        check_windows = all_n if all_n else [window_n]
+        for w_n in check_windows:
+            start_cw = charge_window[w_n]["start"]
+            end_cw = charge_window[w_n]["end"]
+            for e_win in export_window:
+                if "clipping_target_soc_pct" in e_win:
+                    if end_cw >= e_win["start"] and start_cw <= e_win["end"]:
+                        tgt = e_win["clipping_target_soc_pct"]
+                        clip_target = min(clip_target, tgt) if clip_target is not None else tgt
+
+        if clip_target is not None:
+            loop_soc = min(loop_soc, clip_target)
 
         # Create min/max SoC to avoid simulating SoC that are not going have any impact
         # Can't do this for anything but a single window as the winder SoC impact isn't known

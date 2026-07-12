@@ -2388,4 +2388,7 @@ APPS_SCHEMA = {
     "pv_clearsky_tomorrow": {"type": "sensor", "sensor_type": "float"},
     "pv_clearsky_d3": {"type": "sensor", "sensor_type": "float"},
     "pv_clearsky_d4": {"type": "sensor", "sensor_type": "float"},
+    "pv_clearsky_d5": {"type": "sensor", "sensor_type": "float"},
+    "pv_clearsky_d6": {"type": "sensor", "sensor_type": "float"},
+    "pv_clearsky_d7": {"type": "sensor", "sensor_type": "float"},
 }

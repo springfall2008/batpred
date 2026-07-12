@@ -1451,7 +1451,7 @@ class SolarAPI(ComponentBase):
             using_ha_data = True
 
             # Fetch data from each sensor
-            for argname in ["pv_forecast_today", "pv_forecast_tomorrow", "pv_forecast_d3", "pv_forecast_d4"]:
+            for argname in ["pv_forecast_today", "pv_forecast_tomorrow", "pv_forecast_d3", "pv_forecast_d4", "pv_forecast_d5", "pv_forecast_d6", "pv_forecast_d7"]:
                 # We have to re-get the arg here as the regexp wouldn't be resolved earlier
                 entity_id = getattr(self, argname, None)
 
@@ -1510,7 +1510,7 @@ class SolarAPI(ComponentBase):
             elif clipping_clearsky_source == "ha_solcast_clearsky":
                 self.log("SolarAPI: Overlaying ClearSky data from Home Assistant integration")
                 ha_data = []
-                for argname in ["pv_clearsky_today", "pv_clearsky_tomorrow", "pv_clearsky_d3", "pv_clearsky_d4"]:
+                for argname in ["pv_clearsky_today", "pv_clearsky_tomorrow", "pv_clearsky_d3", "pv_clearsky_d4", "pv_clearsky_d5", "pv_clearsky_d6", "pv_clearsky_d7"]:
                     entity_id = getattr(self, argname, None)
                     if entity_id:
                         data, _, _ = self.fetch_pv_datapoints(argname, entity_id)
