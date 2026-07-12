@@ -40,10 +40,11 @@ SITE_SEARCH_PATH = "/app-api/search_sites.json"
 BATTERY_CONFIG_BASE = "/service/batteryConfig/api/v1"
 
 # Refresh ages in minutes for each data category
-ENPHASE_REFRESH_STATIC = 24 * 60
-ENPHASE_REFRESH_SETTINGS = 5
-ENPHASE_REFRESH_ENERGY = 15
-ENPHASE_REFRESH_POWER = 1
+ENPHASE_REFRESH_STATIC = 24 * 60  # sites list - rarely changes
+ENPHASE_REFRESH_SETTINGS = 30  # profile, battery settings, schedule config - change rarely / only via our own writes
+ENPHASE_REFRESH_STATUS = 5  # battery SOC/available energy - needs to stay fresh for planning
+ENPHASE_REFRESH_ENERGY = 5  # today energy totals
+ENPHASE_REFRESH_POWER = 5  # latest instantaneous power
 
 ENPHASE_CACHE_KEYS = ["sites", "battery_status", "battery_settings", "profile", "schedules", "site_settings", "today", "latest_power"]
 ENPHASE_CACHE_VERSION = 2
@@ -346,8 +347,12 @@ class EnphaseAPI(ComponentBase):
         # keyed globally, so processing one site per cycle also keeps them correct.
         site_id = self.sites[0]["site_id"] if self.sites else None
         if site_id:
-            if self._needs_refresh("battery_status", ENPHASE_REFRESH_SETTINGS):
+            # SOC/available energy must stay fresh for planning, so it is on the fast tier;
+            # the profile/settings/schedule config changes rarely (or only via our own writes),
+            # so it polls on the slower settings tier. (gated on "profile", which get_profile stamps)
+            if self._needs_refresh("battery_status", ENPHASE_REFRESH_STATUS):
                 await self.get_battery_status(site_id)
+            if self._needs_refresh("profile", ENPHASE_REFRESH_SETTINGS):
                 await self.get_profile(site_id)
                 await self.get_battery_settings(site_id)
                 await self.get_schedules(site_id)
