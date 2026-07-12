@@ -1024,7 +1024,15 @@ class Plan:
             if clipping_start_override is not None:
                 early_start = midnight + clipping_start_override
 
-            morning_start = min(morning_start, early_start)
+            # If stretching back, ensure we don't stretch into periods of negative import rates
+            # where the optimizer might want to charge the battery.
+            if early_start < morning_start:
+                test_start = morning_start
+                while test_start > early_start:
+                    if getattr(self, "rate_import", {}).get(test_start - 30, 9999) <= 0:
+                        break
+                    test_start -= 30
+                morning_start = test_start
             morning_start = max(self.minutes_now, morning_start)
 
             morning_start = int(morning_start / 30) * 30  # Align to nearest 30 mins
@@ -1785,6 +1793,14 @@ class Plan:
         # Start the loop at the max soc setting
         if self.best_soc_max > 0:
             loop_soc = min(loop_soc, self.best_soc_max)
+
+        # Cap charge limit to preserve clipping headroom during active clipping export windows
+        if not all_n:
+            hit_export = self.hit_charge_window(export_window, charge_window[window_n]["start"], charge_window[window_n]["end"])
+            if hit_export >= 0:
+                clip_target = export_window[hit_export].get("clipping_target_soc_pct", None)
+                if clip_target is not None:
+                    loop_soc = min(loop_soc, clip_target)
 
         # Create min/max SoC to avoid simulating SoC that are not going have any impact
         # Can't do this for anything but a single window as the winder SoC impact isn't known
@@ -3055,6 +3071,8 @@ class Plan:
         swapped_target = {}
         curr = self.currency_symbols[1]
 
+        if self.calculate_best_export:
+            record_export_windows = min(record_export_windows, len(self.export_window_best))
         if self.calculate_best_export and record_export_windows >= 1:
             swapped = True
             while swapped:
@@ -3380,7 +3398,8 @@ class Plan:
             if not self.calculate_export_oncharge:
                 hit_export = self.hit_charge_window(self.export_window_best, self.charge_window_best[charge_window_n]["start"], self.charge_window_best[charge_window_n]["end"])
                 if hit_export >= 0 and self.export_limits_best[hit_export] < 100:
-                    return False
+                    if "clipping_target_soc_pct" not in self.export_window_best[hit_export]:
+                        return False
             return True
         return False
 

@@ -771,7 +771,7 @@ class SolarAPI(ComponentBase):
         timeline = []
         for item in source_data:
             ts_str = item.get("period_start")
-            val = float(item.get(value_field, 0.0))
+            val = float(item.get(value_field, item.get("pv_estimate", 0.0)))
             try:
                 start_dt = datetime.strptime(ts_str, TIME_FORMAT)
                 start_dt = start_dt.replace(tzinfo=pytz.utc)
