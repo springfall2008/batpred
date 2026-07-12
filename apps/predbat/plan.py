@@ -3468,7 +3468,7 @@ class Plan:
             if (count % 16) == 0:
                 self.log("Final optimisation type {} window {} metric {} metric_keep {} best_carbon {} best_import {} cost {}".format(typ, window_n, best_metric, dp2(best_keep), dp0(best_carbon), dp2(best_import), dp2(best_cost)))
             count += 1
-        self.log("Second pass optimisation finished metric {} cost {} metric_keep {} cycle {} carbon {} import {}".format(best_metric, dp2(best_cost), dp2(best_keep), dp2(best_cycle), dp0(best_carbon), dp2(best_carbon)))
+        self.log("Second pass optimisation finished metric {} cost {} metric_keep {} cycle {} carbon {} import {}".format(best_metric, dp2(best_cost), dp2(best_keep), dp2(best_cycle), dp0(best_carbon), dp2(best_import)))
 
         self.plan_write_debug(debug_mode, "plan_pass2.html", self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
         return best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value
@@ -4886,7 +4886,7 @@ class Plan:
             if save and save == "debug":
                 self.dashboard_item(
                     self.prefix + ".pv_power_debug",
-                    state=dp3(final_soc),
+                    state=dp3(self.filtered_today(predict_pv_power, stamp=self.now_utc) or 0),
                     attributes={
                         "results": self.filtered_times(predict_pv_power),
                         "today": self.filtered_today(predict_pv_power),
@@ -4898,7 +4898,7 @@ class Plan:
                 )
                 self.dashboard_item(
                     self.prefix + ".grid_power_debug",
-                    state=dp3(final_soc),
+                    state=dp3(self.filtered_today(predict_grid_power, stamp=self.now_utc) or 0),
                     attributes={
                         "results": self.filtered_times(predict_grid_power),
                         "today": self.filtered_today(predict_grid_power),
@@ -4910,7 +4910,7 @@ class Plan:
                 )
                 self.dashboard_item(
                     self.prefix + ".load_power_debug",
-                    state=dp3(final_soc),
+                    state=dp3(self.filtered_today(predict_load_power, stamp=self.now_utc) or 0),
                     attributes={
                         "results": self.filtered_times(predict_load_power),
                         "today": self.filtered_today(predict_load_power),
@@ -4922,7 +4922,7 @@ class Plan:
                 )
                 self.dashboard_item(
                     self.prefix + ".battery_power_debug",
-                    state=dp3(final_soc),
+                    state=dp3(self.filtered_today(predict_battery_power, stamp=self.now_utc) or 0),
                     attributes={
                         "results": self.filtered_times(predict_battery_power),
                         "today": self.filtered_today(predict_battery_power),
