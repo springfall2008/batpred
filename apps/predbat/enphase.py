@@ -358,6 +358,7 @@ class EnphaseAPI(ComponentBase):
             if self._needs_refresh("profile", ENPHASE_REFRESH_SETTINGS):
                 await self.get_profile(site_id)
                 await self.get_battery_settings(site_id)
+                await self.get_site_settings(site_id)
                 await self.get_schedules(site_id)
             if self._needs_refresh("today", ENPHASE_REFRESH_ENERGY):
                 await self.get_today(site_id)
@@ -770,6 +771,20 @@ class EnphaseAPI(ComponentBase):
         await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/batterySettings/{site_id}", family="battery_config", json_body={"chargeFromGrid": True})
         self.battery_settings.setdefault(site_id, {})["chargeFromGrid"] = True
 
+    async def set_reserve(self, site_id, reserve):
+        """Write the battery backup reserve (batteryBackupPercentage) via a profile PUT.
+
+        Preserves the current profile name (so only the reserve changes). Returns the parsed
+        response, or None on failure.
+        """
+        cloud = self.profile.get(site_id, {})
+        profile_name = cloud.get("profile") or PROFILE_SELF_CONSUMPTION
+        self.log(f"Enphase: Setting reserve to {int(reserve)}% (profile {profile_name}) on site {site_id}")
+        params = {"source": "enho"}
+        if self.user_id:
+            params["userId"] = self.user_id
+        return await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/profile/{site_id}", family="battery_config", params=params, json_body={"profile": profile_name, "batteryBackupPercentage": int(reserve)})
+
     async def apply_battery_schedule(self, site_id):
         """Diff the local schedule model against the cloud and issue only the changed writes.
 
@@ -792,6 +807,9 @@ class EnphaseAPI(ComponentBase):
         controls.
         """
         await self.get_schedule_settings_ha(site_id)
+        # Bootstrap a fresh XSRF token before writing (the web app GETs siteSettings first); its
+        # x-csrf-token response header is absorbed by request_json for the writes below.
+        await self.get_site_settings(site_id)
         local = self.local_schedule.get(site_id, self._default_local_schedule())
         wrote = False
 
@@ -799,12 +817,7 @@ class EnphaseAPI(ComponentBase):
         desired_reserve = int(local.get("reserve", 0))
         cloud = self.profile.get(site_id, {})
         if desired_reserve and desired_reserve != int(cloud.get("reserve", -1)):
-            profile_name = cloud.get("profile") or PROFILE_SELF_CONSUMPTION
-            self.log(f"Enphase: Setting reserve to {desired_reserve}% (profile {profile_name}) on site {site_id}")
-            params = {"source": "enho"}
-            if self.user_id:
-                params["userId"] = self.user_id
-            await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/profile/{site_id}", family="battery_config", params=params, json_body={"profile": profile_name, "batteryBackupPercentage": desired_reserve})
+            await self.set_reserve(site_id, desired_reserve)
             wrote = True
 
         # Forced charge window (CFG)
@@ -959,6 +972,25 @@ class EnphaseAPI(ComponentBase):
         }
         await self._save_cache("battery_settings", self.battery_settings)
         return self.battery_settings[site_id]
+
+    async def get_site_settings(self, site_id):
+        """Fetch the BatteryConfig site feature/capability flags for a site.
+
+        GET /service/batteryConfig/api/v1/siteSettings/<site>?userId=<uid>. Returns capability
+        flags under a "data" object (hasEncharge, hasAcb, showChargeFromGrid, isEnsemble, ...).
+        This is also the web app's primary XSRF bootstrap: the response's x-csrf-token header (and
+        cookies) are absorbed by request_json, refreshing the token used for subsequent writes.
+        """
+        params = {}
+        if self.user_id:
+            params["userId"] = self.user_id
+        data = await self.request_json("GET", f"{BATTERY_CONFIG_BASE}/siteSettings/{site_id}", family="battery_config", params=params or None)
+        if data is None:
+            return None
+        body = data.get("data") if isinstance(data.get("data"), dict) else data
+        self.site_settings[site_id] = body
+        await self._save_cache("site_settings", self.site_settings)
+        return self.site_settings[site_id]
 
     async def get_schedules(self, site_id):
         """Fetch and normalise the charge/export/freeze battery schedules for a site.
@@ -1224,6 +1256,12 @@ class EnphaseAPI(ComponentBase):
             async with session.request(method, url, headers=headers, data=data, json=json_body, params=params, timeout=aiohttp.ClientTimeout(total=60)) as response:
                 text = await response.text()
                 cookies = {key: morsel.value for key, morsel in response.cookies.items()}
+                # The BatteryConfig service returns a fresh XSRF token in the x-csrf-token response
+                # header on every call; fold it into the cookie dict so _absorb_cookies keeps our
+                # X-XSRF-Token current for the next write (the web app's primary bootstrap mechanism).
+                csrf_header = response.headers.get("x-csrf-token") or response.headers.get("X-CSRF-Token")
+                if csrf_header:
+                    cookies["XSRF-TOKEN"] = csrf_header
                 json_data = None
                 content_type = response.headers.get("Content-Type", "")
                 if "json" in content_type:
@@ -1295,6 +1333,9 @@ class EnphaseAPI(ComponentBase):
                 continue
 
             self.requests_today += 1
+            # Keep the session cookie and XSRF token current - Enlighten rotates the session cookie,
+            # and BatteryConfig hands back a fresh XSRF token, on ordinary responses.
+            self._absorb_cookies(cookies)
             self._log_api_call(method, path, params, status, json_data, text)
             auth_failed = status in (401, 403) or self._is_login_wall(json_data, text)
             if auth_failed:
@@ -1465,6 +1506,42 @@ async def test_write_schedule(username, password, site_id, start_time, end_time,
     print("Done")
 
 
+async def test_write_reserve(username, password, site_id, value):  # pragma: no cover
+    """Write the battery reserve to a test value, read it back, then restore the original.
+
+    A minimal, safe real-write test: it changes only the reserve (batteryBackupPercentage),
+    prints the before/after values, and always puts the original value back so the customer's
+    system is left as it was.
+    """
+    mock_base = MockBase()
+    api = EnphaseAPI(mock_base, username=username, password=password, site_id=site_id, automatic=False)
+
+    print("Logging in and loading current state...")
+    await api.run(seconds=0, first=True)
+    if not api.sites:
+        print("No sites found")
+        return
+    sid = api.sites[0]["site_id"]
+
+    original = api.profile.get(sid, {}).get("reserve")
+    print(f"Current reserve on site {sid}: {original}%")
+    if original is None:
+        print("Could not read current reserve - aborting without writing")
+        return
+
+    try:
+        print(f"Writing test reserve {value}%...")
+        await api.set_reserve(sid, value)
+        await api.get_profile(sid)
+        print(f"Read-back reserve after write: {api.profile.get(sid, {}).get('reserve')}% (note: may lag by minutes)")
+    finally:
+        print(f"Restoring original reserve {original}%...")
+        await api.set_reserve(sid, original)
+        await api.get_profile(sid)
+        print(f"Read-back reserve after restore: {api.profile.get(sid, {}).get('reserve')}%")
+    print("Done")
+
+
 def main():  # pragma: no cover
     """Command-line entry point for exercising the Enphase component standalone."""
     import argparse
@@ -1477,10 +1554,13 @@ def main():  # pragma: no cover
     parser.add_argument("--start-time", default="02:00:00", help="Test charge window start (HH:MM:SS)")
     parser.add_argument("--end-time", default="05:00:00", help="Test charge window end (HH:MM:SS)")
     parser.add_argument("--soc", type=int, default=80, help="Test charge target SOC percent")
+    parser.add_argument("--write-reserve", type=int, default=None, help="Write this reserve %% (e.g. 25), then restore the original - a safe real-write test")
 
     args = parser.parse_args()
 
-    if args.write_schedule:
+    if args.write_reserve is not None:
+        asyncio.run(test_write_reserve(args.username, args.password, args.site_id, args.write_reserve))
+    elif args.write_schedule:
         asyncio.run(test_write_schedule(args.username, args.password, args.site_id, args.start_time, args.end_time, args.soc))
     else:
         asyncio.run(test_enphase_api(args.username, args.password, args.site_id))

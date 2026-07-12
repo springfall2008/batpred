@@ -474,6 +474,50 @@ def test_reads_nested_data_shape():
     assert settings["veryLowSocMax"] == 25
 
 
+def test_get_site_settings():
+    """siteSettings parses the nested 'data' capability flags."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.set_http_response(
+        "/service/batteryConfig/api/v1/siteSettings/12345",
+        200,
+        {"type": "site-settings", "data": {"hasEncharge": True, "hasAcb": False, "showChargeFromGrid": True, "isEnsemble": True, "countryCode": "GB"}},
+    )
+    run_async(api.get_site_settings("12345"))
+    flags = api.site_settings["12345"]
+    assert flags["hasEncharge"] is True
+    assert flags["showChargeFromGrid"] is True
+    assert flags["countryCode"] == "GB"
+
+
+def test_set_reserve_writes_profile_put():
+    """set_reserve PUTs the profile with the new batteryBackupPercentage, preserving the profile name."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.profile["12345"] = {"profile": "cost_savings", "reserve": 30}
+    api.set_http_response("/service/batteryConfig/api/v1/profile/12345", 200, {})
+    run_async(api.set_reserve("12345", 25))
+    puts = [r for r in api.request_log if r["method"] == "PUT" and r["path"].endswith("/profile/12345")]
+    assert len(puts) == 1
+    body = puts[0]["json"]
+    assert body["batteryBackupPercentage"] == 25
+    assert body["profile"] == "cost_savings"  # existing profile preserved
+
+
+def test_request_json_absorbs_xsrf_token():
+    """A BatteryConfig response's XSRF token (folded into cookies) refreshes self.xsrf_token."""
+    api = MockEnphaseAPI()
+    api.eauth_token = "tok"
+
+    async def raw_with_xsrf(method, url, headers=None, data=None, json_body=None, params=None):
+        """Return a 200 with a fresh XSRF token in the cookie dict (as request_raw folds the header)."""
+        return 200, {"ok": True}, "", {"XSRF-TOKEN": "fresh-token-123"}
+
+    api.request_raw = raw_with_xsrf
+    run_async(api.request_json("GET", "/service/batteryConfig/api/v1/siteSettings/12345", family="battery_config"))
+    assert api.xsrf_token == "fresh-token-123"
+
+
 def test_get_battery_status_percent_soc():
     """Site current_charge like '0%' must parse; capacity-weighted SOC uses storages."""
     api = MockEnphaseAPI()
@@ -1050,6 +1094,9 @@ def run_enphase_api_tests(my_predbat):
     test_inverter_time_and_system_status_sensors()
     test_log_api_call_suppresses_html()
     test_reads_nested_data_shape()
+    test_get_site_settings()
+    test_set_reserve_writes_profile_put()
+    test_request_json_absorbs_xsrf_token()
     test_get_battery_status_percent_soc()
     test_today_channel_kwh()
     test_interval_power()
