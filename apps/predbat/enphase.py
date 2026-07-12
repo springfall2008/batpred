@@ -246,6 +246,9 @@ class EnphaseAPI(ComponentBase):
 
         # Local (HA-side) schedule model, written by events, applied on write switch
         self.local_schedule = {}
+        # Sites whose local schedule/control model has been seeded from the cloud state (once),
+        # so the control entities start out mirroring the inverter's real schedule/reserve
+        self._schedule_seeded = set()
 
         # Pending writes awaiting cloud settle confirmation
         self.pending_writes = {}
@@ -352,6 +355,7 @@ class EnphaseAPI(ComponentBase):
                 await self.get_today(site_id)
             if self._needs_refresh("latest_power", ENPHASE_REFRESH_POWER):
                 await self.get_latest_power(site_id)
+            self.sync_local_schedule_from_cloud(site_id)
             await self.publish_data(site_id)
             await self.publish_schedule_settings_ha(site_id)
 
@@ -505,6 +509,36 @@ class EnphaseAPI(ComponentBase):
             "export": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 5, "enable": False},
             "freeze": {"enable": False},
         }
+
+    def sync_local_schedule_from_cloud(self, site_id):
+        """One-time seed of the local schedule/control model from the current cloud state.
+
+        So the published control entities (reserve, charge/export window times, target SOC and
+        enable) start out reflecting the inverter's real schedule and reserve rather than the
+        defaults. Runs only once per site (the first time cloud data is available); after that the
+        control entities are driven by Predbat/user writes, so a later external change in the app
+        is shown by the monitoring sensors but does not clobber Predbat's desired control values.
+        """
+        if site_id in self._schedule_seeded:
+            return
+        profile = self.profile.get(site_id)
+        schedules = self.schedules.get(site_id)
+        if not profile and not schedules:
+            return  # no cloud data yet - nothing to seed from
+        local = self.local_schedule.setdefault(site_id, self._default_local_schedule())
+        reserve = (profile or {}).get("reserve")
+        if reserve:
+            local["reserve"] = reserve
+        for direction, family_key in (("charge", "cfg"), ("export", "dtg")):
+            entry = (schedules or {}).get(family_key, {})
+            if entry.get("startTime"):
+                local[direction]["start_time"] = enphase_time_to_ha(entry.get("startTime"))
+                local[direction]["end_time"] = enphase_time_to_ha(entry.get("endTime"))
+                if entry.get("limit") is not None:
+                    local[direction]["soc"] = entry.get("limit")
+                local[direction]["enable"] = bool(entry.get("enabled"))
+        local["freeze"]["enable"] = bool((schedules or {}).get("rbd", {}).get("enabled"))
+        self._schedule_seeded.add(site_id)
 
     async def publish_schedule_settings_ha(self, site_id):
         """Publish the schedule control entities for a site.
@@ -1161,8 +1195,6 @@ class EnphaseAPI(ComponentBase):
             preview = json.dumps(json_data, default=str)
         else:
             preview = text or ""
-        if len(preview) > 600:
-            preview = preview[:600] + f"...(+{len(preview) - 600} more chars)"
         param_str = f" params={params}" if params else ""
         self.log(f"Enphase API: {method} {path}{param_str} -> {status} {preview}")
 
@@ -1269,7 +1301,8 @@ class MockBase:  # pragma: no cover
         """Return the stored state (or full record when raw) for an entity id."""
         if raw:
             return self.entities.get(entity_id, {})
-        return self.entities.get(entity_id, {}).get("state", default)
+        else:
+            return self.entities.get(entity_id, {}).get("state", default)
 
     def set_state_wrapper(self, entity_id, state, attributes=None, app=None):
         """Store an entity's state and attributes in memory."""
@@ -1282,15 +1315,30 @@ class MockBase:  # pragma: no cover
     def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
         """Print and store a published entity, so a standalone run shows what it publishes."""
         print(f"ENTITY: {entity_id} = {state}")
+        if attributes:
+            if "options" in attributes:
+                attributes["options"] = "..."
+            print(f"  Attributes: {json.dumps(attributes, indent=2)}")
         self.set_state_wrapper(entity_id, state, attributes)
 
-    def get_arg(self, key, default=None, **kwargs):
+    def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
         """Return the default for any requested arg (no real config in standalone mode)."""
         return default
 
     def set_arg(self, key, value):
-        """Print an arg that automatic_config would set on the real base object."""
-        print(f"Set arg {key} = {value}")
+        """Print an arg that automatic_config would set, resolving any referenced entity state."""
+        state = None
+        if isinstance(value, str) and "." in value:
+            state = self.get_state_wrapper(value, default=None)
+        elif isinstance(value, list):
+            state = "n/a []"
+            for v in value:
+                if isinstance(v, str) and "." in v:
+                    state = self.get_state_wrapper(v, default=None)
+                    break
+        else:
+            state = "n/a"
+        print(f"Set arg {key} = {value} (state={state})")
 
 
 async def test_enphase_api(username, password, site_id):  # pragma: no cover

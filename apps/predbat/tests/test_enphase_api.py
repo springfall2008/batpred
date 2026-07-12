@@ -754,6 +754,41 @@ def test_publish_data_sensors():
     assert items["sensor.predbat_enphase_12345_pv_power"]["state"] == 4000.0  # 1000 Wh / 0.25h
 
 
+def test_sync_local_schedule_from_cloud():
+    """Control entities are seeded (once) from the real cloud reserve and schedule windows."""
+    api = MockEnphaseAPI()
+    site_id = "12345"
+    api.profile[site_id] = {"profile": "self-consumption", "reserve": 30}
+    api.schedules[site_id] = {
+        "cfg": {"id": "c1", "startTime": "01:10", "endTime": "05:29", "limit": 100, "enabled": True, "supported": True},
+        "dtg": {"id": "d1", "startTime": "23:30", "endTime": "00:10", "limit": 30, "enabled": False, "supported": True},
+        "rbd": {"id": None, "startTime": None, "endTime": None, "limit": None, "enabled": False, "supported": True},
+    }
+    api.sync_local_schedule_from_cloud(site_id)
+    local = api.local_schedule[site_id]
+    assert local["reserve"] == 30  # matches the cloud batteryBackupPercentage, not the default 0
+    assert local["charge"]["start_time"] == "01:10:00"
+    assert local["charge"]["end_time"] == "05:29:00"
+    assert local["charge"]["soc"] == 100
+    assert local["charge"]["enable"] is True
+    assert local["export"]["start_time"] == "23:30:00"
+    assert local["export"]["enable"] is False
+
+    # Published control entities now reflect the seeded values, not defaults.
+    api.battery_settings[site_id] = {"veryLowSocMin": 5}
+    run_async(api.publish_schedule_settings_ha(site_id))
+    items = api.dashboard_items
+    assert items["number.predbat_enphase_12345_battery_schedule_reserve"]["state"] == 30
+    assert items["select.predbat_enphase_12345_battery_schedule_charge_start_time"]["state"] == "01:10:00"
+    assert items["switch.predbat_enphase_12345_battery_schedule_charge_enable"]["state"] == "on"
+
+    # Seeding is one-time: a later cloud change (or a user edit) is not clobbered by re-sync.
+    local["reserve"] = 45  # simulate a Predbat/user edit
+    api.profile[site_id]["reserve"] = 99  # cloud changed externally
+    api.sync_local_schedule_from_cloud(site_id)
+    assert api.local_schedule[site_id]["reserve"] == 45  # not re-seeded
+
+
 def test_publish_schedule_entities():
     """Control entities are published for charge, and export only when dtg supported."""
     api = MockEnphaseAPI()
@@ -937,6 +972,7 @@ def run_enphase_api_tests(my_predbat):
     test_run_first_polls_all_tiers()
     test_get_today()
     test_publish_data_sensors()
+    test_sync_local_schedule_from_cloud()
     test_publish_schedule_entities()
     test_event_handlers_update_local_schedule()
     test_write_switch_triggers_apply()
