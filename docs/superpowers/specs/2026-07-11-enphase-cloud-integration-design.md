@@ -43,11 +43,19 @@ client, no pypi dependency). Key facts verified from its source:
     - `/pv/settings/<site>/battery_status.json` — per-battery and site SOC
     (`current_charge` %), `available_energy` kWh, `max_capacity` kWh,
     `available_power`/`max_power` kW, status, live profile label.
-    - `/pv/systems/<site>/lifetime_energy` — daily kWh arrays since
-    `start_date`: `production`, `consumption`, `import`, `export`, `charge`,
-    `discharge` plus flow decomposition (`solar_home`, `solar_grid`,
-    `grid_home`, `battery_home`, `battery_grid`, `grid_battery`,
-    `solar_battery`). Today's (last) entry updates intraday (~5 min cadence).
+    - `/pv/systems/<site>/today` — cadence-independent per-channel `totals`
+    (Wh) for the current day plus 15-minute interval energy buckets
+    (`interval_length`, `start_time`) per channel, including the flow
+    decomposition (`solar_home`, `solar_grid`, `grid_home`, `battery_home`,
+    `battery_grid`, `grid_battery`, `solar_battery`) used to derive
+    charge/discharge/export totals that have no single channel of their own.
+    **Implementation note (superseding this bullet's original research):** an
+    earlier iteration read `/pv/systems/<site>/lifetime_energy` (daily-bucketed
+    totals requiring delta-tracking across polls); it was replaced by `/today`
+    because its totals are correct regardless of the site's reporting cadence
+    and its interval buckets give a stable instantaneous power estimate with no
+    cross-poll state. See `EnphaseAPI.get_today()`, `today_channel_kwh()` and
+    `interval_power()` in `enphase.py`.
     - `/app-api/<site>/get_latest_power` — latest real consumption power sample.
     - `/app-api/search_sites.json` — site discovery;
     `/app-api/<site>/devices.json` — device inventory.
