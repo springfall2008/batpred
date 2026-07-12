@@ -543,8 +543,8 @@ Connects Predbat to the Enphase Enlighten cloud for monitoring and battery contr
 
 - **EXPERIMENTAL**: this uses the unofficial Enlighten web-app API - there is no official Enphase API with battery control, and Enphase may change it without notice
 - Accounts with multi-factor authentication (MFA) enabled are **not supported** - disable MFA on the Enphase account before use
-- Predbat controls the battery by writing Enphase schedules: charge windows become charge-from-grid (CFG) schedules with a target SOC, export windows become discharge-to-grid (DTG) schedules (only on sites where Enphase supports DTG), freeze windows use restrict-battery-discharge (RBD) schedules, and the reserve is set through the battery profile
-- Cloud writes can take a few minutes to settle - Predbat re-reads the schedule/profile after a write and treats it as confirmed once the cloud reflects the change
+- Predbat controls the battery by writing Enphase schedules: charge windows become charge-from-grid (CFG) schedules with a target SOC, export windows become discharge-to-grid (DTG) schedules, freeze-export windows use restrict-battery-discharge (RBD) schedules, and the reserve is set through the battery profile. `automatic_config` requires both CFG and DTG support and fails configuration if either is missing
+- On a successful write, Predbat optimistically updates its local cache and moves on rather than waiting to re-read the cloud - the periodic schedule/profile re-read (every 30 minutes) corrects the cache later if a write didn't actually land
 - Repeated login failures back off automatically to protect the Enphase account from lockout: a 5 minute cooldown after each rejection, rising to a 24 hour suspension after 3 consecutive rejections
 
 #### Configuration Options (enphase)
@@ -577,20 +577,23 @@ For each site (`{site_id}` in the entity names), the component creates:
 - PV/load/import/export today (kWh)
 - Battery charge/discharge today (kWh)
 
-**Power Sensors (derived from cumulative energy deltas):**
+**Power Sensors (derived from the most recent completed 15-minute energy bucket):**
 
 - PV power, grid power, battery power, load power (W)
 
 **Control Entities (per site):**
 
-- Battery schedule reserve (number, %)
+- Battery schedule reserve (number, %) - written to Enphase immediately on change, like Fox
 - Charge/export start and end time (select, HH:MM:SS format)
 - Charge/export target SOC (number, %)
 - Charge/export enable (switch)
 - Charge/export write (switch) - triggers the cloud write for that schedule
-- Freeze enable (switch, written as an RBD schedule reusing the charge window times)
 
-Export (DTG) controls are only published for sites where `dtg_supported` reports the schedule family is available.
+A configured site always supports both charge and export control - `automatic_config` requires both
+the charge-from-grid (CFG) and discharge-to-grid (DTG) schedule families to be available, so both sets
+of controls are always published. There is no separate freeze control: freeze-export is derived
+automatically (and written as a restrict-battery-discharge schedule) whenever the export target SOC is
+set to exactly 99%; 100% already means export is disabled.
 
 ---
 
