@@ -1876,7 +1876,7 @@ async def test_octopus_run(my_predbat):
     Tests:
     - Test 1: First run with no cache (both fetched_at=None) — all methods called
     - Test 2: Tariff stale (35 min), device fresh, sensor fresh — only tariff refreshed
-    - Test 3: Device stale (15 min), tariff fresh (5 min) — only device refreshed
+    - Test 3: Device stale (15 min), tariff and sensor fresh — only saving sessions refreshed (dispatches follow the sensor cadence)
     - Test 4: Both fresh (1 min), sensor due — dispatch fetch and sensor update, no cache save
     - Test 5: Commands processed forces device and dispatch refresh even when recently fetched
     - Test 6: Fast restart (first=True) with fresh timestamps — dispatches and sensor refreshed, no heavy fetches
