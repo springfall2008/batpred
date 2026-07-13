@@ -38,6 +38,8 @@ def test_octopus_slots_change(my_predbat):
     - Test 3: In-progress slot window end changes → different signature
     - Test 4: A future slot's energy changes → different signature
     - Test 5: A slot transitioning from future to active → different signature
+    - Test 6: The same instant in different string formats (+00:00 vs +0000) → same signature
+    - Test 7: Unparseable slot timestamps do not raise and are still comparable
     """
     print("**** Running octopus_slots_signature tests ****")
     failed = False
@@ -93,6 +95,34 @@ def test_octopus_slots_change(my_predbat):
             failed = True
         else:
             print("Test 5 passed - future to active transition forces a replan")
+
+        # Test 6: the same instant expressed with different offset formatting must NOT look changed
+        print("*** Test 6: equivalent timestamps in different formats produce same signature ***")
+        colon_offset = [[_slot("2025-01-15T13:00:00+00:00", "2025-01-15T14:00:00+00:00", 5.0)]]
+        no_colon_offset = [[_slot("2025-01-15T13:00:00+0000", "2025-01-15T14:00:00+0000", 5.0)]]
+        if my_predbat.octopus_slots_signature(colon_offset) != my_predbat.octopus_slots_signature(no_colon_offset):
+            print("ERROR: Equivalent timestamps in different formats reported as changed")
+            failed = True
+        else:
+            print("Test 6 passed - offset formatting does not force a replan")
+
+        # Test 7: unparseable timestamps must not raise, and must still be comparable
+        print("*** Test 7: unparseable timestamps do not raise and remain comparable ***")
+        try:
+            bad = [[_slot("unavailable", "unknown", 5.0)]]
+            bad_same = [[_slot("unavailable", "unknown", 5.0)]]
+            bad_diff = [[_slot("unknown", "unknown", 5.0)]]
+            if my_predbat.octopus_slots_signature(bad) != my_predbat.octopus_slots_signature(bad_same):
+                print("ERROR: Identical unparseable slots reported as changed")
+                failed = True
+            elif my_predbat.octopus_slots_signature(bad) == my_predbat.octopus_slots_signature(bad_diff):
+                print("ERROR: Differing unparseable slots not detected as changed")
+                failed = True
+            else:
+                print("Test 7 passed - unparseable timestamps handled without raising")
+        except (ValueError, TypeError) as e:
+            print("ERROR: octopus_slots_signature raised on unparseable timestamp: {}".format(e))
+            failed = True
     finally:
         my_predbat.now_utc = old_now_utc
 

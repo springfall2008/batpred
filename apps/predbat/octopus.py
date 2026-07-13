@@ -2248,7 +2248,10 @@ class Octopus:
 
         Returns an opaque tuple intended only to be compared for equality against another signature -
         callers should not index into it. Per-car grouping is preserved inside so a slot moving
-        between cars still registers as a change.
+        between cars still registers as a change. Timestamps are normalised to the parsed instant so
+        equivalent values in different formats (+0000 vs +00:00 vs Z) do not register as a change;
+        an unparseable value falls back to its raw string (and never raises) so a genuine change is
+        still detected without breaking the update cycle.
 
         An in-progress dispatch has its start advanced to now and its charge_in_kwh scaled to the
         remaining time on every component refresh (see async_get_intelligent_devices). Comparing the
@@ -2265,16 +2268,28 @@ class Octopus:
                 end = slot.get("end")
                 source = slot.get("source")
                 location = slot.get("location")
-                start_dt = str2time(start) if start else None
-                end_dt = str2time(end) if end else None
+                start_dt = self._parse_slot_time(start)
+                end_dt = self._parse_slot_time(end)
+                # Normalise to the parsed instant where possible, else keep the raw string
+                start_key = start_dt if start_dt is not None else start
+                end_key = end_dt if end_dt is not None else end
                 in_progress = start_dt is not None and end_dt is not None and start_dt <= self.now_utc < end_dt
                 if in_progress:
                     # start / charge_in_kwh drift as time elapses - exclude them so only genuine changes count
-                    car_signature.append(("active", end, source, location))
+                    car_signature.append(("active", end_key, source, location))
                 else:
-                    car_signature.append((start, end, slot.get("charge_in_kwh", slot.get("kwh")), source, location))
+                    car_signature.append((start_key, end_key, slot.get("charge_in_kwh", slot.get("kwh")), source, location))
             signature.append(tuple(car_signature))
         return tuple(signature)
+
+    def _parse_slot_time(self, value):
+        """Parse a slot timestamp string into a datetime, returning None if empty or unparseable."""
+        if not value:
+            return None
+        try:
+            return str2time(value)
+        except (ValueError, TypeError):
+            return None
 
     def load_free_slot(self, octopus_free_slots, export=False, rate_replicate=None):
         """
