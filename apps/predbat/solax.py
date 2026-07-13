@@ -26,6 +26,7 @@ from component_base import ComponentBase
 
 SOLAX_TIMEOUT = 20
 SOLAX_RETRIES = 5
+SOLAX_MIN_RESERVE_PERCENT = 10  # SolaX Cloud clamps target_soc/reserve controls to this floor; see control_info()
 SOLAX_COMMAND_RETRY_DELAY = 2.0
 SOLAX_COMMAND_MAX_RETRIES = 8
 SOLAX_REGIONS = {
@@ -305,6 +306,14 @@ def as_int(value, default=0):
         return default
 
 
+class SolaxAuthError(aiohttp.ClientError):
+    """
+    Raised when the SolaX Cloud API rejects a request due to an invalid/expired access token.
+    Subclasses aiohttp.ClientError so request_wrapper() retries it exactly like a network error,
+    re-entering _request_get_impl() which refreshes the token before the retried attempt.
+    """
+
+
 class SolaxAPI(ComponentBase):
     """
     SolaX Cloud API component for Predbat
@@ -417,6 +426,7 @@ class SolaxAPI(ComponentBase):
 
         # Control entities using the controls system
         self.set_arg("reserve", [f"number.{self.prefix}_solax_{plant}_setting_reserve" for plant in plants])
+        self.set_arg("battery_min_soc", [SOLAX_MIN_RESERVE_PERCENT for plant in plants])
         self.set_arg("charge_start_time", [f"select.{self.prefix}_solax_{plant}_battery_schedule_charge_start_time" for plant in plants])
         self.set_arg("charge_end_time", [f"select.{self.prefix}_solax_{plant}_battery_schedule_charge_end_time" for plant in plants])
         self.set_arg("charge_limit", [f"number.{self.prefix}_solax_{plant}_battery_schedule_charge_target_soc" for plant in plants])
@@ -810,7 +820,7 @@ class SolaxAPI(ComponentBase):
         elif field == "target_soc":
             field_type = 'number'
             field_units = "%"
-            min_value = 10
+            min_value = SOLAX_MIN_RESERVE_PERCENT
             max_value = 100
             if direction == "charge":
                 default = max_value
@@ -823,7 +833,7 @@ class SolaxAPI(ComponentBase):
             field_type = 'number'
             field_units = "W"
         elif field == "reserve":
-            min_value = 10
+            min_value = SOLAX_MIN_RESERVE_PERCENT
             max_value = 100
             default = min_value
             field_type = 'number'
@@ -1010,7 +1020,10 @@ class SolaxAPI(ComponentBase):
                     await asyncio.sleep(retry * 0.5)
                 else:
                     self.log(f"Warn: SolaX API: Request failed after {SOLAX_RETRIES} attempts: {e}")
-                    self.error_count += 1
+                    # SolaxAuthError already incremented error_count where it was raised (once per
+                    # attempt); avoid counting the final attempt a second time here.
+                    if not isinstance(e, SolaxAuthError):
+                        self.error_count += 1
             except Exception as e:
                 self.log(f"Warn: SolaX API: Unexpected exception during request: {e}\n{traceback.format_exc()}")
                 self.error_count += 1
@@ -1081,7 +1094,9 @@ class SolaxAPI(ComponentBase):
                 self.access_token = None
                 self.token_expiry = None
                 self.error_count += 1
-                return None
+                # Raise (rather than return None) so request_wrapper() retries immediately with a
+                # freshly refreshed token instead of leaving this poll cycle's fetch to fail outright.
+                raise SolaxAuthError(error_desc)
 
             return data
 

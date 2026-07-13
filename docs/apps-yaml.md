@@ -186,6 +186,11 @@ pred_bat:
   forecast_solar_api_key: !secret forecast_solar_api_key  # Forecast.solar API key (if using Forecast.solar)
   ge_cloud_key: !secret ge_cloud_key  # GivEnergy API key (if using GE Cloud)
   fox_key: !secret fox_key  # Fox ESS API key and username (if using Fox Cloud)
+  enphase_username: !secret enphase_username  # Enphase Enlighten account e-mail (if using Enphase Cloud)
+  enphase_password: !secret enphase_password  # Enphase Enlighten account password (if using Enphase Cloud)
+  enphase_site_id: !secret enphase_site_id  # Enphase Enlighten site id, optional (if using Enphase Cloud)
+  enphase_automatic: True  # Automatically configure Predbat inverter settings (if using Enphase Cloud)
+  enphase_automatic_ignore_pv: False  # Skip PV sensors during automatic configuration (if using Enphase Cloud)
   axle_api_key: !secret axle_api_key  # Axle API key (if using Axle VPP)
   kraken_key: !secret kraken_key  # Kraken API key (if using Kraken component)
   kraken_password: !secret kraken_password  # Kraken password (if using Kraken component)
@@ -770,6 +775,7 @@ The number of inverters you have. If you increase this above 1 you must provide 
 
 inverter_type defaults to 'GE' (GivEnergy) if not set in `apps.yaml`, or should be set to one of the inverter types that are already pre-programmed into Predbat:
 
+  EnphaseCloud: Enphase Cloud integration (EXPERIMENTAL)
   FoxCloud: Fox Cloud integration
   FoxESS: FoxESS via modbus
   GE: GivEnergy via GivTCP
