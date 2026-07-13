@@ -97,12 +97,14 @@ from tests.test_octopus_rate_limit import test_octopus_rate_limit_wrapper
 from tests.test_octopus_logging import test_octopus_logging_wrapper
 from tests.test_octopus_fetch_previous_dispatch import test_octopus_fetch_previous_dispatch_wrapper
 from tests.test_octopus_intelligent_devices import test_octopus_intelligent_devices_wrapper
+from tests.test_octopus_sensor_due import test_octopus_sensor_due_wrapper
 from tests.test_octopus_day_night_rates import test_octopus_day_night_rates_wrapper
 from tests.test_fetch_octopus_rates import test_fetch_octopus_rates
 from tests.test_fetch_tariffs import test_fetch_tariffs
 from tests.test_fetch_url_cached import test_fetch_url_cached
 from tests.test_load_free_slot import test_load_free_slot
 from tests.test_add_now_to_octopus_slot import test_add_now_to_octopus_slot
+from tests.test_octopus_slots_change import test_octopus_slots_change
 from tests.test_dynamic_load import test_dynamic_load_car_slot_cancellation
 from tests.test_fox_api import run_fox_api_tests
 from tests.test_enphase_api import run_enphase_api_tests
@@ -242,6 +244,7 @@ def main():
         ("octopus_logging", test_octopus_logging_wrapper, "Octopus GraphQL logging redaction tests", False),
         ("octopus_fetch_previous_dispatch", test_octopus_fetch_previous_dispatch_wrapper, "Octopus fetch previous dispatch tests", False),
         ("octopus_intelligent_devices", test_octopus_intelligent_devices_wrapper, "Octopus intelligent devices tests (flexPlannedDispatches, energyAddedKwh)", False),
+        ("octopus_sensor_due", test_octopus_sensor_due_wrapper, "Octopus intelligent sensor 2-minute update scheduling tests", False),
         ("octopus_day_night_rates", test_octopus_day_night_rates_wrapper, "Octopus day/night rate window selection tests (IOG TOU, GO, Economy 7)", False),
         ("download_octopus_rates", test_octopus_download_rates_wrapper, "Test download octopus rates", False),
         ("fetch_octopus_rates", test_fetch_octopus_rates, "Fetch Octopus rates tests", False),
@@ -250,6 +253,7 @@ def main():
         ("fetch_config_options", test_fetch_config_options, "Fetch config options tests", False),
         ("load_free_slot", test_load_free_slot, "Load free slot tests", False),
         ("add_now_to_octopus_slot", test_add_now_to_octopus_slot, "Add now to Octopus slot tests", False),
+        ("octopus_slots_change", test_octopus_slots_change, "Octopus slots change-detection signature tests (in-progress re-clock vs genuine change)", False),
         ("plugin_startup", test_plugin_startup_order, "Plugin startup order tests", False),
         ("active_flag", test_active_flag, "Active flag cleared on exception tests", False),
         ("component_health_status", test_component_health_status, "Component errors fail the recorded run status tests", False),
