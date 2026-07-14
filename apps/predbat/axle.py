@@ -578,6 +578,15 @@ class AxleAPI(ComponentBase):
             },
         )
 
+    def health_exempt(self):
+        """Axle is health-exempt while the user has disabled automation.
+
+        With automation off (automatic=False) the component still polls so the event
+        sensor stays honest, but a broken or rotated credential returning errors must not
+        fail the Predbat run or mark the instance unhealthy — the user has opted out.
+        """
+        return not self.automatic
+
     async def automatic_config(self):
         """
         Automatic configuration for Axle participation

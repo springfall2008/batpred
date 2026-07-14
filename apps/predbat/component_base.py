@@ -337,6 +337,20 @@ class ComponentBase(ABC):
         """
         return self.last_success_timestamp
 
+    def health_exempt(self):
+        """
+        Whether this component should be exempt from failing the run when it is not alive.
+
+        A component the user has switched off may stay loaded because a credential is still
+        stored, and can therefore keep failing to reach its API. Such a component must not
+        fail the whole Predbat run or mark the instance unhealthy. Subclasses that support a
+        user-disabled state override this to return True while disabled.
+
+        Returns:
+            bool: True if an unhealthy state should be tolerated (not fail the run)
+        """
+        return False
+
     async def select_event(self, entity_id, value):
         """
         Handle select entity state changes from Home Assistant.

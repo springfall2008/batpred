@@ -49,7 +49,6 @@ from datetime import datetime, timezone, timedelta
 import asyncio
 import os
 
-
 COMPONENT_LIST = {
     "storage": {"class": StorageComponent, "name": "Storage", "args": {}, "can_restart": True, "phase": 0},
     "db": {
@@ -660,6 +659,20 @@ class Components:
         if "get_error_count" not in dir(self.components[name]):
             return None
         return self.components[name].get_error_count()
+
+    def health_exempt(self, name):
+        """Whether a component is exempt from failing the run while not alive.
+
+        True when the user has disabled the component's automation but a stored
+        credential keeps it loaded (e.g. Axle turned off with a key still present).
+        """
+        if name not in self.components:
+            return False
+        if not self.components[name]:
+            return False
+        if "health_exempt" not in dir(self.components[name]):
+            return False
+        return bool(self.components[name].health_exempt())
 
     def can_restart(self, name):
         """Check if a component can be restarted"""

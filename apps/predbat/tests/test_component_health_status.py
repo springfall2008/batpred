@@ -13,8 +13,9 @@
 class FakeComponents:
     """Minimal stand-in for the Components registry, driven by a name -> is_alive map."""
 
-    def __init__(self, alive_map):
+    def __init__(self, alive_map, exempt_map=None):
         self.alive_map = alive_map
+        self.exempt_map = exempt_map or {}
 
     def get_all(self):
         return list(self.alive_map.keys())
@@ -30,6 +31,9 @@ class FakeComponents:
 
     def get_error_count(self, name):
         return 0 if self.alive_map[name] else 1
+
+    def health_exempt(self, name):
+        return self.exempt_map.get(name, False)
 
 
 def test_component_health_status(my_predbat):
@@ -91,6 +95,36 @@ def test_component_health_status(my_predbat):
             failed = 1
         else:
             print("OK: All failed components listed in the recorded error status")
+
+    # --- Health-exempt component in error (user disabled it): run must NOT fail ---
+    # e.g. Axle automation turned off but a rotated or expired key is rejected (HTTP 401) every fetch.
+    my_predbat.had_errors = False
+    my_predbat.components = FakeComponents({"axle": False, "gecloud": True}, exempt_map={"axle": True})
+    recorded_statuses.clear()
+    my_predbat.record_final_run_status("Idle", "")
+
+    if len(recorded_statuses) != 1 or recorded_statuses[0] != ("Idle", False):
+        print("ERROR: Health-exempt unhealthy component should not fail the run, got {}".format(recorded_statuses))
+        failed = 1
+    else:
+        print("OK: Health-exempt unhealthy component recorded as success (not a run error)")
+
+    # --- A non-exempt component in error alongside a health-exempt one: still fails, naming only the non-exempt ---
+    my_predbat.had_errors = False
+    my_predbat.components = FakeComponents({"axle": False, "octopus": False}, exempt_map={"axle": True})
+    recorded_statuses.clear()
+    my_predbat.record_final_run_status("Idle", "")
+
+    if len(recorded_statuses) != 1:
+        print("ERROR: Expected a single status record, got {}".format(recorded_statuses))
+        failed = 1
+    else:
+        message, had_errors = recorded_statuses[0]
+        if not had_errors or "Octopus Energy Direct" not in message or "Axle" in message:
+            print("ERROR: Non-exempt failure should be named and exempt component excluded: {}".format(message))
+            failed = 1
+        else:
+            print("OK: Non-exempt component fails the run; exempt component excluded from the error")
 
     # --- Pre-existing error takes precedence, and is not overwritten by the component check ---
     my_predbat.had_errors = True

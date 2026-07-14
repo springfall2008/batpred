@@ -126,6 +126,7 @@ def test_axle(my_predbat=None):
     # Sub-test registry - each entry is (key, function, description)
     sub_tests = [
         ("initialisation", _test_axle_initialization, "Axle API initialisation"),
+        ("health_exempt", _test_axle_health_exempt_when_disabled, "Health-exempt only when automation disabled"),
         ("list_api_key", _test_axle_list_api_key_validation, "List API key validation and error logging"),
         ("active_event", _test_axle_fetch_with_active_event, "Fetch with active event"),
         ("duplicate_event", _test_axle_duplicate_event_detection, "Duplicate event detection"),
@@ -203,6 +204,26 @@ def _test_axle_initialization(my_predbat=None):
     assert axle.history_loaded is False, "History should not be loaded on init"
 
     print("  ✓ Initialisation successful")
+    return False
+
+
+def _test_axle_health_exempt_when_disabled(my_predbat=None):
+    """Axle is health-exempt only when automation is user-disabled (automatic=False).
+
+    When disabled the component still polls, so a rotated or expired key rejected with HTTP 401
+    must not fail the Predbat run or mark the instance unhealthy — the user has opted out.
+    """
+    print("Test: Axle health_exempt reflects automation state")
+
+    axle_off = MockAxleAPI()
+    axle_off.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
+    assert axle_off.health_exempt() is True, "Disabled Axle (automatic=False) must be health-exempt"
+
+    axle_on = MockAxleAPI()
+    axle_on.initialize(api_key="test_key", pence_per_kwh=100, automatic=True)
+    assert axle_on.health_exempt() is False, "Enabled Axle (automatic=True) must not be health-exempt"
+
+    print("  ✓ health_exempt tracks the automatic flag")
     return False
 
 

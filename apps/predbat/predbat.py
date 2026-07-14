@@ -758,7 +758,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 is_active = self.components.is_active(component_name)
                 is_alive = self.components.is_alive(component_name)
                 component_error_count[component_name] = self.components.get_error_count(component_name)
-                if is_active and not is_alive:
+                if is_active and not is_alive and self.components.health_exempt(component_name):
+                    # User has disabled this component's automation but a stored credential
+                    # keeps it loaded — surface it as degraded but do NOT fail the run.
+                    component_status[component_name] = "degraded"
+                elif is_active and not is_alive:
                     # Component is active but not alive - error state
                     component_status[component_name] = "error"
                     all_healthy = False
