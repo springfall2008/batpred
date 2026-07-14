@@ -2170,6 +2170,25 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
+    # Battery and car share a busbar upstream of the CT clamp (car_energy_reported_load=False is a
+    # monitoring blind spot, not electrical isolation), so discharge must still be held here exactly
+    # as it is for the reported_load=True case above (no_discharge_car_demand1) - see issue #4246.
+    failed |= run_execute_test(
+        my_predbat,
+        "no_discharge_car_demand1c_shared_busbar",
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=100,
+        assert_status="Hold for car",
+        assert_pause_discharge=True,
+        car_slot=charge_window_best_slot,
+        assert_immediate_soc_target=100,
+        car_charging_from_battery=False,
+        car_energy_reported_load=False,
+    )
+    if failed:
+        return failed
+
     failed |= run_execute_test(
         my_predbat,
         "no_discharge_car_demand2",
