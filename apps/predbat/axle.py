@@ -579,13 +579,17 @@ class AxleAPI(ComponentBase):
         )
 
     def health_exempt(self):
-        """Axle is health-exempt while the user has disabled automation.
+        """Axle is health-exempt only when no axle_session entity is configured.
 
-        With automation off (automatic=False) the component still polls so the event
-        sensor stays honest, but a broken or rotated credential returning errors must not
-        fail the Predbat run or mark the instance unhealthy — the user has opted out.
+        Axle stays loaded whenever an api_key is present, but it only influences the plan
+        when an axle_session entity is set — either the automatic default (axle_automatic=True)
+        or a manual override. When neither is configured the user has effectively disabled Axle
+        (e.g. the SaaS "Axle off" toggle leaves the key but no session), so a broken or rotated
+        credential returning errors must not fail the run or mark the instance unhealthy. A user
+        who names axle_session manually is still actively using Axle and is NOT exempt. This
+        mirrors the participation check in fetch_axle_sessions().
         """
-        return not self.automatic
+        return not self.get_arg("axle_session", None, indirect=False)
 
     async def automatic_config(self):
         """

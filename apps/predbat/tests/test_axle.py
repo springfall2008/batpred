@@ -208,22 +208,28 @@ def _test_axle_initialization(my_predbat=None):
 
 
 def _test_axle_health_exempt_when_disabled(my_predbat=None):
-    """Axle is health-exempt only when automation is user-disabled (automatic=False).
+    """Axle is health-exempt only when no axle_session entity is configured.
 
-    When disabled the component still polls, so a rotated or expired key rejected with HTTP 401
-    must not fail the Predbat run or mark the instance unhealthy — the user has opted out.
+    With no session the user has effectively disabled Axle (e.g. the SaaS "off" toggle leaves
+    the key but no session), so a rotated or expired key rejected with HTTP 401 must not fail
+    the Predbat run. A user who names axle_session manually (axle_automatic:false) is still
+    actively using Axle and must NOT be exempt.
     """
-    print("Test: Axle health_exempt reflects automation state")
+    print("Test: Axle health_exempt reflects axle_session configuration")
 
+    # Disabled: no axle_session configured -> exempt
     axle_off = MockAxleAPI()
     axle_off.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
-    assert axle_off.health_exempt() is True, "Disabled Axle (automatic=False) must be health-exempt"
+    axle_off.config_args.pop("axle_session", None)
+    assert axle_off.health_exempt() is True, "No axle_session configured must be health-exempt"
 
-    axle_on = MockAxleAPI()
-    axle_on.initialize(api_key="test_key", pence_per_kwh=100, automatic=True)
-    assert axle_on.health_exempt() is False, "Enabled Axle (automatic=True) must not be health-exempt"
+    # Active with a manually named axle_session, even with automatic=False -> NOT exempt
+    axle_manual = MockAxleAPI()
+    axle_manual.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
+    axle_manual.config_args["axle_session"] = "binary_sensor.my_axle_event"
+    assert axle_manual.health_exempt() is False, "A configured axle_session must not be health-exempt"
 
-    print("  ✓ health_exempt tracks the automatic flag")
+    print("  ✓ health_exempt tracks axle_session configuration, not the automatic flag")
     return False
 
 
