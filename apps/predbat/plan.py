@@ -1344,7 +1344,7 @@ class Plan:
 
             # Calculate effective clipping limit: most restrictive hardware constraint
             if self.clipping_limit_override > 0:
-                clipping_limit_effective = self.clipping_limit_override
+                clipping_limit_effective = self.clipping_limit_override * 60.0
                 clipping_limit_mode = "Manual Override"
             else:
                 limits = []
