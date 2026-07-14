@@ -22,7 +22,7 @@ import traceback
 from datetime import datetime, timedelta
 from multiprocessing import Pool, cpu_count
 from const import PREDICT_STEP, TIME_FORMAT, MINUTE_WATT
-from utils import calc_percent_limit, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, calc_percent_limit, in_car_slot
+from utils import calc_percent_limit, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, calc_percent_limit, in_car_slot, time_string_to_stamp
 from prediction import Prediction, wrapped_run_prediction_single, wrapped_run_prediction_charge, wrapped_run_prediction_charge_min_max, wrapped_run_prediction_export, wrapped_run_prediction_charge_min_max
 from prediction_kernel import kernel_status_summary
 from predbat_metrics import metrics
@@ -1019,7 +1019,8 @@ class Plan:
             if clipping_start_override is None:
                 start_time_str = self.get_arg("clipping_buffer_start_time", default="None")
                 if start_time_str and start_time_str != "None":
-                    clipping_start_override = self.time_to_minutes(start_time_str)
+                    _ts = time_string_to_stamp(start_time_str)
+                    clipping_start_override = _ts.hour * 60 + _ts.minute if _ts else None
                     self.clipping_buffer_start = clipping_start_override
             if clipping_start_override is not None:
                 early_start = midnight + clipping_start_override
@@ -1371,11 +1372,13 @@ class Plan:
 
             self.clipping_buffer_start = None
             if start_time_str and start_time_str != "None":
-                self.clipping_buffer_start = self.time_to_minutes(start_time_str)
+                _ts = time_string_to_stamp(start_time_str)
+                self.clipping_buffer_start = _ts.hour * 60 + _ts.minute if _ts else None
 
             self.clipping_buffer_end = None
             if end_time_str and end_time_str != "None":
-                self.clipping_buffer_end = self.time_to_minutes(end_time_str)
+                _ts = time_string_to_stamp(end_time_str)
+                self.clipping_buffer_end = _ts.hour * 60 + _ts.minute if _ts else None
 
             # Calculate Implicit Buffer (Physics-based Decay Curve)
             self.clipping_buffer_forecast_kwh = {}
