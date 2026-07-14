@@ -1150,6 +1150,89 @@ def test_apply_no_change_no_write():
     assert writes == []
 
 
+def test_activate_cfg_mode():
+    """_activate_cfg_mode PUTs batterySettings with acceptedItcDisclaimer to transition CFG from pending to active."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.battery_settings.clear()
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 200, {})
+    run_async(api._activate_cfg_mode("12345"))
+    puts = [r for r in api.request_log if r["method"] == "PUT" and r["path"] == "/service/batteryConfig/api/v1/batterySettings/12345"]
+    assert len(puts) == 1
+    body = puts[0]["json"]
+    assert body["chargeFromGrid"] is True
+    assert "acceptedItcDisclaimer" in body
+    # Timestamp must be a current ISO-8601 string (e.g. "2026-07-14T20:25:00")
+    from datetime import datetime as dt
+
+    parsed = dt.fromisoformat(body["acceptedItcDisclaimer"])
+    assert parsed.year >= 2025  # not a stale date
+    # Cached battery settings updated optimistically on success
+    assert api.battery_settings["12345"]["chargeFromGrid"] is True
+
+
+def test_apply_activates_cfg_after_write():
+    """apply_battery_schedule activates CFG mode after a schedule write when charge is enabled."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.sites = [{"site_id": "12345", "name": "Home"}]
+    api.schedules["12345"] = {"cfg": {"supported": True}, "dtg": {"supported": True}, "rbd": {"supported": True}}
+    api.profile["12345"] = {"profile": "self-consumption", "reserve": 20}
+    api.battery_settings["12345"] = {"chargeFromGrid": False, "veryLowSocMin": 5}
+    api.local_schedule["12345"] = {"reserve": 20, "charge": {"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": True}, "export": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 5, "enable": False}}
+    # _ensure_charge_from_grid paths
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/acceptDisclaimer/12345", 200, {})
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 200, {})
+    # _write_schedule (POST) path
+    api.set_http_response("/service/batteryConfig/api/v1/battery/sites/12345/schedules", 200, {"cfg": {"scheduleSupported": True, "details": []}, "dtg": {"scheduleSupported": True, "details": []}, "rbd": {"scheduleSupported": True, "details": []}})
+    run_async(api.apply_battery_schedule("12345"))
+    # CFG schedule was created (POST to schedules)
+    posts = [r for r in api.request_log if r["method"] == "POST" and r["path"].endswith("/schedules")]
+    assert len(posts) == 1
+    # Activation was called: PUT batterySettings/12345 with acceptedItcDisclaimer
+    # The base _ensure_charge_from_grid also PUTs to this path once, so expect 2 PUTs total
+    # (one from activation, one from _ensure_charge_from_grid).
+    puts = [r for r in api.request_log if r["method"] == "PUT" and r["path"] == "/service/batteryConfig/api/v1/batterySettings/12345"]
+    # At least one PUT has acceptedItcDisclaimer (the activation call)
+    activation_puts = [p for p in puts if p.get("json", {}).get("acceptedItcDisclaimer")]
+    assert len(activation_puts) == 1
+    assert activation_puts[0]["json"]["chargeFromGrid"] is True
+
+
+def test_apply_no_activate_cfg_when_charge_disabled():
+    """_activate_cfg_mode is NOT called when the charge window is disabled."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.sites = [{"site_id": "12345", "name": "Home"}]
+    api.schedules["12345"] = {"cfg": {"supported": True}, "dtg": {"supported": True}, "rbd": {"supported": True}}
+    api.profile["12345"] = {"profile": "self-consumption", "reserve": 20}
+    api.battery_settings["12345"] = {"chargeFromGrid": True, "veryLowSocMin": 5}
+    api.local_schedule["12345"] = {"reserve": 20, "charge": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 100, "enable": False}, "export": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 5, "enable": False}}
+    # Only the CFG write (no cloud cfg exists, so it will POST to schedules).
+    # charge is disabled, so no activation call.
+    api.set_http_response("/service/batteryConfig/api/v1/battery/sites/12345/schedules", 200, {"cfg": {"scheduleSupported": True, "details": []}, "dtg": {"scheduleSupported": True, "details": []}, "rbd": {"scheduleSupported": True, "details": []}})
+    run_async(api.apply_battery_schedule("12345"))
+    # No PUTs to batterySettings (no _ensure_charge_from_grid, no _activate_cfg_mode)
+    puts = [r for r in api.request_log if r["method"] == "PUT" and "batterySettings" in r["path"]]
+    assert puts == []
+
+
+def test_apply_no_activate_cfg_when_unchanged():
+    """_activate_cfg_mode is NOT called when the CFG schedule already matches (no-op write)."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.sites = [{"site_id": "12345", "name": "Home"}]
+    # Cloud CFG already matches the local desired state
+    api.schedules["12345"] = {"cfg": {"supported": True, "id": "u1", "startTime": "02:00", "endTime": "05:00", "limit": 90, "enabled": True}, "dtg": {"supported": True}, "rbd": {"supported": True}}
+    api.profile["12345"] = {"profile": "self-consumption", "reserve": 20}
+    api.battery_settings["12345"] = {"chargeFromGrid": True, "veryLowSocMin": 5}
+    api.local_schedule["12345"] = {"reserve": 20, "charge": {"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": True}, "export": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 5, "enable": False}}
+    run_async(api.apply_battery_schedule("12345"))
+    # No writes at all (schedules_match -> False, _ensure_charge_from_grid already done)
+    writes = [r for r in api.request_log if r["method"] in ("POST", "PUT")]
+    assert writes == []
+
+
 def run_enphase_api_tests(my_predbat):
     """Run all Enphase API tests, returning 0 on success."""
     test_initialize_defaults()
@@ -1211,5 +1294,9 @@ def run_enphase_api_tests(my_predbat):
     test_apply_caches_write_no_rewrite()
     test_set_reserve_caches_written_value()
     test_apply_no_change_no_write()
+    test_activate_cfg_mode()
+    test_apply_activates_cfg_after_write()
+    test_apply_no_activate_cfg_when_charge_disabled()
+    test_apply_no_activate_cfg_when_unchanged()
     print("**** Enphase API tests passed ****")
     return 0

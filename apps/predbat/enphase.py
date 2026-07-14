@@ -751,6 +751,30 @@ class EnphaseAPI(ComponentBase):
                 await self.get_schedules(site_id)
         return result is not None
 
+    async def _activate_cfg_mode(self, site_id):
+        """Activate charge-from-grid mode after writing the CFG schedule.
+
+        The CFG schedule write puts the schedule into "pending" status;
+        a subsequent batterySettings PUT with acceptedItcDisclaimer
+        is required to transition it to "active" so the Enphase gateway
+        picks it up and starts charging.
+        """
+        params = {"source": "enho"}
+        if self.user_id:
+            params["userId"] = self.user_id
+        now_iso = datetime.now().isoformat()
+        await self.request_json(
+            "PUT",
+            f"{BATTERY_CONFIG_BASE}/batterySettings/{site_id}",
+            family="battery_config",
+            params=params,
+            json_body={
+                "chargeFromGrid": True,
+                "acceptedItcDisclaimer": now_iso,
+            },
+        )
+        self.battery_settings.setdefault(site_id, {})["chargeFromGrid"] = True
+
     async def _ensure_charge_from_grid(self, site_id):
         """Enable the charge-from-grid setting, accepting the one-time ITC disclaimer first."""
         if self.battery_settings.get(site_id, {}).get("chargeFromGrid"):
@@ -822,7 +846,10 @@ class EnphaseAPI(ComponentBase):
         charge = local.get("charge", {})
         if charge.get("enable"):
             await self._ensure_charge_from_grid(site_id)
-        wrote |= await self._write_schedule(site_id, SCHEDULE_CHARGE, charge.get("start_time", "00:00:00"), charge.get("end_time", "00:00:00"), charge.get("soc", 100), charge.get("enable", False))
+        wrote_cfg = await self._write_schedule(site_id, SCHEDULE_CHARGE, charge.get("start_time", "00:00:00"), charge.get("end_time", "00:00:00"), charge.get("soc", 100), charge.get("enable", False))
+        if wrote_cfg and charge.get("enable"):
+            await self._activate_cfg_mode(site_id)
+        wrote |= wrote_cfg
 
         # Export window. Predbat encodes the mode in the export/discharge target SOC:
         #   < 99  -> real forced export to that floor (DTG)
