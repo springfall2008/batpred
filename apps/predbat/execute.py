@@ -432,9 +432,11 @@ class Execute:
 
                 status_freeze_export = " [Freeze exporting]"
 
-            # Car charging from battery disable?
+            # Car charging from battery disable? Applies regardless of car_energy_reported_load - that
+            # switch only controls CT-clamp load-history/export accounting, not whether the battery is
+            # physically able to serve the car (it shares the same busbar either way).
             carHolding = False
-            if self.set_charge_window and not self.car_charging_from_battery and self.car_energy_reported_load:
+            if self.set_charge_window and not self.car_charging_from_battery:
                 for car_n in range(self.num_cars):
                     if self.car_charging_slots[car_n]:
                         window = self.car_charging_slots[car_n][0]
