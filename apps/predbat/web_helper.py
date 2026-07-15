@@ -2512,6 +2512,10 @@ def get_components_css():
     border-color: #dc3545;
 }
 
+.component-card.degraded {
+    border-color: #ff9800;
+}
+
 .component-card.inactive {
     border-color: #999;
     background: #f9f9f9;
@@ -2544,6 +2548,10 @@ def get_components_css():
 
 .status-error {
     color: #f44336;
+}
+
+.status-degraded {
+    color: #ff9800;
 }
 
 .status-inactive {
@@ -2708,6 +2716,10 @@ body.dark-mode .component-card.active {
 
 body.dark-mode .component-card.error {
     border-color: #dc3545;
+}
+
+body.dark-mode .component-card.degraded {
+    border-color: #ff9800;
 }
 
 body.dark-mode .component-card.inactive {

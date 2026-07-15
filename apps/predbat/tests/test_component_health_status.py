@@ -34,10 +34,15 @@ class _HealthComponent:
         return self._exempt
 
     def last_updated_time(self):
-        """Return a fresh timestamp so the staleness gate never trips for an alive component."""
-        from datetime import datetime, timezone
+        """Return a recent timestamp so the staleness gate never trips for an alive component.
 
-        return datetime.now(timezone.utc)
+        Deliberately a minute in the past, not now(): Components.is_alive() computes
+        now() - last_updated_time and treats a zero timedelta as stale (it is falsy), so
+        returning now() here could flip an alive component to not-alive on a fast host.
+        """
+        from datetime import datetime, timezone, timedelta
+
+        return datetime.now(timezone.utc) - timedelta(minutes=1)
 
 
 class FakeComponents:
@@ -74,6 +79,10 @@ def test_component_health_status(my_predbat):
     print("*** Running test: Component errors fail the recorded run status")
     failed = 0
 
+    # my_predbat is a single instance shared across the whole suite, so stash the real
+    # record_status and restore it in teardown - otherwise this no-op lambda leaks into
+    # every test that runs after this one.
+    original_record_status = my_predbat.record_status
     recorded_statuses = []
     my_predbat.record_status = lambda message, debug="", had_errors=False, notify=False, extra="": recorded_statuses.append((message, had_errors))
 
@@ -200,5 +209,6 @@ def test_component_health_status(my_predbat):
 
     my_predbat.had_errors = False
     my_predbat.components = None
+    my_predbat.record_status = original_record_status
 
     return failed

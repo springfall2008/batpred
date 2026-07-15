@@ -4375,6 +4375,7 @@ chart.render();
 
         # Count components by status
         error_components = []
+        degraded_components = []
         active_healthy_components = []
         disabled_components = []
 
@@ -4382,7 +4383,11 @@ chart.render();
             is_alive = self.base.components.is_alive(component_name)
             is_active = component_name in active_components
 
-            if is_active and not is_alive:
+            if is_active and not is_alive and self.base.components.health_exempt(component_name):
+                # User disabled the component's automation but a stored credential keeps it
+                # loaded (e.g. Axle off with a rotated key) - degraded, not an error.
+                degraded_components.append(component_name)
+            elif is_active and not is_alive:
                 error_components.append(component_name)
             elif is_active and is_alive:
                 active_healthy_components.append(component_name)
@@ -4398,6 +4403,8 @@ chart.render();
         text += "</label>\n"
         text += "<div style='white-space: nowrap;'>\n"
         text += f"<span style='color: #d32f2f; font-weight: bold;'>{len(error_components)} Error</span> | \n"
+        if degraded_components:
+            text += f"<span style='color: #ff9800; font-weight: bold;'>{len(degraded_components)} Degraded</span> | \n"
         text += f"<span style='color: #4CAF50; font-weight: bold;'>{len(active_healthy_components)} Active</span> | \n"
         text += f"<span style='color: #666; font-weight: bold;'>{len(disabled_components)} Disabled</span>\n"
         text += "</div>\n"
@@ -4405,8 +4412,8 @@ chart.render();
 
         text += "<div class='components-grid'>\n"
 
-        # Sort components: errors first, then active, then disabled
-        sorted_components = error_components + active_healthy_components + disabled_components
+        # Sort components: errors first, then degraded, then active, then disabled
+        sorted_components = error_components + degraded_components + active_healthy_components + disabled_components
 
         for component_name in sorted_components:
             from components import COMPONENT_LIST
@@ -4414,6 +4421,7 @@ chart.render();
             component_info = COMPONENT_LIST.get(component_name, {})
             component = self.base.components.get_component(component_name)
             is_alive = self.base.components.is_alive(component_name)
+            is_exempt = self.base.components.health_exempt(component_name)
             can_restart = self.base.components.can_restart(component_name)
             is_active = component_name in active_components
 
@@ -4424,7 +4432,7 @@ chart.render();
             # Create component card
             card_class = "active" if is_active else "inactive"
             if is_active and not is_alive:
-                card_class += " error"
+                card_class += " degraded" if is_exempt else " error"
 
             # Add data-disabled attribute for filtering
             disabled_attr = 'data-disabled="true"' if not is_active else 'data-disabled="false"'
@@ -4436,6 +4444,8 @@ chart.render();
             # Status indicator
             if is_active and is_alive:
                 text += '<span class="status-indicator status-healthy">●</span><span class="status-text">Active</span>\n'
+            elif is_active and not is_alive and is_exempt:
+                text += '<span class="status-indicator status-degraded">●</span><span class="status-text">Degraded</span>\n'
             elif is_active and not is_alive:
                 text += '<span class="status-indicator status-error">●</span><span class="status-text">Error</span>\n'
             else:
