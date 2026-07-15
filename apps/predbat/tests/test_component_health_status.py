@@ -10,6 +10,36 @@
 # fmt on
 
 
+class _HealthTask:
+    """Stand-in for a component's asyncio task; always reports itself as running."""
+
+    def is_alive(self):
+        """Report the task as alive so is_alive() falls through to the component's own health."""
+        return True
+
+
+class _HealthComponent:
+    """Stand-in for a single loaded component with controllable alive/exempt state."""
+
+    def __init__(self, alive, exempt):
+        self._alive = alive
+        self._exempt = exempt
+
+    def is_alive(self):
+        """Return the component's own health flag."""
+        return self._alive
+
+    def health_exempt(self):
+        """Return whether the component is exempt from failing the run while not alive."""
+        return self._exempt
+
+    def last_updated_time(self):
+        """Return a fresh timestamp so the staleness gate never trips for an alive component."""
+        from datetime import datetime, timezone
+
+        return datetime.now(timezone.utc)
+
+
 class FakeComponents:
     """Minimal stand-in for the Components registry, driven by a name -> is_alive map."""
 
@@ -137,6 +167,36 @@ def test_component_health_status(my_predbat):
         failed = 1
     else:
         print("OK: Pre-existing error state left untouched by the component health check")
+
+    # --- is_all_alive() must not report the instance unhealthy for a health-exempt component ---
+    # This mirrors is_running(): a disabled-but-loaded component (dead + exempt) should NOT drag
+    # the whole instance to unhealthy, otherwise the /health page and MCP report a false failure.
+    from components import Components
+
+    def make_registry(spec):
+        """Build a real Components with fake sub-components from {name: (alive, exempt)}."""
+        registry = Components.__new__(Components)
+        registry.base = None
+        registry.components = {}
+        registry.component_tasks = {}
+        for name, (alive, exempt) in spec.items():
+            registry.components[name] = _HealthComponent(alive, exempt)
+            registry.component_tasks[name] = _HealthTask()
+        return registry
+
+    # Alive component + a dead-but-exempt one: instance is still alive.
+    if make_registry({"gecloud": (True, False), "axle": (False, True)}).is_all_alive():
+        print("OK: is_all_alive() treats a dead health-exempt component as alive")
+    else:
+        print("ERROR: is_all_alive() reported unhealthy for a health-exempt component")
+        failed = 1
+
+    # A dead, non-exempt component still makes the instance unhealthy.
+    if not make_registry({"gecloud": (True, False), "octopus": (False, False)}).is_all_alive():
+        print("OK: is_all_alive() still reports unhealthy for a dead non-exempt component")
+    else:
+        print("ERROR: is_all_alive() ignored a genuinely dead component")
+        failed = 1
 
     my_predbat.had_errors = False
     my_predbat.components = None

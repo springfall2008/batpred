@@ -603,8 +603,15 @@ class Components:
                 await component.number_event(entity_id, value)
 
     def is_all_alive(self):
-        """Check if a component is alive, or check if all are alive"""
-        return all(self.is_alive(name) for name in self.components.keys())
+        """Check if a component is alive, or check if all are alive.
+
+        A health-exempt component (user disabled its automation but a stored
+        credential keeps it loaded) is treated as alive here so it does not make
+        the whole instance report unhealthy via is_running(). is_alive() itself
+        is left unchanged so record_final_run_status() can still tell exempt
+        components apart and mark them "degraded".
+        """
+        return all(self.is_alive(name) or self.health_exempt(name) for name in self.components.keys())
 
     def is_active(self, name):
         """Check if a single component is active (initialised)"""
