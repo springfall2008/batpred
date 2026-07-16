@@ -751,6 +751,12 @@ class EnphaseAPI(ComponentBase):
                 await self.get_schedules(site_id)
         return result is not None
 
+    def _is_schedule_pending(self, site_id, family):
+        """Return True when the cached cloud schedule exists but is stuck in pending status."""
+        family_key = family.lower()
+        entry = self.schedules.get(site_id, {}).get(family_key, {})
+        return isinstance(entry, dict) and entry.get("status", "").lower() == "pending"
+
     async def _set_charge_from_grid(self, site_id, params=None, **extra_body):
         """PUT batterySettings chargeFromGrid:True and cache the result on success.
 
@@ -924,8 +930,13 @@ class EnphaseAPI(ComponentBase):
         if charge.get("enable"):
             await self._ensure_charge_from_grid(site_id)
         wrote_cfg = await self._write_schedule(site_id, SCHEDULE_CHARGE, charge.get("start_time", "00:00:00"), charge.get("end_time", "00:00:00"), charge.get("soc", 100), charge.get("enable", False))
-        if wrote_cfg and charge.get("enable"):
-            await self._activate_cfg_mode(site_id)
+        if charge.get("enable"):
+            if wrote_cfg:
+                await self._activate_cfg_mode(site_id)
+            elif self._is_schedule_pending(site_id, SCHEDULE_CHARGE):
+                # Schedule matches but is stuck pending — activate without rewriting
+                self.log(f"Enphase: CFG schedule for site {site_id} is pending; activating without rewrite")
+                await self._activate_cfg_mode(site_id)
         wrote |= wrote_cfg
 
         # Export window. Predbat encodes the mode in the export/discharge target SOC:
@@ -947,14 +958,22 @@ class EnphaseAPI(ComponentBase):
 
         # Forced export to a target (DTG). A configured inverter always supports DTG.
         wrote_dtg = await self._write_schedule(site_id, SCHEDULE_EXPORT, export_start, export_end, dtg_limit, real_export)
-        if wrote_dtg and real_export:
-            await self._activate_dtg_mode(site_id)
+        if real_export:
+            if wrote_dtg:
+                await self._activate_dtg_mode(site_id)
+            elif self._is_schedule_pending(site_id, SCHEDULE_EXPORT):
+                self.log(f"Enphase: DTG schedule for site {site_id} is pending; activating without rewrite")
+                await self._activate_dtg_mode(site_id)
         wrote |= wrote_dtg
 
         # Freeze export = restrict battery discharge (RBD) over the export window
         wrote_rbd = await self._write_schedule(site_id, SCHEDULE_FREEZE, export_start, export_end, None, freeze_export)
-        if wrote_rbd and freeze_export:
-            await self._activate_rbd_mode(site_id)
+        if freeze_export:
+            if wrote_rbd:
+                await self._activate_rbd_mode(site_id)
+            elif self._is_schedule_pending(site_id, SCHEDULE_FREEZE):
+                self.log(f"Enphase: RBD schedule for site {site_id} is pending; activating without rewrite")
+                await self._activate_rbd_mode(site_id)
         wrote |= wrote_rbd
         return wrote
 

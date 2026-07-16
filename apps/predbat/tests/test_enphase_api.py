@@ -1441,6 +1441,26 @@ def test_activate_rbd_mode_invalidates_cache_on_failure():
     assert "id" in cached
 
 
+def test_apply_activates_pending_schedule_without_rewrite():
+    """When a schedule matches but status is pending, activation is called without re-writing."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.sites = [{"site_id": "12345", "name": "Home"}]
+    # Cloud CFG already matches desired state BUT status is pending
+    api.schedules["12345"] = {"cfg": {"supported": True, "id": "u1", "startTime": "02:00", "endTime": "05:00", "limit": 90, "enabled": True, "status": "pending"}, "dtg": {"supported": True}, "rbd": {"supported": True}}
+    api.profile["12345"] = {"profile": "self-consumption", "reserve": 20}
+    api.battery_settings["12345"] = {"chargeFromGrid": True, "veryLowSocMin": 5}
+    api.local_schedule["12345"] = {"reserve": 20, "charge": {"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": True}, "export": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 5, "enable": False}}
+    # Activation PUT succeeds
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 200, {})
+    run_async(api.apply_battery_schedule("12345"))
+    # No schedule write (schedules equal) but activation was called
+    writes = [r for r in api.request_log if r["method"] in ("POST", "PUT") and "schedules" in r["path"]]
+    assert writes == []
+    puts = [r for r in api.request_log if r["method"] == "PUT" and r["path"] == "/service/batteryConfig/api/v1/batterySettings/12345"]
+    assert len(puts) == 1  # activation PUT, not the _ensure_charge_from_grid one
+
+
 def run_enphase_api_tests(my_predbat):
     """Run all Enphase API tests, returning 0 on success."""
     test_initialize_defaults()
@@ -1516,5 +1536,6 @@ def run_enphase_api_tests(my_predbat):
     test_activate_cfg_mode_invalidates_cache_on_failure()
     test_activate_dtg_mode_invalidates_cache_on_failure()
     test_activate_rbd_mode_invalidates_cache_on_failure()
+    test_apply_activates_pending_schedule_without_rewrite()
     print("**** Enphase API tests passed ****")
     return 0
