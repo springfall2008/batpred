@@ -658,6 +658,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 max_discharge_current_amps = float(self.cached_values.get(inverter_sn, {}).get(SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT, 60.0))
                 charge_current = max_charge_current_amps
                 discharge_current = max_discharge_current_amps
+                slot1_active = False  # Whether slot 1 has any charge/discharge window configured
 
                 # There appears to be charge current limit on the slots which confused as slot 1 has a higher limit than the others,
                 # but the value isn't accepted, find the lowest slot limit
@@ -677,6 +678,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
                     if slot == 1:
                         # Predbat only uses slot 1, so it can indicate current here.
                         charge_current = slot_data.get("charge_current", charge_current)
+                        slot1_active = bool(slot_data.get("charge_enable", 0)) or bool(slot_data.get("discharge_enable", 0))
                         discharge_current = slot_data.get("discharge_current", discharge_current)
 
                     # When a slot is disabled, zero out its times so the inverter shows a clean 00:00-00:00
@@ -797,12 +799,23 @@ class SolisAPI(ComponentBase, OAuthMixin):
                                 success &= result
 
                 # Decide if Solar charges the batter or exports
+                # The inverter only retains the TOU bit on CID 636 when a charge/discharge window is
+                # actually configured on slot 1, so gate the mode choice the same way the V1 branch does
+                # (see the in_charge_slot/in_discharge_slot handling below) to avoid a permanent verify-fail loop.
                 if charge_current == 0:
-                    self.log(f"Solis API: Charge current is 0A for {inverter_sn}, setting storage mode to 'Feed-in priority'")
-                    await self.set_storage_mode_if_needed(inverter_sn, "Feed-in priority")
+                    if slot1_active:
+                        self.log(f"Solis API: Charge current is 0A for {inverter_sn}, setting storage mode to 'Feed-in priority'")
+                        await self.set_storage_mode_if_needed(inverter_sn, "Feed-in priority")
+                    else:
+                        self.log(f"Solis API: Charge current is 0A and no active slot for {inverter_sn}, setting storage mode to 'Feed-in priority - No Timed Charge/Discharge'")
+                        await self.set_storage_mode_if_needed(inverter_sn, "Feed-in priority - No Timed Charge/Discharge")
                 else:
-                    self.log(f"Solis API: Charge current is {charge_current}A for {inverter_sn}, setting storage mode to 'Self-Use'")
-                    await self.set_storage_mode_if_needed(inverter_sn, "Self-Use")
+                    if slot1_active:
+                        self.log(f"Solis API: Charge current is {charge_current}A for {inverter_sn}, setting storage mode to 'Self-Use'")
+                        await self.set_storage_mode_if_needed(inverter_sn, "Self-Use")
+                    else:
+                        self.log(f"Solis API: Charge current is {charge_current}A and no active slot for {inverter_sn}, setting storage mode to 'Self-Use - No Timed Charge/Discharge'")
+                        await self.set_storage_mode_if_needed(inverter_sn, "Self-Use - No Timed Charge/Discharge")
 
                 return success
             else:

@@ -365,6 +365,7 @@ class OctopusAPI(ComponentBase):
         self.intelligent_devices = {}
         self.tariff_fetched_at = None
         self.device_fetched_at = None
+        self.sensor_updated_at = None
         self.automatic = automatic
         self.commands = []
         self.mpan = None
@@ -429,10 +430,6 @@ class OctopusAPI(ComponentBase):
             await self.load_octopus_cache()
             self.log("OctopusAPI: Started")
 
-        # Update time every minute
-        now = datetime.now()
-        count_minutes = now.minute + now.hour * 60
-
         # Process any queued commands
         refresh = False
         if not first and (await self.process_commands(self.account_id)):
@@ -446,7 +443,7 @@ class OctopusAPI(ComponentBase):
 
         tariff_due = self._data_age_minutes(self.tariff_fetched_at) >= 30
         device_due = refresh or self._data_age_minutes(self.device_fetched_at) >= 10
-        sensor_due = first or refresh or (count_minutes % 2) == 0
+        sensor_due = first or refresh or self._data_age_minutes(self.sensor_updated_at) >= 2
 
         if tariff_due:
             # 30-minute API refresh for account and tariff discovery
@@ -458,8 +455,7 @@ class OctopusAPI(ComponentBase):
             await self.async_find_tariffs()
 
         if device_due:
-            # 10-minute API refresh for intelligent device and saving sessions
-            await self.async_update_intelligent_devices(self.account_id)
+            # 10-minute API refresh for saving sessions
             self.saving_sessions = await self.async_get_flexibility_events(self.account_id)
             self.get_saving_session_data()
             self.device_fetched_at = datetime.now()
@@ -469,7 +465,11 @@ class OctopusAPI(ComponentBase):
             await self.fetch_tariffs(self.tariffs)
 
         if sensor_due:
-            # 2-minute update for intelligent device sensor
+            # 2-minute refresh of intelligent dispatches and the dispatch sensor so new slots are
+            # picked up quickly. Stamp before fetching so the fetch/publish duration can't slip
+            # the cadence past the next run
+            self.sensor_updated_at = datetime.now()
+            await self.async_update_intelligent_devices(self.account_id)
             await self.async_intelligent_update_sensor(self.account_id)
 
         if tariff_due or device_due:
@@ -683,7 +683,7 @@ class OctopusAPI(ComponentBase):
         """
         import_tariff = self.tariffs.get("import", {})
         tariffCode = import_tariff.get("tariffCode", "")
-        if "INTELLI-" not in tariffCode:
+        if not self.is_intelligent_go_tariff(tariffCode):
             return
         deviceID = import_tariff.get("deviceID", None)
         if deviceID:
@@ -1217,6 +1217,16 @@ class OctopusAPI(ComponentBase):
                     best_rate = rate.get("value_inc_vat", None)
         return best_rate
 
+    @staticmethod
+    def is_intelligent_go_tariff(tariff_code):
+        """
+        Determine whether a tariff code is an Intelligent GO (IOG) tariff.
+        """
+        if not tariff_code:
+            return False
+        else:
+            return ("INTELLI-" in tariff_code) or ("IOG-" in tariff_code)
+
     async def async_get_day_night_rates(self, url, product_code="", tariff_code=""):
         """
         Get day and night rates from Octopus.
@@ -1235,7 +1245,7 @@ class OctopusAPI(ComponentBase):
         self.log("Info: OctopusAPI: Day rate entries: {} night rate entries: {}".format(len(result_day) if result_day else 0, len(result_night) if result_night else 0))
         if result_day and result_night:
             # Select night window based on tariff type
-            if ("INTELLI" in tariff_code) or ("IOG-" in tariff_code):
+            if self.is_intelligent_go_tariff(tariff_code):
                 window = OCTOPUS_NIGHT_RATE_WINDOWS["iog"]
             elif tariff_code and "GO-" in tariff_code:
                 window = OCTOPUS_NIGHT_RATE_WINDOWS["go"]
@@ -2231,6 +2241,55 @@ class Octopus:
             octopus_slots.append(slot)
             self.log("Octopus: Car is charging now - added new IO slot {}".format(slot))
         return octopus_slots
+
+    def octopus_slots_signature(self, octopus_slots):
+        """
+        Build a single change-detection signature value for the intelligent dispatch slots.
+
+        Returns an opaque tuple intended only to be compared for equality against another signature -
+        callers should not index into it. Per-car grouping is preserved inside so a slot moving
+        between cars still registers as a change. Timestamps are normalised to the parsed instant so
+        equivalent values in different formats (+0000 vs +00:00 vs Z) do not register as a change;
+        an unparseable value falls back to its raw string (and never raises) so a genuine change is
+        still detected without breaking the update cycle.
+
+        An in-progress dispatch has its start advanced to now and its charge_in_kwh scaled to the
+        remaining time on every component refresh (see async_get_intelligent_devices). Comparing the
+        raw slots would therefore report a change on every cycle throughout an active charging window
+        and force a needless replan each time. For a currently active slot the signature keeps only
+        the stable fields (window end, source, location); genuine changes - new/removed slots, a
+        moved window end, a revised future slot, a future slot becoming active - still alter it.
+        """
+        signature = []
+        for car_slots in octopus_slots:
+            car_signature = []
+            for slot in car_slots:
+                start = slot.get("start")
+                end = slot.get("end")
+                source = slot.get("source")
+                location = slot.get("location")
+                start_dt = self._parse_slot_time(start)
+                end_dt = self._parse_slot_time(end)
+                # Normalise to the parsed instant where possible, else keep the raw string
+                start_key = start_dt if start_dt is not None else start
+                end_key = end_dt if end_dt is not None else end
+                in_progress = start_dt is not None and end_dt is not None and start_dt <= self.now_utc < end_dt
+                if in_progress:
+                    # start / charge_in_kwh drift as time elapses - exclude them so only genuine changes count
+                    car_signature.append(("active", end_key, source, location))
+                else:
+                    car_signature.append((start_key, end_key, slot.get("charge_in_kwh", slot.get("kwh")), source, location))
+            signature.append(tuple(car_signature))
+        return tuple(signature)
+
+    def _parse_slot_time(self, value):
+        """Parse a slot timestamp string into a datetime, returning None if empty or unparseable."""
+        if not value:
+            return None
+        try:
+            return str2time(value)
+        except (ValueError, TypeError):
+            return None
 
     def load_free_slot(self, octopus_free_slots, export=False, rate_replicate=None):
         """

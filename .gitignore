@@ -17,6 +17,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+# Cross-built prediction kernel binaries are checked in (per-platform, see
+# build_kernel_cross.sh); the local native build prediction_kernel_lib.so stays ignored
+!apps/predbat/prediction_kernel_lib_*.so
 .Python
 build/
 develop-eggs/
