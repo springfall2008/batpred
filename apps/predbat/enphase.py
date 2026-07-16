@@ -766,7 +766,19 @@ class EnphaseAPI(ComponentBase):
             self.battery_settings.setdefault(site_id, {})["chargeFromGrid"] = True
         return result is not None
 
-    async def _activate_cfg_mode(self, site_id):
+    def _invalidate_cached_schedule(self, site_id, family):
+        """Clear the cached cloud schedule so the next apply detects a diff and retries.
+
+        Removes startTime from the cached entry (but keeps the id) so that
+        schedules_equal returns False and _write_schedule will PUT the update
+        again (instead of creating a duplicate schedule).
+        """
+        family_key = family.lower()
+        entry = self.schedules.get(site_id, {}).get(family_key)
+        if isinstance(entry, dict):
+            entry.pop("startTime", None)
+
+    async def _activate_cfg_mode(self, site_id, family=SCHEDULE_CHARGE):
         """Activate charge-from-grid mode after writing the CFG schedule.
 
         The CFG schedule write puts the schedule into "pending" status;
@@ -774,21 +786,28 @@ class EnphaseAPI(ComponentBase):
         is required to transition it to "active" so the Enphase gateway
         picks it up and starts charging.
 
+        On failure, clears the cached schedule startTime so the next
+        apply re-detects a diff and retries write + activation.
+
         Returns True if the activation call succeeded.
         """
         now_iso = datetime.now(timezone.utc).isoformat()
         ok = await self._set_charge_from_grid(site_id, acceptedItcDisclaimer=now_iso)
         if not ok:
             self.log(f"Warn: Enphase: CFG activation failed for site {site_id}")
+            self._invalidate_cached_schedule(site_id, family)
         return ok
 
-    async def _activate_dtg_mode(self, site_id):
+    async def _activate_dtg_mode(self, site_id, family=SCHEDULE_EXPORT):
         """Activate discharge-to-grid mode after writing the DTG schedule.
 
         The DTG schedule write puts the schedule into "pending" status;
         a subsequent batterySettings PUT with dtgControl.enabled is
         required to transition it to "active" so the Enphase gateway
         picks it up.
+
+        On failure, clears the cached schedule startTime so the next
+        apply re-detects a diff and retries write + activation.
 
         Returns True if the activation call succeeded.
         """
@@ -801,15 +820,19 @@ class EnphaseAPI(ComponentBase):
             self.battery_settings.setdefault(site_id, {}).setdefault("dtgControl", {})["enabled"] = True
         else:
             self.log(f"Warn: Enphase: DTG activation failed for site {site_id}")
+            self._invalidate_cached_schedule(site_id, family)
         return result is not None
 
-    async def _activate_rbd_mode(self, site_id):
+    async def _activate_rbd_mode(self, site_id, family=SCHEDULE_FREEZE):
         """Activate restrict-battery-discharge mode after writing the RBD schedule.
 
         The RBD schedule write puts the schedule into "pending" status;
         a subsequent batterySettings PUT with rbdControl.enabled is
         required to transition it to "active" so the Enphase gateway
         picks it up.
+
+        On failure, clears the cached schedule startTime so the next
+        apply re-detects a diff and retries write + activation.
 
         Returns True if the activation call succeeded.
         """
@@ -822,6 +845,7 @@ class EnphaseAPI(ComponentBase):
             self.battery_settings.setdefault(site_id, {}).setdefault("rbdControl", {})["enabled"] = True
         else:
             self.log(f"Warn: Enphase: RBD activation failed for site {site_id}")
+            self._invalidate_cached_schedule(site_id, family)
         return result is not None
 
     async def _ensure_charge_from_grid(self, site_id):

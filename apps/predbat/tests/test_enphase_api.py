@@ -1096,6 +1096,7 @@ def test_apply_updates_existing_by_id():
     api.battery_settings["12345"] = {"chargeFromGrid": True, "veryLowSocMin": 5}
     api.local_schedule["12345"] = {"reserve": 20, "charge": {"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": True}, "export": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 5, "enable": False}, "freeze": {"enable": False}}
     api.set_http_response("/service/batteryConfig/api/v1/battery/sites/12345/schedules/u1", 200, {})
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 200, {})  # activation PUT
     api.set_http_response(
         "/service/batteryConfig/api/v1/battery/sites/12345/schedules",
         200,
@@ -1120,6 +1121,7 @@ def test_apply_caches_write_no_rewrite():
     api.battery_settings["12345"] = {"chargeFromGrid": True, "veryLowSocMin": 5}
     api.local_schedule["12345"] = {"reserve": 20, "charge": {"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": True}, "export": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 5, "enable": False}}
     api.set_http_response("/service/batteryConfig/api/v1/battery/sites/12345/schedules/u1", 200, {})
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 200, {})  # activation PUT
     run_async(api.apply_battery_schedule("12345"))
     run_async(api.apply_battery_schedule("12345"))  # second apply, unchanged desired state
     puts = [r for r in api.request_log if r["method"] == "PUT" and r["path"].endswith("/schedules/u1")]
@@ -1395,6 +1397,50 @@ def test_apply_no_activate_dtg_when_unchanged():
     assert writes == []
 
 
+def test_activate_cfg_mode_invalidates_cache_on_failure():
+    """Cache is cleared on CFG activation failure so next apply retries write+activation."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.battery_settings.clear()
+    api.schedules["12345"] = {"cfg": {"supported": True, "id": "u1", "startTime": "02:00", "endTime": "05:00", "limit": 90, "enabled": True}}
+    # Set up a 404 response — activation will fail
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 404, {})
+    ok = run_async(api._activate_cfg_mode("12345"))
+    assert ok is False
+    # Cached startTime must be cleared so schedules_equal detects a diff next time
+    cached = api.schedules["12345"]["cfg"]
+    assert "startTime" not in cached
+    assert "id" in cached  # id preserved for PUT update
+
+
+def test_activate_dtg_mode_invalidates_cache_on_failure():
+    """Cache is cleared on DTG activation failure so next apply retries write+activation."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.battery_settings.clear()
+    api.schedules["12345"] = {"dtg": {"supported": True, "id": "d1", "startTime": "16:00", "endTime": "19:00", "limit": 60, "enabled": True}}
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 404, {})
+    ok = run_async(api._activate_dtg_mode("12345"))
+    assert ok is False
+    cached = api.schedules["12345"]["dtg"]
+    assert "startTime" not in cached
+    assert "id" in cached
+
+
+def test_activate_rbd_mode_invalidates_cache_on_failure():
+    """Cache is cleared on RBD activation failure so next apply retries write+activation."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.battery_settings.clear()
+    api.schedules["12345"] = {"rbd": {"supported": True, "id": "r1", "startTime": "22:00", "endTime": "23:00", "limit": 99, "enabled": True}}
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 404, {})
+    ok = run_async(api._activate_rbd_mode("12345"))
+    assert ok is False
+    cached = api.schedules["12345"]["rbd"]
+    assert "startTime" not in cached
+    assert "id" in cached
+
+
 def run_enphase_api_tests(my_predbat):
     """Run all Enphase API tests, returning 0 on success."""
     test_initialize_defaults()
@@ -1467,5 +1513,8 @@ def run_enphase_api_tests(my_predbat):
     test_apply_no_activate_dtg_when_export_disabled()
     test_apply_no_activate_dtg_when_freeze_not_real_export()
     test_apply_no_activate_dtg_when_unchanged()
+    test_activate_cfg_mode_invalidates_cache_on_failure()
+    test_activate_dtg_mode_invalidates_cache_on_failure()
+    test_activate_rbd_mode_invalidates_cache_on_failure()
     print("**** Enphase API tests passed ****")
     return 0
