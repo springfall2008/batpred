@@ -751,16 +751,15 @@ class EnphaseAPI(ComponentBase):
                 await self.get_schedules(site_id)
         return result is not None
 
-    async def _set_charge_from_grid(self, site_id, **extra_body):
+    async def _set_charge_from_grid(self, site_id, params=None, **extra_body):
         """PUT batterySettings chargeFromGrid:True and cache the result on success.
 
-        Accepts optional extra body keys (e.g. acceptedItcDisclaimer). Returns True if
-        the API call succeeded, False otherwise.
+        Accepts optional extra body keys (e.g. acceptedItcDisclaimer) and optional
+        query params (e.g. source/userId for activation). chargeFromGrid is always
+        forced to True regardless of extra_body. Returns True if the API call succeeded.
         """
-        params = {"source": "enho"}
-        if self.user_id:
-            params["userId"] = self.user_id
-        body = {"chargeFromGrid": True, **extra_body}
+        body = dict(extra_body)
+        body["chargeFromGrid"] = True
         result = await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/batterySettings/{site_id}", family="battery_config", params=params, json_body=body)
         if result is not None:
             self.battery_settings.setdefault(site_id, {})["chargeFromGrid"] = True
@@ -770,9 +769,11 @@ class EnphaseAPI(ComponentBase):
         """Clear the cached cloud schedule so the next apply detects a diff and retries.
 
         Sets startTime to an empty string (rather than removing the key) so that
-        schedules_equal always returns False regardless of the desired enabled state.
-        Removing the key would cause schedules_equal to return ``not enabled``, which
-        incorrectly no-ops a disable request after an activation failure.
+        schedules_equal returns ``not enabled`` (False when enabled=True), causing
+        _write_schedule to re-issue the update on the next apply. Removing the key
+        would also return ``not enabled``, which incorrectly no-ops a disable
+        request after an activation failure (False for enabled=False means True —
+        equal, so no write is issued).
         """
         family_key = family.lower()
         entry = self.schedules.get(site_id, {}).get(family_key)
@@ -793,7 +794,10 @@ class EnphaseAPI(ComponentBase):
         Returns True if the activation call succeeded.
         """
         now_iso = datetime.now(timezone.utc).isoformat()
-        ok = await self._set_charge_from_grid(site_id, acceptedItcDisclaimer=now_iso)
+        params = {"source": "enho"}
+        if self.user_id:
+            params["userId"] = self.user_id
+        ok = await self._set_charge_from_grid(site_id, params=params, acceptedItcDisclaimer=now_iso)
         if not ok:
             self.log(f"Warn: Enphase: CFG activation failed for site {site_id}")
             self._invalidate_cached_schedule(site_id, family)

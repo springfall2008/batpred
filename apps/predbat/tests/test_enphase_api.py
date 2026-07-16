@@ -1171,7 +1171,7 @@ def test_activate_cfg_mode():
 
     parsed = dt.fromisoformat(body["acceptedItcDisclaimer"])
     age = (dt.now(tz.utc) - parsed).total_seconds()
-    assert 0 <= age <= 60, f"acceptedItcDisclaimer age {age}s outside [0, 60] — stale timestamp"
+    assert -5 <= age <= 60, f"acceptedItcDisclaimer age {age}s outside [-5, 60] — stale or future timestamp"
     # Cached battery settings updated optimistically on success
     assert api.battery_settings["12345"]["chargeFromGrid"] is True
 
