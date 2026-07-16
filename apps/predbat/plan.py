@@ -2280,7 +2280,9 @@ class Plan:
 
             # Only select an export if it makes a notable improvement has defined by min_improvement (divided in M windows)
             # Also require cost improvement to prevent exports that only game metric_keep without actual savings (issue #2984)
-            if (metric <= off_metric) and (metric <= best_metric) and ((cost + min_improvement_scaled) <= off_cost):
+            # However, for anti-clipping windows, the financial savings (clipping penalty) is only tracked in the metric,
+            # so we bypass the strict cost improvement check if it's a clipping window.
+            if (metric <= off_metric) and (metric <= best_metric) and (is_clipping_window or ((cost + min_improvement_scaled) <= off_cost)):
                 best_metric = metric
                 best_export = this_export_limit
                 best_cost = cost

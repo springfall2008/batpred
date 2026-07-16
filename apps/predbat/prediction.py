@@ -869,13 +869,18 @@ class Prediction:
             discharge_rate_now_curve_step = discharge_rate_now_curve * step
 
             battery_to_min = max(soc - reserve_expected, 0) * battery_loss_discharge
-            battery_to_max = max(soc_max - soc, 0) * battery_loss
 
             discharge_min = reserve
             is_anti_clipping = False
             if export_window_active:
                 discharge_min = max(soc_max * export_limit_now / 100.0, reserve, self.best_soc_min)
                 is_anti_clipping = "clipping_target_soc_pct" in export_window[export_window_n]
+
+            limit_max = soc_max
+            if is_anti_clipping and export_limit_now < 100.0:
+                limit_max = soc_max * export_limit_now / 100.0
+            
+            battery_to_max = max(limit_max - soc, 0) * battery_loss
 
             if (not set_export_freeze_only or is_anti_clipping) and export_window_active and export_limit_now < 99.0 and (soc > discharge_min):
                 # Discharge enable, capped at export limit
@@ -1014,7 +1019,7 @@ class Prediction:
                 )
                 charge_rate_now_curve_step = charge_rate_now_curve * step
 
-                battery_draw = -max(min(charge_rate_now_curve_step, max(charge_limit_n - soc, pv_now)), 0, -battery_to_max)
+                battery_draw = max(-min(charge_rate_now_curve_step, max(charge_limit_n - soc, pv_now)), -battery_to_max)
                 battery_state = "f+"
                 first_charge = min(first_charge, minute)
 

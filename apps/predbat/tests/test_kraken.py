@@ -1670,12 +1670,21 @@ def test_merge_completed_dispatches_dedup_and_prune():
 
 def test_fetch_dispatches_populates_device():
     """async_fetch_dispatches fills planned + completed dispatches for each known device."""
+    from datetime import datetime, timezone, timedelta
+
     api = make_kraken_api()
     api.intelligent_devices = {"dev-1": {"device_id": "dev-1", "planned_dispatches": [], "completed_dispatches": []}}
+
+    recent_planned = (datetime.now(timezone.utc) + timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    recent_planned_end = (datetime.now(timezone.utc) + timedelta(hours=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    recent_completed = (datetime.now(timezone.utc) - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    recent_completed_end = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
     api.async_graphql_query = AsyncMock(
         return_value={
-            "flexPlannedDispatches": [{"start": "2026-07-08T02:00:00Z", "end": "2026-07-08T05:00:00Z", "type": "SMART", "energyAddedKwh": 10.0}],
-            "completedDispatches": [{"start": "2026-07-08T00:00:00Z", "end": "2026-07-08T01:00:00Z", "delta": 3.0, "meta": {"source": "SMART", "location": "AT_HOME"}}],
+            "flexPlannedDispatches": [{"start": recent_planned, "end": recent_planned_end, "type": "SMART", "energyAddedKwh": 10.0}],
+            "completedDispatches": [{"start": recent_completed, "end": recent_completed_end, "delta": 3.0, "meta": {"source": "SMART", "location": "AT_HOME"}}],
         }
     )
     asyncio.run(api.async_fetch_dispatches())

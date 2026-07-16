@@ -152,6 +152,7 @@ struct PkScenario {
     const double *export_limits;  // percent per export window (99=freeze, 100=off)
     const int32_t *export_start;
     const int32_t *export_end;
+    const int32_t *export_flags;  // 1 if clipping_target_soc_pct is active, 0 otherwise
     double *soc_out;              // caller-allocated, n_steps entries, filled with round(soc, 3)
 
     int32_t n_charge;
@@ -601,19 +602,25 @@ int32_t pk_run(int64_t handle, const PkScenario *s, PkResult *out)
         double discharge_rate_now_curve_step = discharge_rate_now_curve * step;
 
         const double battery_to_min = std::max(soc - reserve_expected, 0.0) * battery_loss_discharge;
-        const double battery_to_max = std::max(soc_max - soc, 0.0) * battery_loss;
-
         // prediction.py:791-793
         double discharge_min = reserve;
+        bool is_anti_clipping = false;
         if (export_window_active) {
             discharge_min = std::max({soc_max * export_limit_now / 100.0, reserve, c->best_soc_min});
+            is_anti_clipping = s->export_flags[export_window_n] != 0;
         }
+
+        double limit_max = soc_max;
+        if (is_anti_clipping && export_limit_now < 100.0) {
+            limit_max = soc_max * export_limit_now / 100.0;
+        }
+        const double battery_to_max = std::max(limit_max - soc, 0.0) * battery_loss;
 
         double battery_draw = 0;
         double pv_dc = 0;
         double pv_ac = 0;
 
-        if (!c->set_export_freeze_only && export_window_active && export_limit_now < 99.0 && (soc > discharge_min)) {
+        if ((!c->set_export_freeze_only || is_anti_clipping) && export_window_active && export_limit_now < 99.0 && (soc > discharge_min)) {
             // Force export - prediction.py:795-902
             double export_rate_adjust = 1.0;
             if (c->set_export_low_power) {
@@ -709,7 +716,7 @@ int32_t pk_run(int64_t handle, const PkScenario *s, PkResult *out)
             charge_rate_now_curve = rate_curve(soc_round1, battery_rate_max_charge_combined, battery_rate_max_charge_combined, c->temp_charge_cap[k], c->charge_curve, soc_max, battery_rate_min) * battery_rate_max_scaling;
             charge_rate_now_curve_step = charge_rate_now_curve * step;
 
-            battery_draw = -std::max({std::min(charge_rate_now_curve_step, std::max(charge_limit_n - soc, pv_now)), 0.0, -battery_to_max});
+            battery_draw = std::max({-std::min(charge_rate_now_curve_step, std::max(charge_limit_n - soc, pv_now)), -battery_to_max});
 
             if (inverter_hybrid) {
                 pv_dc = std::min(std::fabs(battery_draw), pv_now);
