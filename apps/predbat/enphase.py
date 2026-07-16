@@ -858,6 +858,9 @@ class EnphaseAPI(ComponentBase):
         result = await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/batterySettings/{site_id}", family="battery_config", params=params, json_body=body)
         if result is not None:
             self.battery_settings.setdefault(site_id, {}).setdefault("rbdControl", {})["enabled"] = True
+            entry = self.schedules.get(site_id, {}).get(family.lower())
+            if isinstance(entry, dict):
+                entry.pop("status", None)
         else:
             self.log(f"Warn: Enphase: RBD activation failed for site {site_id}")
             self._invalidate_cached_schedule(site_id, family)
