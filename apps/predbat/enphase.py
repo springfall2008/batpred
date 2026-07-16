@@ -804,7 +804,11 @@ class EnphaseAPI(ComponentBase):
         if self.user_id:
             params["userId"] = self.user_id
         ok = await self._set_charge_from_grid(site_id, params=params, acceptedItcDisclaimer=now_iso)
-        if not ok:
+        if ok:
+            entry = self.schedules.get(site_id, {}).get(family.lower())
+            if isinstance(entry, dict):
+                entry.pop("status", None)
+        else:
             self.log(f"Warn: Enphase: CFG activation failed for site {site_id}")
             self._invalidate_cached_schedule(site_id, family)
         return ok
