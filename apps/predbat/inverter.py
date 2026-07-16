@@ -581,7 +581,9 @@ class Inverter:
             self.base.battery_scaling_auto = True
 
         # Run find_battery_size at most once per calendar day, always update the history sensor
-        existing_history = self.base.get_state_wrapper(soc_max_sensor_name, attribute="history", default={})
+        # Use load_previous_value_from_ha so the history survives a Home Assistant restart (the sensor
+        # state is ephemeral and is not restored by HA, but the recorder history is)
+        existing_history = self.base.load_previous_value_from_ha(soc_max_sensor_name, attribute="history") or {}
         if not isinstance(existing_history, dict):
             existing_history = {}
         today_key = str(self.base.now_utc.date())
@@ -645,7 +647,7 @@ class Inverter:
         else:
             sensor_name = "sensor.{}_soc_max_calculated".format(self.base.prefix)
 
-        history = self.base.get_state_wrapper(sensor_name, attribute="history", default={})
+        history = self.base.load_previous_value_from_ha(sensor_name, attribute="history") or {}
         if not isinstance(history, dict):
             history = {}
 
