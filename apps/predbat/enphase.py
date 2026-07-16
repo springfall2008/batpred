@@ -751,6 +751,21 @@ class EnphaseAPI(ComponentBase):
                 await self.get_schedules(site_id)
         return result is not None
 
+    async def _set_charge_from_grid(self, site_id, **extra_body):
+        """PUT batterySettings chargeFromGrid:True and cache the result on success.
+
+        Accepts optional extra body keys (e.g. acceptedItcDisclaimer). Returns True if
+        the API call succeeded, False otherwise.
+        """
+        params = {"source": "enho"}
+        if self.user_id:
+            params["userId"] = self.user_id
+        body = {"chargeFromGrid": True, **extra_body}
+        result = await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/batterySettings/{site_id}", family="battery_config", params=params, json_body=body)
+        if result is not None:
+            self.battery_settings.setdefault(site_id, {})["chargeFromGrid"] = True
+        return result is not None
+
     async def _activate_cfg_mode(self, site_id):
         """Activate charge-from-grid mode after writing the CFG schedule.
 
@@ -759,21 +774,40 @@ class EnphaseAPI(ComponentBase):
         is required to transition it to "active" so the Enphase gateway
         picks it up and starts charging.
         """
+        now_iso = datetime.now(timezone.utc).isoformat()
+        await self._set_charge_from_grid(site_id, acceptedItcDisclaimer=now_iso)
+
+    async def _activate_dtg_mode(self, site_id):
+        """Activate discharge-to-grid mode after writing the DTG schedule.
+
+        The DTG schedule write puts the schedule into "pending" status;
+        a subsequent batterySettings PUT with dtgControl.enabled is
+        required to transition it to "active" so the Enphase gateway
+        picks it up.
+        """
         params = {"source": "enho"}
         if self.user_id:
             params["userId"] = self.user_id
-        now_iso = datetime.now().isoformat()
-        await self.request_json(
-            "PUT",
-            f"{BATTERY_CONFIG_BASE}/batterySettings/{site_id}",
-            family="battery_config",
-            params=params,
-            json_body={
-                "chargeFromGrid": True,
-                "acceptedItcDisclaimer": now_iso,
-            },
-        )
-        self.battery_settings.setdefault(site_id, {})["chargeFromGrid"] = True
+        body = {"dtgControl": {"enabled": True}}
+        result = await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/batterySettings/{site_id}", family="battery_config", params=params, json_body=body)
+        if result is not None:
+            self.battery_settings.setdefault(site_id, {}).setdefault("dtgControl", {})["enabled"] = True
+
+    async def _activate_rbd_mode(self, site_id):
+        """Activate restrict-battery-discharge mode after writing the RBD schedule.
+
+        The RBD schedule write puts the schedule into "pending" status;
+        a subsequent batterySettings PUT with rbdControl.enabled is
+        required to transition it to "active" so the Enphase gateway
+        picks it up.
+        """
+        params = {"source": "enho"}
+        if self.user_id:
+            params["userId"] = self.user_id
+        body = {"rbdControl": {"enabled": True}}
+        result = await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/batterySettings/{site_id}", family="battery_config", params=params, json_body=body)
+        if result is not None:
+            self.battery_settings.setdefault(site_id, {}).setdefault("rbdControl", {})["enabled"] = True
 
     async def _ensure_charge_from_grid(self, site_id):
         """Enable the charge-from-grid setting, accepting the one-time ITC disclaimer first."""
@@ -781,8 +815,7 @@ class EnphaseAPI(ComponentBase):
             return
         self.log(f"Enphase: Enabling charge-from-grid on site {site_id}")
         await self.request_json("POST", f"{BATTERY_CONFIG_BASE}/batterySettings/acceptDisclaimer/{site_id}", family="battery_config", json_body={"disclaimer-type": "itc"})
-        await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/batterySettings/{site_id}", family="battery_config", json_body={"chargeFromGrid": True})
-        self.battery_settings.setdefault(site_id, {})["chargeFromGrid"] = True
+        await self._set_charge_from_grid(site_id)
 
     async def set_reserve(self, site_id, reserve):
         """Write the battery backup reserve (batteryBackupPercentage) via a profile PUT.
@@ -869,10 +902,16 @@ class EnphaseAPI(ComponentBase):
         dtg_limit = max(export_soc, int(local.get("reserve", 0)))
 
         # Forced export to a target (DTG). A configured inverter always supports DTG.
-        wrote |= await self._write_schedule(site_id, SCHEDULE_EXPORT, export_start, export_end, dtg_limit, real_export)
+        wrote_dtg = await self._write_schedule(site_id, SCHEDULE_EXPORT, export_start, export_end, dtg_limit, real_export)
+        if wrote_dtg and real_export:
+            await self._activate_dtg_mode(site_id)
+        wrote |= wrote_dtg
 
         # Freeze export = restrict battery discharge (RBD) over the export window
-        wrote |= await self._write_schedule(site_id, SCHEDULE_FREEZE, export_start, export_end, None, freeze_export)
+        wrote_rbd = await self._write_schedule(site_id, SCHEDULE_FREEZE, export_start, export_end, None, freeze_export)
+        if wrote_rbd and freeze_export:
+            await self._activate_rbd_mode(site_id)
+        wrote |= wrote_rbd
         return wrote
 
     async def get_battery_status(self, site_id):

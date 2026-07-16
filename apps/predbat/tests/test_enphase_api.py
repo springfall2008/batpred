@@ -1162,11 +1162,12 @@ def test_activate_cfg_mode():
     body = puts[0]["json"]
     assert body["chargeFromGrid"] is True
     assert "acceptedItcDisclaimer" in body
-    # Timestamp must be a current ISO-8601 string (e.g. "2026-07-14T20:25:00")
-    from datetime import datetime as dt
+    # Timestamp must be a recent UTC ISO-8601 string (e.g. "2026-07-14T20:25:00+00:00")
+    from datetime import datetime as dt, timezone as tz
 
     parsed = dt.fromisoformat(body["acceptedItcDisclaimer"])
-    assert parsed.year >= 2025  # not a stale date
+    age = (dt.now(tz.utc) - parsed).total_seconds()
+    assert 0 <= age <= 60, f"acceptedItcDisclaimer age {age}s outside [0, 60] — stale timestamp"
     # Cached battery settings updated optimistically on success
     assert api.battery_settings["12345"]["chargeFromGrid"] is True
 
@@ -1229,6 +1230,158 @@ def test_apply_no_activate_cfg_when_unchanged():
     api.local_schedule["12345"] = {"reserve": 20, "charge": {"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": True}, "export": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 5, "enable": False}}
     run_async(api.apply_battery_schedule("12345"))
     # No writes at all (schedules_match -> False, _ensure_charge_from_grid already done)
+    writes = [r for r in api.request_log if r["method"] in ("POST", "PUT")]
+    assert writes == []
+
+
+def test_activate_dtg_mode():
+    """_activate_dtg_mode PUTs batterySettings with dtgControl.enabled to transition DTG from pending to active."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.battery_settings.clear()
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 200, {})
+    run_async(api._activate_dtg_mode("12345"))
+    puts = [r for r in api.request_log if r["method"] == "PUT" and r["path"] == "/service/batteryConfig/api/v1/batterySettings/12345"]
+    assert len(puts) == 1
+    body = puts[0]["json"]
+    assert body == {"dtgControl": {"enabled": True}}
+    # Cached battery settings updated on success
+    assert api.battery_settings["12345"]["dtgControl"]["enabled"] is True
+
+
+def test_activate_rbd_mode():
+    """_activate_rbd_mode PUTs batterySettings with rbdControl.enabled to transition RBD from pending to active."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.battery_settings.clear()
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 200, {})
+    run_async(api._activate_rbd_mode("12345"))
+    puts = [r for r in api.request_log if r["method"] == "PUT" and r["path"] == "/service/batteryConfig/api/v1/batterySettings/12345"]
+    assert len(puts) == 1
+    body = puts[0]["json"]
+    assert body == {"rbdControl": {"enabled": True}}
+    assert api.battery_settings["12345"]["rbdControl"]["enabled"] is True
+
+
+def test_apply_activates_dtg_after_write():
+    """apply_battery_schedule activates DTG mode after a schedule write when real export is enabled."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.sites = [{"site_id": "12345", "name": "Home"}]
+    api.schedules["12345"] = {"cfg": {"supported": True}, "dtg": {"supported": True}, "rbd": {"supported": True}}
+    api.profile["12345"] = {"profile": "self-consumption", "reserve": 20}
+    api.battery_settings["12345"] = {"chargeFromGrid": True, "veryLowSocMin": 5}
+    api.local_schedule["12345"] = {
+        "reserve": 20,
+        "charge": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 100, "enable": False},
+        "export": {"start_time": "16:00:00", "end_time": "19:00:00", "soc": 60, "enable": True},
+    }
+    api.set_http_response("/service/batteryConfig/api/v1/battery/sites/12345/schedules", 200, {"cfg": {"scheduleSupported": True, "details": []}, "dtg": {"scheduleSupported": True, "details": []}, "rbd": {"scheduleSupported": True, "details": []}})
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 200, {})
+    run_async(api.apply_battery_schedule("12345"))
+    # DTG schedule was created (POST to schedules with scheduleType DTG)
+    posts = [r for r in api.request_log if r["method"] == "POST" and r["path"].endswith("/schedules")]
+    assert len(posts) == 1
+    assert posts[0]["json"]["scheduleType"] == "DTG"
+    # Activation PUT with dtgControl.enabled
+    puts = [r for r in api.request_log if r["method"] == "PUT" and r["path"] == "/service/batteryConfig/api/v1/batterySettings/12345"]
+    activation = [p for p in puts if p.get("json", {}).get("dtgControl", {}).get("enabled") is True]
+    assert len(activation) == 1
+
+
+def test_apply_activates_rbd_after_write():
+    """apply_battery_schedule activates RBD mode after a schedule write when freeze export is enabled."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.sites = [{"site_id": "12345", "name": "Home"}]
+    api.schedules["12345"] = {"cfg": {"supported": True}, "dtg": {"supported": True}, "rbd": {"supported": True}}
+    api.profile["12345"] = {"profile": "self-consumption", "reserve": 20}
+    api.battery_settings["12345"] = {"chargeFromGrid": True, "veryLowSocMin": 5}
+    api.local_schedule["12345"] = {
+        "reserve": 20,
+        "charge": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 100, "enable": False},
+        "export": {"start_time": "22:00:00", "end_time": "23:00:00", "soc": 99, "enable": True},
+    }
+    api.set_http_response("/service/batteryConfig/api/v1/battery/sites/12345/schedules", 200, {"cfg": {"scheduleSupported": True, "details": []}, "dtg": {"scheduleSupported": True, "details": []}, "rbd": {"scheduleSupported": True, "details": []}})
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 200, {})
+    run_async(api.apply_battery_schedule("12345"))
+    # RBD schedule was created (POST to schedules with scheduleType RBD)
+    posts = [r for r in api.request_log if r["method"] == "POST" and r["path"].endswith("/schedules")]
+    assert len(posts) == 1
+    assert posts[0]["json"]["scheduleType"] == "RBD"
+    # Activation PUT with rbdControl.enabled
+    puts = [r for r in api.request_log if r["method"] == "PUT" and r["path"] == "/service/batteryConfig/api/v1/batterySettings/12345"]
+    activation = [p for p in puts if p.get("json", {}).get("rbdControl", {}).get("enabled") is True]
+    assert len(activation) == 1
+
+
+def test_apply_no_activate_dtg_when_export_disabled():
+    """_activate_dtg_mode is NOT called when export is disabled (no real or freeze export)."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.sites = [{"site_id": "12345", "name": "Home"}]
+    api.schedules["12345"] = {"cfg": {"supported": True}, "dtg": {"supported": True}, "rbd": {"supported": True}}
+    api.profile["12345"] = {"profile": "self-consumption", "reserve": 20}
+    api.battery_settings["12345"] = {"chargeFromGrid": True, "veryLowSocMin": 5}
+    api.local_schedule["12345"] = {
+        "reserve": 20,
+        "charge": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 100, "enable": False},
+        "export": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 5, "enable": False},
+    }
+    # No schedule write (no cloud DTG, export disabled → enabled=False, _write_schedule returns False)
+    # No HTTP needed — nothing is written.
+    api.set_http_response("/service/batteryConfig/api/v1/battery/sites/12345/schedules", 200, {"cfg": {"scheduleSupported": True, "details": []}, "dtg": {"scheduleSupported": True, "details": []}, "rbd": {"scheduleSupported": True, "details": []}})
+    run_async(api.apply_battery_schedule("12345"))
+    # No PUTs to batterySettings (no activation for DTG or RBD)
+    puts = [r for r in api.request_log if r["method"] == "PUT" and "batterySettings" in r["path"]]
+    assert puts == []
+
+
+def test_apply_no_activate_dtg_when_freeze_not_real_export():
+    """_activate_dtg_mode is NOT called for freeze export (soc == 99 triggers RBD, not DTG)."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.sites = [{"site_id": "12345", "name": "Home"}]
+    api.schedules["12345"] = {"cfg": {"supported": True}, "dtg": {"supported": True}, "rbd": {"supported": True}}
+    api.profile["12345"] = {"profile": "self-consumption", "reserve": 20}
+    api.battery_settings["12345"] = {"chargeFromGrid": True, "veryLowSocMin": 5}
+    api.local_schedule["12345"] = {
+        "reserve": 20,
+        "charge": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 100, "enable": False},
+        "export": {"start_time": "22:00:00", "end_time": "23:00:00", "soc": 99, "enable": True},
+    }
+    # DTG is not written (real_export=False when soc==99), but RBD is.
+    api.set_http_response("/service/batteryConfig/api/v1/battery/sites/12345/schedules", 200, {"cfg": {"scheduleSupported": True, "details": []}, "dtg": {"scheduleSupported": True, "details": []}, "rbd": {"scheduleSupported": True, "details": []}})
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 200, {})
+    run_async(api.apply_battery_schedule("12345"))
+    # RBD schedule was created
+    posts = [r for r in api.request_log if r["method"] == "POST" and r["path"].endswith("/schedules")]
+    assert len(posts) == 1
+    assert posts[0]["json"]["scheduleType"] == "RBD"
+    # Activation PUTs: only rbdControl, no dtgControl
+    puts = [r for r in api.request_log if r["method"] == "PUT" and r["path"] == "/service/batteryConfig/api/v1/batterySettings/12345"]
+    dtg_activation = [p for p in puts if p.get("json", {}).get("dtgControl")]
+    rbd_activation = [p for p in puts if p.get("json", {}).get("rbdControl", {}).get("enabled") is True]
+    assert dtg_activation == []
+    assert len(rbd_activation) == 1
+
+
+def test_apply_no_activate_dtg_when_unchanged():
+    """_activate_dtg_mode is NOT called when the DTG schedule already matches (no-op write)."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.sites = [{"site_id": "12345", "name": "Home"}]
+    # Cloud DTG already matches local desired state
+    api.schedules["12345"] = {"cfg": {"supported": True}, "dtg": {"supported": True, "id": "d1", "startTime": "16:00", "endTime": "19:00", "limit": 60, "enabled": True}, "rbd": {"supported": True}}
+    api.profile["12345"] = {"profile": "self-consumption", "reserve": 20}
+    api.battery_settings["12345"] = {"chargeFromGrid": True, "veryLowSocMin": 5}
+    api.local_schedule["12345"] = {
+        "reserve": 20,
+        "charge": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 100, "enable": False},
+        "export": {"start_time": "16:00:00", "end_time": "19:00:00", "soc": 60, "enable": True},
+    }
+    run_async(api.apply_battery_schedule("12345"))
+    # No writes at all (all schedules match cloud state, no reserve change)
     writes = [r for r in api.request_log if r["method"] in ("POST", "PUT")]
     assert writes == []
 
@@ -1298,5 +1451,12 @@ def run_enphase_api_tests(my_predbat):
     test_apply_activates_cfg_after_write()
     test_apply_no_activate_cfg_when_charge_disabled()
     test_apply_no_activate_cfg_when_unchanged()
+    test_activate_dtg_mode()
+    test_activate_rbd_mode()
+    test_apply_activates_dtg_after_write()
+    test_apply_activates_rbd_after_write()
+    test_apply_no_activate_dtg_when_export_disabled()
+    test_apply_no_activate_dtg_when_freeze_not_real_export()
+    test_apply_no_activate_dtg_when_unchanged()
     print("**** Enphase API tests passed ****")
     return 0
