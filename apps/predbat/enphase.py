@@ -769,14 +769,15 @@ class EnphaseAPI(ComponentBase):
     def _invalidate_cached_schedule(self, site_id, family):
         """Clear the cached cloud schedule so the next apply detects a diff and retries.
 
-        Removes startTime from the cached entry (but keeps the id) so that
-        schedules_equal returns False and _write_schedule will PUT the update
-        again (instead of creating a duplicate schedule).
+        Sets startTime to an empty string (rather than removing the key) so that
+        schedules_equal always returns False regardless of the desired enabled state.
+        Removing the key would cause schedules_equal to return ``not enabled``, which
+        incorrectly no-ops a disable request after an activation failure.
         """
         family_key = family.lower()
         entry = self.schedules.get(site_id, {}).get(family_key)
         if isinstance(entry, dict):
-            entry.pop("startTime", None)
+            entry["startTime"] = ""
 
     async def _activate_cfg_mode(self, site_id, family=SCHEDULE_CHARGE):
         """Activate charge-from-grid mode after writing the CFG schedule.

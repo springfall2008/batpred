@@ -1409,7 +1409,7 @@ def test_activate_cfg_mode_invalidates_cache_on_failure():
     assert ok is False
     # Cached startTime must be cleared so schedules_equal detects a diff next time
     cached = api.schedules["12345"]["cfg"]
-    assert "startTime" not in cached
+    assert cached["startTime"] == ""
     assert "id" in cached  # id preserved for PUT update
 
 
@@ -1423,7 +1423,7 @@ def test_activate_dtg_mode_invalidates_cache_on_failure():
     ok = run_async(api._activate_dtg_mode("12345"))
     assert ok is False
     cached = api.schedules["12345"]["dtg"]
-    assert "startTime" not in cached
+    assert cached["startTime"] == ""
     assert "id" in cached
 
 
@@ -1437,7 +1437,7 @@ def test_activate_rbd_mode_invalidates_cache_on_failure():
     ok = run_async(api._activate_rbd_mode("12345"))
     assert ok is False
     cached = api.schedules["12345"]["rbd"]
-    assert "startTime" not in cached
+    assert cached["startTime"] == ""
     assert "id" in cached
 
 
