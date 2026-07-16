@@ -291,15 +291,28 @@ pred_bat:
   #    azimuth: 180
   #    kwp: 4.0
 
-  # Determines which source Predbat uses for the primary PV forecast.
+  # -------------------------------------------------------------------------
+  # Primary Solar Forecast
+  # -------------------------------------------------------------------------
+  # Determines which source Predbat uses for the ACTUAL weather-adjusted PV forecast.
+  # This tells Predbat how much solar energy to expect given the current weather.
   # Options: "auto" (default), "ha", "forecast_solar", "openmeteo", "solcast_api"
-  # If you are using Open-Meteo ONLY for the ClearSky baseline below, it's recommended to explicitly set this to "ha" if using the HA integration.
+  #
+  # NOTE: If you are using Open-Meteo ONLY for the theoretical ClearSky baseline below, 
+  # it is recommended to explicitly set this to "ha" if you use the Solcast HA integration.
   #pv_forecast_primary: "auto"
 
-  # --- Automated Solar Clipping Mitigation ---
-  # Enable clipping mitigation to automatically force exports prior to peaks
+  # -------------------------------------------------------------------------
+  # Automated Solar Clipping Mitigation
+  # -------------------------------------------------------------------------
+  # Clipping mitigation automatically forces exports prior to massive solar peaks so your
+  # battery has enough empty space to absorb all excess solar energy without clipping.
   #clipping_buffer_enable: True
-  # Set the source for the theoretical ClearSky maximum (e.g. "openmeteo", "ha_solcast_clearsky", "solcast_api")
+  
+  # To detect these peaks, Predbat needs a purely theoretical baseline of what your 
+  # panels WOULD produce under perfect, cloudless conditions (ClearSky). This is 
+  # compared against your weather-adjusted forecast above to find clipping risks.
+  # Options: "openmeteo", "ha_solcast_clearsky", "solcast_api"
   #clipping_clearsky_source: "ha_solcast_clearsky"
 
   # Set these to match solcast sensor names if not using the cloud interface
