@@ -639,6 +639,7 @@ def test_fetch_pv_forecast_open_meteo_not_selected_when_forecast_solar_configure
         test_api.solar.solcast_api_key = None
         test_api.solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "declination": 30, "azimuth": 0, "kwp": 3.0}]
         test_api.solar.open_meteo_forecast = [{"latitude": 51.5, "longitude": -0.1, "declination": 35, "azimuth": 180, "kwp": 3.0, "efficiency": 1.0}]
+        test_api.mock_base.set_arg("clipping_clearsky_source", "base")
 
         forecast_solar_response = {
             "result": {"watts": {"2025-06-15T12:00:00+0000": 500}},

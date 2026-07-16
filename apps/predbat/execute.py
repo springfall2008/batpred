@@ -644,6 +644,13 @@ class Execute:
         Adjust target SoC based on the current SoC of all the inverters accounting for their
         charge rates and battery capacities
         """
+        if self.set_export_window and self.export_window_best:
+            if self.minutes_now >= self.export_window_best[0]["start"] and self.minutes_now < self.export_window_best[0]["end"]:
+                if self.export_window_best[0].get("clipping_target_soc_pct") is not None:
+                    limit_pct = float(self.export_limits_best[0])
+                    if limit_pct < 100.0:
+                        soc = min(soc, limit_pct)
+
         target_kwh = dp2(self.soc_max * (soc / 100.0))
         soc_percent = calc_percent_limit(self.soc_kw, self.soc_max)
 

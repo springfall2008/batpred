@@ -1497,6 +1497,15 @@ class SolarAPI(ComponentBase):
 
             # Optional overlay of ClearSky data from a secondary source
             clipping_clearsky_source = self.get_arg("clipping_clearsky_source", "auto", indirect=False)
+
+            if clipping_clearsky_source == "auto":
+                if any(getattr(self, argname, None) for argname in ["pv_clearsky_today", "pv_clearsky_tomorrow", "pv_clearsky_d3", "pv_clearsky_d4", "pv_clearsky_d5", "pv_clearsky_d6", "pv_clearsky_d7"]):
+                    clipping_clearsky_source = "ha_solcast_clearsky"
+                elif self.solcast_api_key:
+                    clipping_clearsky_source = "solcast_api"
+                elif self.open_meteo_forecast:
+                    clipping_clearsky_source = "openmeteo"
+
             if clipping_clearsky_source == "openmeteo" and self.open_meteo_forecast:
                 self.log("SolarAPI: Overlaying ClearSky data from Open-Meteo API")
                 om_data, _ = await self.download_open_meteo_data()

@@ -2594,6 +2594,7 @@ def run_execute_tests(my_predbat):
         soc_max=10.0,
         assert_status="Exporting",
         assert_reserve=80,
+        assert_soc_target=80,
         assert_immediate_soc_target=80,
         assert_discharge_start_time_minutes=my_predbat.minutes_now,
         assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,

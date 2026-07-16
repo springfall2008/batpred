@@ -2489,7 +2489,7 @@ def test_pv_calibration_sparse_recent_history_no_crash(my_predbat):
         pv_forecast_data = [{"period_start": base.midnight_utc.strftime("%Y-%m-%dT%H:%M:%S+0000"), "pv_estimate": 0.05}]
 
         try:
-            adj_minute, adj_minute10, adj_data = solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
+            adj_minute, adj_minute10, adj_data, _ = solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
         except TypeError as e:
             print("ERROR: pv_calibration raised TypeError with sparse recent history: {}".format(e))
             failed = True
