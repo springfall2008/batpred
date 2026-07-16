@@ -79,6 +79,9 @@ class GitHub:
         # Check the cache first
         now = datetime.now()
         cached_entry = self.github_url_cache.get(url)
+        if not isinstance(cached_entry, dict):
+            cached_entry = None
+
         if cached_entry:
             stamp = cached_entry.get("stamp")
             pdata = cached_entry.get("data")
@@ -88,8 +91,7 @@ class GitHub:
                     self.log("Using cached GitHub data for {} age {} minutes".format(url, dp1(age.total_seconds() / 60)))
                     return pdata
 
-        stale_data = cached_entry.get("data", []) if cached_entry else []
-
+        stale_data = (cached_entry.get("data") or []) if cached_entry else []
         try:
             r = requests.get(url, timeout=10)
         except Exception:
