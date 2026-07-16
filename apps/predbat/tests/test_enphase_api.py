@@ -1229,7 +1229,7 @@ def test_apply_no_activate_cfg_when_unchanged():
     api.battery_settings["12345"] = {"chargeFromGrid": True, "veryLowSocMin": 5}
     api.local_schedule["12345"] = {"reserve": 20, "charge": {"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": True}, "export": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 5, "enable": False}}
     run_async(api.apply_battery_schedule("12345"))
-    # No writes at all (schedules_match -> False, _ensure_charge_from_grid already done)
+    # No writes at all (schedules_match -> True, _ensure_charge_from_grid already done)
     writes = [r for r in api.request_log if r["method"] in ("POST", "PUT")]
     assert writes == []
 
