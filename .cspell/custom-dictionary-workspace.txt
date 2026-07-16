@@ -462,6 +462,7 @@ twinx
 tzfile
 tzpath
 unconfigured
+unparseable
 unsmoothed
 unstaged
 urlsafe

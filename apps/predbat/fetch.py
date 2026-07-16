@@ -1083,7 +1083,10 @@ class Fetch:
             self.load_inday_adjustment = 1.0
 
         force_replan = False
-        if str(prev_octopus_slots) != str(self.octopus_slots):
+        # Compare on the change-detection signature, not the raw slots, so the per-cycle re-clocking
+        # of an in-progress dispatch (start advanced to now, energy scaled to remaining time) does not
+        # force a replan every cycle while a slot is active - only genuine slot changes do
+        if self.octopus_slots_signature(prev_octopus_slots) != self.octopus_slots_signature(self.octopus_slots):
             self.log("Octopus slots changed from {} to {}".format(prev_octopus_slots, self.octopus_slots))
             force_replan = True
         if str(prev_octopus_saving_slots) != str(self.octopus_saving_slots):

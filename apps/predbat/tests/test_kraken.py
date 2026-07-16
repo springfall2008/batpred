@@ -1674,17 +1674,15 @@ def test_fetch_dispatches_populates_device():
 
     api = make_kraken_api()
     api.intelligent_devices = {"dev-1": {"device_id": "dev-1", "planned_dispatches": [], "completed_dispatches": []}}
-
-    recent_planned = (datetime.now(timezone.utc) + timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    recent_planned_end = (datetime.now(timezone.utc) + timedelta(hours=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    recent_completed = (datetime.now(timezone.utc) - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    recent_completed_end = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
-
+    # Use dates relative to now so the completed dispatch stays inside the history prune window
+    planned_start = (datetime.now(timezone.utc) + timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    planned_end = (datetime.now(timezone.utc) + timedelta(hours=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    completed_start = (datetime.now(timezone.utc) - timedelta(hours=4)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    completed_end = (datetime.now(timezone.utc) - timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
     api.async_graphql_query = AsyncMock(
         return_value={
-            "flexPlannedDispatches": [{"start": recent_planned, "end": recent_planned_end, "type": "SMART", "energyAddedKwh": 10.0}],
-            "completedDispatches": [{"start": recent_completed, "end": recent_completed_end, "delta": 3.0, "meta": {"source": "SMART", "location": "AT_HOME"}}],
+            "flexPlannedDispatches": [{"start": planned_start, "end": planned_end, "type": "SMART", "energyAddedKwh": 10.0}],
+            "completedDispatches": [{"start": completed_start, "end": completed_end, "delta": 3.0, "meta": {"source": "SMART", "location": "AT_HOME"}}],
         }
     )
     asyncio.run(api.async_fetch_dispatches())
