@@ -773,9 +773,14 @@ class EnphaseAPI(ComponentBase):
         a subsequent batterySettings PUT with acceptedItcDisclaimer
         is required to transition it to "active" so the Enphase gateway
         picks it up and starts charging.
+
+        Returns True if the activation call succeeded.
         """
         now_iso = datetime.now(timezone.utc).isoformat()
-        await self._set_charge_from_grid(site_id, acceptedItcDisclaimer=now_iso)
+        ok = await self._set_charge_from_grid(site_id, acceptedItcDisclaimer=now_iso)
+        if not ok:
+            self.log(f"Warn: Enphase: CFG activation failed for site {site_id}")
+        return ok
 
     async def _activate_dtg_mode(self, site_id):
         """Activate discharge-to-grid mode after writing the DTG schedule.
@@ -784,6 +789,8 @@ class EnphaseAPI(ComponentBase):
         a subsequent batterySettings PUT with dtgControl.enabled is
         required to transition it to "active" so the Enphase gateway
         picks it up.
+
+        Returns True if the activation call succeeded.
         """
         params = {"source": "enho"}
         if self.user_id:
@@ -792,6 +799,9 @@ class EnphaseAPI(ComponentBase):
         result = await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/batterySettings/{site_id}", family="battery_config", params=params, json_body=body)
         if result is not None:
             self.battery_settings.setdefault(site_id, {}).setdefault("dtgControl", {})["enabled"] = True
+        else:
+            self.log(f"Warn: Enphase: DTG activation failed for site {site_id}")
+        return result is not None
 
     async def _activate_rbd_mode(self, site_id):
         """Activate restrict-battery-discharge mode after writing the RBD schedule.
@@ -800,6 +810,8 @@ class EnphaseAPI(ComponentBase):
         a subsequent batterySettings PUT with rbdControl.enabled is
         required to transition it to "active" so the Enphase gateway
         picks it up.
+
+        Returns True if the activation call succeeded.
         """
         params = {"source": "enho"}
         if self.user_id:
@@ -808,6 +820,9 @@ class EnphaseAPI(ComponentBase):
         result = await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/batterySettings/{site_id}", family="battery_config", params=params, json_body=body)
         if result is not None:
             self.battery_settings.setdefault(site_id, {}).setdefault("rbdControl", {})["enabled"] = True
+        else:
+            self.log(f"Warn: Enphase: RBD activation failed for site {site_id}")
+        return result is not None
 
     async def _ensure_charge_from_grid(self, site_id):
         """Enable the charge-from-grid setting, accepting the one-time ITC disclaimer first."""

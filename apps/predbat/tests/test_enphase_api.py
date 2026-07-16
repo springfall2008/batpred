@@ -86,7 +86,7 @@ class MockEnphaseAPI(EnphaseAPI):
     async def request_raw(self, method, url, headers=None, data=None, json_body=None, params=None):
         """Return canned responses instead of performing HTTP."""
         path = url.split("enphaseenergy.com", 1)[-1].split("?")[0]
-        self.request_log.append({"method": method, "path": path, "json": json_body, "data": data})
+        self.request_log.append({"method": method, "path": path, "json": json_body, "data": data, "params": params})
         response = self.http_responses.get(path, {"status": 404, "json_data": None, "text_data": "not found"})
         return response["status"], response["json_data"], response.get("text_data") or "", {}
 
@@ -1162,6 +1162,8 @@ def test_activate_cfg_mode():
     body = puts[0]["json"]
     assert body["chargeFromGrid"] is True
     assert "acceptedItcDisclaimer" in body
+    # Verify required query params are sent
+    assert puts[0].get("params") == {"source": "enho", "userId": "9999"}
     # Timestamp must be a recent UTC ISO-8601 string (e.g. "2026-07-14T20:25:00+00:00")
     from datetime import datetime as dt, timezone as tz
 
@@ -1198,6 +1200,7 @@ def test_apply_activates_cfg_after_write():
     activation_puts = [p for p in puts if p.get("json", {}).get("acceptedItcDisclaimer")]
     assert len(activation_puts) == 1
     assert activation_puts[0]["json"]["chargeFromGrid"] is True
+    assert activation_puts[0].get("params") == {"source": "enho", "userId": "9999"}
 
 
 def test_apply_no_activate_cfg_when_charge_disabled():
@@ -1245,6 +1248,8 @@ def test_activate_dtg_mode():
     assert len(puts) == 1
     body = puts[0]["json"]
     assert body == {"dtgControl": {"enabled": True}}
+    # Verify required query params are sent
+    assert puts[0].get("params") == {"source": "enho", "userId": "9999"}
     # Cached battery settings updated on success
     assert api.battery_settings["12345"]["dtgControl"]["enabled"] is True
 
@@ -1260,6 +1265,8 @@ def test_activate_rbd_mode():
     assert len(puts) == 1
     body = puts[0]["json"]
     assert body == {"rbdControl": {"enabled": True}}
+    # Verify required query params are sent
+    assert puts[0].get("params") == {"source": "enho", "userId": "9999"}
     assert api.battery_settings["12345"]["rbdControl"]["enabled"] is True
 
 
@@ -1287,6 +1294,7 @@ def test_apply_activates_dtg_after_write():
     puts = [r for r in api.request_log if r["method"] == "PUT" and r["path"] == "/service/batteryConfig/api/v1/batterySettings/12345"]
     activation = [p for p in puts if p.get("json", {}).get("dtgControl", {}).get("enabled") is True]
     assert len(activation) == 1
+    assert activation[0].get("params") == {"source": "enho", "userId": "9999"}
 
 
 def test_apply_activates_rbd_after_write():
@@ -1313,6 +1321,7 @@ def test_apply_activates_rbd_after_write():
     puts = [r for r in api.request_log if r["method"] == "PUT" and r["path"] == "/service/batteryConfig/api/v1/batterySettings/12345"]
     activation = [p for p in puts if p.get("json", {}).get("rbdControl", {}).get("enabled") is True]
     assert len(activation) == 1
+    assert activation[0].get("params") == {"source": "enho", "userId": "9999"}
 
 
 def test_apply_no_activate_dtg_when_export_disabled():
