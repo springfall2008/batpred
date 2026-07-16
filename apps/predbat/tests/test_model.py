@@ -11,8 +11,9 @@
 from tests.test_infra import reset_rates, reset_inverter, simple_scenario, reset_rates2
 
 
-def run_model_tests(my_predbat):
-    print("**** Running Model tests ****")
+def run_model_tests(my_predbat, prediction_kernel=False):
+    print("**** Running Model tests{} ****".format(" (C++ prediction kernel enabled)" if prediction_kernel else ""))
+    my_predbat.prediction_kernel_enable = prediction_kernel
     reset_inverter(my_predbat)
     import_rate = 10.0
     export_rate = 5.0
@@ -2008,6 +2009,7 @@ def run_model_tests(my_predbat):
     # pv_ac_limit must NOT apply to hybrid inverters (PV is DC-coupled, clipping handled by inverter_limit)
     failed |= simple_scenario("pv_ac_limit_hybrid_ignored", my_predbat, 0, 2.0, assert_final_metric=-export_rate * 24, assert_final_soc=24, with_battery=True, hybrid=True, pv_ac_limit=1.5, assert_clipped=0)
 
+    my_predbat.prediction_kernel_enable = False
     if failed:
         print("**** ERROR: Some Model tests failed ****")
     return failed

@@ -117,17 +117,20 @@ def download_predbat_file_from_github(tag, filename, new_filename, repository=No
             value is resolved via ``resolve_predbat_repository()``.
 
     Returns:
-        str: The contents of the file.
+        bytes: The raw contents of the file.
     """
     repository = resolve_predbat_repository(repository)
     url = "https://raw.githubusercontent.com/{}/".format(repository) + tag + "/apps/predbat/{}".format(filename)
     print("Downloading {}".format(url))
     r = requests.get(url, headers={})
     if r.ok:
-        data = r.text
+        # Use raw bytes (not r.text, which decodes through a guessed text encoding and would
+        # corrupt binary files such as the prediction kernel .so binaries) and write in binary
+        # mode so both source files and binaries round-trip byte-for-byte.
+        data = r.content
         print("Got data, writing to {}".format(new_filename))
         if new_filename:
-            with open(new_filename, "w") as han:
+            with open(new_filename, "wb") as han:
                 han.write(data)
         return data
     else:

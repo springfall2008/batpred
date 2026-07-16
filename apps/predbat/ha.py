@@ -18,15 +18,16 @@ HAHistory for automatic entity history tracking and pruning.
 """
 
 import os
-from datetime import timedelta, datetime
+from datetime import timedelta, datetime, timezone
 import asyncio
 from aiohttp import ClientSession, WSMsgType
+import array
+import bisect
 import json
 import requests
 import traceback
 import threading
 import time
-import copy
 from utils import str2time
 from const import TIME_FORMAT_HA, TIMEOUT, TIME_FORMAT_HA_TZ
 from component_base import ComponentBase
@@ -56,6 +57,145 @@ def run_async(coro):
         return asyncio.run(coro)
 
 
+class EntityHistory:
+    """
+    Compact columnar storage for a single entity's history.
+
+    Stores timestamps as epoch seconds and numeric states in typed arrays (~16 bytes
+    per record) instead of keeping the decoded JSON record dicts (~300 bytes per
+    record). Non-numeric states and per-record attribute variations are kept in small
+    exception maps keyed by epoch time. Records are materialised back into the
+    standard list-of-dicts form on demand by to_records(). Records must be appended
+    oldest to newest so the epoch array stays sorted.
+    """
+
+    __slots__ = ["epochs", "states", "state_exceptions", "shared_attributes", "attribute_exceptions"]
+
+    def __init__(self):
+        """
+        Create an empty history store
+        """
+        self.epochs = array.array("d")
+        self.states = array.array("d")
+        self.state_exceptions = {}
+        self.shared_attributes = None
+        self.attribute_exceptions = {}
+
+    def __len__(self):
+        """
+        Return the number of records stored
+        """
+        return len(self.epochs)
+
+    def __getitem__(self, index):
+        """
+        Materialise and return the record dict at the given integer index
+        """
+        epoch = self.epochs[index]
+        if self.state_exceptions and epoch in self.state_exceptions:
+            state = self.state_exceptions[epoch]
+        else:
+            state = self.states[index]
+        if self.attribute_exceptions and epoch in self.attribute_exceptions:
+            attributes = dict(self.attribute_exceptions[epoch])
+        else:
+            attributes = dict(self.shared_attributes) if self.shared_attributes else {}
+        return {"state": state, "last_updated": datetime.fromtimestamp(epoch, timezone.utc).isoformat(), "attributes": attributes}
+
+    def __iter__(self):
+        """
+        Iterate over the stored records, materialising each as a record dict
+        """
+        for index in range(len(self.epochs)):
+            yield self[index]
+
+    def append_record(self, record, epoch=None):
+        """
+        Append a single history record, which must be newer than all stored records.
+
+        Returns True if the record was stored, False if its last_updated could not be parsed.
+        """
+        if epoch is None:
+            last_updated = record.get("last_updated", None)
+            if not last_updated:
+                return False
+            try:
+                epoch = str2time(last_updated).timestamp()
+            except (ValueError, TypeError):
+                return False
+
+        state = record.get("state", None)
+        try:
+            state_value = float(state)
+        except (ValueError, TypeError):
+            state_value = None
+        if state_value is None or state_value != state_value:
+            # Keep non-numeric states (including NaN, which would break equality checks) as-is
+            self.state_exceptions[epoch] = state
+            state_value = 0.0
+        self.epochs.append(epoch)
+        self.states.append(state_value)
+
+        attributes = record.get("attributes", None) or {}
+        if self.shared_attributes is None:
+            self.shared_attributes = dict(attributes)
+        elif attributes != self.shared_attributes:
+            self.attribute_exceptions[epoch] = dict(attributes)
+        return True
+
+    @classmethod
+    def from_records(cls, records):
+        """
+        Build a store from a list of history record dicts ordered oldest to newest
+        """
+        store = cls()
+        for record in records:
+            store.append_record(record)
+        return store
+
+    def to_records(self):
+        """
+        Materialise the store back into the standard list of history record dicts.
+
+        Each returned record dict, and its "state"/"last_updated" values, are freshly
+        created and safe for callers to reassign. The "attributes" dict is NOT: records
+        that shared identical attributes when stored share one attributes dict object in
+        the output, so mutating it in place (rather than replacing record["attributes"]
+        wholesale) will affect every other record sharing it. Callers that need to edit
+        attributes in place must dict.copy() first.
+        """
+        shared_attributes = dict(self.shared_attributes) if self.shared_attributes else {}
+        state_exceptions = self.state_exceptions
+        attribute_exceptions = self.attribute_exceptions
+        states = self.states
+        utc = timezone.utc
+        records = []
+        for index, epoch in enumerate(self.epochs):
+            if state_exceptions and epoch in state_exceptions:
+                state = state_exceptions[epoch]
+            else:
+                state = states[index]
+            if attribute_exceptions and epoch in attribute_exceptions:
+                attributes = dict(attribute_exceptions[epoch])
+            else:
+                attributes = shared_attributes
+            records.append({"state": state, "last_updated": datetime.fromtimestamp(epoch, utc).isoformat(), "attributes": attributes})
+        return records
+
+    def prune(self, cutoff_epoch):
+        """
+        Drop all records older than the given cutoff epoch time
+        """
+        index = bisect.bisect_left(self.epochs, cutoff_epoch)
+        if index > 0:
+            self.epochs = self.epochs[index:]
+            self.states = self.states[index:]
+            if self.state_exceptions:
+                self.state_exceptions = {epoch: value for epoch, value in self.state_exceptions.items() if epoch >= cutoff_epoch}
+            if self.attribute_exceptions:
+                self.attribute_exceptions = {epoch: value for epoch, value in self.attribute_exceptions.items() if epoch >= cutoff_epoch}
+
+
 class HAHistory(ComponentBase):
     """
     Home Assistant History Data
@@ -83,8 +223,13 @@ class HAHistory(ComponentBase):
         result = None
 
         with self.history_lock:
-            if self.history_data.get(entity_id, None) and self.history_entities.get(entity_id, 0) >= days:
-                result = [self.history_data[entity_id]]
+            store = self.history_data.get(entity_id, None)
+            if store and self.history_entities.get(entity_id, 0) >= days:
+                # Materialise fresh record dicts from the compact store (replaces the previous
+                # deepcopy) - callers can reassign record["state"]/["attributes"] without
+                # corrupting the cache, but must not mutate a returned attributes dict in place
+                # (see EntityHistory.to_records docstring: it may be shared across records)
+                result = [store.to_records()]
 
         if result is None:
             ha_interface = self.base.components.get_component("ha")
@@ -99,15 +244,9 @@ class HAHistory(ComponentBase):
                 history_data = history_data[0]
                 if tracked:
                     self.update_entity(entity_id, history_data)
+                # The store keeps its own compact copy of the data, so the fetched records
+                # can be handed to the caller directly
                 result = [history_data]
-
-        if result is not None:
-            # Do not return the internal cached structures directly: callers could mutate the list or observe
-            # concurrent updates performed by other threads without holding history_lock, leading to cache
-            # corruption or inconsistent snapshots. Instead, take history_lock and return a deep copy.
-
-            with self.history_lock:
-                result = copy.deepcopy(result)
 
         return result
 
@@ -118,22 +257,8 @@ class HAHistory(ComponentBase):
         with self.history_lock:
             for entity_id in list(self.history_data.keys()):
                 max_days = self.history_entities.get(entity_id, 30)
-                cutoff_time = now - timedelta(days=max_days)
-                new_history = []
-                keep_all = False
-                for entry in self.history_data[entity_id]:
-                    if keep_all:
-                        new_history.append(entry)
-                    else:
-                        last_updated = entry.get("last_updated", None)
-                        if last_updated:
-                            entry_time = str2time(last_updated)
-                            if entry_time >= cutoff_time:
-                                new_history.append(entry)
-                                # Keep remaining entries now as they are in order
-                                keep_all = True
-                        # Note: Entries without last_updated are dropped
-                self.history_data[entity_id] = new_history
+                cutoff_epoch = (now - timedelta(days=max_days)).timestamp()
+                self.history_data[entity_id].prune(cutoff_epoch)
 
     def update_entity(self, entity_id, new_history_data):
         """
@@ -152,38 +277,45 @@ class HAHistory(ComponentBase):
                     entry["attributes"].pop(attr, None)
             for entry_attr in FILTER_ENTRIES:
                 entry.pop(entry_attr, None)
+            # Normalise numeric states to float here (mirroring EntityHistory.append_record) so a
+            # tracked entity's first (uncached) fetch returns the same state type as later cache hits
+            try:
+                state_value = float(entry["state"])
+            except (ValueError, TypeError, KeyError):
+                state_value = None
+            if state_value is not None and state_value == state_value:
+                entry["state"] = state_value
 
         with self.history_lock:
-            current_history_data = self.history_data.get(entity_id, None)
-            if current_history_data and len(current_history_data) > 0:
-                first_updated = current_history_data[0].get("last_updated", None)
-                last_updated = current_history_data[-1].get("last_updated", None)
-            else:
-                first_updated = None
-                last_updated = None
-
-            if last_updated:
-                # Find the last timestamp in the previous history data, data is always in order from oldest to newest
-                first_timestamp = str2time(first_updated)
-                last_timestamp = str2time(last_updated)
-                # Scan new data, using the timestamp only add new entries
-                add_all = False
+            store = self.history_data.get(entity_id, None)
+            if store and len(store) > 0:
+                # Scan new data (always in order from oldest to newest), appending entries newer
+                # than the stored data and collecting any entries older than the stored data
+                first_epoch = store.epochs[0]
+                last_epoch = store.epochs[-1]
+                older_entries = []
                 for entry in new_history_data:
-                    if add_all:
-                        self.history_data[entity_id].append(entry)
-                    else:
-                        this_updated = entry.get("last_updated", None)
-                        if this_updated:
-                            entry_time = str2time(this_updated)
-                            if entry_time > last_timestamp:
-                                self.history_data[entity_id].append(entry)
-                                add_all = True  # Remaining entries are all newer
-                            elif entry_time < first_timestamp:
-                                self.history_data[entity_id].append(entry)
+                    this_updated = entry.get("last_updated", None)
+                    if not this_updated:
+                        continue
+                    try:
+                        epoch = str2time(this_updated).timestamp()
+                    except (ValueError, TypeError):
+                        continue
+                    if epoch > last_epoch:
+                        store.append_record(entry, epoch=epoch)
+                        last_epoch = epoch
+                    elif epoch < first_epoch:
+                        older_entries.append(entry)
 
-                self.history_data[entity_id].sort(key=lambda x: x.get("last_updated"))
+                if older_entries:
+                    # Rebuild the store with the older entries merged in (rare, only happens
+                    # when more days of history are requested than previously cached)
+                    combined = older_entries + store.to_records()
+                    combined.sort(key=lambda x: str2time(x.get("last_updated")))
+                    self.history_data[entity_id] = EntityHistory.from_records(combined)
             else:
-                self.history_data[entity_id] = new_history_data
+                self.history_data[entity_id] = EntityHistory.from_records(new_history_data)
 
         # Update last success timestamp
         self.update_success_timestamp()
@@ -202,10 +334,10 @@ class HAHistory(ComponentBase):
             now = datetime.now(self.local_tz)
             for entity_id in list(self.history_entities.keys()):
                 # self.log("HAHistory: Updating history for {}".format(entity_id))
-                current_history_data = self.history_data.get(entity_id, None)
-                last_updated = current_history_data[-1].get("last_updated", None) if current_history_data and len(current_history_data) > 0 else None
-                if last_updated:
-                    history_data = ha_interface.get_history(entity_id, now, days=1, from_time=str2time(last_updated))
+                store = self.history_data.get(entity_id, None)
+                last_updated_time = datetime.fromtimestamp(store.epochs[-1], timezone.utc) if store and len(store) > 0 else None
+                if last_updated_time:
+                    history_data = ha_interface.get_history(entity_id, now, days=1, from_time=last_updated_time)
                     if history_data and len(history_data) > 0:
                         history_data = history_data[0]
                         self.update_entity(entity_id, history_data)

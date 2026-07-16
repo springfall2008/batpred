@@ -969,6 +969,7 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_write_time_windows_v1_mode())
         failed |= asyncio.run(test_write_time_windows_v2_no_changes())
         failed |= asyncio.run(test_write_time_windows_v2_stale_slot_clearing())
+        failed |= asyncio.run(test_write_time_windows_v2_no_active_slot())
         failed |= asyncio.run(test_write_time_windows_zero_charge_current())
         failed |= asyncio.run(test_write_time_windows_v1_slot_detection())
         failed |= asyncio.run(test_write_time_windows_v1_discharge_slot_detection())
@@ -1905,6 +1906,53 @@ async def test_write_time_windows_v2_stale_slot_clearing():
     assert slot2_time_idx < first_slot1_active, "Slot 2 time clear must precede slot 1 active write"
 
     print("PASSED: V2 mode two-pass clears stale disabled slots before writing active slot")
+    return False
+
+
+async def test_write_time_windows_v2_no_active_slot():
+    """Test write_time_windows_if_changed in V2 mode when slot 1 has no charge or discharge window.
+
+    Regression test: when neither charge nor discharge is enabled for slot 1, the inverter has no
+    time-of-use schedule configured and will not retain the TOU bit (SOLIS_BIT_TOU_MODE) on CID 636 -
+    it always reads back with that bit cleared. Predbat must mirror the V1 branch's behaviour and
+    request the '... - No Timed Charge/Discharge' mode variant in this case, otherwise every cycle
+    writes a value the inverter immediately rejects, producing a permanent verify-failure loop.
+    """
+    print("\n=== Test: write_time_windows_if_changed V2 mode no active slot ===")
+
+    api = MockSolisAPI()
+    api._test_v2_mode = True  # Enable V2 mode
+    api._mock_storage_mode = True  # Mock storage mode tracking
+    inverter_sn = "TEST123"
+    api.inverter_sn = [inverter_sn]
+
+    # Slot 1 has neither charge nor discharge enabled - no TOU schedule configured at all
+    api.charge_discharge_time_windows[inverter_sn] = {
+        1: {
+            "charge_enable": 0,
+            "charge_start_time": "00:00",
+            "charge_end_time": "00:00",
+            "charge_soc": 100,
+            "charge_current": 50,
+            "discharge_enable": 0,
+            "discharge_start_time": "00:00",
+            "discharge_end_time": "00:00",
+            "discharge_soc": 10,
+            "discharge_current": 30,
+        }
+    }
+
+    api.cached_values[inverter_sn] = {}
+
+    result = await api.write_time_windows_if_changed(inverter_sn)
+    assert result == True, "write_time_windows_if_changed should return True"
+
+    # Storage mode must use the 'No Timed Charge/Discharge' variant since no slot is active
+    storage_mode_calls = api.set_storage_mode_calls
+    assert len(storage_mode_calls) == 1, f"Expected 1 storage mode call, got {len(storage_mode_calls)}"
+    assert storage_mode_calls[0]["mode"] == "Self-Use - No Timed Charge/Discharge", f"Storage mode should be 'Self-Use - No Timed Charge/Discharge' when no slot is active, got '{storage_mode_calls[0]['mode']}'"
+
+    print("PASSED: V2 mode uses 'No Timed Charge/Discharge' variant when no slot is active")
     return False
 
 

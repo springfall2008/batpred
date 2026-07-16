@@ -582,6 +582,11 @@ class WebInterface(ComponentBase):
             text += "<tr><td>Status</td><td{}>{}</td></tr>\n".format(debug_title, status_full)
         text += "<tr><td>Last Updated</td><td>{}</td></tr>\n".format(last_updated)
         last_started = self.get_state_wrapper(self.prefix + ".last_started", default=None)
+        if last_started:
+            try:
+                last_started = str2time(last_started).replace(tzinfo=None)
+            except (ValueError, TypeError) as e:
+                self.log("Warn: Failed to parse last_started time {}: {}".format(last_started, e))
         text += "<tr><td>Last Started</td><td>{}</td></tr>\n".format(last_started)
         text += "<tr><td>Version</td><td>{}</td></tr>\n".format(version)
 
@@ -2659,13 +2664,18 @@ chart.render();
             text += "</table>"
         elif isinstance(value, str):
             pat = re.match(r"^[a-zA-Z_]+\.\S+", value)
+            # Only try entity resolution if the schema type for this arg can be a sensor.
+            # Pure string fields (e.g. gateway_mqtt_host = "mqtt.predbat.com") must not
+            # be treated as HA entity IDs even though they contain a dot.
+            schema_type = APPS_SCHEMA.get(arg, {}).get("type", "")
+            is_pure_string = schema_type and not any(t.startswith("sensor") for t in schema_type.split("|"))
             if "{" in value:
                 text = self.base.resolve_arg(arg, value, indirect=False, quiet=True)
                 if text is None:
                     text = '<span style="background-color:#FFAAAA"> {} </p>'.format(value)
                 else:
                     text = self.render_type(arg, text, parent_path, row_counter)
-            elif pat and (arg != "service"):
+            elif pat and (arg != "service") and not is_pure_string:
                 entity_id = value
                 unit_of_measurement = ""
                 if "$" in entity_id:
