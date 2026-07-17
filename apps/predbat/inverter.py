@@ -588,8 +588,12 @@ class Inverter:
             existing_history = {}
         today_key = str(self.base.now_utc.date())
 
-        # Already calculated today - use stored mean from sensor state
-        trimmed_mean_state = self.base.get_state_wrapper(soc_max_sensor_name)
+        # Already calculated today - use stored mean from sensor state. Use load_previous_value_from_ha
+        # (same recorder fallback as existing_history above) so that after a mid-day HA restart the
+        # trimmed mean is recovered too; otherwise today_key is present in the recovered history (so the
+        # recalculation below is skipped) while the live-only state read returns None, silently disabling
+        # battery_scaling_auto for the rest of the day.
+        trimmed_mean_state = self.base.load_previous_value_from_ha(soc_max_sensor_name)
         try:
             trimmed_mean = float(trimmed_mean_state) if trimmed_mean_state is not None else None
         except (ValueError, TypeError):
