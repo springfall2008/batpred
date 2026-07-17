@@ -165,10 +165,7 @@ class TestHAInterface:
             return result
         else:
             # print("Getting state: {} attribute {} => default {} ".format(entity_id, attribute, default))
-            if attribute:
-                return ""
-            else:
-                return default
+            return default
 
     def call_service(self, service, **kwargs):
         print("Calling service: {} {}".format(service, kwargs))

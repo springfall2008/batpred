@@ -751,14 +751,111 @@ class EnphaseAPI(ComponentBase):
                 await self.get_schedules(site_id)
         return result is not None
 
+    def _is_schedule_pending(self, site_id, family):
+        """Return True when the cached cloud schedule exists but is stuck in pending status."""
+        family_key = family.lower()
+        entry = self.schedules.get(site_id, {}).get(family_key, {})
+        # get_schedules always stores a "status" key (None when the cloud omits scheduleStatus),
+        # so coalesce to "" before comparing rather than relying on the dict-get default.
+        return isinstance(entry, dict) and (entry.get("status") or "").lower() == "pending"
+
+    def _invalidate_cached_schedule(self, site_id, family):
+        """Clear the cached cloud schedule so the next apply detects a diff and retries.
+
+        Sets startTime to an empty string so that schedules_equal fails its window
+        comparison for an enabled schedule (``""[:5] != start_hm``), causing
+        _write_schedule to re-issue the update on the next apply as a PUT (the id is
+        preserved). Invalidation only runs after a failed activation, which only happens
+        for enabled schedules, so the disable path is never affected.
+        """
+        family_key = family.lower()
+        entry = self.schedules.get(site_id, {}).get(family_key)
+        if isinstance(entry, dict):
+            entry["startTime"] = ""
+
+    async def _activate_control_mode(self, site_id, family, body, apply_cache, label):
+        """Commit a freshly written schedule to the gateway via a batterySettings PUT.
+
+        A schedule write leaves the schedule in "pending" status; this follow-up PUT
+        (carrying a per-mode ``body``) transitions it to active so the gateway acts on it.
+        On success it clears the cached pending marker and calls ``apply_cache`` to
+        optimistically record the change in ``battery_settings``; on failure it logs and
+        invalidates the cached schedule so the next apply re-detects a diff and retries
+        write + activation. Returns True if the PUT succeeded.
+        """
+        params = {"source": "enho"}
+        if self.user_id:
+            params["userId"] = self.user_id
+        result = await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/batterySettings/{site_id}", family="battery_config", params=params, json_body=body)
+        if result is not None:
+            apply_cache(self.battery_settings.setdefault(site_id, {}))
+            entry = self.schedules.get(site_id, {}).get(family.lower())
+            if isinstance(entry, dict):
+                entry.pop("status", None)
+        else:
+            self.log(f"Warn: Enphase: {label} activation failed for site {site_id}")
+            self._invalidate_cached_schedule(site_id, family)
+        return result is not None
+
+    async def _activate_cfg_mode(self, site_id, family=SCHEDULE_CHARGE):
+        """Activate charge-from-grid (CFG) after writing its schedule.
+
+        The activation PUT both accepts the ITC disclaimer inline (``acceptedItcDisclaimer``)
+        and enables ``chargeFromGrid``, transitioning the pending schedule to active so the
+        gateway starts charging. See _activate_control_mode for success/failure handling.
+        """
+        body = {"chargeFromGrid": True, "acceptedItcDisclaimer": datetime.now(timezone.utc).isoformat()}
+
+        def apply_cache(settings):
+            """Record the enabled charge-from-grid setting in the battery-settings cache."""
+            settings["chargeFromGrid"] = True
+
+        return await self._activate_control_mode(site_id, family, body, apply_cache, "CFG")
+
+    async def _activate_dtg_mode(self, site_id, family=SCHEDULE_EXPORT):
+        """Activate discharge-to-grid (DTG) after writing its schedule; see _activate_control_mode."""
+
+        def apply_cache(settings):
+            """Record the enabled dtgControl setting in the battery-settings cache."""
+            settings.setdefault("dtgControl", {})["enabled"] = True
+
+        return await self._activate_control_mode(site_id, family, {"dtgControl": {"enabled": True}}, apply_cache, "DTG")
+
+    async def _activate_rbd_mode(self, site_id, family=SCHEDULE_FREEZE):
+        """Activate restrict-battery-discharge (RBD) after writing its schedule; see _activate_control_mode."""
+
+        def apply_cache(settings):
+            """Record the enabled rbdControl setting in the battery-settings cache."""
+            settings.setdefault("rbdControl", {})["enabled"] = True
+
+        return await self._activate_control_mode(site_id, family, {"rbdControl": {"enabled": True}}, apply_cache, "RBD")
+
+    async def _write_and_activate(self, site_id, family, start_time_ha, end_time_ha, limit, enabled, activate, force_activate=False):
+        """Write one schedule family, then activate it when appropriate.
+
+        Activation fires when the mode is enabled and any of: the schedule was just written,
+        ``force_activate`` is set (e.g. the underlying battery setting still needs enabling), or
+        the cached schedule is stuck pending. Activation PUTs are not schedule writes, so the
+        return value reflects only whether _write_schedule issued a write.
+        """
+        wrote = await self._write_schedule(site_id, family, start_time_ha, end_time_ha, limit, enabled)
+        if enabled and (wrote or force_activate or self._is_schedule_pending(site_id, family)):
+            if not wrote:
+                self.log(f"Enphase: {family} schedule for site {site_id} needs activation; activating without rewrite")
+            await activate(site_id)
+        return wrote
+
     async def _ensure_charge_from_grid(self, site_id):
-        """Enable the charge-from-grid setting, accepting the one-time ITC disclaimer first."""
+        """Accept the one-time ITC disclaimer required before charge-from-grid can be enabled.
+
+        The ``chargeFromGrid`` battery setting itself is enabled by the CFG activation PUT
+        (_activate_cfg_mode), so this only performs the disclaimer acceptance and avoids a
+        redundant second batterySettings write on the enable path.
+        """
         if self.battery_settings.get(site_id, {}).get("chargeFromGrid"):
             return
-        self.log(f"Enphase: Enabling charge-from-grid on site {site_id}")
+        self.log(f"Enphase: Accepting ITC disclaimer on site {site_id}")
         await self.request_json("POST", f"{BATTERY_CONFIG_BASE}/batterySettings/acceptDisclaimer/{site_id}", family="battery_config", json_body={"disclaimer-type": "itc"})
-        await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/batterySettings/{site_id}", family="battery_config", json_body={"chargeFromGrid": True})
-        self.battery_settings.setdefault(site_id, {})["chargeFromGrid"] = True
 
     async def set_reserve(self, site_id, reserve):
         """Write the battery backup reserve (batteryBackupPercentage) via a profile PUT.
@@ -818,11 +915,14 @@ class EnphaseAPI(ComponentBase):
             await self.set_reserve(site_id, desired_reserve)
             wrote = True
 
-        # Forced charge window (CFG)
+        # Forced charge window (CFG). Enabling chargeFromGrid *is* the activation PUT, so force
+        # activation whenever the setting is still off, even if the schedule already matches.
         charge = local.get("charge", {})
-        if charge.get("enable"):
+        charge_enabled = bool(charge.get("enable"))
+        if charge_enabled:
             await self._ensure_charge_from_grid(site_id)
-        wrote |= await self._write_schedule(site_id, SCHEDULE_CHARGE, charge.get("start_time", "00:00:00"), charge.get("end_time", "00:00:00"), charge.get("soc", 100), charge.get("enable", False))
+        cfg_needs_enable = not self.battery_settings.get(site_id, {}).get("chargeFromGrid")
+        wrote |= await self._write_and_activate(site_id, SCHEDULE_CHARGE, charge.get("start_time", "00:00:00"), charge.get("end_time", "00:00:00"), charge.get("soc", 100), charge_enabled, self._activate_cfg_mode, force_activate=cfg_needs_enable)
 
         # Export window. Predbat encodes the mode in the export/discharge target SOC:
         #   < 99  -> real forced export to that floor (DTG)
@@ -842,10 +942,10 @@ class EnphaseAPI(ComponentBase):
         dtg_limit = max(export_soc, int(local.get("reserve", 0)))
 
         # Forced export to a target (DTG). A configured inverter always supports DTG.
-        wrote |= await self._write_schedule(site_id, SCHEDULE_EXPORT, export_start, export_end, dtg_limit, real_export)
+        wrote |= await self._write_and_activate(site_id, SCHEDULE_EXPORT, export_start, export_end, dtg_limit, real_export, self._activate_dtg_mode)
 
         # Freeze export = restrict battery discharge (RBD) over the export window
-        wrote |= await self._write_schedule(site_id, SCHEDULE_FREEZE, export_start, export_end, None, freeze_export)
+        wrote |= await self._write_and_activate(site_id, SCHEDULE_FREEZE, export_start, export_end, None, freeze_export, self._activate_rbd_mode)
         return wrote
 
     async def get_battery_status(self, site_id):

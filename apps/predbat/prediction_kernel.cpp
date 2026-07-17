@@ -504,12 +504,14 @@ int32_t pk_run(int64_t handle, const PkScenario *s, PkResult *out)
                         // Note: mirrors the Python engine exactly - the cumulative premium amount is added per car
                         car_amount_premium += car_load_scale / c->car_charging_loss;
                         load_yesterday += car_amount_premium;
-                        // Model not allowing the car to charge from the battery
-                        if ((car_load_scale > 0) && (!c->car_charging_from_battery) && c->set_charge_window) {
-                            discharge_rate_now = battery_rate_min; // 0
-                        }
                     } else {
                         car_load_energy_bypass += car_load_scale / c->car_charging_loss;
+                    }
+
+                    // Model not allowing the car to charge from the battery - applies regardless of
+                    // car_energy_reported_load, which only controls CT-clamp house-load inclusion
+                    if ((car_load_scale > 0) && (!c->car_charging_from_battery) && c->set_charge_window) {
+                        discharge_rate_now = battery_rate_min; // 0
                     }
                 }
             }

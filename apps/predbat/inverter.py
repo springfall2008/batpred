@@ -581,13 +581,19 @@ class Inverter:
             self.base.battery_scaling_auto = True
 
         # Run find_battery_size at most once per calendar day, always update the history sensor
-        existing_history = self.base.get_state_wrapper(soc_max_sensor_name, attribute="history", default={})
+        # Use load_previous_value_from_ha so the history survives a Home Assistant restart (the sensor
+        # state is ephemeral and is not restored by HA, but the recorder history is)
+        existing_history = self.base.load_previous_value_from_ha(soc_max_sensor_name, attribute="history") or {}
         if not isinstance(existing_history, dict):
             existing_history = {}
         today_key = str(self.base.now_utc.date())
 
-        # Already calculated today - use stored mean from sensor state
-        trimmed_mean_state = self.base.get_state_wrapper(soc_max_sensor_name)
+        # Already calculated today - use stored mean from sensor state. Use load_previous_value_from_ha
+        # (same recorder fallback as existing_history above) so that after a mid-day HA restart the
+        # trimmed mean is recovered too; otherwise today_key is present in the recovered history (so the
+        # recalculation below is skipped) while the live-only state read returns None, silently disabling
+        # battery_scaling_auto for the rest of the day.
+        trimmed_mean_state = self.base.load_previous_value_from_ha(soc_max_sensor_name)
         try:
             trimmed_mean = float(trimmed_mean_state) if trimmed_mean_state is not None else None
         except (ValueError, TypeError):
@@ -645,7 +651,7 @@ class Inverter:
         else:
             sensor_name = "sensor.{}_soc_max_calculated".format(self.base.prefix)
 
-        history = self.base.get_state_wrapper(sensor_name, attribute="history", default={})
+        history = self.base.load_previous_value_from_ha(sensor_name, attribute="history") or {}
         if not isinstance(history, dict):
             history = {}
 

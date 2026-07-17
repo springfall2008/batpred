@@ -111,6 +111,12 @@ especially if you have a small battery. If you set it to zero then Predbat may n
 
 To reverse the direction of your [grid power entity](apps-yaml.md#power-data) in the Predbat web console, you may need to set '**grid_power_invert** to true if your **grid_power** is positive when importing.
 
+## In the power flow diagram the grid always shows 0W even though I'm clearly exporting (or importing)
+
+**grid_power** must be a single signed sensor - negative while importing, positive while exporting (or the reverse, corrected with **grid_power_invert**). Some meter/CT-clamp integrations instead expose two separate sensors that are always zero or positive - one for import, one for export - rather than one signed sensor. If **grid_power** is pointed at one of these (e.g. the import-only sensor), it will correctly read 0 whenever you're exporting (and vice versa), because that sensor structurally cannot represent flow in the other direction - Predbat is displaying it faithfully, it just isn't the right sensor for this field.
+
+If this is your situation, create a template sensor in Home Assistant that combines the two into one signed value (e.g. `export - import`, or `-import` when only importing) and point **grid_power** at that combined template instead of either sensor directly.
+
 ## My plan is freeze charging or holding at 100% battery a lot
 
 **Round trip losses**

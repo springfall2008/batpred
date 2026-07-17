@@ -37,6 +37,9 @@ pred_bat:
   # When True, Predbat won't take over pv_today/pv_power from Enphase (e.g. if you already
   # have a better PV sensor configured elsewhere)
   enphase_automatic_ignore_pv: False
+  # If your Enlighten account has more than one site, set the site ID to use here.
+  # Leave commented and Predbat will use the first site it discovers.
+  #enphase_site_id: 'xxxxxxx'
   #
   # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
   #balance_inverters_seconds: 60

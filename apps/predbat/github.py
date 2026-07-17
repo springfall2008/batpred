@@ -68,32 +68,45 @@ class GitHub:
     def download_predbat_releases_url(self, url):
         """
         Download release data from GitHub, but use the cache for 2 hours
+
+        On failure (network error, non-2xx status, or bad JSON) falls back to the last
+        successfully cached data if any, and never caches the failure itself - this way
+        a transient error (e.g. rate limiting) is retried on the next plan cycle rather
+        than getting stuck for the full 2-hour cache window after it's already cleared.
         """
         self._load_github_url_cache_from_storage()
 
         # Check the cache first
         now = datetime.now()
-        if url in self.github_url_cache:
-            entry = self.github_url_cache[url]
-            stamp = entry.get("stamp")
-            pdata = entry.get("data")
+        cached_entry = self.github_url_cache.get(url)
+        if not isinstance(cached_entry, dict):
+            cached_entry = None
+
+        if cached_entry:
+            stamp = cached_entry.get("stamp")
+            pdata = cached_entry.get("data")
             if stamp is not None and pdata is not None:
                 age = now - stamp
                 if age.total_seconds() < (120 * 60):
                     self.log("Using cached GitHub data for {} age {} minutes".format(url, dp1(age.total_seconds() / 60)))
                     return pdata
 
+        stale_data = (cached_entry.get("data") or []) if cached_entry else []
         try:
-            r = requests.get(url)
+            r = requests.get(url, timeout=10)
         except Exception:
             self.log("Warn: Unable to load data from GitHub URL: {}".format(url))
-            return []
+            return stale_data
+
+        if not r.ok:
+            self.log("Warn: GitHub returned status {} for {} - will retry next cycle".format(r.status_code, url))
+            return stale_data
 
         try:
             pdata = r.json()
         except requests.exceptions.JSONDecodeError:
             self.log("Warn: Unable to decode data from GitHub URL: {}".format(url))
-            return []
+            return stale_data
 
         # Save to in-memory cache and persist to storage
         self.github_url_cache[url] = {}
