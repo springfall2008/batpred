@@ -1024,15 +1024,8 @@ class Plan:
             if clipping_start_override is not None:
                 early_start = midnight + clipping_start_override
 
-            # If stretching back, ensure we don't stretch into periods of negative import rates
-            # where the optimizer might want to charge the battery.
             if early_start < morning_start:
-                test_start = morning_start
-                while test_start > early_start:
-                    if getattr(self, "rate_import", {}).get(test_start - 30, 9999) <= 0:
-                        break
-                    test_start -= 30
-                morning_start = test_start
+                morning_start = early_start
             morning_start = max(self.minutes_now, morning_start)
 
             morning_start = int(morning_start / 30) * 30  # Align to nearest 30 mins
