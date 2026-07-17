@@ -38,19 +38,21 @@ pred_bat:
   #
   # Obtain your API credentials and MQTT certificates from the Sigenergy Developer
   # Portal (https://developer.sigencloud.com) - see the 'Sigenergy Cloud' section of
-  # the inverter setup documentation for step-by-step instructions. Store the
-  # secrets in secrets.yaml and reference them here with !secret as shown below.
+  # the inverter setup documentation for step-by-step instructions.
   #
   # Your System ID can be found in the Sigenergy app under
   # Settings -> System Settings -> About -> System ID (tap the ID to copy it).
   # At least one system ID is required to onboard your system.
   sigenergy_system_id:
     - "YOUR_SYSTEM_ID"
-  sigenergy_app_key: !secret sigenergy_app_key
-  sigenergy_app_secret: !secret sigenergy_app_secret
-  sigenergy_ca_pem: !secret sigenergy_ca_pem
-  sigenergy_client_pem: !secret sigenergy_client_pem
-  sigenergy_client_key: !secret sigenergy_client_key
+  sigenergy_app_key: 'xxxxxxxx'
+  sigenergy_app_secret: 'xxxxxxxx'
+  # The MQTT certificates are multi-line PEM blocks. Store them in secrets.yaml as
+  # literal (|) blocks and reference them with !secret, then uncomment the three
+  # lines below (see the 'Sigenergy Cloud' section of the docs for the exact format).
+  #sigenergy_ca_pem: !secret sigenergy_ca_pem
+  #sigenergy_client_pem: !secret sigenergy_client_pem
+  #sigenergy_client_key: !secret sigenergy_client_key
   # When True Predbat wires up all the sensor and control entities automatically
   sigenergy_automatic: True
   # Set to False to monitor only (Predbat will not send charge/discharge/mode commands)
