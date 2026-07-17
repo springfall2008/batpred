@@ -1,12 +1,12 @@
 # ------------------------------------------------------------------
-# This is an example configuration, please modify it
+# Sigenergy Cloud template
 # ------------------------------------------------------------------
 ---
 pred_bat:
   module: predbat
   class: PredBat
 
-  # Sets the prefix for all created entities in HA - only change if you want to run more than once instance
+  # Sets the prefix for all created entities in HA - only change if you want to run more than one instance
   prefix: predbat
 
   # Timezone to work in
@@ -28,18 +28,39 @@ pred_bat:
   # To disable set it to 1440
   load_filter_threshold: 30
 
-  # Enter the username/password you use to log in to the Enphase Enlighten app/web site.
-  # There is no official Enphase API with battery control, so Predbat talks to the same
-  # unofficial web endpoints the Enlighten app uses.
-  enphase_username: 'xxxxxxx'
-  enphase_password: 'xxxxxxx'
-  enphase_automatic: True
-  # When True, Predbat won't take over pv_today/pv_power from Enphase (e.g. if you already
-  # have a better PV sensor configured elsewhere)
-  enphase_automatic_ignore_pv: False
-  # If your Enlighten account has more than one site, set the site ID to use here.
-  # Leave commented and Predbat will use the first site it discovers.
-  #enphase_site_id: 'xxxxxxx'
+  # ------------------------------------------------------------------
+  # Sigenergy Cloud API (experimental)
+  # ------------------------------------------------------------------
+  # Predbat connects directly to the Sigenergy OpenAPI and MQTT broker - no local
+  # Home Assistant Sigenergy integration is required. Predbat publishes all of the
+  # sensor entities itself and, with sigenergy_automatic: True, wires them into
+  # Predbat automatically so no manual sensor configuration is needed.
+  #
+  # Obtain your API credentials and MQTT certificates from the Sigenergy Developer
+  # Portal (https://developer.sigencloud.com) - see the 'Sigenergy Cloud' section of
+  # the inverter setup documentation for step-by-step instructions.
+  #
+  # Your System ID can be found in the Sigenergy app under
+  # Settings -> System Settings -> About -> System ID (tap the ID to copy it).
+  # At least one system ID is required to onboard your system.
+  sigenergy_system_id:
+    - "YOUR_SYSTEM_ID"
+  sigenergy_app_key: 'xxxxxxxx'
+  sigenergy_app_secret: 'xxxxxxxx'
+  # The MQTT certificates are multi-line PEM blocks. Store them in secrets.yaml as
+  # literal (|) blocks and reference them with !secret, then uncomment the three
+  # lines below (see the 'Sigenergy Cloud' section of the docs for the exact format).
+  #sigenergy_ca_pem: !secret sigenergy_ca_pem
+  #sigenergy_client_pem: !secret sigenergy_client_pem
+  #sigenergy_client_key: !secret sigenergy_client_key
+  # When True Predbat wires up all the sensor and control entities automatically
+  sigenergy_automatic: True
+  # Set to False to monitor only (Predbat will not send charge/discharge/mode commands)
+  sigenergy_enable_controls: True
+  # Regional OpenAPI endpoint - defaults to the EU server, change if you are elsewhere
+  #sigenergy_base_url: 'https://openapi-eu.sigencloud.com'
+  # MQTT broker host - by default this is derived automatically, only set to override
+  #sigenergy_mqtt_host: 'mqtt-eu.sigencloud.com'
   #
   # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
   #balance_inverters_seconds: 60
@@ -47,8 +68,8 @@ pred_bat:
 
   # Some inverters don't turn off when the rate is set to 0, still charge or discharge at around 200w
   # The value can be set here in watts to model this (doesn't change operation)
-  inverter_battery_rate_min:
-    - 200
+  #inverter_battery_rate_min:
+  #  - 200
 
   # Workaround to limit the maximum reserve setting, some inverters won't allow 100% to be set
   # Comment out if your inverter allows 100%
@@ -57,21 +78,20 @@ pred_bat:
   # Some batteries tail off their charge rate at high soc%
   # enter the charging curve here as a % of the max charge rate for each soc percentage.
   # the default is 1.0 (full power)
-  # The example below is from GE 9.5kwh battery with latest firmware and gen1 inverter
-  battery_charge_power_curve:
-    100 : 0.15
-    99 : 0.15
-    98 : 0.22
-    97 : 0.31
-    96 : 0.42
-    95 : 0.48
-    94 : 0.58
-    93 : 0.68
-    92 : 0.77
-    91 : 0.85
-    90 : 0.94
-  battery_discharge_power_curve:
-    4: 1.0
+  #battery_charge_power_curve:
+  #  100 : 0.15
+  #  99 : 0.15
+  #  98 : 0.22
+  #  97 : 0.31
+  #  96 : 0.42
+  #  95 : 0.48
+  #  94 : 0.58
+  #  93 : 0.68
+  #  92 : 0.77
+  #  91 : 0.85
+  #  90 : 0.94
+  #battery_discharge_power_curve:
+  #  4: 1.0
 
     # Inverter clock skew in minutes, e.g. 1 means it's 1 minute fast and -1 is 1 minute slow
   # Separate start and end options are applied to the start and end time windows, mostly as you want to start late (not early) and finish early (not late)
