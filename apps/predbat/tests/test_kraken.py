@@ -1692,7 +1692,7 @@ def test_fetch_dispatches_populates_device():
 
 
 def test_publish_dispatch_sensors_active_state_and_wiring():
-    """_publish_dispatch_sensors publishes an on/off binary_sensor and wires slot + num_cars."""
+    """_publish_dispatch_sensors publishes an on binary_sensor and wires slot + num_cars. and fetches rates if in an active dispatch."""
     from datetime import datetime, timezone, timedelta
 
     api = make_kraken_api()
@@ -1704,8 +1704,9 @@ def test_publish_dispatch_sensors_active_state_and_wiring():
     captured = {}
     api.set_arg = MagicMock(side_effect=lambda k, v: captured.__setitem__(k, v))
     api.get_arg = MagicMock(return_value=0)  # num_cars currently 0
+    api.async_fetch_rates = AsyncMock(return_value=[{"value_inc_vat": 7.00}])
 
-    api._publish_dispatch_sensors()
+    asyncio.run(api._publish_dispatch_sensors())
 
     entity = api.get_entity_name("binary_sensor", "intelligent_dispatch_12345")
     call = [c for c in api.dashboard_item.call_args_list if c.args[0] == entity][0]
@@ -1713,6 +1714,30 @@ def test_publish_dispatch_sensors_active_state_and_wiring():
     # Wired to the sensor list, and num_cars bumped so fetch.py actually consumes it.
     assert captured["octopus_intelligent_slot"] == [entity]
     assert captured["num_cars"] == 1
+
+    api.async_fetch_rates.assert_called()
+
+
+def test_publish_dispatch_sensors_non_active_state():
+    """_publish_dispatch_sensors publishes an off binary_sensor and doesn't fetches rates."""
+    from datetime import datetime, timezone, timedelta
+
+    api = make_kraken_api()
+    now = datetime.now(timezone.utc)
+    start = (now + timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    end = (now + timedelta(minutes=20)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    api.intelligent_devices = {"aaa-bbb-12345": {"device_id": "aaa-bbb-12345", "planned_dispatches": [{"start": start, "end": end, "charge_in_kwh": 5.0}], "completed_dispatches": []}}
+    api.dashboard_item = MagicMock()
+    api.get_arg = MagicMock(return_value=0)  # num_cars currently 0
+    api.async_fetch_rates = AsyncMock(return_value=[{"value_inc_vat": 24.5}])
+
+    asyncio.run(api._publish_dispatch_sensors())
+
+    entity = api.get_entity_name("binary_sensor", "intelligent_dispatch_12345")
+    call = [c for c in api.dashboard_item.call_args_list if c.args[0] == entity][0]
+    assert call.args[1] == "off", "a dispatch spanning now should make the sensor inactive"
+
+    api.async_fetch_rates.assert_not_called()
 
 
 def test_run_fetches_and_wires_dispatches():

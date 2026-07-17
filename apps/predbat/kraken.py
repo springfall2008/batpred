@@ -1234,7 +1234,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             new_completed = self._normalize_dispatches(data.get("completedDispatches"), completed=True)
             device["completed_dispatches"] = self._merge_completed_dispatches(device.get("completed_dispatches", []), new_completed)
 
-    def _publish_dispatch_sensors(self):
+    async def _publish_dispatch_sensors(self):
         """Publish an intelligent_dispatch binary_sensor per device and wire octopus_intelligent_slot.
 
         Sensor format matches OctopusAPI so predbat's fetch consumes it identically: state on/off if a
@@ -1245,6 +1245,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         if not self.intelligent_devices:
             return
         now = datetime.now(timezone.utc)
+        should_fetch_rates = False
         slot_list = []
         for device_id, device in self.intelligent_devices.items():
             index_suffix = self._device_index_suffix(device_id)
@@ -1258,6 +1259,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
                 end = self._parse_dispatch_dt(dispatch.get("end"))
                 if start and end and start <= now < end:
                     active = True
+                    should_fetch_rates = True
                     break
 
             attributes = {"friendly_name": "Kraken Intelligent Dispatches", "icon": "mdi:flash", **device}
@@ -1270,6 +1272,10 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         self.set_arg("octopus_intelligent_slot", slot_list)
         if self.get_arg("num_cars", 0) < len(slot_list):
             self.set_arg("num_cars", len(slot_list))
+
+        if should_fetch_rates:
+            # dispatch is active now, fetch and publish rates
+            await self._fetch_and_publish_rates()
 
     async def run(self, seconds, first):
         """Component run method — called by ComponentBase.start() every 60s.
@@ -1318,24 +1324,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
 
         # Fetch import rates + standing charges + export rates when stale
         if self.current_tariff and rates_due:
-            rates = await self.async_fetch_rates()
-            if rates:
-                had_success = True
-                self.import_rates = rates
-                self.rates_fetched_at = datetime.now()
-
-            standing_charge = await self.async_fetch_standing_charges()
-            if standing_charge is not None:
-                had_success = True
-                self.import_standing_charge = standing_charge
-
-            # Fetch export rates if export tariff is known
-            if self.export_tariff:
-                export_rates = await self.async_fetch_rates(tariff=self.export_tariff)
-                if export_rates:
-                    had_success = True
-                    self.export_rates = export_rates
-                    self.export_rates_available = True
+            had_success = await self._fetch_and_publish_rates() or had_success
 
         # Publish rate sensors from current in-memory data (cache or fresh)
         if self.current_tariff and (first or rates_due):
@@ -1351,7 +1340,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             self.dispatch_fetched_at = datetime.now()
             had_success = True
         if self.intelligent_devices and (first or dispatch_due):
-            self._publish_dispatch_sensors()
+            await self._publish_dispatch_sensors()
 
         # Wire import into fetch.py once tariff is discovered (retries until successful)
         if not self.wired and self.current_tariff:
@@ -1399,6 +1388,28 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             return False
 
         return True
+
+    async def _fetch_and_publish_rates(self):
+        had_success = False
+        rates = await self.async_fetch_rates()
+        if rates:
+            had_success = True
+            self.import_rates = rates
+            self.rates_fetched_at = datetime.now()
+
+        standing_charge = await self.async_fetch_standing_charges()
+        if standing_charge is not None:
+            had_success = True
+            self.import_standing_charge = standing_charge
+
+            # Fetch export rates if export tariff is known
+        if self.export_tariff:
+            export_rates = await self.async_fetch_rates(tariff=self.export_tariff)
+            if export_rates:
+                had_success = True
+                self.export_rates = export_rates
+                self.export_rates_available = True
+        return had_success
 
 
 class KrakenMockBase:  # pragma: no cover
