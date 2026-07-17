@@ -720,7 +720,7 @@ class Prediction:
                             car_load_energy_bypass += car_load_scale / self.car_charging_loss
 
                         # Model not allowing the car to charge from the battery - applies regardless of
-                        # car_energy_reported_load, as the battery shares the same busbar either way
+                        # car_energy_reported_load, which only controls CT-clamp house-load inclusion
                         if (car_load_scale > 0) and (not self.car_charging_from_battery) and set_charge_window:
                             discharge_rate_now = battery_rate_min  # 0
 
