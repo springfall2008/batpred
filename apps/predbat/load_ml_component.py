@@ -165,6 +165,14 @@ class LoadMLComponent(ComponentBase):
                 self.log("ML Component: Failed to load model, reinitialising predictor")
                 self.predictor = LoadPredictor(log_func=self.log, learning_rate=self.ml_learning_rate, max_load_kw=self.ml_max_load_kw, weight_decay=self.ml_weight_decay, dropout_rate=self.ml_dropout_rate)
 
+    def is_alive(self):
+        """
+        Override ComponentBase to prevent Read-Only mode during long initial training.
+        Returns True if we have fully started, OR if we are still starting up but 
+        haven't encountered any actual errors yet.
+        """
+        return self.api_started or (self.count_errors == 0 and not self.fatal_error)
+
     def is_calculating(self):
         """Return whether the component is currently calculating predictions."""
         return self.load_ml_calculating
