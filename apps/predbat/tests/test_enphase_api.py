@@ -1194,11 +1194,11 @@ def test_apply_activates_cfg_after_write():
     # CFG schedule was created (POST to schedules)
     posts = [r for r in api.request_log if r["method"] == "POST" and r["path"].endswith("/schedules")]
     assert len(posts) == 1
-    # Activation was called: PUT batterySettings/12345 with acceptedItcDisclaimer
-    # The base _ensure_charge_from_grid also PUTs to this path once, so expect 2 PUTs total
-    # (one from activation, one from _ensure_charge_from_grid).
+    # Exactly one PUT to batterySettings: the activation call. The one-time disclaimer is a
+    # separate acceptDisclaimer POST, and enabling chargeFromGrid is folded into the activation
+    # PUT, so there is no redundant second batterySettings write.
     puts = [r for r in api.request_log if r["method"] == "PUT" and r["path"] == "/service/batteryConfig/api/v1/batterySettings/12345"]
-    # At least one PUT has acceptedItcDisclaimer (the activation call)
+    assert len(puts) == 1
     activation_puts = [p for p in puts if p.get("json", {}).get("acceptedItcDisclaimer")]
     assert len(activation_puts) == 1
     assert activation_puts[0]["json"]["chargeFromGrid"] is True
@@ -1461,6 +1461,112 @@ def test_apply_activates_pending_schedule_without_rewrite():
     assert len(puts) == 1  # activation PUT, not the _ensure_charge_from_grid one
 
 
+def test_is_schedule_pending_null_status_is_not_pending():
+    """_is_schedule_pending must treat a None status as not-pending, not crash on None.lower().
+
+    get_schedules always writes a "status" key (set to None when the cloud omits scheduleStatus),
+    so the present-but-None case is the common one and must be handled without raising.
+    """
+    api = MockEnphaseAPI()
+    api.schedules["12345"] = {"cfg": {"supported": True, "status": None}}
+    assert api._is_schedule_pending("12345", "CFG") is False
+    # And the genuine pending case still returns True
+    api.schedules["12345"]["cfg"]["status"] = "PENDING"
+    assert api._is_schedule_pending("12345", "CFG") is True
+
+
+def test_apply_no_crash_when_cached_status_none():
+    """apply_battery_schedule must not raise when a matching cached schedule has status None.
+
+    Reproduces the get_schedules cache shape (status key present, value None) for a matching,
+    enabled CFG schedule. Before the fix this hit None.lower() in _is_schedule_pending and
+    aborted the whole apply.
+    """
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.sites = [{"site_id": "12345", "name": "Home"}]
+    api.schedules["12345"] = {
+        "cfg": {"supported": True, "id": "u1", "startTime": "02:00", "endTime": "05:00", "limit": 90, "enabled": True, "status": None},
+        "dtg": {"supported": True, "status": None},
+        "rbd": {"supported": True, "status": None},
+    }
+    api.profile["12345"] = {"profile": "self-consumption", "reserve": 20}
+    api.battery_settings["12345"] = {"chargeFromGrid": True, "veryLowSocMin": 5}
+    api.local_schedule["12345"] = {"reserve": 20, "charge": {"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": True}, "export": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 5, "enable": False}}
+    run_async(api.apply_battery_schedule("12345"))  # must not raise
+    # Matching schedule + status None (not "pending") => no activation PUT
+    puts = [r for r in api.request_log if r["method"] == "PUT" and "batterySettings" in r["path"]]
+    assert puts == []
+
+
+def test_activate_dtg_mode_clears_pending_status_on_success():
+    """A successful DTG activation clears the cached pending marker, like CFG does."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.schedules["12345"] = {"dtg": {"supported": True, "id": "d1", "startTime": "16:00", "endTime": "19:00", "limit": 60, "enabled": True, "status": "pending"}}
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 200, {})
+    assert run_async(api._activate_dtg_mode("12345")) is True
+    assert "status" not in api.schedules["12345"]["dtg"]
+
+
+def test_activate_rbd_mode_clears_pending_status_on_success():
+    """A successful RBD activation clears the cached pending marker, like CFG does."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.schedules["12345"] = {"rbd": {"supported": True, "id": "r1", "startTime": "22:00", "endTime": "23:00", "limit": 99, "enabled": True, "status": "pending"}}
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 200, {})
+    assert run_async(api._activate_rbd_mode("12345")) is True
+    assert "status" not in api.schedules["12345"]["rbd"]
+
+
+def test_apply_pending_dtg_not_reactivated_after_success():
+    """A pending DTG is activated once; the next unchanged apply issues no further activation PUT.
+
+    Without clearing the pending marker on success, every subsequent apply would re-fire the
+    activation PUT while the cached status stayed "pending".
+    """
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.sites = [{"site_id": "12345", "name": "Home"}]
+    api.schedules["12345"] = {"cfg": {"supported": True}, "dtg": {"supported": True, "id": "d1", "startTime": "16:00", "endTime": "19:00", "limit": 60, "enabled": True, "status": "pending"}, "rbd": {"supported": True}}
+    api.profile["12345"] = {"profile": "self-consumption", "reserve": 20}
+    api.battery_settings["12345"] = {"chargeFromGrid": True, "veryLowSocMin": 5}
+    api.local_schedule["12345"] = {"reserve": 20, "charge": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 100, "enable": False}, "export": {"start_time": "16:00:00", "end_time": "19:00:00", "soc": 60, "enable": True}}
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 200, {})
+    run_async(api.apply_battery_schedule("12345"))
+    run_async(api.apply_battery_schedule("12345"))
+    activation = [r for r in api.request_log if r["method"] == "PUT" and r["path"].endswith("/batterySettings/12345") and r.get("json", {}).get("dtgControl")]
+    assert len(activation) == 1
+
+
+def test_apply_activates_cfg_when_setting_off_but_schedule_matches():
+    """When the CFG schedule already matches but chargeFromGrid is off, activation still fires.
+
+    Enabling chargeFromGrid is the activation PUT, so a matching schedule that was never activated
+    must still be activated rather than silently skipped. Also covers the status-None path (#1).
+    """
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.sites = [{"site_id": "12345", "name": "Home"}]
+    api.schedules["12345"] = {
+        "cfg": {"supported": True, "id": "u1", "startTime": "02:00", "endTime": "05:00", "limit": 90, "enabled": True, "status": None},
+        "dtg": {"supported": True},
+        "rbd": {"supported": True},
+    }
+    api.profile["12345"] = {"profile": "self-consumption", "reserve": 20}
+    api.battery_settings["12345"] = {"chargeFromGrid": False, "veryLowSocMin": 5}
+    api.local_schedule["12345"] = {"reserve": 20, "charge": {"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": True}, "export": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 5, "enable": False}}
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/acceptDisclaimer/12345", 200, {})
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 200, {})
+    run_async(api.apply_battery_schedule("12345"))
+    # No schedule write (already matches), but activation fired because chargeFromGrid was off
+    schedule_writes = [r for r in api.request_log if r["method"] in ("POST", "PUT") and "schedules" in r["path"]]
+    assert schedule_writes == []
+    activation = [r for r in api.request_log if r["method"] == "PUT" and r["path"].endswith("/batterySettings/12345") and r.get("json", {}).get("acceptedItcDisclaimer")]
+    assert len(activation) == 1
+    assert api.battery_settings["12345"]["chargeFromGrid"] is True
+
+
 def run_enphase_api_tests(my_predbat):
     """Run all Enphase API tests, returning 0 on success."""
     test_initialize_defaults()
@@ -1537,5 +1643,11 @@ def run_enphase_api_tests(my_predbat):
     test_activate_dtg_mode_invalidates_cache_on_failure()
     test_activate_rbd_mode_invalidates_cache_on_failure()
     test_apply_activates_pending_schedule_without_rewrite()
+    test_is_schedule_pending_null_status_is_not_pending()
+    test_apply_no_crash_when_cached_status_none()
+    test_activate_dtg_mode_clears_pending_status_on_success()
+    test_activate_rbd_mode_clears_pending_status_on_success()
+    test_apply_pending_dtg_not_reactivated_after_success()
+    test_apply_activates_cfg_when_setting_off_but_schedule_matches()
     print("**** Enphase API tests passed ****")
     return 0
