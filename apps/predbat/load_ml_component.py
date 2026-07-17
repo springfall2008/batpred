@@ -962,25 +962,26 @@ class LoadMLComponent(ComponentBase):
                         max_intermediate_passes=8,
                     )
                 )
-            # Even if initial was done we need to do one fine tuned curriculum pass too.
-            val_mae = await loop.run_in_executor(
-                None,
-                lambda: self.predictor.train_curriculum(
-                    load_data_snap,
-                    now_utc_snap,
-                    pv_minutes=pv_data_snap,
-                    temp_minutes=temp_data_snap,
-                    import_rates=import_rates_snap,
-                    export_rates=export_rates_snap,
-                    epochs=epochs,
-                    time_decay_days=time_decay,
-                    validation_holdout_hours=holdout_hours,
-                    patience=patience,
-                    curriculum_window_days=window_days,
-                    curriculum_step_days=step_days,
-                    max_intermediate_passes=max_intermediate_passes,
+            else:
+                # Even if initial was done we need to do one fine tuned curriculum pass too.
+                val_mae = await loop.run_in_executor(
+                    None,
+                    lambda: self.predictor.train_curriculum(
+                        load_data_snap,
+                        now_utc_snap,
+                        pv_minutes=pv_data_snap,
+                        temp_minutes=temp_data_snap,
+                        import_rates=import_rates_snap,
+                        export_rates=export_rates_snap,
+                        epochs=epochs,
+                        time_decay_days=time_decay,
+                        validation_holdout_hours=holdout_hours,
+                        patience=patience,
+                        curriculum_window_days=window_days,
+                        curriculum_step_days=step_days,
+                        max_intermediate_passes=max_intermediate_passes,
+                    )
                 )
-            )
 
             if val_mae is not None:
                 self.last_train_time = datetime.now(timezone.utc)
