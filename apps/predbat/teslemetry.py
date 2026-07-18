@@ -274,6 +274,7 @@ class TeslemetryAPI(ComponentBase):
             entity_id = self.entity(suffix, domain=domain)
             self.control_attrs[entity_id] = attributes
             self.dashboard_item(entity_id, initial_state, attributes, app="teslemetry")
+        self.publish_schedule_entities()
 
     def publish_control(self, entity_id, value):
         """Write a control entity's new state, re-applying the attributes register_control_entities
@@ -334,6 +335,98 @@ class TeslemetryAPI(ComponentBase):
                 return {"tariff_mode": "export_now", "export_rule": "battery_ok", "grid_charging": False, "reserve": target, "mode": "autonomous"}
             return {"tariff_mode": "normal", "export_rule": "pv_only", "grid_charging": False, "reserve": target, "mode": "self_consumption"}
         return {"tariff_mode": "normal", "export_rule": "pv_only", "grid_charging": True, "reserve": int(reserve), "mode": "self_consumption"}
+
+    def publish_schedule_entities(self):
+        """Publish the schedule entities from the pending schedule (pending == committed after boot/apply).
+
+        Entity states must track pending edits immediately so inverter.py's write-and-poll
+        verification sees its own writes reflected back.
+        """
+        sched = self.pending_schedule
+        self.dashboard_item(
+            self.entity("schedule_reserve", domain="number"),
+            sched.get("reserve", 20),
+            {"friendly_name": "Powerwall Schedule Reserve", "min": 0, "max": 100, "step": 1, "unit_of_measurement": "%", "icon": "mdi:gauge"},
+            app="teslemetry",
+        )
+        for direction in ["charge", "discharge"]:
+            window = sched.get(direction, {})
+            for attribute in ["start_time", "end_time"]:
+                self.dashboard_item(
+                    self.entity("schedule_{}_{}".format(direction, attribute), domain="select"),
+                    window.get(attribute, "00:00:00"),
+                    {"options": OPTIONS_TIME_FULL, "friendly_name": "Powerwall Schedule {} {}".format(direction.capitalize(), attribute.replace("_", " ").capitalize()), "icon": "mdi:clock-outline"},
+                    app="teslemetry",
+                )
+            self.dashboard_item(
+                self.entity("schedule_{}_soc".format(direction), domain="number"),
+                window.get("soc", 100 if direction == "charge" else 10),
+                {"friendly_name": "Powerwall Schedule {} Soc".format(direction.capitalize()), "min": 0, "max": 100, "step": 1, "unit_of_measurement": "%", "icon": "mdi:gauge"},
+                app="teslemetry",
+            )
+            self.dashboard_item(
+                self.entity("schedule_{}_enable".format(direction), domain="switch"),
+                "on" if window.get("enable") else "off",
+                {"friendly_name": "Powerwall Schedule {} Enable".format(direction.capitalize()), "icon": "mdi:check-circle-outline"},
+                app="teslemetry",
+            )
+        self.dashboard_item(self.entity("schedule_write", domain="switch"), "off", {"friendly_name": "Powerwall Schedule Write", "icon": "mdi:content-save-outline"}, app="teslemetry")
+
+    async def apply_schedule(self):
+        """Commit the pending schedule atomically (extended with persistence and an immediate device assert in later tasks)."""
+        self.schedule = copy.deepcopy(self.pending_schedule)
+        self.publish_schedule_entities()
+
+    async def schedule_event(self, entity_id, value):
+        """Stage a schedule entity write into pending_schedule; the write switch commits it.
+
+        Reserve applies immediately (fox parity) since it is not part of window atomicity.
+        Invalid times fall back to 00:00:00 and non-numeric SOC/reserve values are rejected.
+        """
+        if entity_id.endswith("_schedule_write"):
+            if value in ("turn_on", "toggle"):
+                await self.apply_schedule()
+            self.publish_schedule_entities()
+            return
+        if entity_id.endswith("_schedule_reserve"):
+            try:
+                reserve = max(0, min(100, int(float(value))))
+            except (ValueError, TypeError):
+                self.log("Warn: Teslemetry invalid schedule reserve value {}".format(value))
+                return
+            self.pending_schedule["reserve"] = reserve
+            self.schedule["reserve"] = reserve
+            self.publish_schedule_entities()
+            return
+        direction = None
+        if "_schedule_charge_" in entity_id:
+            direction = "charge"
+        elif "_schedule_discharge_" in entity_id:
+            direction = "discharge"
+        if not direction:
+            self.log("Warn: Teslemetry unhandled schedule event {} = {}".format(entity_id, value))
+            return
+        window = self.pending_schedule.setdefault(direction, {})
+        if entity_id.endswith("_start_time") or entity_id.endswith("_end_time"):
+            attribute = "start_time" if entity_id.endswith("_start_time") else "end_time"
+            window[attribute] = value if value in OPTIONS_TIME_FULL else "00:00:00"
+        elif entity_id.endswith("_soc"):
+            try:
+                window["soc"] = max(0, min(100, int(float(value))))
+            except (ValueError, TypeError):
+                self.log("Warn: Teslemetry invalid schedule soc value {}".format(value))
+                return
+        elif entity_id.endswith("_enable"):
+            if value == "turn_on":
+                window["enable"] = 1
+            elif value == "turn_off":
+                window["enable"] = 0
+            elif value == "toggle":
+                window["enable"] = 0 if window.get("enable") else 1
+        else:
+            self.log("Warn: Teslemetry unhandled schedule event {} = {}".format(entity_id, value))
+            return
+        self.publish_schedule_entities()
 
     async def _command(self, path, body):
         """POST a command; return True only if both the transport and the application layer succeeded.
@@ -611,6 +704,9 @@ class TeslemetryAPI(ComponentBase):
 
     async def select_event(self, entity_id, value):
         """Handle select changes routed from the service-hook loopback."""
+        if "_schedule_" in entity_id:
+            await self.schedule_event(entity_id, value)
+            return
         success = False
         if entity_id.endswith("_operation_mode") and value in OPERATION_MODES:
             success = await self.set_operation_mode(value)
@@ -632,6 +728,9 @@ class TeslemetryAPI(ComponentBase):
         Guards the int(float(value)) conversion: a number.increment/decrement service call can
         forward value=None, which would otherwise raise a TypeError out of the dispatch loop.
         """
+        if "_schedule_" in entity_id:
+            await self.schedule_event(entity_id, value)
+            return
         if entity_id.endswith("_backup_reserve"):
             try:
                 percent = max(0, min(100, int(float(value))))
@@ -647,6 +746,9 @@ class TeslemetryAPI(ComponentBase):
 
     async def switch_event(self, entity_id, service):
         """Handle switch service calls routed from the service-hook loopback."""
+        if "_schedule_" in entity_id:
+            await self.schedule_event(entity_id, service)
+            return
         if entity_id.endswith("_allow_charging_from_grid"):
             allow = service != "turn_off"
             if await self.set_grid_charging(allow):

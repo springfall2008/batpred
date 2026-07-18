@@ -1022,6 +1022,61 @@ def test_teslemetry_evaluate_schedule_charge_precedence():
     assert api.evaluate_schedule(2 * 60, 50)["mode"] == "backup"
 
 
+def test_teslemetry_schedule_entities_published():
+    """Schedule entities are published with option lists, ranges and safe defaults."""
+    api = MockTeslemetryAPI()
+    api.publish_schedule_entities()
+    assert api.dashboard_items["select.predbat_teslemetry_schedule_charge_start_time"]["attributes"]["options"] == OPTIONS_TIME_FULL
+    assert api.dashboard_items["select.predbat_teslemetry_schedule_discharge_end_time"]["state"] == "00:00:00"
+    assert api.dashboard_items["number.predbat_teslemetry_schedule_reserve"]["state"] == 20
+    assert api.dashboard_items["number.predbat_teslemetry_schedule_charge_soc"]["state"] == 100
+    assert api.dashboard_items["number.predbat_teslemetry_schedule_discharge_soc"]["state"] == 10
+    assert api.dashboard_items["switch.predbat_teslemetry_schedule_charge_enable"]["state"] == "off"
+    assert api.dashboard_items["switch.predbat_teslemetry_schedule_write"]["state"] == "off"
+
+
+def test_teslemetry_schedule_edits_stage_without_device_writes():
+    """Entity writes accumulate in pending_schedule, mirror into entity state, and send nothing to the device."""
+    api = MockTeslemetryAPI()
+    run_async(api.select_event("select.predbat_teslemetry_schedule_charge_start_time", "01:30:00"))
+    run_async(api.select_event("select.predbat_teslemetry_schedule_charge_end_time", "05:00:00"))
+    run_async(api.number_event("number.predbat_teslemetry_schedule_charge_soc", 90))
+    run_async(api.switch_event("switch.predbat_teslemetry_schedule_charge_enable", "turn_on"))
+    assert api.pending_schedule["charge"] == {"start_time": "01:30:00", "end_time": "05:00:00", "soc": 90, "enable": 1}
+    assert api.schedule["charge"]["enable"] == 0
+    assert api.requests_made == []
+    assert api.entity_states["select.predbat_teslemetry_schedule_charge_start_time"] == "01:30:00"
+    assert api.entity_states["switch.predbat_teslemetry_schedule_charge_enable"] == "on"
+
+
+def test_teslemetry_schedule_write_button_commits():
+    """The write button copies pending to committed and leaves the button off."""
+    api = MockTeslemetryAPI()
+    run_async(api.switch_event("switch.predbat_teslemetry_schedule_discharge_enable", "turn_on"))
+    run_async(api.switch_event("switch.predbat_teslemetry_schedule_write", "turn_on"))
+    assert api.schedule["discharge"]["enable"] == 1
+    assert api.entity_states["switch.predbat_teslemetry_schedule_write"] == "off"
+
+
+def test_teslemetry_schedule_invalid_values_rejected():
+    """Garbage times and non-numeric SOC values are rejected or clamped without corrupting the schedule."""
+    api = MockTeslemetryAPI()
+    run_async(api.select_event("select.predbat_teslemetry_schedule_charge_start_time", "25:99:00"))
+    assert api.pending_schedule["charge"]["start_time"] == "00:00:00"
+    run_async(api.number_event("number.predbat_teslemetry_schedule_charge_soc", "banana"))
+    assert api.pending_schedule["charge"]["soc"] == 100
+    run_async(api.number_event("number.predbat_teslemetry_schedule_reserve", 150))
+    assert api.pending_schedule["reserve"] == 100
+
+
+def test_teslemetry_schedule_reserve_applies_immediately():
+    """Reserve edits commit without the write button (fox parity) and persist into both schedules."""
+    api = MockTeslemetryAPI()
+    run_async(api.number_event("number.predbat_teslemetry_schedule_reserve", 35))
+    assert api.pending_schedule["reserve"] == 35
+    assert api.schedule["reserve"] == 35
+
+
 def test_teslemetry(my_predbat=None):
     """Run all Teslemetry component tests (registry entry point).
 
@@ -1090,5 +1145,10 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_in_window()
     test_teslemetry_evaluate_schedule_states()
     test_teslemetry_evaluate_schedule_charge_precedence()
+    test_teslemetry_schedule_entities_published()
+    test_teslemetry_schedule_edits_stage_without_device_writes()
+    test_teslemetry_schedule_write_button_commits()
+    test_teslemetry_schedule_invalid_values_rejected()
+    test_teslemetry_schedule_reserve_applies_immediately()
     print("**** Teslemetry tests passed ****")
     return 0
