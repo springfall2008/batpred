@@ -27,6 +27,7 @@ import argparse
 import asyncio
 import copy
 import json
+import sys
 from datetime import datetime, timezone
 
 import aiohttp
@@ -936,12 +937,16 @@ class MockBase:  # pragma: no cover
         print("Set arg {} = {}".format(key, value))
 
 
-async def test_teslemetry_api(key, site_id, base_url=None, control=False):  # pragma: no cover
+async def test_teslemetry_api(key, site_id, base_url=None, control=False):
     """Run a standalone test of the Teslemetry component against the live API.
 
     By default this is READ-ONLY: it polls the Powerwall and prints/publishes the entities and
     status but sends no control commands - the scheduler emulator and any crash-recovery writes
     are suppressed via set_read_only. Pass control=True to let the component send commands.
+
+    Returns True only if the run connected and completed successfully. A failed connection -
+    an auth failure (401/403) or an unsuccessful run() - returns False so main() can exit
+    non-zero instead of a broken connection looking like a pass.
     """
     mode = "READ-WRITE (controls may change)" if control else "READ-ONLY (status only, no controls changed)"
     print("Testing Teslemetry API for site {} - {}".format(site_id, mode))
@@ -957,8 +962,16 @@ async def test_teslemetry_api(key, site_id, base_url=None, control=False):  # pr
 
     print("Calling run() once...")
     result = await api.run(seconds=0, first=True)
-    print("Run completed (success={})".format(result))
     await api.final()
+
+    if api.api_auth_failed:
+        print("FAILED: Teslemetry authentication failed (401/403) - check the --key token and --site-id are correct")
+        return False
+    if not result:
+        print("FAILED: Teslemetry run did not complete successfully - see the warnings above")
+        return False
+    print("SUCCESS: Teslemetry run completed")
+    return True
 
 
 def main():  # pragma: no cover
@@ -970,7 +983,8 @@ def main():  # pragma: no cover
     parser.add_argument("--control", action="store_true", help="Allow control commands to be sent (default is read-only: report status only, change nothing)")
 
     args = parser.parse_args()
-    asyncio.run(test_teslemetry_api(args.key, args.site_id, base_url=args.base_url, control=args.control))
+    ok = asyncio.run(test_teslemetry_api(args.key, args.site_id, base_url=args.base_url, control=args.control))
+    sys.exit(0 if ok else 1)
 
 
 if __name__ == "__main__":

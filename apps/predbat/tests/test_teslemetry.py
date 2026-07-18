@@ -1392,6 +1392,46 @@ def test_teslemetry_mock_base_get_arg_consults_args():
     assert base.get_arg("set_read_only", False) is True
 
 
+def test_teslemetry_cli_harness_signals_failure_on_auth_error():
+    """The standalone CLI harness returns False on an auth failure (so main() exits non-zero) and True on a healthy run - a broken connection must not look like a pass."""
+    import io
+    import contextlib
+    import teslemetry
+
+    async def auth_fail_request(self, method, path, json_body=None):
+        """Simulate every request 401ing (bad token)."""
+        self.api_auth_failed = True
+        return None
+
+    async def healthy_request(self, method, path, json_body=None):
+        """Simulate a healthy, connected Powerwall for every endpoint."""
+        if method == "POST":
+            return {"response": {}}
+        if "site_info" in path:
+            return {"response": {"nameplate_energy": 13500, "nameplate_power": 11500, "max_site_meter_power_ac": 11500, "default_real_mode": "self_consumption", "backup_reserve_percent": 20}}
+        if "live_status" in path:
+            return {"response": {"percentage_charged": 50}}
+        if "calendar_history" in path:
+            return {"response": {"time_series": []}}
+        if "tariff_rate" in path:
+            return {"response": {"tariff_content_v2": {"code": "PREDBAT-NORMAL"}}}
+        return None
+
+    original = teslemetry.TeslemetryAPI._request
+    try:
+        teslemetry.TeslemetryAPI._request = auth_fail_request
+        with contextlib.redirect_stdout(io.StringIO()):
+            failed = run_async(teslemetry.test_teslemetry_api("bad-token", "site123"))
+        assert failed is False
+
+        teslemetry.TeslemetryAPI._request = healthy_request
+        with contextlib.redirect_stdout(io.StringIO()):
+            ok = run_async(teslemetry.test_teslemetry_api("good-token", "site123"))
+        assert ok is True
+    finally:
+        teslemetry.TeslemetryAPI._request = original
+
+
 def test_teslemetry(my_predbat=None):
     """Run all Teslemetry component tests (registry entry point).
 
@@ -1480,5 +1520,6 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_emulator_failure_does_not_fail_run()
     test_teslemetry_automatic_config_skips_unpublished_rate_sensors()
     test_teslemetry_mock_base_get_arg_consults_args()
+    test_teslemetry_cli_harness_signals_failure_on_auth_error()
     print("**** Teslemetry tests passed ****")
     return 0
