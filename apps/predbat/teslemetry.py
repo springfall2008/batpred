@@ -58,7 +58,7 @@ EXPORT_RULES = ["never", "pv_only", "battery_ok"]
 TARIFF_MODES = ["normal", "export_now"]
 
 REAL_TIERS = ["SUPER_OFF_PEAK", "OFF_PEAK", "PARTIAL_PEAK"]
-BOOST_TIER = "BOOST"
+BOOST_TIER = "ON_PEAK"
 SLOTS_PER_DAY = 48
 SLOT_MINUTES = 30
 

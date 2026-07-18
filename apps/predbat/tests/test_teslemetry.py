@@ -1626,16 +1626,36 @@ def test_teslemetry_quantise_two_distinct_exact():
 
 
 def test_teslemetry_quantise_agile_three_bands_clamped_rounded():
-    """A wide/varied series quantises to 3 mean-priced bands; negatives clamp to 0; prices whole pence."""
+    """A series with >3 distinct prices drives the equal-width BANDING branch (not exact-mapping): the
+    [min,max] range splits into 3 bands, each priced at its members' mean, with negatives clamped to 0.
+
+    Six equally-sized price steps (8 of the 48 slots each), one negative, give six distinct post-round
+    GBP values {0.00, 0.10, 0.20, 0.30, 0.40, 0.60} -> 6 > 3 -> the else branch runs. Range 0.00..0.60,
+    width 0.20, so the bands and their exact means are:
+      band 0 [0.00,0.20): {0.00, 0.10} -> mean 0.05  (0.00 is the clamped -5p, proving the clamp)
+      band 1 [0.20,0.40): {0.20, 0.30} -> mean 0.25
+      band 2 [0.40,0.60]: {0.40, 0.60} -> mean 0.50
+    """
+    steps_pence = [-5.0, 10.0, 20.0, 30.0, 40.0, 60.0]  # incl. a negative that must clamp to 0
     rates = {}
     for m in range(0, 2880):
-        slot = (m % 1440) // 30
-        rates[m] = [-5.0, 12.0, 45.0][slot % 3]  # a value in each band, incl. a negative
-    prices, today, tomorrow = TeslemetryAPI._quantise_side(rates, 12.0)
+        slot = (m % 1440) // 30  # 0..47
+        rates[m] = steps_pence[slot // 8]  # 6 equal groups of 8 slots
+    prices, today, tomorrow = TeslemetryAPI._quantise_side(rates, 20.0)
+    # (a) exactly the 3 real tier names present
     assert set(prices) == {"SUPER_OFF_PEAK", "OFF_PEAK", "PARTIAL_PEAK"}
-    assert prices["SUPER_OFF_PEAK"] == 0.0            # -5p clamped to 0, rounded whole pence
+    # (b) lowest band price is the MEAN of its members mean(0.00, 0.10) = 0.05 (mean-of-bucket, not just membership)
+    assert prices["SUPER_OFF_PEAK"] == 0.05
+    assert prices["OFF_PEAK"] == 0.25             # mean(0.20, 0.30)
+    assert prices["PARTIAL_PEAK"] == 0.50         # mean(0.40, 0.60)
+    # (c) strictly increasing across the bands
+    assert prices["SUPER_OFF_PEAK"] < prices["OFF_PEAK"] < prices["PARTIAL_PEAK"]
+    # (d) every price is whole pence (2dp)
     assert all(p == round(p, 2) for p in prices.values())
-    assert set(today) <= set(prices)                  # matched sets: every slot tier is priced
+    # (e) the negative-priced slot 0 clamped to 0 and landed in the lowest band
+    assert today[0] == "SUPER_OFF_PEAK"
+    # matched sets: every slot tier is priced, both days sized to 48 slots
+    assert set(today) <= set(prices) and set(tomorrow) <= set(prices)
     assert len(today) == 48 and len(tomorrow) == 48
 
 
