@@ -98,13 +98,18 @@ class MockTeslemetryAPI(TeslemetryAPI):
 
 
 def _rate_base(import_p, export_p):
-    """A minimal base double exposing flat import/export rate dicts and a local clock for build_tariff."""
+    """A minimal base double exposing flat import/export rate dicts and a local clock for build_tariff.
+
+    get_arg defaults to returning the caller's default (i.e. not read-only), matching how
+    test_teslemetry_run_boots_without_reconcile wires its own base double - so _is_read_only() (consulted
+    by sync_tariff) can be called against this double without every test needing its own override.
+    """
     from types import SimpleNamespace
     from datetime import datetime
 
     rate_import = {m: import_p for m in range(0, 2880)}
     rate_export = {m: export_p for m in range(0, 2880)}
-    return SimpleNamespace(rate_import=rate_import, rate_export=rate_export, minutes_now=0, now=datetime(2026, 7, 20, 12, 0), local_tz=None)
+    return SimpleNamespace(rate_import=rate_import, rate_export=rate_export, minutes_now=0, now=datetime(2026, 7, 20, 12, 0), local_tz=None, get_arg=lambda a, d=None, **k: d)
 
 
 LIVE_STATUS = {
@@ -547,6 +552,39 @@ def test_teslemetry_set_tariff_posts_tou_settings():
     method, path, body = api.requests_made[-1]
     assert path == "/api/1/energy_sites/123456/time_of_use_settings"
     assert "tariff_content_v2" in body["tou_settings"]
+
+
+def test_teslemetry_sync_tariff_dedupes_unchanged():
+    """Two syncs with identical inputs push the tariff exactly once (monthly API-call budget)."""
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    api.mock_responses["/api/1/energy_sites/123456/time_of_use_settings"] = {"response": {"code": 201}}
+    run_async(api.sync_tariff())
+    run_async(api.sync_tariff())
+    posts = [r for r in api.requests_made if r[0] == "POST" and r[1].endswith("/time_of_use_settings")]
+    assert len(posts) == 1
+
+
+def test_teslemetry_sync_tariff_pushes_on_window_change():
+    """Enabling a discharge window changes the tariff and triggers a second push."""
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    api.mock_responses["/api/1/energy_sites/123456/time_of_use_settings"] = {"response": {"code": 201}}
+    run_async(api.sync_tariff())
+    api.schedule["discharge"] = {"start_time": "17:00:00", "end_time": "18:00:00", "soc": 30, "enable": 1}
+    run_async(api.sync_tariff())
+    posts = [r for r in api.requests_made if r[0] == "POST" and r[1].endswith("/time_of_use_settings")]
+    assert len(posts) == 2
+
+
+def test_teslemetry_sync_tariff_read_only_no_push():
+    """Read-only mode sends no tariff command."""
+    from types import SimpleNamespace
+
+    api = MockTeslemetryAPI()
+    api.base = SimpleNamespace(rate_import={m: 28.0 for m in range(2880)}, rate_export={m: 15.0 for m in range(2880)}, minutes_now=0, now=None, local_tz=None, get_arg=lambda a, d=None, **k: True if a == "set_read_only" else d)
+    run_async(api.sync_tariff())
+    assert not [r for r in api.requests_made if r[0] == "POST"]
 
 
 def _assert_tou_periods_partition_day(tou_periods):
@@ -1551,6 +1589,9 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_build_tariff_boost_clamps_above_high_rates()
     test_teslemetry_build_tariff_periods_partition_each_day()
     test_teslemetry_set_tariff_posts_tou_settings()
+    test_teslemetry_sync_tariff_dedupes_unchanged()
+    test_teslemetry_sync_tariff_pushes_on_window_change()
+    test_teslemetry_sync_tariff_read_only_no_push()
     test_teslemetry_site_info_latches_without_nameplate_soc_max_from_live_status()
     test_teslemetry_run_site_info_latches_on_any_response()
     test_teslemetry_energy_today_requests_kind_and_period()

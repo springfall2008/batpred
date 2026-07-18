@@ -405,6 +405,7 @@ class TeslemetryAPI(ComponentBase):
             # Scheduler emulator: the Powerwall has no native scheduler, so translate the committed
             # windows into device commands each cycle. Failures are logged and self-retry via the
             # dedupe cache; they do not fail the run() data path.
+            await self.sync_tariff()
             await self.assert_device_state(self.evaluate_schedule(self.get_minutes_now(), self.last_soc))
         return success
 
@@ -528,6 +529,7 @@ class TeslemetryAPI(ComponentBase):
         await self.save_schedule()
         self.publish_schedule_entities()
         if self.last_soc is not None and not self._is_read_only():
+            await self.sync_tariff()
             await self.assert_device_state(self.evaluate_schedule(self.get_minutes_now(), self.last_soc))
 
     async def save_schedule(self):
@@ -1028,6 +1030,17 @@ class TeslemetryAPI(ComponentBase):
         """
         signature = json.dumps(tariff, sort_keys=True)
         return await self._apply_command("tariff", signature, lambda: self._command("time_of_use_settings", {"tou_settings": {"tariff_content_v2": tariff}}), force=force)
+
+    async def sync_tariff(self):
+        """Build the tariff from current rates + committed discharge window and push it (deduped).
+
+        Cheap to call every cycle: set_tariff only reaches the API when the serialised tariff changes,
+        i.e. on a genuine rate-band, discharge-window or day-of-week change. Gated on read-only mode.
+        """
+        if self._is_read_only():
+            return True
+        tariff = self.build_tariff(self._discharge_window())
+        return await self.set_tariff(tariff)
 
     def _is_read_only(self):
         """Return True if Predbat is configured read-only, so device-write commands must not be sent.
