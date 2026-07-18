@@ -40,10 +40,14 @@ TESLEMETRY_RETRIES = 3
 LIVE_POLL_SECONDS = 120
 ENERGY_POLL_SECONDS = 300
 RECONCILE_MAX_ATTEMPTS = 5
-# Approximate usable capacity per Powerwall unit (kWh). Used only to ESTIMATE soc_max when the API
+# Approximate usable capacity per Powerwall unit (kWh), used only to ESTIMATE soc_max when the API
 # exposes no capacity field at all (observed on some Powerwall 3 firmware, whose site_info and
 # live_status omit total_pack_energy/nameplate_energy/energy_left). Users can override soc_max in apps.yaml.
+# Powerwall 1 (6.4 kWh) is told apart from Powerwall 2/3 (13.5 kWh) by its much lower inverter power
+# (~3.3 kW vs ~5 kW / ~11.5 kW), since nameplate_power is exposed even when capacity is not.
 POWERWALL_PACK_KWH = 13.5
+POWERWALL_1_PACK_KWH = 6.4
+POWERWALL_1_MAX_POWER = 3500  # Per-unit nameplate power at/below this is treated as a Powerwall 1.
 
 OPERATION_MODES = ["self_consumption", "autonomous", "backup"]
 EXPORT_RULES = ["never", "pv_only", "battery_ok"]
@@ -201,6 +205,23 @@ class TeslemetryAPI(ComponentBase):
             self.soc_max_real = True
         self.log("Info: Teslemetry soc_max = {} kWh ({})".format(round(kwh, 2), "estimated from battery_count - set soc_max manually if wrong" if estimate else "from device"))
 
+    def estimate_pack_kwh(self, response):
+        """Estimate total usable battery capacity (kWh) from a site_info response with no capacity field.
+
+        Powerwall 1 (6.4 kWh) has a much lower inverter than Powerwall 2/3 (13.5 kWh), so the per-unit
+        nameplate power (site nameplate_power / battery_count) tells them apart: at or below
+        POWERWALL_1_MAX_POWER it is a Powerwall 1, otherwise a Powerwall 2/3. The gateway part name is
+        logged for confirmation. The per-unit figure is multiplied by battery_count for the site total.
+        """
+        battery_count = response.get("battery_count") or 1
+        nameplate_power = response.get("nameplate_power") or 0
+        per_unit_power = (nameplate_power / battery_count) if battery_count else nameplate_power
+        is_pw1 = 0 < per_unit_power <= POWERWALL_1_MAX_POWER
+        per_unit_kwh = POWERWALL_1_PACK_KWH if is_pw1 else POWERWALL_PACK_KWH
+        part_names = ", ".join(str(gateway.get("part_name", "")) for gateway in response.get("components", {}).get("gateways", []) or []) or "unknown"
+        self.log("Info: Teslemetry capacity estimate: {} x {} kWh ({}, per-unit inverter ~{} W, part={})".format(battery_count, per_unit_kwh, "Powerwall 1" if is_pw1 else "Powerwall 2/3", int(per_unit_power), part_names))
+        return battery_count * per_unit_kwh
+
     async def fetch_live_status(self):
         """Fetch live power flows and SOC, publishing power sensors."""
         data = await self._request("GET", "/api/1/energy_sites/{}/live_status".format(self.site_id))
@@ -243,9 +264,9 @@ class TeslemetryAPI(ComponentBase):
         if nameplate_wh:
             self.publish_soc_max(nameplate_wh / 1000.0)
         elif battery_count:
-            # No capacity field on this firmware (e.g. PW3): estimate from battery_count. A real value
-            # from live_status (total_pack_energy) will upgrade this if/when it appears.
-            self.publish_soc_max(battery_count * POWERWALL_PACK_KWH, estimate=True)
+            # No capacity field on this firmware (e.g. PW3): estimate from battery_count and model. A
+            # real value from live_status (total_pack_energy) will upgrade this if/when it appears.
+            self.publish_soc_max(self.estimate_pack_kwh(response), estimate=True)
         nameplate_power = response.get("nameplate_power", 0)
         if nameplate_power:
             self.publish_sensor("battery_rate_max", nameplate_power, unit="W", state_class=None, friendly="Powerwall Max Rate")

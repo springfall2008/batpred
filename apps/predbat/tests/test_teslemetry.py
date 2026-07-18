@@ -1483,6 +1483,21 @@ def test_teslemetry_soc_max_estimated_from_battery_count_when_no_capacity_field(
     assert api.soc_max_real is True
 
 
+def test_teslemetry_soc_max_estimate_distinguishes_powerwall_1():
+    """A Powerwall 1 (low ~3.3 kW inverter) is estimated at 6.4 kWh; a Powerwall 2/3 at 13.5 kWh - told
+    apart by per-unit nameplate power, and scaled by battery_count."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = {"response": {"nameplate_power": 3300, "battery_count": 1, "components": {"gateways": [{"part_name": "Powerwall"}]}}}
+    run_async(api.fetch_site_info())
+    assert api.dashboard_items["sensor.predbat_teslemetry_soc_max"]["state"] == 6.4
+
+    # Two Powerwall 2 units (5 kW each) -> 2 x 13.5 = 27 kWh.
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = {"response": {"nameplate_power": 10000, "battery_count": 2, "components": {"gateways": [{"part_name": "Powerwall 2"}]}}}
+    run_async(api.fetch_site_info())
+    assert api.dashboard_items["sensor.predbat_teslemetry_soc_max"]["state"] == 27.0
+
+
 def test_teslemetry_soc_max_derived_from_energy_left():
     """soc_max is derived from energy_left / percentage_charged when total_pack_energy is absent but energy_left is present."""
     api = MockTeslemetryAPI()
@@ -1650,6 +1665,7 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_run_discovers_site_before_polling()
     test_teslemetry_soc_rounded_to_2dp()
     test_teslemetry_soc_max_estimated_from_battery_count_when_no_capacity_field()
+    test_teslemetry_soc_max_estimate_distinguishes_powerwall_1()
     test_teslemetry_soc_max_derived_from_energy_left()
     test_teslemetry_inverter_limit_sentinel_clamped_to_nameplate()
     test_teslemetry_run_auto_config_fires_with_soc_max_from_live_status()
