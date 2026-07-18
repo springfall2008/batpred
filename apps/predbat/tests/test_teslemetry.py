@@ -1458,6 +1458,31 @@ def test_teslemetry_run_discovers_site_before_polling():
     assert api.dashboard_items["sensor.predbat_teslemetry_soc"]["state"] == LIVE_STATUS["response"]["percentage_charged"]
 
 
+def test_teslemetry_summarize_for_log_hides_bulk():
+    """The log summariser hides the history time_series and tariff blocks (which are huge) while
+    keeping small fields and reporting counts/codes so the endpoint output stays readable."""
+    data = {
+        "response": {
+            "serial_number": "TG123",
+            "period": "day",
+            "time_series": [{"x": 1}, {"x": 2}, {"x": 3}],
+            "SmartBreakerEnergyLogs": [{"a": 1}],
+            "tariff_content_v2": {"code": "PREDBAT-NORMAL", "energy_charges": {"lots": "of data"}},
+            "tariff_content": {"code": "CUSTOMER-TARIFF", "energy_charges": {"lots": "of data"}},
+        }
+    }
+    summary = TeslemetryAPI._summarize_for_log(data)["response"]
+    assert summary["serial_number"] == "TG123"
+    assert summary["period"] == "day"
+    assert summary["time_series"] == "[3 entries hidden]"
+    assert summary["SmartBreakerEnergyLogs"] == "[1 entries hidden]"
+    assert summary["tariff_content_v2"] == "[hidden, code=PREDBAT-NORMAL]"
+    assert summary["tariff_content"] == "[hidden, code=CUSTOMER-TARIFF]"
+    # Small responses (e.g. live_status) pass through unchanged.
+    small = {"response": {"percentage_charged": 50}}
+    assert TeslemetryAPI._summarize_for_log(small) == small
+
+
 def test_teslemetry_soc_rounded_to_2dp():
     """The published SoC is rounded to 2 decimal places rather than the raw high-precision device value."""
     api = MockTeslemetryAPI()
@@ -1663,6 +1688,7 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_discover_site_uses_first_and_filters()
     test_teslemetry_discover_site_no_match_returns_false()
     test_teslemetry_run_discovers_site_before_polling()
+    test_teslemetry_summarize_for_log_hides_bulk()
     test_teslemetry_soc_rounded_to_2dp()
     test_teslemetry_soc_max_estimated_from_battery_count_when_no_capacity_field()
     test_teslemetry_soc_max_estimate_distinguishes_powerwall_1()

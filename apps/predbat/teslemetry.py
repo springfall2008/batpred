@@ -38,11 +38,11 @@ TESLEMETRY_DEFAULT_URL = "https://api.teslemetry.com"
 TESLEMETRY_TIMEOUT = 30
 TESLEMETRY_RETRIES = 3
 LIVE_POLL_SECONDS = 120
-# Daily energy comes from calendar_history?period=day, whose response is large (fine intra-day
-# buckets + breaker logs) and there is no smaller "totals only" endpoint on the Fleet/Teslemetry API
-# (the library's energy_history() is just a wrapper around calendar_history). The values are
-# slow-moving daily cumulative counters, so poll them infrequently to avoid re-downloading ~150 KB.
-ENERGY_POLL_SECONDS = 900
+# Daily energy totals are polled every 5 minutes: Predbat derives its 5-minute energy buckets from
+# the change in these cumulative counters, so they must keep pace with the plan interval. The
+# calendar_history response is large (there is no smaller "totals only" endpoint - the library's
+# energy_history() just wraps calendar_history), so its payload is truncated in the debug log.
+ENERGY_POLL_SECONDS = 300
 RECONCILE_MAX_ATTEMPTS = 5
 # Approximate usable capacity per Powerwall unit (kWh), used only to ESTIMATE soc_max when the API
 # exposes no capacity field at all (observed on some Powerwall 3 firmware, whose site_info and
@@ -141,9 +141,10 @@ class TeslemetryAPI(ComponentBase):
                             return None
                         self.api_auth_failed = False
                         result = await resp.json()
-                        # Log the full raw response so live output can be cross-checked against the
-                        # parsing/units in this component (beta debugging aid).
-                        self.log("Info: Teslemetry API {} {} status {} response: {}".format(method, path, resp.status, json.dumps(result, default=str)))
+                        # Log the raw response so live output can be cross-checked against the parsing
+                        # here (beta debugging aid), with the bulky history time_series and tariff/rate
+                        # blocks summarised so the endpoints stay readable without a wall of data.
+                        self.log("Info: Teslemetry API {} {} status {} response: {}".format(method, path, resp.status, json.dumps(self._summarize_for_log(result), default=str)))
                         return result
             except (aiohttp.ClientError, asyncio.TimeoutError) as err:
                 self.log("Warn: Teslemetry network error on {} attempt {}: {}".format(path, attempt + 1, err))
@@ -186,6 +187,25 @@ class TeslemetryAPI(ComponentBase):
         self.site_id = candidates[0]
         self.log("Info: Teslemetry using energy site id {}".format(self.site_id))
         return True
+
+    @staticmethod
+    def _summarize_for_log(data):
+        """Return a copy of an API response with bulky fields summarised for logging.
+
+        The calendar_history time_series (and SmartBreakerEnergyLogs) and the site_info tariff blocks
+        are huge; replace them with a short placeholder (entry count / tariff code) so the log shows
+        which endpoint returned what without dumping ~150 KB of history or a full ToU rate table.
+        """
+        if not isinstance(data, dict) or not isinstance(data.get("response"), dict):
+            return data
+        response = dict(data["response"])
+        for key in ("time_series", "SmartBreakerEnergyLogs"):
+            if isinstance(response.get(key), list):
+                response[key] = "[{} entries hidden]".format(len(response[key]))
+        for key in ("tariff_content", "tariff_content_v2"):
+            if isinstance(response.get(key), dict):
+                response[key] = "[hidden, code={}]".format(response[key].get("code"))
+        return {"response": response}
 
     def publish_sensor(self, suffix, state, unit=None, state_class="measurement", friendly=None):
         """Publish one virtual sensor via the dashboard."""
