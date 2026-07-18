@@ -740,20 +740,21 @@ def test_teslemetry_emulator_failure_does_not_fail_run():
     api = MockTeslemetryAPI()
     api.register_control_entities()
     # Deliberately NOT calling command_ok_responses(api): every emulator POST (operation, backup,
-    # grid_import_export, time_of_use_settings) has no mock response registered, so _command's
-    # `result is None` branch makes every one of them fail.
+    # grid_import_export) has no mock response registered, so _command's `result is None` branch
+    # makes every one of them fail.
     api.mock_responses["/api/1/energy_sites/123456/live_status"] = LIVE_STATUS
     api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO_FULL
     api.mock_responses["/api/1/energy_sites/123456/calendar_history?kind=energy&period=day"] = ENERGY_HISTORY
     api.mock_responses["/api/1/energy_sites/123456/tariff_rate"] = TARIFF_RATE_NORMAL
     api.get_minutes_now = lambda: 12 * 60
     assert run_async(api.run(seconds=0, first=True)) is True
-    # Tariff has no drift-correction cache pre-seed (unlike operation_mode/backup_reserve, which
-    # SITE_INFO_FULL happens to already match the idle target for, so those two would be deduped
-    # away with no POST at all) - so the emulator's tariff write is always attempted on a fresh
-    # boot, confirming it really tried and failed rather than being silently skipped.
+    # export_rule/grid_charging have no drift-correction cache pre-seed (unlike operation_mode/
+    # backup_reserve, which SITE_INFO_FULL happens to already match the idle target for, so those
+    # two would be deduped away with no POST at all) - so the emulator's grid_import_export write is
+    # always attempted on a fresh boot, confirming it really tried and failed rather than being
+    # silently skipped.
     posts = [req[1] for req in api.requests_made if req[0] == "POST"]
-    assert "/api/1/energy_sites/123456/time_of_use_settings" in posts
+    assert "/api/1/energy_sites/123456/grid_import_export" in posts
 
 
 def test_teslemetry_site_info_latches_without_nameplate_soc_max_from_live_status():
@@ -1085,23 +1086,18 @@ def test_teslemetry_in_window():
 
 
 def test_teslemetry_evaluate_schedule_states():
-    """The five reachable device states: charging, hold-at-target, exporting, discharge floor, idle.
-
-    Charging and hold both allow pv_only export so surplus solar is exported (not curtailed) while the
-    battery fills or holds full; only the active grid-export state escalates to battery_ok, so pv_only
-    is the export rule in every state except that one - the invariant asserted at the end.
-    """
+    """The five reachable device states without the removed tariff_mode lever."""
     api = MockTeslemetryAPI()
     api.schedule = {
         "reserve": 20,
         "charge": {"start_time": "01:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1},
         "discharge": {"start_time": "17:00:00", "end_time": "19:00:00", "soc": 30, "enable": 1},
     }
-    assert api.evaluate_schedule(2 * 60, 50) == {"tariff_mode": "normal", "export_rule": "pv_only", "grid_charging": True, "reserve": 90, "mode": "backup"}
-    assert api.evaluate_schedule(2 * 60, 90) == {"tariff_mode": "normal", "export_rule": "pv_only", "grid_charging": False, "reserve": 90, "mode": "backup"}
-    assert api.evaluate_schedule(18 * 60, 80) == {"tariff_mode": "export_now", "export_rule": "battery_ok", "grid_charging": False, "reserve": 30, "mode": "autonomous"}
-    assert api.evaluate_schedule(18 * 60, 30) == {"tariff_mode": "normal", "export_rule": "pv_only", "grid_charging": False, "reserve": 30, "mode": "self_consumption"}
-    assert api.evaluate_schedule(12 * 60, 60) == {"tariff_mode": "normal", "export_rule": "pv_only", "grid_charging": True, "reserve": 20, "mode": "self_consumption"}
+    assert api.evaluate_schedule(2 * 60, 50) == {"export_rule": "pv_only", "grid_charging": True, "reserve": 90, "mode": "backup"}
+    assert api.evaluate_schedule(2 * 60, 90) == {"export_rule": "pv_only", "grid_charging": False, "reserve": 90, "mode": "backup"}
+    assert api.evaluate_schedule(18 * 60, 80) == {"export_rule": "battery_ok", "grid_charging": False, "reserve": 30, "mode": "autonomous"}
+    assert api.evaluate_schedule(18 * 60, 30) == {"export_rule": "pv_only", "grid_charging": False, "reserve": 30, "mode": "self_consumption"}
+    assert api.evaluate_schedule(12 * 60, 60) == {"export_rule": "pv_only", "grid_charging": True, "reserve": 20, "mode": "self_consumption"}
     # Invariant: export_rule is pv_only in every state except the active grid-export window (battery_ok),
     # so the rule is only rewritten on entry/exit of an export window - never on an ordinary charge cycle.
     non_export_states = [api.evaluate_schedule(2 * 60, 50), api.evaluate_schedule(2 * 60, 90), api.evaluate_schedule(18 * 60, 30), api.evaluate_schedule(12 * 60, 60)]
@@ -1203,14 +1199,15 @@ def command_ok_responses(api):
 
 
 def test_teslemetry_assert_device_state_posts_commands():
-    """assert_device_state issues all four command groups and mirrors success into the diagnostic entities."""
+    """assert_device_state issues all four device commands (tariff is synced separately) and mirrors success into the diagnostic entities."""
     api = MockTeslemetryAPI()
     api.register_control_entities()
     command_ok_responses(api)
-    desired = {"tariff_mode": "normal", "export_rule": "pv_only", "grid_charging": True, "reserve": 20, "mode": "self_consumption"}
+    desired = {"export_rule": "pv_only", "grid_charging": True, "reserve": 20, "mode": "self_consumption"}
     assert run_async(api.assert_device_state(desired)) is True
     paths = [req[1] for req in api.requests_made if req[0] == "POST"]
-    assert "/api/1/energy_sites/123456/time_of_use_settings" in paths
+    assert len(paths) == 4
+    assert "/api/1/energy_sites/123456/time_of_use_settings" not in paths
     assert "/api/1/energy_sites/123456/grid_import_export" in paths
     assert "/api/1/energy_sites/123456/backup" in paths
     assert "/api/1/energy_sites/123456/operation" in paths
@@ -1224,7 +1221,7 @@ def test_teslemetry_assert_device_state_dedupes_repeat():
     api = MockTeslemetryAPI()
     api.register_control_entities()
     command_ok_responses(api)
-    desired = {"tariff_mode": "normal", "export_rule": "pv_only", "grid_charging": True, "reserve": 20, "mode": "self_consumption"}
+    desired = {"export_rule": "pv_only", "grid_charging": True, "reserve": 20, "mode": "self_consumption"}
     run_async(api.assert_device_state(desired))
     first_count = len(api.requests_made)
     run_async(api.assert_device_state(desired))

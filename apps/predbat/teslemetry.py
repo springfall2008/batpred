@@ -486,31 +486,25 @@ class TeslemetryAPI(ComponentBase):
     def evaluate_schedule(self, minutes_now, soc):
         """Map the committed schedule + wall clock + live SOC to the desired device tuple.
 
-        Returns a dict with keys tariff_mode, export_rule, grid_charging, reserve and mode.
-        Charge window wins over an overlapping discharge window (matches execute.py ordering).
-        Charging uses backup mode (proven template semantics); the hold state (SOC at target,
-        which is also how Predbat expresses charge freeze) is backup + grid charging off.
-        Export uses the tariff-trick + autonomous with the device reserve as the discharge floor.
-        Every non-export state (charge, hold and idle) allows PV-only export so surplus solar is
-        never curtailed even while the battery is filling or holding at target; only an active
-        grid-export window escalates to battery_ok. Keeping the export rule at pv_only across all
-        of those states also means it is only rewritten when entering or leaving an export window
-        rather than on every charge cycle, saving grid_import_export commands.
+        Returns a dict with keys export_rule, grid_charging, reserve and mode. Charge wins over an
+        overlapping discharge (matches execute.py). Export uses autonomous + battery_ok, which the
+        ON_PEAK boost over the committed discharge window (in the tariff) makes favourable; the tariff
+        is no longer part of this per-cycle tuple. Every non-export state allows pv_only export so
+        surplus solar is never curtailed.
         """
         charge = self.schedule.get("charge", {})
         discharge = self.schedule.get("discharge", {})
         reserve = self.schedule.get("reserve", 20)
         if self.in_window(minutes_now, charge):
             target = int(charge.get("soc", 100))
-            if soc >= target:
-                return {"tariff_mode": "normal", "export_rule": "pv_only", "grid_charging": False, "reserve": target, "mode": "backup"}
-            return {"tariff_mode": "normal", "export_rule": "pv_only", "grid_charging": True, "reserve": target, "mode": "backup"}
+            grid = soc < target
+            return {"export_rule": "pv_only", "grid_charging": grid, "reserve": target, "mode": "backup"}
         if self.in_window(minutes_now, discharge):
             target = int(discharge.get("soc", 10))
             if soc > target:
-                return {"tariff_mode": "export_now", "export_rule": "battery_ok", "grid_charging": False, "reserve": target, "mode": "autonomous"}
-            return {"tariff_mode": "normal", "export_rule": "pv_only", "grid_charging": False, "reserve": target, "mode": "self_consumption"}
-        return {"tariff_mode": "normal", "export_rule": "pv_only", "grid_charging": True, "reserve": int(reserve), "mode": "self_consumption"}
+                return {"export_rule": "battery_ok", "grid_charging": False, "reserve": target, "mode": "autonomous"}
+            return {"export_rule": "pv_only", "grid_charging": False, "reserve": target, "mode": "self_consumption"}
+        return {"export_rule": "pv_only", "grid_charging": True, "reserve": int(reserve), "mode": "self_consumption"}
 
     def publish_schedule_entities(self):
         """Publish the schedule entities from the pending schedule (pending == committed after boot/apply).
@@ -585,20 +579,17 @@ class TeslemetryAPI(ComponentBase):
         return now.hour * 60 + now.minute
 
     async def assert_device_state(self, desired):
-        """Assert the desired device tuple, tariff first and mode last (the template-proven ordering).
+        """Assert the desired device tuple (export rule, grid charging, reserve, mode); tariff is synced separately.
 
         Each setter dedupes on write-on-change, so an unchanged assert costs zero command credits.
-        Successful writes are mirrored into the diagnostic control entities; failures leave both
-        the dedupe cache and the entity state untouched so the next cycle retries.
+        Successful writes are mirrored into the diagnostic control entities; failures leave both the
+        dedupe cache and the entity state untouched so the next cycle retries.
         """
         results = {}
-        results["tariff_mode"] = await self.set_tariff(desired["tariff_mode"])
         results["export_rule"] = await self.set_export_rule(desired["export_rule"])
         results["grid_charging"] = await self.set_grid_charging(desired["grid_charging"])
         results["reserve"] = await self.set_backup_reserve(desired["reserve"])
         results["mode"] = await self.set_operation_mode(desired["mode"])
-        if results["tariff_mode"]:
-            self.publish_control(self.entity("tariff_mode", domain="select"), desired["tariff_mode"])
         if results["export_rule"]:
             self.publish_control(self.entity("allow_export", domain="select"), desired["export_rule"])
         if results["grid_charging"]:
