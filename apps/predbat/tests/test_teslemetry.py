@@ -1659,6 +1659,41 @@ def test_teslemetry_quantise_agile_three_bands_clamped_rounded():
     assert len(today) == 48 and len(tomorrow) == 48
 
 
+def test_teslemetry_tesla_dow_sunday_zero():
+    """Python weekday (Mon=0..Sun=6) maps to Tesla fromDayOfWeek (Sun=0..Sat=6)."""
+    assert TeslemetryAPI._tesla_dow(6) == 0   # Sunday
+    assert TeslemetryAPI._tesla_dow(0) == 1   # Monday
+    assert TeslemetryAPI._tesla_dow(5) == 6   # Saturday
+
+
+def test_teslemetry_side_layout_partitions_every_day():
+    """Every day-of-week's intervals tile [0,1440) with no gaps or overlaps."""
+    today = ["SUPER_OFF_PEAK"] * 10 + ["OFF_PEAK"] * 38
+    tomorrow = ["OFF_PEAK"] * 48
+    layout = TeslemetryAPI._side_layout(today, tomorrow, today_dow=2)
+    assert set(layout) == set(range(7))
+    for day, intervals in layout.items():
+        covered = 0
+        for (frm, to, _tier) in sorted(intervals):
+            assert frm == covered  # no gap/overlap
+            covered = to
+        assert covered == 1440
+    # today's shape only on dow 2; the rest carry tomorrow's flat shape
+    assert layout[2][0] == (0, 300, "SUPER_OFF_PEAK")
+    assert layout[3] == [(0, 1440, "OFF_PEAK")]
+
+
+def test_teslemetry_render_side_matched_sets_and_day_end():
+    """Rendered rates name exactly the tiers used in periods; day-end shows 00:00."""
+    layout = {day: [(0, 1440, "OFF_PEAK")] for day in range(7)}
+    charges, periods = TeslemetryAPI._render_side(layout, {"OFF_PEAK": 0.30, "SUPER_OFF_PEAK": 0.08})
+    assert set(charges["AllYear"]["rates"]) == {"OFF_PEAK"}      # SUPER_OFF_PEAK unused -> dropped (matched sets)
+    assert set(periods) == {"OFF_PEAK"}
+    assert charges["ALL"] == {"rates": {"ALL": 0}}
+    sample = periods["OFF_PEAK"]["periods"][0]
+    assert (sample["fromHour"], sample["fromMinute"], sample["toHour"], sample["toMinute"]) == (0, 0, 0, 0)
+
+
 def test_teslemetry(my_predbat=None):
     """Run all Teslemetry component tests (registry entry point).
 
@@ -1761,5 +1796,8 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_quantise_flat_single_tier()
     test_teslemetry_quantise_two_distinct_exact()
     test_teslemetry_quantise_agile_three_bands_clamped_rounded()
+    test_teslemetry_tesla_dow_sunday_zero()
+    test_teslemetry_side_layout_partitions_every_day()
+    test_teslemetry_render_side_matched_sets_and_day_end()
     print("**** Teslemetry tests passed ****")
     return 0

@@ -851,6 +851,62 @@ class TeslemetryAPI(ComponentBase):
         tomorrow_tiers = [band_of(value) for value in tomorrow]
         return tier_prices, today_tiers, tomorrow_tiers
 
+    @staticmethod
+    def _tesla_dow(python_weekday):
+        """Map a Python weekday (0=Mon..6=Sun) to Tesla's fromDayOfWeek (0=Sun..6=Sat).
+
+        Isolated so any future convention change is a one-line fix.
+        """
+        return (python_weekday + 1) % 7
+
+    @staticmethod
+    def _coalesce_day(slot_tiers):
+        """Coalesce a 48-slot tier list into [(from_min, to_min, tier), ...] partitioning [0,1440)."""
+        intervals = []
+        index = 0
+        while index < SLOTS_PER_DAY:
+            tier = slot_tiers[index]
+            run_end = index
+            while run_end < SLOTS_PER_DAY and slot_tiers[run_end] == tier:
+                run_end += 1
+            intervals.append((index * SLOT_MINUTES, run_end * SLOT_MINUTES, tier))
+            index = run_end
+        return intervals
+
+    @staticmethod
+    def _side_layout(today_tiers, tomorrow_tiers, today_dow):
+        """Place today's coalesced shape on today_dow, tomorrow's on the next day, replicate tomorrow's on the rest."""
+        today_intervals = TeslemetryAPI._coalesce_day(today_tiers)
+        tomorrow_intervals = TeslemetryAPI._coalesce_day(tomorrow_tiers)
+        layout = {}
+        for day in range(7):
+            if day == today_dow % 7:
+                layout[day] = list(today_intervals)
+            else:
+                layout[day] = list(tomorrow_intervals)
+        layout[(today_dow + 1) % 7] = list(tomorrow_intervals)
+        return layout
+
+    @staticmethod
+    def _render_side(layout, tier_prices):
+        """Render a per-day interval layout into (energy_charges_side, tou_periods), matched tier sets only."""
+        periods = {}
+        used = set()
+        for day, intervals in layout.items():
+            for (frm, to, tier) in intervals:
+                from_hour, from_minute = frm // 60, frm % 60
+                if to >= 1440:
+                    to_hour, to_minute = 0, 0
+                else:
+                    to_hour, to_minute = to // 60, to % 60
+                periods.setdefault(tier, {"periods": []})["periods"].append(
+                    {"fromDayOfWeek": day, "toDayOfWeek": day, "fromHour": from_hour, "fromMinute": from_minute, "toHour": to_hour, "toMinute": to_minute}
+                )
+                used.add(tier)
+        rates = {tier: price for tier, price in tier_prices.items() if tier in used}
+        energy_charges_side = {"ALL": {"rates": {"ALL": 0}}, "AllYear": {"rates": rates}}
+        return energy_charges_side, periods
+
     def build_tariff(self, mode, now=None):
         """Build a tariff_content_v2 dict for the requested mode.
 
