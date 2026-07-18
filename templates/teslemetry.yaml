@@ -24,150 +24,18 @@ pred_bat:
   # Can be auto for automatic, 0 for off or values 1-N for a fixed number
   threads: auto
 
-  # Misc
-  charge_control_immediate: False
-
-  inverter_type: TESLA
-  inverter:
-    name: "Tesla Powerwall via Teslemetry"
-    has_rest_api: False
-    has_mqtt_api: False
-    output_charge_control: "none"
-    has_charge_enable_time: False
-    has_discharge_enable_time: False
-    has_target_soc: False
-    # While the Powerwall does have a reserve SoC, we don't need to
-    # leverage it for controlling charge/discharge
-    has_reserve_soc: False
-    has_ge_inverter_mode: False
-    charge_time_format: "S"
-    charge_time_entity_is_option: False
-    soc_units: "%"
-    num_load_entities: 1
-    time_button_press: False
-    clock_time_format: "%Y-%m-%d %H:%M:%S"
-    write_and_poll_sleep: 2
-    has_time_window: False
-    support_charge_freeze: False
-    support_discharge_freeze: False
-    has_idle_time: False
-
-  # ---- Live power ----
-  battery_power:
-    - sensor.my_home_battery_power
-  battery_power_invert:
-    - False
-
-  pv_power:
-    - sensor.my_home_solar_power
-
-  load_power:
-    - sensor.my_home_load_power
-
-  grid_power:
-    - sensor.my_home_grid_power
-  grid_power_invert:
-    - True
-
-  inverter_reserve_max: 80 #Anything between 80-100 will always be treated as 100
-
-  # ---- Daily energy (kWh, cumulative today) ----
-  load_today:
-    - sensor.my_home_home_usage
-  import_today:
-    - sensor.my_home_grid_imported
-  export_today:
-    - sensor.my_home_grid_exported
-
-  # Replace this with the total PV energy generated today from your inverter
-  pv_today: sensor.my_home_solar_generated
-
-  # ---- State of charge ----
-  soc_percent:
-    - sensor.my_home_percentage_charged
-  soc_max:
-    - "13.5"  # ensure this matches your usable kWh
-
-  # --- Predbat service hooks (Tesla / Teslemetry) ---
-  # These hooks are called when Predbat wants to change the current
-  # state of charge/discharge. They can tie-in to other HA entities.
-  #
-  # Tesla PW Operation modes can be one of:
-  # ['self_consumption','autonomous','backup']
-  #
-  # grid-charging=on, mode=backup: Powerwall will charge
-  # grid-charging=off, mode=backup: Powerwall will hold
-  # mode=self_consumption: Powerwall will discharge
-
-  charge_start_service:
-    - service: select.select_option
-      entity_id: select.my_home_operation_mode
-      option: "autonomous"
-      repeat: True
-    - service: number.set_value
-      entity_id: number.my_home_backup_reserve
-      value: "100"
-    - service: select.select_option
-      entity_id: select.my_home_operation_mode
-      option: "backup"
-      repeat: True
-  charge_freeze_service:
-    - service: switch.turn_off
-      entity_id: switch.my_home_allow_charging_from_grid
-      repeat: True
-    - service: select.select_option
-      entity_id: select.my_home_operation_mode
-      option: "backup"
-      repeat: True
-  charge_stop_service:
-    - service: select.select_option
-      entity_id: select.my_home_operation_mode
-      option: "self_consumption"
-      repeat: True
-    - service: number.set_value
-      entity_id: number.my_home_backup_reserve
-      value: "0"
-      repeat: True
-  discharge_start_service:
-    - service: rest_command.tesla_api_set_export_now_tariff
-      repeat: True
-    - service: select.select_option
-      entity_id: select.my_home_allow_export
-      option: "battery_ok"
-      repeat: True
-    - service: select.select_option
-      entity_id: select.my_home_operation_mode
-      option: "autonomous"
-      repeat: True
-  discharge_stop_service:
-    - service: rest_command.tesla_api_set_iog_custom_tariff
-      repeat: True
-    - service: select.select_option
-      entity_id: select.my_home_allow_export
-      option: "never"
-      repeat: True
-
-  # Inverter max AC limit (one per inverter)
-  # If you have a second inverter for PV only please add the two values together
-  inverter_limit: 11950 # For a 11kW inverter
-
-  # Set the maximum charge/discharge rate of the battery
-  battery_rate_max:
-    - 5000
-
-  # Export limit is a software limit set on your inverter that prevents exporting above a given level
-  # When enabled Predbat will model this limit
-  #export_limit:
-  #  - 3600
-  #  - 3600
-  #
-  # The maximum rate the inverter can charge and discharge the battery can be overwritten, this will change
-  # the register programming and thus cap the max rates. The default is to use the maximum supported rates (recommended)
-  #
-  inverter_limit_charge:
-    - 5000
-  inverter_limit_discharge:
-    - 11000
+  # --- Tesla Powerwall via the Teslemetry component (BETA) ---
+  # NOTE: This integration is in BETA and under active development. Expect issues
+  # and please report them on GitHub. If you want a proven setup today, use the
+  # manual Home Assistant integration template (tesla_powerwall.yaml) instead.
+  # Get your API token from https://teslemetry.com and your energy site id from
+  # the Teslemetry console. With teslemetry_automatic enabled Predbat configures
+  # the inverter automatically - no further inverter settings needed. For a direct
+  # Tesla Fleet API connection set teslemetry_base_url accordingly.
+  teslemetry_key: 'xxxx'
+  teslemetry_site_id: '123456'
+  teslemetry_automatic: True
+  #teslemetry_base_url: 'https://api.teslemetry.com'
 
   # Inverter clock skew in minutes, e.g. 1 means it's 1 minute fast and -1 is 1 minute slow
   # Separate start and end options are applied to the start and end time windows, mostly as you want to start late (not early) and finish early (not late)

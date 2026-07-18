@@ -529,6 +529,9 @@ Integrates with Fox ESS inverters for monitoring and controlling Fox ESS battery
 
 **Can be restarted:** Yes
 
+!!! warning "Beta"
+    This component is in **beta** and under active development. It is not yet recommended for general use - expect issues and please report them on GitHub. For a proven setup today, use the [manual Home Assistant integration](inverter-setup.md#manual-configuration-via-home-assistant-integrations) instead.
+
 #### What it does (teslemetry)
 
 Integrates a Tesla Powerwall via the [Teslemetry](https://teslemetry.com) REST API (which mirrors Tesla Fleet API paths, so a direct Fleet API connection works by changing the base URL). Publishes live power flows, SOC and daily energy sensors, and exposes fox-style charge/discharge window entities that Predbat programs directly. Because the Powerwall has no native scheduler, the component translates the programmed windows into operation mode, backup reserve, grid-charging and export-rule commands each cycle, including the export tariff-trick needed to force the Powerwall to export.

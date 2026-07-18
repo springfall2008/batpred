@@ -108,3 +108,6 @@ it
 
 # Runtime-generated manifest
 apps/predbat/manifest.yaml
+
+# Superpowers planning artifacts (not project docs)
+docs/superpowers/
