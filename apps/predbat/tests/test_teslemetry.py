@@ -894,6 +894,30 @@ def test_teslemetry_reconcile_forces_write_even_if_cache_preseeded():
     assert api.entity_states["select.predbat_teslemetry_allow_export"] == "never"
 
 
+def test_teslemetry_inverter_def_tesla():
+    """TESLA inverter type is registered with window control, no rate control and no export freeze."""
+    from config import INVERTER_DEF
+
+    tesla = INVERTER_DEF.get("TESLA")
+    assert tesla is not None
+    assert tesla["name"] == "Tesla Powerwall"
+    assert tesla["has_charge_enable_time"] is True
+    assert tesla["has_discharge_enable_time"] is True
+    assert tesla["has_target_soc"] is True
+    assert tesla["has_reserve_soc"] is True
+    assert tesla["charge_time_entity_is_option"] is True
+    assert tesla["charge_time_format"] == "HH:MM:SS"
+    assert tesla["time_button_press"] is True
+    assert tesla["output_charge_control"] == "none"
+    assert tesla["support_charge_freeze"] is True
+    assert tesla["support_discharge_freeze"] is False
+    assert tesla["can_span_midnight"] is False
+    assert tesla["target_soc_used_for_discharge"] is True
+    # inverter.py reads the FoxCloud key set unconditionally - TESLA must not miss any of them
+    for key in INVERTER_DEF["FoxCloud"]:
+        assert key in tesla, "TESLA INVERTER_DEF missing key {}".format(key)
+
+
 def test_teslemetry(my_predbat=None):
     """Run all Teslemetry component tests (registry entry point).
 
@@ -953,5 +977,6 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_backup_reserve_drift_correction_refreshes_cache_and_reasserts()
     test_teslemetry_backup_reserve_drift_correction_no_spurious_resend_when_matching()
     test_teslemetry_reconcile_forces_write_even_if_cache_preseeded()
+    test_teslemetry_inverter_def_tesla()
     print("**** Teslemetry tests passed ****")
     return 0
