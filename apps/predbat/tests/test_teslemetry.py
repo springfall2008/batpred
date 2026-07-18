@@ -38,6 +38,7 @@ class MockTeslemetryAPI(TeslemetryAPI):
         """Initialise the mock with captured state instead of ComponentBase wiring."""
         self.api_key = "test_token"
         self.site_id = "123456"
+        self.site_filter = []
         self.base_url = "https://api.teslemetry.com"
         self.prefix = "predbat"
         self.api_auth_failed = False
@@ -319,11 +320,12 @@ def _make_run_api_with_fetch_capture(site_info=True, live_status=True, energy_to
 
 
 def test_teslemetry_run_unconfigured_returns_false():
-    """run() returns False (not None) when key or site_id is missing, so ComponentBase treats it as a failed cycle."""
+    """run() returns False (not None) when the key is missing or a site cannot be resolved, so ComponentBase treats it as a failed cycle."""
     api, calls = _make_run_api_with_fetch_capture()
     api.api_key = ""
     assert run_async(api.run(0, True)) is False
     assert calls == []
+    # No site resolved and /api/1/products returns nothing (no mock registered) -> discovery fails -> run() False.
     api = MockTeslemetryAPI()
     api.site_id = ""
     assert run_async(api.run(0, True)) is False
@@ -1392,6 +1394,60 @@ def test_teslemetry_mock_base_get_arg_consults_args():
     assert base.get_arg("set_read_only", False) is True
 
 
+def test_teslemetry_discover_site_uses_first_and_filters():
+    """discover_site reads /api/1/products, ignores non-energy products, applies the site_id filter and picks the first match."""
+    products = {"response": [{"vehicle_id": 900}, {"energy_site_id": 111, "resource_type": "battery"}, {"energy_site_id": 222, "resource_type": "battery"}]}
+
+    # No filter: first energy site is used, vehicle ignored.
+    api = MockTeslemetryAPI()
+    api.site_id = ""
+    api.mock_responses["/api/1/products"] = products
+    assert run_async(api.discover_site()) is True
+    assert api.site_id == "111"
+
+    # Filter selects a specific site (as a string id).
+    api = MockTeslemetryAPI()
+    api.site_id = ""
+    api.site_filter = ["222"]
+    api.mock_responses["/api/1/products"] = products
+    assert run_async(api.discover_site()) is True
+    assert api.site_id == "222"
+
+
+def test_teslemetry_discover_site_no_match_returns_false():
+    """discover_site returns False and leaves site_id empty when the filter matches nothing or the read fails."""
+    products = {"response": [{"energy_site_id": 111, "resource_type": "battery"}]}
+
+    api = MockTeslemetryAPI()
+    api.site_id = ""
+    api.site_filter = ["999"]
+    api.mock_responses["/api/1/products"] = products
+    assert run_async(api.discover_site()) is False
+    assert api.site_id == ""
+
+    # products read fails (no mock response) -> False.
+    api = MockTeslemetryAPI()
+    api.site_id = ""
+    assert run_async(api.discover_site()) is False
+    assert api.site_id == ""
+
+
+def test_teslemetry_run_discovers_site_before_polling():
+    """run() resolves the site via /api/1/products when none is configured, then proceeds to poll and report."""
+    api = MockTeslemetryAPI()
+    api.site_id = ""
+    api.site_filter = []
+    api.mock_responses["/api/1/products"] = {"response": [{"energy_site_id": 777, "resource_type": "battery"}]}
+    api.mock_responses["/api/1/energy_sites/777/site_info"] = SITE_INFO_FULL
+    api.mock_responses["/api/1/energy_sites/777/live_status"] = LIVE_STATUS
+    api.mock_responses["/api/1/energy_sites/777/calendar_history?kind=energy&period=day"] = ENERGY_HISTORY
+    api.mock_responses["/api/1/energy_sites/777/tariff_rate"] = TARIFF_RATE_NORMAL
+    assert run_async(api.run(0, True)) is True
+    assert api.site_id == "777"
+    assert any(req[1] == "/api/1/products" for req in api.requests_made)
+    assert api.dashboard_items["sensor.predbat_teslemetry_soc"]["state"] == LIVE_STATUS["response"]["percentage_charged"]
+
+
 def test_teslemetry_cli_harness_signals_failure_on_auth_error():
     """The standalone CLI harness returns False on an auth failure (so main() exits non-zero) and True on a healthy run - a broken connection must not look like a pass."""
     import io
@@ -1407,6 +1463,8 @@ def test_teslemetry_cli_harness_signals_failure_on_auth_error():
         """Simulate a healthy, connected Powerwall for every endpoint."""
         if method == "POST":
             return {"response": {}}
+        if "products" in path:
+            return {"response": [{"energy_site_id": "site123", "resource_type": "battery"}]}
         if "site_info" in path:
             return {"response": {"nameplate_energy": 13500, "nameplate_power": 11500, "max_site_meter_power_ac": 11500, "default_real_mode": "self_consumption", "backup_reserve_percent": 20}}
         if "live_status" in path:
@@ -1521,5 +1579,8 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_automatic_config_skips_unpublished_rate_sensors()
     test_teslemetry_mock_base_get_arg_consults_args()
     test_teslemetry_cli_harness_signals_failure_on_auth_error()
+    test_teslemetry_discover_site_uses_first_and_filters()
+    test_teslemetry_discover_site_no_match_returns_false()
+    test_teslemetry_run_discovers_site_before_polling()
     print("**** Teslemetry tests passed ****")
     return 0

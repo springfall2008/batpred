@@ -66,13 +66,23 @@ class TeslemetryAPI(ComponentBase):
 
         Args:
             key: Teslemetry (or Fleet API) bearer token.
-            site_id: Tesla energy site id to poll and control.
+            site_id: Optional Tesla energy site id, or list of ids, used to FILTER the sites discovered
+                from /api/1/products. Empty means "use whatever the account returns". The active site is
+                resolved by discovery in run(); for now only the first matching site is used.
             base_url: REST API base URL (Teslemetry by default, swappable for a direct Fleet API connection).
             automatic: Automatically configure Predbat's inverter args to use this component (fox-style).
             kwargs: Reserved for future control-path configuration (accepted and ignored here).
         """
         self.api_key = key
-        self.site_id = str(site_id) if site_id else ""
+        # site_id acts as a filter over the sites discovered from /api/1/products (see discover_site),
+        # not a hardcoded target. It may be a single id, a list of ids, or empty (use all account sites).
+        if isinstance(site_id, (list, tuple)):
+            self.site_filter = [str(entry) for entry in site_id if entry not in (None, "")]
+        elif site_id:
+            self.site_filter = [str(site_id)]
+        else:
+            self.site_filter = []
+        self.site_id = ""  # Resolved from discover_site() in run().
         self.base_url = base_url
         self.api_auth_failed = False
         self.last_live_poll = 0
@@ -87,7 +97,7 @@ class TeslemetryAPI(ComponentBase):
         self.schedule = copy.deepcopy(DEFAULT_SCHEDULE)
         self.pending_schedule = copy.deepcopy(DEFAULT_SCHEDULE)
         self.schedule_loaded = False
-        self.log("Info: TeslemetryAPI initialising site_id={}".format(self.site_id))
+        self.log("Info: TeslemetryAPI initialising site filter={}".format(self.site_filter or "all account sites"))
         self.log("Info: Teslemetry control drift-correction is transition-based (self-heals when Predbat's own desired value changes, plus a one-off refresh at boot) - full periodic device-state reconciliation is a pilot follow-up")
         self.register_control_entities()
 
@@ -122,6 +132,43 @@ class TeslemetryAPI(ComponentBase):
                 self.log("Warn: Teslemetry network error on {} attempt {}: {}".format(path, attempt + 1, err))
                 await asyncio.sleep(2**attempt)
         return None
+
+    async def discover_site(self):
+        """Resolve the active energy site id from /api/1/products, filtered by the configured site_id(s).
+
+        The account's products are fetched and reduced to energy sites (products carrying an
+        `energy_site_id`; vehicles and other products are ignored). If a site_id filter is configured,
+        only matching sites are kept. For now a single site is supported, so the first remaining
+        candidate is used and any others are logged (full multi-site support is a follow-up).
+
+        Sets self.site_id and returns True on success; returns False (leaving site_id empty) when the
+        products read fails or no site matches, so run() retries on a later cycle.
+        """
+        data = await self._request("GET", "/api/1/products")
+        if not data:
+            return False
+        candidates = []
+        for product in data.get("response", []) or []:
+            if not isinstance(product, dict):
+                continue
+            site = product.get("energy_site_id")
+            if site is None:
+                continue
+            site = str(site)
+            if self.site_filter and site not in self.site_filter:
+                continue
+            candidates.append(site)
+        if not candidates:
+            if self.site_filter:
+                self.log("Warn: Teslemetry none of the configured site ids {} were found in the account products".format(self.site_filter))
+            else:
+                self.log("Warn: Teslemetry no energy sites found on the account")
+            return False
+        if len(candidates) > 1:
+            self.log("Info: Teslemetry {} sites available {} - using the first ({}); multi-site is a follow-up".format(len(candidates), candidates, candidates[0]))
+        self.site_id = candidates[0]
+        self.log("Info: Teslemetry using energy site id {}".format(self.site_id))
+        return True
 
     def publish_sensor(self, suffix, state, unit=None, state_class="measurement", friendly=None):
         """Publish one virtual sensor via the dashboard."""
@@ -239,16 +286,22 @@ class TeslemetryAPI(ComponentBase):
         device whose tariff_rate response never yields a usable code (an unvalidated shape on live
         hardware would otherwise wedge `reconcile_done` at False forever).
         """
-        if not self.api_key or not self.site_id:
-            self.log("Warn: Teslemetry key or site_id not configured, skipping run")
+        if not self.api_key:
+            self.log("Warn: Teslemetry key not configured, skipping run")
             return False
         if self.api_auth_failed:
-            # Do not hammer the API with a dead token; only live_status probes recovery.
-            # A successful probe clears the flag in _request; a failed one returns False
-            # so ComponentBase keeps backing off.
+            # Do not hammer the API with a dead token; only one probe per cycle checks recovery.
+            # A successful probe clears the flag in _request; a failed one returns False so
+            # ComponentBase keeps backing off. Until a site is resolved the probe is discovery
+            # itself (which also needs a valid token), otherwise a live_status poll.
             if seconds - self.last_live_poll >= LIVE_POLL_SECONDS:
                 self.last_live_poll = seconds
+                if not self.site_id:
+                    return await self.discover_site()
                 return await self.fetch_live_status()
+            return False
+        # Resolve the active site from /api/1/products (site_id filters the result); retry until it resolves.
+        if not self.site_id and not await self.discover_site():
             return False
         success = True
         if not self.site_info_done:
@@ -937,25 +990,27 @@ class MockBase:  # pragma: no cover
         print("Set arg {} = {}".format(key, value))
 
 
-async def test_teslemetry_api(key, site_id, base_url=None, control=False):
+async def test_teslemetry_api(key, site_id=None, base_url=None, control=False):
     """Run a standalone test of the Teslemetry component against the live API.
 
-    By default this is READ-ONLY: it polls the Powerwall and prints/publishes the entities and
-    status but sends no control commands - the scheduler emulator and any crash-recovery writes
-    are suppressed via set_read_only. Pass control=True to let the component send commands.
+    site_id is optional and acts as a filter over the sites discovered from /api/1/products; when
+    omitted the account's first site is used. By default this is READ-ONLY: it polls the Powerwall
+    and prints/publishes the entities and status but sends no control commands - the scheduler
+    emulator and any crash-recovery writes are suppressed via set_read_only. Pass control=True to
+    let the component send commands.
 
     Returns True only if the run connected and completed successfully. A failed connection -
     an auth failure (401/403) or an unsuccessful run() - returns False so main() can exit
     non-zero instead of a broken connection looking like a pass.
     """
     mode = "READ-WRITE (controls may change)" if control else "READ-ONLY (status only, no controls changed)"
-    print("Testing Teslemetry API for site {} - {}".format(site_id, mode))
+    print("Testing Teslemetry API for site {} - {}".format(site_id or "auto-discover", mode))
 
     mock_base = MockBase()
     # Read-only by default so a bare test run only reports status and never changes the Powerwall.
     mock_base.args["set_read_only"] = not control
 
-    arg_dict = {"key": key, "site_id": site_id, "automatic": True}
+    arg_dict = {"key": key, "site_id": site_id or "", "automatic": True}
     if base_url:
         arg_dict["base_url"] = base_url
     api = TeslemetryAPI(mock_base, **arg_dict)
@@ -978,7 +1033,7 @@ def main():  # pragma: no cover
     """Command line entry point to test the Teslemetry component against the live API."""
     parser = argparse.ArgumentParser(description="Test Teslemetry Tesla Powerwall API")
     parser.add_argument("--key", required=True, help="Teslemetry (or Fleet API) bearer token")
-    parser.add_argument("--site-id", required=True, help="Tesla energy site id")
+    parser.add_argument("--site-id", default=None, help="Optional Tesla energy site id to filter the sites discovered from /api/1/products (default: use the first site on the account)")
     parser.add_argument("--base-url", default=None, help="REST API base URL (default {})".format(TESLEMETRY_DEFAULT_URL))
     parser.add_argument("--control", action="store_true", help="Allow control commands to be sent (default is read-only: report status only, change nothing)")
 

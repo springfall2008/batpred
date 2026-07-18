@@ -373,7 +373,7 @@ COMPONENT_LIST = {
         "event_filter": "predbat_teslemetry_",
         "args": {
             "key": {"required": True, "config": "teslemetry_key"},
-            "site_id": {"required": True, "config": "teslemetry_site_id"},
+            "site_id": {"required": False, "config": "teslemetry_site_id"},
             "base_url": {"required": False, "config": "teslemetry_base_url", "default": "https://api.teslemetry.com"},
             "automatic": {"required": False, "default": False, "config": "teslemetry_automatic"},
         },

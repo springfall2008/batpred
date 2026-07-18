@@ -2230,7 +2230,7 @@ APPS_SCHEMA = {
     "fox_token_expires_at": {"type": "string", "empty": False},
     "fox_token_hash": {"type": "string", "empty": False},
     "teslemetry_key": {"type": "string", "empty": False},
-    "teslemetry_site_id": {"type": "string", "empty": False},
+    "teslemetry_site_id": {"type": "string|string_list"},
     "teslemetry_base_url": {"type": "string", "empty": False},
     "teslemetry_automatic": {"type": "boolean"},
     "octopus_intelligent_slot": {"type": "sensor|sensor_list", "sensor_type": "boolean|action", "entries": "num_cars", "optional_entries": True},
