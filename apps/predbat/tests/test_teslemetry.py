@@ -48,6 +48,7 @@ class MockTeslemetryAPI(TeslemetryAPI):
         self.reconcile_done = False
         self.reconcile_attempts = 0
         self.last_soc = None
+        self.soc_max_real = False
         self.dashboard_items = {}
         self.log_messages = []
         self.entity_states = {}
@@ -1465,6 +1466,31 @@ def test_teslemetry_soc_rounded_to_2dp():
     assert api.dashboard_items["sensor.predbat_teslemetry_soc"]["state"] == 51.59
 
 
+def test_teslemetry_soc_max_estimated_from_battery_count_when_no_capacity_field():
+    """When the API exposes no capacity field (observed on PW3), soc_max is estimated from battery_count,
+    and a later real value from live_status (total_pack_energy) upgrades the estimate."""
+    api = MockTeslemetryAPI()
+    # site_info like the real PW3: nameplate_power + battery_count, but no nameplate_energy/total_pack_energy.
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = {"response": {"nameplate_power": 11500, "battery_count": 1, "default_real_mode": "autonomous", "backup_reserve_percent": 0}}
+    run_async(api.fetch_site_info())
+    assert api.dashboard_items["sensor.predbat_teslemetry_soc_max"]["state"] == 13.5
+    assert api.soc_max_real is False
+
+    # A real total_pack_energy from live_status upgrades the estimate.
+    api.mock_responses["/api/1/energy_sites/123456/live_status"] = {"response": {"percentage_charged": 50, "total_pack_energy": 14000}}
+    run_async(api.fetch_live_status())
+    assert api.dashboard_items["sensor.predbat_teslemetry_soc_max"]["state"] == 14.0
+    assert api.soc_max_real is True
+
+
+def test_teslemetry_soc_max_derived_from_energy_left():
+    """soc_max is derived from energy_left / percentage_charged when total_pack_energy is absent but energy_left is present."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/live_status"] = {"response": {"percentage_charged": 50, "energy_left": 6750}}
+    run_async(api.fetch_live_status())
+    assert api.dashboard_items["sensor.predbat_teslemetry_soc_max"]["state"] == 13.5
+
+
 def test_teslemetry_inverter_limit_sentinel_clamped_to_nameplate():
     """An 'unlimited' max_site_meter_power_ac sentinel (e.g. 1e9) is ignored; inverter_limit falls back to nameplate_power."""
     api = MockTeslemetryAPI()
@@ -1623,6 +1649,8 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_discover_site_no_match_returns_false()
     test_teslemetry_run_discovers_site_before_polling()
     test_teslemetry_soc_rounded_to_2dp()
+    test_teslemetry_soc_max_estimated_from_battery_count_when_no_capacity_field()
+    test_teslemetry_soc_max_derived_from_energy_left()
     test_teslemetry_inverter_limit_sentinel_clamped_to_nameplate()
     test_teslemetry_run_auto_config_fires_with_soc_max_from_live_status()
     print("**** Teslemetry tests passed ****")

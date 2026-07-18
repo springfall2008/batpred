@@ -40,6 +40,10 @@ TESLEMETRY_RETRIES = 3
 LIVE_POLL_SECONDS = 120
 ENERGY_POLL_SECONDS = 300
 RECONCILE_MAX_ATTEMPTS = 5
+# Approximate usable capacity per Powerwall unit (kWh). Used only to ESTIMATE soc_max when the API
+# exposes no capacity field at all (observed on some Powerwall 3 firmware, whose site_info and
+# live_status omit total_pack_energy/nameplate_energy/energy_left). Users can override soc_max in apps.yaml.
+POWERWALL_PACK_KWH = 13.5
 
 OPERATION_MODES = ["self_consumption", "autonomous", "backup"]
 EXPORT_RULES = ["never", "pv_only", "battery_ok"]
@@ -91,6 +95,7 @@ class TeslemetryAPI(ComponentBase):
         self.reconcile_done = False
         self.reconcile_attempts = 0
         self.last_soc = None
+        self.soc_max_real = False  # True once soc_max is published from a real device value (not the estimate).
         self._last_sent = {}
         self.automatic = automatic
         self.automatic_done = False
@@ -181,6 +186,21 @@ class TeslemetryAPI(ComponentBase):
             attributes["unit_of_measurement"] = unit
         self.dashboard_item(self.entity(suffix), state, attributes, app="teslemetry")
 
+    def publish_soc_max(self, kwh, estimate=False):
+        """Publish the battery capacity (soc_max) in kWh, preferring a real device value over an estimate.
+
+        Different Powerwall firmwares expose capacity in different places (total_pack_energy in
+        live_status, nameplate_energy in site_info) or nowhere at all - in the last case this is
+        estimated from battery_count. A later real value upgrades a previously published estimate,
+        but an estimate never overwrites a real value.
+        """
+        if estimate and self.soc_max_real:
+            return
+        self.publish_sensor("soc_max", round(kwh, 2), unit="kWh", state_class=None, friendly="Powerwall Capacity")
+        if not estimate:
+            self.soc_max_real = True
+        self.log("Info: Teslemetry soc_max = {} kWh ({})".format(round(kwh, 2), "estimated from battery_count - set soc_max manually if wrong" if estimate else "from device"))
+
     async def fetch_live_status(self):
         """Fetch live power flows and SOC, publishing power sensors."""
         data = await self._request("GET", "/api/1/energy_sites/{}/live_status".format(self.site_id))
@@ -189,11 +209,16 @@ class TeslemetryAPI(ComponentBase):
         response = data.get("response", {})
         self.last_soc = response.get("percentage_charged", self.last_soc)
         self.publish_sensor("soc", round(float(response.get("percentage_charged", 0) or 0), 2), unit="%", friendly="Powerwall SOC")
-        # total_pack_energy (Wh) is the reliable battery capacity source on Powerwall (esp. PW3, whose
-        # site_info omits nameplate_energy). Publish it as soc_max so automatic_config can wire it.
+        # Capacity (soc_max): prefer total_pack_energy (Wh); else derive from energy_left / percentage.
+        # Both live in live_status per the HA integration, but some PW3 firmware omits them entirely,
+        # in which case site_info's battery_count estimate (below) is the only source.
         total_pack_wh = response.get("total_pack_energy")
+        energy_left_wh = response.get("energy_left")
+        pct = response.get("percentage_charged")
         if total_pack_wh:
-            self.publish_sensor("soc_max", round(total_pack_wh / 1000.0, 2), unit="kWh", state_class=None, friendly="Powerwall Capacity")
+            self.publish_soc_max(total_pack_wh / 1000.0)
+        elif energy_left_wh and pct:
+            self.publish_soc_max((energy_left_wh / (pct / 100.0)) / 1000.0)
         self.publish_sensor("battery_power", response.get("battery_power", 0), unit="W", friendly="Powerwall Battery Power")
         self.publish_sensor("grid_power", response.get("grid_power", 0), unit="W", friendly="Powerwall Grid Power")
         self.publish_sensor("load_power", response.get("load_power", 0), unit="W", friendly="Powerwall Load Power")
@@ -214,8 +239,13 @@ class TeslemetryAPI(ComponentBase):
             return False
         response = data.get("response", {})
         nameplate_wh = response.get("nameplate_energy", 0)
+        battery_count = response.get("battery_count")
         if nameplate_wh:
-            self.publish_sensor("soc_max", round(nameplate_wh / 1000.0, 2), unit="kWh", state_class=None, friendly="Powerwall Capacity")
+            self.publish_soc_max(nameplate_wh / 1000.0)
+        elif battery_count:
+            # No capacity field on this firmware (e.g. PW3): estimate from battery_count. A real value
+            # from live_status (total_pack_energy) will upgrade this if/when it appears.
+            self.publish_soc_max(battery_count * POWERWALL_PACK_KWH, estimate=True)
         nameplate_power = response.get("nameplate_power", 0)
         if nameplate_power:
             self.publish_sensor("battery_rate_max", nameplate_power, unit="W", state_class=None, friendly="Powerwall Max Rate")
@@ -843,12 +873,15 @@ class TeslemetryAPI(ComponentBase):
             self.log("Warn: Teslemetry site_info read failed - cannot determine current tariff")
             return None
         response = data.get("response", {}) if isinstance(data, dict) else {}
-        tariff = response.get("tariff_content_v2")
-        if not isinstance(tariff, dict):
-            tariff = response.get("tariff_content")
-        code = self._find_tariff_code(tariff) if isinstance(tariff, dict) else None
+        # Prefer tariff_content_v2 (where Predbat writes its PREDBAT-* marker); fall back to the v1
+        # tariff_content (which carries the customer's real tariff code on observed PW3 hardware).
+        tariff_v2 = response.get("tariff_content_v2")
+        code = self._find_tariff_code(tariff_v2) if isinstance(tariff_v2, dict) else None
         if code is None:
-            self.log("Warn: Teslemetry site_info carried no tariff code (tariff_content_v2 absent or code-less)")
+            tariff_v1 = response.get("tariff_content")
+            code = self._find_tariff_code(tariff_v1) if isinstance(tariff_v1, dict) else None
+        if code is None:
+            self.log("Warn: Teslemetry site_info carried no tariff code (tariff_content_v2/tariff_content absent or code-less)")
         return code
 
     def _is_read_only(self):
