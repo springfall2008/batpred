@@ -5,10 +5,11 @@
 # -----------------------------------------------------------------------------
 """Unit tests for the TeslemetryAPI component (Tesla Powerwall via Teslemetry)."""
 
+import copy
 from unittest.mock import MagicMock, patch, AsyncMock
 
 from tests.test_infra import create_aiohttp_mock_response, create_aiohttp_mock_session, run_async
-from teslemetry import TeslemetryAPI, OPERATION_MODES
+from teslemetry import TeslemetryAPI, OPERATION_MODES, OPTIONS_TIME_FULL, DEFAULT_SCHEDULE
 
 
 class MockTeslemetryAPI(TeslemetryAPI):
@@ -32,6 +33,11 @@ class MockTeslemetryAPI(TeslemetryAPI):
         self.mock_responses = {}
         self.requests_made = []
         self._last_sent = {}
+        self.schedule = copy.deepcopy(DEFAULT_SCHEDULE)
+        self.pending_schedule = copy.deepcopy(DEFAULT_SCHEDULE)
+        self.schedule_loaded = False
+        self.automatic = False
+        self.automatic_done = False
 
     def log(self, msg):
         """Capture log messages."""
@@ -967,6 +973,55 @@ def test_teslemetry_component_registry_config():
     assert APPS_SCHEMA["teslemetry_automatic"] == {"type": "boolean"}
 
 
+def test_teslemetry_time_to_minutes():
+    """HH:MM:SS strings convert to minutes since midnight; garbage converts to 0."""
+    assert TeslemetryAPI.time_to_minutes("00:00:00") == 0
+    assert TeslemetryAPI.time_to_minutes("05:30:00") == 330
+    assert TeslemetryAPI.time_to_minutes("23:59:00") == 1439
+    assert TeslemetryAPI.time_to_minutes("garbage") == 0
+
+
+def test_teslemetry_in_window():
+    """Window membership: inclusive start, exclusive end, disabled and midnight-wrap cases."""
+    window = {"enable": 1, "start_time": "01:00:00", "end_time": "05:00:00"}
+    assert TeslemetryAPI.in_window(60, window) is True
+    assert TeslemetryAPI.in_window(299, window) is True
+    assert TeslemetryAPI.in_window(300, window) is False
+    assert TeslemetryAPI.in_window(0, window) is False
+    assert TeslemetryAPI.in_window(60, {**window, "enable": 0}) is False
+    assert TeslemetryAPI.in_window(60, {**window, "end_time": "01:00:00"}) is False
+    wrap = {"enable": 1, "start_time": "23:00:00", "end_time": "01:00:00"}
+    assert TeslemetryAPI.in_window(23 * 60 + 30, wrap) is True
+    assert TeslemetryAPI.in_window(30, wrap) is True
+    assert TeslemetryAPI.in_window(12 * 60, wrap) is False
+
+
+def test_teslemetry_evaluate_schedule_states():
+    """The five reachable device states: charging, hold-at-target, exporting, discharge floor, idle."""
+    api = MockTeslemetryAPI()
+    api.schedule = {
+        "reserve": 20,
+        "charge": {"start_time": "01:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1},
+        "discharge": {"start_time": "17:00:00", "end_time": "19:00:00", "soc": 30, "enable": 1},
+    }
+    assert api.evaluate_schedule(2 * 60, 50) == {"tariff_mode": "normal", "export_rule": "never", "grid_charging": True, "reserve": 90, "mode": "backup"}
+    assert api.evaluate_schedule(2 * 60, 90) == {"tariff_mode": "normal", "export_rule": "never", "grid_charging": False, "reserve": 90, "mode": "backup"}
+    assert api.evaluate_schedule(18 * 60, 80) == {"tariff_mode": "export_now", "export_rule": "battery_ok", "grid_charging": False, "reserve": 30, "mode": "autonomous"}
+    assert api.evaluate_schedule(18 * 60, 30) == {"tariff_mode": "normal", "export_rule": "pv_only", "grid_charging": False, "reserve": 30, "mode": "self_consumption"}
+    assert api.evaluate_schedule(12 * 60, 60) == {"tariff_mode": "normal", "export_rule": "pv_only", "grid_charging": True, "reserve": 20, "mode": "self_consumption"}
+
+
+def test_teslemetry_evaluate_schedule_charge_precedence():
+    """When charge and discharge windows overlap, charge wins (matches execute.py ordering)."""
+    api = MockTeslemetryAPI()
+    api.schedule = {
+        "reserve": 20,
+        "charge": {"start_time": "01:00:00", "end_time": "05:00:00", "soc": 100, "enable": 1},
+        "discharge": {"start_time": "01:00:00", "end_time": "05:00:00", "soc": 10, "enable": 1},
+    }
+    assert api.evaluate_schedule(2 * 60, 50)["mode"] == "backup"
+
+
 def test_teslemetry(my_predbat=None):
     """Run all Teslemetry component tests (registry entry point).
 
@@ -1031,5 +1086,9 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_site_info_publishes_rate_and_limit()
     test_teslemetry_site_info_limit_kw_normalised()
     test_teslemetry_live_status_tracks_last_soc()
+    test_teslemetry_time_to_minutes()
+    test_teslemetry_in_window()
+    test_teslemetry_evaluate_schedule_states()
+    test_teslemetry_evaluate_schedule_charge_precedence()
     print("**** Teslemetry tests passed ****")
     return 0

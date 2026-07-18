@@ -26,6 +26,7 @@ failed POST never updates the cache) or external-drift correction (see
 """
 
 import asyncio
+import copy
 import json
 from datetime import datetime, timezone
 
@@ -43,6 +44,14 @@ OPERATION_MODES = ["self_consumption", "autonomous", "backup"]
 EXPORT_RULES = ["never", "pv_only", "battery_ok"]
 TARIFF_MODES = ["normal", "export_now"]
 
+OPTIONS_TIME_FULL = ["{:02d}:{:02d}:00".format(hour, minute) for hour in range(24) for minute in range(60)]
+
+DEFAULT_SCHEDULE = {
+    "reserve": 20,
+    "charge": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 100, "enable": 0},
+    "discharge": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 10, "enable": 0},
+}
+
 
 class TeslemetryAPI(ComponentBase):
     """Tesla Powerwall component using the Teslemetry (or Fleet) REST API."""
@@ -51,13 +60,14 @@ class TeslemetryAPI(ComponentBase):
     DEFAULT_IMPORT_RATE = 0.28
     DEFAULT_EXPORT_RATE = 0.15
 
-    def initialize(self, key="", site_id="", base_url=TESLEMETRY_DEFAULT_URL, **kwargs):
+    def initialize(self, key="", site_id="", base_url=TESLEMETRY_DEFAULT_URL, automatic=False, **kwargs):
         """Initialise the Teslemetry component from configuration.
 
         Args:
             key: Teslemetry (or Fleet API) bearer token.
             site_id: Tesla energy site id to poll and control.
             base_url: REST API base URL (Teslemetry by default, swappable for a direct Fleet API connection).
+            automatic: Automatically configure Predbat's inverter args to use this component (fox-style).
             kwargs: Reserved for future control-path configuration (accepted and ignored here).
         """
         self.api_key = key
@@ -70,6 +80,11 @@ class TeslemetryAPI(ComponentBase):
         self.reconcile_done = False
         self.last_soc = None
         self._last_sent = {}
+        self.automatic = automatic
+        self.automatic_done = False
+        self.schedule = copy.deepcopy(DEFAULT_SCHEDULE)
+        self.pending_schedule = copy.deepcopy(DEFAULT_SCHEDULE)
+        self.schedule_loaded = False
         self.log("Info: TeslemetryAPI initialising site_id={}".format(self.site_id))
         self.log("Info: Teslemetry control drift-correction is transition-based (self-heals when Predbat's own desired value changes, plus a one-off refresh at boot) - full periodic device-state reconciliation is a pilot follow-up")
         self.register_control_entities()
@@ -272,6 +287,53 @@ class TeslemetryAPI(ComponentBase):
         """
         attrs = getattr(self, "control_attrs", {}).get(entity_id, {})
         self.dashboard_item(entity_id, value, attrs, app="teslemetry")
+
+    @staticmethod
+    def time_to_minutes(value):
+        """Convert an HH:MM[:SS] time string to minutes since midnight, or 0 on garbage."""
+        try:
+            parts = str(value).split(":")
+            return int(parts[0]) * 60 + int(parts[1])
+        except (ValueError, IndexError):
+            return 0
+
+    @staticmethod
+    def in_window(minutes_now, window):
+        """Return True if minutes_now falls inside an enabled schedule window (inclusive start, exclusive end, midnight wrap supported; start == end means disabled)."""
+        if not window.get("enable"):
+            return False
+        start = TeslemetryAPI.time_to_minutes(window.get("start_time", "00:00:00"))
+        end = TeslemetryAPI.time_to_minutes(window.get("end_time", "00:00:00"))
+        if start == end:
+            return False
+        if end > start:
+            return start <= minutes_now < end
+        return minutes_now >= start or minutes_now < end
+
+    def evaluate_schedule(self, minutes_now, soc):
+        """Map the committed schedule + wall clock + live SOC to the desired device tuple.
+
+        Returns a dict with keys tariff_mode, export_rule, grid_charging, reserve and mode.
+        Charge window wins over an overlapping discharge window (matches execute.py ordering).
+        Charging uses backup mode (proven template semantics); the hold state (SOC at target,
+        which is also how Predbat expresses charge freeze) is backup + grid charging off.
+        Export uses the tariff-trick + autonomous with the device reserve as the discharge floor.
+        Idle allows PV-only export so excess solar is never curtailed.
+        """
+        charge = self.schedule.get("charge", {})
+        discharge = self.schedule.get("discharge", {})
+        reserve = self.schedule.get("reserve", 20)
+        if self.in_window(minutes_now, charge):
+            target = int(charge.get("soc", 100))
+            if soc >= target:
+                return {"tariff_mode": "normal", "export_rule": "never", "grid_charging": False, "reserve": target, "mode": "backup"}
+            return {"tariff_mode": "normal", "export_rule": "never", "grid_charging": True, "reserve": target, "mode": "backup"}
+        if self.in_window(minutes_now, discharge):
+            target = int(discharge.get("soc", 10))
+            if soc > target:
+                return {"tariff_mode": "export_now", "export_rule": "battery_ok", "grid_charging": False, "reserve": target, "mode": "autonomous"}
+            return {"tariff_mode": "normal", "export_rule": "pv_only", "grid_charging": False, "reserve": target, "mode": "self_consumption"}
+        return {"tariff_mode": "normal", "export_rule": "pv_only", "grid_charging": True, "reserve": int(reserve), "mode": "self_consumption"}
 
     async def _command(self, path, body):
         """POST a command; return True only if both the transport and the application layer succeeded.
