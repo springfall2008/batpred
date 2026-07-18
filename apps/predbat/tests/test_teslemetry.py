@@ -25,6 +25,7 @@ class MockTeslemetryAPI(TeslemetryAPI):
         self.last_energy_poll = 0
         self.site_info_done = False
         self.reconcile_done = False
+        self.last_soc = None
         self.dashboard_items = {}
         self.log_messages = []
         self.entity_states = {}
@@ -74,6 +75,16 @@ LIVE_STATUS = {
 SITE_INFO = {
     "response": {
         "nameplate_energy": 13500,
+        "default_real_mode": "self_consumption",
+        "backup_reserve_percent": 20,
+    }
+}
+
+SITE_INFO_FULL = {
+    "response": {
+        "nameplate_energy": 13500,
+        "nameplate_power": 11500,
+        "max_site_meter_power_ac": 11500,
         "default_real_mode": "self_consumption",
         "backup_reserve_percent": 20,
     }
@@ -148,6 +159,31 @@ def test_teslemetry_energy_today_publishes_kwh():
     assert api.dashboard_items["sensor.predbat_teslemetry_import_today"]["state"] == 2.5
     assert api.dashboard_items["sensor.predbat_teslemetry_export_today"]["state"] == 1.5
     assert api.dashboard_items["sensor.predbat_teslemetry_load_today"]["state"] == 4.2
+
+
+def test_teslemetry_site_info_publishes_rate_and_limit():
+    """site_info nameplate power and site AC limit are published as W sensors for automatic config."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO_FULL
+    run_async(api.fetch_site_info())
+    assert api.dashboard_items["sensor.predbat_teslemetry_battery_rate_max"]["state"] == 11500
+    assert api.dashboard_items["sensor.predbat_teslemetry_inverter_limit"]["state"] == 11500
+
+
+def test_teslemetry_site_info_limit_kw_normalised():
+    """A max_site_meter_power_ac reported in kW (small magnitude) is normalised to W."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = {"response": {"nameplate_energy": 13500, "nameplate_power": 11500, "max_site_meter_power_ac": 11.5}}
+    run_async(api.fetch_site_info())
+    assert api.dashboard_items["sensor.predbat_teslemetry_inverter_limit"]["state"] == 11500
+
+
+def test_teslemetry_live_status_tracks_last_soc():
+    """fetch_live_status records the live SOC for the scheduler emulator."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/live_status"] = LIVE_STATUS
+    run_async(api.fetch_live_status())
+    assert api.last_soc == 55.5
 
 
 def _make_real_request_api():
@@ -992,5 +1028,8 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_reconcile_forces_write_even_if_cache_preseeded()
     test_teslemetry_inverter_def_tesla()
     test_teslemetry_component_registry_config()
+    test_teslemetry_site_info_publishes_rate_and_limit()
+    test_teslemetry_site_info_limit_kw_normalised()
+    test_teslemetry_live_status_tracks_last_soc()
     print("**** Teslemetry tests passed ****")
     return 0

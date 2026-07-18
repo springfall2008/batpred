@@ -68,6 +68,7 @@ class TeslemetryAPI(ComponentBase):
         self.last_energy_poll = 0
         self.site_info_done = False
         self.reconcile_done = False
+        self.last_soc = None
         self._last_sent = {}
         self.log("Info: TeslemetryAPI initialising site_id={}".format(self.site_id))
         self.log("Info: Teslemetry control drift-correction is transition-based (self-heals when Predbat's own desired value changes, plus a one-off refresh at boot) - full periodic device-state reconciliation is a pilot follow-up")
@@ -118,6 +119,7 @@ class TeslemetryAPI(ComponentBase):
         if not data:
             return False
         response = data.get("response", {})
+        self.last_soc = response.get("percentage_charged", self.last_soc)
         self.publish_sensor("soc", response.get("percentage_charged", 0), unit="%", friendly="Powerwall SOC")
         self.publish_sensor("battery_power", response.get("battery_power", 0), unit="W", friendly="Powerwall Battery Power")
         self.publish_sensor("grid_power", response.get("grid_power", 0), unit="W", friendly="Powerwall Grid Power")
@@ -143,6 +145,15 @@ class TeslemetryAPI(ComponentBase):
         if nameplate_wh:
             self.publish_sensor("soc_max", round(nameplate_wh / 1000.0, 2), unit="kWh", state_class=None, friendly="Powerwall Capacity")
             soc_max_published = True
+        nameplate_power = response.get("nameplate_power", 0)
+        if nameplate_power:
+            self.publish_sensor("battery_rate_max", nameplate_power, unit="W", state_class=None, friendly="Powerwall Max Rate")
+        site_limit = response.get("max_site_meter_power_ac", 0) or nameplate_power
+        if site_limit and site_limit < 100:
+            # Some sites report this field in kW; normalise to W
+            site_limit = site_limit * 1000
+        if site_limit:
+            self.publish_sensor("inverter_limit", int(site_limit), unit="W", state_class=None, friendly="Powerwall Site Limit")
         # Seed the control entity STATES (display only, no commands) from the device so they reflect
         # reality at boot instead of the hardcoded defaults set by register_control_entities().
         #
