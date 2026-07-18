@@ -480,34 +480,69 @@ def test_teslemetry_site_info_latch():
     assert api.dashboard_items["sensor.predbat_teslemetry_soc_max"]["state"] == 13.5
 
 
-def test_teslemetry_build_tariff_export_now():
-    """export_now tariff marks the current window ON_PEAK with a high sell rate."""
-    from datetime import datetime
-
+def test_teslemetry_build_tariff_single_code_real_bands():
+    """build_tariff() with no window yields one PREDBAT tariff, GBP, with real bands and no ON_PEAK."""
     api = MockTeslemetryAPI()
-    now = datetime(2026, 7, 2, 14, 40)
-    tariff = api.build_tariff("export_now", now=now)
-    assert tariff["version"] == 1
-    sell = tariff["sell_tariff"]["energy_charges"]["AllYear"]["rates"]
-    assert sell["ON_PEAK"] > sell["SUPER_OFF_PEAK"]
-    periods = tariff["seasons"]["AllYear"]["tou_periods"]["ON_PEAK"]["periods"]
-    assert periods[0]["fromHour"] == 14 and periods[0]["fromMinute"] == 30
-    assert periods[0]["toHour"] == 15 and periods[0]["toMinute"] == 30
-
-
-def test_teslemetry_build_tariff_normal_flat():
-    """normal tariff is flat (single ALL rate, no ON_PEAK windows)."""
-    api = MockTeslemetryAPI()
-    tariff = api.build_tariff("normal")
+    api.base = _rate_base(import_p=28.0, export_p=15.0)  # helper below
+    tariff = api.build_tariff(None)
+    assert tariff["code"] == "PREDBAT"
+    assert tariff["currency"] == "GBP"
     assert "ON_PEAK" not in tariff["seasons"]["AllYear"]["tou_periods"]
-    assert tariff["energy_charges"]["AllYear"]["rates"]["SUPER_OFF_PEAK"] >= 0
+    assert "ON_PEAK" not in tariff["sell_tariff"]["seasons"]["AllYear"]["tou_periods"]
+
+
+def test_teslemetry_build_tariff_boost_is_strict_max_on_today_dow():
+    """A discharge window adds ON_PEAK above every real band, on today's DOW only (both sides)."""
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    tariff = api.build_tariff((1020, 1080), now_min=600)  # 17:00-18:00 window, now 10:00 -> today
+    sell_periods = tariff["sell_tariff"]["seasons"]["AllYear"]["tou_periods"]
+    today_dow = api._tesla_dow(api.base.now.weekday())
+    assert set(p["fromDayOfWeek"] for p in sell_periods["ON_PEAK"]["periods"]) == {today_dow}
+    boost = tariff["sell_tariff"]["energy_charges"]["AllYear"]["rates"]["ON_PEAK"]
+    real = [v for t, v in tariff["sell_tariff"]["energy_charges"]["AllYear"]["rates"].items() if t != "ON_PEAK"]
+    assert all(boost > v for v in real)
+    assert tariff["energy_charges"]["AllYear"]["rates"]["ON_PEAK"] == boost  # buy mirror
+
+
+def test_teslemetry_build_tariff_fallback_flat_when_no_rates():
+    """No base/rates -> flat tariff via the ALL field, still schema-valid, boost still overlays."""
+    api = MockTeslemetryAPI()
+    api.base = None
+    tariff = api.build_tariff(None)
+    assert tariff["energy_charges"]["ALL"]["rates"]["ALL"] >= 0
+
+
+def test_teslemetry_build_tariff_boost_clamps_above_high_rates():
+    """Boost is 2x the highest real band when that exceeds the static EXPORT_SELL_RATE floor, and the
+    buy-side ON_PEAK mirrors the sell-side boost so grid-charging is discouraged during the window."""
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=30.0, export_p=60.0)
+    tariff = api.build_tariff((1020, 1080), now_min=600)
+    sell = tariff["sell_tariff"]["energy_charges"]["AllYear"]["rates"]
+    assert sell["SUPER_OFF_PEAK"] == 0.6
+    assert sell["ON_PEAK"] == 1.2
+    assert tariff["energy_charges"]["AllYear"]["rates"]["ON_PEAK"] == sell["ON_PEAK"]
+
+
+def test_teslemetry_build_tariff_periods_partition_each_day():
+    """Every day-of-week's rendered periods (buy and sell) partition [0, 1440) exactly, boost included."""
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    tariff = api.build_tariff((1020, 1080), now_min=600)
+    for tou_periods in (tariff["seasons"]["AllYear"]["tou_periods"], tariff["sell_tariff"]["seasons"]["AllYear"]["tou_periods"]):
+        for day in range(7):
+            day_periods = {tier: {"periods": [p for p in block["periods"] if p["fromDayOfWeek"] == day]} for tier, block in tou_periods.items()}
+            _assert_tou_periods_partition_day(day_periods)
 
 
 def test_teslemetry_set_tariff_posts_tou_settings():
-    """set_tariff wraps the tariff in tou_settings and POSTs it."""
+    """set_tariff wraps a prebuilt tariff in tou_settings and POSTs it."""
     api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
     api.mock_responses["/api/1/energy_sites/123456/time_of_use_settings"] = {"response": {"code": 201}}
-    result = run_async(api.set_tariff("normal"))
+    t = api.build_tariff(None)
+    result = run_async(api.set_tariff(t))
     assert result is True
     method, path, body = api.requests_made[-1]
     assert path == "/api/1/energy_sites/123456/time_of_use_settings"
@@ -527,72 +562,6 @@ def _assert_tou_periods_partition_day(tou_periods):
                 covered[minute % (24 * 60)] += 1
     assert max(covered) <= 1, "tou_periods overlap"
     assert min(covered) >= 1, "tou_periods leave a gap"
-
-
-def test_teslemetry_build_tariff_export_now_midnight_wrap():
-    """export_now at 23:40 wraps midnight: ON_PEAK 23:30-00:30 with a single non-overlapping off-peak complement."""
-    from datetime import datetime
-
-    api = MockTeslemetryAPI()
-    tariff = api.build_tariff("export_now", now=datetime(2026, 7, 2, 23, 40))
-    tou_periods = tariff["seasons"]["AllYear"]["tou_periods"]
-    assert tou_periods["ON_PEAK"]["periods"] == [{"fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 23, "fromMinute": 30, "toHour": 0, "toMinute": 30}]
-    assert tou_periods["SUPER_OFF_PEAK"]["periods"] == [{"fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 0, "fromMinute": 30, "toHour": 23, "toMinute": 30}]
-    _assert_tou_periods_partition_day(tou_periods)
-
-
-def test_teslemetry_build_tariff_export_now_midnight_exact():
-    """export_now at 23:10 ends exactly at midnight: ON_PEAK 23:00-00:00 with a single off-peak complement."""
-    from datetime import datetime
-
-    api = MockTeslemetryAPI()
-    tariff = api.build_tariff("export_now", now=datetime(2026, 7, 2, 23, 10))
-    tou_periods = tariff["seasons"]["AllYear"]["tou_periods"]
-    assert tou_periods["ON_PEAK"]["periods"] == [{"fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 23, "fromMinute": 0, "toHour": 0, "toMinute": 0}]
-    assert tou_periods["SUPER_OFF_PEAK"]["periods"] == [{"fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 0, "fromMinute": 0, "toHour": 23, "toMinute": 0}]
-    _assert_tou_periods_partition_day(tou_periods)
-
-
-def test_teslemetry_build_tariff_sell_clamp_above_export_rate():
-    """ON_PEAK sell (and buy) stay above the live export rate even when it exceeds the static high rate."""
-    from types import SimpleNamespace
-
-    api = MockTeslemetryAPI()
-    api.base = SimpleNamespace(minutes_now=600, rate_import={600: 30.0}, rate_export={600: 60.0})
-    tariff = api.build_tariff("export_now")
-    sell = tariff["sell_tariff"]["energy_charges"]["AllYear"]["rates"]
-    assert sell["SUPER_OFF_PEAK"] == 0.6
-    assert sell["ON_PEAK"] > 0.6
-    assert sell["ON_PEAK"] == 1.2
-    # Buy-side ON_PEAK matches the high sell rate to discourage grid-charging during the export window
-    assert tariff["energy_charges"]["AllYear"]["rates"]["ON_PEAK"] == sell["ON_PEAK"]
-
-
-def test_teslemetry_build_tariff_uses_site_local_time_not_utc():
-    """build_tariff's export_now window must be expressed in the SITE'S LOCAL wall-clock time (the
-    same clock Predbat schedules in), not raw UTC - the Powerwall applies tou_periods in local time.
-
-    A base whose local time is 15:40 during BST (UTC+1) must yield an ON_PEAK window starting at
-    15:30 local. A naive UTC-only implementation would instead read whatever the system clock (or,
-    as sabotaged here, a mocked bogus UTC time) reports, producing the wrong window boundaries.
-    """
-    import pytz
-    from datetime import datetime as real_datetime
-    from types import SimpleNamespace
-
-    api = MockTeslemetryAPI()
-    london = pytz.timezone("Europe/London")
-    local_now = london.localize(real_datetime(2026, 7, 2, 15, 40))
-    api.base = SimpleNamespace(now_utc=local_now, local_tz=london, minutes_now=None, rate_import=None, rate_export=None)
-
-    # Sabotage a naive implementation: if build_tariff ignores the base and calls datetime.now(timezone.utc)
-    # directly, it will see this deliberately-wrong bogus time (03:05) instead of the real 15:40 local time above.
-    with patch("teslemetry.datetime") as mock_datetime:
-        mock_datetime.now.return_value = real_datetime(2026, 7, 2, 3, 5)
-        tariff = api.build_tariff("export_now")
-
-    periods = tariff["seasons"]["AllYear"]["tou_periods"]["ON_PEAK"]["periods"]
-    assert periods[0]["fromHour"] == 15 and periods[0]["fromMinute"] == 30
 
 
 def test_teslemetry_emulator_failure_does_not_fail_run():
@@ -722,25 +691,25 @@ def test_teslemetry_dedupe_failed_post_not_cached_so_retries():
 
 
 def test_teslemetry_dedupe_tariff_identical_body_skips_repeat_post():
-    """Two normal-tariff builds with an identical body POST only once."""
+    """Two identical prebuilt tariff pushes POST only once."""
     api = MockTeslemetryAPI()
     api.mock_responses["/api/1/energy_sites/123456/time_of_use_settings"] = {"response": {"code": 201}}
-    run_async(api.set_tariff("normal"))
-    run_async(api.set_tariff("normal"))
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    tariff = api.build_tariff(None)
+    run_async(api.set_tariff(tariff))
+    run_async(api.set_tariff(tariff))
     posts = [req for req in api.requests_made if req[0] == "POST"]
     assert len(posts) == 1
 
 
 def test_teslemetry_dedupe_tariff_resends_when_rates_change():
     """A tariff rebuild whose sell/buy price actually changed must re-POST rather than be deduped."""
-    from types import SimpleNamespace
-
     api = MockTeslemetryAPI()
     api.mock_responses["/api/1/energy_sites/123456/time_of_use_settings"] = {"response": {"code": 201}}
-    api.base = SimpleNamespace(minutes_now=600, rate_import={600: 30.0}, rate_export={600: 15.0}, now_utc=None, local_tz=None)
-    run_async(api.set_tariff("normal"))
-    api.base.rate_export = {600: 60.0}  # Export rate jumps, so the sell-side signature changes.
-    run_async(api.set_tariff("normal"))
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    run_async(api.set_tariff(api.build_tariff(None)))
+    api.base = _rate_base(import_p=28.0, export_p=60.0)  # Export rate jumps, so the sell-side signature changes.
+    run_async(api.set_tariff(api.build_tariff(None)))
     posts = [req for req in api.requests_made if req[0] == "POST"]
     assert len(posts) == 2
 
@@ -780,52 +749,36 @@ def test_teslemetry_drift_correction_no_spurious_resend_when_matching():
 
 
 def test_teslemetry_dedupe_tariff_resends_on_window_advance():
-    """A tariff rebuild whose live rate is UNCHANGED but whose export_now ON_PEAK window has
-    advanced (a later base local time crosses into the next 30-minute-aligned window) must still
-    re-POST - the dedupe signature is the full built tariff body (which embeds the window), not
-    just the mode string, so a window-only move is not silently skipped.
+    """A tariff rebuild whose live rate is UNCHANGED but whose boost window has rolled from today to
+    tomorrow (now_min has passed the window's end) must still re-POST - the dedupe signature is the
+    full built tariff body (which embeds the boost's day-of-week placement), not just the rates, so a
+    window-only roll is not silently skipped.
 
-    Would be RED under a hypothetical mode-string-keyed signature: if `set_tariff` deduped on
-    `_apply_command("tariff", mode, ...)` instead of the built-tariff JSON, both calls below pass
-    the identical mode "export_now", so `self._last_sent["tariff"] == "export_now"` would already
-    match on the second call and the POST would be skipped (posts == 1) even though the device's
-    ON_PEAK window moved from 14:30-15:30 to 15:00-16:00 - the customer would be left on a STALE,
-    now-expired export window. GREEN as-built: the signature is
-    `json.dumps(build_tariff(mode), sort_keys=True)`, which differs between the two builds purely
-    because fromHour/fromMinute/toHour/toMinute moved, so both calls POST.
+    Would be RED under a hypothetical rate-only signature: if `set_tariff` deduped on just the
+    energy_charges values, both builds below have identical rates (same base throughout), so a naive
+    signature would match on the second call and the POST would be skipped even though the boost
+    moved from today's day-of-week to tomorrow's - the customer would be left exporting on the wrong
+    day. GREEN as-built: the signature is the full `json.dumps(tariff, sort_keys=True)`, which differs
+    between the two builds purely because the ON_PEAK periods' fromDayOfWeek moved, so both calls POST.
     """
-    from datetime import datetime, timezone
-    from types import SimpleNamespace
-
     api = MockTeslemetryAPI()
     api.mock_responses["/api/1/energy_sites/123456/time_of_use_settings"] = {"response": {"code": 201}}
-    # Live import/export rates held FIXED across both calls (same minutes_now, same rate tables) so
-    # only the base local time - and therefore the window - differs between the two builds.
-    api.base = SimpleNamespace(
-        now_utc=datetime(2026, 7, 2, 14, 40, tzinfo=timezone.utc),
-        local_tz=timezone.utc,
-        minutes_now=600,
-        rate_import={600: 28.0},
-        rate_export={600: 15.0},
-    )
-    run_async(api.set_tariff("export_now"))
-
-    # Advance base local time into the NEXT 30-minute window; rates untouched.
-    api.base.now_utc = datetime(2026, 7, 2, 15, 10, tzinfo=timezone.utc)
-    run_async(api.set_tariff("export_now"))
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    window = (1020, 1080)  # 17:00-18:00
+    run_async(api.set_tariff(api.build_tariff(window, now_min=600)))  # 10:00 -> window still today
+    run_async(api.set_tariff(api.build_tariff(window, now_min=1100)))  # 18:20 -> window rolled to tomorrow
 
     posts = [req for req in api.requests_made if req[0] == "POST"]
     assert len(posts) == 2
     first_tariff = posts[0][2]["tou_settings"]["tariff_content_v2"]
     second_tariff = posts[1][2]["tou_settings"]["tariff_content_v2"]
-    first_window = first_tariff["seasons"]["AllYear"]["tou_periods"]["ON_PEAK"]["periods"][0]
-    second_window = second_tariff["seasons"]["AllYear"]["tou_periods"]["ON_PEAK"]["periods"][0]
-    assert (first_window["fromHour"], first_window["fromMinute"]) == (14, 30)
-    assert (second_window["fromHour"], second_window["fromMinute"]) == (15, 0)
-    # Confirm the live rate really was constant - only the window differs between the two builds.
-    first_on_peak_sell = first_tariff["sell_tariff"]["energy_charges"]["AllYear"]["rates"]["ON_PEAK"]
-    second_on_peak_sell = second_tariff["sell_tariff"]["energy_charges"]["AllYear"]["rates"]["ON_PEAK"]
-    assert first_on_peak_sell == second_on_peak_sell
+    first_dow = first_tariff["sell_tariff"]["seasons"]["AllYear"]["tou_periods"]["ON_PEAK"]["periods"][0]["fromDayOfWeek"]
+    second_dow = second_tariff["sell_tariff"]["seasons"]["AllYear"]["tou_periods"]["ON_PEAK"]["periods"][0]["fromDayOfWeek"]
+    assert first_dow != second_dow
+    # Confirm the live rate really was constant - only the boost's day-of-week placement differs.
+    first_rate = first_tariff["sell_tariff"]["energy_charges"]["AllYear"]["rates"]["ON_PEAK"]
+    second_rate = second_tariff["sell_tariff"]["energy_charges"]["AllYear"]["rates"]["ON_PEAK"]
+    assert first_rate == second_rate
 
 
 def test_teslemetry_backup_reserve_drift_correction_refreshes_cache_and_reasserts():
@@ -1096,9 +1049,7 @@ def test_teslemetry_run_asserts_schedule_each_cycle():
     # emulator assert would be correctly deduped away with no POST at all - a true negative that
     # would make this test pass for the wrong reason (or fail) regardless of whether run() actually
     # wires the emulator in. Using values that differ guarantees the assert has real work to do.
-    api.mock_responses["/api/1/energy_sites/123456/site_info"] = {
-        "response": {"nameplate_energy": 13500, "nameplate_power": 11500, "max_site_meter_power_ac": 11500, "default_real_mode": "backup", "backup_reserve_percent": 5}
-    }
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = {"response": {"nameplate_energy": 13500, "nameplate_power": 11500, "max_site_meter_power_ac": 11500, "default_real_mode": "backup", "backup_reserve_percent": 5}}
     api.mock_responses["/api/1/energy_sites/123456/calendar_history?kind=energy&period=day"] = ENERGY_HISTORY
     api.get_minutes_now = lambda: 12 * 60
     assert run_async(api.run(seconds=0, first=True)) is True
@@ -1482,8 +1433,8 @@ def test_teslemetry_quantise_agile_three_bands_clamped_rounded():
     assert set(prices) == {"SUPER_OFF_PEAK", "OFF_PEAK", "PARTIAL_PEAK"}
     # (b) lowest band price is the MEAN of its members mean(0.00, 0.10) = 0.05 (mean-of-bucket, not just membership)
     assert prices["SUPER_OFF_PEAK"] == 0.05
-    assert prices["OFF_PEAK"] == 0.25             # mean(0.20, 0.30)
-    assert prices["PARTIAL_PEAK"] == 0.50         # mean(0.40, 0.60)
+    assert prices["OFF_PEAK"] == 0.25  # mean(0.20, 0.30)
+    assert prices["PARTIAL_PEAK"] == 0.50  # mean(0.40, 0.60)
     # (c) strictly increasing across the bands
     assert prices["SUPER_OFF_PEAK"] < prices["OFF_PEAK"] < prices["PARTIAL_PEAK"]
     # (d) every price is whole pence (2dp)
@@ -1497,9 +1448,9 @@ def test_teslemetry_quantise_agile_three_bands_clamped_rounded():
 
 def test_teslemetry_tesla_dow_sunday_zero():
     """Python weekday (Mon=0..Sun=6) maps to Tesla fromDayOfWeek (Sun=0..Sat=6)."""
-    assert TeslemetryAPI._tesla_dow(6) == 0   # Sunday
-    assert TeslemetryAPI._tesla_dow(0) == 1   # Monday
-    assert TeslemetryAPI._tesla_dow(5) == 6   # Saturday
+    assert TeslemetryAPI._tesla_dow(6) == 0  # Sunday
+    assert TeslemetryAPI._tesla_dow(0) == 1  # Monday
+    assert TeslemetryAPI._tesla_dow(5) == 6  # Saturday
 
 
 def test_teslemetry_side_layout_partitions_every_day():
@@ -1510,7 +1461,7 @@ def test_teslemetry_side_layout_partitions_every_day():
     assert set(layout) == set(range(7))
     for day, intervals in layout.items():
         covered = 0
-        for (frm, to, _tier) in sorted(intervals):
+        for frm, to, _tier in sorted(intervals):
             assert frm == covered  # no gap/overlap
             covered = to
         assert covered == 1440
@@ -1523,7 +1474,7 @@ def test_teslemetry_render_side_matched_sets_and_day_end():
     """Rendered rates name exactly the tiers used in periods; day-end shows 00:00."""
     layout = {day: [(0, 1440, "OFF_PEAK")] for day in range(7)}
     charges, periods = TeslemetryAPI._render_side(layout, {"OFF_PEAK": 0.30, "SUPER_OFF_PEAK": 0.08})
-    assert set(charges["AllYear"]["rates"]) == {"OFF_PEAK"}      # SUPER_OFF_PEAK unused -> dropped (matched sets)
+    assert set(charges["AllYear"]["rates"]) == {"OFF_PEAK"}  # SUPER_OFF_PEAK unused -> dropped (matched sets)
     assert set(periods) == {"OFF_PEAK"}
     assert charges["ALL"] == {"rates": {"ALL": 0}}
     sample = periods["OFF_PEAK"]["periods"][0]
@@ -1539,11 +1490,11 @@ def test_teslemetry_carve_interval_splits_and_partitions():
 
 def test_teslemetry_boost_segments_today_vs_tomorrow():
     """A same-day window ending in the future is today; one already ended is tomorrow; wrap splits."""
-    assert TeslemetryAPI._boost_segments((1020, 1080), now_min=600) == [(0, 1020, 1080)]   # 10:00, 17-18 upcoming -> today
-    assert TeslemetryAPI._boost_segments((540, 660), now_min=600) == [(0, 540, 660)]        # in progress (09-11 @10:00) -> today
-    assert TeslemetryAPI._boost_segments((300, 420), now_min=600) == [(1, 300, 420)]        # 05-07 ended by 10:00 -> tomorrow
+    assert TeslemetryAPI._boost_segments((1020, 1080), now_min=600) == [(0, 1020, 1080)]  # 10:00, 17-18 upcoming -> today
+    assert TeslemetryAPI._boost_segments((540, 660), now_min=600) == [(0, 540, 660)]  # in progress (09-11 @10:00) -> today
+    assert TeslemetryAPI._boost_segments((300, 420), now_min=600) == [(1, 300, 420)]  # 05-07 ended by 10:00 -> tomorrow
     assert TeslemetryAPI._boost_segments((1380, 60), now_min=720) == [(0, 1380, 1440), (1, 0, 60)]  # 23-01 upcoming -> today+tomorrow
-    assert TeslemetryAPI._boost_segments((1380, 60), now_min=30) == [(0, 0, 60)]            # 00:30 inside the 23-01 tail -> today head
+    assert TeslemetryAPI._boost_segments((1380, 60), now_min=30) == [(0, 0, 60)]  # 00:30 inside the 23-01 tail -> today head
 
 
 def test_teslemetry_apply_boost_places_segments_on_offset_days():
@@ -1562,7 +1513,7 @@ def test_teslemetry_apply_boost_wrap_segments_span_two_days():
     sell = {d: [(0, 1440, "OFF_PEAK")] for d in range(7)}
     TeslemetryAPI._apply_boost(buy, sell, [(0, 1380, 1440), (1, 0, 60)], today_dow=6)  # tomorrow = (6+1)%7 = 0
     assert (1380, 1440, "ON_PEAK") in buy[6]  # today
-    assert (0, 60, "ON_PEAK") in buy[0]       # tomorrow
+    assert (0, 60, "ON_PEAK") in buy[0]  # tomorrow
     assert all(seg[2] != "ON_PEAK" for seg in buy[1])  # an unrelated day untouched
 
 
@@ -1594,13 +1545,12 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_switch_grid_charging()
     test_teslemetry_select_export_rule()
     test_teslemetry_site_info_latch()
-    test_teslemetry_build_tariff_export_now()
-    test_teslemetry_build_tariff_normal_flat()
+    test_teslemetry_build_tariff_single_code_real_bands()
+    test_teslemetry_build_tariff_boost_is_strict_max_on_today_dow()
+    test_teslemetry_build_tariff_fallback_flat_when_no_rates()
+    test_teslemetry_build_tariff_boost_clamps_above_high_rates()
+    test_teslemetry_build_tariff_periods_partition_each_day()
     test_teslemetry_set_tariff_posts_tou_settings()
-    test_teslemetry_build_tariff_export_now_midnight_wrap()
-    test_teslemetry_build_tariff_export_now_midnight_exact()
-    test_teslemetry_build_tariff_sell_clamp_above_export_rate()
-    test_teslemetry_build_tariff_uses_site_local_time_not_utc()
     test_teslemetry_site_info_latches_without_nameplate_soc_max_from_live_status()
     test_teslemetry_run_site_info_latches_on_any_response()
     test_teslemetry_energy_today_requests_kind_and_period()

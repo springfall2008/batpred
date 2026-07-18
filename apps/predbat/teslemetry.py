@@ -781,6 +781,7 @@ class TeslemetryAPI(ComponentBase):
         priced at each band's mean. Returns (tier_prices, today_tiers, tomorrow_tiers) where the slot
         lists only ever name tiers present in tier_prices (matched sets).
         """
+
         def slot_price(minute):
             """Convert a per-minute pence rate to GBP, clamped at 0 and rounded to whole pence."""
             pence = rate_dict.get(minute, default_pence)
@@ -798,6 +799,7 @@ class TeslemetryAPI(ComponentBase):
             def band_of(value):
                 """Return the tier for an exact value in the small-distinct case."""
                 return value_to_tier[value]
+
         else:
             low, high = distinct[0], distinct[-1]
             width = (high - low) / len(REAL_TIERS)
@@ -863,15 +865,13 @@ class TeslemetryAPI(ComponentBase):
         periods = {}
         used = set()
         for day, intervals in layout.items():
-            for (frm, to, tier) in intervals:
+            for frm, to, tier in intervals:
                 from_hour, from_minute = frm // 60, frm % 60
                 if to >= 1440:
                     to_hour, to_minute = 0, 0
                 else:
                     to_hour, to_minute = to // 60, to % 60
-                periods.setdefault(tier, {"periods": []})["periods"].append(
-                    {"fromDayOfWeek": day, "toDayOfWeek": day, "fromHour": from_hour, "fromMinute": from_minute, "toHour": to_hour, "toMinute": to_minute}
-                )
+                periods.setdefault(tier, {"periods": []})["periods"].append({"fromDayOfWeek": day, "toDayOfWeek": day, "fromHour": from_hour, "fromMinute": from_minute, "toHour": to_hour, "toMinute": to_minute})
                 used.add(tier)
         rates = {tier: price for tier, price in tier_prices.items() if tier in used}
         energy_charges_side = {"ALL": {"rates": {"ALL": 0}}, "AllYear": {"rates": rates}}
@@ -886,7 +886,7 @@ class TeslemetryAPI(ComponentBase):
         [0, 1440) exactly.
         """
         out = []
-        for (frm, to, existing) in intervals:
+        for frm, to, existing in intervals:
             if to <= start_min or frm >= end_min:
                 out.append((frm, to, existing))
                 continue
@@ -923,66 +923,80 @@ class TeslemetryAPI(ComponentBase):
         (offset, from, to) segment.
         """
         for layout in (buy_layout, sell_layout):
-            for (offset, seg_start, seg_end) in segments:
+            for offset, seg_start, seg_end in segments:
                 day = (today_dow + offset) % 7
                 layout[day] = TeslemetryAPI._carve_interval(layout[day], seg_start, seg_end, BOOST_TIER)
 
-    def build_tariff(self, mode, now=None):
-        """Build a tariff_content_v2 dict for the requested mode.
+    def _rate_side(self, rate_dict, default_gbp):
+        """Return the 4-tuple (energy_charges_side, tou_periods, tier_prices, layout) for one side.
 
-        export_now: current 30-minute-aligned window becomes ON_PEAK with a
-        high sell price so autonomous mode exports immediately; the window
-        self-expires. normal: flat tariff from the customer's current rates.
-
-        The Powerwall applies tou_periods windows in the SITE'S LOCAL wall-clock time (the same
-        clock Predbat schedules against), not UTC, so when `now` is not injected (production use)
-        it defaults to the base's local time - base.now_utc converted to base.local_tz - rather than
-        a bare UTC clock read, which would misplace the window by the site's UTC offset. Falls back
-        to system UTC only when no base is wired up (e.g. some unit tests), since there is then no
-        site-local timezone to derive from.
+        layout is None in the flat/fallback branch (no rates), signalling build_tariff to skip the boost;
+        otherwise it is the per-DOW interval layout the boost carves into.
         """
+        if not rate_dict:
+            flat = round(max(0.0, default_gbp), 2)
+            return {"ALL": {"rates": {"ALL": flat}}}, {}, {"SUPER_OFF_PEAK": flat}, None
+        today_dow = self._tesla_dow(self._local_today_weekday())
+        tier_prices, today_tiers, tomorrow_tiers = self._quantise_side(rate_dict, default_gbp * 100.0)
+        layout = self._side_layout(today_tiers, tomorrow_tiers, today_dow)
+        return (*self._render_side(layout, tier_prices), tier_prices, layout)
+
+    def _local_today_weekday(self):
+        """Return the site-local weekday (0=Mon) from base.now, falling back to the system clock in tests."""
+        base = getattr(self, "base", None)
+        now = getattr(base, "now", None) if base is not None else None
         if now is None:
-            base = getattr(self, "base", None)
-            base_now_utc = getattr(base, "now_utc", None) if base is not None else None
-            if base_now_utc is not None:
-                local_tz = getattr(base, "local_tz", None) or getattr(self, "local_tz", None) or timezone.utc
-                now = base_now_utc.astimezone(local_tz)
-            else:
-                now = datetime.now(timezone.utc)
-        import_rate, export_rate = self.current_rates()
-        # Keep the synthetic ON_PEAK sell strictly above the live export rate, otherwise the
-        # export trick silently inverts at the highest-value moments.
-        sell_high = max(self.EXPORT_SELL_RATE, round(export_rate * 2, 4))
+            now = datetime.now(getattr(self, "local_tz", None) or timezone.utc)
+        return now.weekday()
 
-        def charges(off_peak_buy, on_peak_buy):
-            """Build an energy_charges block."""
-            rates = {"SUPER_OFF_PEAK": off_peak_buy}
-            if mode == "export_now":
-                rates["ON_PEAK"] = on_peak_buy
-            return {"ALL": {"rates": {"ALL": 0}}, "AllYear": {"rates": rates}}
+    def _discharge_window(self):
+        """Return (start_min, end_min) for the committed discharge window when enabled, else None."""
+        discharge = self.schedule.get("discharge", {})
+        if not discharge.get("enable"):
+            return None
+        start = self.time_to_minutes(discharge.get("start_time", "00:00:00"))
+        end = self.time_to_minutes(discharge.get("end_time", "00:00:00"))
+        return None if start == end else (start, end)
 
-        tou_periods = {"SUPER_OFF_PEAK": {"periods": [{"fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 0, "fromMinute": 0, "toHour": 0, "toMinute": 0}]}}
-        if mode == "export_now":
-            start = now.replace(minute=0 if now.minute < 30 else 30, second=0, microsecond=0)
-            end_minute_total = start.hour * 60 + start.minute + 60
-            wrapped = end_minute_total >= 24 * 60
-            end_hour, end_min = (end_minute_total // 60) % 24, end_minute_total % 60
-            window = {"fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": start.hour, "fromMinute": start.minute, "toHour": end_hour, "toMinute": end_min}
-            off_periods = []
-            if wrapped:
-                # ON_PEAK crosses midnight, so its circle complement is a single segment from the wrapped end back to the start.
-                off_periods.append({"fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": end_hour, "fromMinute": end_min, "toHour": start.hour, "toMinute": start.minute})
-            else:
-                if start.hour > 0 or start.minute > 0:
-                    off_periods.append({"fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 0, "fromMinute": 0, "toHour": start.hour, "toMinute": start.minute})
-                if end_hour > 0 or end_min > 0:
-                    off_periods.append({"fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": end_hour, "fromMinute": end_min, "toHour": 0, "toMinute": 0})
-            tou_periods = {"SUPER_OFF_PEAK": {"periods": off_periods}, "ON_PEAK": {"periods": [window]}}
+    @staticmethod
+    def _boost_price(*price_maps):
+        """Return the synthetic boost price: strictly above every real band and at least the floor."""
+        horizon_max = max([value for prices in price_maps for value in prices.values()] + [0.0])
+        return max(TeslemetryAPI.EXPORT_SELL_RATE, round(2 * horizon_max, 2))
 
-        seasons = {"AllYear": {"fromMonth": 1, "fromDay": 1, "toMonth": 12, "toDay": 31, "tou_periods": tou_periods}}
-        sell_rates = charges(export_rate, sell_high)
-        # Buy-side ON_PEAK mirrors the high sell rate to discourage grid-charging during the export window.
-        buy_rates = charges(import_rate, sell_high)
+    def build_tariff(self, discharge_window=None, now_min=None):
+        """Build the single PREDBAT tariff: real 3-band buy/sell rates plus an optional ON_PEAK export boost.
+
+        Buy comes from rate_import, sell from rate_export, each quantised over today+tomorrow local days.
+        When discharge_window is given, an ON_PEAK band priced above every real band is carved over that
+        window on its current-or-next occurrence's real day(s) (today if it still ends now/later, else
+        tomorrow; split across today+tomorrow for a midnight wrap), both sides - buy mirrors sell so it
+        never grid-charges to re-export. now_min defaults to the live local clock.
+        """
+        if now_min is None:
+            now_min = self.get_minutes_now()
+        import_gbp, export_gbp = self.current_rates()
+        today_dow = self._tesla_dow(self._local_today_weekday())
+        buy_charges, buy_periods, buy_prices, buy_layout = self._rate_side(self._side_rates("import"), import_gbp)
+        sell_charges, sell_periods, sell_prices, sell_layout = self._rate_side(self._side_rates("export"), export_gbp)
+        code = "PREDBAT"
+        if discharge_window is not None and buy_layout is not None and sell_layout is not None:
+            boost = self._boost_price(buy_prices, sell_prices)
+            segments = self._boost_segments(discharge_window, now_min)
+            self._apply_boost(buy_layout, sell_layout, segments, today_dow)
+            buy_charges, buy_periods = self._render_side(buy_layout, {**buy_prices, BOOST_TIER: boost})
+            sell_charges, sell_periods = self._render_side(sell_layout, {**sell_prices, BOOST_TIER: boost})
+        return self._assemble_tariff(code, buy_charges, buy_periods, sell_charges, sell_periods)
+
+    def _side_rates(self, kind):
+        """Return the base rate dict for 'import'/'export', or {} when no base is wired (tests/fallback)."""
+        base = getattr(self, "base", None)
+        if base is None:
+            return {}
+        return getattr(base, "rate_import" if kind == "import" else "rate_export", {}) or {}
+
+    def _assemble_tariff(self, code, buy_charges, buy_periods, sell_charges, sell_periods):
+        """Assemble the top-level tariff_content_v2 dict from prebuilt buy/sell charge + period blocks."""
         common = {
             "min_applicable_demand": 0,
             "max_applicable_demand": 0,
@@ -991,29 +1005,27 @@ class TeslemetryAPI(ComponentBase):
             "daily_charges": [{"name": "Charge", "amount": 0}],
             "demand_charges": {"ALL": {"rates": {"ALL": 0}}, "AllYear": {"rates": {}}},
         }
+        buy_seasons = {"AllYear": {"fromMonth": 1, "fromDay": 1, "toMonth": 12, "toDay": 31, "tou_periods": buy_periods}}
+        sell_seasons = {"AllYear": {"fromMonth": 1, "fromDay": 1, "toMonth": 12, "toDay": 31, "tou_periods": sell_periods}}
         return {
             "version": 1,
             "utility": "Predbat",
-            "code": "PREDBAT-{}".format(mode.upper().replace("_", "-")),
-            "name": "Predbat ({})".format(mode),
+            "code": code,
+            "name": "Predbat",
             "currency": "GBP",
             "daily_demand_charges": {},
-            "energy_charges": buy_rates,
-            "seasons": seasons,
-            "sell_tariff": {**common, "utility": "Predbat", "energy_charges": sell_rates, "seasons": seasons},
+            "energy_charges": buy_charges,
+            "seasons": buy_seasons,
+            "sell_tariff": {**common, "utility": "Predbat", "energy_charges": sell_charges, "seasons": sell_seasons},
             **common,
         }
 
-    async def set_tariff(self, mode, force=False):
-        """Push the tariff for the requested mode via time_of_use_settings, deduped on write-on-change.
+    async def set_tariff(self, tariff, force=False):
+        """Push a prebuilt tariff via time_of_use_settings, deduped on the serialised tariff body.
 
-        The dedupe signature is a canonical (sort_keys) JSON serialisation of the BUILT tariff body
-        rather than just `mode`: the export_now window and sell price are time-varying (the ON_PEAK
-        window advances every 30 minutes and the sell price tracks the live export rate), so the same
-        `mode` string can legitimately need re-sending when the underlying built tariff has changed,
-        while an unchanged build (the common case every 5-minute cycle) is skipped.
+        Prices are rounded to whole pence upstream so per-cycle rate nudges do not change the JSON;
+        a re-push therefore fires only on a genuine band, boost-window or day-of-week change.
         """
-        tariff = self.build_tariff(mode)
         signature = json.dumps(tariff, sort_keys=True)
         return await self._apply_command("tariff", signature, lambda: self._command("time_of_use_settings", {"tou_settings": {"tariff_content_v2": tariff}}), force=force)
 
