@@ -57,6 +57,7 @@ class MockTeslemetryAPI(TeslemetryAPI):
         self.schedule_loaded = False
         self.automatic = False
         self.automatic_done = False
+        self.args_set = {}
 
     @property
     def storage(self):
@@ -89,6 +90,10 @@ class MockTeslemetryAPI(TeslemetryAPI):
         """Return canned responses instead of real HTTP."""
         self.requests_made.append((method, path, json_body))
         return self.mock_responses.get(path, None)
+
+    def set_arg(self, arg, value):
+        """Capture set_arg calls for automatic_config assertions."""
+        self.args_set[arg] = value
 
 
 LIVE_STATUS = {
@@ -1220,6 +1225,85 @@ def test_teslemetry_run_skips_assert_without_soc():
     assert [req for req in api.requests_made if req[0] == "POST"] == []
 
 
+def test_teslemetry_automatic_config_sets_args():
+    """automatic_config wires every inverter arg to this component's published entities."""
+    api = MockTeslemetryAPI()
+    run_async(api.automatic_config())
+    assert api.args_set["inverter_type"] == ["TESLA"]
+    assert api.args_set["num_inverters"] == 1
+    assert api.args_set["inverter_reserve_max"] == 80
+    assert api.args_set["soc_percent"] == ["sensor.predbat_teslemetry_soc"]
+    assert api.args_set["soc_max"] == ["sensor.predbat_teslemetry_soc_max"]
+    assert api.args_set["battery_power"] == ["sensor.predbat_teslemetry_battery_power"]
+    assert api.args_set["battery_power_invert"] == [False]
+    assert api.args_set["grid_power"] == ["sensor.predbat_teslemetry_grid_power"]
+    assert api.args_set["grid_power_invert"] == [True]
+    assert api.args_set["load_power"] == ["sensor.predbat_teslemetry_load_power"]
+    assert api.args_set["pv_power"] == ["sensor.predbat_teslemetry_solar_power"]
+    assert api.args_set["load_today"] == ["sensor.predbat_teslemetry_load_today"]
+    assert api.args_set["import_today"] == ["sensor.predbat_teslemetry_import_today"]
+    assert api.args_set["export_today"] == ["sensor.predbat_teslemetry_export_today"]
+    assert api.args_set["pv_today"] == ["sensor.predbat_teslemetry_solar_today"]
+    assert api.args_set["battery_rate_max"] == ["sensor.predbat_teslemetry_battery_rate_max"]
+    assert api.args_set["inverter_limit"] == ["sensor.predbat_teslemetry_inverter_limit"]
+    assert api.args_set["reserve"] == ["number.predbat_teslemetry_schedule_reserve"]
+    assert api.args_set["charge_start_time"] == ["select.predbat_teslemetry_schedule_charge_start_time"]
+    assert api.args_set["charge_end_time"] == ["select.predbat_teslemetry_schedule_charge_end_time"]
+    assert api.args_set["charge_limit"] == ["number.predbat_teslemetry_schedule_charge_soc"]
+    assert api.args_set["scheduled_charge_enable"] == ["switch.predbat_teslemetry_schedule_charge_enable"]
+    assert api.args_set["discharge_start_time"] == ["select.predbat_teslemetry_schedule_discharge_start_time"]
+    assert api.args_set["discharge_end_time"] == ["select.predbat_teslemetry_schedule_discharge_end_time"]
+    assert api.args_set["discharge_target_soc"] == ["number.predbat_teslemetry_schedule_discharge_soc"]
+    assert api.args_set["scheduled_discharge_enable"] == ["switch.predbat_teslemetry_schedule_discharge_enable"]
+    assert api.args_set["schedule_write_button"] == ["switch.predbat_teslemetry_schedule_write"]
+
+
+def test_teslemetry_automatic_config_references_published_entities():
+    """Every entity automatic_config references is actually published by the component."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/live_status"] = LIVE_STATUS
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO_FULL
+    api.mock_responses["/api/1/energy_sites/123456/calendar_history?kind=energy&period=day"] = ENERGY_HISTORY
+    api.register_control_entities()
+    run_async(api.fetch_live_status())
+    run_async(api.fetch_site_info())
+    run_async(api.fetch_energy_today())
+    run_async(api.automatic_config())
+    published = set(api.dashboard_items.keys())
+    for arg, value in api.args_set.items():
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, str) and "." in item:
+                    assert item in published, "automatic_config references unpublished entity {} (arg {})".format(item, arg)
+
+
+def test_teslemetry_run_triggers_automatic_config_once_after_site_info():
+    """run() calls automatic_config exactly once, only when automatic is enabled and site_info succeeded."""
+    api = MockTeslemetryAPI()
+    api.register_control_entities()
+    command_ok_responses(api)
+    api.mock_responses["/api/1/energy_sites/123456/live_status"] = LIVE_STATUS
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO_FULL
+    api.mock_responses["/api/1/energy_sites/123456/calendar_history?kind=energy&period=day"] = ENERGY_HISTORY
+    api.mock_responses["/api/1/energy_sites/123456/tariff_rate"] = TARIFF_RATE_NORMAL
+    api.automatic = True
+    run_async(api.run(seconds=0, first=True))
+    assert api.args_set.get("inverter_type") == ["TESLA"]
+    api.args_set.clear()
+    run_async(api.run(seconds=120, first=False))
+    assert "inverter_type" not in api.args_set
+
+    api_off = MockTeslemetryAPI()
+    api_off.register_control_entities()
+    command_ok_responses(api_off)
+    api_off.mock_responses["/api/1/energy_sites/123456/live_status"] = LIVE_STATUS
+    api_off.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO_FULL
+    api_off.mock_responses["/api/1/energy_sites/123456/calendar_history?kind=energy&period=day"] = ENERGY_HISTORY
+    api_off.mock_responses["/api/1/energy_sites/123456/tariff_rate"] = TARIFF_RATE_NORMAL
+    run_async(api_off.run(seconds=0, first=True))
+    assert api_off.args_set == {}
+
+
 def test_teslemetry(my_predbat=None):
     """Run all Teslemetry component tests (registry entry point).
 
@@ -1301,5 +1385,8 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_run_asserts_schedule_each_cycle()
     test_teslemetry_run_skips_assert_when_read_only()
     test_teslemetry_run_skips_assert_without_soc()
+    test_teslemetry_automatic_config_sets_args()
+    test_teslemetry_automatic_config_references_published_entities()
+    test_teslemetry_run_triggers_automatic_config_once_after_site_info()
     print("**** Teslemetry tests passed ****")
     return 0

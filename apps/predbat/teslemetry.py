@@ -249,6 +249,9 @@ class TeslemetryAPI(ComponentBase):
             await self.load_schedule()
             self.schedule_loaded = True
             self.publish_schedule_entities()
+        if self.automatic and not self.automatic_done and self.site_info_done:
+            await self.automatic_config()
+            self.automatic_done = True
         if first or (seconds - self.last_live_poll >= LIVE_POLL_SECONDS):
             self.last_live_poll = seconds
             success = await self.fetch_live_status()
@@ -440,6 +443,42 @@ class TeslemetryAPI(ComponentBase):
         if not all(results.values()):
             self.log("Warn: Teslemetry device-state assert incomplete: {}".format({key: value for key, value in results.items() if not value}))
         return all(results.values())
+
+    async def automatic_config(self):
+        """Automatically wire Predbat's inverter args to this component's virtual entities (fox parity).
+
+        With teslemetry_automatic enabled the user needs no manual inverter configuration in
+        apps.yaml: the TESLA inverter type plus these args make inverter.py program the
+        schedule entities directly and the emulator drive the device.
+        """
+        self.log("Info: Teslemetry automatic configuration - wiring Predbat to the TESLA inverter type")
+        self.set_arg("inverter_type", ["TESLA"])
+        self.set_arg("num_inverters", 1)
+        self.set_arg("inverter_reserve_max", 80)
+        self.set_arg("soc_percent", [self.entity("soc")])
+        self.set_arg("soc_max", [self.entity("soc_max")])
+        self.set_arg("battery_power", [self.entity("battery_power")])
+        self.set_arg("battery_power_invert", [False])
+        self.set_arg("grid_power", [self.entity("grid_power")])
+        self.set_arg("grid_power_invert", [True])
+        self.set_arg("load_power", [self.entity("load_power")])
+        self.set_arg("pv_power", [self.entity("solar_power")])
+        self.set_arg("load_today", [self.entity("load_today")])
+        self.set_arg("import_today", [self.entity("import_today")])
+        self.set_arg("export_today", [self.entity("export_today")])
+        self.set_arg("pv_today", [self.entity("solar_today")])
+        self.set_arg("battery_rate_max", [self.entity("battery_rate_max")])
+        self.set_arg("inverter_limit", [self.entity("inverter_limit")])
+        self.set_arg("reserve", [self.entity("schedule_reserve", domain="number")])
+        self.set_arg("charge_start_time", [self.entity("schedule_charge_start_time", domain="select")])
+        self.set_arg("charge_end_time", [self.entity("schedule_charge_end_time", domain="select")])
+        self.set_arg("charge_limit", [self.entity("schedule_charge_soc", domain="number")])
+        self.set_arg("scheduled_charge_enable", [self.entity("schedule_charge_enable", domain="switch")])
+        self.set_arg("discharge_start_time", [self.entity("schedule_discharge_start_time", domain="select")])
+        self.set_arg("discharge_end_time", [self.entity("schedule_discharge_end_time", domain="select")])
+        self.set_arg("discharge_target_soc", [self.entity("schedule_discharge_soc", domain="number")])
+        self.set_arg("scheduled_discharge_enable", [self.entity("schedule_discharge_enable", domain="switch")])
+        self.set_arg("schedule_write_button", [self.entity("schedule_write", domain="switch")])
 
     async def schedule_event(self, entity_id, value):
         """Stage a schedule entity write into pending_schedule; the write switch commits it.
