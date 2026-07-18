@@ -37,6 +37,7 @@ TESLEMETRY_TIMEOUT = 30
 TESLEMETRY_RETRIES = 3
 LIVE_POLL_SECONDS = 120
 ENERGY_POLL_SECONDS = 300
+RECONCILE_MAX_ATTEMPTS = 5
 
 OPERATION_MODES = ["self_consumption", "autonomous", "backup"]
 EXPORT_RULES = ["never", "pv_only", "battery_ok"]
@@ -76,6 +77,7 @@ class TeslemetryAPI(ComponentBase):
         self.last_energy_poll = 0
         self.site_info_done = False
         self.reconcile_done = False
+        self.reconcile_attempts = 0
         self.last_soc = None
         self._last_sent = {}
         self.automatic = automatic
@@ -228,6 +230,12 @@ class TeslemetryAPI(ComponentBase):
         above returns before reconcile ever runs, but `first` is still consumed by that cycle. Gating
         on a latch instead means reconcile still runs on the first cycle that is NOT auth-failed,
         however many cycles that takes to arrive - a boot that 401s then recovers still reconciles.
+
+        The retry is bounded: each failed `reconcile_on_start()` attempt increments
+        `reconcile_attempts`, and once it reaches `RECONCILE_MAX_ATTEMPTS` the latch is force-set
+        (with a one-time warning) so the emulator assert below is never permanently gated off by a
+        device whose tariff_rate response never yields a usable code (an unvalidated shape on live
+        hardware would otherwise wedge `reconcile_done` at False forever).
         """
         if not self.api_key or not self.site_id:
             self.log("Warn: Teslemetry key or site_id not configured, skipping run")
@@ -245,6 +253,11 @@ class TeslemetryAPI(ComponentBase):
             self.site_info_done = await self.fetch_site_info()
         if not self.reconcile_done:
             self.reconcile_done = await self.reconcile_on_start()
+            if not self.reconcile_done:
+                self.reconcile_attempts += 1
+                if self.reconcile_attempts >= RECONCILE_MAX_ATTEMPTS:
+                    self.reconcile_done = True
+                    self.log("Warn: Teslemetry boot reconciliation abandoned after {} attempts - proceeding without crash-recovery check".format(self.reconcile_attempts))
         if not self.schedule_loaded:
             await self.load_schedule()
             self.schedule_loaded = True
@@ -409,11 +422,12 @@ class TeslemetryAPI(ComponentBase):
         self.pending_schedule = copy.deepcopy(self.schedule)
 
     def get_minutes_now(self):
-        """Return minutes since local midnight, preferring the base's clock (which Predbat schedules against)."""
-        base = getattr(self, "base", None)
-        minutes = getattr(base, "minutes_now", None) if base is not None else None
-        if minutes is not None:
-            return minutes
+        """Return minutes since local midnight from the live wall clock in the site's local timezone.
+
+        Deliberately not base.minutes_now: that value is only refreshed on Predbat's 5-minute
+        update cycles, which would freeze the emulator's clock between cycles (and indefinitely
+        if the main loop stalls), enforcing window boundaries late or never.
+        """
         now = datetime.now(timezone.utc).astimezone(getattr(self, "local_tz", None) or timezone.utc)
         return now.hour * 60 + now.minute
 
@@ -450,6 +464,12 @@ class TeslemetryAPI(ComponentBase):
         With teslemetry_automatic enabled the user needs no manual inverter configuration in
         apps.yaml: the TESLA inverter type plus these args make inverter.py program the
         schedule entities directly and the emulator drive the device.
+
+        battery_rate_max/inverter_limit are wired conditionally: fetch_site_info only publishes
+        those two sensors when the site_info response actually carried nameplate_power/
+        max_site_meter_power_ac, so wiring them unconditionally would point Predbat at entities
+        that never exist on a site missing those fields. Predbat falls back to its own defaults
+        for absent args, so skipping the wiring here is safe.
         """
         self.log("Info: Teslemetry automatic configuration - wiring Predbat to the TESLA inverter type")
         self.set_arg("inverter_type", ["TESLA"])
@@ -467,8 +487,10 @@ class TeslemetryAPI(ComponentBase):
         self.set_arg("import_today", [self.entity("import_today")])
         self.set_arg("export_today", [self.entity("export_today")])
         self.set_arg("pv_today", [self.entity("solar_today")])
-        self.set_arg("battery_rate_max", [self.entity("battery_rate_max")])
-        self.set_arg("inverter_limit", [self.entity("inverter_limit")])
+        if self.get_state_wrapper(self.entity("battery_rate_max")) is not None:
+            self.set_arg("battery_rate_max", [self.entity("battery_rate_max")])
+        if self.get_state_wrapper(self.entity("inverter_limit")) is not None:
+            self.set_arg("inverter_limit", [self.entity("inverter_limit")])
         self.set_arg("reserve", [self.entity("schedule_reserve", domain="number")])
         self.set_arg("charge_start_time", [self.entity("schedule_charge_start_time", domain="select")])
         self.set_arg("charge_end_time", [self.entity("schedule_charge_end_time", domain="select")])
@@ -783,7 +805,10 @@ class TeslemetryAPI(ComponentBase):
         Returns True once this has actually executed against a live API (the tariff read
         returned a usable code, whether or not a restore was needed), so run() can latch
         reconcile_done and stop retrying. Returns False when the tariff read itself failed to
-        return anything usable, so run() retries on a later cycle instead of latching a no-op.
+        return anything usable, so run() retries on a later cycle instead of latching a no-op -
+        bounded to RECONCILE_MAX_ATTEMPTS retries by run(), which force-latches reconcile_done
+        after that many consecutive failures so a device that never yields a usable tariff code
+        cannot permanently gate the scheduler emulator off.
 
         The restore writes below pass force=True to `set_tariff`/`set_export_rule` so this recovery
         path can NEVER be silently skipped by the write-on-change dedupe cache - at boot the cache is

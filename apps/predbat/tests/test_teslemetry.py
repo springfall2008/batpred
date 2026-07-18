@@ -9,7 +9,7 @@ import copy
 from unittest.mock import MagicMock, patch, AsyncMock
 
 from tests.test_infra import create_aiohttp_mock_response, create_aiohttp_mock_session, run_async
-from teslemetry import TeslemetryAPI, OPERATION_MODES, OPTIONS_TIME_FULL, DEFAULT_SCHEDULE
+from teslemetry import TeslemetryAPI, OPERATION_MODES, OPTIONS_TIME_FULL, DEFAULT_SCHEDULE, RECONCILE_MAX_ATTEMPTS
 
 
 class FakeStorage:
@@ -45,6 +45,7 @@ class MockTeslemetryAPI(TeslemetryAPI):
         self.last_energy_poll = 0
         self.site_info_done = False
         self.reconcile_done = False
+        self.reconcile_attempts = 0
         self.last_soc = None
         self.dashboard_items = {}
         self.log_messages = []
@@ -696,6 +697,55 @@ def test_teslemetry_reconcile_latch_runs_once_on_healthy_boot():
     assert len(tariff_reads) == 1
 
 
+def test_teslemetry_reconcile_abandoned_after_max_attempts():
+    """A tariff_rate response that never carries a usable code must not permanently wedge
+    reconcile_done at False: after RECONCILE_MAX_ATTEMPTS consecutive failed reconcile attempts,
+    run() force-latches reconcile_done so the scheduler emulator is not silently dead forever."""
+    api = MockTeslemetryAPI()
+    api.register_control_entities()
+    command_ok_responses(api)
+    api.mock_responses["/api/1/energy_sites/123456/live_status"] = LIVE_STATUS
+    # Deliberately out of sync with the idle-state default schedule (mode/reserve) - see the
+    # rationale in test_teslemetry_run_asserts_schedule_each_cycle: this guarantees the emulator
+    # assert below has real work to do (a POST), rather than being silently deduped away.
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = {"response": {"nameplate_energy": 13500, "nameplate_power": 11500, "max_site_meter_power_ac": 11500, "default_real_mode": "backup", "backup_reserve_percent": 5}}
+    api.mock_responses["/api/1/energy_sites/123456/calendar_history?kind=energy&period=day"] = ENERGY_HISTORY
+    # No "code" anywhere in the response -> get_current_tariff_code returns None -> reconcile_on_start fails.
+    api.mock_responses["/api/1/energy_sites/123456/tariff_rate"] = {"response": {}}
+    api.get_minutes_now = lambda: 12 * 60
+    for attempt in range(RECONCILE_MAX_ATTEMPTS):
+        # Vary seconds generously so the live/energy poll cadence never gates a fetch - only the
+        # reconcile latch and attempt counter are under test here.
+        run_async(api.run(seconds=attempt * 1000, first=(attempt == 0)))
+    assert api.reconcile_done is True
+    assert api.reconcile_attempts == RECONCILE_MAX_ATTEMPTS
+    posts = [req[1] for req in api.requests_made if req[0] == "POST"]
+    assert "/api/1/energy_sites/123456/operation" in posts
+
+
+def test_teslemetry_emulator_failure_does_not_fail_run():
+    """A healthy data path with every command endpoint failing must still let run() return True:
+    the scheduler emulator's writes are best-effort and self-retrying, and must never fail the
+    data-fetch cycle that ComponentBase's health monitoring depends on."""
+    api = MockTeslemetryAPI()
+    api.register_control_entities()
+    # Deliberately NOT calling command_ok_responses(api): every emulator POST (operation, backup,
+    # grid_import_export, time_of_use_settings) has no mock response registered, so _command's
+    # `result is None` branch makes every one of them fail.
+    api.mock_responses["/api/1/energy_sites/123456/live_status"] = LIVE_STATUS
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO_FULL
+    api.mock_responses["/api/1/energy_sites/123456/calendar_history?kind=energy&period=day"] = ENERGY_HISTORY
+    api.mock_responses["/api/1/energy_sites/123456/tariff_rate"] = TARIFF_RATE_NORMAL
+    api.get_minutes_now = lambda: 12 * 60
+    assert run_async(api.run(seconds=0, first=True)) is True
+    # Tariff has no drift-correction cache pre-seed (unlike operation_mode/backup_reserve, which
+    # SITE_INFO_FULL happens to already match the idle target for, so those two would be deduped
+    # away with no POST at all) - so the emulator's tariff write is always attempted on a fresh
+    # boot, confirming it really tried and failed rather than being silently skipped.
+    posts = [req[1] for req in api.requests_made if req[0] == "POST"]
+    assert "/api/1/energy_sites/123456/time_of_use_settings" in posts
+
+
 def test_teslemetry_site_info_returns_false_without_nameplate_so_soc_max_retries():
     """fetch_site_info must return False when nameplate_energy is absent/zero so run()'s
     site_info_done latch stays False and soc_max is retried on a later cycle - even though other
@@ -1226,8 +1276,15 @@ def test_teslemetry_run_skips_assert_without_soc():
 
 
 def test_teslemetry_automatic_config_sets_args():
-    """automatic_config wires every inverter arg to this component's published entities."""
+    """automatic_config wires every inverter arg to this component's published entities.
+
+    battery_rate_max/inverter_limit are wired only once fetch_site_info has actually published
+    those sensors (see test_teslemetry_automatic_config_skips_unpublished_rate_sensors for the
+    absent-fields case), so this test seeds them via SITE_INFO_FULL first.
+    """
     api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO_FULL
+    assert run_async(api.fetch_site_info()) is True
     run_async(api.automatic_config())
     assert api.args_set["inverter_type"] == ["TESLA"]
     assert api.args_set["num_inverters"] == 1
@@ -1256,6 +1313,25 @@ def test_teslemetry_automatic_config_sets_args():
     assert api.args_set["discharge_target_soc"] == ["number.predbat_teslemetry_schedule_discharge_soc"]
     assert api.args_set["scheduled_discharge_enable"] == ["switch.predbat_teslemetry_schedule_discharge_enable"]
     assert api.args_set["schedule_write_button"] == ["switch.predbat_teslemetry_schedule_write"]
+
+
+def test_teslemetry_automatic_config_skips_unpublished_rate_sensors():
+    """automatic_config must not wire battery_rate_max/inverter_limit args when fetch_site_info
+    never published those sensors (site missing nameplate_power/max_site_meter_power_ac) - doing
+    so unconditionally would point Predbat at entities that never exist. Other args (e.g. soc_max)
+    must still be wired normally."""
+    api = MockTeslemetryAPI()
+    api.register_control_entities()
+    # Only nameplate_energy present -> soc_max is published but neither battery_rate_max nor
+    # inverter_limit is (see fetch_site_info: both are conditional on nameplate_power/max_site_meter_power_ac).
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = {"response": {"nameplate_energy": 13500, "default_real_mode": "self_consumption", "backup_reserve_percent": 20}}
+    assert run_async(api.fetch_site_info()) is True
+    assert "sensor.predbat_teslemetry_battery_rate_max" not in api.entity_states
+    assert "sensor.predbat_teslemetry_inverter_limit" not in api.entity_states
+    run_async(api.automatic_config())
+    assert "battery_rate_max" not in api.args_set
+    assert "inverter_limit" not in api.args_set
+    assert api.args_set["soc_max"] == ["sensor.predbat_teslemetry_soc_max"]
 
 
 def test_teslemetry_automatic_config_references_published_entities():
@@ -1388,5 +1464,8 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_automatic_config_sets_args()
     test_teslemetry_automatic_config_references_published_entities()
     test_teslemetry_run_triggers_automatic_config_once_after_site_info()
+    test_teslemetry_reconcile_abandoned_after_max_attempts()
+    test_teslemetry_emulator_failure_does_not_fail_run()
+    test_teslemetry_automatic_config_skips_unpublished_rate_sensors()
     print("**** Teslemetry tests passed ****")
     return 0

@@ -2573,7 +2573,7 @@ input_text:
 
 You then need to obtain an access token for the API. There are two ways - either use the existing Fleet Integration if you have that setup, or manually obtain them.
 
-### Option 1: Tesla Fleet Integration (recommended)
+### Option 1: Tesla Fleet Integration
 
 The Tesla Fleet integration already handles token exchanges for you. You can simply use this token for the REST API calls.
 

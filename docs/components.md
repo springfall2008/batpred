@@ -545,6 +545,7 @@ Integrates a Tesla Powerwall via the [Teslemetry](https://teslemetry.com) REST A
 - The Powerwall has no charge/discharge rate control; rates are modelled from the nameplate power
 - When enabled (and Predbat is not read-only) the component owns the device tariff, replacing the customer's configured tariff with one built from Predbat's rate data
 - Commands are deduped write-on-change to conserve Teslemetry command credits
+- The five diagnostic control entities (operation mode, backup reserve, grid charging, allow export, tariff mode) mirror the emulator's asserted state; any manual change made to them is re-asserted away within about a minute while Predbat is not read-only
 
 #### Configuration Options (teslemetry)
 
