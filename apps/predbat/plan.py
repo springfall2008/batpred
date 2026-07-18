@@ -2116,11 +2116,14 @@ class Plan:
         if try_export[window_n] not in loop_options and try_export[window_n] > 0.0 and try_export[window_n] < 99.0:
             loop_options.append(try_export[window_n])
 
-        # FORCE the optimizer to respect clipping protection by removing the "do nothing" (100.0) option
-        # This ensures we pick either the hold flag (98.0) or the explicit clipping target (e.g. 61.0)
+        # FORCE the optimizer to respect clipping protection by rigorously filtering options
+        # We must remove any option that evaluates to > target_soc (e.g. 100.0, 99.0, 98.0)
         is_clipping_window = ("clipping_target_soc_pct" in try_export_window[window_n])
-        if is_clipping_window and 100.0 in loop_options and len(loop_options) > 1:
-            loop_options.remove(100.0)
+        if is_clipping_window:
+            target = try_export_window[window_n]["clipping_target_soc_pct"]
+            loop_options = [opt for opt in loop_options if opt <= target and opt not in [98.0, 99.0, 100.0]]
+            if target not in loop_options:
+                loop_options.append(target)
 
         # Collect all options
         results = []
@@ -2129,6 +2132,12 @@ class Plan:
         for loop_limit in loop_options:
             # Loop on window size
             loop_start = window["end"] - 5  # Minimum export window size 5 minutes
+            
+            # Anti-clipping export windows must be evaluated at full size to ensure they provide
+            # early PV charging protection instead of shrinking to exploit arbitrage.
+            if is_clipping_window:
+                loop_start = window["start"]
+
             while loop_start >= window["start"]:
                 this_export_limit = loop_limit
                 start = loop_start
@@ -2140,6 +2149,9 @@ class Plan:
                     loop_start -= export_step_large
                 else:
                     loop_start -= export_step
+
+                if is_clipping_window:
+                    loop_start = window["start"] - 5 # Force loop exit
 
                 if this_export_limit == 98.0:
                     soc_at_start = self.predict_soc_best.get(start, self.soc_max)
