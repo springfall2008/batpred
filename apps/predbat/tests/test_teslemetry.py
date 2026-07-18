@@ -412,6 +412,47 @@ def test_teslemetry_boot_resumes_from_persisted_schedule():
     assert api.entity_states["select.predbat_teslemetry_allow_export"] == "battery_ok"
 
 
+def test_teslemetry_run_exports_with_aligned_tariff_boost():
+    """A committed discharge window active NOW with soc > target fires both per-cycle levers in
+    agreement within one cycle: the mode/export-rule commands go autonomous/battery_ok AND the
+    synced tariff carries an ON_PEAK sell boost that strictly dominates every real band.
+
+    Drives sync_tariff() followed by assert_device_state(evaluate_schedule(...)) - exactly what
+    run() does each healthy cycle - rather than the full run() path, so this does not also need to
+    mock the site_info/live_status/energy_today fetch endpoints that are irrelevant here.
+    """
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(28.0, 15.0)  # import 28p, export 15p
+    api.base.get_arg = lambda a, d=None, **k: d  # not read-only
+    api.schedule = {
+        "reserve": 20,
+        "charge": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 100, "enable": 0},
+        "discharge": {"start_time": "00:00:00", "end_time": "23:59:00", "soc": 10, "enable": 1},
+    }
+    api.schedule_loaded = True
+    api.last_soc = 80
+    for path in ("operation", "backup", "grid_import_export", "time_of_use_settings"):
+        api.mock_responses["/api/1/energy_sites/123456/" + path] = {"response": {"code": 201}}
+
+    run_async(api.sync_tariff())
+    run_async(api.assert_device_state(api.evaluate_schedule(api.get_minutes_now(), api.last_soc)))
+
+    # Lever 1: mode/export-rule commands agree on an active export window (soc 80 > target 10).
+    assert api.entity_states["select.predbat_teslemetry_operation_mode"] == "autonomous"
+    assert api.entity_states["select.predbat_teslemetry_allow_export"] == "battery_ok"
+
+    # Lever 2: the synced tariff's sell side carries an ON_PEAK boost, non-empty and strictly above
+    # every non-ON_PEAK sell price - proving the boost is present and aligned with the export window.
+    tariff_posts = [req for req in api.requests_made if req[0] == "POST" and req[1].endswith("/time_of_use_settings")]
+    assert len(tariff_posts) == 1
+    tariff = tariff_posts[0][2]["tou_settings"]["tariff_content_v2"]
+    sell_periods = tariff["sell_tariff"]["seasons"]["AllYear"]["tou_periods"]
+    assert sell_periods.get("ON_PEAK", {}).get("periods")
+    sell_rates = tariff["sell_tariff"]["energy_charges"]["AllYear"]["rates"]
+    boost = sell_rates["ON_PEAK"]
+    assert all(boost > price for tier, price in sell_rates.items() if tier != "ON_PEAK")
+
+
 def test_teslemetry_select_operation_mode():
     """select_event on operation_mode POSTs /operation and updates entity state on success."""
     api = MockTeslemetryAPI()
@@ -1579,6 +1620,8 @@ def test_teslemetry_apply_boost_wrap_segments_span_two_days():
     TeslemetryAPI._apply_boost(buy, sell, [(0, 1380, 1440), (1, 0, 60)], today_dow=6)  # tomorrow = (6+1)%7 = 0
     assert (1380, 1440, "ON_PEAK") in buy[6]  # today
     assert (0, 60, "ON_PEAK") in buy[0]  # tomorrow
+    assert (1380, 1440, "ON_PEAK") in sell[6]  # today, sell mirrors buy
+    assert (0, 60, "ON_PEAK") in sell[0]  # tomorrow, sell mirrors buy
     assert all(seg[2] != "ON_PEAK" for seg in buy[1])  # an unrelated day untouched
 
 
@@ -1601,6 +1644,7 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_run_auth_failed_only_probes_live_status()
     test_teslemetry_run_boots_without_reconcile()
     test_teslemetry_boot_resumes_from_persisted_schedule()
+    test_teslemetry_run_exports_with_aligned_tariff_boost()
     test_teslemetry_select_operation_mode()
     test_teslemetry_select_failure_keeps_state()
     test_teslemetry_command_success_on_low_response_code()

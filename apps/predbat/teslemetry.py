@@ -981,6 +981,9 @@ class TeslemetryAPI(ComponentBase):
         buy_charges, buy_periods, buy_prices, buy_layout = self._rate_side(self._side_rates("import"), import_gbp)
         sell_charges, sell_periods, sell_prices, sell_layout = self._rate_side(self._side_rates("export"), export_gbp)
         code = "PREDBAT"
+        # buy_layout/sell_layout are None only in the flat-fallback branch (no rate data, priced via the
+        # ALL field) - there are no per-day bands to carve a boost into, and that degenerate zero-rate-data
+        # case is not a normal production state, so the boost is intentionally skipped there.
         if discharge_window is not None and buy_layout is not None and sell_layout is not None:
             boost = self._boost_price(buy_prices, sell_prices)
             segments = self._boost_segments(discharge_window, now_min)
