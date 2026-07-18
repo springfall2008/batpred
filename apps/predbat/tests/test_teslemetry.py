@@ -492,7 +492,7 @@ def test_teslemetry_set_tariff_posts_tou_settings():
 
 def test_teslemetry_reconcile_on_start_device_marker_restores_normal():
     """Boot reconciliation reads the ACTUAL device tariff (not the local entity mirror); a PREDBAT-EXPORT-NOW
-    marker on the device restores normal tariff + never export and updates the mirror entities on success."""
+    marker on the device restores normal tariff + pv_only export and updates the mirror entities on success."""
     api = MockTeslemetryAPI()
     # The entity mirror is always reseeded to "normal" by register_control_entities() on boot, so it must
     # be irrelevant here - only the device response drives the outcome.
@@ -503,7 +503,7 @@ def test_teslemetry_reconcile_on_start_device_marker_restores_normal():
     run_async(api.reconcile_on_start())
     assert ("GET", "/api/1/energy_sites/123456/site_info", None) in api.requests_made
     assert api.entity_states["select.predbat_teslemetry_tariff_mode"] == "normal"
-    assert api.entity_states["select.predbat_teslemetry_allow_export"] == "never"
+    assert api.entity_states["select.predbat_teslemetry_allow_export"] == "pv_only"
     assert any("PREDBAT-EXPORT-NOW" in msg for msg in api.log_messages)
 
 
@@ -569,7 +569,7 @@ def test_teslemetry_reconcile_on_start_ignores_boot_default_read_only_attribute(
     assert any(req[1].endswith("/time_of_use_settings") for req in api.requests_made if req[0] == "POST")
     assert any(req[1].endswith("/grid_import_export") for req in api.requests_made if req[0] == "POST")
     assert api.entity_states["select.predbat_teslemetry_tariff_mode"] == "normal"
-    assert api.entity_states["select.predbat_teslemetry_allow_export"] == "never"
+    assert api.entity_states["select.predbat_teslemetry_allow_export"] == "pv_only"
     assert not any("read-only" in msg.lower() for msg in api.log_messages)
 
 
@@ -685,7 +685,7 @@ def test_teslemetry_reconcile_latch_survives_auth_failed_first_cycle():
     # Cycle 2 (first=False): reconcile must still run even though `first` was already consumed in cycle 1.
     assert run_async(api.run(300, False)) is True
     assert api.entity_states["select.predbat_teslemetry_tariff_mode"] == "normal"
-    assert api.entity_states["select.predbat_teslemetry_allow_export"] == "never"
+    assert api.entity_states["select.predbat_teslemetry_allow_export"] == "pv_only"
     assert api.reconcile_done is True
 
 
@@ -1013,15 +1013,15 @@ def test_teslemetry_reconcile_forces_write_even_if_cache_preseeded():
     api.mock_responses["/api/1/energy_sites/123456/site_info"] = TARIFF_RATE_EXPORT_NOW
     api.mock_responses["/api/1/energy_sites/123456/time_of_use_settings"] = {"response": {"code": 201}}
     api.mock_responses["/api/1/energy_sites/123456/grid_import_export"] = {"response": {"code": 201}}
-    # Pre-seed the dedupe cache as if "normal"/"never" had already been confirmed-sent - a naive
-    # dedupe would treat the recovery writes below as no-ops and skip them entirely.
+    # Pre-seed the dedupe cache as if "normal"/"pv_only" had already been confirmed-sent (matching what
+    # recovery now sends) - a naive dedupe would treat the recovery writes below as no-ops and skip them.
     api._last_sent["tariff"] = _json.dumps(api.build_tariff("normal"), sort_keys=True)
-    api._last_sent["export_rule"] = "never"
+    api._last_sent["export_rule"] = "pv_only"
     run_async(api.reconcile_on_start())
     assert any(req[1].endswith("/time_of_use_settings") for req in api.requests_made if req[0] == "POST")
     assert any(req[1].endswith("/grid_import_export") for req in api.requests_made if req[0] == "POST")
     assert api.entity_states["select.predbat_teslemetry_tariff_mode"] == "normal"
-    assert api.entity_states["select.predbat_teslemetry_allow_export"] == "never"
+    assert api.entity_states["select.predbat_teslemetry_allow_export"] == "pv_only"
 
 
 def test_teslemetry_inverter_def_tesla():
@@ -1085,18 +1085,27 @@ def test_teslemetry_in_window():
 
 
 def test_teslemetry_evaluate_schedule_states():
-    """The five reachable device states: charging, hold-at-target, exporting, discharge floor, idle."""
+    """The five reachable device states: charging, hold-at-target, exporting, discharge floor, idle.
+
+    Charging and hold both allow pv_only export so surplus solar is exported (not curtailed) while the
+    battery fills or holds full; only the active grid-export state escalates to battery_ok, so pv_only
+    is the export rule in every state except that one - the invariant asserted at the end.
+    """
     api = MockTeslemetryAPI()
     api.schedule = {
         "reserve": 20,
         "charge": {"start_time": "01:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1},
         "discharge": {"start_time": "17:00:00", "end_time": "19:00:00", "soc": 30, "enable": 1},
     }
-    assert api.evaluate_schedule(2 * 60, 50) == {"tariff_mode": "normal", "export_rule": "never", "grid_charging": True, "reserve": 90, "mode": "backup"}
-    assert api.evaluate_schedule(2 * 60, 90) == {"tariff_mode": "normal", "export_rule": "never", "grid_charging": False, "reserve": 90, "mode": "backup"}
+    assert api.evaluate_schedule(2 * 60, 50) == {"tariff_mode": "normal", "export_rule": "pv_only", "grid_charging": True, "reserve": 90, "mode": "backup"}
+    assert api.evaluate_schedule(2 * 60, 90) == {"tariff_mode": "normal", "export_rule": "pv_only", "grid_charging": False, "reserve": 90, "mode": "backup"}
     assert api.evaluate_schedule(18 * 60, 80) == {"tariff_mode": "export_now", "export_rule": "battery_ok", "grid_charging": False, "reserve": 30, "mode": "autonomous"}
     assert api.evaluate_schedule(18 * 60, 30) == {"tariff_mode": "normal", "export_rule": "pv_only", "grid_charging": False, "reserve": 30, "mode": "self_consumption"}
     assert api.evaluate_schedule(12 * 60, 60) == {"tariff_mode": "normal", "export_rule": "pv_only", "grid_charging": True, "reserve": 20, "mode": "self_consumption"}
+    # Invariant: export_rule is pv_only in every state except the active grid-export window (battery_ok),
+    # so the rule is only rewritten on entry/exit of an export window - never on an ordinary charge cycle.
+    non_export_states = [api.evaluate_schedule(2 * 60, 50), api.evaluate_schedule(2 * 60, 90), api.evaluate_schedule(18 * 60, 30), api.evaluate_schedule(12 * 60, 60)]
+    assert all(state["export_rule"] == "pv_only" for state in non_export_states)
 
 
 def test_teslemetry_evaluate_schedule_charge_precedence():

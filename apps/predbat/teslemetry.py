@@ -486,7 +486,11 @@ class TeslemetryAPI(ComponentBase):
         Charging uses backup mode (proven template semantics); the hold state (SOC at target,
         which is also how Predbat expresses charge freeze) is backup + grid charging off.
         Export uses the tariff-trick + autonomous with the device reserve as the discharge floor.
-        Idle allows PV-only export so excess solar is never curtailed.
+        Every non-export state (charge, hold and idle) allows PV-only export so surplus solar is
+        never curtailed even while the battery is filling or holding at target; only an active
+        grid-export window escalates to battery_ok. Keeping the export rule at pv_only across all
+        of those states also means it is only rewritten when entering or leaving an export window
+        rather than on every charge cycle, saving grid_import_export commands.
         """
         charge = self.schedule.get("charge", {})
         discharge = self.schedule.get("discharge", {})
@@ -494,8 +498,8 @@ class TeslemetryAPI(ComponentBase):
         if self.in_window(minutes_now, charge):
             target = int(charge.get("soc", 100))
             if soc >= target:
-                return {"tariff_mode": "normal", "export_rule": "never", "grid_charging": False, "reserve": target, "mode": "backup"}
-            return {"tariff_mode": "normal", "export_rule": "never", "grid_charging": True, "reserve": target, "mode": "backup"}
+                return {"tariff_mode": "normal", "export_rule": "pv_only", "grid_charging": False, "reserve": target, "mode": "backup"}
+            return {"tariff_mode": "normal", "export_rule": "pv_only", "grid_charging": True, "reserve": target, "mode": "backup"}
         if self.in_window(minutes_now, discharge):
             target = int(discharge.get("soc", 10))
             if soc > target:
@@ -949,8 +953,10 @@ class TeslemetryAPI(ComponentBase):
         entity mirror: register_control_entities() unconditionally reseeds the mirror to
         "normal" on every boot, so trusting it would make this recovery path unreachable.
         If the device's tariff still carries the PREDBAT-EXPORT-NOW marker written by
-        build_tariff(), a previous run crashed mid-export, so normal tariff and disabled
-        export are restored (unless Predbat is running read-only, in which case the need
+        build_tariff(), a previous run crashed mid-export, so the normal tariff is restored and
+        export is dropped back to pv_only - the resting rule the scheduler uses in every state
+        except an active export window - which stops the battery draining to grid while still
+        letting surplus solar export (unless Predbat is running read-only, in which case the need
         for recovery is logged but no write is sent). If no tariff code can be determined
         (read failure or code-less response, each logged distinctly by
         get_current_tariff_code), this skips rather than guessing at the device state.
@@ -977,11 +983,11 @@ class TeslemetryAPI(ComponentBase):
         if self._is_read_only():
             self.log("Warn: Teslemetry device tariff was left as {} - recovery needed but skipped (read-only mode)".format(tariff_code))
             return True
-        self.log("Warn: Teslemetry device tariff was left as {} - restoring normal tariff and disabling export".format(tariff_code))
+        self.log("Warn: Teslemetry device tariff was left as {} - restoring normal tariff and dropping export back to pv_only".format(tariff_code))
         if await self.set_tariff("normal", force=True):
             self.publish_control(self.entity("tariff_mode", domain="select"), "normal")
-        if await self.set_export_rule("never", force=True):
-            self.publish_control(self.entity("allow_export", domain="select"), "never")
+        if await self.set_export_rule("pv_only", force=True):
+            self.publish_control(self.entity("allow_export", domain="select"), "pv_only")
         return True
 
     async def select_event(self, entity_id, value):
