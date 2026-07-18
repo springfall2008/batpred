@@ -183,6 +183,8 @@ It is therefore recommended that you do NOT set car_charging_now unless you have
 
 **CAUTION:** It is strongly recommended to not use car_charging_now with Predbat-led charging unless you can't make it work any other way as Predbat will assume all car charging is at a low rate.
 
+**Note:** the advice above is about using car_charging_now as a substitute for working Octopus Intelligent slot detection. It has a second, separate job: when **switch.predbat_octopus_intelligent_confirm_slots** is enabled (see below), car_charging_now is also used to confirm that a still-provisional daytime Intelligent dispatch slot is genuinely being used, before the house battery commits to charging on it. Even if your Octopus Intelligent slot detection already works fine, it's still worth configuring car_charging_now for this reason - if you removed it based on the guidance above, you may be missing out on the most reliable confirmation signal for this newer protection. This doesn't have to come from the car's own API - if your charger is controlled directly by Octopus rather than the car (e.g. a Hypervolt charger), a charger-level "actively drawing power" sensor is often a *more* reliable source for car_charging_now than a vehicle-API-based one.
+
 - **car_charging_now_response** - Set to the range of positive responses for car_charging_now to indicate that the car is charging. Useful if you have a sensor for your car charger that isn't binary.
 
 To make Predbat-led car charging more accurate, additionally you can configure the following items in `apps.yaml`:
@@ -347,6 +349,11 @@ Predbat will still assume all Octopus charging slots are low rates even if some 
 
 - The switch **switch.predbat_octopus_intelligent_ignore_unplugged** (*expert mode*) (default value is Off) can be used to prevent Predbat from assuming the car will be charging or that future extra low-rate slots apply when the car is unplugged.
 This will only work correctly if **car_charging_planned** is set correctly in `apps.yaml` to detect your car being plugged in
+
+- The switch **switch.predbat_octopus_intelligent_confirm_slots** (*expert mode*) (default value is On) protects against a daytime Octopus Intelligent dispatch slot (outside the fixed 23:30-05:30 off-peak window) being withdrawn - Octopus's own daytime dispatch schedule is provisional and can be revised before it's delivered, and if your car doesn't end up drawing power during that slot the cheap rate for it can be rescinded.
+While this switch is On, a daytime slot is only treated as low rate for the house battery once it's confirmed - either because Octopus reports it as a completed dispatch, or because **car_charging_now** confirms the car (or charger) is actually drawing power.
+The fixed 23:30-05:30 window is never affected by this switch, since it's guaranteed cheap by the tariff itself.
+Turning this Off restores the previous behaviour of treating every dispatch slot as low rate immediately, which is more aggressive but carries the risk of the house battery charging at what turns out to be the full rate if the slot is later withdrawn.
 
 - Let the Octopus app control when your car charges.
 

@@ -37,7 +37,7 @@ If your energy provider prices on the basis of smaller (or larger) intervals the
 If your electricity supplier is Octopus Energy then the simplest way to provide Predbat with your electricity pricing information is to connect Predbat directly to Octopus.
 
 - This method will not work correctly if you have multiple import or export meters.
-- A single Octopus Intelligent GO car charger or car is supported and Predbat will plan your battery charging based on iGo sessions.
+- A single Octopus Intelligent GO car charger or car is supported and Predbat will plan your battery charging based on iGo sessions. Note that a daytime dispatch slot's confirmation status now factors into when the battery commits to charging on it - see **switch.predbat_octopus_intelligent_confirm_slots** in [Car charging](car-charging.md).
 - Saving sessions are also supported, including Predbat auto-enrolling you to them (note you must be joined to both the Octopus Octopoints and then the Saving Sessions schemes beforehand).
 
 You should first log into your Octopus account and go to the [Accounts](https://octopus.energy/dashboard/new/accounts/) section and copy your Octopus account number e.g. `A-1234567`.
