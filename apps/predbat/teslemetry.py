@@ -907,6 +907,56 @@ class TeslemetryAPI(ComponentBase):
         energy_charges_side = {"ALL": {"rates": {"ALL": 0}}, "AllYear": {"rates": rates}}
         return energy_charges_side, periods
 
+    @staticmethod
+    def _carve_interval(intervals, start_min, end_min, tier):
+        """Remove [start_min, end_min) from a day's partitioning intervals and insert (start, end, tier).
+
+        Removes the time range [start_min, end_min) from a single day's partitioning intervals and inserts
+        a new interval (start_min, end_min, tier). The result stays sorted and continues to partition
+        [0, 1440) exactly.
+        """
+        out = []
+        for (frm, to, existing) in intervals:
+            if to <= start_min or frm >= end_min:
+                out.append((frm, to, existing))
+                continue
+            if frm < start_min:
+                out.append((frm, start_min, existing))
+            if to > end_min:
+                out.append((end_min, to, existing))
+        out.append((start_min, end_min, tier))
+        out.sort()
+        return out
+
+    @staticmethod
+    def _boost_segments(window, now_min):
+        """Decide which day(s) the boost lands on for the window's current-or-next occurrence.
+
+        Returns [(day_offset, from_min, to_min)] with day_offset 0=today / 1=tomorrow. A same-day window
+        already finished today (end <= now) rolls to tomorrow; otherwise it stays today. A midnight-wrapped
+        window splits across today and tomorrow, except when we are already inside its post-midnight tail
+        (now < end), where only today's head [0, end) still needs the boost.
+        """
+        start_min, end_min = window
+        if start_min < end_min:
+            offset = 0 if end_min > now_min else 1
+            return [(offset, start_min, end_min)]
+        if now_min < end_min:
+            return [(0, 0, end_min)]
+        return [(0, start_min, 1440), (1, 0, end_min)]
+
+    @staticmethod
+    def _apply_boost(buy_layout, sell_layout, segments, today_dow):
+        """Carve BOOST_TIER onto (today_dow + offset) % 7 for each (offset, from, to) segment, both sides.
+
+        Mutates both layouts in place, carving BOOST_TIER onto (today_dow + offset) % 7 for each
+        (offset, from, to) segment.
+        """
+        for layout in (buy_layout, sell_layout):
+            for (offset, seg_start, seg_end) in segments:
+                day = (today_dow + offset) % 7
+                layout[day] = TeslemetryAPI._carve_interval(layout[day], seg_start, seg_end, BOOST_TIER)
+
     def build_tariff(self, mode, now=None):
         """Build a tariff_content_v2 dict for the requested mode.
 

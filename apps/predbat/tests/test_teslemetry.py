@@ -1694,6 +1694,42 @@ def test_teslemetry_render_side_matched_sets_and_day_end():
     assert (sample["fromHour"], sample["fromMinute"], sample["toHour"], sample["toMinute"]) == (0, 0, 0, 0)
 
 
+def test_teslemetry_carve_interval_splits_and_partitions():
+    """Carving a mid-day window splits the covering interval and still partitions the day."""
+    day = [(0, 1440, "OFF_PEAK")]
+    out = TeslemetryAPI._carve_interval(day, 1020, 1080, "ON_PEAK")  # 17:00-18:00
+    assert out == [(0, 1020, "OFF_PEAK"), (1020, 1080, "ON_PEAK"), (1080, 1440, "OFF_PEAK")]
+
+
+def test_teslemetry_boost_segments_today_vs_tomorrow():
+    """A same-day window ending in the future is today; one already ended is tomorrow; wrap splits."""
+    assert TeslemetryAPI._boost_segments((1020, 1080), now_min=600) == [(0, 1020, 1080)]   # 10:00, 17-18 upcoming -> today
+    assert TeslemetryAPI._boost_segments((540, 660), now_min=600) == [(0, 540, 660)]        # in progress (09-11 @10:00) -> today
+    assert TeslemetryAPI._boost_segments((300, 420), now_min=600) == [(1, 300, 420)]        # 05-07 ended by 10:00 -> tomorrow
+    assert TeslemetryAPI._boost_segments((1380, 60), now_min=720) == [(0, 1380, 1440), (1, 0, 60)]  # 23-01 upcoming -> today+tomorrow
+    assert TeslemetryAPI._boost_segments((1380, 60), now_min=30) == [(0, 0, 60)]            # 00:30 inside the 23-01 tail -> today head
+
+
+def test_teslemetry_apply_boost_places_segments_on_offset_days():
+    """Each (offset, from, to) segment carves BOOST_TIER onto (today_dow + offset) % 7, both sides."""
+    buy = {d: [(0, 1440, "OFF_PEAK")] for d in range(7)}
+    sell = {d: [(0, 1440, "SUPER_OFF_PEAK")] for d in range(7)}
+    TeslemetryAPI._apply_boost(buy, sell, [(0, 1020, 1080)], today_dow=3)  # today = Tesla dow 3
+    assert (1020, 1080, "ON_PEAK") in buy[3]
+    assert (1020, 1080, "ON_PEAK") in sell[3]
+    assert all(seg[2] != "ON_PEAK" for d in range(7) if d != 3 for seg in buy[d])
+
+
+def test_teslemetry_apply_boost_wrap_segments_span_two_days():
+    """A two-segment wrap carves the tail on today's DOW and the head on tomorrow's DOW."""
+    buy = {d: [(0, 1440, "OFF_PEAK")] for d in range(7)}
+    sell = {d: [(0, 1440, "OFF_PEAK")] for d in range(7)}
+    TeslemetryAPI._apply_boost(buy, sell, [(0, 1380, 1440), (1, 0, 60)], today_dow=6)  # tomorrow = (6+1)%7 = 0
+    assert (1380, 1440, "ON_PEAK") in buy[6]  # today
+    assert (0, 60, "ON_PEAK") in buy[0]       # tomorrow
+    assert all(seg[2] != "ON_PEAK" for seg in buy[1])  # an unrelated day untouched
+
+
 def test_teslemetry(my_predbat=None):
     """Run all Teslemetry component tests (registry entry point).
 
@@ -1799,5 +1835,9 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_tesla_dow_sunday_zero()
     test_teslemetry_side_layout_partitions_every_day()
     test_teslemetry_render_side_matched_sets_and_day_end()
+    test_teslemetry_carve_interval_splits_and_partitions()
+    test_teslemetry_boost_segments_today_vs_tomorrow()
+    test_teslemetry_apply_boost_places_segments_on_offset_days()
+    test_teslemetry_apply_boost_wrap_segments_span_two_days()
     print("**** Teslemetry tests passed ****")
     return 0
