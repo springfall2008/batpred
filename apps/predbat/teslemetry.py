@@ -373,9 +373,28 @@ class TeslemetryAPI(ComponentBase):
         self.dashboard_item(self.entity("schedule_write", domain="switch"), "off", {"friendly_name": "Powerwall Schedule Write", "icon": "mdi:content-save-outline"}, app="teslemetry")
 
     async def apply_schedule(self):
-        """Commit the pending schedule atomically (extended with persistence and an immediate device assert in later tasks)."""
+        """Commit the pending schedule atomically and persist it (immediate device assert added by the emulator task)."""
         self.schedule = copy.deepcopy(self.pending_schedule)
+        await self.save_schedule()
         self.publish_schedule_entities()
+
+    async def save_schedule(self):
+        """Persist the committed schedule via the Storage component (no-op when storage is unavailable)."""
+        storage = self.storage
+        if storage:
+            await storage.save("teslemetry", "schedule", self.schedule, format="json")
+
+    async def load_schedule(self):
+        """Restore the committed schedule from storage at boot; keep safe defaults when absent.
+
+        The Powerwall has no native scheduler to read the plan back from (unlike Fox Cloud),
+        so persistence is what makes a schedule survive a restart mid-plan.
+        """
+        storage = self.storage
+        data = await storage.load("teslemetry", "schedule") if storage else None
+        if isinstance(data, dict) and "charge" in data and "discharge" in data:
+            self.schedule = data
+        self.pending_schedule = copy.deepcopy(self.schedule)
 
     async def schedule_event(self, entity_id, value):
         """Stage a schedule entity write into pending_schedule; the write switch commits it.
@@ -396,6 +415,7 @@ class TeslemetryAPI(ComponentBase):
                 return
             self.pending_schedule["reserve"] = reserve
             self.schedule["reserve"] = reserve
+            await self.save_schedule()
             self.publish_schedule_entities()
             return
         direction = None

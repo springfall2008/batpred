@@ -12,8 +12,27 @@ from tests.test_infra import create_aiohttp_mock_response, create_aiohttp_mock_s
 from teslemetry import TeslemetryAPI, OPERATION_MODES, OPTIONS_TIME_FULL, DEFAULT_SCHEDULE
 
 
+class FakeStorage:
+    """In-memory stand-in for the Storage component."""
+
+    def __init__(self):
+        """Create the empty in-memory store."""
+        self.saved = {}
+
+    async def save(self, module, filename, data, format="yaml", expiry=None):
+        """Record saved data keyed on (module, filename)."""
+        self.saved[(module, filename)] = data
+        return True
+
+    async def load(self, module, filename):
+        """Return previously saved data or None."""
+        return self.saved.get((module, filename))
+
+
 class MockTeslemetryAPI(TeslemetryAPI):
     """TeslemetryAPI test double that avoids ComponentBase initialisation."""
+
+    mock_storage = None
 
     def __init__(self):
         """Initialise the mock with captured state instead of ComponentBase wiring."""
@@ -38,6 +57,11 @@ class MockTeslemetryAPI(TeslemetryAPI):
         self.schedule_loaded = False
         self.automatic = False
         self.automatic_done = False
+
+    @property
+    def storage(self):
+        """Return the fake storage component for tests (None by default)."""
+        return self.mock_storage
 
     def log(self, msg):
         """Capture log messages."""
@@ -1077,6 +1101,28 @@ def test_teslemetry_schedule_reserve_applies_immediately():
     assert api.schedule["reserve"] == 35
 
 
+def test_teslemetry_schedule_persistence_roundtrip():
+    """apply_schedule persists the committed schedule; load_schedule restores it and resets pending."""
+    api = MockTeslemetryAPI()
+    api.mock_storage = FakeStorage()
+    api.pending_schedule["charge"]["enable"] = 1
+    api.pending_schedule["charge"]["start_time"] = "02:00:00"
+    run_async(api.apply_schedule())
+    assert api.mock_storage.saved[("teslemetry", "schedule")]["charge"]["enable"] == 1
+    api2 = MockTeslemetryAPI()
+    api2.mock_storage = api.mock_storage
+    run_async(api2.load_schedule())
+    assert api2.schedule["charge"]["start_time"] == "02:00:00"
+    assert api2.pending_schedule == api2.schedule
+
+
+def test_teslemetry_schedule_load_without_storage_is_safe():
+    """With no storage component available, load_schedule keeps the safe defaults."""
+    api = MockTeslemetryAPI()
+    run_async(api.load_schedule())
+    assert api.schedule == DEFAULT_SCHEDULE
+
+
 def test_teslemetry(my_predbat=None):
     """Run all Teslemetry component tests (registry entry point).
 
@@ -1150,5 +1196,7 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_schedule_write_button_commits()
     test_teslemetry_schedule_invalid_values_rejected()
     test_teslemetry_schedule_reserve_applies_immediately()
+    test_teslemetry_schedule_persistence_roundtrip()
+    test_teslemetry_schedule_load_without_storage_is_safe()
     print("**** Teslemetry tests passed ****")
     return 0
