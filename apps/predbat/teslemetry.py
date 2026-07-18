@@ -127,7 +127,11 @@ class TeslemetryAPI(ComponentBase):
                             self.log("Warn: Teslemetry HTTP {} on {}: {}".format(resp.status, path, body[:200]))
                             return None
                         self.api_auth_failed = False
-                        return await resp.json()
+                        result = await resp.json()
+                        # Log the full raw response so live output can be cross-checked against the
+                        # parsing/units in this component (beta debugging aid).
+                        self.log("Info: Teslemetry API {} {} status {} response: {}".format(method, path, resp.status, json.dumps(result, default=str)))
+                        return result
             except (aiohttp.ClientError, asyncio.TimeoutError) as err:
                 self.log("Warn: Teslemetry network error on {} attempt {}: {}".format(path, attempt + 1, err))
                 await asyncio.sleep(2**attempt)
@@ -184,7 +188,12 @@ class TeslemetryAPI(ComponentBase):
             return False
         response = data.get("response", {})
         self.last_soc = response.get("percentage_charged", self.last_soc)
-        self.publish_sensor("soc", response.get("percentage_charged", 0), unit="%", friendly="Powerwall SOC")
+        self.publish_sensor("soc", round(float(response.get("percentage_charged", 0) or 0), 2), unit="%", friendly="Powerwall SOC")
+        # total_pack_energy (Wh) is the reliable battery capacity source on Powerwall (esp. PW3, whose
+        # site_info omits nameplate_energy). Publish it as soc_max so automatic_config can wire it.
+        total_pack_wh = response.get("total_pack_energy")
+        if total_pack_wh:
+            self.publish_sensor("soc_max", round(total_pack_wh / 1000.0, 2), unit="kWh", state_class=None, friendly="Powerwall Capacity")
         self.publish_sensor("battery_power", response.get("battery_power", 0), unit="W", friendly="Powerwall Battery Power")
         self.publish_sensor("grid_power", response.get("grid_power", 0), unit="W", friendly="Powerwall Grid Power")
         self.publish_sensor("load_power", response.get("load_power", 0), unit="W", friendly="Powerwall Load Power")
@@ -193,28 +202,30 @@ class TeslemetryAPI(ComponentBase):
         return True
 
     async def fetch_site_info(self):
-        """Fetch site info, publishing the battery capacity as soc_max and seeding control entity states.
+        """Fetch site info, publishing static config sensors and seeding control entity states.
 
-        Returns True only once soc_max has actually been published. If nameplate_energy is absent or
-        zero, control-entity seeding still happens with whatever fields are present, but this returns
-        False so the run()-level site_info_done latch stays False and the fetch is retried on a later
-        cycle instead of permanently giving up on soc_max.
+        Returns True whenever a site_info response was received (regardless of whether soc_max could
+        be published), so the run()-level site_info_done latch and automatic_config are not blocked on
+        a capacity field this hardware may not expose. soc_max is published here from nameplate_energy
+        when present, but the reliable source on PW3 is total_pack_energy from live_status.
         """
         data = await self._request("GET", "/api/1/energy_sites/{}/site_info".format(self.site_id))
         if not data:
             return False
         response = data.get("response", {})
         nameplate_wh = response.get("nameplate_energy", 0)
-        soc_max_published = False
         if nameplate_wh:
             self.publish_sensor("soc_max", round(nameplate_wh / 1000.0, 2), unit="kWh", state_class=None, friendly="Powerwall Capacity")
-            soc_max_published = True
         nameplate_power = response.get("nameplate_power", 0)
         if nameplate_power:
             self.publish_sensor("battery_rate_max", nameplate_power, unit="W", state_class=None, friendly="Powerwall Max Rate")
-        site_limit = response.get("max_site_meter_power_ac", 0) or nameplate_power
+        site_limit = response.get("max_site_meter_power_ac", 0)
+        if not site_limit or site_limit <= 0 or site_limit > 1_000_000:
+            # max_site_meter_power_ac is frequently an "unlimited" sentinel (e.g. 1e9) or absent;
+            # fall back to the nameplate power rather than publishing an absurd inverter limit.
+            site_limit = nameplate_power
         if site_limit and site_limit < 100:
-            # Some sites report this field in kW; normalise to W
+            # Some sites report this field in kW; normalise to W.
             site_limit = site_limit * 1000
         if site_limit:
             self.publish_sensor("inverter_limit", int(site_limit), unit="W", state_class=None, friendly="Powerwall Site Limit")
@@ -243,7 +254,7 @@ class TeslemetryAPI(ComponentBase):
         if isinstance(backup_reserve, (int, float)):
             self.publish_control(self.entity("backup_reserve", domain="number"), backup_reserve)
             self._last_sent["backup_reserve"] = int(backup_reserve)  # Same drift-correction rationale as operation_mode above.
-        return soc_max_published
+        return True
 
     async def fetch_energy_today(self):
         """Fetch today's cumulative energy, publishing daily kWh sensors.
@@ -317,15 +328,18 @@ class TeslemetryAPI(ComponentBase):
             await self.load_schedule()
             self.schedule_loaded = True
             self.publish_schedule_entities()
-        if self.automatic and not self.automatic_done and self.site_info_done:
-            await self.automatic_config()
-            self.automatic_done = True
         if first or (seconds - self.last_live_poll >= LIVE_POLL_SECONDS):
             self.last_live_poll = seconds
             success = await self.fetch_live_status()
         if first or (seconds - self.last_energy_poll >= ENERGY_POLL_SECONDS):
             self.last_energy_poll = seconds
             await self.fetch_energy_today()
+        # Auto-config once site info is read AND a battery-capacity sensor (soc_max) exists. soc_max may
+        # come from live_status (total_pack_energy) rather than site_info on some hardware (e.g. PW3), so
+        # this is gated on the published sensor and runs after the live poll rather than on site_info alone.
+        if self.automatic and not self.automatic_done and self.site_info_done and self.get_state_wrapper(self.entity("soc_max")) is not None:
+            await self.automatic_config()
+            self.automatic_done = True
         if self.schedule_loaded and self.reconcile_done and self.last_soc is not None and not self._is_read_only():
             # Scheduler emulator: the Powerwall has no native scheduler, so translate the committed
             # windows into device commands each cycle. Failures are logged and self-retry via the
@@ -817,18 +831,24 @@ class TeslemetryAPI(ComponentBase):
         return None
 
     async def get_current_tariff_code(self):
-        """Fetch the site's current tariff_rate from the device and return its tariff "code", or None on failure.
+        """Read the site's current tariff "code" from site_info, or None on failure.
 
-        Logs distinct warnings for the two failure modes: the read itself failing (network/HTTP error, empty
-        body) versus a successful read whose response simply carries no "code" key anywhere.
+        There is no dedicated tariff-read endpoint on the Fleet/Teslemetry API (a GET /tariff_rate
+        returns 404); the active tariff is carried in the site_info response under tariff_content_v2
+        (or tariff_content). Logs distinct warnings for the read itself failing versus a response that
+        carries no tariff code.
         """
-        data = await self._request("GET", "/api/1/energy_sites/{}/tariff_rate".format(self.site_id))
+        data = await self._request("GET", "/api/1/energy_sites/{}/site_info".format(self.site_id))
         if not data:
-            self.log("Warn: Teslemetry tariff_rate read failed - no response from the device")
+            self.log("Warn: Teslemetry site_info read failed - cannot determine current tariff")
             return None
-        code = self._find_tariff_code(data)
+        response = data.get("response", {}) if isinstance(data, dict) else {}
+        tariff = response.get("tariff_content_v2")
+        if not isinstance(tariff, dict):
+            tariff = response.get("tariff_content")
+        code = self._find_tariff_code(tariff) if isinstance(tariff, dict) else None
         if code is None:
-            self.log("Warn: Teslemetry tariff_rate response contained no tariff code: {}".format(str(data)[:200]))
+            self.log("Warn: Teslemetry site_info carried no tariff code (tariff_content_v2 absent or code-less)")
         return code
 
     def _is_read_only(self):
