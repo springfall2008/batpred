@@ -2483,6 +2483,20 @@ template:
 
 ## Tesla Powerwall
 
+### Recommended: Teslemetry component
+
+The recommended integration is Predbat's built-in Teslemetry component, which needs only three keys in `apps.yaml` and no Home Assistant Tesla integration:
+
+```yaml
+  teslemetry_key: 'your-teslemetry-token'
+  teslemetry_site_id: 'your-energy-site-id'
+  teslemetry_automatic: True
+```
+
+See [Tesla Powerwall Teslemetry API](components.md#tesla-powerwall-teslemetry-api-teslemetry) for details. The manual configuration below remains available if you prefer to drive the Powerwall through the Home Assistant Tesla Fleet/Teslemetry integrations.
+
+### Manual configuration via Home Assistant integrations
+
 Integration of the Tesla Powerwall follows the approach outlined in [Ed Hull's blog](https://edhull.co.uk/blog/2025-08-24/predbat-docker-tesla).
 Ed's setup only covered Predbat controlling charging the Powerwall, the below configuration (thanks @Slee2112) covers both charging and discharging (exporting).
 

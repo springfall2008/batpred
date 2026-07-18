@@ -17,6 +17,7 @@ This document provides a comprehensive overview of all Predbat components, their
     - [Axle Energy VPP (axle)](#axle-energy-vpp-axle)
     - [Ohme Charger (ohme)](#ohme-charger-ohme)
     - [Fox ESS API (fox)](#fox-ess-api-fox)
+    - [Tesla Powerwall Teslemetry API (teslemetry)](#tesla-powerwall-teslemetry-api-teslemetry)
     - [Solax Cloud API (Solax)](#solax-cloud-api-solax)
     - [Solis Cloud API (Solis)](#solis-cloud-api-solis)
     - [Sigenergy Cloud API (Sigenergy)](#sigenergy-cloud-api-sigenergy)
@@ -521,6 +522,38 @@ Integrates with Fox ESS inverters for monitoring and controlling Fox ESS battery
 | `key` | String | Yes | - | `fox_key` | Your Fox ESS API key |
 | `automatic` | Boolean | No | false | `fox_automatic` | Set to `true` to automatically configured Predbat to use the Fox inverter (no manual apps.yaml updates required) |
 | `automatic_ignore_pv` | Boolean | No | false | `fox_automatic_ignore_pv` | When `automatic` is enabled, set to `true` to prevent Fox Cloud from overwriting `pv_power` and `pv_today` config. Useful for AC-coupled setups where PV is measured independently and Fox Cloud reports zero/absent PV data |
+
+---
+
+### Tesla Powerwall Teslemetry API (teslemetry)
+
+**Can be restarted:** Yes
+
+#### What it does (teslemetry)
+
+Integrates a Tesla Powerwall via the [Teslemetry](https://teslemetry.com) REST API (which mirrors Tesla Fleet API paths, so a direct Fleet API connection works by changing the base URL). Publishes live power flows, SOC and daily energy sensors, and exposes fox-style charge/discharge window entities that Predbat programs directly. Because the Powerwall has no native scheduler, the component translates the programmed windows into operation mode, backup reserve, grid-charging and export-rule commands each cycle, including the export tariff-trick needed to force the Powerwall to export.
+
+#### When to enable (teslemetry)
+
+- You have a Tesla Powerwall (developed against Powerwall 3)
+- You want Predbat to control charging and export directly via the Tesla cloud
+- You have a Teslemetry subscription and API token (or Tesla Fleet API access)
+
+#### Important notes (teslemetry)
+
+- Export freeze is not supported by the Powerwall hardware and is disabled automatically
+- The Powerwall has no charge/discharge rate control; rates are modelled from the nameplate power
+- When enabled (and Predbat is not read-only) the component owns the device tariff, replacing the customer's configured tariff with one built from Predbat's rate data
+- Commands are deduped write-on-change to conserve Teslemetry command credits
+
+#### Configuration Options (teslemetry)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `key` | String | Yes | - | `teslemetry_key` | Your Teslemetry (or Fleet API) bearer token |
+| `site_id` | String | Yes | - | `teslemetry_site_id` | Tesla energy site id to poll and control |
+| `base_url` | String | No | `https://api.teslemetry.com` | `teslemetry_base_url` | REST base URL; set to the Fleet API endpoint for a direct connection |
+| `automatic` | Boolean | No | false | `teslemetry_automatic` | Set to `true` to automatically configure Predbat to use the Powerwall (no manual apps.yaml inverter settings required) |
 
 ---
 
