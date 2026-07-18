@@ -1059,33 +1059,43 @@ class MockBase:  # pragma: no cover
         self.entities = {}
 
     def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=None):
-        """Return a previously published entity state (or its raw record)."""
         if raw:
             return self.entities.get(entity_id, {})
-        return self.entities.get(entity_id, {}).get("state", default)
+        else:
+            return self.entities.get(entity_id, {}).get("state", default)
 
     def set_state_wrapper(self, entity_id, state, attributes=None, app=None):
-        """Record an entity state update."""
         self.entities[entity_id] = {"state": state, "attributes": attributes or {}}
 
     def log(self, message):
-        """Print a timestamped log line."""
-        print("[{}] {}".format(datetime.now().strftime("%H:%M:%S"), message))
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
 
     def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
-        """Print and record a published dashboard entity."""
-        print("ENTITY: {} = {}".format(entity_id, state))
-        if attributes and "options" in attributes:
-            attributes = {**attributes, "options": "..."}
+        print(f"ENTITY: {entity_id} = {state}")
+        if attributes:
+            if "options" in attributes:
+                attributes["options"] = "..."
+            print(f"  Attributes: {json.dumps(attributes, indent=2)}")
         self.set_state_wrapper(entity_id, state, attributes)
 
     def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
-        """Return a configured arg value; consulted so set_read_only actually gates control writes."""
+        """Return a configured arg value, consulting self.args so set_read_only actually gates the emulator's control writes (the CLI harness relies on this to run read-only)."""
         return self.args.get(arg, default)
 
     def set_arg(self, key, value):
-        """Print an arg assignment made by automatic_config."""
-        print("Set arg {} = {}".format(key, value))
+        """Print an arg assignment made by automatic_config, showing the referenced entity's current state."""
+        state = None
+        if isinstance(value, str) and "." in value:
+            state = self.get_state_wrapper(value, default=None)
+        elif isinstance(value, list):
+            state = "n/a []"
+            for v in value:
+                if isinstance(v, str) and "." in v:
+                    state = self.get_state_wrapper(v, default=None)
+                    break
+        else:
+            state = "n/a"
+        print(f"Set arg {key} = {value} (state={state})")
 
 
 async def test_teslemetry_api(key, site_id=None, base_url=None, control=False):
