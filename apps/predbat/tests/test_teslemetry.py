@@ -918,6 +918,19 @@ def test_teslemetry_inverter_def_tesla():
         assert key in tesla, "TESLA INVERTER_DEF missing key {}".format(key)
 
 
+def test_teslemetry_component_registry_config():
+    """Component registry exposes the automatic arg, can_restart, and the schema accepts teslemetry_automatic."""
+    from components import COMPONENT_LIST
+    from config import APPS_SCHEMA
+
+    entry = COMPONENT_LIST["teslemetry"]
+    assert entry["args"]["automatic"]["config"] == "teslemetry_automatic"
+    assert entry["args"]["automatic"]["default"] is False
+    assert entry["args"]["automatic"]["required"] is False
+    assert entry.get("can_restart") is True
+    assert APPS_SCHEMA["teslemetry_automatic"] == {"type": "boolean"}
+
+
 def test_teslemetry(my_predbat=None):
     """Run all Teslemetry component tests (registry entry point).
 
@@ -978,5 +991,6 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_backup_reserve_drift_correction_no_spurious_resend_when_matching()
     test_teslemetry_reconcile_forces_write_even_if_cache_preseeded()
     test_teslemetry_inverter_def_tesla()
+    test_teslemetry_component_registry_config()
     print("**** Teslemetry tests passed ****")
     return 0

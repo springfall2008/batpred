@@ -2232,6 +2232,7 @@ APPS_SCHEMA = {
     "teslemetry_key": {"type": "string", "empty": False},
     "teslemetry_site_id": {"type": "string", "empty": False},
     "teslemetry_base_url": {"type": "string", "empty": False},
+    "teslemetry_automatic": {"type": "boolean"},
     "octopus_intelligent_slot": {"type": "sensor|sensor_list", "sensor_type": "boolean|action", "entries": "num_cars", "optional_entries": True},
     "octopus_ready_time": {"type": "sensor|sensor_list", "sensor_type": "string", "entries": "num_cars", "optional_entries": True},
     "octopus_charge_limit": {"type": "sensor|sensor_list", "sensor_type": "float", "entries": "num_cars", "optional_entries": True},
