@@ -12,17 +12,15 @@ in later without changing this component.
 
 Data path:  polls live_status (power flows + SOC), site_info (capacity) and
 calendar_history (daily energy) and publishes predbat_teslemetry_* sensors.
-Control path: exposes virtual select/number/switch entities driven by the
-TESLA service hooks; handlers issue REST commands (operation mode, backup
-reserve, grid import/export rules and the export tariff-trick).
-
-Command dedupe: the TESLA service hooks carry `repeat: true`, so Predbat fires
-each hook's loopback event every cycle (~5 minutes) even when nothing has
-changed. Every control write is routed through `_apply_command`, which only
-POSTs when the value actually differs from the last CONFIRMED-SENT value,
-cutting Teslemetry command-credit spend without losing failure-retry (a
-failed POST never updates the cache) or external-drift correction (see
-`fetch_site_info`).
+Control path: exposes fox-style virtual schedule entities (charge/discharge window
+time selects, SoC numbers, enable switches, a reserve number and an atomic write
+button) that inverter.py programs directly via the TESLA inverter type. Because the
+Powerwall has no native scheduler, run() acts as one: each cycle it evaluates the
+committed windows against the wall clock and live SOC and asserts the resulting
+device tuple (tariff / export rule / grid charging / backup reserve / operation
+mode) through deduped write-on-change commands, so unchanged cycles cost no
+Teslemetry command credits and failed writes self-retry. All emulator writes are
+gated on Predbat's set_read_only configuration.
 """
 
 import asyncio
@@ -247,12 +245,21 @@ class TeslemetryAPI(ComponentBase):
             self.site_info_done = await self.fetch_site_info()
         if not self.reconcile_done:
             self.reconcile_done = await self.reconcile_on_start()
+        if not self.schedule_loaded:
+            await self.load_schedule()
+            self.schedule_loaded = True
+            self.publish_schedule_entities()
         if first or (seconds - self.last_live_poll >= LIVE_POLL_SECONDS):
             self.last_live_poll = seconds
             success = await self.fetch_live_status()
         if first or (seconds - self.last_energy_poll >= ENERGY_POLL_SECONDS):
             self.last_energy_poll = seconds
             await self.fetch_energy_today()
+        if self.schedule_loaded and self.reconcile_done and self.last_soc is not None and not self._is_read_only():
+            # Scheduler emulator: the Powerwall has no native scheduler, so translate the committed
+            # windows into device commands each cycle. Failures are logged and self-retry via the
+            # dedupe cache; they do not fail the run() data path.
+            await self.assert_device_state(self.evaluate_schedule(self.get_minutes_now(), self.last_soc))
         return success
 
     def register_control_entities(self):
@@ -373,10 +380,12 @@ class TeslemetryAPI(ComponentBase):
         self.dashboard_item(self.entity("schedule_write", domain="switch"), "off", {"friendly_name": "Powerwall Schedule Write", "icon": "mdi:content-save-outline"}, app="teslemetry")
 
     async def apply_schedule(self):
-        """Commit the pending schedule atomically and persist it (immediate device assert added by the emulator task)."""
+        """Commit the pending schedule atomically, persist it, and assert the device state immediately rather than waiting up to 60s for the next run cycle."""
         self.schedule = copy.deepcopy(self.pending_schedule)
         await self.save_schedule()
         self.publish_schedule_entities()
+        if self.last_soc is not None and not self._is_read_only():
+            await self.assert_device_state(self.evaluate_schedule(self.get_minutes_now(), self.last_soc))
 
     async def save_schedule(self):
         """Persist the committed schedule via the Storage component (no-op when storage is unavailable)."""
@@ -395,6 +404,42 @@ class TeslemetryAPI(ComponentBase):
         if isinstance(data, dict) and "charge" in data and "discharge" in data:
             self.schedule = data
         self.pending_schedule = copy.deepcopy(self.schedule)
+
+    def get_minutes_now(self):
+        """Return minutes since local midnight, preferring the base's clock (which Predbat schedules against)."""
+        base = getattr(self, "base", None)
+        minutes = getattr(base, "minutes_now", None) if base is not None else None
+        if minutes is not None:
+            return minutes
+        now = datetime.now(timezone.utc).astimezone(getattr(self, "local_tz", None) or timezone.utc)
+        return now.hour * 60 + now.minute
+
+    async def assert_device_state(self, desired):
+        """Assert the desired device tuple, tariff first and mode last (the template-proven ordering).
+
+        Each setter dedupes on write-on-change, so an unchanged assert costs zero command credits.
+        Successful writes are mirrored into the diagnostic control entities; failures leave both
+        the dedupe cache and the entity state untouched so the next cycle retries.
+        """
+        results = {}
+        results["tariff_mode"] = await self.set_tariff(desired["tariff_mode"])
+        results["export_rule"] = await self.set_export_rule(desired["export_rule"])
+        results["grid_charging"] = await self.set_grid_charging(desired["grid_charging"])
+        results["reserve"] = await self.set_backup_reserve(desired["reserve"])
+        results["mode"] = await self.set_operation_mode(desired["mode"])
+        if results["tariff_mode"]:
+            self.publish_control(self.entity("tariff_mode", domain="select"), desired["tariff_mode"])
+        if results["export_rule"]:
+            self.publish_control(self.entity("allow_export", domain="select"), desired["export_rule"])
+        if results["grid_charging"]:
+            self.publish_control(self.entity("allow_charging_from_grid", domain="switch"), "on" if desired["grid_charging"] else "off")
+        if results["reserve"]:
+            self.publish_control(self.entity("backup_reserve", domain="number"), int(desired["reserve"]))
+        if results["mode"]:
+            self.publish_control(self.entity("operation_mode", domain="select"), desired["mode"])
+        if not all(results.values()):
+            self.log("Warn: Teslemetry device-state assert incomplete: {}".format({key: value for key, value in results.items() if not value}))
+        return all(results.values())
 
     async def schedule_event(self, entity_id, value):
         """Stage a schedule entity write into pending_schedule; the write switch commits it.

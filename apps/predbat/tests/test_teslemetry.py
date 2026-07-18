@@ -1123,6 +1123,103 @@ def test_teslemetry_schedule_load_without_storage_is_safe():
     assert api.schedule == DEFAULT_SCHEDULE
 
 
+def command_ok_responses(api):
+    """Register success responses for all four Powerwall command endpoints."""
+    for path in ["operation", "backup", "grid_import_export", "time_of_use_settings"]:
+        api.mock_responses["/api/1/energy_sites/123456/{}".format(path)] = {"response": {}}
+
+
+def test_teslemetry_assert_device_state_posts_commands():
+    """assert_device_state issues all four command groups and mirrors success into the diagnostic entities."""
+    api = MockTeslemetryAPI()
+    api.register_control_entities()
+    command_ok_responses(api)
+    desired = {"tariff_mode": "normal", "export_rule": "pv_only", "grid_charging": True, "reserve": 20, "mode": "self_consumption"}
+    assert run_async(api.assert_device_state(desired)) is True
+    paths = [req[1] for req in api.requests_made if req[0] == "POST"]
+    assert "/api/1/energy_sites/123456/time_of_use_settings" in paths
+    assert "/api/1/energy_sites/123456/grid_import_export" in paths
+    assert "/api/1/energy_sites/123456/backup" in paths
+    assert "/api/1/energy_sites/123456/operation" in paths
+    assert api.entity_states["select.predbat_teslemetry_operation_mode"] == "self_consumption"
+    assert api.entity_states["number.predbat_teslemetry_backup_reserve"] == 20
+    assert api.entity_states["select.predbat_teslemetry_allow_export"] == "pv_only"
+
+
+def test_teslemetry_assert_device_state_dedupes_repeat():
+    """Asserting an unchanged desired state issues no further REST commands (write-on-change)."""
+    api = MockTeslemetryAPI()
+    api.register_control_entities()
+    command_ok_responses(api)
+    desired = {"tariff_mode": "normal", "export_rule": "pv_only", "grid_charging": True, "reserve": 20, "mode": "self_consumption"}
+    run_async(api.assert_device_state(desired))
+    first_count = len(api.requests_made)
+    run_async(api.assert_device_state(desired))
+    assert len(api.requests_made) == first_count
+
+
+def test_teslemetry_apply_schedule_asserts_immediately():
+    """Committing a schedule mid-window asserts the device state without waiting for the next run cycle."""
+    api = MockTeslemetryAPI()
+    api.register_control_entities()
+    command_ok_responses(api)
+    api.last_soc = 50
+    api.get_minutes_now = lambda: 2 * 60
+    api.pending_schedule["charge"] = {"start_time": "01:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1}
+    run_async(api.switch_event("switch.predbat_teslemetry_schedule_write", "turn_on"))
+    posts = [(req[1], req[2]) for req in api.requests_made if req[0] == "POST"]
+    assert ("/api/1/energy_sites/123456/operation", {"default_real_mode": "backup"}) in posts
+    assert ("/api/1/energy_sites/123456/backup", {"backup_reserve_percent": 90}) in posts
+
+
+def test_teslemetry_run_asserts_schedule_each_cycle():
+    """A healthy run cycle evaluates the committed schedule and asserts the device state."""
+    api = MockTeslemetryAPI()
+    api.register_control_entities()
+    command_ok_responses(api)
+    api.mock_responses["/api/1/energy_sites/123456/live_status"] = LIVE_STATUS
+    # Deliberately out of sync with the idle-state default schedule (mode/reserve), unlike
+    # SITE_INFO_FULL: fetch_site_info's drift-correction (see fetch_site_info) refreshes the
+    # dedupe cache from whatever site_info reports, and if that already matched the emulator's
+    # desired idle tuple ("self_consumption"/20, as SITE_INFO_FULL happens to), the subsequent
+    # emulator assert would be correctly deduped away with no POST at all - a true negative that
+    # would make this test pass for the wrong reason (or fail) regardless of whether run() actually
+    # wires the emulator in. Using values that differ guarantees the assert has real work to do.
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = {"response": {"nameplate_energy": 13500, "nameplate_power": 11500, "max_site_meter_power_ac": 11500, "default_real_mode": "backup", "backup_reserve_percent": 5}}
+    api.mock_responses["/api/1/energy_sites/123456/calendar_history?kind=energy&period=day"] = ENERGY_HISTORY
+    api.mock_responses["/api/1/energy_sites/123456/tariff_rate"] = TARIFF_RATE_NORMAL
+    api.get_minutes_now = lambda: 12 * 60
+    assert run_async(api.run(seconds=0, first=True)) is True
+    posts = [req[1] for req in api.requests_made if req[0] == "POST"]
+    assert "/api/1/energy_sites/123456/operation" in posts
+
+
+def test_teslemetry_run_skips_assert_when_read_only():
+    """Read-only mode gates all emulator device writes."""
+    api = MockTeslemetryAPI()
+    api.register_control_entities()
+    command_ok_responses(api)
+    api.mock_responses["/api/1/energy_sites/123456/live_status"] = LIVE_STATUS
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO_FULL
+    api.mock_responses["/api/1/energy_sites/123456/calendar_history?kind=energy&period=day"] = ENERGY_HISTORY
+    api.mock_responses["/api/1/energy_sites/123456/tariff_rate"] = TARIFF_RATE_NORMAL
+    api._is_read_only = lambda: True
+    run_async(api.run(seconds=0, first=True))
+    assert [req for req in api.requests_made if req[0] == "POST"] == []
+
+
+def test_teslemetry_run_skips_assert_without_soc():
+    """The emulator never asserts before a live SOC reading exists (no blind mode changes)."""
+    api = MockTeslemetryAPI()
+    api.register_control_entities()
+    command_ok_responses(api)
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO_FULL
+    api.mock_responses["/api/1/energy_sites/123456/tariff_rate"] = TARIFF_RATE_NORMAL
+    # live_status has no mock response -> fetch fails -> last_soc stays None
+    run_async(api.run(seconds=0, first=True))
+    assert [req for req in api.requests_made if req[0] == "POST"] == []
+
+
 def test_teslemetry(my_predbat=None):
     """Run all Teslemetry component tests (registry entry point).
 
@@ -1198,5 +1295,11 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_schedule_reserve_applies_immediately()
     test_teslemetry_schedule_persistence_roundtrip()
     test_teslemetry_schedule_load_without_storage_is_safe()
+    test_teslemetry_assert_device_state_posts_commands()
+    test_teslemetry_assert_device_state_dedupes_repeat()
+    test_teslemetry_apply_schedule_asserts_immediately()
+    test_teslemetry_run_asserts_schedule_each_cycle()
+    test_teslemetry_run_skips_assert_when_read_only()
+    test_teslemetry_run_skips_assert_without_soc()
     print("**** Teslemetry tests passed ****")
     return 0
