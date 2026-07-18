@@ -191,9 +191,9 @@ def test_teslemetry_site_info_seeds_control_entity_states():
 
 
 def test_teslemetry_energy_today_publishes_kwh():
-    """calendar_history energy series is aggregated into daily kWh sensors."""
+    """energy_history energy series is aggregated into daily kWh sensors."""
     api = MockTeslemetryAPI()
-    api.mock_responses["/api/1/energy_sites/123456/calendar_history?kind=energy&period=day"] = ENERGY_HISTORY
+    api.mock_responses["/api/1/energy_sites/123456/energy_history?kind=energy&period=day"] = ENERGY_HISTORY
     run_async(api.fetch_energy_today())
     assert api.dashboard_items["sensor.predbat_teslemetry_solar_today"]["state"] == 4.0
     assert api.dashboard_items["sensor.predbat_teslemetry_import_today"]["state"] == 2.5
@@ -719,7 +719,7 @@ def test_teslemetry_reconcile_abandoned_after_max_attempts():
     # rationale in test_teslemetry_run_asserts_schedule_each_cycle: this guarantees the emulator
     # assert below has real work to do (a POST), rather than being silently deduped away.
     api.mock_responses["/api/1/energy_sites/123456/site_info"] = {"response": {"nameplate_energy": 13500, "nameplate_power": 11500, "max_site_meter_power_ac": 11500, "default_real_mode": "backup", "backup_reserve_percent": 5}}
-    api.mock_responses["/api/1/energy_sites/123456/calendar_history?kind=energy&period=day"] = ENERGY_HISTORY
+    api.mock_responses["/api/1/energy_sites/123456/energy_history?kind=energy&period=day"] = ENERGY_HISTORY
     # No "code" anywhere in the response -> get_current_tariff_code returns None -> reconcile_on_start fails.
     api.mock_responses["/api/1/energy_sites/123456/tariff_rate"] = {"response": {}}
     api.get_minutes_now = lambda: 12 * 60
@@ -744,7 +744,7 @@ def test_teslemetry_emulator_failure_does_not_fail_run():
     # `result is None` branch makes every one of them fail.
     api.mock_responses["/api/1/energy_sites/123456/live_status"] = LIVE_STATUS
     api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO_FULL
-    api.mock_responses["/api/1/energy_sites/123456/calendar_history?kind=energy&period=day"] = ENERGY_HISTORY
+    api.mock_responses["/api/1/energy_sites/123456/energy_history?kind=energy&period=day"] = ENERGY_HISTORY
     api.mock_responses["/api/1/energy_sites/123456/tariff_rate"] = TARIFF_RATE_NORMAL
     api.get_minutes_now = lambda: 12 * 60
     assert run_async(api.run(seconds=0, first=True)) is True
@@ -785,13 +785,12 @@ def test_teslemetry_run_site_info_latches_on_any_response():
 
 
 def test_teslemetry_energy_today_requests_kind_and_period():
-    """fetch_energy_today must query calendar_history with kind=energy&period=day - the Fleet/Teslemetry
-    endpoint requires both, and omitting them (the previous bare-path request) produces an invalid or
-    empty response."""
+    """fetch_energy_today must query energy_history with kind=energy&period=day - the smaller endpoint
+    used by the HA integration; both params are required for a usable time_series."""
     api = MockTeslemetryAPI()
-    api.mock_responses["/api/1/energy_sites/123456/calendar_history?kind=energy&period=day"] = ENERGY_HISTORY
+    api.mock_responses["/api/1/energy_sites/123456/energy_history?kind=energy&period=day"] = ENERGY_HISTORY
     run_async(api.fetch_energy_today())
-    assert api.requests_made == [("GET", "/api/1/energy_sites/123456/calendar_history?kind=energy&period=day", None)]
+    assert api.requests_made == [("GET", "/api/1/energy_sites/123456/energy_history?kind=energy&period=day", None)]
     assert api.dashboard_items["sensor.predbat_teslemetry_solar_today"]["state"] == 4.0
 
 
@@ -1254,7 +1253,7 @@ def test_teslemetry_run_asserts_schedule_each_cycle():
     api.mock_responses["/api/1/energy_sites/123456/site_info"] = {
         "response": {"nameplate_energy": 13500, "nameplate_power": 11500, "max_site_meter_power_ac": 11500, "default_real_mode": "backup", "backup_reserve_percent": 5, "tariff_content_v2": {"code": "PREDBAT-NORMAL"}}
     }
-    api.mock_responses["/api/1/energy_sites/123456/calendar_history?kind=energy&period=day"] = ENERGY_HISTORY
+    api.mock_responses["/api/1/energy_sites/123456/energy_history?kind=energy&period=day"] = ENERGY_HISTORY
     api.get_minutes_now = lambda: 12 * 60
     assert run_async(api.run(seconds=0, first=True)) is True
     posts = [req[1] for req in api.requests_made if req[0] == "POST"]
@@ -1268,7 +1267,7 @@ def test_teslemetry_run_skips_assert_when_read_only():
     command_ok_responses(api)
     api.mock_responses["/api/1/energy_sites/123456/live_status"] = LIVE_STATUS
     api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO_FULL
-    api.mock_responses["/api/1/energy_sites/123456/calendar_history?kind=energy&period=day"] = ENERGY_HISTORY
+    api.mock_responses["/api/1/energy_sites/123456/energy_history?kind=energy&period=day"] = ENERGY_HISTORY
     api.mock_responses["/api/1/energy_sites/123456/tariff_rate"] = TARIFF_RATE_NORMAL
     api._is_read_only = lambda: True
     run_async(api.run(seconds=0, first=True))
@@ -1351,7 +1350,7 @@ def test_teslemetry_automatic_config_references_published_entities():
     api = MockTeslemetryAPI()
     api.mock_responses["/api/1/energy_sites/123456/live_status"] = LIVE_STATUS
     api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO_FULL
-    api.mock_responses["/api/1/energy_sites/123456/calendar_history?kind=energy&period=day"] = ENERGY_HISTORY
+    api.mock_responses["/api/1/energy_sites/123456/energy_history?kind=energy&period=day"] = ENERGY_HISTORY
     api.register_control_entities()
     run_async(api.fetch_live_status())
     run_async(api.fetch_site_info())
@@ -1372,7 +1371,7 @@ def test_teslemetry_run_triggers_automatic_config_once_after_site_info():
     command_ok_responses(api)
     api.mock_responses["/api/1/energy_sites/123456/live_status"] = LIVE_STATUS
     api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO_FULL
-    api.mock_responses["/api/1/energy_sites/123456/calendar_history?kind=energy&period=day"] = ENERGY_HISTORY
+    api.mock_responses["/api/1/energy_sites/123456/energy_history?kind=energy&period=day"] = ENERGY_HISTORY
     api.mock_responses["/api/1/energy_sites/123456/tariff_rate"] = TARIFF_RATE_NORMAL
     api.automatic = True
     run_async(api.run(seconds=0, first=True))
@@ -1386,7 +1385,7 @@ def test_teslemetry_run_triggers_automatic_config_once_after_site_info():
     command_ok_responses(api_off)
     api_off.mock_responses["/api/1/energy_sites/123456/live_status"] = LIVE_STATUS
     api_off.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO_FULL
-    api_off.mock_responses["/api/1/energy_sites/123456/calendar_history?kind=energy&period=day"] = ENERGY_HISTORY
+    api_off.mock_responses["/api/1/energy_sites/123456/energy_history?kind=energy&period=day"] = ENERGY_HISTORY
     api_off.mock_responses["/api/1/energy_sites/123456/tariff_rate"] = TARIFF_RATE_NORMAL
     run_async(api_off.run(seconds=0, first=True))
     assert api_off.args_set == {}
@@ -1450,7 +1449,7 @@ def test_teslemetry_run_discovers_site_before_polling():
     api.mock_responses["/api/1/products"] = {"response": [{"energy_site_id": 777, "resource_type": "battery"}]}
     api.mock_responses["/api/1/energy_sites/777/site_info"] = SITE_INFO_FULL
     api.mock_responses["/api/1/energy_sites/777/live_status"] = LIVE_STATUS
-    api.mock_responses["/api/1/energy_sites/777/calendar_history?kind=energy&period=day"] = ENERGY_HISTORY
+    api.mock_responses["/api/1/energy_sites/777/energy_history?kind=energy&period=day"] = ENERGY_HISTORY
     api.mock_responses["/api/1/energy_sites/777/tariff_rate"] = TARIFF_RATE_NORMAL
     assert run_async(api.run(0, True)) is True
     assert api.site_id == "777"
@@ -1522,7 +1521,7 @@ def test_teslemetry_run_auto_config_fires_with_soc_max_from_live_status():
     api.automatic = True
     api.mock_responses["/api/1/energy_sites/123456/site_info"] = {"response": {"nameplate_power": 11500, "default_real_mode": "self_consumption", "backup_reserve_percent": 20, "tariff_content_v2": {"code": "PREDBAT-NORMAL"}}}
     api.mock_responses["/api/1/energy_sites/123456/live_status"] = {"response": {"percentage_charged": 42, "total_pack_energy": 13500}}
-    api.mock_responses["/api/1/energy_sites/123456/calendar_history?kind=energy&period=day"] = ENERGY_HISTORY
+    api.mock_responses["/api/1/energy_sites/123456/energy_history?kind=energy&period=day"] = ENERGY_HISTORY
     run_async(api.run(0, True))
     assert api.dashboard_items["sensor.predbat_teslemetry_soc_max"]["state"] == 13.5
     assert api.args_set.get("inverter_type") == ["TESLA"]
@@ -1550,7 +1549,7 @@ def test_teslemetry_cli_harness_signals_failure_on_auth_error():
             return {"response": {"nameplate_energy": 13500, "nameplate_power": 11500, "max_site_meter_power_ac": 11500, "default_real_mode": "self_consumption", "backup_reserve_percent": 20}}
         if "live_status" in path:
             return {"response": {"percentage_charged": 50}}
-        if "calendar_history" in path:
+        if "energy_history" in path:
             return {"response": {"time_series": []}}
         if "tariff_rate" in path:
             return {"response": {"tariff_content_v2": {"code": "PREDBAT-NORMAL"}}}

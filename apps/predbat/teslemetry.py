@@ -11,7 +11,7 @@ The base URL is configurable so a direct Fleet API connection can be swapped
 in later without changing this component.
 
 Data path:  polls live_status (power flows + SOC), site_info (capacity) and
-calendar_history (daily energy) and publishes predbat_teslemetry_* sensors.
+energy_history (daily energy) and publishes predbat_teslemetry_* sensors.
 Control path: exposes fox-style virtual schedule entities (charge/discharge window
 time selects, SoC numbers, enable switches, a reserve number and an atomic write
 button) that inverter.py programs directly via the TESLA inverter type. Because the
@@ -310,10 +310,13 @@ class TeslemetryAPI(ComponentBase):
     async def fetch_energy_today(self):
         """Fetch today's cumulative energy, publishing daily kWh sensors.
 
-        The Fleet/Teslemetry calendar_history endpoint requires a "kind" and a "period" query
-        parameter; without them it does not reliably return the daily energy time_series.
+        Uses energy_history (not calendar_history): both aggregate to the same daily totals, but
+        energy_history returns far fewer buckets and omits the bulky SmartBreakerEnergyLogs, so the
+        response is a fraction of the size for the four totals we actually need. This is the same
+        endpoint the Home Assistant Teslemetry integration uses for daily energy. The "kind" and
+        "period" query parameters are required for a usable time_series.
         """
-        data = await self._request("GET", "/api/1/energy_sites/{}/calendar_history?kind=energy&period=day".format(self.site_id))
+        data = await self._request("GET", "/api/1/energy_sites/{}/energy_history?kind=energy&period=day".format(self.site_id))
         if not data:
             return False
         series = data.get("response", {}).get("time_series", [])
