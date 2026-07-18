@@ -1605,6 +1605,40 @@ def test_teslemetry_cli_harness_signals_failure_on_auth_error():
         teslemetry.TeslemetryAPI._request = original
 
 
+def test_teslemetry_quantise_flat_single_tier():
+    """A flat rate collapses to one tier priced in GBP whole pence, all 48 slots the same."""
+    rates = {m: 28.0 for m in range(0, 2880)}  # 28p flat
+    prices, today, tomorrow = TeslemetryAPI._quantise_side(rates, 28.0)
+    assert prices == {"SUPER_OFF_PEAK": 0.28}
+    assert today == ["SUPER_OFF_PEAK"] * 48
+    assert tomorrow == ["SUPER_OFF_PEAK"] * 48
+
+
+def test_teslemetry_quantise_two_distinct_exact():
+    """Economy-7 (two distinct rates) uses two tiers, cheapest -> SUPER_OFF_PEAK, exact prices."""
+    rates = {}
+    for m in range(0, 2880):
+        local = m % 1440
+        rates[m] = 8.0 if (0 <= local < 300) else 30.0  # cheap 00:00-05:00, else dear
+    prices, today, tomorrow = TeslemetryAPI._quantise_side(rates, 30.0)
+    assert prices == {"SUPER_OFF_PEAK": 0.08, "OFF_PEAK": 0.30}
+    assert today[0] == "SUPER_OFF_PEAK" and today[10] == "OFF_PEAK"  # slot 10 = 05:00
+
+
+def test_teslemetry_quantise_agile_three_bands_clamped_rounded():
+    """A wide/varied series quantises to 3 mean-priced bands; negatives clamp to 0; prices whole pence."""
+    rates = {}
+    for m in range(0, 2880):
+        slot = (m % 1440) // 30
+        rates[m] = [-5.0, 12.0, 45.0][slot % 3]  # a value in each band, incl. a negative
+    prices, today, tomorrow = TeslemetryAPI._quantise_side(rates, 12.0)
+    assert set(prices) == {"SUPER_OFF_PEAK", "OFF_PEAK", "PARTIAL_PEAK"}
+    assert prices["SUPER_OFF_PEAK"] == 0.0            # -5p clamped to 0, rounded whole pence
+    assert all(p == round(p, 2) for p in prices.values())
+    assert set(today) <= set(prices)                  # matched sets: every slot tier is priced
+    assert len(today) == 48 and len(tomorrow) == 48
+
+
 def test_teslemetry(my_predbat=None):
     """Run all Teslemetry component tests (registry entry point).
 
@@ -1704,5 +1738,8 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_soc_max_derived_from_energy_left()
     test_teslemetry_inverter_limit_sentinel_clamped_to_nameplate()
     test_teslemetry_run_auto_config_fires_with_soc_max_from_live_status()
+    test_teslemetry_quantise_flat_single_tier()
+    test_teslemetry_quantise_two_distinct_exact()
+    test_teslemetry_quantise_agile_three_bands_clamped_rounded()
     print("**** Teslemetry tests passed ****")
     return 0

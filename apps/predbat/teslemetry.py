@@ -57,6 +57,11 @@ OPERATION_MODES = ["self_consumption", "autonomous", "backup"]
 EXPORT_RULES = ["never", "pv_only", "battery_ok"]
 TARIFF_MODES = ["normal", "export_now"]
 
+REAL_TIERS = ["SUPER_OFF_PEAK", "OFF_PEAK", "PARTIAL_PEAK"]
+BOOST_TIER = "BOOST"
+SLOTS_PER_DAY = 48
+SLOT_MINUTES = 30
+
 OPTIONS_TIME_FULL = ["{:02d}:{:02d}:00".format(hour, minute) for hour in range(24) for minute in range(60)]
 
 DEFAULT_SCHEDULE = {
@@ -795,6 +800,56 @@ class TeslemetryAPI(ComponentBase):
             if minutes_now is not None and rate_export:
                 export_rate = round(rate_export.get(minutes_now, self.DEFAULT_EXPORT_RATE * 100) / 100.0, 4)
         return import_rate, export_rate
+
+    @staticmethod
+    def _quantise_side(rate_dict, default_pence):
+        """Quantise a per-minute pence rate dict into <=3 named GBP tiers over today+tomorrow.
+
+        Samples every 30 minutes for today (minutes 0-1439) and tomorrow (1440-2879), converts to
+        GBP clamped at 0 and rounded to whole pence, then either maps <=3 distinct values one-to-one
+        onto the real tiers (cheapest -> SUPER_OFF_PEAK) or splits [min,max] into 3 equal-width bands
+        priced at each band's mean. Returns (tier_prices, today_tiers, tomorrow_tiers) where the slot
+        lists only ever name tiers present in tier_prices (matched sets).
+        """
+        def slot_price(minute):
+            """Convert a per-minute pence rate to GBP, clamped at 0 and rounded to whole pence."""
+            pence = rate_dict.get(minute, default_pence)
+            return round(max(0.0, pence) / 100.0, 2)
+
+        today = [slot_price(m) for m in range(0, 1440, SLOT_MINUTES)]
+        tomorrow = [slot_price(m) for m in range(1440, 2880, SLOT_MINUTES)]
+        combined = today + tomorrow
+        distinct = sorted(set(combined))
+
+        if len(distinct) <= len(REAL_TIERS):
+            value_to_tier = {value: REAL_TIERS[index] for index, value in enumerate(distinct)}
+            tier_prices = {tier: value for value, tier in value_to_tier.items()}
+
+            def band_of(value):
+                """Return the tier for an exact value in the small-distinct case."""
+                return value_to_tier[value]
+        else:
+            low, high = distinct[0], distinct[-1]
+            width = (high - low) / len(REAL_TIERS)
+            buckets = {index: [] for index in range(len(REAL_TIERS))}
+
+            def band_index(value):
+                """Return 0..2 for the equal-width band a value falls in (clamped)."""
+                if width <= 0:
+                    return 0
+                return min(len(REAL_TIERS) - 1, int((value - low) / width))
+
+            for value in combined:
+                buckets[band_index(value)].append(value)
+            tier_prices = {REAL_TIERS[index]: round(sum(values) / len(values), 2) for index, values in buckets.items() if values}
+
+            def band_of(value):
+                """Return the tier name for the band a value falls in."""
+                return REAL_TIERS[band_index(value)]
+
+        today_tiers = [band_of(value) for value in today]
+        tomorrow_tiers = [band_of(value) for value in tomorrow]
+        return tier_prices, today_tiers, tomorrow_tiers
 
     def build_tariff(self, mode, now=None):
         """Build a tariff_content_v2 dict for the requested mode.
