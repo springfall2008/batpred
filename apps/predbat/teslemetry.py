@@ -858,7 +858,6 @@ class TeslemetryAPI(ComponentBase):
                 layout[day] = list(today_intervals)
             else:
                 layout[day] = list(tomorrow_intervals)
-        layout[(today_dow + 1) % 7] = list(tomorrow_intervals)
         return layout
 
     @staticmethod

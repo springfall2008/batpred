@@ -100,7 +100,9 @@ class MockTeslemetryAPI(TeslemetryAPI):
 def _rate_base(import_p, export_p):
     """A minimal base double exposing flat import/export rate dicts and a local clock for build_tariff.
 
-    get_arg defaults to returning the caller's default (i.e. not read-only), matching how
+    get_arg's keyword-only "d" never matches the "default=" keyword ComponentBase.get_arg forwards
+    with, so it always falls through to its own None default (never the caller's default) - which
+    reads as not read-only since bool(None) is False. This matches how
     test_teslemetry_run_boots_without_reconcile wires its own base double - so _is_read_only() (consulted
     by sync_tariff) can be called against this double without every test needing its own override.
     """
@@ -387,8 +389,27 @@ def test_teslemetry_run_boots_without_reconcile():
     api.mock_responses["/api/1/energy_sites/123456/backup"] = {"response": {"code": 201}}
     api.mock_responses["/api/1/energy_sites/123456/grid_import_export"] = {"response": {"code": 201}}
     run_async(api.run(seconds=0, first=True))
-    assert not hasattr(api, "reconcile_done") or True  # attribute may be gone
-    assert not any("reconcil" in m.lower() for m in api.log_messages)
+    assert not hasattr(api, "reconcile_done")
+    assert not any("reconcile" in m.lower() for m in api.log_messages)
+
+
+def test_teslemetry_boot_resumes_from_persisted_schedule():
+    """With a persisted mid-discharge schedule and empty dedupe cache, the first cycle asserts autonomous export."""
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    api.base.get_arg = lambda a, d=None, **k: d
+    api.schedule = {
+        "reserve": 20,
+        "charge": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 100, "enable": 0},
+        "discharge": {"start_time": "00:00:00", "end_time": "23:59:00", "soc": 10, "enable": 1},
+    }
+    api.schedule_loaded = True
+    api.last_soc = 80
+    for path in ("operation", "backup", "grid_import_export", "time_of_use_settings"):
+        api.mock_responses["/api/1/energy_sites/123456/" + path] = {"response": {"code": 201}}
+    run_async(api.assert_device_state(api.evaluate_schedule(12 * 60, 80)))
+    assert api.entity_states["select.predbat_teslemetry_operation_mode"] == "autonomous"
+    assert api.entity_states["select.predbat_teslemetry_allow_export"] == "battery_ok"
 
 
 def test_teslemetry_select_operation_mode():
@@ -1491,6 +1512,12 @@ def test_teslemetry_tesla_dow_sunday_zero():
     assert TeslemetryAPI._tesla_dow(5) == 6  # Saturday
 
 
+def test_teslemetry_boost_price_floor_wins_on_low_rates():
+    """When 2x the highest real band is below the static EXPORT_SELL_RATE floor, the floor wins."""
+    boost = TeslemetryAPI._boost_price({"SUPER_OFF_PEAK": 0.05, "OFF_PEAK": 0.10}, {"SUPER_OFF_PEAK": 0.08})
+    assert boost == 0.50
+
+
 def test_teslemetry_side_layout_partitions_every_day():
     """Every day-of-week's intervals tile [0,1440) with no gaps or overlaps."""
     today = ["SUPER_OFF_PEAK"] * 10 + ["OFF_PEAK"] * 38
@@ -1573,6 +1600,7 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_run_first_success_returns_true()
     test_teslemetry_run_auth_failed_only_probes_live_status()
     test_teslemetry_run_boots_without_reconcile()
+    test_teslemetry_boot_resumes_from_persisted_schedule()
     test_teslemetry_select_operation_mode()
     test_teslemetry_select_failure_keeps_state()
     test_teslemetry_command_success_on_low_response_code()
@@ -1650,6 +1678,7 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_quantise_two_distinct_exact()
     test_teslemetry_quantise_agile_three_bands_clamped_rounded()
     test_teslemetry_tesla_dow_sunday_zero()
+    test_teslemetry_boost_price_floor_wins_on_low_rates()
     test_teslemetry_side_layout_partitions_every_day()
     test_teslemetry_render_side_matched_sets_and_day_end()
     test_teslemetry_carve_interval_splits_and_partitions()
