@@ -23,6 +23,7 @@ Teslemetry command credits and failed writes self-retry. All emulator writes are
 gated on Predbat's set_read_only configuration.
 """
 
+import argparse
 import asyncio
 import copy
 import json
@@ -890,3 +891,87 @@ class TeslemetryAPI(ComponentBase):
     async def final(self):
         """Cleanup on shutdown."""
         self.log("Info: TeslemetryAPI shutdown")
+
+
+class MockBase:  # pragma: no cover
+    """Mock base object for standalone Teslemetry testing (stands in for the PredBat instance)."""
+
+    def __init__(self):
+        """Initialise the mock base with a local-time clock and empty entity/arg stores."""
+        self.local_tz = datetime.now().astimezone().tzinfo
+        self.now_utc = datetime.now(self.local_tz)
+        self.prefix = "predbat"
+        self.args = {}
+        self.midnight_utc = datetime.now(self.local_tz).replace(hour=0, minute=0, second=0, microsecond=0)
+        self.minutes_now = self.now_utc.hour * 60 + self.now_utc.minute
+        self.entities = {}
+
+    def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=None):
+        """Return a previously published entity state (or its raw record)."""
+        if raw:
+            return self.entities.get(entity_id, {})
+        return self.entities.get(entity_id, {}).get("state", default)
+
+    def set_state_wrapper(self, entity_id, state, attributes=None, app=None):
+        """Record an entity state update."""
+        self.entities[entity_id] = {"state": state, "attributes": attributes or {}}
+
+    def log(self, message):
+        """Print a timestamped log line."""
+        print("[{}] {}".format(datetime.now().strftime("%H:%M:%S"), message))
+
+    def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
+        """Print and record a published dashboard entity."""
+        print("ENTITY: {} = {}".format(entity_id, state))
+        if attributes and "options" in attributes:
+            attributes = {**attributes, "options": "..."}
+        self.set_state_wrapper(entity_id, state, attributes)
+
+    def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
+        """Return a configured arg value; consulted so set_read_only actually gates control writes."""
+        return self.args.get(arg, default)
+
+    def set_arg(self, key, value):
+        """Print an arg assignment made by automatic_config."""
+        print("Set arg {} = {}".format(key, value))
+
+
+async def test_teslemetry_api(key, site_id, base_url=None, control=False):  # pragma: no cover
+    """Run a standalone test of the Teslemetry component against the live API.
+
+    By default this is READ-ONLY: it polls the Powerwall and prints/publishes the entities and
+    status but sends no control commands - the scheduler emulator and any crash-recovery writes
+    are suppressed via set_read_only. Pass control=True to let the component send commands.
+    """
+    mode = "READ-WRITE (controls may change)" if control else "READ-ONLY (status only, no controls changed)"
+    print("Testing Teslemetry API for site {} - {}".format(site_id, mode))
+
+    mock_base = MockBase()
+    # Read-only by default so a bare test run only reports status and never changes the Powerwall.
+    mock_base.args["set_read_only"] = not control
+
+    arg_dict = {"key": key, "site_id": site_id, "automatic": True}
+    if base_url:
+        arg_dict["base_url"] = base_url
+    api = TeslemetryAPI(mock_base, **arg_dict)
+
+    print("Calling run() once...")
+    result = await api.run(seconds=0, first=True)
+    print("Run completed (success={})".format(result))
+    await api.final()
+
+
+def main():  # pragma: no cover
+    """Command line entry point to test the Teslemetry component against the live API."""
+    parser = argparse.ArgumentParser(description="Test Teslemetry Tesla Powerwall API")
+    parser.add_argument("--key", required=True, help="Teslemetry (or Fleet API) bearer token")
+    parser.add_argument("--site-id", required=True, help="Tesla energy site id")
+    parser.add_argument("--base-url", default=None, help="REST API base URL (default {})".format(TESLEMETRY_DEFAULT_URL))
+    parser.add_argument("--control", action="store_true", help="Allow control commands to be sent (default is read-only: report status only, change nothing)")
+
+    args = parser.parse_args()
+    asyncio.run(test_teslemetry_api(args.key, args.site_id, base_url=args.base_url, control=args.control))
+
+
+if __name__ == "__main__":
+    main()

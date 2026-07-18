@@ -1380,6 +1380,18 @@ def test_teslemetry_run_triggers_automatic_config_once_after_site_info():
     assert api_off.args_set == {}
 
 
+def test_teslemetry_mock_base_get_arg_consults_args():
+    """The CLI harness MockBase.get_arg reflects configured args so set_read_only defaults the standalone test to read-only (controls unchanged)."""
+    from teslemetry import MockBase
+
+    base = MockBase()
+    # Default (no set_read_only configured): the CLI harness sets this itself, but the raw default must be False.
+    assert base.get_arg("set_read_only", False) is False
+    # Read-only test mode: set_read_only True must be reflected back so _is_read_only() gates control writes.
+    base.args["set_read_only"] = True
+    assert base.get_arg("set_read_only", False) is True
+
+
 def test_teslemetry(my_predbat=None):
     """Run all Teslemetry component tests (registry entry point).
 
@@ -1467,5 +1479,6 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_reconcile_abandoned_after_max_attempts()
     test_teslemetry_emulator_failure_does_not_fail_run()
     test_teslemetry_automatic_config_skips_unpublished_rate_sensors()
+    test_teslemetry_mock_base_get_arg_consults_args()
     print("**** Teslemetry tests passed ****")
     return 0
