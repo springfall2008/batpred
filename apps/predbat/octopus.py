@@ -2238,6 +2238,7 @@ class Octopus:
             slot["end"] = slot_end_date.strftime(TIME_FORMAT)
             slot["source"] = "car_charging_now"
             slot["kwh"] = self.car_charging_rate[car_n] * 30 / 60  # Scale to 30 minute slot
+            slot["provisional"] = False  # Real-time confirmed draw, not a still-revisable Octopus plan
             octopus_slots.append(slot)
             self.log("Octopus: Car is charging now - added new IO slot {}".format(slot))
         return octopus_slots
@@ -2372,6 +2373,21 @@ class Octopus:
                             self.load_scaling_dynamic[minute] = self.load_scaling_saving
                             rate_replicate[minute] = "saving"
 
+    def minute_in_iog_fixed_window(self, minute_abs):
+        """
+        True if minute_abs (minutes-since-midnight-of-today, may be negative or beyond
+        forecast_minutes) falls within the fixed IOG off-peak window (23:30-05:30), which is
+        guaranteed cheap by the tariff itself and never subject to dispatch-slot rescission.
+        """
+        window = OCTOPUS_NIGHT_RATE_WINDOWS["iog"]
+        start_minute = window["start"][0] * 60 + window["start"][1]
+        end_minute = window["end"][0] * 60 + window["end"][1]
+        minute_of_day = minute_abs % 1440
+        if window["cross_midnight"]:
+            return minute_of_day >= start_minute or minute_of_day < end_minute
+        else:
+            return start_minute <= minute_of_day < end_minute
+
     def decode_octopus_slot(self, car_n, slot, raw=False):
         """
         Decode IOG slot
@@ -2385,6 +2401,9 @@ class Octopus:
 
         source = slot.get("source", "")
         location = slot.get("location", "")
+        # Whether this slot is still Octopus's provisional/revisable plan (True) or a confirmed
+        # real dispatch (False) - see rate_add_io_slots for how this gates low-rate treatment.
+        provisional = slot.get("provisional", False)
 
         start_minutes = minutes_to_time(start, self.midnight_utc)
         end_minutes = minutes_to_time(end, self.midnight_utc)
@@ -2396,7 +2415,7 @@ class Octopus:
             end_minutes = max(min(end_minutes, self.forecast_minutes + self.minutes_now), start_minutes)
 
         if start_minutes == end_minutes:
-            return 0, 0, 0, source, location
+            return 0, 0, 0, source, location, provisional
 
         cap_minutes = end_minutes - start_minutes
 
@@ -2410,7 +2429,7 @@ class Octopus:
 
         # Remove empty slots
         if kwh is None and location == "" and source == "":
-            return 0, 0, 0, source, location
+            return 0, 0, 0, source, location, provisional
 
         # Create kWh if missing
         if kwh is None:
@@ -2426,7 +2445,7 @@ class Octopus:
         else:
             kwh = 0
 
-        return start_minutes, end_minutes, kwh, source, location
+        return start_minutes, end_minutes, kwh, source, location, provisional
 
     def load_octopus_slots(self, car_n, octopus_slots, octopus_intelligent_consider_full):
         """
@@ -2445,7 +2464,7 @@ class Octopus:
 
         # Decode the slots
         for slot in octopus_slots:
-            start_minutes, end_minutes, kwh, source, location = self.decode_octopus_slot(car_n, slot)
+            start_minutes, end_minutes, kwh, source, location, _ = self.decode_octopus_slot(car_n, slot)
             # Octopus zeros chargeKwh once it calculates the car has hit its target SoC, but the
             # dispatch window stays open and the charger may still draw power. Preserve active slots
             # with a duration-based kwh so the "Hold for car" guard in execute.py still fires.
@@ -2542,11 +2561,22 @@ class Octopus:
 
     def rate_add_io_slots(self, car_n, rates, octopus_slots):
         """
-        # Add in any planned octopus slots
-        # Octopus limits cheap slots to 6 hours (12 x 30-min slots) per 24-hour period
+        Add in any planned Octopus Intelligent Go dispatch slots as a low import rate.
+
+        Octopus limits cheap slots to 6 hours (12 x 30-min slots) per 24-hour period. A daytime
+        dispatch slot (outside the fixed 23:30-05:30 off-peak window) is still Octopus's own
+        provisional/revisable plan until it's confirmed - if the car never actually draws power,
+        Octopus retroactively rescinds the cheap rate for that slot. When
+        octopus_intelligent_confirm_slots is enabled (default), an out-of-window slot is only
+        treated as low-rate once it's confirmed - either because Octopus reports it as a completed
+        (metered) dispatch, or car_charging_now confirms real-time draw - so the battery doesn't
+        commit to charging on a rate that may later be withdrawn. Slots inside the fixed window are
+        always trusted, since that window is guaranteed cheap by the tariff itself, not by the
+        dispatch mechanism.
         """
         octopus_slot_low_rate = self.get_arg("octopus_slot_low_rate", True)
         octopus_slot_max = self.get_arg("octopus_slot_max", OCTOPUS_SLOT_MAX_DEFAULT)
+        confirm_slots_only = self.octopus_intelligent_confirm_slots
 
         # Track slots per 24-hour period (keyed by day offset from midday)
         # Period 0 = noon today to 11:59 tomorrow, Period -1 = noon yesterday to 11:59 today, etc.
@@ -2558,9 +2588,13 @@ class Octopus:
         saved_slots = set()  # For logging purposes, track which slots we actually applied as low rate
 
         if octopus_slots:
-            # Add in IO slots
+            # Decode and filter all slots up front, then process confirmed slots (provisional=False)
+            # before still-provisional ones - so a genuine confirmation (e.g. a car_charging_now
+            # entry appended after the original Octopus dispatch entry) always wins a tied minute
+            # over a still-provisional entry for the same time, regardless of append order.
+            decoded_slots = []
             for slot in octopus_slots:
-                start_minutes, end_minutes, kwh, source, location = self.decode_octopus_slot(car_n, slot, raw=True)
+                start_minutes, end_minutes, kwh, source, location, provisional = self.decode_octopus_slot(car_n, slot, raw=True)
 
                 # Ignore bump-charge slots as their cost won't change
                 if source != "bump-charge" and source != "BOOST" and (not location or location == "AT_HOME"):
@@ -2571,49 +2605,58 @@ class Octopus:
                     end_minutes = ((end_minutes + plan_interval_minutes - 1) // plan_interval_minutes) * plan_interval_minutes
                     start_minutes = max(start_minutes, -96 * 60)  # Allow for previous 2 days
                     end_minutes = min(end_minutes, self.forecast_minutes)
+                    decoded_slots.append((start_minutes, end_minutes, kwh, source, location, provisional))
 
-                    for minute in range(start_minutes, end_minutes):
-                        if octopus_slot_low_rate:
-                            assumed_price = self.rate_min_base
+            decoded_slots.sort(key=lambda entry: entry[5])  # Stable: confirmed (False) slots first
+
+            for start_minutes, end_minutes, kwh, source, location, provisional in decoded_slots:
+                for minute in range(start_minutes, end_minutes):
+                    if octopus_slot_low_rate:
+                        assumed_price = self.rate_min_base
+                    else:
+                        assumed_price = self.rate_import.get(start_minutes, self.rate_min)
+
+                    if minute in saved_slots:
+                        continue  # Already applied a low rate slot to this minute, skip
+                    else:
+                        saved_slots.add(minute)
+
+                    # Calculate which day this minute belongs to (day boundary at midday)
+                    # Period 0 = noon today (720) to 11:59 tomorrow (2159), etc.
+                    # Python's floor division handles negative numbers correctly
+                    day_offset = (minute - 720) // (24 * 60)
+
+                    # Initialise counter for this day if needed
+                    if day_offset not in slots_per_day:
+                        slots_per_day[day_offset] = 0
+
+                    # Calculate the 30-min slot start for this minute
+                    slot_start = (minute // 30) * 30
+
+                    # A still-provisional (unconfirmed) out-of-window slot doesn't get the low rate -
+                    # Octopus can withdraw it before it's ever delivered. The fixed off-peak window
+                    # is always trusted regardless of provenance.
+                    confirmed = (not confirm_slots_only) or (not provisional) or self.minute_in_iog_fixed_window(slot_start)
+
+                    # At the start of each 30-min slot, decide if we can add it
+                    if minute % 30 == 0:
+                        if confirmed and slots_per_day[day_offset] < octopus_slot_max:
+                            slots_per_day[day_offset] += 1
+                            slots_added_set.add(slot_start)
+                            rates[minute] = assumed_price
                         else:
-                            assumed_price = self.rate_import.get(start_minutes, self.rate_min)
+                            assumed_price = self.rate_max_base
+                    else:
+                        # For minutes within a 30-min slot, only apply if the slot was added
+                        if slot_start in slots_added_set:
+                            rates[minute] = assumed_price
 
-                        if minute in saved_slots:
-                            continue  # Already applied a low rate slot to this minute, skip
-                        else:
-                            saved_slots.add(minute)
-
-                        # Calculate which day this minute belongs to (day boundary at midday)
-                        # Period 0 = noon today (720) to 11:59 tomorrow (2159), etc.
-                        # Python's floor division handles negative numbers correctly
-                        day_offset = (minute - 720) // (24 * 60)
-
-                        # Initialise counter for this day if needed
-                        if day_offset not in slots_per_day:
-                            slots_per_day[day_offset] = 0
-
-                        # Calculate the 30-min slot start for this minute
-                        slot_start = (minute // 30) * 30
-
-                        # At the start of each 30-min slot, decide if we can add it
-                        if minute % 30 == 0:
-                            if slots_per_day[day_offset] < octopus_slot_max:
-                                slots_per_day[day_offset] += 1
-                                slots_added_set.add(slot_start)
-                                rates[minute] = assumed_price
-                            else:
-                                assumed_price = self.rate_max_base
-                        else:
-                            # For minutes within a 30-min slot, only apply if the slot was added
-                            if slot_start in slots_added_set:
-                                rates[minute] = assumed_price
-
-                        if minute % 30 == 0 and start_minutes > -24 * 60:
-                            self.log(
-                                "Octopus: Intelligent slot at {}-{}, assumed price {}, amount {}, kWh location {}, source {}, octopus_slot_low_rate {}".format(
-                                    self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), dp2(assumed_price), dp2(kwh), location, source, octopus_slot_low_rate
-                                )
+                    if minute % 30 == 0 and start_minutes > -24 * 60:
+                        self.log(
+                            "Octopus: Intelligent slot at {}-{}, assumed price {}, amount {}, kWh location {}, source {}, octopus_slot_low_rate {}, provisional {}, confirmed {}".format(
+                                self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), dp2(assumed_price), dp2(kwh), location, source, octopus_slot_low_rate, provisional, confirmed
                             )
+                        )
 
         # Log daily slot counts for debugging
         for day_offset in sorted(slots_per_day.keys()):

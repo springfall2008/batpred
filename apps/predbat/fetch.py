@@ -1198,11 +1198,16 @@ class Fetch:
                         self.record_status(message="Error: octopus_intelligent_slot not set correctly in apps.yaml for car {}".format(car_n), had_errors=True)
 
                 # Completed and planned slots - merge from all cars
+                # Tag provenance (copies, not in-place mutation, since get_state_wrapper may return a
+                # cached/shared list): completed dispatches are Octopus's metered, confirmed record;
+                # planned dispatches are still Octopus's own provisional schedule, which it "routinely
+                # withdraws on its next re-plan" if the car never actually draws power. See
+                # rate_add_io_slots for how this gates low-rate treatment for out-of-window slots.
                 if completed:
-                    self.octopus_slots[car_n] += completed
+                    self.octopus_slots[car_n] += [dict(slot, provisional=False) for slot in completed]
                 if planned and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n]):
                     # We only count planned slots if the car is plugged in or we are ignoring unplugged cars
-                    self.octopus_slots[car_n] += planned
+                    self.octopus_slots[car_n] += [dict(slot, provisional=True) for slot in planned]
 
                 # Extract vehicle data if we can get it
                 size = self.get_state_wrapper(entity_id=entity_id, attribute="vehicle_battery_size_in_kwh")
@@ -2390,6 +2395,7 @@ class Fetch:
             self.set_window_minutes = 0
         self.octopus_intelligent_charging = self.get_arg("octopus_intelligent_charging")
         self.octopus_intelligent_ignore_unplugged = self.get_arg("octopus_intelligent_ignore_unplugged")
+        self.octopus_intelligent_confirm_slots = self.get_arg("octopus_intelligent_confirm_slots")
         self.octopus_intelligent_consider_full = self.get_arg("octopus_intelligent_consider_full")
         self.car_energy_reported_load = self.get_arg("car_energy_reported_load")
         self.get_car_charging_planned()
