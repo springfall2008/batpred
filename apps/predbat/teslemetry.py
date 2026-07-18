@@ -43,7 +43,6 @@ LIVE_POLL_SECONDS = 120
 # calendar_history response is large (there is no smaller "totals only" endpoint - the library's
 # energy_history() just wraps calendar_history), so its payload is truncated in the debug log.
 ENERGY_POLL_SECONDS = 300
-RECONCILE_MAX_ATTEMPTS = 5
 # Approximate usable capacity per Powerwall unit (kWh), used only to ESTIMATE soc_max when the API
 # exposes no capacity field at all (observed on some Powerwall 3 firmware, whose site_info and
 # live_status omit total_pack_energy/nameplate_energy/energy_left). Users can override soc_max in apps.yaml.
@@ -55,7 +54,6 @@ POWERWALL_1_MAX_POWER = 3500  # Per-unit nameplate power at/below this is treate
 
 OPERATION_MODES = ["self_consumption", "autonomous", "backup"]
 EXPORT_RULES = ["never", "pv_only", "battery_ok"]
-TARIFF_MODES = ["normal", "export_now"]
 
 REAL_TIERS = ["SUPER_OFF_PEAK", "OFF_PEAK", "PARTIAL_PEAK"]
 BOOST_TIER = "ON_PEAK"
@@ -105,8 +103,6 @@ class TeslemetryAPI(ComponentBase):
         self.last_live_poll = 0
         self.last_energy_poll = 0
         self.site_info_done = False
-        self.reconcile_done = False
-        self.reconcile_attempts = 0
         self.last_soc = None
         self.soc_max_real = False  # True once soc_max is published from a real device value (not the estimate).
         self._last_sent = {}
@@ -116,7 +112,7 @@ class TeslemetryAPI(ComponentBase):
         self.pending_schedule = copy.deepcopy(DEFAULT_SCHEDULE)
         self.schedule_loaded = False
         self.log("Info: TeslemetryAPI initialising site filter={}".format(self.site_filter or "all account sites"))
-        self.log("Info: Teslemetry control drift-correction is transition-based (self-heals when Predbat's own desired value changes, plus a one-off refresh at boot) - full periodic device-state reconciliation is a pilot follow-up")
+        self.log("Info: Teslemetry control drift-correction is transition-based (self-heals when Predbat's own desired value changes) - full periodic device-state reconciliation is a pilot follow-up")
         self.register_control_entities()
 
     def entity(self, suffix, domain="sensor"):
@@ -365,17 +361,9 @@ class TeslemetryAPI(ComponentBase):
         ComponentBase.start() uses this to set api_started, clear the startup flag
         and drive its retry backoff, so a failing cycle must return False.
 
-        Boot reconciliation is gated on the `reconcile_done` latch (mirroring the `site_info_done`
-        pattern) rather than on `first`: if the very first cycle 401s, the auth-failed fast-path
-        above returns before reconcile ever runs, but `first` is still consumed by that cycle. Gating
-        on a latch instead means reconcile still runs on the first cycle that is NOT auth-failed,
-        however many cycles that takes to arrive - a boot that 401s then recovers still reconciles.
-
-        The retry is bounded: each failed `reconcile_on_start()` attempt increments
-        `reconcile_attempts`, and once it reaches `RECONCILE_MAX_ATTEMPTS` the latch is force-set
-        (with a one-time warning) so the emulator assert below is never permanently gated off by a
-        device whose tariff_rate response never yields a usable code (an unvalidated shape on live
-        hardware would otherwise wedge `reconcile_done` at False forever).
+        Crash recovery is handled by continuing from the persisted schedule (see load_schedule)
+        rather than by reading back the device's actual tariff at boot, so the first healthy cycle
+        can assert device state directly once the schedule has loaded and a live SOC is known.
         """
         if not self.api_key:
             self.log("Warn: Teslemetry key not configured, skipping run")
@@ -397,13 +385,6 @@ class TeslemetryAPI(ComponentBase):
         success = True
         if not self.site_info_done:
             self.site_info_done = await self.fetch_site_info()
-        if not self.reconcile_done:
-            self.reconcile_done = await self.reconcile_on_start()
-            if not self.reconcile_done:
-                self.reconcile_attempts += 1
-                if self.reconcile_attempts >= RECONCILE_MAX_ATTEMPTS:
-                    self.reconcile_done = True
-                    self.log("Warn: Teslemetry boot reconciliation abandoned after {} attempts - proceeding without crash-recovery check".format(self.reconcile_attempts))
         if not self.schedule_loaded:
             await self.load_schedule()
             self.schedule_loaded = True
@@ -420,7 +401,7 @@ class TeslemetryAPI(ComponentBase):
         if self.automatic and not self.automatic_done and self.site_info_done and self.get_state_wrapper(self.entity("soc_max")) is not None:
             await self.automatic_config()
             self.automatic_done = True
-        if self.schedule_loaded and self.reconcile_done and self.last_soc is not None and not self._is_read_only():
+        if self.schedule_loaded and self.last_soc is not None and not self._is_read_only():
             # Scheduler emulator: the Powerwall has no native scheduler, so translate the committed
             # windows into device commands each cycle. Failures are logged and self-retry via the
             # dedupe cache; they do not fail the run() data path.
@@ -439,7 +420,6 @@ class TeslemetryAPI(ComponentBase):
             ("backup_reserve", "number", 0, {"friendly_name": "Powerwall Backup Reserve", "min": 0, "max": 100, "step": 1, "unit_of_measurement": "%"}),
             ("allow_charging_from_grid", "switch", "on", {"friendly_name": "Powerwall Allow Grid Charging"}),
             ("allow_export", "select", "never", {"friendly_name": "Powerwall Allow Export", "options": EXPORT_RULES}),
-            ("tariff_mode", "select", "normal", {"friendly_name": "Powerwall Tariff Mode", "options": TARIFF_MODES}),
         )
         self.control_attrs = {}
         for suffix, domain, initial_state, attributes in controls:
@@ -454,7 +434,7 @@ class TeslemetryAPI(ComponentBase):
 
         A bare set_state_wrapper(entity, value) write defaults attributes to {}, which silently
         replaces the options/min/max/friendly_name published once at startup and never resent, so
-        every select/number/switch write - and the reconcile/site_info writes that mirror device
+        every select/number/switch write - and the site_info writes that mirror device
         state into these same entities - must route through here instead of calling
         set_state_wrapper directly.
         """
@@ -737,9 +717,8 @@ class TeslemetryAPI(ComponentBase):
         an unchanged value are deduped away.
 
         `force=True` bypasses the cache check and always calls `sender`, still refreshing the cache on
-        success. This is used by `reconcile_on_start` so its corrective writes can never be silently
-        skipped by a (present or future) pre-seeded cache entry that happens to already match what the
-        recovery is about to send.
+        success. This lets a corrective write be sent even when a (present or future) pre-seeded
+        cache entry already happens to match what is about to be sent.
 
         Drift-refresh limitation (accepted, not an oversight): unlike "operation_mode" and
         "backup_reserve" (refreshed once per process from the device's actual state - see the NOTE in
@@ -1038,109 +1017,18 @@ class TeslemetryAPI(ComponentBase):
         signature = json.dumps(tariff, sort_keys=True)
         return await self._apply_command("tariff", signature, lambda: self._command("time_of_use_settings", {"tou_settings": {"tariff_content_v2": tariff}}), force=force)
 
-    @staticmethod
-    def _find_tariff_code(node):
-        """Recursively search a parsed JSON structure for the first string "code" key.
-
-        The Teslemetry/Fleet API tariff_rate response shape is not guaranteed to nest the
-        code at one fixed path (top-level, under tariff_content_v2, or elsewhere), so this
-        walks dicts and lists looking for a "code" key rather than assuming a fixed path.
-        """
-        if isinstance(node, dict):
-            code = node.get("code")
-            if isinstance(code, str):
-                return code
-            for value in node.values():
-                found = TeslemetryAPI._find_tariff_code(value)
-                if found is not None:
-                    return found
-        elif isinstance(node, list):
-            for item in node:
-                found = TeslemetryAPI._find_tariff_code(item)
-                if found is not None:
-                    return found
-        return None
-
-    async def get_current_tariff_code(self):
-        """Read the site's current tariff "code" from site_info, or None on failure.
-
-        There is no dedicated tariff-read endpoint on the Fleet/Teslemetry API (a GET /tariff_rate
-        returns 404); the active tariff is carried in the site_info response under tariff_content_v2
-        (or tariff_content). Logs distinct warnings for the read itself failing versus a response that
-        carries no tariff code.
-        """
-        data = await self._request("GET", "/api/1/energy_sites/{}/site_info".format(self.site_id))
-        if not data:
-            self.log("Warn: Teslemetry site_info read failed - cannot determine current tariff")
-            return None
-        response = data.get("response", {}) if isinstance(data, dict) else {}
-        # Prefer tariff_content_v2 (where Predbat writes its PREDBAT-* marker); fall back to the v1
-        # tariff_content (which carries the customer's real tariff code on observed PW3 hardware).
-        tariff_v2 = response.get("tariff_content_v2")
-        code = self._find_tariff_code(tariff_v2) if isinstance(tariff_v2, dict) else None
-        if code is None:
-            tariff_v1 = response.get("tariff_content")
-            code = self._find_tariff_code(tariff_v1) if isinstance(tariff_v1, dict) else None
-        if code is None:
-            self.log("Warn: Teslemetry site_info carried no tariff code (tariff_content_v2/tariff_content absent or code-less)")
-        return code
-
     def _is_read_only(self):
         """Return True if Predbat is configured read-only, so device-write commands must not be sent.
 
         Reads the configuration via get_arg rather than the base's set_read_only attribute: the attribute
         defaults to True in the PredBat constructor and is only refreshed from config during the fetch cycle,
-        which runs AFTER phase-1 components start - so at reconcile_on_start time the attribute would always
+        which runs AFTER phase-1 components start - so at component-start time the attribute would always
         read True even for read-write instances. load_user_config(load_config=True) runs before phase-1
         component start, so get_arg returns the real configured value here.
         """
         if getattr(self, "base", None) is None:
             return False
         return bool(self.get_arg("set_read_only", False))
-
-    async def reconcile_on_start(self):
-        """Restore a safe state if a previous run died mid-export.
-
-        Reads the Powerwall's ACTUAL current tariff from the device rather than the local
-        entity mirror: register_control_entities() unconditionally reseeds the mirror to
-        "normal" on every boot, so trusting it would make this recovery path unreachable.
-        If the device's tariff still carries the PREDBAT-EXPORT-NOW marker written by
-        build_tariff(), a previous run crashed mid-export, so the normal tariff is restored and
-        export is dropped back to pv_only - the resting rule the scheduler uses in every state
-        except an active export window - which stops the battery draining to grid while still
-        letting surplus solar export (unless Predbat is running read-only, in which case the need
-        for recovery is logged but no write is sent). If no tariff code can be determined
-        (read failure or code-less response, each logged distinctly by
-        get_current_tariff_code), this skips rather than guessing at the device state.
-
-        Returns True once this has actually executed against a live API (the tariff read
-        returned a usable code, whether or not a restore was needed), so run() can latch
-        reconcile_done and stop retrying. Returns False when the tariff read itself failed to
-        return anything usable, so run() retries on a later cycle instead of latching a no-op -
-        bounded to RECONCILE_MAX_ATTEMPTS retries by run(), which force-latches reconcile_done
-        after that many consecutive failures so a device that never yields a usable tariff code
-        cannot permanently gate the scheduler emulator off.
-
-        The restore writes below pass force=True to `set_tariff`/`set_export_rule` so this recovery
-        path can NEVER be silently skipped by the write-on-change dedupe cache - at boot the cache is
-        empty so this is naturally a no-op today, but forcing makes that explicit and future-proof
-        against a cache-preseed feature that might otherwise make recovery look like a no-op.
-        """
-        tariff_code = await self.get_current_tariff_code()
-        if tariff_code is None:
-            return False
-        export_now_code = self.build_tariff("export_now").get("code")
-        if tariff_code != export_now_code:
-            return True
-        if self._is_read_only():
-            self.log("Warn: Teslemetry device tariff was left as {} - recovery needed but skipped (read-only mode)".format(tariff_code))
-            return True
-        self.log("Warn: Teslemetry device tariff was left as {} - restoring normal tariff and dropping export back to pv_only".format(tariff_code))
-        if await self.set_tariff("normal", force=True):
-            self.publish_control(self.entity("tariff_mode", domain="select"), "normal")
-        if await self.set_export_rule("pv_only", force=True):
-            self.publish_control(self.entity("allow_export", domain="select"), "pv_only")
-        return True
 
     async def select_event(self, entity_id, value):
         """Handle select changes routed from the service-hook loopback."""
@@ -1152,8 +1040,6 @@ class TeslemetryAPI(ComponentBase):
             success = await self.set_operation_mode(value)
         elif entity_id.endswith("_allow_export") and value in EXPORT_RULES:
             success = await self.set_export_rule(value)
-        elif entity_id.endswith("_tariff_mode") and value in TARIFF_MODES:
-            success = await self.set_tariff(value)
         else:
             self.log("Warn: Teslemetry unhandled select_event {} = {}".format(entity_id, value))
             return

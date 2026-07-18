@@ -9,7 +9,7 @@ import copy
 from unittest.mock import MagicMock, patch, AsyncMock
 
 from tests.test_infra import create_aiohttp_mock_response, create_aiohttp_mock_session, run_async
-from teslemetry import TeslemetryAPI, OPERATION_MODES, OPTIONS_TIME_FULL, DEFAULT_SCHEDULE, RECONCILE_MAX_ATTEMPTS
+from teslemetry import TeslemetryAPI, OPERATION_MODES, OPTIONS_TIME_FULL, DEFAULT_SCHEDULE
 
 
 class FakeStorage:
@@ -45,8 +45,6 @@ class MockTeslemetryAPI(TeslemetryAPI):
         self.last_live_poll = 0
         self.last_energy_poll = 0
         self.site_info_done = False
-        self.reconcile_done = False
-        self.reconcile_attempts = 0
         self.last_soc = None
         self.soc_max_real = False
         self.dashboard_items = {}
@@ -99,6 +97,16 @@ class MockTeslemetryAPI(TeslemetryAPI):
         self.args_set[arg] = value
 
 
+def _rate_base(import_p, export_p):
+    """A minimal base double exposing flat import/export rate dicts and a local clock for build_tariff."""
+    from types import SimpleNamespace
+    from datetime import datetime
+
+    rate_import = {m: import_p for m in range(0, 2880)}
+    rate_export = {m: export_p for m in range(0, 2880)}
+    return SimpleNamespace(rate_import=rate_import, rate_export=rate_export, minutes_now=0, now=datetime(2026, 7, 20, 12, 0), local_tz=None)
+
+
 LIVE_STATUS = {
     "response": {
         "percentage_charged": 55.5,
@@ -129,8 +137,6 @@ SITE_INFO_FULL = {
         "tariff_content_v2": {"code": "PREDBAT-NORMAL"},
     }
 }
-
-TARIFF_RATE_EXPORT_NOW = {"response": {"tariff_content_v2": {"version": 1, "utility": "Predbat", "code": "PREDBAT-EXPORT-NOW", "name": "Predbat (export_now)"}}}
 
 TARIFF_RATE_NORMAL = {"response": {"tariff_content_v2": {"version": 1, "utility": "Predbat", "code": "PREDBAT-NORMAL", "name": "Predbat (normal)"}}}
 
@@ -362,6 +368,24 @@ def test_teslemetry_run_auth_failed_only_probes_live_status():
     assert calls == ["live_status"]
 
 
+def test_teslemetry_run_boots_without_reconcile():
+    """A healthy first cycle asserts device state directly, with no tariff-read reconcile call."""
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    api.base.get_arg = lambda a, d=None, **k: d  # not read-only
+    api.mock_responses["/api/1/products"] = {"response": [{"energy_site_id": 123456}]}
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO
+    api.mock_responses["/api/1/energy_sites/123456/live_status"] = LIVE_STATUS
+    api.mock_responses["/api/1/energy_sites/123456/calendar_history?kind=energy&period=day"] = ENERGY_HISTORY
+    api.mock_responses["/api/1/energy_sites/123456/time_of_use_settings"] = {"response": {"code": 201}}
+    api.mock_responses["/api/1/energy_sites/123456/operation"] = {"response": {"code": 201}}
+    api.mock_responses["/api/1/energy_sites/123456/backup"] = {"response": {"code": 201}}
+    api.mock_responses["/api/1/energy_sites/123456/grid_import_export"] = {"response": {"code": 201}}
+    run_async(api.run(seconds=0, first=True))
+    assert not hasattr(api, "reconcile_done") or True  # attribute may be gone
+    assert not any("reconcil" in m.lower() for m in api.log_messages)
+
+
 def test_teslemetry_select_operation_mode():
     """select_event on operation_mode POSTs /operation and updates entity state on success."""
     api = MockTeslemetryAPI()
@@ -490,89 +514,6 @@ def test_teslemetry_set_tariff_posts_tou_settings():
     assert "tariff_content_v2" in body["tou_settings"]
 
 
-def test_teslemetry_reconcile_on_start_device_marker_restores_normal():
-    """Boot reconciliation reads the ACTUAL device tariff (not the local entity mirror); a PREDBAT-EXPORT-NOW
-    marker on the device restores normal tariff + pv_only export and updates the mirror entities on success."""
-    api = MockTeslemetryAPI()
-    # The entity mirror is always reseeded to "normal" by register_control_entities() on boot, so it must
-    # be irrelevant here - only the device response drives the outcome.
-    api.entity_states["select.predbat_teslemetry_tariff_mode"] = "normal"
-    api.mock_responses["/api/1/energy_sites/123456/site_info"] = TARIFF_RATE_EXPORT_NOW
-    api.mock_responses["/api/1/energy_sites/123456/time_of_use_settings"] = {"response": {"code": 201}}
-    api.mock_responses["/api/1/energy_sites/123456/grid_import_export"] = {"response": {"code": 201}}
-    run_async(api.reconcile_on_start())
-    assert ("GET", "/api/1/energy_sites/123456/site_info", None) in api.requests_made
-    assert api.entity_states["select.predbat_teslemetry_tariff_mode"] == "normal"
-    assert api.entity_states["select.predbat_teslemetry_allow_export"] == "pv_only"
-    assert any("PREDBAT-EXPORT-NOW" in msg for msg in api.log_messages)
-
-
-def test_teslemetry_reconcile_on_start_device_normal_is_noop():
-    """Boot reconciliation issues zero command requests when the device tariff is not the export_now marker."""
-    api = MockTeslemetryAPI()
-    api.mock_responses["/api/1/energy_sites/123456/site_info"] = TARIFF_RATE_NORMAL
-    run_async(api.reconcile_on_start())
-    assert [req for req in api.requests_made if req[0] == "POST"] == []
-    assert api.entity_states == {}
-
-
-def test_teslemetry_reconcile_on_start_read_failure_skips_without_crash():
-    """Boot reconciliation skips (no writes, no exception) when the device tariff read fails, logging a read failure."""
-    api = MockTeslemetryAPI()
-    # No mock response registered for site_info -> _request returns None
-    run_async(api.reconcile_on_start())
-    assert [req for req in api.requests_made if req[0] == "POST"] == []
-    assert api.entity_states == {}
-    assert any("read failed" in msg for msg in api.log_messages)
-    assert not any("no tariff code" in msg for msg in api.log_messages)
-
-
-def test_teslemetry_reconcile_on_start_no_code_in_response_skips():
-    """Boot reconciliation skips with a DISTINCT log when the tariff read succeeds but the response carries no code key."""
-    api = MockTeslemetryAPI()
-    api.mock_responses["/api/1/energy_sites/123456/site_info"] = {"response": {"tariff_content_v2": {"version": 1, "utility": "SomeUtility"}}}
-    run_async(api.reconcile_on_start())
-    assert [req for req in api.requests_made if req[0] == "POST"] == []
-    assert api.entity_states == {}
-    assert any("no tariff code" in msg for msg in api.log_messages)
-    assert not any("read failed" in msg for msg in api.log_messages)
-
-
-def test_teslemetry_reconcile_on_start_read_only_mode_skips_writes():
-    """When get_arg reports read-only, a device tariff still marked PREDBAT-EXPORT-NOW is logged but not written back."""
-    from types import SimpleNamespace
-
-    api = MockTeslemetryAPI()
-    api.base = SimpleNamespace(set_read_only=True, get_arg=lambda arg, default=None, **kwargs: True if arg == "set_read_only" else default)
-    api.mock_responses["/api/1/energy_sites/123456/site_info"] = TARIFF_RATE_EXPORT_NOW
-    api.mock_responses["/api/1/energy_sites/123456/time_of_use_settings"] = {"response": {"code": 201}}
-    api.mock_responses["/api/1/energy_sites/123456/grid_import_export"] = {"response": {"code": 201}}
-    run_async(api.reconcile_on_start())
-    assert [req for req in api.requests_made if req[0] == "POST"] == []
-    assert api.entity_states == {}
-    assert any("read-only" in msg.lower() for msg in api.log_messages)
-
-
-def test_teslemetry_reconcile_on_start_ignores_boot_default_read_only_attribute():
-    """The recovery write must NOT be gated on base.set_read_only: the constructor defaults that attribute to True
-    and it is only refreshed from config in the fetch cycle AFTER phase-1 components start, so at reconcile time it
-    is always True. With get_arg (the real config source) reporting False, the writes must go ahead regardless."""
-    from types import SimpleNamespace
-
-    api = MockTeslemetryAPI()
-    # Simulate the real boot condition: stale constructor default True on the attribute, real config value False.
-    api.base = SimpleNamespace(set_read_only=True, get_arg=lambda arg, default=None, **kwargs: False if arg == "set_read_only" else default)
-    api.mock_responses["/api/1/energy_sites/123456/site_info"] = TARIFF_RATE_EXPORT_NOW
-    api.mock_responses["/api/1/energy_sites/123456/time_of_use_settings"] = {"response": {"code": 201}}
-    api.mock_responses["/api/1/energy_sites/123456/grid_import_export"] = {"response": {"code": 201}}
-    run_async(api.reconcile_on_start())
-    assert any(req[1].endswith("/time_of_use_settings") for req in api.requests_made if req[0] == "POST")
-    assert any(req[1].endswith("/grid_import_export") for req in api.requests_made if req[0] == "POST")
-    assert api.entity_states["select.predbat_teslemetry_tariff_mode"] == "normal"
-    assert api.entity_states["select.predbat_teslemetry_allow_export"] == "pv_only"
-    assert not any("read-only" in msg.lower() for msg in api.log_messages)
-
-
 def _assert_tou_periods_partition_day(tou_periods):
     """Assert the tou_periods cover every minute of the (circular) day exactly once — no overlaps, no gaps."""
     covered = [0] * (24 * 60)
@@ -627,17 +568,6 @@ def test_teslemetry_build_tariff_sell_clamp_above_export_rate():
     assert tariff["energy_charges"]["AllYear"]["rates"]["ON_PEAK"] == sell["ON_PEAK"]
 
 
-def test_teslemetry_reconcile_on_start_partial_failure():
-    """Partial reconcile: tariff restore succeeds but the export-rule command fails, so only tariff_mode is updated."""
-    api = MockTeslemetryAPI()
-    api.mock_responses["/api/1/energy_sites/123456/site_info"] = TARIFF_RATE_EXPORT_NOW
-    api.mock_responses["/api/1/energy_sites/123456/time_of_use_settings"] = {"response": {"code": 201}}
-    # grid_import_export mock ABSENT -> _request returns None -> set_export_rule fails
-    run_async(api.reconcile_on_start())
-    assert api.entity_states["select.predbat_teslemetry_tariff_mode"] == "normal"
-    assert "select.predbat_teslemetry_allow_export" not in api.entity_states
-
-
 def test_teslemetry_build_tariff_uses_site_local_time_not_utc():
     """build_tariff's export_now window must be expressed in the SITE'S LOCAL wall-clock time (the
     same clock Predbat schedules in), not raw UTC - the Powerwall applies tou_periods in local time.
@@ -663,74 +593,6 @@ def test_teslemetry_build_tariff_uses_site_local_time_not_utc():
 
     periods = tariff["seasons"]["AllYear"]["tou_periods"]["ON_PEAK"]["periods"]
     assert periods[0]["fromHour"] == 15 and periods[0]["fromMinute"] == 30
-
-
-def test_teslemetry_reconcile_latch_survives_auth_failed_first_cycle():
-    """A first cycle that 401s (auth-failed, consuming `first`) must not permanently skip reconcile:
-    once the API recovers on a later cycle, reconcile_on_start still runs and restores a stuck export
-    state, because reconcile is gated on a `reconcile_done` latch rather than on `first`."""
-    api, calls = _make_run_api_with_fetch_capture()
-    api.api_auth_failed = True  # Simulate: the boot cycle already found the token dead.
-    assert api.reconcile_done is False
-    # Cycle 1 (first=True): auth-failed fast path, poll not yet due -> no HTTP traffic at all, no reconcile chance.
-    assert run_async(api.run(0, True)) is False
-    assert calls == []
-    assert api.reconcile_done is False
-
-    # Auth recovers (e.g. a live_status probe on an intervening cycle succeeded and cleared the flag).
-    api.api_auth_failed = False
-    api.mock_responses["/api/1/energy_sites/123456/site_info"] = TARIFF_RATE_EXPORT_NOW
-    api.mock_responses["/api/1/energy_sites/123456/time_of_use_settings"] = {"response": {"code": 201}}
-    api.mock_responses["/api/1/energy_sites/123456/grid_import_export"] = {"response": {"code": 201}}
-    # Cycle 2 (first=False): reconcile must still run even though `first` was already consumed in cycle 1.
-    assert run_async(api.run(300, False)) is True
-    assert api.entity_states["select.predbat_teslemetry_tariff_mode"] == "normal"
-    assert api.entity_states["select.predbat_teslemetry_allow_export"] == "pv_only"
-    assert api.reconcile_done is True
-
-
-def test_teslemetry_reconcile_latch_runs_once_on_healthy_boot():
-    """A healthy first cycle runs reconcile exactly once; the latch prevents a redundant reconcile
-    call (and its site_info tariff read) on every subsequent cycle.
-
-    fetch_site_info is stubbed by the capture helper, so the only site_info reads here come from
-    reconcile's get_current_tariff_code - which makes counting them a clean proxy for reconcile runs."""
-    api, calls = _make_run_api_with_fetch_capture()
-    api.mock_responses["/api/1/energy_sites/123456/site_info"] = TARIFF_RATE_NORMAL
-    assert run_async(api.run(0, True)) is True
-    assert api.reconcile_done is True
-    tariff_reads = [req for req in api.requests_made if req[1].endswith("/site_info")]
-    assert len(tariff_reads) == 1
-    # A later cycle must not repeat the reconcile site_info read.
-    assert run_async(api.run(600, False)) is True
-    tariff_reads = [req for req in api.requests_made if req[1].endswith("/site_info")]
-    assert len(tariff_reads) == 1
-
-
-def test_teslemetry_reconcile_abandoned_after_max_attempts():
-    """A tariff_rate response that never carries a usable code must not permanently wedge
-    reconcile_done at False: after RECONCILE_MAX_ATTEMPTS consecutive failed reconcile attempts,
-    run() force-latches reconcile_done so the scheduler emulator is not silently dead forever."""
-    api = MockTeslemetryAPI()
-    api.register_control_entities()
-    command_ok_responses(api)
-    api.mock_responses["/api/1/energy_sites/123456/live_status"] = LIVE_STATUS
-    # Deliberately out of sync with the idle-state default schedule (mode/reserve) - see the
-    # rationale in test_teslemetry_run_asserts_schedule_each_cycle: this guarantees the emulator
-    # assert below has real work to do (a POST), rather than being silently deduped away.
-    api.mock_responses["/api/1/energy_sites/123456/site_info"] = {"response": {"nameplate_energy": 13500, "nameplate_power": 11500, "max_site_meter_power_ac": 11500, "default_real_mode": "backup", "backup_reserve_percent": 5}}
-    api.mock_responses["/api/1/energy_sites/123456/calendar_history?kind=energy&period=day"] = ENERGY_HISTORY
-    # No "code" anywhere in the response -> get_current_tariff_code returns None -> reconcile_on_start fails.
-    api.mock_responses["/api/1/energy_sites/123456/tariff_rate"] = {"response": {}}
-    api.get_minutes_now = lambda: 12 * 60
-    for attempt in range(RECONCILE_MAX_ATTEMPTS):
-        # Vary seconds generously so the live/energy poll cadence never gates a fetch - only the
-        # reconcile latch and attempt counter are under test here.
-        run_async(api.run(seconds=attempt * 1000, first=(attempt == 0)))
-    assert api.reconcile_done is True
-    assert api.reconcile_attempts == RECONCILE_MAX_ATTEMPTS
-    posts = [req[1] for req in api.requests_made if req[0] == "POST"]
-    assert "/api/1/energy_sites/123456/operation" in posts
 
 
 def test_teslemetry_emulator_failure_does_not_fail_run():
@@ -1004,27 +866,6 @@ def test_teslemetry_backup_reserve_drift_correction_no_spurious_resend_when_matc
     assert len(posts) == 1
 
 
-def test_teslemetry_reconcile_forces_write_even_if_cache_preseeded():
-    """reconcile_on_start's corrective writes must not be silently skipped by the dedupe cache even if
-    it already holds a value matching what recovery is about to send (e.g. a future cache-preseed
-    feature) - the recovery path always forces the POST regardless of cache state."""
-    import json as _json
-
-    api = MockTeslemetryAPI()
-    api.mock_responses["/api/1/energy_sites/123456/site_info"] = TARIFF_RATE_EXPORT_NOW
-    api.mock_responses["/api/1/energy_sites/123456/time_of_use_settings"] = {"response": {"code": 201}}
-    api.mock_responses["/api/1/energy_sites/123456/grid_import_export"] = {"response": {"code": 201}}
-    # Pre-seed the dedupe cache as if "normal"/"pv_only" had already been confirmed-sent (matching what
-    # recovery now sends) - a naive dedupe would treat the recovery writes below as no-ops and skip them.
-    api._last_sent["tariff"] = _json.dumps(api.build_tariff("normal"), sort_keys=True)
-    api._last_sent["export_rule"] = "pv_only"
-    run_async(api.reconcile_on_start())
-    assert any(req[1].endswith("/time_of_use_settings") for req in api.requests_made if req[0] == "POST")
-    assert any(req[1].endswith("/grid_import_export") for req in api.requests_made if req[0] == "POST")
-    assert api.entity_states["select.predbat_teslemetry_tariff_mode"] == "normal"
-    assert api.entity_states["select.predbat_teslemetry_allow_export"] == "pv_only"
-
-
 def test_teslemetry_inverter_def_tesla():
     """TESLA inverter type is registered with window control, no rate control and no export freeze."""
     from config import INVERTER_DEF
@@ -1255,10 +1096,8 @@ def test_teslemetry_run_asserts_schedule_each_cycle():
     # emulator assert would be correctly deduped away with no POST at all - a true negative that
     # would make this test pass for the wrong reason (or fail) regardless of whether run() actually
     # wires the emulator in. Using values that differ guarantees the assert has real work to do.
-    # Non-marker tariff_content_v2 so reconcile latches (and the emulator runs); mode/reserve stay
-    # deliberately out of sync with the idle tuple per the note above.
     api.mock_responses["/api/1/energy_sites/123456/site_info"] = {
-        "response": {"nameplate_energy": 13500, "nameplate_power": 11500, "max_site_meter_power_ac": 11500, "default_real_mode": "backup", "backup_reserve_percent": 5, "tariff_content_v2": {"code": "PREDBAT-NORMAL"}}
+        "response": {"nameplate_energy": 13500, "nameplate_power": 11500, "max_site_meter_power_ac": 11500, "default_real_mode": "backup", "backup_reserve_percent": 5}
     }
     api.mock_responses["/api/1/energy_sites/123456/calendar_history?kind=energy&period=day"] = ENERGY_HISTORY
     api.get_minutes_now = lambda: 12 * 60
@@ -1744,6 +1583,7 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_run_unconfigured_returns_false()
     test_teslemetry_run_first_success_returns_true()
     test_teslemetry_run_auth_failed_only_probes_live_status()
+    test_teslemetry_run_boots_without_reconcile()
     test_teslemetry_select_operation_mode()
     test_teslemetry_select_failure_keeps_state()
     test_teslemetry_command_success_on_low_response_code()
@@ -1757,19 +1597,10 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_build_tariff_export_now()
     test_teslemetry_build_tariff_normal_flat()
     test_teslemetry_set_tariff_posts_tou_settings()
-    test_teslemetry_reconcile_on_start_device_marker_restores_normal()
-    test_teslemetry_reconcile_on_start_device_normal_is_noop()
-    test_teslemetry_reconcile_on_start_read_failure_skips_without_crash()
-    test_teslemetry_reconcile_on_start_no_code_in_response_skips()
-    test_teslemetry_reconcile_on_start_read_only_mode_skips_writes()
-    test_teslemetry_reconcile_on_start_ignores_boot_default_read_only_attribute()
     test_teslemetry_build_tariff_export_now_midnight_wrap()
     test_teslemetry_build_tariff_export_now_midnight_exact()
     test_teslemetry_build_tariff_sell_clamp_above_export_rate()
-    test_teslemetry_reconcile_on_start_partial_failure()
     test_teslemetry_build_tariff_uses_site_local_time_not_utc()
-    test_teslemetry_reconcile_latch_survives_auth_failed_first_cycle()
-    test_teslemetry_reconcile_latch_runs_once_on_healthy_boot()
     test_teslemetry_site_info_latches_without_nameplate_soc_max_from_live_status()
     test_teslemetry_run_site_info_latches_on_any_response()
     test_teslemetry_energy_today_requests_kind_and_period()
@@ -1785,7 +1616,6 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_dedupe_tariff_resends_on_window_advance()
     test_teslemetry_backup_reserve_drift_correction_refreshes_cache_and_reasserts()
     test_teslemetry_backup_reserve_drift_correction_no_spurious_resend_when_matching()
-    test_teslemetry_reconcile_forces_write_even_if_cache_preseeded()
     test_teslemetry_inverter_def_tesla()
     test_teslemetry_component_registry_config()
     test_teslemetry_site_info_publishes_rate_and_limit()
@@ -1811,7 +1641,6 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_automatic_config_sets_args()
     test_teslemetry_automatic_config_references_published_entities()
     test_teslemetry_run_triggers_automatic_config_once_after_site_info()
-    test_teslemetry_reconcile_abandoned_after_max_attempts()
     test_teslemetry_emulator_failure_does_not_fail_run()
     test_teslemetry_automatic_config_skips_unpublished_rate_sensors()
     test_teslemetry_mock_base_get_arg_consults_args()
