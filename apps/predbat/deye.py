@@ -396,3 +396,54 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             }
         self.local_schedule[sn] = schedule
         return schedule
+
+    def _sn_from_entity(self, entity_id):
+        """Extract the inverter serial embedded in a DEYE entity id, or None if it can't be resolved."""
+        marker = "_deye_"
+        if marker not in entity_id:
+            return None
+        tail = entity_id.split(marker, 1)[1]
+        for sn in self.device_list:
+            if tail.startswith(sn.lower()):
+                return sn
+        return None
+
+    async def apply_reserve_live(self, sn, reserve):
+        """Write the reserve immediately via a forced control apply (freeze-charge relies on this taking effect at once)."""
+        schedule = self.local_schedule.get(sn, {})
+        schedule["reserve"] = int(reserve)
+        self.local_schedule[sn] = schedule
+        current_soc = self.device_values.get(sn, {}).get("soc", reserve)
+        return await self.apply_dynamic_control(sn, schedule, current_soc, force=True)
+
+    async def apply_schedule(self, sn, force=True):
+        """Recompute the schedule from HA control entities and push it for one inverter."""
+        schedule = await self.get_schedule_settings_ha(sn)
+        current_soc = self.device_values.get(sn, {}).get("soc", schedule.get("reserve", 0))
+        return await self.apply_dynamic_control(sn, schedule, current_soc, force=force)
+
+    async def select_event(self, entity_id, value):
+        """Handle a select (time) change from Home Assistant: refresh local schedule state."""
+        sn = self._sn_from_entity(entity_id)
+        if sn:
+            await self.get_schedule_settings_ha(sn)
+
+    async def number_event(self, entity_id, value):
+        """Handle a number change from Home Assistant: the reserve is written live, others just refresh local state."""
+        sn = self._sn_from_entity(entity_id)
+        if not sn:
+            return
+        if entity_id.endswith("battery_schedule_reserve"):
+            await self.apply_reserve_live(sn, int(float(value)))
+        else:
+            await self.get_schedule_settings_ha(sn)
+
+    async def switch_event(self, entity_id, service):
+        """Handle a switch change from Home Assistant: the write button applies the schedule, others just refresh local state."""
+        sn = self._sn_from_entity(entity_id)
+        if not sn:
+            return
+        if entity_id.endswith("_write") and service in ("turn_on", "on"):
+            await self.apply_schedule(sn, force=True)
+        else:
+            await self.get_schedule_settings_ha(sn)

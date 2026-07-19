@@ -8,6 +8,8 @@
 
 """Tests for DEYE publish sensors and schedule control entities (``deye.py``)."""
 
+from unittest.mock import patch
+
 from tests.test_deye_api import MockDeye
 
 
@@ -94,3 +96,49 @@ def test_get_schedule_settings_ha_survives_unavailable():
         print(f"ERROR: charge soc did not fall back to int 0: {charge_soc!r}")
         failed = True
     assert not failed, "test_get_schedule_settings_ha_survives_unavailable"
+
+
+def test_reserve_event_writes_immediately():
+    """A reserve number_event pushes to DEYE at once (freeze-charge relies on it)."""
+    failed = False
+    d = RecordingDeye()
+    d.device_list = ["INV1"]
+    d.device_values = {"INV1": {"soc": 50.0}}
+    calls = []
+
+    async def fake_apply_reserve(sn, reserve):
+        """Record the (sn, reserve) pair the live-reserve path was called with."""
+        calls.append((sn, reserve))
+        return True
+
+    import tests.test_infra as ti
+
+    with patch.object(d, "apply_reserve_live", side_effect=fake_apply_reserve):
+        ti.run_async(d.number_event("number.predbat_deye_inv1_battery_schedule_reserve", 25))
+    if calls != [("INV1", 25)]:
+        print(f"ERROR: reserve not written immediately: {calls}")
+        failed = True
+    assert not failed, "test_reserve_event_writes_immediately"
+
+
+def test_write_button_applies_schedule():
+    """The write switch triggers a forced schedule apply."""
+    failed = False
+    d = RecordingDeye()
+    d.device_list = ["INV1"]
+    d.device_values = {"INV1": {"soc": 50.0}}
+    applied = []
+
+    async def fake_apply(sn, force=True):
+        """Record the (sn, force) pair the schedule-apply path was called with."""
+        applied.append((sn, force))
+        return True
+
+    import tests.test_infra as ti
+
+    with patch.object(d, "apply_schedule", side_effect=fake_apply):
+        ti.run_async(d.switch_event("switch.predbat_deye_inv1_battery_schedule_charge_write", "turn_on"))
+    if applied != [("INV1", True)]:
+        print(f"ERROR: write button did not apply: {applied}")
+        failed = True
+    assert not failed, "test_write_button_applies_schedule"
