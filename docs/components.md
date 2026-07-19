@@ -556,7 +556,7 @@ Integrates a Tesla Powerwall via the [Teslemetry](https://teslemetry.com) REST A
 | Option | Type | Required | Default | Config Key | Description |
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `key` | String | Yes | - | `teslemetry_key` | Your Teslemetry (or Fleet API) bearer token |
-| `site_id` | String | Yes | - | `teslemetry_site_id` | Tesla energy site id to poll and control |
+| `site_id` | String or String List | No | First account site | `teslemetry_site_id` | Optional Tesla energy site id (or list of ids) to filter the sites discovered from the account; leave unset to use the first site on the account automatically |
 | `base_url` | String | No | `https://api.teslemetry.com` | `teslemetry_base_url` | REST base URL; set to the Fleet API endpoint for a direct connection |
 | `automatic` | Boolean | No | false | `teslemetry_automatic` | Set to `true` to automatically configure Predbat to use the Powerwall (no manual apps.yaml inverter settings required) |
 

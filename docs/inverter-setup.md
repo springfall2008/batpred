@@ -2504,11 +2504,11 @@ template:
 !!! warning "Beta"
     Predbat's built-in Teslemetry component is in **beta** and under active development. It is not yet recommended for general use - expect issues and please report them on GitHub. For a proven setup today, use the [manual configuration](#manual-configuration-via-home-assistant-integrations) below.
 
-The component needs only three keys in `apps.yaml` and no Home Assistant Tesla integration:
+The component needs only your token in `apps.yaml` and no Home Assistant Tesla integration (`site_id` is optional - omit it to use the first site on your account):
 
 ```yaml
   teslemetry_key: 'your-teslemetry-token'
-  teslemetry_site_id: 'your-energy-site-id'
+  teslemetry_site_id: 'your-energy-site-id'  # optional: omit to use the first site on your account
   teslemetry_automatic: True
 ```
 

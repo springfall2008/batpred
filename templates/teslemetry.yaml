@@ -33,7 +33,7 @@ pred_bat:
   # the inverter automatically - no further inverter settings needed. For a direct
   # Tesla Fleet API connection set teslemetry_base_url accordingly.
   teslemetry_key: 'xxxx'
-  teslemetry_site_id: '123456'
+  teslemetry_site_id: '123456'  # optional: omit to use the first site on your account
   teslemetry_automatic: True
   #teslemetry_base_url: 'https://api.teslemetry.com'
 
