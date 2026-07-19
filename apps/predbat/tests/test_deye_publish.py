@@ -161,6 +161,31 @@ def test_sn_from_entity_disambiguates_prefix_colliding_serials():
     assert not failed, "test_sn_from_entity_disambiguates_prefix_colliding_serials"
 
 
+def test_automatic_config_maps_all_inverters():
+    """automatic_config registers each inverter and maps the core control args."""
+    failed = False
+    d = RecordingDeye()
+    d.device_list = ["INVA", "INVB"]
+    d.set_args = {}
+    d.set_arg = lambda k, v: d.set_args.__setitem__(k, v)
+    import tests.test_infra as ti
+    ti.run_async(d.automatic_config())
+    if d.set_args.get("num_inverters") != 2:
+        print(f"ERROR: num_inverters {d.set_args.get('num_inverters')}")
+        failed = True
+    if d.set_args.get("inverter_type") != ["DeyeCloud", "DeyeCloud"]:
+        print(f"ERROR: inverter_type {d.set_args.get('inverter_type')}")
+        failed = True
+    cs = d.set_args.get("charge_start_time")
+    if not cs or cs[0] != "select.predbat_deye_inva_battery_schedule_charge_start_time":
+        print(f"ERROR: charge_start_time map {cs}")
+        failed = True
+    if "inverter_mode" in d.set_args:
+        print("ERROR: DEYE must not set inverter_mode (mode-less)")
+        failed = True
+    assert not failed, "test_automatic_config_maps_all_inverters"
+
+
 def test_apply_reserve_live_forces_write_despite_noop():
     """apply_reserve_live posts a dynamic_control even when the payload is unchanged (force=True bypass)."""
     failed = False
