@@ -482,3 +482,39 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         self.set_arg("discharge_rate", [self._control_name("number", sn, "battery_schedule_export_power") for sn in devices])
         self.set_arg("scheduled_discharge_enable", [self._control_name("switch", sn, "battery_schedule_export_enable") for sn in devices])
         self.set_arg("schedule_write_button", [self._control_name("switch", sn, "battery_schedule_charge_write") for sn in devices])
+
+    async def run(self, seconds, first):
+        """Main component loop: auth, discover, poll, publish, configure."""
+        if self.auth_method == "app_credentials" and not getattr(self, "access_token", None):
+            if not await self.fetch_token():
+                self.log("Warn: DEYE token unavailable, skipping run")
+                return False
+        if not await self.check_and_refresh_oauth_token():
+            self.log("Warn: DEYE OAuth token invalid, skipping run")
+            return False
+
+        if first or not self.device_list:
+            await self.get_device_list()
+        if not self.device_list:
+            self.log("Error: DEYE no inverters found")
+            return False
+
+        for sn in self.device_list:
+            try:
+                await self.fetch_battery_config(sn)
+                await self.fetch_device_data(sn)
+                await self.get_schedule_settings_ha(sn)
+            except Exception as e:
+                self.log(f"Warn: DEYE poll failed for {sn}: {e}")
+
+        await self.publish_data()
+        for sn in self.device_list:
+            await self.publish_schedule_settings_ha(sn)
+
+        if first and self.automatic:
+            await self.automatic_config()
+        return True
+
+    async def final(self):
+        """Cleanup on shutdown."""
+        self.log("Info: DeyeAPI shutdown")
