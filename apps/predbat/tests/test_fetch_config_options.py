@@ -368,31 +368,40 @@ def test_fetch_config_options(my_predbat):
     mock_config.config["octopus_intelligent_confirm_slots"] = True
     mock_config.config["octopus_intelligent_charging"] = True
 
+    my_predbat.had_errors = False
     my_predbat.fetch_config_options()
 
-    warnings = [msg for msg in log_messages if "car_charging_now is not set" in msg]
-    assert len(warnings) == 1, "Should warn exactly once when confirm_slots is on, IOG is on, and car_charging_now is absent, got {}".format(len(warnings))
+    # The detailed explanation is always logged...
+    detailed_warnings = [msg for msg in log_messages if "cannot be confirmed in real time and will not be treated as low rate" in msg]
+    assert len(detailed_warnings) == 1, "Should log the detailed warning exactly once, got {}".format(len(detailed_warnings))
+    # ...and also surfaced on the status sensor, not just buried in the log
+    assert my_predbat.had_errors is True, "Missing car_charging_now with confirm_slots on should flag had_errors via record_status"
 
     # Configuring car_charging_now should silence the warning
     log_messages.clear()
     my_predbat.args["car_charging_now"] = "sensor.car_charging_now"
+    my_predbat.had_errors = False
 
     my_predbat.fetch_config_options()
 
-    warnings = [msg for msg in log_messages if "car_charging_now is not set" in msg]
-    assert len(warnings) == 0, "Should not warn once car_charging_now is configured, got {}".format(warnings)
+    detailed_warnings = [msg for msg in log_messages if "cannot be confirmed in real time and will not be treated as low rate" in msg]
+    assert len(detailed_warnings) == 0, "Should not warn once car_charging_now is configured, got {}".format(detailed_warnings)
+    assert my_predbat.had_errors is False, "Should not flag had_errors once car_charging_now is configured"
 
     # Switch off should also silence the warning even without car_charging_now configured
     del my_predbat.args["car_charging_now"]
     mock_config.config["octopus_intelligent_confirm_slots"] = False
     log_messages.clear()
+    my_predbat.had_errors = False
 
     my_predbat.fetch_config_options()
 
-    warnings = [msg for msg in log_messages if "car_charging_now is not set" in msg]
-    assert len(warnings) == 0, "Should not warn when octopus_intelligent_confirm_slots is off, got {}".format(warnings)
+    detailed_warnings = [msg for msg in log_messages if "cannot be confirmed in real time and will not be treated as low rate" in msg]
+    assert len(detailed_warnings) == 0, "Should not warn when octopus_intelligent_confirm_slots is off, got {}".format(detailed_warnings)
+    assert my_predbat.had_errors is False, "Should not flag had_errors when octopus_intelligent_confirm_slots is off"
 
     my_predbat.log = original_log
+    my_predbat.had_errors = False
     mock_config.config["octopus_intelligent_confirm_slots"] = False
 
     print("✓ octopus_intelligent_confirm_slots warning test passed")
