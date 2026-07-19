@@ -27,6 +27,7 @@ from temperature import TemperatureAPI
 from axle import AxleAPI
 from solax import SolaxAPI
 from sigenergy import SigenergyAPI
+from teslemetry import TeslemetryAPI
 from solis import SolisAPI
 from alertfeed import AlertFeed
 from web import WebInterface
@@ -393,6 +394,22 @@ COMPONENT_LIST = {
             "client_key": {"required": False, "config": "sigenergy_client_key"},
             "automatic": {"required": False, "config": "sigenergy_automatic", "default": False},
             "enable_controls": {"required": False, "config": "sigenergy_enable_controls", "default": True},
+        },
+        "phase": 1,
+        "can_restart": True,
+    },
+    "teslemetry": {
+        "class": TeslemetryAPI,
+        "name": "Tesla Powerwall (Teslemetry)",
+        "event_filter": "predbat_teslemetry_",
+        "args": {
+            "key": {"required": True, "config": "teslemetry_key"},
+            "site_id": {"required": False, "config": "teslemetry_site_id"},
+            "base_url": {"required": False, "config": "teslemetry_base_url", "default": "https://api.teslemetry.com"},
+            "automatic": {"required": False, "default": False, "config": "teslemetry_automatic"},
+            "auth_method": {"required": False, "config": "teslemetry_auth_method", "default": "api_key"},
+            "token_expires_at": {"required": False, "config": "teslemetry_token_expires_at"},
+            "token_hash": {"required": False, "config": "teslemetry_token_hash"},
         },
         "phase": 1,
         "can_restart": True,
