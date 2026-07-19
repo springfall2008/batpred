@@ -2404,6 +2404,10 @@ class Fetch:
                 "charger-level sensor, not just the car) to restore that protection, or turn this switch Off to accept the "
                 "risk of a rescinded slot instead."
             )
+            self.record_status(
+                "Warn: octopus_intelligent_confirm_slots is On but car_charging_now is not set - daytime IOG slots cannot be confirmed",
+                had_errors=True,
+            )
         self.octopus_intelligent_consider_full = self.get_arg("octopus_intelligent_consider_full")
         self.car_energy_reported_load = self.get_arg("car_energy_reported_load")
         self.get_car_charging_planned()
