@@ -284,3 +284,50 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             return {k: v for k, v in (p or {}).items() if k != "deviceSn"}
 
         return strip(a) == strip(b)
+
+    async def _get(self, path):
+        """GET an absolute DEYE path (used for order status). Returns parsed JSON or {}."""
+        url = f"{self.base_url}{path}"
+        timeout = aiohttp.ClientTimeout(total=DEYE_TIMEOUT)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url, headers=self._auth_headers()) as resp:
+                    if resp.status in (401, 403):
+                        if await self.handle_oauth_401():
+                            async with session.get(url, headers=self._auth_headers()) as resp2:
+                                resp2.raise_for_status()
+                                return await resp2.json()
+                        return {}
+                    resp.raise_for_status()
+                    return await resp.json()
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            self.log(f"Warn: DEYE GET {path} failed: {e}")
+            return {}
+
+    async def apply_dynamic_control(self, sn, schedule, current_soc, force=False):
+        """Write the combined control payload, suppressing no-op writes via the applied-payload cache. Returns True if written."""
+        desired = self.build_dynamic_payload(sn, schedule, current_soc)
+        if not force and self.payloads_equal(desired, self.applied_payload.get(sn)):
+            self.log(f"Info: DEYE {sn} control unchanged, skipping write")
+            return False
+        resp = await self._post("dynamic_control", desired)
+        if not resp.get("success", True):
+            self.log(f"Warn: DEYE dynamic control failed for {sn}: {resp.get('msg', 'unknown')}")
+            return False
+        self.applied_payload[sn] = desired
+        order_id = resp.get("orderId")
+        if order_id:
+            self.pending_orders[sn] = order_id
+            self.log(f"Info: DEYE {sn} control submitted, orderId={order_id}")
+        return True
+
+    async def poll_order(self, sn):
+        """Poll the pending control order via GET /order/{orderId}. Returns success/pending/failed."""
+        order_id = self.pending_orders.get(sn)
+        if not order_id:
+            return "success"
+        resp = await self._get(f"{DEYE_ENDPOINTS['order_result']}{order_id}")
+        if not resp.get("success", True):
+            return "pending"
+        self.pending_orders.pop(sn, None)
+        return "success"
