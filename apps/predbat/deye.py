@@ -398,13 +398,19 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         return schedule
 
     def _sn_from_entity(self, entity_id):
-        """Extract the inverter serial embedded in a DEYE entity id, or None if it can't be resolved."""
+        """Extract the inverter serial embedded in a DEYE entity id, or None if it can't be resolved.
+
+        Entity ids are always ``{prefix}_deye_{sn}_{leaf}``, so the serial is always followed by
+        ``_``. We match ``sn + "_"`` (not a bare prefix) so that prefix-colliding serials are
+        disambiguated fully - e.g. an entity for ``INV11`` never mis-routes to ``INV1`` (which
+        would otherwise send a forced control write to the wrong inverter).
+        """
         marker = "_deye_"
         if marker not in entity_id:
             return None
         tail = entity_id.split(marker, 1)[1]
         for sn in self.device_list:
-            if tail.startswith(sn.lower()):
+            if tail.startswith(sn.lower() + "_"):
                 return sn
         return None
 

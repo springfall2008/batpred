@@ -142,3 +142,50 @@ def test_write_button_applies_schedule():
         print(f"ERROR: write button did not apply: {applied}")
         failed = True
     assert not failed, "test_write_button_applies_schedule"
+
+
+def test_sn_from_entity_disambiguates_prefix_colliding_serials():
+    """_sn_from_entity resolves prefix-colliding serials (INV1 vs INV11) to the correct inverter."""
+    failed = False
+    d = RecordingDeye()
+    # INV1 is a literal prefix of INV11: a bare startswith would mis-route INV11 events to INV1.
+    d.device_list = ["INV1", "INV11"]
+    got_11 = d._sn_from_entity("number.predbat_deye_inv11_battery_schedule_reserve")
+    if got_11 != "INV11":
+        print(f"ERROR: inv11 entity mis-routed to: {got_11!r}")
+        failed = True
+    got_1 = d._sn_from_entity("number.predbat_deye_inv1_battery_schedule_reserve")
+    if got_1 != "INV1":
+        print(f"ERROR: inv1 entity mis-routed to: {got_1!r}")
+        failed = True
+    assert not failed, "test_sn_from_entity_disambiguates_prefix_colliding_serials"
+
+
+def test_apply_reserve_live_forces_write_despite_noop():
+    """apply_reserve_live posts a dynamic_control even when the payload is unchanged (force=True bypass)."""
+    failed = False
+    d = RecordingDeye()
+    d.device_list = ["INV1"]
+    d.device_values = {"INV1": {"soc": 50.0}}
+    d.local_schedule = {"INV1": {"reserve": 25, "charge": {"enable": False}, "export": {"enable": False}}}
+    # Pre-seed the applied-payload cache with EXACTLY the payload this call will build, so a
+    # non-forced write would be suppressed as a no-op. force=True must override that suppression.
+    d.applied_payload = {"INV1": d.build_dynamic_payload("INV1", d.local_schedule["INV1"], 50.0)}
+    posts = []
+
+    async def fake_post(endpoint_key, body):
+        """Record each DEYE POST and report success."""
+        posts.append((endpoint_key, body))
+        return {"success": True}
+
+    import tests.test_infra as ti
+
+    with patch.object(d, "_post", side_effect=fake_post):
+        wrote = ti.run_async(d.apply_reserve_live("INV1", 25))
+    if not wrote:
+        print(f"ERROR: apply_reserve_live did not write (no-op suppression not bypassed): {wrote}")
+        failed = True
+    if not any(endpoint == "dynamic_control" for endpoint, _ in posts):
+        print(f"ERROR: no dynamic_control post despite forced write: {posts}")
+        failed = True
+    assert not failed, "test_apply_reserve_live_forces_write_despite_noop"
