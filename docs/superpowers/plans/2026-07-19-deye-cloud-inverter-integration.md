@@ -31,21 +31,21 @@
 
 ---
 
-## Task 0: Pre-flight spike — confirm the live API contract
+## Task 0: Contract confirmation (already resolved — no live device required)
 
-**Not TDD** — an investigation whose deliverable is confirmed values written into `deye_const.py` (Task 1). If no live inverter is available, skip and proceed with the documented best-known defaults in Task 1; revisit before merge.
+The API contract was confirmed from the **official** `DeyeCloudDevelopers/deye-openapi-client-sample-code` repo, so this is **not a blocker** and needs **no credentials to start building**. Confirmed and baked into Task 1 / the task code:
 
-**Files:**
-- Reference only: `docs/superpowers/specs/2026-07-19-deye-cloud-inverter-integration-design.md` ("Open items confirmed at the implementation spike").
+- **Token:** `POST /account/token?appId=` body `{appSecret, email|username, password: sha256(pw), companyId}` (`companyId:"0"` = personal). (`account/obtain_token.py`)
+- **`TimeUseSettingItem` fields (6 slots):** `{time:"HH:MM", power:<W>, soc:<%>, enableGridCharge:bool, enableGeneration:bool}`. (`commission/sys_tou_update.py`)
+- **Combined control endpoint:** `POST /strategy/dynamicControl` with `{deviceSn, workMode, gridChargeAction, solarSellAction, maxSellPower, maxSolarPower, touAction, touDays[], timeUseSettingItems[6]}`. (`strategy/dynamic_control_*.py`)
+- **Mode realisation** (matches the spec table): charge = `gridChargeAction:on` + `workMode:ZERO_EXPORT_TO_*` + high slot SoC (SELLING_FIRST would stop charging); export = `solarSellAction:on` + `workMode:SELLING_FIRST` + low slot SoC; hold/idle = slot SoC set to the hold level ("battery ceases charging and discharging").
+- **Reserve = slot SoC floor** — there is no dedicated reserve endpoint (`battery/parameter/update` only sets `MAX_CHARGE_CURRENT`/`MAX_DISCHARGE_CURRENT`).
+- **`device/latest` request:** `POST /device/latest` body `{deviceList:[sn]}` (≤10). (`device/obtain_device_latest.py`)
+- **Order poll:** `GET /order/{orderId}`. (`commission/get_control_res.py`)
 
-- [ ] **Step 1:** Obtain a DEYE developer App ID/Secret (`developer.deyecloud.com`) and account creds for a battery inverter. Get a token: `POST {base}/account/token?appId={id}` body `{appSecret, email, password: sha256(pw)}`.
-- [ ] **Step 2:** Capture a real `POST /device/latest` response for the inverter. Record the exact `dataList[].key` strings for SoC, battery power, grid power, PV power, load power, temperature, and their `unit` values.
-- [ ] **Step 3:** Capture `POST /config/tou` and `POST /strategy/dynamic/control/read`. Record the exact `TimeUseSettingItem` per-slot field names, value units, ranges, and how many slots are returned (expected 6).
-- [ ] **Step 4:** Record the reserve mechanism: is the SoC floor per-slot, or `battLowCapacity` via `/order/battery/parameter/update`? Note which produces an immediate hold.
-- [ ] **Step 5:** Record forced-export behaviour: confirm `workMode=SELLING_FIRST` + `solarSellAction=on` drains the battery to grid to the slot SoC floor, and that a slot SoC of 99 holds the battery (solar-only export).
-- [ ] **Step 6:** Record the token-refresh mechanism (dedicated refresh-token grant, or re-login with app creds) and observed `expiresIn`.
-- [ ] **Step 7:** Confirm `POST /strategy/dynamic/control` is accepted by the target firmware (else note the granular-endpoint fallback).
-- [ ] **Step 8:** Write all confirmed values into the Task 1 constants (replace the `# VERIFY@SPIKE` defaults). No commit needed here; the values land with Task 1.
+**One item remains empirical** (safe defaults shipped; correct post-first-connection):
+
+- [ ] **Only outstanding check:** the exact `device/latest` `dataList[].key` strings for SoC / battery / grid / pv / load power. `deye_const.py:DEYE_TELEMETRY_KEYS` holds best-known defaults; on the first live connection, log the raw `dataList` keys and correct that one dict. All logic references the dict, so nothing else changes.
 
 ---
 
@@ -72,7 +72,7 @@ def test_deye_const_shape():
         if dc not in DEYE_BASE_URLS or not DEYE_BASE_URLS[dc].startswith("https://"):
             print(f"ERROR: base url missing/invalid for {dc}")
             failed = True
-    for ep in ("token", "station_list", "station_device", "device_latest", "config_battery", "dynamic_control", "dynamic_read", "order_result"):
+    for ep in ("token", "station_list", "station_device", "device_latest", "config_battery", "tou_update", "dynamic_control", "order_result"):
         if ep not in DEYE_ENDPOINTS:
             print(f"ERROR: endpoint {ep} missing")
             failed = True
@@ -125,6 +125,7 @@ DEYE_RETRIES = 3
 TOU_SLOT_COUNT = 6
 FREEZE_EXPORT_SOC = 99
 
+# Endpoint paths CONFIRMED against DeyeCloudDevelopers/deye-openapi-client-sample-code.
 DEYE_ENDPOINTS = {
     "token": "/account/token",
     "station_list": "/station/list",
@@ -132,10 +133,13 @@ DEYE_ENDPOINTS = {
     "device_latest": "/device/latest",
     "config_battery": "/config/battery",
     "config_tou": "/config/tou",
-    "dynamic_control": "/strategy/dynamic/control",
-    "dynamic_read": "/strategy/dynamic/control/read",
-    "order_result": "/order/result",
+    "tou_update": "/order/sys/tou/update",
+    "dynamic_control": "/strategy/dynamicControl",  # camelCase — confirmed in sample code
+    "order_result": "/order/",  # GET {base}/order/{orderId} — confirmed
 }
+
+# device/latest batches serials on this body key (max 10 per call).  # CONFIRMED
+DEYE_LATEST_BODY_KEY = "deviceList"
 
 DEYE_WORKMODE = {
     "selling_first": "SELLING_FIRST",
@@ -143,7 +147,9 @@ DEYE_WORKMODE = {
     "zero_export_ct": "ZERO_EXPORT_TO_CT",
 }
 
-# device/latest dataList[].key spellings.  # VERIFY@SPIKE
+# device/latest dataList[].key spellings — the one item to confirm from a live
+# response (request body/shape is confirmed; exact value keys are not in the
+# sample).  # VERIFY@SPIKE (values only)
 DEYE_TELEMETRY_KEYS = {
     "soc": "batterySOC",
     "battery_power": "batteryPower",
@@ -153,7 +159,8 @@ DEYE_TELEMETRY_KEYS = {
     "temperature": "batteryTemperature",
 }
 
-# TimeUseSettingItem per-slot field names.  # VERIFY@SPIKE
+# TimeUseSettingItem per-slot fields — CONFIRMED from official sample
+# clientcode/commission/sys_tou_update.py and the strategy/* samples.
 TOU_FIELD = {
     "time": "time",
     "power": "power",
@@ -334,6 +341,7 @@ class MockDeye(DeyeAPI):
         self.device_battery_config = {}
         self.local_schedule = {}
         self.pending_orders = {}
+        self.applied_payload = {}
         self.cached_values = {}
         self.log_messages = []
         self.local_tz = pytz.timezone("Europe/London")
@@ -405,6 +413,7 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         self.device_battery_config = {}
         self.local_schedule = {}
         self.pending_orders = {}
+        self.applied_payload = {}
         self.cached_values = {}
         auth_method = self.get_arg("auth_method", "app_credentials")
         self._init_oauth(
@@ -765,7 +774,7 @@ def test_fetch_device_data_maps_keys():
 Run: `cd coverage && python -m pytest ../apps/predbat/tests/test_deye_api.py::test_fetch_device_data_maps_keys -v > /tmp/deye_api.log 2>&1; grep -E "passed|failed|Error" /tmp/deye_api.log`
 Expected: FAIL — no attribute `fetch_device_data`.
 
-- [ ] **Step 3: Write minimal implementation** (append to `DeyeAPI`, add `from deye_const import DEYE_TELEMETRY_KEYS` to the imports)
+- [ ] **Step 3: Write minimal implementation** (append to `DeyeAPI`, add `from deye_const import DEYE_TELEMETRY_KEYS, DEYE_LATEST_BODY_KEY` to the imports)
 
 ```python
     @staticmethod
@@ -788,7 +797,7 @@ Expected: FAIL — no attribute `fetch_device_data`.
 
     async def fetch_device_data(self, sn):
         """Fetch and normalise the latest telemetry for one inverter."""
-        data = await self._post("device_latest", {"deviceSnList": [sn]})
+        data = await self._post("device_latest", {DEYE_LATEST_BODY_KEY: [sn]})
         if not data.get("success", True):
             self.log(f"Warn: DEYE device/latest failed for {sn}: {data.get('msg', 'unknown')}")
             return {}
@@ -1107,28 +1116,29 @@ git commit -m "feat(deye): build combined control payload with change detection"
 ## Task 10: Async write + order polling
 
 **Files:**
-- Modify: `apps/predbat/deye.py` (add `apply_dynamic_control`, `read_dynamic_control`, `poll_order`)
+- Modify: `apps/predbat/deye.py` (add `apply_dynamic_control`, `poll_order`, `_get`)
 - Test: `apps/predbat/tests/test_deye_control.py` (append)
 
 **Interfaces:**
-- Consumes: `_post`, `build_dynamic_payload`, `payloads_equal`, `DEYE_ENDPOINTS`.
-- Produces: `async read_dynamic_control(self, sn) -> dict`; `async apply_dynamic_control(self, sn, schedule, current_soc, force=False) -> bool` (reads back, diffs, writes only on change or `force`, records `orderId` in `self.pending_orders[sn]`); `async poll_order(self, sn) -> str` (returns `"success"`/`"pending"`/`"failed"`).
+- Consumes: `_post`, `_get`, `build_dynamic_payload`, `payloads_equal`, `DEYE_ENDPOINTS`, `self.applied_payload` (last-applied payload cache, initialised in Task 3 `MockDeye`/`initialise`).
+- Produces: `async apply_dynamic_control(self, sn, schedule, current_soc, force=False) -> bool` (diffs the desired payload against the **last-applied cached payload** — no read endpoint needed — writes only on change or `force`, caches the applied payload, records `orderId` in `self.pending_orders[sn]`); `async poll_order(self, sn) -> str` (returns `"success"`/`"pending"`/`"failed"` via `GET /order/{orderId}`); `async _get(self, path) -> dict`.
+
+> **Why cache-diff, not read-back:** the official sample code confirms the write endpoint (`/strategy/dynamicControl`) and the order poll (`GET /order/{orderId}`) but ships **no** dynamic-read sample, so we do not depend on an unconfirmed read endpoint. Diffing the freshly-computed payload against the last one we successfully applied gives the same write-suppression Fox gets from a read-back. `initialise()` (Task 3) must add `self.applied_payload = {}` (and `MockDeye` already sets it).
 
 - [ ] **Step 1: Write the failing test** (append)
 
 ```python
 def test_apply_dynamic_control_suppresses_when_unchanged():
-    """No write when the read-back already matches the desired payload."""
+    """No write when the desired payload equals the last-applied cached payload."""
     failed = False
     d = MockDeye()
     sched = {"reserve": 10, "charge": {"enable": True, "soc": 95, "power": 3000, "start": "02:00", "end": "05:00"}, "export": {"enable": False, "soc": 0, "power": 0}}
-    desired = d.build_dynamic_payload("INV1", sched, 40)
+    # Seed the cache with what we would compute now, so a re-apply is a no-op.
+    d.applied_payload["INV1"] = d.build_dynamic_payload("INV1", sched, 40)
     posts = []
 
     async def fake_post(endpoint_key, body):
         posts.append(endpoint_key)
-        if endpoint_key == "dynamic_read":
-            return {"success": True, "workMode": desired["workMode"], "gridChargeAction": desired["gridChargeAction"], "solarSellAction": desired["solarSellAction"], "touAction": desired["touAction"], "timeUseSettingItems": desired["timeUseSettingItems"]}
         return {"success": True, "orderId": 1}
 
     with patch.object(d, "_post", side_effect=fake_post):
@@ -1142,19 +1152,47 @@ def test_apply_dynamic_control_suppresses_when_unchanged():
     return failed
 
 
+def test_apply_dynamic_control_writes_and_caches_on_change():
+    """A changed payload is written, orderId recorded and payload cached."""
+    failed = False
+    d = MockDeye()
+    sched = {"reserve": 10, "charge": {"enable": True, "soc": 95, "power": 3000, "start": "02:00", "end": "05:00"}, "export": {"enable": False, "soc": 0, "power": 0}}
+
+    async def fake_post(endpoint_key, body):
+        return {"success": True, "orderId": 7}
+
+    with patch.object(d, "_post", side_effect=fake_post):
+        wrote = run_async_local(d.apply_dynamic_control("INV1", sched, 40))
+    if not wrote:
+        print("ERROR: expected a write on first apply")
+        failed = True
+    if d.pending_orders.get("INV1") != 7:
+        print(f"ERROR: orderId not recorded: {d.pending_orders}")
+        failed = True
+    if "INV1" not in d.applied_payload:
+        print("ERROR: applied payload not cached")
+        failed = True
+    return failed
+
+
 def test_poll_order_success():
-    """poll_order maps a successful order result."""
+    """poll_order clears a successful order via GET /order/{orderId}."""
     failed = False
     d = MockDeye()
     d.pending_orders["INV1"] = 42
+    seen = []
 
-    async def fake_post(endpoint_key, body):
+    async def fake_get(path):
+        seen.append(path)
         return {"success": True, "connectionStatus": 1}
 
-    with patch.object(d, "_post", side_effect=fake_post):
+    with patch.object(d, "_get", side_effect=fake_get):
         status = run_async_local(d.poll_order("INV1"))
     if status != "success":
         print(f"ERROR: status {status}")
+        failed = True
+    if not seen or not seen[0].endswith("/order/42"):
+        print(f"ERROR: wrong poll path {seen}")
         failed = True
     if "INV1" in d.pending_orders:
         print("ERROR: successful order should be cleared")
@@ -1170,26 +1208,36 @@ Expected: FAIL — no attribute `apply_dynamic_control`.
 - [ ] **Step 3: Write minimal implementation** (append to `DeyeAPI`)
 
 ```python
-    async def read_dynamic_control(self, sn):
-        """Read the current combined control state for one inverter."""
-        data = await self._post("dynamic_read", {"deviceSn": sn})
-        if not data.get("success", True):
-            self.log(f"Warn: DEYE dynamic read failed for {sn}: {data.get('msg', 'unknown')}")
+    async def _get(self, path):
+        """GET an absolute DEYE path (used for order status). Returns parsed JSON or {}."""
+        url = f"{self.base_url}{path}"
+        timeout = aiohttp.ClientTimeout(total=DEYE_TIMEOUT)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url, headers=self._auth_headers()) as resp:
+                    if resp.status in (401, 403):
+                        if await self.handle_oauth_401():
+                            async with session.get(url, headers=self._auth_headers()) as resp2:
+                                resp2.raise_for_status()
+                                return await resp2.json()
+                        return {}
+                    resp.raise_for_status()
+                    return await resp.json()
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            self.log(f"Warn: DEYE GET {path} failed: {e}")
             return {}
-        return data
 
     async def apply_dynamic_control(self, sn, schedule, current_soc, force=False):
-        """Write the combined control payload, suppressing no-op writes. Returns True if written."""
+        """Write the combined control payload, suppressing no-op writes via the applied-payload cache. Returns True if written."""
         desired = self.build_dynamic_payload(sn, schedule, current_soc)
-        if not force:
-            current = await self.read_dynamic_control(sn)
-            if current and self.payloads_equal(desired, {**desired, **{k: current.get(k) for k in ("workMode", "gridChargeAction", "solarSellAction", "touAction", "timeUseSettingItems")}}):
-                self.log(f"Info: DEYE {sn} control unchanged, skipping write")
-                return False
+        if not force and self.payloads_equal(desired, self.applied_payload.get(sn)):
+            self.log(f"Info: DEYE {sn} control unchanged, skipping write")
+            return False
         resp = await self._post("dynamic_control", desired)
         if not resp.get("success", True):
             self.log(f"Warn: DEYE dynamic control failed for {sn}: {resp.get('msg', 'unknown')}")
             return False
+        self.applied_payload[sn] = desired
         order_id = resp.get("orderId")
         if order_id:
             self.pending_orders[sn] = order_id
@@ -1197,21 +1245,23 @@ Expected: FAIL — no attribute `apply_dynamic_control`.
         return True
 
     async def poll_order(self, sn):
-        """Poll the pending control order for one inverter. Returns success/pending/failed."""
+        """Poll the pending control order via GET /order/{orderId}. Returns success/pending/failed."""
         order_id = self.pending_orders.get(sn)
         if not order_id:
             return "success"
-        resp = await self._post("order_result", {"orderId": order_id})
+        resp = await self._get(f"{DEYE_ENDPOINTS['order_result']}{order_id}")
         if not resp.get("success", True):
             return "pending"
         self.pending_orders.pop(sn, None)
         return "success"
 ```
 
+Add `from deye_const import DEYE_ENDPOINTS` if not already imported (it is, from Task 3).
+
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd coverage && python -m pytest ../apps/predbat/tests/test_deye_control.py -k "apply_dynamic or poll_order" -v > /tmp/deye_control.log 2>&1; grep -E "passed|failed|ERROR" /tmp/deye_control.log`
-Expected: `2 passed`.
+Expected: `3 passed`.
 
 - [ ] **Step 5: Commit**
 
@@ -1725,6 +1775,7 @@ def run_deye_control_tests(my_predbat):
         ("tou_slots", test_build_tou_slots_charge_window),
         ("payload", test_build_dynamic_payload_and_equality),
         ("apply_suppress", test_apply_dynamic_control_suppresses_when_unchanged),
+        ("apply_write", test_apply_dynamic_control_writes_and_caches_on_change),
         ("poll_order", test_poll_order_success),
     ]:
         try:

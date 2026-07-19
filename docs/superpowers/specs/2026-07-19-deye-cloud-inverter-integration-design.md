@@ -104,23 +104,21 @@ accounts. `password` is sent as a lower-case hex SHA-256 digest. Login key is
   `SELLING_FIRST` / `ZERO_EXPORT_TO_LOAD` / `ZERO_EXPORT_TO_CT`.
 - `POST /order/battery/parameter/update` — `gridChargeAction` (on/off),
   `gridChargeAmpere`, `maxChargeCurrent`, `maxDischargeCurrent`.
-- `POST /strategy/dynamic/control` — **the combined control used by this design**:
-  `{deviceSn, gridChargeAction, gridChargeAmpere, maxSellPower, maxSolarPower,
-  solarSellAction, timeUseSettingItems[6], touAction, touDays[], workMode,
-  zeroExportPower}`. `POST /strategy/dynamic/control/read` reads all of it back;
-  `/strategy/dynamic/control/read/result` polls the read by `orderId`.
-- `POST /order/result` (`get_order_result` by `orderId`) — control command
-  status; response carries `connectionStatus` (0 offline / 1 online), `success`.
+- `POST /strategy/dynamicControl` (camelCase — confirmed in sample code) — **the
+  combined control used by this design**: `{deviceSn, gridChargeAction,
+  gridChargeAmpere, maxSellPower, maxSolarPower, solarSellAction,
+  timeUseSettingItems[6], touAction, touDays[], workMode, zeroExportPower}`.
+- `GET /order/{orderId}` — control command status; response carries
+  `connectionStatus` (0 offline / 1 online), `success`.
 
 Every control response is `{success, code, msg, orderId, collectionTime,
 connectionStatus, requestId}`. **The write is not applied synchronously** — the
 `orderId` must be polled via `get_order_result` until success/timeout.
 
 > The exact per-slot `TimeUseSettingItem` field names (start time, SOC target,
-> power, grid-charge flag, gen/PV-charge flag) are the one contract detail the
-> docs reference but do not expand inline. They are captured at the
-> implementation spike from a live `config_tou` / `strategy_dynamic_control_read`
-> response before the write path is finalised.
+> power, grid-charge flag, gen/PV-charge flag) were confirmed from the official
+> sample code — see "Contract confirmed from official sample code" below —
+> `{time, power, soc, enableGridCharge, enableGeneration}`.
 
 ## Architecture
 
@@ -138,8 +136,8 @@ midnight counter reset):
    (`/station/device`), refreshed on a slow tier.
 3. Poll `config_battery` (capabilities) on a slow tier; `device/latest`
    (telemetry) on a fast tier.
-4. Read current control state (`strategy_dynamic_control_read`) on the control
-   tier.
+4. Read the schedule entities into local state; apply on write-button/diff
+   (change detection is against the last-applied payload cache).
 5. `publish_data()` (sensors) + `publish_schedule_settings_ha()` (control
    entities).
 6. On `first and automatic`, `automatic_config()`.
@@ -238,11 +236,11 @@ written as a full set of 6 in sequence, as the API requires.
 
 ## Write loop (Approach A)
 
-Each cycle: `strategy_dynamic_control_read` → build the desired combined state
-(work mode + grid-charge + solar-sell + 6 TOU items + TOU on) → **diff against
-the read-back** (`schedules_are_equal`-style); if unchanged, no write. On a
-detected diff or a schedule **write-button** press: one atomic
-`strategy_dynamic_control` call, capture `orderId`, poll `get_order_result`
+Each cycle: build the desired combined state (work mode + grid-charge +
+solar-sell + 6 TOU items + TOU on) → **diff against the last-applied cached
+payload** (`schedules_are_equal`-style); if unchanged, no write. On a detected
+diff or a schedule **write-button** press: one atomic `POST /strategy/dynamicControl`
+call, cache the applied payload, capture `orderId`, poll `GET /order/{orderId}`
 until success or timeout with exponential backoff. Pending/failed orders retry
 on the next cycle. The reserve live-write path is separate and immediate.
 
@@ -282,7 +280,7 @@ change-detection write suppression and the tiered read cadence.
 - Reserve live-write path fires immediately on the reserve `number_event`.
 - Window → 6-slot mapping (boundary derivation, full-6 output, overflow keeps
   imminent windows).
-- Change-detection write suppression (no write when read-back matches).
+- Change-detection write suppression (no write when the last-applied payload matches).
 - Async order polling (pending → success; failure → retry next cycle).
 
 `test_deye_oauth.py`: both auth modes; `sha256` password digest and
@@ -297,18 +295,35 @@ Add DEYE to `docs/inverter-setup.md` (setup: developer app, App ID/Secret, data
 centre, add-on vs SaaS), `docs/components.md` (component entry), and
 `docs/apps-yaml.md` (the `deye_*` args).
 
-## Open items confirmed at the implementation spike (against a live inverter)
+## Contract confirmed from official sample code
 
-1. Exact `TimeUseSettingItem` per-slot field names and value units/ranges.
-2. Exact `device/latest` `dataList` key spellings for SOC / battery / grid / pv
-   / load power.
-3. Forced-export realisation on DEYE (`SELLING_FIRST` + `solarSellAction`
-   vs `ZERO_EXPORT_TO_CT`) and the precise freeze-export (99%) hold behaviour.
-4. How "reserve" is written live (per-slot SOC vs `battLowCapacity` via
-   `order_battery_parameter_update`).
-5. Token refresh mechanism (refresh-token grant vs re-login).
-6. Whether `strategy_dynamic_control` is supported across the target inverter
-   firmware set, or whether granular endpoints are needed as a fallback.
+The design's original spike items were resolved from the **official**
+`DeyeCloudDevelopers/deye-openapi-client-sample-code` repo — **no live device is
+needed to build**:
+
+- **`TimeUseSettingItem` (6 slots):** `{time:"HH:MM", power:<W>, soc:<%>,
+  enableGridCharge:bool, enableGeneration:bool}` (`commission/sys_tou_update.py`).
+- **Combined control:** `POST /strategy/dynamicControl` (camelCase) with
+  `{deviceSn, workMode, gridChargeAction, solarSellAction, maxSellPower,
+  maxSolarPower, touAction, touDays[], timeUseSettingItems[6]}`
+  (`strategy/dynamic_control_*.py`).
+- **Mode realisation matches the behaviour table:** charge = `gridChargeAction:on`
+  + `workMode:ZERO_EXPORT_TO_*` + high slot SOC (SELLING_FIRST stops charging);
+  export = `solarSellAction:on` + `workMode:SELLING_FIRST` + low slot SOC;
+  hold/idle = slot SOC set to the hold level ("battery ceases charging and
+  discharging").
+- **Reserve = slot SOC floor** — no dedicated reserve endpoint
+  (`battery/parameter/update` only sets `MAX_CHARGE_CURRENT`/`MAX_DISCHARGE_CURRENT`).
+- **`device/latest` request** `{deviceList:[sn]}` (≤10); **order poll**
+  `GET /order/{orderId}`; **token** `POST /account/token?appId=` with
+  `sha256(password)` (+ `companyId`).
+
+Change detection diffs the freshly-computed payload against the **last-applied
+cached payload** (no read endpoint dependency), rather than a read-back.
+
+**One item remains empirical** (safe defaults shipped, corrected on first live
+connection): the exact `device/latest` `dataList[].key` strings for SOC /
+battery / grid / pv / load power, isolated in `deye_const.py:DEYE_TELEMETRY_KEYS`.
 
 ## Out of scope (YAGNI)
 
