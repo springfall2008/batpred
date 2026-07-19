@@ -1420,15 +1420,21 @@ Expected: FAIL — no attribute `publish_data`.
         self.dashboard_item(self._control_name("switch", sn, "battery_schedule_charge_write"), state="off", attributes={"friendly_name": f"DEYE {sn} Schedule Write", "icon": "mdi:content-save"}, app="deye")
 
     async def get_schedule_settings_ha(self, sn):
-        """Read the control entities into the schedule shape used by control derivation."""
-        schedule = {"reserve": int(float(self.get_state_wrapper(self._control_name("number", sn, "battery_schedule_reserve"), default=0) or 0))}
+        """Read the control entities into the schedule shape used by control derivation.
+
+        Numeric reads go through _as_float so a HA entity reporting "unknown" /
+        "unavailable" (e.g. right after a HA restart, before Predbat republishes)
+        falls back to the default instead of raising ValueError and crashing the
+        reconciliation loop — matching Fox's defensive get_schedule_settings_ha.
+        """
+        schedule = {"reserve": int(self._as_float(self.get_state_wrapper(self._control_name("number", sn, "battery_schedule_reserve"), default=0), 0))}
         for direction in ("charge", "export"):
             schedule[direction] = {
                 "enable": self.get_state_wrapper(self._control_name("switch", sn, f"battery_schedule_{direction}_enable"), default="off") == "on",
                 "start": self.get_state_wrapper(self._control_name("select", sn, f"battery_schedule_{direction}_start_time"), default="00:00"),
                 "end": self.get_state_wrapper(self._control_name("select", sn, f"battery_schedule_{direction}_end_time"), default="00:00"),
-                "soc": int(float(self.get_state_wrapper(self._control_name("number", sn, f"battery_schedule_{direction}_soc"), default=0) or 0)),
-                "power": int(float(self.get_state_wrapper(self._control_name("number", sn, f"battery_schedule_{direction}_power"), default=0) or 0)),
+                "soc": int(self._as_float(self.get_state_wrapper(self._control_name("number", sn, f"battery_schedule_{direction}_soc"), default=0), 0)),
+                "power": int(self._as_float(self.get_state_wrapper(self._control_name("number", sn, f"battery_schedule_{direction}_power"), default=0), 0)),
             }
         self.local_schedule[sn] = schedule
         return schedule
