@@ -16,9 +16,12 @@ payload. Supports HA add-on (self-managed token) and Predbat.com SaaS (injected
 token) auth.
 """
 
+import hashlib
+import asyncio
+import aiohttp
 from component_base import ComponentBase
 from oauth_mixin import OAuthMixin
-from deye_const import DEYE_BASE_URLS
+from deye_const import DEYE_BASE_URLS, DEYE_ENDPOINTS, DEYE_TIMEOUT, DEYE_RETRIES
 
 
 class DeyeAPI(ComponentBase, OAuthMixin):
@@ -64,3 +67,61 @@ class DeyeAPI(ComponentBase, OAuthMixin):
     def base_url(self):
         """Return the OpenAPI base URL for the configured data centre."""
         return DEYE_BASE_URLS.get(self.data_center, DEYE_BASE_URLS["eu"])
+
+    @staticmethod
+    def _sha256(password):
+        """Return the lower-case hex SHA-256 of a password."""
+        return hashlib.sha256(password.encode("utf-8")).hexdigest().lower()
+
+    @staticmethod
+    def _login_payload(login):
+        """Choose the DEYE login key: email if it looks like one, else username."""
+        login = (login or "").strip()
+        return {"email": login} if "@" in login else {"username": login}
+
+    def _auth_headers(self):
+        """Return JSON + Bearer auth headers for a DEYE request."""
+        return {"Content-Type": "application/json", "Authorization": f"Bearer {self.access_token}"}
+
+    async def fetch_token(self):
+        """Fetch an access token using app credentials (app_credentials mode)."""
+        url = f"{self.base_url}{DEYE_ENDPOINTS['token']}?appId={self.app_id}"
+        body = {"appSecret": self.app_secret, "password": self._sha256(self.password), **self._login_payload(self.username)}
+        if self.company_id:
+            body["companyId"] = str(self.company_id)
+        timeout = aiohttp.ClientTimeout(total=DEYE_TIMEOUT)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(url, json=body) as resp:
+                    resp.raise_for_status()
+                    data = await resp.json()
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            self.log(f"Warn: DEYE token fetch failed: {e}")
+            return False
+        if not data.get("success"):
+            self.log(f"Warn: DEYE token rejected: {data.get('msg', 'unknown')}")
+            return False
+        self.access_token = data.get("accessToken")
+        return True
+
+    async def _post(self, endpoint_key, body):
+        """POST to a DEYE endpoint with retry and 401-refresh. Returns parsed JSON or raises."""
+        url = f"{self.base_url}{DEYE_ENDPOINTS[endpoint_key]}"
+        timeout = aiohttp.ClientTimeout(total=DEYE_TIMEOUT)
+        last_err = None
+        for attempt in range(DEYE_RETRIES):
+            try:
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.post(url, headers=self._auth_headers(), json=body) as resp:
+                        if resp.status in (401, 403):
+                            self.log(f"Warn: DEYE 401/403 on {endpoint_key}, attempt {attempt + 1}")
+                            if await self.handle_oauth_401():
+                                continue
+                            raise RuntimeError(f"DEYE auth failed on {endpoint_key}")
+                        resp.raise_for_status()
+                        return await resp.json()
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                last_err = e
+                self.log(f"Warn: DEYE network error on {endpoint_key} attempt {attempt + 1}: {e}")
+                await asyncio.sleep(2**attempt)
+        raise RuntimeError(f"DEYE POST failed after {DEYE_RETRIES} retries on {endpoint_key}: {last_err}")
