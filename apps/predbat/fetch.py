@@ -1083,7 +1083,10 @@ class Fetch:
             self.load_inday_adjustment = 1.0
 
         force_replan = False
-        if str(prev_octopus_slots) != str(self.octopus_slots):
+        # Compare on the change-detection signature, not the raw slots, so the per-cycle re-clocking
+        # of an in-progress dispatch (start advanced to now, energy scaled to remaining time) does not
+        # force a replan every cycle while a slot is active - only genuine slot changes do
+        if self.octopus_slots_signature(prev_octopus_slots) != self.octopus_slots_signature(self.octopus_slots):
             self.log("Octopus slots changed from {} to {}".format(prev_octopus_slots, self.octopus_slots))
             force_replan = True
         if str(prev_octopus_saving_slots) != str(self.octopus_saving_slots):
@@ -1924,8 +1927,8 @@ class Fetch:
         self.car_charging_slots = [[] for c in range(self.num_cars)]
         self.car_charging_exclusive = [False for c in range(self.num_cars)]
 
-        self.car_charging_planned_response = self.get_arg("car_charging_planned_response", ["yes", "on", "enable", "true"])
-        self.car_charging_now_response = self.get_arg("car_charging_now_response", ["yes", "on", "enable", "true"])
+        self.car_charging_planned_response = [str(response).lower() for response in self.get_arg("car_charging_planned_response", ["yes", "on", "enable", "true"])]
+        self.car_charging_now_response = [str(response).lower() for response in self.get_arg("car_charging_now_response", ["yes", "on", "enable", "true"])]
         self.car_charging_from_battery = self.get_arg("car_charging_from_battery")
 
         # Car charging planned sensor
@@ -2282,8 +2285,8 @@ class Fetch:
 
         # days_previous_auto enables the weighted-bucket historical load forecast. The number of days of history
         # it searches comes from max(days_previous) (or 7 when days_previous is not set), capped to the history
-        # Predbat can hold (LOAD_FORECAST_HISTORY_MAX_DAYS).
-        self.load_forecast_history = self.get_arg("days_previous_auto", False)
+        # Predbat can hold (LOAD_FORECAST_HISTORY_MAX_DAYS). Enabled by default.
+        self.load_forecast_history = self.get_arg("days_previous_auto", True)
         if self.load_forecast_history:
             window_days = min(max(self.days_previous) if self.days_previous else 7, LOAD_FORECAST_HISTORY_MAX_DAYS)
             self.log("days_previous_auto enabled - using weighted-bucket historical load forecast over up to {} days".format(window_days))
@@ -2460,7 +2463,7 @@ class Fetch:
         self.calculate_export_oncharge = self.get_arg("calculate_export_oncharge")
         self.calculate_export_on_pv = self.get_arg("calculate_export_on_pv")
         self.calculate_second_pass = self.get_arg("calculate_second_pass")
-        self.prediction_kernel_enable = self.get_arg("prediction_kernel_enable", False)
+        self.prediction_kernel_enable = self.get_arg("prediction_kernel_enable", True)
         self.calculate_inday_adjustment = self.get_arg("calculate_inday_adjustment")
         self.calculate_regions = True
         self.calculate_import_low_export = self.get_arg("calculate_import_low_export")

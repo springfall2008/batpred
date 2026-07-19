@@ -165,10 +165,7 @@ class TestHAInterface:
             return result
         else:
             # print("Getting state: {} attribute {} => default {} ".format(entity_id, attribute, default))
-            if attribute:
-                return ""
-            else:
-                return default
+            return default
 
     def call_service(self, service, **kwargs):
         print("Calling service: {} {}".format(service, kwargs))
@@ -267,6 +264,7 @@ class MockConfigProvider:
             "load_forecast_only": False,
             "days_previous": [7, 14],
             "days_previous_weight": [1.0, 0.5],
+            "days_previous_auto": False,
             "metric_min_improvement": 0.1,
             "metric_min_improvement_export": 0.2,
             "metric_min_improvement_swap": 0.3,

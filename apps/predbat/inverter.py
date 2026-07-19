@@ -581,13 +581,19 @@ class Inverter:
             self.base.battery_scaling_auto = True
 
         # Run find_battery_size at most once per calendar day, always update the history sensor
-        existing_history = self.base.get_state_wrapper(soc_max_sensor_name, attribute="history", default={})
+        # Use load_previous_value_from_ha so the history survives a Home Assistant restart (the sensor
+        # state is ephemeral and is not restored by HA, but the recorder history is)
+        existing_history = self.base.load_previous_value_from_ha(soc_max_sensor_name, attribute="history") or {}
         if not isinstance(existing_history, dict):
             existing_history = {}
         today_key = str(self.base.now_utc.date())
 
-        # Already calculated today - use stored mean from sensor state
-        trimmed_mean_state = self.base.get_state_wrapper(soc_max_sensor_name)
+        # Already calculated today - use stored mean from sensor state. Use load_previous_value_from_ha
+        # (same recorder fallback as existing_history above) so that after a mid-day HA restart the
+        # trimmed mean is recovered too; otherwise today_key is present in the recovered history (so the
+        # recalculation below is skipped) while the live-only state read returns None, silently disabling
+        # battery_scaling_auto for the rest of the day.
+        trimmed_mean_state = self.base.load_previous_value_from_ha(soc_max_sensor_name)
         try:
             trimmed_mean = float(trimmed_mean_state) if trimmed_mean_state is not None else None
         except (ValueError, TypeError):
@@ -645,7 +651,7 @@ class Inverter:
         else:
             sensor_name = "sensor.{}_soc_max_calculated".format(self.base.prefix)
 
-        history = self.base.get_state_wrapper(sensor_name, attribute="history", default={})
+        history = self.base.load_previous_value_from_ha(sensor_name, attribute="history") or {}
         if not isinstance(history, dict):
             history = {}
 
@@ -733,6 +739,7 @@ class Inverter:
                         divide_by=1.0,
                         scale=1.0,
                         required_unit="%",
+                        can_modify_history=True,  # history is not accessed after this point, so minute_data can freely modify it
                     )
                 else:
                     soc_percent = {}
@@ -753,6 +760,7 @@ class Inverter:
                         divide_by=1.0,
                         scale=1.0,
                         required_unit="kWh",
+                        can_modify_history=True,  # history is not accessed after this point, so minute_data can freely modify it
                     )
                     # Determine soc_max from nominal_capacity or the observed maximum
                     if nominal_capacity and nominal_capacity > 0:
@@ -779,6 +787,7 @@ class Inverter:
                 divide_by=1.0,
                 scale=1.0,
                 required_unit="W",
+                can_modify_history=True,  # history is not accessed after this point, so minute_data can freely modify it
             )
             if battery_power_invert:
                 # Invert the battery power if required
@@ -1062,6 +1071,7 @@ class Inverter:
                         divide_by=1.0,
                         scale=self.battery_scaling,
                         required_unit="%",
+                        can_modify_history=True,  # history is not accessed after this point, so minute_data can freely modify it
                     )
                     for entry in soc_kwh:
                         soc_kwh[entry] = dp4(soc_kwh[entry] * self.soc_max / 100.0)
@@ -1078,6 +1088,7 @@ class Inverter:
                         divide_by=1.0,
                         scale=self.battery_scaling,
                         required_unit="kWh",
+                        can_modify_history=True,  # history is not accessed after this point, so minute_data can freely modify it
                     )
                 charge_rate, ignore_io = minute_data(
                     charge_rate_data[0],
@@ -1091,6 +1102,7 @@ class Inverter:
                     divide_by=1.0,
                     scale=1.0,
                     required_unit="W",
+                    can_modify_history=True,  # history is not accessed after this point, so minute_data can freely modify it
                 )
                 predbat_status = minute_data_state(predbat_status_data[0], self.base.max_days_previous, self.base.now_utc, "state", "last_updated")
                 for minute in predbat_status:
@@ -1110,6 +1122,7 @@ class Inverter:
                     divide_by=1.0,
                     scale=1.0,
                     required_unit="W",
+                    can_modify_history=True,  # history is not accessed after this point, so minute_data can freely modify it
                 )
                 if battery_power_invert:
                     # Invert the battery power if required
@@ -2751,7 +2764,7 @@ class Inverter:
             current_rate = self.get_current_charge_rate()
             service_data = {
                 "device_id": self.base.get_arg("device_id", index=self.id, default=""),
-                "target_soc": target_soc,
+                "target_soc": int(target_soc),
                 "power": int(current_rate),
             }
 
@@ -2779,7 +2792,7 @@ class Inverter:
         if target_soc < 100:
             service_data = {
                 "device_id": self.base.get_arg("device_id", index=self.id, default=""),
-                "target_soc": target_soc,
+                "target_soc": int(target_soc),
                 "power": int(self.battery_rate_max_discharge * MINUTE_WATT),
             }
 

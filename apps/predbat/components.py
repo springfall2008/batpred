@@ -34,6 +34,7 @@ from web import WebInterface
 from ha import HAInterface, HAHistory
 from db_manager import DatabaseManager
 from fox import FoxAPI
+from enphase import EnphaseAPI
 from kraken import KrakenAPI
 from web_mcp import PredbatMCPServer
 
@@ -237,6 +238,36 @@ COMPONENT_LIST = {
             "token_hash": {
                 "required": False,
                 "config": "fox_token_hash",
+            },
+        },
+        "phase": 1,
+    },
+    "enphase": {
+        "class": EnphaseAPI,
+        "name": "Enphase API",
+        "event_filter": "predbat_enphase_",
+        "args": {
+            "username": {
+                "required": True,
+                "config": "enphase_username",
+            },
+            "password": {
+                "required": True,
+                "config": "enphase_password",
+            },
+            "site_id": {
+                "required": False,
+                "config": "enphase_site_id",
+            },
+            "automatic": {
+                "required": False,
+                "default": False,
+                "config": "enphase_automatic",
+            },
+            "automatic_ignore_pv": {
+                "required": False,
+                "default": False,
+                "config": "enphase_automatic_ignore_pv",
             },
         },
         "phase": 1,

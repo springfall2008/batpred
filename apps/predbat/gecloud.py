@@ -417,10 +417,13 @@ class GECloudDirect(ComponentBase):
         full_capacity = 0
         design_capacity = 0
         for battery in batteries:
-            full_capacity += battery.get("capacity", {}).get("full", 0)
-            design_capacity += battery.get("capacity", {}).get("design", 0)
+            full_this = battery.get("capacity", {}).get("full", None)
+            design_this = battery.get("capacity", {}).get("design", None)
+            if full_this and design_this:
+                full_capacity += full_this
+                design_capacity += design_this
         if full_capacity > 0 and design_capacity > 0:
-            soh = full_capacity / design_capacity
+            soh = min(full_capacity / design_capacity, 1.0)
         self.dashboard_item(entity_name + "_battery_soh", dp4(soh), attributes=attribute_table.get("battery_soh", {}), app="gecloud")
 
         # Device device info
@@ -606,6 +609,12 @@ class GECloudDirect(ComponentBase):
     async def enable_default_options(self, device, registers):
         """Enable default options for the device."""
         changed = False
+        # When both a direct power register and its percentage equivalent exist, the power register
+        # is used as the rate control, so the percentage register must be left at 100% to avoid it
+        # clamping the power setting.
+        device_ha_names = {regname_to_ha(registers[key].get("name", "")) for key in registers}
+        has_charge_power = "battery_charge_power" in device_ha_names
+        has_discharge_power = "battery_discharge_power" in device_ha_names
         for key in registers:
             reg_name = registers[key].get("name", "")
             value = registers[key].get("value", None)
@@ -648,6 +657,29 @@ class GECloudDirect(ComponentBase):
                 if not value or value > 4:
                     self.log("GECloud: Setting {} to 4% for {}, previous value was {}".format(ha_name, device, value))
                     result = await self.async_write_inverter_setting(device, key, 4)
+                    if result and ("value" in result):
+                        registers[key]["value"] = result["value"]
+                        await self.publish_registers(device, self.settings[device], select_key=key)
+                        changed = True
+                    else:
+                        self.log("GECloud: Warn: Failed to set {} for {}".format(ha_name, device))
+            # Reset the charge/discharge power percentage to 100% when a direct power register is
+            # present, so that the power register (not the percentage) controls the rate. Match
+            # discharge first as "discharge_power_rate" also contains the "charge_power_rate" substring.
+            if ("inverter_discharge_power_percentage" in ha_name) or ("discharge_power_rate" in ha_name):
+                if has_discharge_power and (not value or value < 100):
+                    self.log("GECloud: Setting {} to 100% for {} as direct power register present, previous value was {}".format(ha_name, device, value))
+                    result = await self.async_write_inverter_setting(device, key, 100)
+                    if result and ("value" in result):
+                        registers[key]["value"] = result["value"]
+                        await self.publish_registers(device, self.settings[device], select_key=key)
+                        changed = True
+                    else:
+                        self.log("GECloud: Warn: Failed to set {} for {}".format(ha_name, device))
+            elif ("inverter_charge_power_percentage" in ha_name) or ("charge_power_rate" in ha_name):
+                if has_charge_power and (not value or value < 100):
+                    self.log("GECloud: Setting {} to 100% for {} as direct power register present, previous value was {}".format(ha_name, device, value))
+                    result = await self.async_write_inverter_setting(device, key, 100)
                     if result and ("value" in result):
                         registers[key]["value"] = result["value"]
                         await self.publish_registers(device, self.settings[device], select_key=key)
@@ -801,6 +833,8 @@ class GECloudDirect(ComponentBase):
             batteries = [devices["gateway"]]
 
         # Do we have a charge/discharge power percentage setting?
+        has_charge_rate = False
+        has_discharge_rate = False
         has_charge_power_percent = False
         has_discharge_power_percent = False
         has_pause_start_time = False
@@ -811,6 +845,10 @@ class GECloudDirect(ComponentBase):
             for key in registers:
                 reg_name = registers[key].get("name", "")
                 ha_name = regname_to_ha(reg_name)
+                if "battery_charge_power" in ha_name:
+                    has_charge_rate = True
+                if "battery_discharge_power" in ha_name:
+                    has_discharge_rate = True
                 if "inverter_charge_power_percentage" in ha_name or "charge_power_rate" in ha_name:
                     has_charge_power_percent = True
                 if "inverter_discharge_power_percentage" in ha_name or "discharge_power_rate" in ha_name:
@@ -848,7 +886,11 @@ class GECloudDirect(ComponentBase):
             return entities
 
         self.log("GECloud: Auto-configuring Predbat and not using apps.yaml entries for control")
-        self.log("GECloud: detected features - charge power percent: {}, pause battery: {}, pause start time: {}, discharge target soc: {}".format(has_charge_power_percent, has_pause_battery, has_pause_start_time, has_discharge_target_soc))
+        self.log(
+            "GECloud: detected features - charge rate: {}, discharge rate: {}, charge power percent: {}, discharge power percent: {}, pause battery: {}, pause start time: {}, discharge target soc: {}".format(
+                has_charge_rate, has_discharge_rate, has_charge_power_percent, has_discharge_power_percent, has_pause_battery, has_pause_start_time, has_discharge_target_soc
+            )
+        )
 
         self.set_arg("inverter_type", ["GEC" for _ in range(num_inverters)])
         self.set_arg("num_inverters", num_inverters)
@@ -900,11 +942,16 @@ class GECloudDirect(ComponentBase):
         else:
             self.set_arg("discharge_target_soc", None)
 
-        if has_charge_power_percent or has_discharge_power_percent:
+        # The percentage rate registers only win as the control when the direct power register is
+        # absent. When both a power register and its percentage equivalent exist, the power register
+        # is the primary control and the percentage is left at 100% (reset by enable_default_options).
+        if has_charge_power_percent and not has_charge_rate:
             self.set_arg("charge_rate_percent", build_entities("number", ["inverter_charge_power_percentage", "charge_power_rate"]))
-            self.set_arg("discharge_rate_percent", build_entities("number", ["inverter_discharge_power_percentage", "discharge_power_rate"]))
         else:
             self.set_arg("charge_rate_percent", None)
+        if has_discharge_power_percent and not has_discharge_rate:
+            self.set_arg("discharge_rate_percent", build_entities("number", ["inverter_discharge_power_percentage", "discharge_power_rate"]))
+        else:
             self.set_arg("discharge_rate_percent", None)
 
         self.set_arg("givtcp_rest", None)

@@ -3015,8 +3015,10 @@ def _test_async_automatic_config(my_predbat):
         assert ge.config_args.get("pause_start_time") == ["select.predbat_gecloud_battery001_pause_battery_start_time"], "pause_start_time should be set"
         assert ge.config_args.get("pause_end_time") == ["select.predbat_gecloud_battery001_pause_battery_end_time"], "pause_end_time should be set"
         assert ge.config_args.get("discharge_target_soc") == ["number.predbat_gecloud_battery001_dc_discharge_1_lower_soc_percent_limit"], "discharge_target_soc should be set"
-        assert ge.config_args.get("charge_rate_percent") == ["number.predbat_gecloud_battery001_inverter_charge_power_percentage"], "charge_rate_percent should be set"
-        assert ge.config_args.get("discharge_rate_percent") == ["number.predbat_gecloud_battery001_inverter_discharge_power_percentage"], "discharge_rate_percent should be set"
+        # When both the direct power register and the percentage register exist, the power register
+        # is the control and the percentage must not be configured (it would clamp the power setting).
+        assert ge.config_args.get("charge_rate_percent") is None, "charge_rate_percent should be None when battery_charge_power is present"
+        assert ge.config_args.get("discharge_rate_percent") is None, "discharge_rate_percent should be None when battery_discharge_power is present"
 
         # Test 2: Battery without optional features
         ge.config_args = {}
@@ -3682,6 +3684,95 @@ def _test_enable_default_options(my_predbat):
             return 1
         if write_calls[0]["value"] != 4:
             print("ERROR: Expected value=4 for discharge down to percent, got {}".format(write_calls[0]["value"]))
+            return 1
+
+        # Test 23: Charge power percentage reset to 100 when the direct power register is present
+        write_calls = []
+        registers = {
+            300: {"name": "Battery_Charge_Power", "value": 3000, "validation_rules": []},
+            301: {"name": "Inverter_Charge_Power_Percentage", "value": 50, "validation_rules": []},
+        }
+
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if not result:
+            print("ERROR: enable_default_options should return True when resetting charge power percentage")
+            return 1
+        if len(write_calls) != 1:
+            print("ERROR: Expected 1 write call for charge power percentage, got {}".format(len(write_calls)))
+            return 1
+        if write_calls[0]["key"] != 301 or write_calls[0]["value"] != 100:
+            print("ERROR: Expected charge power percentage (301) reset to 100, got {}".format(write_calls[0]))
+            return 1
+
+        # Test 24: Charge power percentage NOT touched when there is no direct power register
+        write_calls = []
+        registers = {301: {"name": "Inverter_Charge_Power_Percentage", "value": 50, "validation_rules": []}}
+
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if result:
+            print("ERROR: enable_default_options should not change charge percentage when power register absent")
+            return 1
+        if len(write_calls) != 0:
+            print("ERROR: Expected 0 write calls when power register absent, got {}".format(len(write_calls)))
+            return 1
+
+        # Test 25: Discharge power percentage reset to 100 when the direct power register is present
+        write_calls = []
+        registers = {
+            302: {"name": "Battery_Discharge_Power", "value": 3000, "validation_rules": []},
+            303: {"name": "Inverter_Discharge_Power_Percentage", "value": 80, "validation_rules": []},
+        }
+
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if not result:
+            print("ERROR: enable_default_options should return True when resetting discharge power percentage")
+            return 1
+        if len(write_calls) != 1 or write_calls[0]["key"] != 303 or write_calls[0]["value"] != 100:
+            print("ERROR: Expected discharge power percentage (303) reset to 100, got {}".format(write_calls))
+            return 1
+
+        # Test 26: Alternative three-phase register names (charge_power_rate) are also reset
+        write_calls = []
+        registers = {
+            304: {"name": "Battery_Charge_Power", "value": 3000, "validation_rules": []},
+            305: {"name": "Charge_Power_Rate", "value": 40, "validation_rules": []},
+        }
+
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if len(write_calls) != 1 or write_calls[0]["key"] != 305 or write_calls[0]["value"] != 100:
+            print("ERROR: Expected charge_power_rate (305) reset to 100, got {}".format(write_calls))
+            return 1
+
+        # Test 27: discharge_power_rate must be treated as discharge only (it contains the
+        # "charge_power_rate" substring) — with only the discharge power register present it should
+        # be reset, and no spurious charge reset should occur.
+        write_calls = []
+        registers = {
+            306: {"name": "Battery_Discharge_Power", "value": 3000, "validation_rules": []},
+            307: {"name": "Discharge_Power_Rate", "value": 40, "validation_rules": []},
+        }
+
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if len(write_calls) != 1 or write_calls[0]["key"] != 307 or write_calls[0]["value"] != 100:
+            print("ERROR: Expected discharge_power_rate (307) reset to 100 only, got {}".format(write_calls))
+            return 1
+
+        # Test 28: Percentage already at 100 — no write needed even when power register present
+        write_calls = []
+        registers = {
+            308: {"name": "Battery_Charge_Power", "value": 3000, "validation_rules": []},
+            309: {"name": "Inverter_Charge_Power_Percentage", "value": 100, "validation_rules": []},
+        }
+
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if len(write_calls) != 0:
+            print("ERROR: Expected 0 write calls when percentage already 100, got {}".format(len(write_calls)))
             return 1
 
         return 0
@@ -4353,7 +4444,44 @@ def _test_publish_info_soh(my_predbat):
         return 1
     print("OK case4: empty battery list SOH=1.0")
 
-    # --- Case 5: battery_scaling config uses battery_dod_soh entity after async_automatic_config ---
+    # --- Case 5: batteries with missing/None capacity fields are skipped, not counted as zero ---
+    ge_cloud.dashboard_items.clear()
+    info_missing_capacity = {
+        "info": {"battery": {"nominal_capacity": 186, "nominal_voltage": 51.2, "depth_of_discharge": 0.9}, "model": "GIV-HY3.6", "max_charge_rate": 6000},
+        "connections": {
+            "batteries": [
+                {"capacity": {"full": 90.0, "design": 100.0}},  # valid
+                {"capacity": {"full": None, "design": 100.0}},  # missing full - skipped
+                {"capacity": {"design": 100.0}},  # missing full key entirely - skipped
+                {"capacity": {"full": 50.0}},  # missing design - skipped
+                {"capacity": {}},  # missing both - skipped
+            ]
+        },
+    }
+    run_async(ge_cloud.publish_info("dev5", info_missing_capacity))
+
+    expected_soh_missing = 90.0 / 100.0  # only the valid battery counts
+    actual_soh_missing = ge_cloud.dashboard_items.get("sensor.predbat_gecloud_dev5_battery_soh", {}).get("state")
+    if actual_soh_missing is None or abs(actual_soh_missing - expected_soh_missing) > 1e-9:
+        print("ERROR case5: expected soh={} (batteries with missing capacity skipped), got {}".format(expected_soh_missing, actual_soh_missing))
+        return 1
+    print("OK case5: batteries with missing/None capacity skipped, SOH={}".format(actual_soh_missing))
+
+    # --- Case 6: SOH is clamped to 1.0 when reported full capacity exceeds design capacity ---
+    ge_cloud.dashboard_items.clear()
+    info_over_full = {
+        "info": {"battery": {"nominal_capacity": 186, "nominal_voltage": 51.2, "depth_of_discharge": 0.9}, "model": "GIV-HY3.6", "max_charge_rate": 6000},
+        "connections": {"batteries": [{"capacity": {"full": 210.0, "design": 200.0}}]},
+    }
+    run_async(ge_cloud.publish_info("dev6", info_over_full))
+
+    actual_soh_over_full = ge_cloud.dashboard_items.get("sensor.predbat_gecloud_dev6_battery_soh", {}).get("state")
+    if actual_soh_over_full != 1.0:
+        print("ERROR case6: expected soh clamped to 1.0 (full > design), got {}".format(actual_soh_over_full))
+        return 1
+    print("OK case6: SOH clamped to 1.0 when full capacity exceeds design capacity")
+
+    # --- Case 7: battery_scaling config uses battery_dod_soh entity after async_automatic_config ---
     ge_cloud.dashboard_items.clear()
     ge_cloud.config_args = {}
     ge_cloud.settings = {"battery001": {}}
@@ -4365,9 +4493,9 @@ def _test_publish_info_soh(my_predbat):
     run_async(_check_battery_scaling())
     battery_scaling = ge_cloud.config_args.get("battery_scaling", [])
     if not battery_scaling or "battery_dod_soh" not in battery_scaling[0]:
-        print("ERROR case5: expected battery_scaling to use battery_dod_soh entity, got {}".format(battery_scaling))
+        print("ERROR case7: expected battery_scaling to use battery_dod_soh entity, got {}".format(battery_scaling))
         return 1
-    print("OK case5: battery_scaling uses battery_dod_soh entity: {}".format(battery_scaling))
+    print("OK case7: battery_scaling uses battery_dod_soh entity: {}".format(battery_scaling))
 
     return 0
 

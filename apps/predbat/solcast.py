@@ -996,75 +996,88 @@ class SolarAPI(ComponentBase):
             self.log("SolarAPI: PV Calibration: Not enough valid (non-down) days for calibration, only {} valid days after excluding {} down days".format(valid_days, len(down_days)))
 
         pv_power_hist_by_slot = {}
-        pv_power_hist_by_slot_count = {}
+        pv_power_hist_by_slot_weight = {}
         pv_forecast_by_slot = {}
-        pv_forecast_by_slot_count = {}
+        pv_forecast_by_slot_weight = {}
         max_pv_power_hist = 0
 
-        # Work out the history for each slot in the day, and the history for each day, and the max power in the history for scaling purposes
+        # Work out the history for each slot in the day, and the history for each day, and the max power in the history for scaling purposes.
+        # Weight more recent days higher (same recency weight as the worst/best/average day scaling above) so that the
+        # calibrated forecast tracks a recent change in system performance rather than being diluted by a flat multi-day average.
         for minute in pv_power_hist:
             minute_absolute = self.minutes_now - minute
             if minute_absolute < 0:
                 days_prev = int(abs(minute_absolute) / (24 * 60)) + 1
-                if days_prev in down_days:
+                if days_prev > hist_days or days_prev in down_days:
                     continue
+                weight = max(1.0 - 0.1 * (days_prev - 1), 0.3)
                 slot_abs = minute_absolute % (24 * 60)
                 slot = int(slot_abs / self.plan_interval_minutes) * self.plan_interval_minutes
-                pv_power_hist_by_slot[slot] = pv_power_hist_by_slot.get(slot, 0) + pv_power_hist[minute]
-                pv_power_hist_by_slot_count[slot] = pv_power_hist_by_slot_count.get(slot, 0) + 1
+                pv_power_hist_by_slot[slot] = pv_power_hist_by_slot.get(slot, 0) + pv_power_hist[minute] * weight
+                pv_power_hist_by_slot_weight[slot] = pv_power_hist_by_slot_weight.get(slot, 0) + weight
                 max_pv_power_hist = max(max_pv_power_hist, pv_power_hist[minute])
 
         # Average the history for each slot in the day
         for slot in pv_power_hist_by_slot:
-            if pv_power_hist_by_slot_count[slot] > 0:
-                pv_power_hist_by_slot[slot] = dp4(pv_power_hist_by_slot[slot] / pv_power_hist_by_slot_count[slot])
+            if pv_power_hist_by_slot_weight[slot] > 0:
+                pv_power_hist_by_slot[slot] = dp4(pv_power_hist_by_slot[slot] / pv_power_hist_by_slot_weight[slot])
 
-        # Work out the forecast for each slot in the day, and the forecast for each day, and the max power in the forecast for scaling purposes
+        # Work out the forecast for each slot in the day, and the forecast for each day, and the max power in the forecast for scaling purposes.
+        # Same recency weighting as above so the history and forecast slot averages stay on a like-for-like basis.
         max_pv_power_forecast = 0
         for minute in pv_forecast:
             minute_absolute = self.minutes_now - minute
             if minute_absolute < 0:
                 days_prev = int(abs(minute_absolute) / (24 * 60)) + 1
-                if days_prev in down_days:
+                if days_prev > hist_days or days_prev in down_days:
                     continue
+                weight = max(1.0 - 0.1 * (days_prev - 1), 0.3)
                 slot_abs = minute_absolute % (24 * 60)
                 slot = int(slot_abs / self.plan_interval_minutes) * self.plan_interval_minutes
-                pv_forecast_by_slot[slot] = pv_forecast_by_slot.get(slot, 0) + pv_forecast[minute]
-                pv_forecast_by_slot_count[slot] = pv_forecast_by_slot_count.get(slot, 0) + 1
+                pv_forecast_by_slot[slot] = pv_forecast_by_slot.get(slot, 0) + pv_forecast[minute] * weight
+                pv_forecast_by_slot_weight[slot] = pv_forecast_by_slot_weight.get(slot, 0) + weight
                 max_pv_power_forecast = max(max_pv_power_forecast, pv_forecast[minute])
 
         # Average the forecast for each slot in the day
         for slot in pv_forecast_by_slot:
-            if pv_forecast_by_slot_count[slot] > 0:
-                pv_forecast_by_slot[slot] = dp4(pv_forecast_by_slot[slot] / pv_forecast_by_slot_count[slot])
+            if pv_forecast_by_slot_weight[slot] > 0:
+                pv_forecast_by_slot[slot] = dp4(pv_forecast_by_slot[slot] / pv_forecast_by_slot_weight[slot])
 
         # Work out the scaling factor for the forecast based on the history, looking at each day and each slot, and find the best and worst case day to use as a guide for scaling the forecast.
         # More recent days are weighted higher: weight = max(1.0 - 0.1 * (day - 1), 0.3)
         # so day1=1.0, day2=0.9, day3=0.8 ... day7=0.4, day8+=0.3
-        worst_day_scaling = 1.0
-        best_day_scaling = 1.0
-        average_day_scaling = 0
-        total_weight = 0.0
+        # Seed worst/best from the first observed day's ratio (not a fixed 1.0) so that a run of
+        # days that are all above (or all below) forecast is reflected honestly - otherwise a
+        # hardcoded 1.0 seed can never be displaced by real ratios that are all on the same side of it.
+        worst_day_scaling = None
+        best_day_scaling = None
+        weighted_actual_sum = 0.0
+        weighted_forecast_sum = 0.0
         for day in past_day_forecast:
             if day in down_days:
                 continue
             scaling_factor = dp4(past_day_actual[day] / past_day_forecast[day] if past_day_forecast[day] > 0 else 1.0)
-            worst_day_scaling = min(worst_day_scaling, scaling_factor)
-            best_day_scaling = max(best_day_scaling, scaling_factor)
+            worst_day_scaling = scaling_factor if worst_day_scaling is None else min(worst_day_scaling, scaling_factor)
+            best_day_scaling = scaling_factor if best_day_scaling is None else max(best_day_scaling, scaling_factor)
             weight = max(1.0 - 0.1 * (day - 1), 0.3)
-            average_day_scaling += scaling_factor * weight
-            total_weight += weight
+            # Weight and sum the actual/forecast energy directly (ratio-of-sums) rather than averaging
+            # the per-day ratios (average-of-ratios). This avoids over-weighting low-forecast days whose
+            # ratio is noisier and less representative of the actual energy involved.
+            weighted_actual_sum += past_day_actual[day] * weight
+            weighted_forecast_sum += past_day_forecast[day] * weight
             self.log("SolarAPI: PV Calibration: Past day {} had {} kWh of forecast PV, and actual {} kWh PV generation (weight {})".format(day, dp2(past_day_forecast[day]), dp2(past_day_actual[day]), dp2(weight)))
-        average_day_scaling = dp4(average_day_scaling / total_weight) if total_weight > 0 else 1.0
+        average_day_scaling = dp4(weighted_actual_sum / weighted_forecast_sum) if weighted_forecast_sum > 0 else 1.0
         average_day_scaling = min(max(average_day_scaling, 0.1), 2.0)
+        worst_day_scaling = 1.0 if worst_day_scaling is None else worst_day_scaling
+        best_day_scaling = 1.0 if best_day_scaling is None else best_day_scaling
 
         # Now adjust worst and best day scaling through by average scaling so they are just a factor on the average day, and clamp to sensible values to prevent extreme outliers from causing crazy forecasts.
         worst_day_scaling = dp4(worst_day_scaling / average_day_scaling)
         best_day_scaling = dp4(best_day_scaling / average_day_scaling)
 
         # Clamp best and worst day scaling factors to sensible values
-        worst_day_scaling = max(worst_day_scaling, 0.5)
-        best_day_scaling = min(best_day_scaling, 1.7)
+        worst_day_scaling = max(worst_day_scaling, 0.3)
+        best_day_scaling = min(best_day_scaling, 2.0)
         if not enabled_calibration:
             worst_day_scaling = 0.7
             best_day_scaling = 1.3
