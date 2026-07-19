@@ -1523,13 +1523,19 @@ Expected: FAIL — `apply_reserve_live` / `apply_schedule` missing.
 
 ```python
     def _sn_from_entity(self, entity_id):
-        """Extract the inverter serial embedded in a DEYE entity id."""
+        """Extract the inverter serial embedded in a DEYE entity id.
+
+        Entity ids are always ``{prefix}_deye_{sn}_{leaf}``, so the serial is
+        always followed by ``_``. Match on ``sn + "_"`` (not a bare prefix) so
+        that when one serial is a prefix of another (e.g. INV1 vs INV11) a
+        control event is never mis-routed to the wrong inverter.
+        """
         marker = f"_deye_"
         if marker not in entity_id:
             return None
         tail = entity_id.split(marker, 1)[1]
         for sn in self.device_list:
-            if tail.startswith(sn.lower()):
+            if tail.startswith(sn.lower() + "_"):
                 return sn
         return None
 
