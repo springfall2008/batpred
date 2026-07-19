@@ -935,8 +935,10 @@ Expected: FAIL — no attribute `derive_control_state`.
             charge_soc = int(charge.get("soc", 0))
             if charge_soc > current_soc and charge_soc > reserve:
                 return {"behaviour": "charge", "work_mode": DEYE_WORKMODE["zero_export_load"], "grid_charge": True, "solar_sell": False, "slot_soc": charge_soc, "power": int(charge.get("power", 0))}
-            if charge_soc <= reserve:
+            if charge_soc == reserve:
+                # Freeze charge: "a charge whose target SoC equals the reserve" — hold at reserve (grid charge on).
                 return {"behaviour": "freeze_charge", "work_mode": DEYE_WORKMODE["zero_export_load"], "grid_charge": True, "solar_sell": False, "slot_soc": reserve, "power": int(charge.get("power", 0))}
+            # Hold charge: target <= current (and != reserve) — held at reserve, no grid charge.
             return {"behaviour": "hold_charge", "work_mode": DEYE_WORKMODE["zero_export_load"], "grid_charge": False, "solar_sell": False, "slot_soc": reserve, "power": int(charge.get("power", 0))}
 
         return {"behaviour": "idle", "work_mode": DEYE_WORKMODE["zero_export_load"], "grid_charge": False, "solar_sell": False, "slot_soc": reserve, "power": 0}
