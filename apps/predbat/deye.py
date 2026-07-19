@@ -453,3 +453,32 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             await self.apply_schedule(sn, force=True)
         else:
             await self.get_schedule_settings_ha(sn)
+
+    async def automatic_config(self):
+        """Register every discovered inverter as a DeyeCloud Predbat inverter."""
+        devices = [sn.lower() for sn in self.device_list]
+        n = len(devices)
+        if not n:
+            self.log("Warn: DEYE automatic_config found no inverters")
+            return
+        self.set_arg("inverter_type", ["DeyeCloud" for _ in devices])
+        self.set_arg("num_inverters", n)
+        self.set_arg("soc_percent", [self._sensor_name(sn, "soc") for sn in devices])
+        self.set_arg("battery_power", [self._sensor_name(sn, "battery_power") for sn in devices])
+        self.set_arg("grid_power", [self._sensor_name(sn, "grid_power") for sn in devices])
+        self.set_arg("load_power", [self._sensor_name(sn, "load_power") for sn in devices])
+        if not self.automatic_ignore_pv:
+            self.set_arg("pv_power", [self._sensor_name(sn, "pv_power") for sn in devices])
+        self.set_arg("battery_temperature", [self._sensor_name(sn, "temperature") for sn in devices])
+        self.set_arg("reserve", [self._control_name("number", sn, "battery_schedule_reserve") for sn in devices])
+        self.set_arg("charge_start_time", [self._control_name("select", sn, "battery_schedule_charge_start_time") for sn in devices])
+        self.set_arg("charge_end_time", [self._control_name("select", sn, "battery_schedule_charge_end_time") for sn in devices])
+        self.set_arg("charge_limit", [self._control_name("number", sn, "battery_schedule_charge_soc") for sn in devices])
+        self.set_arg("charge_rate", [self._control_name("number", sn, "battery_schedule_charge_power") for sn in devices])
+        self.set_arg("scheduled_charge_enable", [self._control_name("switch", sn, "battery_schedule_charge_enable") for sn in devices])
+        self.set_arg("discharge_start_time", [self._control_name("select", sn, "battery_schedule_export_start_time") for sn in devices])
+        self.set_arg("discharge_end_time", [self._control_name("select", sn, "battery_schedule_export_end_time") for sn in devices])
+        self.set_arg("discharge_target_soc", [self._control_name("number", sn, "battery_schedule_export_soc") for sn in devices])
+        self.set_arg("discharge_rate", [self._control_name("number", sn, "battery_schedule_export_power") for sn in devices])
+        self.set_arg("scheduled_discharge_enable", [self._control_name("switch", sn, "battery_schedule_export_enable") for sn in devices])
+        self.set_arg("schedule_write_button", [self._control_name("switch", sn, "battery_schedule_charge_write") for sn in devices])
