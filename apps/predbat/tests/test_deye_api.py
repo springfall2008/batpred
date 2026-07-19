@@ -125,6 +125,47 @@ def test_fetch_device_data_maps_keys():
     assert not failed, "test_fetch_device_data_maps_keys"
 
 
+def test_fetch_battery_config_caches_on_success():
+    """A successful config/battery call caches the payload per serial and returns it."""
+    failed = False
+    d = MockDeye()
+    payload = {"success": True, "battCapacity": 100, "battLowCapacity": 10, "maxChargeCurrent": 25}
+
+    async def fake_post(endpoint_key, body):
+        """Fake DEYE POST: return a successful battery config payload."""
+        return payload
+
+    with patch.object(d, "_post", side_effect=fake_post):
+        out = run_async_local(d.fetch_battery_config("INV1"))
+    if out != payload:
+        print(f"ERROR: fetch_battery_config return {out}")
+        failed = True
+    if d.device_battery_config.get("INV1") != payload:
+        print(f"ERROR: not cached: {d.device_battery_config}")
+        failed = True
+    assert not failed, "test_fetch_battery_config_caches_on_success"
+
+
+def test_fetch_battery_config_failure_returns_empty():
+    """A failed config/battery call returns an empty dict and does not cache."""
+    failed = False
+    d = MockDeye()
+
+    async def fake_post(endpoint_key, body):
+        """Fake DEYE POST: report a failed battery config lookup."""
+        return {"success": False, "msg": "device offline"}
+
+    with patch.object(d, "_post", side_effect=fake_post):
+        out = run_async_local(d.fetch_battery_config("INV1"))
+    if out != {}:
+        print(f"ERROR: expected empty dict on failure, got {out}")
+        failed = True
+    if "INV1" in d.device_battery_config:
+        print(f"ERROR: should not cache on failure: {d.device_battery_config}")
+        failed = True
+    assert not failed, "test_fetch_battery_config_failure_returns_empty"
+
+
 def test_run_first_cycle_publishes_and_configures():
     """First run discovers, publishes and (when automatic) configures."""
     failed = False
@@ -183,3 +224,27 @@ def test_run_first_cycle_publishes_and_configures():
         print(f"ERROR: run did not publish/configure {seq}")
         failed = True
     assert not failed, "test_run_first_cycle_publishes_and_configures"
+
+
+def run_deye_api_tests(my_predbat):
+    """Run all DEYE API tests."""
+    failed = False
+    for name, fn in [
+        ("base_url", test_deye_base_url),
+        ("device_list_filter", test_get_device_list_filters_inverters),
+        ("fetch_device_data", test_fetch_device_data_maps_keys),
+        ("fetch_battery_config_success", test_fetch_battery_config_caches_on_success),
+        ("fetch_battery_config_failure", test_fetch_battery_config_failure_returns_empty),
+        ("run_first_cycle", test_run_first_cycle_publishes_and_configures),
+    ]:
+        try:
+            if fn():
+                print(f"  FAILED: deye_api.{name}")
+                failed = True
+        except Exception as e:
+            print(f"  EXCEPTION in deye_api.{name}: {e}")
+            import traceback
+
+            traceback.print_exc()
+            failed = True
+    return failed

@@ -160,3 +160,27 @@ def test_poll_order_success():
         print("ERROR: successful order should be cleared")
         failed = True
     assert not failed, "test_poll_order_success"
+
+
+def run_deye_control_tests(my_predbat):
+    """Run all DEYE control-logic tests."""
+    failed = False
+    for name, fn in [
+        ("derive_table", test_derive_control_state_table),
+        ("tou_slots", test_build_tou_slots_charge_window),
+        ("payload", test_build_dynamic_payload_and_equality),
+        ("apply_suppress", test_apply_dynamic_control_suppresses_when_unchanged),
+        ("apply_write", test_apply_dynamic_control_writes_and_caches_on_change),
+        ("poll_order", test_poll_order_success),
+    ]:
+        try:
+            if fn():
+                print(f"  FAILED: deye_control.{name}")
+                failed = True
+        except Exception as e:
+            print(f"  EXCEPTION in deye_control.{name}: {e}")
+            import traceback
+
+            traceback.print_exc()
+            failed = True
+    return failed

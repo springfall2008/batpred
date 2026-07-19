@@ -210,6 +210,8 @@ INTELLI
 intelligentdevice
 interp
 intraday
+inva
+invb
 invbatpower
 invname
 isinstance

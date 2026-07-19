@@ -66,3 +66,24 @@ def test_post_401_refreshes_then_retries():
         print("ERROR: token not refreshed")
         failed = True
     assert not failed, "test_post_401_refreshes_then_retries"
+
+
+def run_deye_oauth_tests(my_predbat):
+    """Run all DEYE auth tests."""
+    failed = False
+    for name, fn in [
+        ("sha256_login_payload", test_sha256_and_login_payload),
+        ("auth_headers_bearer", test_auth_headers_bearer),
+        ("post_401_refresh_retry", test_post_401_refreshes_then_retries),
+    ]:
+        try:
+            if fn():
+                print(f"  FAILED: deye_oauth.{name}")
+                failed = True
+        except Exception as e:
+            print(f"  EXCEPTION in deye_oauth.{name}: {e}")
+            import traceback
+
+            traceback.print_exc()
+            failed = True
+    return failed

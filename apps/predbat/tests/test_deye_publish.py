@@ -169,6 +169,7 @@ def test_automatic_config_maps_all_inverters():
     d.set_args = {}
     d.set_arg = lambda k, v: d.set_args.__setitem__(k, v)
     import tests.test_infra as ti
+
     ti.run_async(d.automatic_config())
     if d.set_args.get("num_inverters") != 2:
         print(f"ERROR: num_inverters {d.set_args.get('num_inverters')}")
@@ -214,3 +215,29 @@ def test_apply_reserve_live_forces_write_despite_noop():
         print(f"ERROR: no dynamic_control post despite forced write: {posts}")
         failed = True
     assert not failed, "test_apply_reserve_live_forces_write_despite_noop"
+
+
+def run_deye_publish_tests(my_predbat):
+    """Run all DEYE publish/config tests."""
+    failed = False
+    for name, fn in [
+        ("publish_data_soc", test_publish_data_creates_soc_sensor),
+        ("schedule_roundtrip", test_schedule_roundtrip),
+        ("schedule_unavailable", test_get_schedule_settings_ha_survives_unavailable),
+        ("reserve_event_immediate", test_reserve_event_writes_immediately),
+        ("write_button", test_write_button_applies_schedule),
+        ("sn_from_entity", test_sn_from_entity_disambiguates_prefix_colliding_serials),
+        ("automatic_config", test_automatic_config_maps_all_inverters),
+        ("apply_reserve_live_force", test_apply_reserve_live_forces_write_despite_noop),
+    ]:
+        try:
+            if fn():
+                print(f"  FAILED: deye_publish.{name}")
+                failed = True
+        except Exception as e:
+            print(f"  EXCEPTION in deye_publish.{name}: {e}")
+            import traceback
+
+            traceback.print_exc()
+            failed = True
+    return failed
