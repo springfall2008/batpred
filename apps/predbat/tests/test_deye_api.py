@@ -123,3 +123,63 @@ def test_fetch_device_data_maps_keys():
         print("ERROR: not cached")
         failed = True
     assert not failed, "test_fetch_device_data_maps_keys"
+
+
+def test_run_first_cycle_publishes_and_configures():
+    """First run discovers, publishes and (when automatic) configures."""
+    failed = False
+    d = MockDeye(auth_method="oauth")
+    d.access_token = "tok"
+    d.automatic = True
+    seq = {"published": 0, "configured": 0}
+
+    async def fake_dev_list():
+        """Fake device discovery returning a single inverter serial."""
+        d.device_list = ["INV1"]
+        return ["INV1"]
+
+    async def fake_data(sn):
+        """Fake telemetry fetch caching a single SoC reading."""
+        d.device_values[sn] = {"soc": 55.0}
+        return d.device_values[sn]
+
+    async def fake_batt(sn):
+        """Fake battery config fetch returning an empty payload."""
+        return {}
+
+    async def fake_publish():
+        """Fake publish that records the call."""
+        seq["published"] += 1
+
+    async def fake_pub_sched(sn):
+        """Fake schedule publish that is a no-op."""
+        pass
+
+    async def fake_get_sched(sn):
+        """Fake schedule read returning an empty payload."""
+        return {}
+
+    async def fake_auto():
+        """Fake automatic_config that records the call."""
+        seq["configured"] += 1
+
+    from unittest.mock import patch
+
+    with patch.multiple(
+        d,
+        get_device_list=fake_dev_list,
+        fetch_device_data=fake_data,
+        fetch_battery_config=fake_batt,
+        publish_data=fake_publish,
+        publish_schedule_settings_ha=fake_pub_sched,
+        get_schedule_settings_ha=fake_get_sched,
+        automatic_config=fake_auto,
+    ):
+        ok = run_async_local(d.run(0, True))
+    if not ok:
+        print("ERROR: run returned falsy")
+        failed = True
+    if seq["published"] == 0 or seq["configured"] == 0:
+        print(f"ERROR: run did not publish/configure {seq}")
+        failed = True
+    assert not failed, "test_run_first_cycle_publishes_and_configures"
