@@ -67,3 +67,30 @@ def test_schedule_roundtrip():
         print(f"ERROR: reserve round-trip {got.get('reserve')}")
         failed = True
     assert not failed, "test_schedule_roundtrip"
+
+
+def test_get_schedule_settings_ha_survives_unavailable():
+    """Numeric reads fall back to 0 when HA reports 'unavailable' instead of raising."""
+    failed = False
+    d = RecordingDeye()
+    d.device_list = ["INV1"]
+    # Simulate a HA restart: number entities report the string "unavailable" before republish.
+    d.entity_states = {
+        "number.predbat_deye_inv1_battery_schedule_reserve": "unavailable",
+        "number.predbat_deye_inv1_battery_schedule_charge_soc": "unavailable",
+    }
+    import tests.test_infra as ti
+
+    try:
+        got = ti.run_async(d.get_schedule_settings_ha("INV1"))
+    except (ValueError, TypeError) as error:
+        print(f"ERROR: get_schedule_settings_ha raised on unavailable state: {error}")
+        return True
+    if got.get("reserve") != 0 or not isinstance(got.get("reserve"), int):
+        print(f"ERROR: reserve did not fall back to int 0: {got.get('reserve')!r}")
+        failed = True
+    charge_soc = got.get("charge", {}).get("soc")
+    if charge_soc != 0 or not isinstance(charge_soc, int):
+        print(f"ERROR: charge soc did not fall back to int 0: {charge_soc!r}")
+        failed = True
+    assert not failed, "test_get_schedule_settings_ha_survives_unavailable"
