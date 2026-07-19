@@ -261,3 +261,26 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         if len(slots) > TOU_SLOT_COUNT:
             slots = slots[:TOU_SLOT_COUNT]
         return slots
+
+    def build_dynamic_payload(self, sn, schedule, current_soc):
+        """Build the strategy_dynamic_control body for one inverter."""
+        slots = self.build_tou_slots(schedule, current_soc)
+        # The imminent action drives the top-level work mode / on-off flags.
+        active = self.derive_control_state(schedule, current_soc)
+        return {
+            "deviceSn": sn,
+            "workMode": active["work_mode"],
+            "gridChargeAction": "on" if active["grid_charge"] else "off",
+            "solarSellAction": "on" if active["solar_sell"] else "off",
+            "touAction": "on",
+            "timeUseSettingItems": slots,
+        }
+
+    def payloads_equal(self, a, b):
+        """Compare two dynamic-control payloads ignoring deviceSn."""
+
+        def strip(p):
+            """Return payload dict p with the deviceSn key removed."""
+            return {k: v for k, v in (p or {}).items() if k != "deviceSn"}
+
+        return strip(a) == strip(b)
