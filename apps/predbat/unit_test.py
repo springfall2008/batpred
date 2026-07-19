@@ -106,7 +106,7 @@ from tests.test_fetch_url_cached import test_fetch_url_cached
 from tests.test_load_free_slot import test_load_free_slot
 from tests.test_add_now_to_octopus_slot import test_add_now_to_octopus_slot
 from tests.test_octopus_slots_change import test_octopus_slots_change
-from tests.test_dynamic_load import test_dynamic_load_car_slot_cancellation
+from tests.test_dynamic_load import test_dynamic_load_car_slot_cancellation, test_dynamic_load_high_load_baseline
 from tests.test_fox_api import run_fox_api_tests
 from tests.test_enphase_api import run_enphase_api_tests
 from tests.test_solcast import run_solcast_tests
@@ -259,6 +259,7 @@ def main():
         ("active_flag", test_active_flag, "Active flag cleared on exception tests", False),
         ("component_health_status", test_component_health_status, "Component errors fail the recorded run status tests", False),
         ("dynamic_load_car", test_dynamic_load_car_slot_cancellation, "Dynamic load car slot cancellation tests", False),
+        ("dynamic_load_high", test_dynamic_load_high_load_baseline, "Dynamic load high-load baseline tests", False),
         ("units", run_test_units, "Unit tests", False),
         ("manual_api", run_test_manual_api, "Manual API tests", False),
         ("manual_soc", run_test_manual_soc, "Manual SOC target tests", False),
