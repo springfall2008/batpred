@@ -8,7 +8,7 @@
 
 """Tests for the DEYE behaviour to work-mode derivation (``derive_control_state``)."""
 
-from deye_const import DEYE_WORKMODE, FREEZE_EXPORT_SOC
+from deye_const import DEYE_WORKMODE, FREEZE_EXPORT_SOC, TOU_FIELD, TOU_SLOT_COUNT
 from tests.test_deye_api import MockDeye
 
 
@@ -37,3 +37,27 @@ def test_derive_control_state_table():
             print(f"ERROR: {name} expected {exp} got {got}")
             failed = True
     assert not failed, "test_derive_control_state_table"
+
+
+def test_build_tou_slots_charge_window():
+    """A charge window produces exactly 6 ordered slots with a grid-charge segment."""
+    failed = False
+    d = MockDeye()
+    sched = {"reserve": 10, "charge": {"enable": True, "soc": 95, "power": 3000, "start": "02:00", "end": "05:00"}, "export": {"enable": False, "soc": 0, "power": 0}}
+    slots = d.build_tou_slots(sched, current_soc=40)
+    if len(slots) != TOU_SLOT_COUNT:
+        print(f"ERROR: expected {TOU_SLOT_COUNT} slots got {len(slots)}")
+        failed = True
+    else:
+        times = [s[TOU_FIELD["time"]] for s in slots]
+        if times != sorted(times):
+            print(f"ERROR: slots not ordered {times}")
+            failed = True
+        charge_slots = [s for s in slots if s[TOU_FIELD["grid_charge"]] and s[TOU_FIELD["soc"]] == 95]
+        if not charge_slots:
+            print("ERROR: no grid-charge slot at soc 95")
+            failed = True
+        if slots[0][TOU_FIELD["time"]] != "00:00":
+            print(f"ERROR: first slot must start 00:00 got {slots[0][TOU_FIELD['time']]}")
+            failed = True
+    assert not failed, "test_build_tou_slots_charge_window"

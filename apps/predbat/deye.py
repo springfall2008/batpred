@@ -21,7 +21,7 @@ import asyncio
 import aiohttp
 from component_base import ComponentBase
 from oauth_mixin import OAuthMixin
-from deye_const import DEYE_BASE_URLS, DEYE_ENDPOINTS, DEYE_TIMEOUT, DEYE_RETRIES, DEYE_TELEMETRY_KEYS, DEYE_LATEST_BODY_KEY, DEYE_WORKMODE, FREEZE_EXPORT_SOC
+from deye_const import DEYE_BASE_URLS, DEYE_ENDPOINTS, DEYE_TIMEOUT, DEYE_RETRIES, DEYE_TELEMETRY_KEYS, DEYE_LATEST_BODY_KEY, DEYE_WORKMODE, FREEZE_EXPORT_SOC, TOU_FIELD, TOU_SLOT_COUNT
 
 
 class DeyeAPI(ComponentBase, OAuthMixin):
@@ -224,3 +224,40 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             return {"behaviour": "hold_charge", "work_mode": DEYE_WORKMODE["zero_export_load"], "grid_charge": False, "solar_sell": False, "slot_soc": reserve, "power": int(charge.get("power", 0))}
 
         return {"behaviour": "idle", "work_mode": DEYE_WORKMODE["zero_export_load"], "grid_charge": False, "solar_sell": False, "slot_soc": reserve, "power": 0}
+
+    def _self_use_slot(self, start_time, reserve):
+        """Build a self-use TOU slot holding at the reserve SoC."""
+        return {TOU_FIELD["time"]: start_time, TOU_FIELD["power"]: 0, TOU_FIELD["soc"]: int(reserve), TOU_FIELD["grid_charge"]: False, TOU_FIELD["generate"]: True}
+
+    def _action_slot(self, start_time, state):
+        """Build a TOU slot realising a derived control state."""
+        return {TOU_FIELD["time"]: start_time, TOU_FIELD["power"]: int(state["power"]), TOU_FIELD["soc"]: int(state["slot_soc"]), TOU_FIELD["grid_charge"]: bool(state["grid_charge"]), TOU_FIELD["generate"]: True}
+
+    def build_tou_slots(self, schedule, current_soc):
+        """Build exactly TOU_SLOT_COUNT ordered slots covering 24h from the schedule windows."""
+        reserve = int(schedule.get("reserve", 0))
+        # Collect (start_time, state) segment boundaries. Baseline self-use at 00:00.
+        segments = {"00:00": {"behaviour": "idle", "power": 0, "slot_soc": reserve, "grid_charge": False, "solar_sell": False, "work_mode": None}}
+        for direction in ("charge", "export"):
+            window = schedule.get(direction, {})
+            if window.get("enable") and window.get("start") and window.get("end"):
+                intent = {"reserve": reserve, "charge": {"enable": False}, "export": {"enable": False}}
+                intent[direction] = {"enable": True, "soc": window.get("soc", 0), "power": window.get("power", 0)}
+                state = self.derive_control_state(intent, current_soc)
+                segments[window["start"]] = state
+                # After the window, return to self-use at reserve.
+                segments.setdefault(window["end"], {"behaviour": "idle", "power": 0, "slot_soc": reserve, "grid_charge": False, "solar_sell": False, "work_mode": None})
+        ordered = sorted(segments.items(), key=lambda kv: kv[0])
+        slots = []
+        for start_time, state in ordered:
+            if state.get("grid_charge") or state.get("solar_sell") or state.get("power"):
+                slots.append(self._action_slot(start_time, state))
+            else:
+                slots.append(self._self_use_slot(start_time, reserve))
+        # Normalise to exactly TOU_SLOT_COUNT: pad by repeating the last slot's SoC at spread times, or trim keeping the imminent windows.
+        while len(slots) < TOU_SLOT_COUNT:
+            filler_time = "23:59" if not slots else slots[-1][TOU_FIELD["time"]]
+            slots.append(self._self_use_slot(filler_time, reserve))
+        if len(slots) > TOU_SLOT_COUNT:
+            slots = slots[:TOU_SLOT_COUNT]
+        return slots
