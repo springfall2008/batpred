@@ -1754,7 +1754,7 @@ Expected: FAIL — no attribute `run`.
 ```python
     async def run(self, seconds, first):
         """Main component loop: auth, discover, poll, publish, configure."""
-        if self.oauth_auth_method == "app_credentials" and not getattr(self, "access_token", None):
+        if self.auth_method == "app_credentials" and not getattr(self, "access_token", None):
             if not await self.fetch_token():
                 self.log("Warn: DEYE token unavailable, skipping run")
                 return False
@@ -1789,7 +1789,7 @@ Expected: FAIL — no attribute `run`.
         self.log("Info: DeyeAPI shutdown")
 ```
 
-> `self.oauth_auth_method` is set by `_init_oauth`; confirm the attribute name in `oauth_mixin.py` and adjust if the mixin exposes it differently (e.g. `self.auth_method`).
+> `self.auth_method` is set by `_init_oauth` (confirmed: `oauth_mixin.py` stores `self.auth_method`, values `app_credentials`/`oauth`/`api_key`).
 
 - [ ] **Step 4: Run test to verify it passes**
 
