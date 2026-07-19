@@ -298,7 +298,7 @@ pred_bat:
   # This tells Predbat how much solar energy to expect given the current weather.
   # Options: "auto" (default), "ha", "forecast_solar", "openmeteo", "solcast_api"
   #
-  # NOTE: If you are using Open-Meteo ONLY for the theoretical ClearSky baseline below, 
+  # NOTE: If you are using Open-Meteo ONLY for the theoretical ClearSky baseline below,
   # it is recommended to explicitly set this to "ha" if you use the Solcast HA integration.
   #pv_forecast_primary: "auto"
 
@@ -308,9 +308,9 @@ pred_bat:
   # Clipping mitigation automatically forces exports prior to massive solar peaks so your
   # battery has enough empty space to absorb all excess solar energy without clipping.
   #clipping_buffer_enable: True
-  
-  # To detect these peaks, Predbat needs a purely theoretical baseline of what your 
-  # panels WOULD produce under perfect, cloudless conditions (ClearSky). This is 
+
+  # To detect these peaks, Predbat needs a purely theoretical baseline of what your
+  # panels WOULD produce under perfect, cloudless conditions (ClearSky). This is
   # compared against your weather-adjusted forecast above to find clipping risks.
   # Options: "openmeteo", "ha_solcast_clearsky", "solcast_api"
   #clipping_clearsky_source: "ha_solcast_clearsky"

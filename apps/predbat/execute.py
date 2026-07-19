@@ -363,7 +363,7 @@ class Execute:
                         inverter.adjust_discharge_rate(inverter.battery_rate_max_export * export_rate_adjust * MINUTE_WATT)
                         resetDischarge = False
                         inverter.adjust_force_export(True, discharge_start_time, discharge_end_time)
-                        
+
                         if self.set_reserve_enable and is_anti_clipping:
                             inverter.adjust_reserve(int(self.export_limits_best[0]))
                             resetReserve = False

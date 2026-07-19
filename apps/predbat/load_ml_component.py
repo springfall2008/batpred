@@ -168,7 +168,7 @@ class LoadMLComponent(ComponentBase):
     def is_alive(self):
         """
         Override ComponentBase to prevent Read-Only mode during long initial training.
-        Returns True if we have fully started, OR if we are still starting up but 
+        Returns True if we have fully started, OR if we are still starting up but
         haven't encountered any actual errors yet.
         """
         return self.api_started or (self.count_errors == 0 and not self.fatal_error)
@@ -960,7 +960,7 @@ class LoadMLComponent(ComponentBase):
                         curriculum_window_days=window_days,
                         curriculum_step_days=5,
                         max_intermediate_passes=8,
-                    )
+                    ),
                 )
             else:
                 # Even if initial was done we need to do one fine tuned curriculum pass too.
@@ -980,7 +980,7 @@ class LoadMLComponent(ComponentBase):
                         curriculum_window_days=window_days,
                         curriculum_step_days=step_days,
                         max_intermediate_passes=max_intermediate_passes,
-                    )
+                    ),
                 )
 
             if val_mae is not None:
