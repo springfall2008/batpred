@@ -21,6 +21,7 @@
 - **API contract values that are spike-verified live in ONE place:** `apps/predbat/deye_const.py`. All logic references those constants, so Task 0's spike changes values there without touching downstream code or tests.
 - **Commit after every task** (frequent commits). Branch is `feat/deye-cloud-inverter` (already created).
 - **Copyright header** (first lines of every new `.py`, copied verbatim from `fox.py`):
+
   ```python
   # -----------------------------------------------------------------------------
   # Predbat Home Battery System
@@ -52,10 +53,12 @@ The API contract was confirmed from the **official** `DeyeCloudDevelopers/deye-o
 ## Task 1: Constants module (`deye_const.py`)
 
 **Files:**
+
 - Create: `apps/predbat/deye_const.py`
 - Test: `apps/predbat/tests/test_deye_const.py`
 
 **Interfaces:**
+
 - Produces: `DEYE_BASE_URLS: dict`, `DEYE_TIMEOUT: int`, `DEYE_RETRIES: int`, `DEYE_ENDPOINTS: dict`, `DEYE_WORKMODE: dict` (`SELLING_FIRST`/`ZERO_EXPORT_TO_LOAD`/`ZERO_EXPORT_TO_CT`), `DEYE_TELEMETRY_KEYS: dict`, `TOU_FIELD: dict`, `TOU_SLOT_COUNT: int`, `FREEZE_EXPORT_SOC: int` (=99).
 
 - [ ] **Step 1: Write the failing test**
@@ -187,11 +190,13 @@ git commit -m "feat(deye): add DEYE Cloud API constants module"
 ## Task 2: Config items, APPS_SCHEMA and `DeyeCloud` INVERTER_DEF
 
 **Files:**
+
 - Modify: `apps/predbat/config.py` (APPS_SCHEMA `deye_*` block near the `fox_*` keys ~line 2254; INVERTER_DEF `"DeyeCloud"` after `"EnphaseCloud"` ~line 1949)
 - Modify: `.cspell/custom-dictionary-workspace.txt` (add `deye`, `DEYE`, `Deye`, `deyecloud`, `EMEA`, `Sunsynk`)
 - Test: `apps/predbat/tests/test_deye_config.py`
 
 **Interfaces:**
+
 - Produces: `INVERTER_DEF["DeyeCloud"]` capability dict; APPS_SCHEMA keys `deye_app_id`, `deye_app_secret`, `deye_username`, `deye_password`, `deye_data_center`, `deye_company_id`, `deye_auth_method`, `deye_token_expires_at`, `deye_token_hash`, `deye_inverter_sn`, `deye_automatic`, `deye_automatic_ignore_pv`.
 
 - [ ] **Step 1: Write the failing test**
@@ -308,11 +313,13 @@ git commit -m "feat(deye): add DeyeCloud INVERTER_DEF and config schema"
 ## Task 3: `DeyeAPI` skeleton, OAuth init and component registration
 
 **Files:**
+
 - Create: `apps/predbat/deye.py`
 - Modify: `apps/predbat/components.py` (import `DeyeAPI`; add `"deye"` to `COMPONENT_LIST` after `"fox"` ~line 244)
 - Test: `apps/predbat/tests/test_deye_api.py` (created here, grows through later tasks)
 
 **Interfaces:**
+
 - Produces: `class DeyeAPI(ComponentBase, OAuthMixin)` with `initialise()` setting `self.data_center`, `self.company_id`, `self.inverter_sn_filter (list)`, `self.automatic`, `self.automatic_ignore_pv`, `self.device_list`, `self.device_values`, `self.device_battery_config`, `self.local_schedule`, `self.pending_orders`; helper `base_url` (property) → `DEYE_BASE_URLS[self.data_center]`. `COMPONENT_LIST["deye"]` with `event_filter="predbat_deye_"`.
 
 - [ ] **Step 1: Write the failing test**
@@ -399,15 +406,28 @@ from deye_const import DEYE_BASE_URLS, DEYE_TIMEOUT, DEYE_RETRIES, DEYE_ENDPOINT
 class DeyeAPI(ComponentBase, OAuthMixin):
     """DEYE Cloud API component."""
 
-    def initialise(self):
-        """Initialise the DEYE component from configured args."""
+    def initialize(self, app_id="", app_secret="", username="", password="", data_center="eu", company_id="", auth_method="app_credentials", token_expires_at=None, token_hash="", inverter_sn=None, automatic=False, automatic_ignore_pv=False, **kwargs):
+        """Initialise the DEYE component from its resolved config args.
+
+        ComponentBase.__init__ calls initialize(**kwargs); the Components
+        registry has already resolved each arg from its deye_* config key and
+        passes it BY ARG NAME (e.g. data_center <- deye_data_center), exactly
+        like fox/enphase/solax/teslemetry. Consume the kwargs directly — do NOT
+        re-derive with get_arg("data_center"): that bare name is not in
+        apps.yaml (the key is deye_data_center), so it would always return the
+        default and silently pin every setting.
+        """
         self.log("Info: DeyeAPI initialising")
-        self.data_center = self.get_arg("data_center", "eu")
-        self.company_id = self.get_arg("company_id", "")
-        self.automatic = self.get_arg("automatic", False)
-        self.automatic_ignore_pv = self.get_arg("automatic_ignore_pv", False)
-        sn = self.get_arg("inverter_sn", [])
-        self.inverter_sn_filter = sn if isinstance(sn, list) else [sn]
+        self.app_id = app_id
+        self.app_secret = app_secret
+        self.username = username
+        self.password = password
+        self.data_center = data_center or "eu"
+        self.company_id = company_id
+        self.token_hash = token_hash
+        self.automatic = automatic
+        self.automatic_ignore_pv = automatic_ignore_pv
+        self.inverter_sn_filter = inverter_sn if isinstance(inverter_sn, list) else ([inverter_sn] if inverter_sn else [])
         self.device_list = []
         self.device_values = {}
         self.device_battery_config = {}
@@ -415,11 +435,10 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         self.pending_orders = {}
         self.applied_payload = {}
         self.cached_values = {}
-        auth_method = self.get_arg("auth_method", "app_credentials")
         self._init_oauth(
             auth_method=auth_method,
-            key=self.get_arg("app_secret", self.get_arg("token_hash", "")),
-            token_expires_at=self.get_arg("token_expires_at", None),
+            key=app_secret or token_hash,
+            token_expires_at=token_expires_at,
             provider_name="deye",
         )
 
@@ -471,10 +490,12 @@ git commit -m "feat(deye): add DeyeAPI skeleton and component registration"
 ## Task 4: Auth headers, `_post` transport (retry + 401 refresh), token fetch
 
 **Files:**
+
 - Modify: `apps/predbat/deye.py` (add `_auth_headers`, `_sha256`, `_login_payload`, `fetch_token`, `_post`)
 - Test: `apps/predbat/tests/test_deye_oauth.py`
 
 **Interfaces:**
+
 - Consumes: `MockDeye` from `test_deye_api.py`; `create_aiohttp_mock_response`, `create_aiohttp_mock_session`, `run_async` from `tests/test_infra.py`.
 - Produces: `async _post(self, endpoint_key, body) -> dict`; `async fetch_token(self) -> bool`; `_auth_headers() -> dict`; static `_sha256(str) -> str`; `_login_payload(login) -> dict`.
 
@@ -566,9 +587,8 @@ Expected: FAIL — `AttributeError: '... _sha256'` / `_post`.
 
     async def fetch_token(self):
         """Fetch an access token using app credentials (app_credentials mode)."""
-        app_id = self.get_arg("app_id", "")
-        url = f"{self.base_url}{DEYE_ENDPOINTS['token']}?appId={app_id}"
-        body = {"appSecret": self.get_arg("app_secret", ""), "password": self._sha256(self.get_arg("password", "")), **self._login_payload(self.get_arg("username", ""))}
+        url = f"{self.base_url}{DEYE_ENDPOINTS['token']}?appId={self.app_id}"
+        body = {"appSecret": self.app_secret, "password": self._sha256(self.password), **self._login_payload(self.username)}
         if self.company_id:
             body["companyId"] = str(self.company_id)
         timeout = aiohttp.ClientTimeout(total=DEYE_TIMEOUT)
@@ -626,10 +646,12 @@ git commit -m "feat(deye): add auth headers, token fetch and _post transport"
 ## Task 5: Device discovery (stations → inverters, paginated)
 
 **Files:**
+
 - Modify: `apps/predbat/deye.py` (add `get_station_ids`, `get_device_list`)
 - Test: `apps/predbat/tests/test_deye_api.py` (append)
 
 **Interfaces:**
+
 - Consumes: `_post`.
 - Produces: `async get_station_ids(self) -> list`; `async get_device_list(self) -> list` (populates `self.device_list` with inverter `deviceSn` strings, honouring `inverter_sn_filter`).
 
@@ -730,10 +752,12 @@ git commit -m "feat(deye): add station and inverter device discovery"
 ## Task 6: Telemetry parse (`device/latest`) and battery config
 
 **Files:**
+
 - Modify: `apps/predbat/deye.py` (add `_datalist_to_dict`, `fetch_device_data`, `fetch_battery_config`)
 - Test: `apps/predbat/tests/test_deye_api.py` (append)
 
 **Interfaces:**
+
 - Consumes: `_post`, `DEYE_TELEMETRY_KEYS`.
 - Produces: `_datalist_to_dict(data_list) -> dict` (raw `{key: value}`); `async fetch_device_data(self, sn) -> dict` (normalised `{soc, battery_power, grid_power, pv_power, load_power, temperature}` via `DEYE_TELEMETRY_KEYS`, cached in `self.device_values[sn]`); `async fetch_battery_config(self, sn) -> dict` (cached in `self.device_battery_config[sn]`).
 
@@ -838,10 +862,12 @@ git commit -m "feat(deye): parse device/latest telemetry and battery config"
 This is the heart of the spec's mode-less control. It takes the desired per-inverter schedule state (already read from the HA entities) plus current SoC and returns the DEYE control intent (work mode + flags + slot SoC/power) for the imminent window.
 
 **Files:**
+
 - Modify: `apps/predbat/deye.py` (add `derive_control_state`)
 - Test: `apps/predbat/tests/test_deye_control.py`
 
 **Interfaces:**
+
 - Consumes: `DEYE_WORKMODE`, `FREEZE_EXPORT_SOC`.
 - Produces: `derive_control_state(self, schedule, current_soc) -> dict` where `schedule` is `{"reserve": int, "charge": {"enable": bool, "soc": int, "power": int}, "export": {"enable": bool, "soc": int, "power": int}}` and the return is `{"work_mode": str, "grid_charge": bool, "solar_sell": bool, "slot_soc": int, "power": int, "behaviour": str}`. `behaviour` ∈ `{charge, freeze_charge, hold_charge, export, freeze_export, idle}`.
 
@@ -935,10 +961,12 @@ git commit -m "feat(deye): derive DEYE work mode from Predbat schedule intent"
 ## Task 8: Window → 6-slot TOU schedule builder
 
 **Files:**
+
 - Modify: `apps/predbat/deye.py` (add `build_tou_slots`)
 - Test: `apps/predbat/tests/test_deye_control.py` (append)
 
 **Interfaces:**
+
 - Consumes: `derive_control_state`, `TOU_FIELD`, `TOU_SLOT_COUNT`.
 - Produces: `build_tou_slots(self, schedule, current_soc) -> list` — exactly `TOU_SLOT_COUNT` dicts keyed by `TOU_FIELD`, in ascending start-time order, each covering a segment of the day. Charge/export windows become their own segments; the remainder is self-use at reserve.
 
@@ -1038,10 +1066,12 @@ git commit -m "feat(deye): build 6-slot TOU schedule from charge/export windows"
 ## Task 9: Combined control payload + change detection
 
 **Files:**
+
 - Modify: `apps/predbat/deye.py` (add `build_dynamic_payload`, `payloads_equal`)
 - Test: `apps/predbat/tests/test_deye_control.py` (append)
 
 **Interfaces:**
+
 - Consumes: `build_tou_slots`, `derive_control_state`, `TOU_FIELD`.
 - Produces: `build_dynamic_payload(self, sn, schedule, current_soc) -> dict` (the `strategy_dynamic_control` body: `deviceSn`, `workMode`, `gridChargeAction`, `solarSellAction`, `touAction`, `timeUseSettingItems`); `payloads_equal(self, a, b) -> bool` (compares ignoring `deviceSn`).
 
@@ -1116,10 +1146,12 @@ git commit -m "feat(deye): build combined control payload with change detection"
 ## Task 10: Async write + order polling
 
 **Files:**
+
 - Modify: `apps/predbat/deye.py` (add `apply_dynamic_control`, `poll_order`, `_get`)
 - Test: `apps/predbat/tests/test_deye_control.py` (append)
 
 **Interfaces:**
+
 - Consumes: `_post`, `_get`, `build_dynamic_payload`, `payloads_equal`, `DEYE_ENDPOINTS`, `self.applied_payload` (last-applied payload cache, initialised in Task 3 `MockDeye`/`initialise`).
 - Produces: `async apply_dynamic_control(self, sn, schedule, current_soc, force=False) -> bool` (diffs the desired payload against the **last-applied cached payload** — no read endpoint needed — writes only on change or `force`, caches the applied payload, records `orderId` in `self.pending_orders[sn]`); `async poll_order(self, sn) -> str` (returns `"success"`/`"pending"`/`"failed"` via `GET /order/{orderId}`); `async _get(self, path) -> dict`.
 
@@ -1275,10 +1307,12 @@ git commit -m "feat(deye): async combined-control write with order polling"
 ## Task 11: Publish sensors and schedule control entities
 
 **Files:**
+
 - Modify: `apps/predbat/deye.py` (add `publish_data`, `publish_schedule_settings_ha`, `get_schedule_settings_ha`)
 - Test: `apps/predbat/tests/test_deye_publish.py`
 
 **Interfaces:**
+
 - Consumes: `dashboard_item`, `get_state_wrapper`, `self.device_values`, `self.local_schedule`.
 - Produces: `async publish_data(self)`; `async publish_schedule_settings_ha(self, sn)`; `async get_schedule_settings_ha(self, sn) -> dict` (reads the control entities into `self.local_schedule[sn]` shaped as the `schedule` dict used by Task 7). Entity naming: `sensor|select|number|switch.{prefix}_deye_{sn}_...` (mirrors Fox/Enphase).
 
@@ -1415,10 +1449,12 @@ git commit -m "feat(deye): publish sensors and schedule control entities"
 ## Task 12: Event routing + reserve live-write
 
 **Files:**
+
 - Modify: `apps/predbat/deye.py` (add `select_event`, `number_event`, `switch_event`, `apply_reserve_live`, `apply_schedule`)
 - Test: `apps/predbat/tests/test_deye_publish.py` (append)
 
 **Interfaces:**
+
 - Consumes: `get_schedule_settings_ha`, `apply_dynamic_control`, `device_values`.
 - Produces: overrides of `select_event`/`number_event`/`switch_event` that update local schedule and route; `async apply_reserve_live(self, sn, reserve)` (immediate write path); `async apply_schedule(self, sn, force=True)` (called on write-button press).
 
@@ -1547,10 +1583,12 @@ git commit -m "feat(deye): route control events and write reserve live"
 ## Task 13: `automatic_config` (multi-inverter arg mapping)
 
 **Files:**
+
 - Modify: `apps/predbat/deye.py` (add `automatic_config`)
 - Test: `apps/predbat/tests/test_deye_publish.py` (append)
 
 **Interfaces:**
+
 - Consumes: `set_arg`, `self.device_list`.
 - Produces: `async automatic_config(self)` setting `inverter_type=["DeyeCloud", …]`, `num_inverters`, and the arg → entity map for every discovered inverter.
 
@@ -1637,10 +1675,12 @@ git commit -m "feat(deye): automatic_config multi-inverter arg mapping"
 ## Task 14: `run()` loop, token bootstrap, refresh tiers and `final()`
 
 **Files:**
+
 - Modify: `apps/predbat/deye.py` (add `run`, `final`)
 - Test: `apps/predbat/tests/test_deye_api.py` (append)
 
 **Interfaces:**
+
 - Consumes: everything above.
 - Produces: `async run(self, seconds, first) -> bool` (bootstrap token in `app_credentials` mode; discover devices on first/slow tier; poll telemetry + battery config; publish; `automatic_config` on first when `automatic`); `async final(self)`.
 
@@ -1754,11 +1794,13 @@ git commit -m "feat(deye): add run loop, token bootstrap and shutdown"
 ## Task 15: Register tests, full suite, pre-commit, docs, close PR #3917
 
 **Files:**
+
 - Modify: `apps/predbat/unit_test.py` (import + `TEST_REGISTRY` entries)
 - Modify: `docs/inverter-setup.md`, `docs/components.md`, `docs/apps-yaml.md`
 - Test: whole DEYE suite via `run_all`
 
 **Interfaces:**
+
 - Consumes: all DEYE test modules.
 - Produces: registered `deye_*` test entries; user docs.
 
