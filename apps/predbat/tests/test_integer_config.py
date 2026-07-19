@@ -286,3 +286,43 @@ def test_config_item_range_clamp(my_predbat):
 
     print("✓ Test passed: config item range clamp works correctly")
     return False
+
+
+def test_config_item_step_min_max_types_consistent(my_predbat):
+    """
+    Schema self-check: for any input_number CONFIG_ITEM with an integer-valued step, min/max
+    must also be integer-valued (e.g. 250 or 250.0 - the numeric type doesn't matter, just that
+    there's no fractional part). A float step is compatible with any min/max, integer or not, so
+    only the integer-step direction is checked.
+
+    This exists because load_user_config's integer-preservation logic only makes sense for a
+    schema declared this way in the first place - a mismatch here (integer step, fractional
+    min/max) would mean the "preserve as int" intent and the declared range disagree with each
+    other, and it's cheap to catch that at test time rather than only in generated values.
+    """
+    print("**** test_config_item_step_min_max_types_consistent ****")
+
+    def is_integer_valued(value):
+        return isinstance(value, int) or (isinstance(value, float) and value == int(value))
+
+    mismatches = []
+    for item in my_predbat.CONFIG_ITEMS:
+        if item.get("type") != "input_number":
+            continue
+
+        step = item.get("step", 1)
+        if not is_integer_valued(step):
+            # A float step (e.g. 0.01, 0.25) is compatible with any min/max - nothing to check.
+            continue
+
+        for bound_name in ("min", "max"):
+            bound = item.get(bound_name)
+            if bound is None:
+                continue
+            if not is_integer_valued(bound):
+                mismatches.append("{}: step={} but {}={}".format(item.get("name"), step, bound_name, bound))
+
+    assert not mismatches, "input_number items with an integer step must have integer-valued min/max: {}".format(mismatches)
+
+    print("✓ Test passed: all integer-step input_number items have integer-valued min/max")
+    return False
