@@ -88,6 +88,7 @@ dayname
 daynumber
 daysymbol
 dedup
+dedupe
 dend
 denorm
 derating
@@ -335,6 +336,8 @@ predai
 predbat
 predbatt
 predheat
+preseed
+preseeded
 prevs
 psum
 pvbat

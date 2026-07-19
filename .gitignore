@@ -113,3 +113,6 @@ apps/predbat/manifest.yaml
 scratch/
 cases/
 apps_ha.yaml
+
+# Superpowers planning artifacts (not project docs)
+docs/superpowers/
