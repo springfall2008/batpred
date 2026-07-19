@@ -33,6 +33,7 @@ from datetime import datetime, timezone
 import aiohttp
 
 from component_base import ComponentBase
+from oauth_mixin import OAuthMixin
 
 TESLEMETRY_DEFAULT_URL = "https://api.teslemetry.com"
 TESLEMETRY_TIMEOUT = 30
@@ -69,26 +70,37 @@ DEFAULT_SCHEDULE = {
 }
 
 
-class TeslemetryAPI(ComponentBase):
+class TeslemetryAPI(ComponentBase, OAuthMixin):
     """Tesla Powerwall component using the Teslemetry (or Fleet) REST API."""
 
     EXPORT_SELL_RATE = 0.50  # GBP/kWh synthetic high sell price to force export now.
     DEFAULT_IMPORT_RATE = 0.28
     DEFAULT_EXPORT_RATE = 0.15
 
-    def initialize(self, key="", site_id="", base_url=TESLEMETRY_DEFAULT_URL, automatic=False, **kwargs):
+    def initialize(self, key="", site_id="", base_url=TESLEMETRY_DEFAULT_URL, automatic=False, auth_method=None, token_expires_at=None, token_hash=None, **kwargs):
         """Initialise the Teslemetry component from configuration.
 
         Args:
-            key: Teslemetry (or Fleet API) bearer token.
+            key: Bearer token. In the default api_key mode this is the static Teslemetry token; in oauth
+                mode (direct Tesla Fleet API) it is the OAuth access token, refreshed via OAuthMixin.
             site_id: Optional Tesla energy site id, or list of ids, used to FILTER the sites discovered
                 from /api/1/products. Empty means "use whatever the account returns". The active site is
                 resolved by discovery in run(); for now only the first matching site is used.
-            base_url: REST API base URL (Teslemetry by default, swappable for a direct Fleet API connection).
+            base_url: REST API base URL (Teslemetry by default, swappable for a direct Fleet API connection;
+                in oauth mode set this to the regional Fleet endpoint).
             automatic: Automatically configure Predbat's inverter args to use this component (fox-style).
+            auth_method: "api_key" (default, static Teslemetry token) or "oauth" (direct Fleet API; token
+                refresh is driven externally by predbat.com via OAuthMixin's oauth-refresh edge function).
+            token_expires_at: OAuth access-token expiry (ISO string or epoch); only used in oauth mode.
+            token_hash: Server-computed token hash echoed back to the oauth-refresh function for dedup.
             kwargs: Reserved for future control-path configuration (accepted and ignored here).
         """
         self.api_key = key
+        # OAuth support (mirrors Fox/Kraken/Solis): in oauth mode the refresh chain is owned by
+        # predbat.com's oauth-refresh edge function - this component only holds/refreshes the access token.
+        self._init_oauth(auth_method, key, token_expires_at, "tesla")
+        if token_hash:
+            self.token_hash = token_hash
         # site_id acts as a filter over the sites discovered from /api/1/products (see discover_site),
         # not a hardcoded target. It may be a single id, a list of ids, or empty (use all account sites).
         if isinstance(site_id, (list, tuple)):
@@ -119,15 +131,32 @@ class TeslemetryAPI(ComponentBase):
         """Build a prefixed virtual entity id for this component."""
         return "{}.{}_teslemetry_{}".format(domain, self.prefix, suffix)
 
-    async def _request(self, method, path, json_body=None):
-        """Make a Teslemetry REST request, returning parsed JSON or None on failure."""
+    def _bearer_token(self):
+        """Return the bearer token: the refreshable OAuth access token in oauth mode, else the static key."""
+        return self.access_token if self.auth_method == "oauth" else self.api_key
+
+    async def _request(self, method, path, json_body=None, _retry_after_refresh=False):
+        """Make a Teslemetry REST request, returning parsed JSON or None on failure.
+
+        In oauth mode the access token is refreshed before the call (via OAuthMixin, which delegates to
+        predbat.com's oauth-refresh edge function) and a single refresh-and-retry is attempted on a 401.
+        """
+        if self.auth_method == "oauth" and not _retry_after_refresh:
+            if not await self.check_and_refresh_oauth_token():
+                self.api_auth_failed = True
+                self.log("Warn: Teslemetry OAuth token refresh failed on {} - skipping API call".format(path))
+                return None
         url = "{}{}".format(self.base_url, path)
-        headers = {"Authorization": "Bearer {}".format(self.api_key), "Content-Type": "application/json"}
+        headers = {"Authorization": "Bearer {}".format(self._bearer_token()), "Content-Type": "application/json"}
         timeout = aiohttp.ClientTimeout(total=TESLEMETRY_TIMEOUT)
         for attempt in range(TESLEMETRY_RETRIES):
             try:
                 async with aiohttp.ClientSession(timeout=timeout) as session:
                     async with session.request(method, url, headers=headers, json=json_body) as resp:
+                        if resp.status == 401 and self.auth_method == "oauth" and not _retry_after_refresh:
+                            # Force one token refresh and retry the request with the new access token.
+                            if await self.handle_oauth_401():
+                                return await self._request(method, path, json_body=json_body, _retry_after_refresh=True)
                         if resp.status in (401, 403):
                             self.api_auth_failed = True
                             self.log("Warn: Teslemetry auth failed ({}) on {} - token revoked or subscription lapsed".format(resp.status, path))

@@ -36,6 +36,10 @@ pred_bat:
   teslemetry_site_id: '123456'  # optional: omit to use the first site on your account
   teslemetry_automatic: True
   #teslemetry_base_url: 'https://api.teslemetry.com'
+  # For direct Tesla Fleet API (OAuth) instead of the Teslemetry proxy, connect via predbat.com -
+  # it sets teslemetry_auth_method: oauth, puts the Fleet access token in teslemetry_key, and sets
+  # the regional teslemetry_base_url for you (token refresh is handled automatically, like Fox).
+  #teslemetry_auth_method: 'oauth'
 
   # Inverter clock skew in minutes, e.g. 1 means it's 1 minute fast and -1 is 1 minute slow
   # Separate start and end options are applied to the start and end time windows, mostly as you want to start late (not early) and finish early (not late)

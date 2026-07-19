@@ -59,6 +59,14 @@ class MockTeslemetryAPI(TeslemetryAPI):
         self.automatic = False
         self.automatic_done = False
         self.args_set = {}
+        # OAuth state (production sets these via _init_oauth in initialize, which the mock bypasses).
+        self.auth_method = "api_key"
+        self.access_token = None
+        self.token_expires_at = None
+        self.provider_name = "tesla"
+        self.oauth_failed = False
+        self._refresh_in_progress = False
+        self.token_hash = ""
 
     @property
     def storage(self):
@@ -1651,6 +1659,102 @@ def test_teslemetry_apply_boost_wrap_segments_span_two_days():
     assert all(seg[2] != "ON_PEAK" for seg in buy[1])  # an unrelated day untouched
 
 
+def test_teslemetry_bearer_token_selects_by_auth_method():
+    """_bearer_token returns the refreshable OAuth access token in oauth mode and the static key otherwise."""
+    api = MockTeslemetryAPI()
+    api.api_key = "STATIC"
+    assert api._bearer_token() == "STATIC"  # default api_key mode
+    api.auth_method = "oauth"
+    api.access_token = "ACCESS"
+    assert api._bearer_token() == "ACCESS"
+
+
+def test_teslemetry_init_oauth_sets_state():
+    """_init_oauth wires auth_method/access_token/provider for oauth and stays inert for api_key."""
+    api = MockTeslemetryAPI()
+    TeslemetryAPI._init_oauth(api, "oauth", "ACCESS", None, "tesla")
+    assert api.auth_method == "oauth"
+    assert api.access_token == "ACCESS"
+    assert api.provider_name == "tesla"
+    api2 = MockTeslemetryAPI()
+    TeslemetryAPI._init_oauth(api2, None, "STATIC", None, "tesla")
+    assert api2.auth_method == "api_key"
+    assert api2.access_token is None
+
+
+def test_teslemetry_request_skips_when_oauth_refresh_fails():
+    """A failed pre-call OAuth refresh aborts the request before any HTTP and flags auth failure."""
+
+    async def test():
+        """Drive the real _request in oauth mode with a refresh that fails, asserting no HTTP is attempted."""
+        api = _make_real_request_api()
+        api.auth_method = "oauth"
+        api.check_and_refresh_oauth_token = AsyncMock(return_value=False)
+        mock_session = create_aiohttp_mock_session(create_aiohttp_mock_response(status=200))
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            mock_session_class.return_value = mock_session
+            result = await api._request("GET", "/api/1/products")
+        assert result is None
+        assert api.api_auth_failed is True
+        api.check_and_refresh_oauth_token.assert_awaited_once()
+        mock_session.request.assert_not_called()  # aborted before any HTTP was attempted
+
+    run_async(test())
+
+
+def test_teslemetry_request_401_refreshes_and_retries_once():
+    """A 401 in oauth mode triggers exactly one refresh and retries with the new access token."""
+
+    async def test():
+        """Drive the real _request: first attempt 401, refresh swaps the token, the single retry succeeds with it."""
+        api = _make_real_request_api()
+        api.auth_method = "oauth"
+        api.access_token = "OLD"
+        api.check_and_refresh_oauth_token = AsyncMock(return_value=True)  # pre-call token still valid
+
+        async def refresh_401():
+            """Simulate a successful 401 refresh by swapping in a new access token."""
+            api.access_token = "NEW"
+            return True
+
+        api.handle_oauth_401 = AsyncMock(side_effect=refresh_401)
+        resp_401 = create_aiohttp_mock_response(status=401, json_data={})
+        resp_200 = create_aiohttp_mock_response(status=200, json_data={"response": {"ok": True}})
+        mock_session = create_aiohttp_mock_session(resp_200)
+        mock_session.request = MagicMock(side_effect=[resp_401, resp_200])
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            mock_session_class.return_value = mock_session
+            result = await api._request("GET", "/api/1/products")
+        assert result == {"response": {"ok": True}}
+        api.handle_oauth_401.assert_awaited_once()
+        bearers = [call.kwargs["headers"]["Authorization"] for call in mock_session.request.call_args_list]
+        assert bearers == ["Bearer OLD", "Bearer NEW"]  # the retry used the refreshed token
+
+    run_async(test())
+
+
+def test_teslemetry_request_api_key_mode_does_not_refresh():
+    """api_key mode never calls the OAuth refresh and sends the static token."""
+
+    async def test():
+        """Drive the real _request in api_key mode, asserting no refresh is attempted and the static bearer is sent."""
+        api = _make_real_request_api()
+        api.auth_method = "api_key"
+        api.api_key = "STATIC"
+        api.check_and_refresh_oauth_token = AsyncMock(return_value=True)
+        resp_200 = create_aiohttp_mock_response(status=200, json_data={"response": {"ok": True}})
+        mock_session = create_aiohttp_mock_session(resp_200)
+        mock_session.request = MagicMock(side_effect=[resp_200])
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            mock_session_class.return_value = mock_session
+            result = await api._request("GET", "/api/1/products")
+        assert result == {"response": {"ok": True}}
+        api.check_and_refresh_oauth_token.assert_not_awaited()
+        assert mock_session.request.call_args.kwargs["headers"]["Authorization"] == "Bearer STATIC"
+
+    run_async(test())
+
+
 def test_teslemetry(my_predbat=None):
     """Run all Teslemetry component tests (registry entry point).
 
@@ -1756,5 +1860,10 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_boost_segments_today_vs_tomorrow()
     test_teslemetry_apply_boost_places_segments_on_offset_days()
     test_teslemetry_apply_boost_wrap_segments_span_two_days()
+    test_teslemetry_bearer_token_selects_by_auth_method()
+    test_teslemetry_init_oauth_sets_state()
+    test_teslemetry_request_skips_when_oauth_refresh_fails()
+    test_teslemetry_request_401_refreshes_and_retries_once()
+    test_teslemetry_request_api_key_mode_does_not_refresh()
     print("**** Teslemetry tests passed ****")
     return 0
