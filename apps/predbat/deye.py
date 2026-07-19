@@ -331,3 +331,62 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             return "pending"
         self.pending_orders.pop(sn, None)
         return "success"
+
+    def _sensor_name(self, sn, leaf):
+        """Return a namespaced DEYE sensor entity id."""
+        return f"sensor.{self.prefix}_deye_{sn.lower()}_{leaf}"
+
+    def _control_name(self, domain, sn, leaf):
+        """Return a namespaced DEYE control entity id."""
+        return f"{domain}.{self.prefix}_deye_{sn.lower()}_{leaf}"
+
+    async def publish_data(self):
+        """Publish monitoring sensors for each inverter."""
+        for sn in self.device_list:
+            values = self.device_values.get(sn, {})
+            units = {"soc": "%", "battery_power": "W", "grid_power": "W", "pv_power": "W", "load_power": "W", "temperature": "°C"}
+            for leaf, unit in units.items():
+                if leaf in values:
+                    self.dashboard_item(self._sensor_name(sn, leaf), state=values[leaf], attributes={"unit_of_measurement": unit, "friendly_name": f"DEYE {sn} {leaf.replace('_', ' ').title()}"}, app="deye")
+
+    async def publish_schedule_settings_ha(self, sn):
+        """Publish the charge/export schedule control entities for one inverter."""
+        local = self.local_schedule.get(sn, {})
+        reserve = int(local.get("reserve", 0))
+        self.dashboard_item(
+            self._control_name("number", sn, "battery_schedule_reserve"), state=reserve, attributes={"min": 0, "max": 100, "step": 1, "unit_of_measurement": "%", "friendly_name": f"DEYE {sn} Battery Schedule Reserve", "icon": "mdi:gauge"}, app="deye"
+        )
+        for direction in ("charge", "export"):
+            window = local.get(direction, {})
+            self.dashboard_item(self._control_name("select", sn, f"battery_schedule_{direction}_start_time"), state=window.get("start", "00:00"), attributes={"friendly_name": f"DEYE {sn} {direction.title()} Start", "icon": "mdi:clock-outline"}, app="deye")
+            self.dashboard_item(self._control_name("select", sn, f"battery_schedule_{direction}_end_time"), state=window.get("end", "00:00"), attributes={"friendly_name": f"DEYE {sn} {direction.title()} End", "icon": "mdi:clock-outline"}, app="deye")
+            self.dashboard_item(
+                self._control_name("number", sn, f"battery_schedule_{direction}_soc"),
+                state=int(window.get("soc", 0)),
+                attributes={"min": 0, "max": 100, "step": 1, "unit_of_measurement": "%", "friendly_name": f"DEYE {sn} {direction.title()} SoC", "icon": "mdi:gauge"},
+                app="deye",
+            )
+            self.dashboard_item(
+                self._control_name("number", sn, f"battery_schedule_{direction}_power"),
+                state=int(window.get("power", 0)),
+                attributes={"min": 0, "max": 20000, "step": 100, "unit_of_measurement": "W", "friendly_name": f"DEYE {sn} {direction.title()} Power", "icon": "mdi:flash"},
+                app="deye",
+            )
+            self.dashboard_item(
+                self._control_name("switch", sn, f"battery_schedule_{direction}_enable"), state="on" if window.get("enable") else "off", attributes={"friendly_name": f"DEYE {sn} {direction.title()} Enable", "icon": "mdi:check-circle-outline"}, app="deye"
+            )
+        self.dashboard_item(self._control_name("switch", sn, "battery_schedule_charge_write"), state="off", attributes={"friendly_name": f"DEYE {sn} Schedule Write", "icon": "mdi:content-save"}, app="deye")
+
+    async def get_schedule_settings_ha(self, sn):
+        """Read the control entities into the schedule shape used by control derivation."""
+        schedule = {"reserve": int(float(self.get_state_wrapper(self._control_name("number", sn, "battery_schedule_reserve"), default=0) or 0))}
+        for direction in ("charge", "export"):
+            schedule[direction] = {
+                "enable": self.get_state_wrapper(self._control_name("switch", sn, f"battery_schedule_{direction}_enable"), default="off") == "on",
+                "start": self.get_state_wrapper(self._control_name("select", sn, f"battery_schedule_{direction}_start_time"), default="00:00"),
+                "end": self.get_state_wrapper(self._control_name("select", sn, f"battery_schedule_{direction}_end_time"), default="00:00"),
+                "soc": int(float(self.get_state_wrapper(self._control_name("number", sn, f"battery_schedule_{direction}_soc"), default=0) or 0)),
+                "power": int(float(self.get_state_wrapper(self._control_name("number", sn, f"battery_schedule_{direction}_power"), default=0) or 0)),
+            }
+        self.local_schedule[sn] = schedule
+        return schedule
