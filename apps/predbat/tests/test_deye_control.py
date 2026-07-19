@@ -61,3 +61,25 @@ def test_build_tou_slots_charge_window():
             print(f"ERROR: first slot must start 00:00 got {slots[0][TOU_FIELD['time']]}")
             failed = True
     assert not failed, "test_build_tou_slots_charge_window"
+
+
+def test_build_dynamic_payload_and_equality():
+    """Payload carries work mode + on/off actions + 6 slots; equality ignores deviceSn."""
+    failed = False
+    d = MockDeye()
+    sched = {"reserve": 10, "charge": {"enable": True, "soc": 95, "power": 3000, "start": "02:00", "end": "05:00"}, "export": {"enable": False, "soc": 0, "power": 0}}
+    p1 = d.build_dynamic_payload("INV1", sched, current_soc=40)
+    p2 = d.build_dynamic_payload("INV2", sched, current_soc=40)
+    if p1.get("deviceSn") != "INV1":
+        print("ERROR: deviceSn not set")
+        failed = True
+    if len(p1.get("timeUseSettingItems", [])) != 6:
+        print("ERROR: payload must carry 6 slots")
+        failed = True
+    if p1.get("gridChargeAction") not in ("on", "off"):
+        print(f"ERROR: gridChargeAction {p1.get('gridChargeAction')}")
+        failed = True
+    if not d.payloads_equal(p1, p2):
+        print("ERROR: payloads differing only by deviceSn should be equal")
+        failed = True
+    assert not failed, "test_build_dynamic_payload_and_equality"
