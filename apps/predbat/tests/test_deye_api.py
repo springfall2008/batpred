@@ -11,9 +11,10 @@
 import predbat  # noqa: F401  (import first - avoids circular import: config.py does `from predbat import THIS_VERSION`)
 import pytz
 from datetime import datetime
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from deye import DeyeAPI
 from deye_const import DEYE_BASE_URLS
+from tests.test_infra import run_async as run_async_local
 
 
 class MockDeye(DeyeAPI):
@@ -63,3 +64,31 @@ def test_deye_base_url():
         print(f"ERROR: base_url {d.base_url}")
         failed = True
     assert not failed, "test_deye_base_url"
+
+
+def test_get_device_list_filters_inverters():
+    """Only INVERTER devices are kept; sn filter is honoured."""
+    failed = False
+    d = MockDeye(inverter_sn=["INV1"])
+
+    async def fake_post(endpoint_key, body):
+        """Fake DEYE POST: return a station list, then a paginated device list."""
+        if endpoint_key == "station_list":
+            return {"success": True, "stationList": [{"id": 10}]}
+        if endpoint_key == "station_device":
+            return {
+                "success": True,
+                "total": 2,
+                "deviceListItems": [
+                    {"deviceType": "INVERTER", "deviceSn": "INV1"},
+                    {"deviceType": "METER", "deviceSn": "MET9"},
+                ],
+            }
+        return {"success": True}
+
+    with patch.object(d, "_post", side_effect=fake_post):
+        devices = run_async_local(d.get_device_list())
+    if devices != ["INV1"]:
+        print(f"ERROR: devices {devices}")
+        failed = True
+    assert not failed, "test_get_device_list_filters_inverters"

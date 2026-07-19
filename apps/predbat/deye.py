@@ -125,3 +125,39 @@ class DeyeAPI(ComponentBase, OAuthMixin):
                 self.log(f"Warn: DEYE network error on {endpoint_key} attempt {attempt + 1}: {e}")
                 await asyncio.sleep(2**attempt)
         raise RuntimeError(f"DEYE POST failed after {DEYE_RETRIES} retries on {endpoint_key}: {last_err}")
+
+    async def get_station_ids(self):
+        """Return station ids visible to the account."""
+        data = await self._post("station_list", {})
+        if not data.get("success", True):
+            self.log(f"Warn: DEYE station/list failed: {data.get('msg', 'unknown')}")
+            return []
+        stations = data.get("stationList") or []
+        return [s.get("id") or s.get("stationId") for s in stations if s.get("id") or s.get("stationId")]
+
+    async def get_device_list(self):
+        """Discover battery inverter serials across the account's stations."""
+        station_ids = await self.get_station_ids()
+        if not station_ids:
+            self.log("Warn: DEYE no stations found")
+            self.device_list = []
+            return []
+        devices = []
+        page, size = 1, 100
+        while True:
+            data = await self._post("station_device", {"page": page, "size": size, "stationIds": station_ids})
+            if not data.get("success", True):
+                self.log(f"Warn: DEYE station/device failed: {data.get('msg', 'unknown')}")
+                break
+            items = data.get("deviceListItems") or []
+            devices.extend(items)
+            total = data.get("total")
+            if (total is not None and len(devices) >= int(total)) or len(items) < size:
+                break
+            page += 1
+        serials = [x["deviceSn"] for x in devices if x.get("deviceType") == "INVERTER" and x.get("deviceSn")]
+        if self.inverter_sn_filter:
+            wanted = {s.lower() for s in self.inverter_sn_filter}
+            serials = [s for s in serials if s.lower() in wanted]
+        self.device_list = serials
+        return serials
