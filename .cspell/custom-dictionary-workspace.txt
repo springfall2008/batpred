@@ -94,6 +94,8 @@ derating
 devcontainer
 devcontainers
 dexport
+deye
+deyecloud
 digestmod
 dimport
 dischargeenergytotal
