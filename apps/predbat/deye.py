@@ -21,7 +21,7 @@ import asyncio
 import aiohttp
 from component_base import ComponentBase
 from oauth_mixin import OAuthMixin
-from deye_const import DEYE_BASE_URLS, DEYE_ENDPOINTS, DEYE_TIMEOUT, DEYE_RETRIES
+from deye_const import DEYE_BASE_URLS, DEYE_ENDPOINTS, DEYE_TIMEOUT, DEYE_RETRIES, DEYE_TELEMETRY_KEYS, DEYE_LATEST_BODY_KEY
 
 
 class DeyeAPI(ComponentBase, OAuthMixin):
@@ -161,3 +161,44 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             serials = [s for s in serials if s.lower() in wanted]
         self.device_list = serials
         return serials
+
+    @staticmethod
+    def _datalist_to_dict(data_list):
+        """Flatten a DEYE dataList of {key,value} pairs into a plain dict."""
+        out = {}
+        for item in data_list or []:
+            key = item.get("key")
+            if key is not None:
+                out[key] = item.get("value")
+        return out
+
+    @staticmethod
+    def _as_float(value, default=0.0):
+        """Best-effort float coercion."""
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    async def fetch_device_data(self, sn):
+        """Fetch and normalise the latest telemetry for one inverter."""
+        data = await self._post("device_latest", {DEYE_LATEST_BODY_KEY: [sn]})
+        if not data.get("success", True):
+            self.log(f"Warn: DEYE device/latest failed for {sn}: {data.get('msg', 'unknown')}")
+            return {}
+        rows = data.get("deviceDataList") or []
+        if not rows:
+            return {}
+        flat = self._datalist_to_dict(rows[0].get("dataList"))
+        result = {name: self._as_float(flat.get(key)) for name, key in DEYE_TELEMETRY_KEYS.items()}
+        self.device_values[sn] = result
+        return result
+
+    async def fetch_battery_config(self, sn):
+        """Fetch and cache battery capability config for one inverter."""
+        data = await self._post("config_battery", {"deviceSn": sn})
+        if not data.get("success", True):
+            self.log(f"Warn: DEYE config/battery failed for {sn}: {data.get('msg', 'unknown')}")
+            return {}
+        self.device_battery_config[sn] = data
+        return data
