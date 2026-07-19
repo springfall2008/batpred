@@ -2567,12 +2567,18 @@ class Octopus:
         dispatch slot (outside the fixed 23:30-05:30 off-peak window) is still Octopus's own
         provisional/revisable plan until it's confirmed - if the car never actually draws power,
         Octopus retroactively rescinds the cheap rate for that slot. When
-        octopus_intelligent_confirm_slots is enabled (default), an out-of-window slot is only
+        octopus_intelligent_confirm_slots is enabled (default Off), an out-of-window slot is only
         treated as low-rate once it's confirmed - either because Octopus reports it as a completed
         (metered) dispatch, or car_charging_now confirms real-time draw - so the battery doesn't
         commit to charging on a rate that may later be withdrawn. Slots inside the fixed window are
         always trusted, since that window is guaranteed cheap by the tariff itself, not by the
         dispatch mechanism.
+
+        In practice, car_charging_now is the only one of those two confirmations fast enough to
+        matter for a still-live slot - a completed-dispatch confirmation may not arrive from Octopus
+        until after the slot has already ended. Enabling this switch without also configuring
+        car_charging_now means out-of-window slots will essentially never be treated as low-rate;
+        fetch_config_options() logs a warning for that combination.
         """
         octopus_slot_low_rate = self.get_arg("octopus_slot_low_rate", True)
         octopus_slot_max = self.get_arg("octopus_slot_max", OCTOPUS_SLOT_MAX_DEFAULT)

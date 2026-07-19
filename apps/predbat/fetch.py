@@ -2396,6 +2396,14 @@ class Fetch:
         self.octopus_intelligent_charging = self.get_arg("octopus_intelligent_charging")
         self.octopus_intelligent_ignore_unplugged = self.get_arg("octopus_intelligent_ignore_unplugged")
         self.octopus_intelligent_confirm_slots = self.get_arg("octopus_intelligent_confirm_slots")
+        if self.octopus_intelligent_confirm_slots and self.octopus_intelligent_charging and "car_charging_now" not in self.args:
+            self.log(
+                "Warn: switch.predbat_octopus_intelligent_confirm_slots is On but car_charging_now is not set in apps.yaml - "
+                "daytime Octopus Intelligent Go dispatch slots (outside the fixed 23:30-05:30 window) cannot be confirmed in "
+                "real time and will not be treated as low rate for the house battery. Set car_charging_now (it can point at a "
+                "charger-level sensor, not just the car) to restore that protection, or turn this switch Off to accept the "
+                "risk of a rescinded slot instead."
+            )
         self.octopus_intelligent_consider_full = self.get_arg("octopus_intelligent_consider_full")
         self.car_energy_reported_load = self.get_arg("car_energy_reported_load")
         self.get_car_charging_planned()

@@ -722,7 +722,7 @@ CONFIG_ITEMS = [
         "name": "octopus_intelligent_confirm_slots",
         "friendly_name": "Only treat confirmed Intelligent dispatch slots as low rate",
         "type": "switch",
-        "default": True,
+        "default": False,
         "enable": "expert_mode",
     },
     {

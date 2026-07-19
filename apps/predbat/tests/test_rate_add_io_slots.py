@@ -392,7 +392,7 @@ def run_rate_add_io_slots_tests(my_predbat):
         expected_rates_22[minute] = 4.0
     my_predbat.octopus_intelligent_confirm_slots = False
     failed |= run_rate_add_io_slots_test("test22_switch_off_restores_old_behaviour", my_predbat, slots_18, True, 12, expected_rates_22)
-    my_predbat.octopus_intelligent_confirm_slots = True  # Restore default for any subsequent tests
+    my_predbat.octopus_intelligent_confirm_slots = False  # Restore default for any subsequent tests
 
     # Restore original forecast_minutes
     my_predbat.forecast_minutes = original_forecast_minutes
