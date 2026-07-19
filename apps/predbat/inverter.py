@@ -522,11 +522,11 @@ class Inverter:
 
         if not self.inv_has_reserve_soc:
             self.create_missing_arg("reserve", self.reserve)
-            self.base.args["reserve"][id] = self.create_entity("reserve", self.reserve, device_class="battery", uom="%")
+            self.base.args["reserve"][id] = self.create_entity("reserve", self.reserve, device_class=None, uom="%", icon="mdi:battery-lock")
 
         if not self.inv_has_target_soc:
             self.create_missing_arg("charge_limit", 100)
-            self.base.args["charge_limit"][id] = self.create_entity("charge_limit", 100, device_class="battery", uom="%")
+            self.base.args["charge_limit"][id] = self.create_entity("charge_limit", 100, device_class=None, uom="%", icon="mdi:target")
 
         if self.inv_output_charge_control != "power":
             max_charge = self.battery_rate_max_charge * MINUTE_WATT
@@ -1308,7 +1308,7 @@ class Inverter:
             self.log("Warn: Cannot find battery {} curve (settings missing), one of the required settings for {}, {}_rate and battery_power are missing from apps.yaml".format(curve_type, soc_label, curve_type))
         return {}
 
-    def create_entity(self, entity_name, value, uom=None, device_class="None"):
+    def create_entity(self, entity_name, value, uom=None, device_class=None, icon=None):
         """
         Create dummy entities required by non GE inverters to mimic GE behaviour
         """
@@ -1322,6 +1322,8 @@ class Inverter:
             attributes["unit_of_measurement"] = uom
         if device_class is not None:
             attributes["device_class"] = device_class
+        if icon is not None:
+            attributes["icon"] = icon
 
         self.created_attributes[entity_id] = attributes
 
