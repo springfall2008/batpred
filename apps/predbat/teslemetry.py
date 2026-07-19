@@ -252,9 +252,10 @@ class TeslemetryAPI(ComponentBase):
         data = await self._request("GET", "/api/1/energy_sites/{}/live_status".format(self.site_id))
         if not data:
             return False
-        response = data.get("response", {})
-        self.last_soc = response.get("percentage_charged", self.last_soc)
-        self.publish_sensor("soc", round(float(response.get("percentage_charged", 0) or 0), 2), unit="%", friendly="Powerwall SOC")
+        response = data.get("response") or {}
+        soc = response.get("percentage_charged", self.last_soc)
+        self.last_soc = soc
+        self.publish_sensor("soc", round(float(soc or 0), 2), unit="%", friendly="Powerwall SOC")
         # Capacity (soc_max): prefer total_pack_energy (Wh); else derive from energy_left / percentage.
         # Both live in live_status per the HA integration, but some PW3 firmware omits them entirely,
         # in which case site_info's battery_count estimate (below) is the only source.
