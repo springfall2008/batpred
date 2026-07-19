@@ -44,3 +44,22 @@ def test_deye_const_shape():
         print("ERROR: FREEZE_EXPORT_SOC must be 99")
         failed = True
     assert not failed, "test_deye_const_shape"
+
+
+def run_deye_const_tests(my_predbat):
+    """Run all DEYE constants tests."""
+    failed = False
+    for name, fn in [
+        ("const_shape", test_deye_const_shape),
+    ]:
+        try:
+            if fn():
+                print(f"  FAILED: deye_const.{name}")
+                failed = True
+        except Exception as e:
+            print(f"  EXCEPTION in deye_const.{name}: {e}")
+            import traceback
+
+            traceback.print_exc()
+            failed = True
+    return failed

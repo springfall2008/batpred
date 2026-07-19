@@ -31,3 +31,22 @@ def test_deyecloud_inverter_def():
             print(f"ERROR: APPS_SCHEMA missing {key}")
             failed = True
     assert not failed, "test_deyecloud_inverter_def"
+
+
+def run_deye_config_tests(my_predbat):
+    """Run all DEYE config/INVERTER_DEF tests."""
+    failed = False
+    for name, fn in [
+        ("inverter_def", test_deyecloud_inverter_def),
+    ]:
+        try:
+            if fn():
+                print(f"  FAILED: deye_config.{name}")
+                failed = True
+        except Exception as e:
+            print(f"  EXCEPTION in deye_config.{name}: {e}")
+            import traceback
+
+            traceback.print_exc()
+            failed = True
+    return failed
