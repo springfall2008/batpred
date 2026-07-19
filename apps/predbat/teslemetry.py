@@ -772,7 +772,14 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         return await self._apply_command("operation_mode", mode, lambda: self._command("operation", {"default_real_mode": mode}), force=force)
 
     async def set_backup_reserve(self, percent, force=False):
-        """Set the backup reserve percentage (cloud caps at 80; 80-100 treated as 100 by Predbat), deduped on write-on-change."""
+        """Set the backup reserve percentage, deduped on write-on-change.
+
+        The full 0-100 range is forwarded as-is: the /backup endpoint accepts any value in 0-100 (the Home
+        Assistant tesla_fleet integration exposes backup_reserve_percent as a 0-100 number over the same
+        api.backup call), so a 100% charge target is accepted rather than rejected - there is no persistent
+        failure/retry loop. Users report the Powerwall snaps a request above 80% up to 100% (as the Tesla
+        app does); the exact device handling of intermediate >80% values is a pilot follow-up.
+        """
         percent = int(percent)
         return await self._apply_command("backup_reserve", percent, lambda: self._command("backup", {"backup_reserve_percent": percent}), force=force)
 
