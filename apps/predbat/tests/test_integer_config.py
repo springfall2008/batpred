@@ -249,6 +249,36 @@ def test_config_item_range_clamp(my_predbat):
     assert my_predbat.had_errors is False, "In-range config value should not flag had_errors"
     print("✓ In-range value (0.3) passes through unclamped")
 
+    # Test 4: an integer-step item with a float-typed max (metric_min_improvement_plan: step=1,
+    # max=250.0) must still come out as an int after clamping, not the raw float max - clamping
+    # runs before the integer-preservation check, so it needs to re-apply after the clamp rather
+    # than just handing back the schema's float boundary value untouched.
+    int_item = None
+    for config_item in my_predbat.CONFIG_ITEMS:
+        if config_item.get("name") == "metric_min_improvement_plan":
+            int_item = config_item
+            break
+
+    assert int_item is not None, "metric_min_improvement_plan config item not found"
+    assert int_item.get("step") == 1, f"metric_min_improvement_plan step should be 1, got {int_item.get('step')}"
+    assert int_item.get("max") == 250.0, f"metric_min_improvement_plan max should be 250.0, got {int_item.get('max')}"
+    assert int_item.get("enable") == "expert_mode", "metric_min_improvement_plan is expected to require expert_mode"
+
+    # This item is gated on expert_mode - enable it so load_user_config doesn't just null the value out
+    original_expert_mode = my_predbat.config_index["expert_mode"].get("value")
+    my_predbat.expose_config("expert_mode", True, force_ha=True)
+
+    my_predbat.expose_config("metric_min_improvement_plan", 300, force_ha=True)
+    my_predbat.had_errors = False
+    my_predbat.load_user_config()
+    assert int_item["value"] == 250, f"Expected clamp to max 250, got {int_item['value']}"
+    assert isinstance(int_item["value"], int), f"Clamped value for an integer-step item should stay an int, got {type(int_item['value'])}"
+    assert my_predbat.had_errors is True, "Out-of-range config value should flag had_errors"
+    print("✓ Above-max value (300) on an integer-step item clamps to an int (250), not a float")
+
+    my_predbat.expose_config("metric_min_improvement_plan", int_item.get("default"), force_ha=True)
+    my_predbat.expose_config("expert_mode", original_expert_mode, force_ha=True)
+
     # Restore original state
     my_predbat.args = original_args
     my_predbat.had_errors = original_had_errors
