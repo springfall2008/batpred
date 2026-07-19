@@ -26,6 +26,11 @@ class MockDeye(DeyeAPI):
         self.automatic_ignore_pv = False
         self.data_center = data_center
         self.company_id = ""
+        self.app_id = ""
+        self.app_secret = "test-secret"
+        self.username = ""
+        self.password = ""
+        self.token_hash = ""
         self.inverter_sn_filter = inverter_sn or []
         self.device_list = []
         self.device_values = {}

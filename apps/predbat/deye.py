@@ -24,19 +24,28 @@ from deye_const import DEYE_BASE_URLS
 class DeyeAPI(ComponentBase, OAuthMixin):
     """DEYE Cloud API component."""
 
-    def initialize(self, **kwargs):
-        """Satisfy the ComponentBase abstract lifecycle hook by delegating to initialise()."""
-        self.initialise()
+    def initialize(self, app_id="", app_secret="", username="", password="", data_center="eu", company_id="", auth_method="app_credentials", token_expires_at=None, token_hash="", inverter_sn=None, automatic=False, automatic_ignore_pv=False, **kwargs):
+        """Initialise the DEYE component from its resolved config args.
 
-    def initialise(self):
-        """Initialise the DEYE component from configured args."""
+        ComponentBase.__init__ calls initialize(**kwargs); the Components
+        registry has already resolved each arg from its deye_* config key and
+        passes it BY ARG NAME (e.g. data_center <- deye_data_center), exactly
+        like fox/enphase/solax/teslemetry. Consume the kwargs directly — do NOT
+        re-derive with get_arg("data_center"): that bare name is not in
+        apps.yaml (the key is deye_data_center), so it would always return the
+        default and silently pin every setting.
+        """
         self.log("Info: DeyeAPI initialising")
-        self.data_center = self.get_arg("data_center", "eu")
-        self.company_id = self.get_arg("company_id", "")
-        self.automatic = self.get_arg("automatic", False)
-        self.automatic_ignore_pv = self.get_arg("automatic_ignore_pv", False)
-        sn = self.get_arg("inverter_sn", [])
-        self.inverter_sn_filter = sn if isinstance(sn, list) else [sn]
+        self.app_id = app_id
+        self.app_secret = app_secret
+        self.username = username
+        self.password = password
+        self.data_center = data_center or "eu"
+        self.company_id = company_id
+        self.token_hash = token_hash
+        self.automatic = automatic
+        self.automatic_ignore_pv = automatic_ignore_pv
+        self.inverter_sn_filter = inverter_sn if isinstance(inverter_sn, list) else ([inverter_sn] if inverter_sn else [])
         self.device_list = []
         self.device_values = {}
         self.device_battery_config = {}
@@ -44,11 +53,10 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         self.pending_orders = {}
         self.applied_payload = {}
         self.cached_values = {}
-        auth_method = self.get_arg("auth_method", "app_credentials")
         self._init_oauth(
             auth_method=auth_method,
-            key=self.get_arg("app_secret", self.get_arg("token_hash", "")),
-            token_expires_at=self.get_arg("token_expires_at", None),
+            key=app_secret or token_hash,
+            token_expires_at=token_expires_at,
             provider_name="deye",
         )
 
