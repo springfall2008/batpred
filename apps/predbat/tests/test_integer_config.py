@@ -196,3 +196,63 @@ def test_expose_config_preserves_integer(my_predbat):
 
     print("✓ Test passed: expose_config preserves type correctly")
     return False
+
+
+def test_config_item_range_clamp(my_predbat):
+    """
+    Test that load_user_config clamps input_number config items to their declared min/max
+    (e.g. an out-of-range apps.yaml override), rather than passing the raw value straight
+    through to the optimiser, and flags the clamp via had_errors.
+    """
+    print("**** test_config_item_range_clamp ****")
+
+    original_args = my_predbat.args.copy()
+    original_had_errors = my_predbat.had_errors
+
+    item = None
+    for config_item in my_predbat.CONFIG_ITEMS:
+        if config_item.get("name") == "pv_metric10_weight":
+            item = config_item
+            break
+
+    assert item is not None, "pv_metric10_weight config item not found"
+    assert item.get("min") == 0, f"pv_metric10_weight min should be 0, got {item.get('min')}"
+    assert item.get("max") == 1.0, f"pv_metric10_weight max should be 1.0, got {item.get('max')}"
+
+    # load_user_config() prefers a value already stored on the HA entity over the apps.yaml
+    # default (that's only used on very first load), so simulate a stale/raw out-of-range
+    # value already sitting in HA state - exactly how this reaches Predbat in practice (an
+    # apps.yaml override gets pushed straight to the entity with no min/max enforcement) -
+    # then confirm a subsequent config refresh catches and clamps it.
+
+    # Test 1: a stored value above the declared max should clamp to the max and flag an error
+    my_predbat.expose_config("pv_metric10_weight", 30, force_ha=True)
+    my_predbat.had_errors = False
+    my_predbat.load_user_config()
+    assert item["value"] == 1.0, f"Expected clamp to max 1.0, got {item['value']}"
+    assert my_predbat.had_errors is True, "Out-of-range config value should flag had_errors"
+    print("✓ Above-max value (30) clamped to max (1.0) and flagged")
+
+    # Test 2: a stored value below the declared min should clamp to the min and flag an error
+    my_predbat.expose_config("pv_metric10_weight", -5, force_ha=True)
+    my_predbat.had_errors = False
+    my_predbat.load_user_config()
+    assert item["value"] == 0, f"Expected clamp to min 0, got {item['value']}"
+    assert my_predbat.had_errors is True, "Out-of-range config value should flag had_errors"
+    print("✓ Below-min value (-5) clamped to min (0) and flagged")
+
+    # Test 3: an in-range value should pass through unmodified and not flag an error
+    my_predbat.expose_config("pv_metric10_weight", 0.3, force_ha=True)
+    my_predbat.had_errors = False
+    my_predbat.load_user_config()
+    assert item["value"] == 0.3, f"Expected in-range value to pass through as 0.3, got {item['value']}"
+    assert my_predbat.had_errors is False, "In-range config value should not flag had_errors"
+    print("✓ In-range value (0.3) passes through unclamped")
+
+    # Restore original state
+    my_predbat.args = original_args
+    my_predbat.had_errors = original_had_errors
+    my_predbat.expose_config("pv_metric10_weight", item.get("default"), force_ha=True)
+
+    print("✓ Test passed: config item range clamp works correctly")
+    return False
