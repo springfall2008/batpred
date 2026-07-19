@@ -114,7 +114,7 @@ from tests.test_rate_add_io_slots import run_rate_add_io_slots_tests
 from tests.test_battery_curve_keys import run_battery_curve_keys_tests
 from tests.test_balance_inverters import run_balance_inverters_tests
 from tests.test_octopus_download_rates import test_octopus_download_rates_wrapper
-from tests.test_integer_config import test_integer_config_entities, test_expose_config_preserves_integer
+from tests.test_integer_config import test_integer_config_entities, test_expose_config_preserves_integer, test_config_item_range_clamp
 from tests.test_validate_config import test_validate_config
 from tests.test_plan_json_rate_adjust import run_test_plan_json_rate_adjust
 from tests.test_rate_replicate_missing_slots import test_rate_replicate
@@ -303,6 +303,7 @@ def main():
         ("integer_config", test_integer_config_entities, "Integer config entities tests", False),
         ("validate_config", test_validate_config, "APPS_SCHEMA validator tests (string types, sensor boolean states)", False),
         ("expose_config_integer", test_expose_config_preserves_integer, "Expose config preserves integer tests", False),
+        ("config_item_range_clamp", test_config_item_range_clamp, "Config item min/max range clamp tests", False),
         ("plan_json_rate_adjust", run_test_plan_json_rate_adjust, "Plan JSON rate adjust type field tests", False),
         # Download tests
         ("download", test_download, "Predbat download/update comprehensive tests (GitHub API, SHA1, install check, file ops)", False),

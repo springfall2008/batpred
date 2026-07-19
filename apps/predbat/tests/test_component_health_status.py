@@ -41,6 +41,7 @@ def test_component_health_status(my_predbat):
     failed = 0
 
     recorded_statuses = []
+    original_record_status = my_predbat.record_status
     my_predbat.record_status = lambda message, debug="", had_errors=False, notify=False, extra="": recorded_statuses.append((message, had_errors))
 
     # --- All components healthy: final status should be the plan's own success status ---
@@ -106,5 +107,6 @@ def test_component_health_status(my_predbat):
 
     my_predbat.had_errors = False
     my_predbat.components = None
+    my_predbat.record_status = original_record_status
 
     return failed
