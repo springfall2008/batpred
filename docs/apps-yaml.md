@@ -798,7 +798,7 @@ Create a developer app at [developer.deyecloud.com](https://developer.deyecloud.
 - `deye_company_id` - Optional, only needed for installer/business accounts
 - `deye_inverter_sn` - Optional, restrict Predbat to specific inverter serial number(s) - a single string or a list. Default is all battery inverters found on the account
 - `deye_automatic` - Set to `true` to automatically configure Predbat entities (recommended, default: `false`)
-- `deye_automatic_ignore_pv` - Optional, defaults to `false`. When `automatic` is enabled, set to `true` to prevent DEYE Cloud from overwriting `pv_power` and `pv_today` config
+- `deye_automatic_ignore_pv` - Optional, defaults to `false`. When `automatic` is enabled, set to `true` to prevent DEYE Cloud from overwriting the `pv_power` config
 
 `deye_auth_method` defaults to `'app_credentials'` so the self-hosted add-on manages its own DeyeCloud token from the credentials above. On Predbat.com the token is injected and refreshed by the platform instead (`deye_auth_method: 'oauth'`) - self-hosted users should leave this at the default.
 
