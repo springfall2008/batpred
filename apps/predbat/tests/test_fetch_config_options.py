@@ -356,6 +356,47 @@ def test_fetch_config_options(my_predbat):
 
     print("✓ Case-insensitivity test passed")
 
+    # Test 14: octopus_intelligent_confirm_slots warns when car_charging_now isn't configured
+    print("\n*** Test 14: octopus_intelligent_confirm_slots warns without car_charging_now ***")
+
+    original_log = my_predbat.log
+    log_messages = []
+    my_predbat.log = lambda message: log_messages.append(message)
+
+    # my_predbat.args only has the battery-curve keys set earlier in this test - car_charging_now
+    # is deliberately absent, mirroring a user who never uncommented it in apps.yaml.
+    mock_config.config["octopus_intelligent_confirm_slots"] = True
+    mock_config.config["octopus_intelligent_charging"] = True
+
+    my_predbat.fetch_config_options()
+
+    warnings = [msg for msg in log_messages if "car_charging_now is not set" in msg]
+    assert len(warnings) == 1, "Should warn exactly once when confirm_slots is on, IOG is on, and car_charging_now is absent, got {}".format(len(warnings))
+
+    # Configuring car_charging_now should silence the warning
+    log_messages.clear()
+    my_predbat.args["car_charging_now"] = "sensor.car_charging_now"
+
+    my_predbat.fetch_config_options()
+
+    warnings = [msg for msg in log_messages if "car_charging_now is not set" in msg]
+    assert len(warnings) == 0, "Should not warn once car_charging_now is configured, got {}".format(warnings)
+
+    # Switch off should also silence the warning even without car_charging_now configured
+    del my_predbat.args["car_charging_now"]
+    mock_config.config["octopus_intelligent_confirm_slots"] = False
+    log_messages.clear()
+
+    my_predbat.fetch_config_options()
+
+    warnings = [msg for msg in log_messages if "car_charging_now is not set" in msg]
+    assert len(warnings) == 0, "Should not warn when octopus_intelligent_confirm_slots is off, got {}".format(warnings)
+
+    my_predbat.log = original_log
+    mock_config.config["octopus_intelligent_confirm_slots"] = False
+
+    print("✓ octopus_intelligent_confirm_slots warning test passed")
+
     # Restore original methods
     my_predbat.get_arg = original_get_arg
     my_predbat.manual_times = original_manual_times
