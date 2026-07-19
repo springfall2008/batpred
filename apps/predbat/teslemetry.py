@@ -630,7 +630,6 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self.log("Info: Teslemetry automatic configuration - wiring Predbat to the TESLA inverter type")
         self.set_arg("inverter_type", ["TESLA"])
         self.set_arg("num_inverters", 1)
-        self.set_arg("inverter_reserve_max", 80)
         self.set_arg("soc_percent", [self.entity("soc")])
         self.set_arg("soc_max", [self.entity("soc_max")])
         self.set_arg("battery_power", [self.entity("battery_power")])

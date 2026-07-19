@@ -1230,7 +1230,7 @@ def test_teslemetry_automatic_config_sets_args():
     run_async(api.automatic_config())
     assert api.args_set["inverter_type"] == ["TESLA"]
     assert api.args_set["num_inverters"] == 1
-    assert api.args_set["inverter_reserve_max"] == 80
+    assert "inverter_reserve_max" not in api.args_set  # not overridden: Predbat's default (100) allows the full reserve range
     assert api.args_set["soc_percent"] == ["sensor.predbat_teslemetry_soc"]
     assert api.args_set["soc_max"] == ["sensor.predbat_teslemetry_soc_max"]
     assert api.args_set["battery_power"] == ["sensor.predbat_teslemetry_battery_power"]
