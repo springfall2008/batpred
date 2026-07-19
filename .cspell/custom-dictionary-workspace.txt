@@ -78,6 +78,7 @@ darkred
 darray
 dasharray
 datain
+datalist
 datalog
 datap
 datapoints

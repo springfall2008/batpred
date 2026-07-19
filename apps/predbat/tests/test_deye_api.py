@@ -13,7 +13,7 @@ import pytz
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 from deye import DeyeAPI
-from deye_const import DEYE_BASE_URLS
+from deye_const import DEYE_BASE_URLS, DEYE_TELEMETRY_KEYS
 from tests.test_infra import run_async as run_async_local
 
 
@@ -96,3 +96,30 @@ def test_get_device_list_filters_inverters():
         print(f"ERROR: devices {devices}")
         failed = True
     assert not failed, "test_get_device_list_filters_inverters"
+
+
+def test_fetch_device_data_maps_keys():
+    """dataList key/value pairs map to normalised telemetry via the key table."""
+    failed = False
+    d = MockDeye()
+    data_list = [
+        {"key": DEYE_TELEMETRY_KEYS["soc"], "value": "57", "unit": "%"},
+        {"key": DEYE_TELEMETRY_KEYS["grid_power"], "value": "-1200", "unit": "W"},
+    ]
+
+    async def fake_post(endpoint_key, body):
+        """Fake DEYE POST: return a single device/latest dataList payload."""
+        return {"success": True, "deviceDataList": [{"deviceSn": "INV1", "dataList": data_list}]}
+
+    with patch.object(d, "_post", side_effect=fake_post):
+        out = run_async_local(d.fetch_device_data("INV1"))
+    if out.get("soc") != 57.0:
+        print(f"ERROR: soc {out.get('soc')}")
+        failed = True
+    if out.get("grid_power") != -1200.0:
+        print(f"ERROR: grid_power {out.get('grid_power')}")
+        failed = True
+    if d.device_values.get("INV1", {}).get("soc") != 57.0:
+        print("ERROR: not cached")
+        failed = True
+    assert not failed, "test_fetch_device_data_maps_keys"
