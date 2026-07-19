@@ -1002,7 +1002,7 @@ class Plan:
             # Stretch the start time back to the end of the overnight charge window, or 06:00 if unknown
             midnight = int(peak_start / 1440) * 1440
             early_start = midnight + (6 * 60)
-            
+
             # Find the end of the last charge window before the peak
             if getattr(self, "charge_window_best", None):
                 last_charge_end = midnight
@@ -1068,8 +1068,6 @@ class Plan:
                     self.high_export_rates.append(copy.deepcopy(new_window))
 
                 self.log("Injected continuous anti-clipping candidate export window {} to {} to allow spillover absorption (Target SOC: {}%)".format(self.time_abs_str(morning_start), self.time_abs_str(peak_end), target_soc_pct))
-
-
 
     def calculate_plan(self, recompute=True, debug_mode=False, publish=True):
         """
@@ -1602,7 +1600,7 @@ class Plan:
             zipped = list(zip(self.export_window_best, self.export_limits_best))
             zipped.sort(key=lambda w: w[0].get("start", 0))
             self.export_window_best, self.export_limits_best = [list(t) for t in zip(*zipped)]
-            
+
         if getattr(self, "high_export_rates", None):
             self.high_export_rates.sort(key=lambda w: w.get("start", 0))
 
@@ -2129,7 +2127,7 @@ class Plan:
 
         # FORCE the optimizer to respect clipping protection by rigorously filtering options
         # We must remove any option that evaluates to > target_soc (e.g. 100.0, 99.0, 98.0)
-        is_clipping_window = ("clipping_target_soc_pct" in try_export_window[window_n])
+        is_clipping_window = "clipping_target_soc_pct" in try_export_window[window_n]
         if is_clipping_window:
             target = try_export_window[window_n]["clipping_target_soc_pct"]
             loop_options = [opt for opt in loop_options if opt <= target and opt not in [98.0, 99.0, 100.0]]
@@ -2143,7 +2141,7 @@ class Plan:
         for loop_limit in loop_options:
             # Loop on window size
             loop_start = window["end"] - 5  # Minimum export window size 5 minutes
-            
+
             # Anti-clipping export windows must be evaluated at full size to ensure they provide
             # early PV charging protection instead of shrinking to exploit arbitrage.
             if is_clipping_window:
@@ -2162,7 +2160,7 @@ class Plan:
                     loop_start -= export_step
 
                 if is_clipping_window:
-                    loop_start = window["start"] - 5 # Force loop exit
+                    loop_start = window["start"] - 5  # Force loop exit
 
                 if this_export_limit == 98.0:
                     soc_at_start = self.predict_soc_best.get(start, self.soc_max)

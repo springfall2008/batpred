@@ -881,7 +881,7 @@ class Prediction:
             limit_max = soc_max
             if is_anti_clipping and export_limit_now < 100.0:
                 limit_max = soc_max * export_limit_now / 100.0
-            
+
             battery_to_max = max(limit_max - soc, 0) * battery_loss
 
             if (not set_export_freeze_only or is_anti_clipping) and export_window_active and export_limit_now < 99.0 and (soc > discharge_min):
