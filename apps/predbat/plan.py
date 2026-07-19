@@ -1069,6 +1069,15 @@ class Plan:
 
                 self.log("Injected continuous anti-clipping candidate export window {} to {} to allow spillover absorption (Target SOC: {}%)".format(self.time_abs_str(morning_start), self.time_abs_str(peak_end), target_soc_pct))
 
+        # Fix Bug 19: Sort the export windows to ensure chronological order for downstream methods
+        if getattr(self, "export_window_best", None):
+            zipped = list(zip(self.export_window_best, self.export_limits_best))
+            zipped.sort(key=lambda w: w[0].get("start", 0))
+            self.export_window_best, self.export_limits_best = [list(t) for t in zip(*zipped)]
+            
+        if getattr(self, "high_export_rates", None):
+            self.high_export_rates.sort(key=lambda w: w.get("start", 0))
+
     def calculate_plan(self, recompute=True, debug_mode=False, publish=True):
         """
         Calculate the new plan (best)
