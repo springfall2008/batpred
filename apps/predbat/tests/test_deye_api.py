@@ -67,9 +67,10 @@ def test_deye_base_url():
 
 
 def test_get_device_list_filters_inverters():
-    """Only INVERTER devices are kept; sn filter is honoured."""
+    """Only INVERTER devices are kept; sn filter is honoured case-insensitively."""
     failed = False
-    d = MockDeye(inverter_sn=["INV1"])
+    # Filter is lower-case while the device serial is upper-case: proves case-insensitivity.
+    d = MockDeye(inverter_sn=["inv1"])
 
     async def fake_post(endpoint_key, body):
         """Fake DEYE POST: return a station list, then a paginated device list."""
@@ -78,9 +79,10 @@ def test_get_device_list_filters_inverters():
         if endpoint_key == "station_device":
             return {
                 "success": True,
-                "total": 2,
+                "total": 3,
                 "deviceListItems": [
                     {"deviceType": "INVERTER", "deviceSn": "INV1"},
+                    {"deviceType": "INVERTER", "deviceSn": "INV2"},
                     {"deviceType": "METER", "deviceSn": "MET9"},
                 ],
             }
@@ -88,6 +90,8 @@ def test_get_device_list_filters_inverters():
 
     with patch.object(d, "_post", side_effect=fake_post):
         devices = run_async_local(d.get_device_list())
+    # INV2 is a real inverter but not in the filter, so it must be excluded (proves the sn filter runs);
+    # INV1 must survive despite the case mismatch between filter ("inv1") and serial ("INV1").
     if devices != ["INV1"]:
         print(f"ERROR: devices {devices}")
         failed = True
