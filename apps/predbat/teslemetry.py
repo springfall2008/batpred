@@ -563,18 +563,18 @@ class TeslemetryAPI(ComponentBase):
     async def assert_device_state(self, desired):
         """Assert the desired device tuple (export rule, grid charging, reserve, mode); tariff is synced separately.
 
-        Each setter dedupes on write-on-change, so an unchanged assert costs zero command credits.
-        Successful writes are mirrored into the diagnostic control entities; failures leave both the
-        dedupe cache and the entity state untouched so the next cycle retries.
+        The export rule and grid-charging flag are asserted together in ONE grid_import_export write (they
+        share that endpoint) so a cycle that changes both - e.g. entering an export window - costs one API
+        call, not two. Each write dedupes on write-on-change, so an unchanged assert costs zero commands.
+        Successful writes are mirrored into the diagnostic control entities; failures leave both the dedupe
+        cache and the entity state untouched so the next cycle retries.
         """
         results = {}
-        results["export_rule"] = await self.set_export_rule(desired["export_rule"])
-        results["grid_charging"] = await self.set_grid_charging(desired["grid_charging"])
+        results["grid_import_export"] = await self.set_grid_import_export(desired["export_rule"], desired["grid_charging"])
         results["reserve"] = await self.set_backup_reserve(desired["reserve"])
         results["mode"] = await self.set_operation_mode(desired["mode"])
-        if results["export_rule"]:
+        if results["grid_import_export"]:
             self.publish_control(self.entity("allow_export", domain="select"), desired["export_rule"])
-        if results["grid_charging"]:
             self.publish_control(self.entity("allow_charging_from_grid", domain="switch"), "on" if desired["grid_charging"] else "off")
         if results["reserve"]:
             self.publish_control(self.entity("backup_reserve", domain="number"), int(desired["reserve"]))
@@ -753,6 +753,27 @@ class TeslemetryAPI(ComponentBase):
     async def set_export_rule(self, rule, force=False):
         """Set the grid export rule (never/pv_only/battery_ok), deduped on write-on-change."""
         return await self._apply_command("export_rule", rule, lambda: self._command("grid_import_export", {"customer_preferred_export_rule": rule}), force=force)
+
+    async def set_grid_import_export(self, export_rule, grid_charging, force=False):
+        """Assert the export rule and grid-charging flag together in a SINGLE grid_import_export POST.
+
+        The Fleet/Teslemetry grid_import_export endpoint carries both customer_preferred_export_rule and
+        disallow_charge_from_grid_with_solar_installed, so writing them together costs one API call instead
+        of the two that separate set_export_rule + set_grid_charging make when both change in the same control
+        cycle (e.g. entering an export window: pv_only+grid-on -> battery_ok+grid-off). Deduped on the pair
+        using the SAME per-field cache keys ("export_rule"/"grid_charging") the individual setters use, so
+        manual select/switch overrides stay coherent: a POST fires when either field differs from its last-sent
+        value (or force=True), always sends both fields, and refreshes both cache entries on success.
+        """
+        allow = bool(grid_charging)
+        if not force and self._last_sent.get("export_rule") == export_rule and self._last_sent.get("grid_charging") == allow:
+            return True
+        body = {"customer_preferred_export_rule": export_rule, "disallow_charge_from_grid_with_solar_installed": not allow}
+        ok = await self._command("grid_import_export", body)
+        if ok:
+            self._last_sent["export_rule"] = export_rule
+            self._last_sent["grid_charging"] = allow
+        return ok
 
     def current_rates(self):
         """Return (import_rate, export_rate) in GBP/kWh from Predbat's rate data when available.

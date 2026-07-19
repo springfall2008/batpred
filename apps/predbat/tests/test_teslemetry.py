@@ -1093,21 +1093,47 @@ def command_ok_responses(api):
 
 
 def test_teslemetry_assert_device_state_posts_commands():
-    """assert_device_state issues all four device commands (tariff is synced separately) and mirrors success into the diagnostic entities."""
+    """assert_device_state issues THREE device commands (export-rule + grid-charging share one grid_import_export POST; tariff is synced separately) and mirrors success into the diagnostic entities."""
     api = MockTeslemetryAPI()
     api.register_control_entities()
     command_ok_responses(api)
     desired = {"export_rule": "pv_only", "grid_charging": True, "reserve": 20, "mode": "self_consumption"}
     assert run_async(api.assert_device_state(desired)) is True
-    paths = [req[1] for req in api.requests_made if req[0] == "POST"]
-    assert len(paths) == 4
+    posts = [(req[1], req[2]) for req in api.requests_made if req[0] == "POST"]
+    paths = [path for path, _body in posts]
+    assert len(paths) == 3
     assert "/api/1/energy_sites/123456/time_of_use_settings" not in paths
-    assert "/api/1/energy_sites/123456/grid_import_export" in paths
     assert "/api/1/energy_sites/123456/backup" in paths
     assert "/api/1/energy_sites/123456/operation" in paths
+    # Exactly ONE grid_import_export POST, carrying BOTH fields (not two single-field POSTs).
+    grid_posts = [body for path, body in posts if path.endswith("/grid_import_export")]
+    assert len(grid_posts) == 1
+    assert grid_posts[0] == {"customer_preferred_export_rule": "pv_only", "disallow_charge_from_grid_with_solar_installed": False}
     assert api.entity_states["select.predbat_teslemetry_operation_mode"] == "self_consumption"
     assert api.entity_states["number.predbat_teslemetry_backup_reserve"] == 20
     assert api.entity_states["select.predbat_teslemetry_allow_export"] == "pv_only"
+    assert api.entity_states["switch.predbat_teslemetry_allow_charging_from_grid"] == "on"
+
+
+def test_teslemetry_set_grid_import_export_single_post_and_coherent():
+    """The combined setter writes both fields in one POST, dedupes on the pair, and shares the per-field caches."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/grid_import_export"] = {"response": {"code": 201}}
+    # Entering an export window changes BOTH fields -> exactly one POST carrying both.
+    assert run_async(api.set_grid_import_export("battery_ok", False)) is True
+    grid_posts = [req[2] for req in api.requests_made if req[0] == "POST" and req[1].endswith("/grid_import_export")]
+    assert grid_posts == [{"customer_preferred_export_rule": "battery_ok", "disallow_charge_from_grid_with_solar_installed": True}]
+    assert api._last_sent["export_rule"] == "battery_ok" and api._last_sent["grid_charging"] is False
+    # Unchanged pair -> deduped, no second POST.
+    run_async(api.set_grid_import_export("battery_ok", False))
+    assert len([r for r in api.requests_made if r[0] == "POST"]) == 1
+    # Cache coherence: a manual single-field setter sees the pair the combined setter left behind.
+    assert run_async(api.set_export_rule("battery_ok")) is True  # matches cached export_rule -> deduped
+    assert len([r for r in api.requests_made if r[0] == "POST"]) == 1
+    # Changing only grid charging via the combined setter re-POSTs (one call) and updates both caches.
+    assert run_async(api.set_grid_import_export("battery_ok", True)) is True
+    assert len([r for r in api.requests_made if r[0] == "POST"]) == 2
+    assert api._last_sent["grid_charging"] is True
 
 
 def test_teslemetry_assert_device_state_dedupes_repeat():
@@ -1696,6 +1722,7 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_schedule_persistence_roundtrip()
     test_teslemetry_schedule_load_without_storage_is_safe()
     test_teslemetry_assert_device_state_posts_commands()
+    test_teslemetry_set_grid_import_export_single_post_and_coherent()
     test_teslemetry_assert_device_state_dedupes_repeat()
     test_teslemetry_apply_schedule_asserts_immediately()
     test_teslemetry_run_asserts_schedule_each_cycle()
