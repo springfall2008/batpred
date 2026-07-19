@@ -21,7 +21,7 @@ import asyncio
 import aiohttp
 from component_base import ComponentBase
 from oauth_mixin import OAuthMixin
-from deye_const import DEYE_BASE_URLS, DEYE_ENDPOINTS, DEYE_TIMEOUT, DEYE_RETRIES, DEYE_TELEMETRY_KEYS, DEYE_LATEST_BODY_KEY
+from deye_const import DEYE_BASE_URLS, DEYE_ENDPOINTS, DEYE_TIMEOUT, DEYE_RETRIES, DEYE_TELEMETRY_KEYS, DEYE_LATEST_BODY_KEY, DEYE_WORKMODE, FREEZE_EXPORT_SOC
 
 
 class DeyeAPI(ComponentBase, OAuthMixin):
@@ -202,3 +202,25 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             return {}
         self.device_battery_config[sn] = data
         return data
+
+    def derive_control_state(self, schedule, current_soc):
+        """Map Predbat's schedule intent to a DEYE control state (see design spec table)."""
+        reserve = int(schedule.get("reserve", 0))
+        charge = schedule.get("charge", {})
+        export = schedule.get("export", {})
+
+        if export.get("enable"):
+            export_soc = int(export.get("soc", FREEZE_EXPORT_SOC))
+            if export_soc >= FREEZE_EXPORT_SOC:
+                return {"behaviour": "freeze_export", "work_mode": DEYE_WORKMODE["selling_first"], "grid_charge": False, "solar_sell": True, "slot_soc": FREEZE_EXPORT_SOC, "power": int(export.get("power", 0))}
+            return {"behaviour": "export", "work_mode": DEYE_WORKMODE["selling_first"], "grid_charge": False, "solar_sell": True, "slot_soc": export_soc, "power": int(export.get("power", 0))}
+
+        if charge.get("enable"):
+            charge_soc = int(charge.get("soc", 0))
+            if charge_soc > current_soc and charge_soc > reserve:
+                return {"behaviour": "charge", "work_mode": DEYE_WORKMODE["zero_export_load"], "grid_charge": True, "solar_sell": False, "slot_soc": charge_soc, "power": int(charge.get("power", 0))}
+            if charge_soc == reserve:
+                return {"behaviour": "freeze_charge", "work_mode": DEYE_WORKMODE["zero_export_load"], "grid_charge": True, "solar_sell": False, "slot_soc": reserve, "power": int(charge.get("power", 0))}
+            return {"behaviour": "hold_charge", "work_mode": DEYE_WORKMODE["zero_export_load"], "grid_charge": False, "solar_sell": False, "slot_soc": reserve, "power": int(charge.get("power", 0))}
+
+        return {"behaviour": "idle", "work_mode": DEYE_WORKMODE["zero_export_load"], "grid_charge": False, "solar_sell": False, "slot_soc": reserve, "power": 0}
