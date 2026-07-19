@@ -916,6 +916,8 @@ class Output:
         if car_charging_kwh > 0:
             sentence += "- Your car is currently charging.\n"
 
+        sentence += self.get_additional_load_text()
+
         charge_window_n_next = self.get_next_charge_window(self.minutes_now)
         export_window_n_next = self.get_next_export_window(self.minutes_now)
         if charge_window_n < 0 and charge_window_n_next >= 0:
