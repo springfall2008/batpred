@@ -21,7 +21,7 @@ import asyncio
 import aiohttp
 from component_base import ComponentBase
 from oauth_mixin import OAuthMixin
-from deye_const import DEYE_BASE_URLS, DEYE_ENDPOINTS, DEYE_TIMEOUT, DEYE_RETRIES, DEYE_TELEMETRY_KEYS, DEYE_LATEST_BODY_KEY, DEYE_WORKMODE, FREEZE_EXPORT_SOC, TOU_FIELD, TOU_SLOT_COUNT
+from deye_const import DEYE_BASE_URLS, DEYE_ENDPOINTS, DEYE_TIMEOUT, DEYE_RETRIES, DEYE_TELEMETRY_KEYS, DEYE_LATEST_BODY_KEY, DEYE_WORKMODE, FREEZE_EXPORT_SOC, TOU_FIELD, TOU_SLOT_COUNT, DEYE_ORDER_MAX_POLLS
 
 
 class DeyeAPI(ComponentBase, OAuthMixin):
@@ -45,7 +45,6 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         self.password = password
         self.data_center = data_center or "eu"
         self.company_id = company_id
-        self.token_hash = token_hash
         self.automatic = automatic
         self.automatic_ignore_pv = automatic_ignore_pv
         self.inverter_sn_filter = inverter_sn if isinstance(inverter_sn, list) else ([inverter_sn] if inverter_sn else [])
@@ -54,6 +53,7 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         self.device_battery_config = {}
         self.local_schedule = {}
         self.pending_orders = {}
+        self.order_poll_count = {}
         self.applied_payload = {}
         self.cached_values = {}
         self._init_oauth(
@@ -62,6 +62,10 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             token_expires_at=token_expires_at,
             provider_name="deye",
         )
+        # _init_oauth() resets token_hash to "" (see oauth_mixin.py) so the configured value
+        # must be applied AFTER it, exactly as fox.py does — otherwise a configured hash is
+        # silently discarded and the Predbat.com SaaS dedup keyed on it breaks.
+        self.token_hash = token_hash
 
     @property
     def base_url(self):
@@ -117,6 +121,10 @@ class DeyeAPI(ComponentBase, OAuthMixin):
                             self.log(f"Warn: DEYE 401/403 on {endpoint_key}, attempt {attempt + 1}")
                             if await self.handle_oauth_401():
                                 continue
+                            if self.auth_method == "app_credentials":
+                                self.access_token = None
+                                if await self.fetch_token():
+                                    continue
                             raise RuntimeError(f"DEYE auth failed on {endpoint_key}")
                         resp.raise_for_status()
                         return await resp.json()
@@ -510,6 +518,25 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         await self.publish_data()
         for sn in self.device_list:
             await self.publish_schedule_settings_ha(sn)
+
+        # Drain any control orders left pending by apply_dynamic_control() every cycle (not
+        # just on first run) so a write that is HTTP-accepted but then fails to apply on the
+        # device doesn't stay masked forever behind the applied-payload change-detection cache.
+        for sn in list(self.pending_orders.keys()):
+            try:
+                status = await self.poll_order(sn)
+            except Exception as e:
+                self.log(f"Warn: DEYE order poll failed for {sn}: {e}")
+                status = "pending"
+            if status == "success":
+                self.order_poll_count.pop(sn, None)
+            else:
+                self.order_poll_count[sn] = self.order_poll_count.get(sn, 0) + 1
+                if self.order_poll_count[sn] >= DEYE_ORDER_MAX_POLLS:
+                    self.log(f"Warn: DEYE {sn} control order unconfirmed after {DEYE_ORDER_MAX_POLLS} polls; forcing re-write")
+                    self.pending_orders.pop(sn, None)
+                    self.order_poll_count.pop(sn, None)
+                    self.applied_payload.pop(sn, None)  # invalidate cache -> next apply re-writes
 
         if first and self.automatic:
             await self.automatic_config()
