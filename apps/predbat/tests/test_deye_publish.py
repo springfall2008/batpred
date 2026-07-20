@@ -49,6 +49,45 @@ def test_publish_data_creates_soc_sensor():
     assert not failed, "test_publish_data_creates_soc_sensor"
 
 
+def test_publish_data_publishes_battery_capacity():
+    """publish_data emits battery-capability sensors (capacity/reserve_min/currents) from config_battery."""
+    failed = False
+    d = RecordingDeye()
+    d.device_list = ["INV1"]
+    d.device_battery_config = {"INV1": {"battCapacity": 10.0, "battLowCapacity": 10, "maxChargeCurrent": 50, "maxDischargeCurrent": 50}}
+    import tests.test_infra as ti
+
+    ti.run_async(d.publish_data())
+    if d.published.get("sensor.predbat_deye_inv1_battery_capacity") != 10.0:
+        print(f"ERROR: battery_capacity not published correctly; got {d.published.get('sensor.predbat_deye_inv1_battery_capacity')!r}")
+        failed = True
+    if d.published.get("sensor.predbat_deye_inv1_battery_reserve_min") != 10.0:
+        print(f"ERROR: battery_reserve_min not published correctly; got {d.published.get('sensor.predbat_deye_inv1_battery_reserve_min')!r}")
+        failed = True
+    if d.published.get("sensor.predbat_deye_inv1_max_charge_current") != 50.0:
+        print(f"ERROR: max_charge_current not published correctly; got {d.published.get('sensor.predbat_deye_inv1_max_charge_current')!r}")
+        failed = True
+    if d.published.get("sensor.predbat_deye_inv1_max_discharge_current") != 50.0:
+        print(f"ERROR: max_discharge_current not published correctly; got {d.published.get('sensor.predbat_deye_inv1_max_discharge_current')!r}")
+        failed = True
+    assert not failed, "test_publish_data_publishes_battery_capacity"
+
+
+def test_publish_data_skips_battery_capacity_when_config_missing():
+    """publish_data does not emit battery-capability sensors for an inverter with no cached config_battery."""
+    failed = False
+    d = RecordingDeye()
+    d.device_list = ["INV1"]
+    d.device_values = {"INV1": {"soc": 63.0}}
+    import tests.test_infra as ti
+
+    ti.run_async(d.publish_data())
+    if "sensor.predbat_deye_inv1_battery_capacity" in d.published:
+        print(f"ERROR: battery_capacity published despite missing config_battery: {d.published}")
+        failed = True
+    assert not failed, "test_publish_data_skips_battery_capacity_when_config_missing"
+
+
 def test_schedule_roundtrip():
     """Published control entities read back into the schedule shape used by control derivation."""
     failed = False
@@ -181,6 +220,14 @@ def test_automatic_config_maps_all_inverters():
     if not cs or cs[0] != "select.predbat_deye_inva_battery_schedule_charge_start_time":
         print(f"ERROR: charge_start_time map {cs}")
         failed = True
+    soc_max = d.set_args.get("soc_max")
+    if not soc_max or soc_max[0] != "sensor.predbat_deye_inva_battery_capacity":
+        print(f"ERROR: soc_max map {soc_max}")
+        failed = True
+    battery_min_soc = d.set_args.get("battery_min_soc")
+    if not battery_min_soc or battery_min_soc[0] != "sensor.predbat_deye_inva_battery_reserve_min":
+        print(f"ERROR: battery_min_soc map {battery_min_soc}")
+        failed = True
     if "inverter_mode" in d.set_args:
         print("ERROR: DEYE must not set inverter_mode (mode-less)")
         failed = True
@@ -222,6 +269,8 @@ def run_deye_publish_tests(my_predbat):
     failed = False
     for name, fn in [
         ("publish_data_soc", test_publish_data_creates_soc_sensor),
+        ("publish_data_battery_capacity", test_publish_data_publishes_battery_capacity),
+        ("publish_data_battery_capacity_missing", test_publish_data_skips_battery_capacity_when_config_missing),
         ("schedule_roundtrip", test_schedule_roundtrip),
         ("schedule_unavailable", test_get_schedule_settings_ha_survives_unavailable),
         ("reserve_event_immediate", test_reserve_event_writes_immediately),

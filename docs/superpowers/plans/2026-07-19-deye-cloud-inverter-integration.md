@@ -44,9 +44,10 @@ The API contract was confirmed from the **official** `DeyeCloudDevelopers/deye-o
 - **`device/latest` request:** `POST /device/latest` body `{deviceList:[sn]}` (≤10). (`device/obtain_device_latest.py`)
 - **Order poll:** `GET /order/{orderId}`. (`commission/get_control_res.py`)
 
-**One item remains empirical** (safe defaults shipped; correct post-first-connection):
+**Two items remain empirical** (safe defaults shipped; correct post-first-connection):
 
-- [ ] **Only outstanding check:** the exact `device/latest` `dataList[].key` strings for SoC / battery / grid / pv / load power. `deye_const.py:DEYE_TELEMETRY_KEYS` holds best-known defaults; on the first live connection, log the raw `dataList` keys and correct that one dict. All logic references the dict, so nothing else changes.
+- [ ] **`device/latest` keys:** the exact `dataList[].key` strings for SoC / battery / grid / pv / load power. `deye_const.py:DEYE_TELEMETRY_KEYS` holds best-known defaults; on the first live connection, log the raw `dataList` keys and correct that one dict. All logic references the dict, so nothing else changes.
+- [ ] **`config/battery` fields and units:** the field names AND units — esp. whether `battCapacity` is kWh (directly usable as `soc_max`) or Ah (needing a voltage scale). `deye_const.py:CONFIG_BATTERY_KEYS` holds best-known defaults; correct against a live `/config/battery` response.
 
 ---
 

@@ -72,3 +72,12 @@ TOU_FIELD = {
     "grid_charge": "enableGridCharge",
     "generate": "enableGeneration",
 }
+
+# config/battery response field names — best-known defaults, not yet seen against a live
+# response.  # VERIFY@SPIKE (field names AND units — esp. whether battCapacity is kWh or Ah)
+CONFIG_BATTERY_KEYS = {
+    "capacity": "battCapacity",
+    "reserve_min": "battLowCapacity",
+    "max_charge_current": "maxChargeCurrent",
+    "max_discharge_current": "maxDischargeCurrent",
+}
