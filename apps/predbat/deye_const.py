@@ -25,6 +25,9 @@ DEYE_TIMEOUT = 30
 DEYE_RETRIES = 3
 TOU_SLOT_COUNT = 6
 FREEZE_EXPORT_SOC = 99
+# Number of run() cycles a control order may stay unconfirmed before the applied-payload
+# cache is invalidated and the next apply is forced to re-write.
+DEYE_ORDER_MAX_POLLS = 3
 
 # Endpoint paths CONFIRMED against DeyeCloudDevelopers/deye-openapi-client-sample-code.
 DEYE_ENDPOINTS = {

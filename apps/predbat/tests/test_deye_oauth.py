@@ -68,6 +68,37 @@ def test_post_401_refreshes_then_retries():
     assert not failed, "test_post_401_refreshes_then_retries"
 
 
+def test_post_401_app_credentials_recovers_via_fetch_token():
+    """In app_credentials mode handle_oauth_401 is a no-op (oauth-only); recovery falls back to fetch_token so an expired token doesn't pin the component until a restart."""
+    failed = False
+    d = MockDeye(auth_method="app_credentials")
+    d.access_token = "old"
+    resp_401 = create_aiohttp_mock_response(status=401, json_data={"success": False})
+    resp_ok = create_aiohttp_mock_response(status=200, json_data={"success": True, "data": 1})
+    session = create_aiohttp_mock_session([resp_401, resp_ok])
+    calls = {"fetch_token": 0}
+
+    async def fake_fetch_token():
+        """Simulate a fresh app-credentials login rotating the access token."""
+        calls["fetch_token"] += 1
+        d.access_token = "new"
+        return True
+
+    with patch("aiohttp.ClientSession", return_value=session):
+        with patch.object(d, "fetch_token", side_effect=fake_fetch_token):
+            out = run_async(d._post("station_list", {}))
+    if not out.get("success"):
+        print(f"ERROR: expected success after re-login, got {out}")
+        failed = True
+    if calls["fetch_token"] != 1:
+        print(f"ERROR: expected fetch_token to be called once, got {calls['fetch_token']}")
+        failed = True
+    if d.access_token != "new":
+        print(f"ERROR: token not refreshed via fetch_token, got {d.access_token}")
+        failed = True
+    assert not failed, "test_post_401_app_credentials_recovers_via_fetch_token"
+
+
 def run_deye_oauth_tests(my_predbat):
     """Run all DEYE auth tests."""
     failed = False
@@ -75,6 +106,7 @@ def run_deye_oauth_tests(my_predbat):
         ("sha256_login_payload", test_sha256_and_login_payload),
         ("auth_headers_bearer", test_auth_headers_bearer),
         ("post_401_refresh_retry", test_post_401_refreshes_then_retries),
+        ("post_401_app_credentials_recover", test_post_401_app_credentials_recovers_via_fetch_token),
     ]:
         try:
             if fn():

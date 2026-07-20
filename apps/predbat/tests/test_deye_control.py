@@ -9,7 +9,7 @@
 """Tests for the DEYE behaviour to work-mode derivation (``derive_control_state``)."""
 
 from unittest.mock import patch
-from deye_const import DEYE_WORKMODE, FREEZE_EXPORT_SOC, TOU_FIELD, TOU_SLOT_COUNT
+from deye_const import DEYE_WORKMODE, FREEZE_EXPORT_SOC, TOU_FIELD, TOU_SLOT_COUNT, DEYE_ORDER_MAX_POLLS
 from tests.test_deye_api import MockDeye
 from tests.test_infra import run_async as run_async_local
 
@@ -162,6 +162,92 @@ def test_poll_order_success():
     assert not failed, "test_poll_order_success"
 
 
+async def _fake_run_step_sn(sn):
+    """No-op stand-in for a per-inverter run() step (fetch_battery_config, fetch_device_data, ...)."""
+    return {}
+
+
+async def _fake_run_step():
+    """No-op stand-in for a run() step taking no arguments (publish_data)."""
+    return None
+
+
+def _patched_run(d, poll_status):
+    """Run one DEYE run() cycle with per-inverter I/O stubbed and poll_order fixed to poll_status."""
+
+    async def fake_poll_order(sn):
+        """Return the fixed status for every call, mirroring the real poll_order's pop-on-success side effect."""
+        if poll_status == "success":
+            d.pending_orders.pop(sn, None)
+        return poll_status
+
+    with patch.multiple(
+        d,
+        fetch_battery_config=_fake_run_step_sn,
+        fetch_device_data=_fake_run_step_sn,
+        get_schedule_settings_ha=_fake_run_step_sn,
+        publish_data=_fake_run_step,
+        publish_schedule_settings_ha=_fake_run_step_sn,
+        poll_order=fake_poll_order,
+    ):
+        return run_async_local(d.run(0, False))
+
+
+def test_run_forces_rewrite_after_max_unconfirmed_polls():
+    """A pending order that never reports success is dropped after DEYE_ORDER_MAX_POLLS run() cycles, invalidating the applied-payload cache so the next apply re-writes."""
+    failed = False
+    d = MockDeye(auth_method="oauth")
+    d.access_token = "tok"
+    d.device_list = ["INV1"]
+    d.pending_orders["INV1"] = 42
+    d.applied_payload["INV1"] = {"deviceSn": "INV1", "workMode": "ZERO_EXPORT_TO_LOAD"}
+
+    for i in range(DEYE_ORDER_MAX_POLLS - 1):
+        _patched_run(d, "pending")
+        if d.order_poll_count.get("INV1") != i + 1:
+            print(f"ERROR: after poll {i + 1} expected count {i + 1}, got {d.order_poll_count.get('INV1')}")
+            failed = True
+        if "INV1" not in d.pending_orders or "INV1" not in d.applied_payload:
+            print(f"ERROR: order/cache dropped too early after poll {i + 1}")
+            failed = True
+
+    _patched_run(d, "pending")
+    if "INV1" in d.pending_orders:
+        print(f"ERROR: pending order should be dropped after {DEYE_ORDER_MAX_POLLS} polls: {d.pending_orders}")
+        failed = True
+    if "INV1" in d.order_poll_count:
+        print(f"ERROR: poll count should be reset after drop: {d.order_poll_count}")
+        failed = True
+    if "INV1" in d.applied_payload:
+        print(f"ERROR: applied_payload cache should be invalidated after drop: {d.applied_payload}")
+        failed = True
+    assert not failed, "test_run_forces_rewrite_after_max_unconfirmed_polls"
+
+
+def test_run_clears_pending_order_and_count_on_success():
+    """A run() cycle whose poll_order reports success clears both the pending order and the poll count, and leaves the applied-payload cache untouched."""
+    failed = False
+    d = MockDeye(auth_method="oauth")
+    d.access_token = "tok"
+    d.device_list = ["INV1"]
+    d.pending_orders["INV1"] = 7
+    d.order_poll_count["INV1"] = 2
+    d.applied_payload["INV1"] = {"deviceSn": "INV1", "workMode": "ZERO_EXPORT_TO_LOAD"}
+
+    _patched_run(d, "success")
+
+    if "INV1" in d.pending_orders:
+        print(f"ERROR: successful order should be cleared: {d.pending_orders}")
+        failed = True
+    if "INV1" in d.order_poll_count:
+        print(f"ERROR: poll count should be reset on success: {d.order_poll_count}")
+        failed = True
+    if "INV1" not in d.applied_payload:
+        print("ERROR: applied_payload cache should not be touched on success")
+        failed = True
+    assert not failed, "test_run_clears_pending_order_and_count_on_success"
+
+
 def run_deye_control_tests(my_predbat):
     """Run all DEYE control-logic tests."""
     failed = False
@@ -172,6 +258,8 @@ def run_deye_control_tests(my_predbat):
         ("apply_suppress", test_apply_dynamic_control_suppresses_when_unchanged),
         ("apply_write", test_apply_dynamic_control_writes_and_caches_on_change),
         ("poll_order", test_poll_order_success),
+        ("run_forces_rewrite_after_max_polls", test_run_forces_rewrite_after_max_unconfirmed_polls),
+        ("run_clears_on_success", test_run_clears_pending_order_and_count_on_success),
     ]:
         try:
             if fn():

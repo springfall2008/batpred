@@ -38,6 +38,7 @@ class MockDeye(DeyeAPI):
         self.device_battery_config = {}
         self.local_schedule = {}
         self.pending_orders = {}
+        self.order_poll_count = {}
         self.applied_payload = {}
         self.cached_values = {}
         self.log_messages = []
