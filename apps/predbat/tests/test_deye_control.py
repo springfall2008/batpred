@@ -190,6 +190,56 @@ def test_poll_order_success():
     assert not failed, "test_poll_order_success"
 
 
+def test_active_workmode_follows_time():
+    """Top-level workMode follows the window active NOW, so a charge period isn't defeated by an export window."""
+    failed = False
+    d = MockDeye()
+    # A day with BOTH a grid-charge window (02:00-05:00) and an export window (18:00-20:00) enabled.
+    sched = {
+        "reserve": 10,
+        "charge": {"enable": True, "soc": 95, "power": 3000, "start": "02:00", "end": "05:00"},
+        "export": {"enable": True, "soc": 20, "power": 3000, "start": "18:00", "end": "20:00"},
+    }
+    from deye_const import DEYE_WORKMODE
+
+    cases = [
+        # now_minutes, expected work_mode, gridChargeAction, solarSellAction
+        (3 * 60, DEYE_WORKMODE["zero_export_load"], "on", "off"),   # 03:00 -> in charge window
+        (19 * 60, DEYE_WORKMODE["selling_first"], "off", "on"),     # 19:00 -> in export window
+        (12 * 60, DEYE_WORKMODE["zero_export_load"], "off", "off"),  # 12:00 -> idle (neither window)
+    ]
+    for now_minutes, exp_mode, exp_grid, exp_sell in cases:
+        payload = d.build_dynamic_payload("INV1", sched, current_soc=40, now_minutes=now_minutes)
+        got = (payload["workMode"], payload["gridChargeAction"], payload["solarSellAction"])
+        if got != (exp_mode, exp_grid, exp_sell):
+            print(f"ERROR: now={now_minutes} expected {(exp_mode, exp_grid, exp_sell)} got {got}")
+            failed = True
+    assert not failed, "test_active_workmode_follows_time"
+
+
+def test_reconcile_only_controlled_inverters():
+    """_reconcile_control re-applies only inverters Predbat already controls, with change-detection (force=False)."""
+    failed = False
+    d = MockDeye()
+    d.device_list = ["INV1", "INV2"]
+    d.control_active = {"INV1"}  # INV2 not yet driven by Predbat
+    d.local_schedule = {"INV1": {"reserve": 10, "charge": {"enable": False}, "export": {"enable": False}}, "INV2": {"reserve": 10, "charge": {"enable": False}, "export": {"enable": False}}}
+    d.device_values = {"INV1": {"soc": 50}, "INV2": {"soc": 50}}
+    calls = []
+
+    async def fake_apply(sn, schedule, current_soc, force=False):
+        """Record reconcile applies."""
+        calls.append((sn, force))
+        return False
+
+    with patch.object(d, "apply_dynamic_control", side_effect=fake_apply):
+        run_async_local(d._reconcile_control())
+    if calls != [("INV1", False)]:
+        print(f"ERROR: reconcile should apply only the controlled inverter with force=False: {calls}")
+        failed = True
+    assert not failed, "test_reconcile_only_controlled_inverters"
+
+
 def test_poll_order_empty_response_stays_pending():
     """An empty/error response (network/auth) must NOT falsely confirm the order."""
     failed = False
@@ -307,6 +357,8 @@ def run_deye_control_tests(my_predbat):
         ("payload", test_build_dynamic_payload_and_equality),
         ("apply_suppress", test_apply_dynamic_control_suppresses_when_unchanged),
         ("apply_write", test_apply_dynamic_control_writes_and_caches_on_change),
+        ("active_workmode_time", test_active_workmode_follows_time),
+        ("reconcile_controlled", test_reconcile_only_controlled_inverters),
         ("poll_order", test_poll_order_success),
         ("poll_order_empty_pending", test_poll_order_empty_response_stays_pending),
         ("run_forces_rewrite_after_max_polls", test_run_forces_rewrite_after_max_unconfirmed_polls),

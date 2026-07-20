@@ -55,6 +55,7 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         self.pending_orders = {}
         self.order_poll_count = {}
         self.applied_payload = {}
+        self.control_active = set()
         self.cached_values = {}
         self._init_oauth(
             auth_method=auth_method,
@@ -281,11 +282,63 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         slots = sorted(slots, key=lambda slot: slot[TOU_FIELD["time"]])[:TOU_SLOT_COUNT]
         return slots
 
-    def build_dynamic_payload(self, sn, schedule, current_soc):
-        """Build the strategy_dynamic_control body for one inverter."""
+    def _now_minutes(self):
+        """Return minutes since local midnight, for time-aware window selection."""
+        try:
+            return int(self.minutes_now)
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _hm_to_minutes(hm):
+        """Convert a HH:MM string to minutes since midnight (0 on bad input)."""
+        try:
+            parts = str(hm).split(":")
+            return int(parts[0]) * 60 + int(parts[1])
+        except (ValueError, IndexError):
+            return 0
+
+    def _window_active(self, window, now_minutes):
+        """Return True if an enabled window covers now_minutes (handles a midnight wrap)."""
+        if not window.get("enable") or not window.get("start") or not window.get("end"):
+            return False
+        start = self._hm_to_minutes(window["start"])
+        end = self._hm_to_minutes(window["end"])
+        if start == end:
+            return False
+        if start < end:
+            return start <= now_minutes < end
+        return now_minutes >= start or now_minutes < end  # window wraps past midnight
+
+    def _active_state(self, schedule, current_soc, now_minutes):
+        """Derive the control state for the window active at now_minutes, else idle.
+
+        DEYE has a single global work mode per schedule, so the top-level mode must
+        follow the window active RIGHT NOW rather than a static export-first
+        precedence: otherwise an export window enabled elsewhere in the day would
+        pin the mode to SELLING_FIRST and block the charge window's grid charging.
+        """
+        reserve = int(schedule.get("reserve", 0))
+        charge = schedule.get("charge", {})
+        export = schedule.get("export", {})
+        intent = {"reserve": reserve, "charge": {"enable": False}, "export": {"enable": False}}
+        if self._window_active(export, now_minutes):
+            intent["export"] = {"enable": True, "soc": export.get("soc", 0), "power": export.get("power", 0)}
+        elif self._window_active(charge, now_minutes):
+            intent["charge"] = {"enable": True, "soc": charge.get("soc", 0), "power": charge.get("power", 0)}
+        return self.derive_control_state(intent, current_soc)
+
+    def build_dynamic_payload(self, sn, schedule, current_soc, now_minutes=None):
+        """Build the strategy_dynamic_control body for one inverter.
+
+        The top-level work mode / on-off flags follow the window active at
+        now_minutes (defaults to the current local time); the 6 TOU slots still
+        encode every window's per-slot config.
+        """
+        if now_minutes is None:
+            now_minutes = self._now_minutes()
         slots = self.build_tou_slots(schedule, current_soc)
-        # The imminent action drives the top-level work mode / on-off flags.
-        active = self.derive_control_state(schedule, current_soc)
+        active = self._active_state(schedule, current_soc, now_minutes)
         return {
             "deviceSn": sn,
             "workMode": active["work_mode"],
@@ -448,12 +501,14 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         schedule["reserve"] = int(reserve)
         self.local_schedule[sn] = schedule
         current_soc = self.device_values.get(sn, {}).get("soc", reserve)
+        self.control_active.add(sn)  # Predbat is now actively controlling this inverter
         return await self.apply_dynamic_control(sn, schedule, current_soc, force=True)
 
     async def apply_schedule(self, sn, force=True):
         """Recompute the schedule from HA control entities and push it for one inverter."""
         schedule = await self.get_schedule_settings_ha(sn)
         current_soc = self.device_values.get(sn, {}).get("soc", schedule.get("reserve", 0))
+        self.control_active.add(sn)  # Predbat is now actively controlling this inverter
         return await self.apply_dynamic_control(sn, schedule, current_soc, force=force)
 
     async def select_event(self, entity_id, value):
@@ -560,9 +615,33 @@ class DeyeAPI(ComponentBase, OAuthMixin):
                     self.order_poll_count.pop(sn, None)
                     self.applied_payload.pop(sn, None)  # invalidate cache -> next apply re-writes
 
+        await self._reconcile_control()
+
         if first and self.automatic:
             await self.automatic_config()
         return True
+
+    async def _reconcile_control(self):
+        """Re-apply the schedule of each inverter Predbat is already controlling.
+
+        Keeps the time-aware top-level work mode in sync as the day advances (e.g.
+        flips from a charge period to an export period). Change detection suppresses
+        no-op writes, so this only actually writes at a genuine transition (or after
+        an order-poll cache invalidation). Inverters Predbat has not yet driven via
+        the write button (not in ``control_active``) are left untouched, so a startup
+        cycle never clobbers an inverter before there is a plan.
+        """
+        for sn in self.device_list:
+            if sn not in self.control_active:
+                continue
+            schedule = self.local_schedule.get(sn)
+            if not schedule:
+                continue
+            current_soc = self.device_values.get(sn, {}).get("soc", schedule.get("reserve", 0))
+            try:
+                await self.apply_dynamic_control(sn, schedule, current_soc, force=False)
+            except Exception as e:
+                self.log(f"Warn: DEYE reconcile failed for {sn}: {e}")
 
     async def final(self):
         """Cleanup on shutdown."""
