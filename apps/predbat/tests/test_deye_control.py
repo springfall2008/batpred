@@ -204,8 +204,8 @@ def test_active_workmode_follows_time():
 
     cases = [
         # now_minutes, expected work_mode, gridChargeAction, solarSellAction
-        (3 * 60, DEYE_WORKMODE["zero_export_load"], "on", "off"),   # 03:00 -> in charge window
-        (19 * 60, DEYE_WORKMODE["selling_first"], "off", "on"),     # 19:00 -> in export window
+        (3 * 60, DEYE_WORKMODE["zero_export_load"], "on", "off"),  # 03:00 -> in charge window
+        (19 * 60, DEYE_WORKMODE["selling_first"], "off", "on"),  # 19:00 -> in export window
         (12 * 60, DEYE_WORKMODE["zero_export_load"], "off", "off"),  # 12:00 -> idle (neither window)
     ]
     for now_minutes, exp_mode, exp_grid, exp_sell in cases:
