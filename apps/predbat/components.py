@@ -261,6 +261,11 @@ COMPONENT_LIST = {
             "automatic": {"required": False, "default": False, "config": "deye_automatic"},
             "automatic_ignore_pv": {"required": False, "default": False, "config": "deye_automatic_ignore_pv"},
         },
+        # Gate activation on having at least one auth path — app credentials (app_id,
+        # self-hosted add-on) OR an injected SaaS token (token_hash). Without this the
+        # component would start for every instance since all individual args are
+        # optional to allow either auth mode.
+        "required_or": ["app_id", "token_hash"],
         "phase": 1,
     },
     "enphase": {
