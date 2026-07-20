@@ -10,11 +10,23 @@
 # fmt on
 
 
+class FakeComponent:
+    """Minimal component exposing its calculation state."""
+
+    def __init__(self, is_calculating=False):
+        self.calculating = is_calculating
+
+    def is_calculating(self):
+        """Return the configured calculation state."""
+        return self.calculating
+
+
 class FakeComponents:
     """Minimal stand-in for the Components registry, driven by a name -> is_alive map."""
 
-    def __init__(self, alive_map):
+    def __init__(self, alive_map, calculating_map=None):
         self.alive_map = alive_map
+        self.calculating_map = calculating_map or {}
 
     def get_all(self):
         return list(self.alive_map.keys())
@@ -30,6 +42,10 @@ class FakeComponents:
 
     def get_error_count(self, name):
         return 0 if self.alive_map[name] else 1
+
+    def get_component(self, name):
+        """Return a fake component with the configured calculation state."""
+        return FakeComponent(self.calculating_map.get(name, False))
 
 
 def test_component_health_status(my_predbat):
@@ -91,6 +107,30 @@ def test_component_health_status(my_predbat):
             failed = 1
         else:
             print("OK: All failed components listed in the recorded error status")
+
+    # --- LoadML can appear unhealthy during a calculation without failing the run status ---
+    my_predbat.had_errors = False
+    my_predbat.components = FakeComponents({"load_ml": False}, calculating_map={"load_ml": True})
+    recorded_statuses.clear()
+    my_predbat.record_final_run_status("Export", "")
+
+    if len(recorded_statuses) != 1 or recorded_statuses[0] != ("Export", False):
+        print("ERROR: Calculating LoadML component should not fail the run status: {}".format(recorded_statuses))
+        failed = 1
+    else:
+        print("OK: Calculating LoadML component does not fail the run status")
+
+    # --- A LoadML failure outside calculation must still fail the run status ---
+    my_predbat.had_errors = False
+    my_predbat.components = FakeComponents({"load_ml": False}, calculating_map={"load_ml": False})
+    recorded_statuses.clear()
+    my_predbat.record_final_run_status("Demand", "")
+
+    if len(recorded_statuses) != 1 or not recorded_statuses[0][1] or "ML Load Forecaster" not in recorded_statuses[0][0]:
+        print("ERROR: Non-calculating failed LoadML component did not fail the run status: {}".format(recorded_statuses))
+        failed = 1
+    else:
+        print("OK: LoadML failure outside calculation still fails the run status")
 
     # --- Pre-existing error takes precedence, and is not overwritten by the component check ---
     my_predbat.had_errors = True
