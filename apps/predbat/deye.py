@@ -19,6 +19,10 @@ token) auth.
 import hashlib
 import asyncio
 import aiohttp
+import argparse
+import json
+import os
+from datetime import datetime
 from component_base import ComponentBase
 from oauth_mixin import OAuthMixin
 from deye_const import DEYE_BASE_URLS, DEYE_ENDPOINTS, DEYE_TIMEOUT, DEYE_RETRIES, DEYE_TELEMETRY_KEYS, DEYE_LATEST_BODY_KEY, DEYE_WORKMODE, FREEZE_EXPORT_SOC, TOU_FIELD, TOU_SLOT_COUNT, TOU_FILLER_TIMES, DEYE_ORDER_MAX_POLLS, CONFIG_BATTERY_KEYS
@@ -646,3 +650,137 @@ class DeyeAPI(ComponentBase, OAuthMixin):
     async def final(self):
         """Cleanup on shutdown."""
         self.log("Info: DeyeAPI shutdown")
+
+
+class MockBase:  # pragma: no cover
+    """Mock base object so DeyeAPI can be exercised from the command line."""
+
+    def __init__(self):
+        """Set up the minimal base surface DeyeAPI reads (tz, prefix, args, time, entities)."""
+        self.local_tz = datetime.now().astimezone().tzinfo
+        self.now_utc = datetime.now(self.local_tz)
+        self.prefix = "predbat"
+        self.args = {}
+        self.midnight_utc = datetime.now(self.local_tz).replace(hour=0, minute=0, second=0, microsecond=0)
+        self.minutes_now = self.now_utc.hour * 60 + self.now_utc.minute
+        self.entities = {}
+
+    def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=None):
+        """Return a previously published entity state (or default)."""
+        if raw:
+            return self.entities.get(entity_id, {})
+        return self.entities.get(entity_id, {}).get("state", default)
+
+    def set_state_wrapper(self, entity_id, state, attributes=None, app=None):
+        """Record an entity state locally."""
+        self.entities[entity_id] = {"state": state, "attributes": attributes or {}}
+
+    def log(self, message):
+        """Print a timestamped log line."""
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
+
+    def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
+        """Print and record a published dashboard entity."""
+        print(f"ENTITY: {entity_id} = {state}")
+        self.set_state_wrapper(entity_id, state, attributes)
+
+    def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
+        """Return the caller's default (no configured args in CLI mode)."""
+        return default
+
+    def set_arg(self, key, value):
+        """Print an inverter arg that automatic_config would set."""
+        print(f"Set arg {key} = {value}")
+
+
+def _build_deye(mock_base, args):  # pragma: no cover
+    """Construct a DeyeAPI from parsed CLI args, choosing the auth mode."""
+    if args.user_id:
+        mock_base.args["user_id"] = args.user_id
+    arg_dict = {
+        "data_center": args.data_center,
+        "company_id": args.company_id or "",
+        "inverter_sn": args.serial,
+        "automatic": True,
+    }
+    if args.token_hash:
+        # Predbat.com SaaS: token injected/refreshed via OAuthMixin (Supabase edge function).
+        if args.supabase_url:
+            os.environ["SUPABASE_URL"] = args.supabase_url
+        if args.supabase_key:
+            os.environ["SUPABASE_KEY"] = args.supabase_key
+        arg_dict.update({"auth_method": "oauth", "token_hash": args.token_hash, "token_expires_at": args.token_expires})
+    else:
+        # Self-hosted add-on: developer app (app_id/app_secret) + DeyeCloud account (username/password).
+        arg_dict.update({"auth_method": "app_credentials", "app_id": args.app_id, "app_secret": args.app_secret, "username": args.username, "password": args.password})
+    return DeyeAPI(mock_base, **arg_dict)
+
+
+async def test_deye_api(args):  # pragma: no cover
+    """Run one read-only DEYE cycle (discover, poll, publish); optionally write a test schedule.
+
+    Default is read-only: run() discovers devices, polls telemetry/config and
+    publishes entities but never writes to the inverter. --write-schedule opts in
+    to a real charge-window write and polls the resulting order.
+    """
+    mock_base = MockBase()
+    deye = _build_deye(mock_base, args)
+
+    print("Calling run() once (read-only: discover, poll, publish)...")
+    await deye.run(seconds=0, first=True)
+
+    for sn in deye.device_list:
+        print(f"Device {sn}: telemetry={json.dumps(deye.device_values.get(sn, {}))}")
+
+    if args.write_schedule:
+        serial = args.serial or (deye.device_list[0] if deye.device_list else None)
+        if not serial:
+            print("No inverter serial available for --write-schedule")
+        else:
+            current_soc = deye.device_values.get(serial, {}).get("soc", 0)
+            schedule = {
+                "reserve": 10,
+                "charge": {"enable": True, "soc": 100, "power": 3000, "start": "00:10", "end": "00:20"},
+                "export": {"enable": False, "soc": 0, "power": 0},
+            }
+            print(f"WRITING test schedule to {serial}:\n{json.dumps(schedule, indent=2)}")
+            wrote = await deye.apply_dynamic_control(serial, schedule, current_soc, force=True)
+            print(f"Write result: {wrote}, pending order: {deye.pending_orders.get(serial)}")
+            if wrote:
+                status = await deye.poll_order(serial)
+                print(f"Order status: {status}")
+
+    await deye.final()
+    print("Done")
+
+
+def main():  # pragma: no cover
+    """Command-line entry point to test the DEYE Cloud API (read-only by default)."""
+    parser = argparse.ArgumentParser(description="Test the DEYE Cloud API (read-only by default)")
+    parser.add_argument("--serial", default=None, help="DEYE inverter serial (auto-discovered if omitted)")
+    parser.add_argument("--data-center", default="eu", choices=["eu", "am", "india"], help="DEYE data centre (default eu)")
+    parser.add_argument("--company-id", default=None, help="DeyeCloud companyId (business/installer accounts only)")
+    # Self-hosted add-on auth: developer app credentials + DeyeCloud account login.
+    parser.add_argument("--app-id", default=None, help="Developer App ID (from developer.deyecloud.com)")
+    parser.add_argument("--app-secret", default=None, help="Developer App Secret (from developer.deyecloud.com)")
+    parser.add_argument("--username", default=None, help="DeyeCloud account email/username")
+    parser.add_argument("--password", default=None, help="DeyeCloud account password (sent SHA-256 hashed)")
+    # Predbat.com SaaS auth: injected token.
+    parser.add_argument("--token-hash", default=None, help="Injected OAuth token hash (Predbat.com SaaS mode)")
+    parser.add_argument("--token-expires", default=None, help="OAuth token expiry timestamp")
+    parser.add_argument("--supabase-url", default=None, help="Supabase URL for OAuth token refresh")
+    parser.add_argument("--supabase-key", default=None, help="Supabase anon key for OAuth token refresh")
+    parser.add_argument("--user-id", default=None, help="Supabase user ID for OAuth token refresh")
+    parser.add_argument("--write-schedule", action="store_true", help="Opt in to writing a test charge window (default is read-only)")
+
+    args = parser.parse_args()
+
+    has_app_creds = all([args.app_id, args.app_secret, args.username, args.password])
+    if not args.token_hash and not has_app_creds:
+        parser.error("provide either --token-hash (SaaS) or all of --app-id/--app-secret/--username/--password (add-on)")
+
+    asyncio.run(test_deye_api(args))
+
+
+if __name__ == "__main__":  # pragma: no cover
+    main()
