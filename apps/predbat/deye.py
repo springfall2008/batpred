@@ -21,7 +21,7 @@ import asyncio
 import aiohttp
 from component_base import ComponentBase
 from oauth_mixin import OAuthMixin
-from deye_const import DEYE_BASE_URLS, DEYE_ENDPOINTS, DEYE_TIMEOUT, DEYE_RETRIES, DEYE_TELEMETRY_KEYS, DEYE_LATEST_BODY_KEY, DEYE_WORKMODE, FREEZE_EXPORT_SOC, TOU_FIELD, TOU_SLOT_COUNT, DEYE_ORDER_MAX_POLLS
+from deye_const import DEYE_BASE_URLS, DEYE_ENDPOINTS, DEYE_TIMEOUT, DEYE_RETRIES, DEYE_TELEMETRY_KEYS, DEYE_LATEST_BODY_KEY, DEYE_WORKMODE, FREEZE_EXPORT_SOC, TOU_FIELD, TOU_SLOT_COUNT, DEYE_ORDER_MAX_POLLS, CONFIG_BATTERY_KEYS
 
 
 class DeyeAPI(ComponentBase, OAuthMixin):
@@ -211,6 +211,11 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         self.device_battery_config[sn] = data
         return data
 
+    def _battery_config_value(self, sn, key, default=0.0):
+        """Read a config_battery field for one inverter via CONFIG_BATTERY_KEYS (spike-confirmable), safely coerced."""
+        raw = self.device_battery_config.get(sn, {}).get(CONFIG_BATTERY_KEYS[key])
+        return self._as_float(raw, default)
+
     def derive_control_state(self, schedule, current_soc):
         """Map Predbat's schedule intent to a DEYE control state (see design spec table)."""
         reserve = int(schedule.get("reserve", 0))
@@ -357,6 +362,12 @@ class DeyeAPI(ComponentBase, OAuthMixin):
                 if leaf in values:
                     self.dashboard_item(self._sensor_name(sn, leaf), state=values[leaf], attributes={"unit_of_measurement": unit, "friendly_name": f"DEYE {sn} {leaf.replace('_', ' ').title()}"}, app="deye")
 
+            if sn in self.device_battery_config:
+                capability_units = {"battery_capacity": ("capacity", "kWh"), "battery_reserve_min": ("reserve_min", "%"), "max_charge_current": ("max_charge_current", "A"), "max_discharge_current": ("max_discharge_current", "A")}
+                for leaf, (key, unit) in capability_units.items():
+                    value = self._battery_config_value(sn, key)
+                    self.dashboard_item(self._sensor_name(sn, leaf), state=value, attributes={"unit_of_measurement": unit, "friendly_name": f"DEYE {sn} {leaf.replace('_', ' ').title()}"}, app="deye")
+
     async def publish_schedule_settings_ha(self, sn):
         """Publish the charge/export schedule control entities for one inverter."""
         local = self.local_schedule.get(sn, {})
@@ -478,6 +489,8 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         if not self.automatic_ignore_pv:
             self.set_arg("pv_power", [self._sensor_name(sn, "pv_power") for sn in devices])
         self.set_arg("battery_temperature", [self._sensor_name(sn, "temperature") for sn in devices])
+        self.set_arg("soc_max", [self._sensor_name(sn, "battery_capacity") for sn in devices])
+        self.set_arg("battery_min_soc", [self._sensor_name(sn, "battery_reserve_min") for sn in devices])
         self.set_arg("reserve", [self._control_name("number", sn, "battery_schedule_reserve") for sn in devices])
         self.set_arg("charge_start_time", [self._control_name("select", sn, "battery_schedule_charge_start_time") for sn in devices])
         self.set_arg("charge_end_time", [self._control_name("select", sn, "battery_schedule_charge_end_time") for sn in devices])

@@ -321,9 +321,14 @@ needed to build**:
 Change detection diffs the freshly-computed payload against the **last-applied
 cached payload** (no read endpoint dependency), rather than a read-back.
 
-**One item remains empirical** (safe defaults shipped, corrected on first live
-connection): the exact `device/latest` `dataList[].key` strings for SOC /
-battery / grid / pv / load power, isolated in `deye_const.py:DEYE_TELEMETRY_KEYS`.
+**Two items remain empirical** (safe defaults shipped, corrected on first live
+connection):
+
+- The exact `device/latest` `dataList[].key` strings for SOC / battery / grid
+  / pv / load power, isolated in `deye_const.py:DEYE_TELEMETRY_KEYS`.
+- The `config/battery` field names and units — esp. whether `battCapacity` is
+  kWh (directly usable as `soc_max`) or Ah (needing a voltage scale), isolated
+  in `deye_const.py:CONFIG_BATTERY_KEYS`.
 
 ## Out of scope (YAGNI)
 
