@@ -58,6 +58,7 @@ Once you get everything working please share the configuration as a GitHub issue
    | [Solis Hybrid inverters (Firmware FB00 and later)](#solis-inverters-fb00-or-later) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) | [ginlong_solis.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml) |
    | [SunSynk](#sunsynk) | [Sunsynk](https://github.com/kellerza/sunsynk) | [sunsynk.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sunsynk.yaml) |
    | [Tesla Powerwall](#tesla-powerwall) | [Tesla Fleet](https://www.home-assistant.io/integrations/tesla_fleet) or [Teslemetry](https://www.home-assistant.io/integrations/teslemetry) | [tesla_powerwall.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/tesla_powerwall.yaml) |
+   | [Tesla Powerwall via Teslemetry component (beta)](#teslemetry-component-beta) | Predbat built-in | [teslemetry.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/teslemetry.yaml) |
    | [Victron](#victron) | [Victron MQTT](https://github.com/tomer-w/victron_mqtt) | [victron.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/victron.yaml) |
 
 Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on GitHub.
@@ -2498,6 +2499,23 @@ template:
 
 ## Tesla Powerwall
 
+### Teslemetry component (beta)
+
+!!! warning "Beta"
+    Predbat's built-in Teslemetry component is in **beta** and under active development. It is not yet recommended for general use - expect issues and please report them on GitHub. For a proven setup today, use the [manual configuration](#manual-configuration-via-home-assistant-integrations) below.
+
+The component needs only your token in `apps.yaml` and no Home Assistant Tesla integration (`site_id` is optional - omit it to use the first site on your account):
+
+```yaml
+  teslemetry_key: 'your-teslemetry-token'
+  teslemetry_site_id: 'your-energy-site-id'  # optional: omit to use the first site on your account
+  teslemetry_automatic: True
+```
+
+Copy the template [teslemetry.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/teslemetry.yaml) over the top of your `apps.yaml` and edit for your system. See [Tesla Powerwall Teslemetry API](components.md#tesla-powerwall-teslemetry-api-teslemetry) for details.
+
+### Manual configuration via Home Assistant integrations
+
 Integration of the Tesla Powerwall follows the approach outlined in [Ed Hull's blog](https://edhull.co.uk/blog/2025-08-24/predbat-docker-tesla).
 Ed's setup only covered Predbat controlling charging the Powerwall, the below configuration (thanks @Slee2112) covers both charging and discharging (exporting).
 
@@ -2574,7 +2592,7 @@ input_text:
 
 You then need to obtain an access token for the API. There are two ways - either use the existing Fleet Integration if you have that setup, or manually obtain them.
 
-### Option 1: Tesla Fleet Integration (recommended)
+### Option 1: Tesla Fleet Integration
 
 The Tesla Fleet integration already handles token exchanges for you. You can simply use this token for the REST API calls.
 

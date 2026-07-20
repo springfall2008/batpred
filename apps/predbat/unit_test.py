@@ -52,6 +52,7 @@ from tests.test_single_debug import run_single_debug
 from tests.test_saving_session import test_saving_session, test_saving_session_null_octopoints, test_saving_session_notify_config, test_saving_session_default_rate, test_saving_session_axle_conflict, test_saving_session_auto_join_toggle
 from tests.test_secrets import run_secrets_tests
 from tests.test_ge_cloud import test_ge_cloud
+from tests.test_teslemetry import test_teslemetry
 from tests.test_compare import test_compare
 from tests.test_gateway import run_gateway_tests
 from tests.test_axle import test_axle
@@ -105,7 +106,7 @@ from tests.test_fetch_url_cached import test_fetch_url_cached
 from tests.test_load_free_slot import test_load_free_slot
 from tests.test_add_now_to_octopus_slot import test_add_now_to_octopus_slot
 from tests.test_octopus_slots_change import test_octopus_slots_change
-from tests.test_dynamic_load import test_dynamic_load_car_slot_cancellation
+from tests.test_dynamic_load import test_dynamic_load_car_slot_cancellation, test_dynamic_load_high_load_baseline
 from tests.test_fox_api import run_fox_api_tests
 from tests.test_enphase_api import run_enphase_api_tests
 from tests.test_solcast import run_solcast_tests
@@ -258,6 +259,7 @@ def main():
         ("active_flag", test_active_flag, "Active flag cleared on exception tests", False),
         ("component_health_status", test_component_health_status, "Component errors fail the recorded run status tests", False),
         ("dynamic_load_car", test_dynamic_load_car_slot_cancellation, "Dynamic load car slot cancellation tests", False),
+        ("dynamic_load_high", test_dynamic_load_high_load_baseline, "Dynamic load high-load baseline tests", False),
         ("units", run_test_units, "Unit tests", False),
         ("manual_api", run_test_manual_api, "Manual API tests", False),
         ("manual_soc", run_test_manual_soc, "Manual SOC target tests", False),
@@ -300,6 +302,7 @@ def main():
         ("balance_inverters", run_balance_inverters_tests, "Balance inverters tests", False),
         # GE Cloud unit tests
         ("ge_cloud", test_ge_cloud, "GE Cloud comprehensive tests (API, devices, EVC, inverter ops, events, publishing, config, downloads, cache)", False),
+        ("teslemetry", test_teslemetry, "Teslemetry Tesla Powerwall component tests (data path, control, tariff)", False),
         ("integer_config", test_integer_config_entities, "Integer config entities tests", False),
         ("validate_config", test_validate_config, "APPS_SCHEMA validator tests (string types, sensor boolean states)", False),
         ("expose_config_integer", test_expose_config_preserves_integer, "Expose config preserves integer tests", False),
