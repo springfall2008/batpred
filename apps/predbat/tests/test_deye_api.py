@@ -40,12 +40,14 @@ class MockDeye(DeyeAPI):
         self.pending_orders = {}
         self.order_poll_count = {}
         self.applied_payload = {}
+        self.control_active = set()
         self.cached_values = {}
         self.log_messages = []
         self.local_tz = pytz.timezone("Europe/London")
         self.base = MagicMock()
         self.base.args = {"user_id": "test-deye-1"}
         self.base.midnight_utc = datetime.now(pytz.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        self.base.minutes_now = 0  # local minutes-since-midnight; tests set this for time-aware control
         self._init_oauth(auth_method, "test-token", None, "deye")
 
     def log(self, message):

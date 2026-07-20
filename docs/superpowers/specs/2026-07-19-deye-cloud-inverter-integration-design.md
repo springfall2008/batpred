@@ -244,6 +244,21 @@ call, cache the applied payload, capture `orderId`, poll `GET /order/{orderId}`
 until success or timeout with exponential backoff. Pending/failed orders retry
 on the next cycle. The reserve live-write path is separate and immediate.
 
+**Time-aware work mode + reconcile.** DEYE has a *single* global `workMode` per
+schedule (unlike Fox, whose scheduler carries per-slot modes), so the top-level
+`workMode`/`gridChargeAction`/`solarSellAction` are derived from the window
+**active at the current time**, not a static export-first precedence — otherwise
+an export window enabled elsewhere in the day would pin the mode to
+`SELLING_FIRST` and block the charge window's grid charging. The 6 TOU slots
+still encode every window's per-slot config. Because the mode is time-dependent,
+`run()` **reconciles** each cycle — re-applying (with change-detection, so it
+only writes at a genuine transition) the schedule of every inverter Predbat is
+already controlling (`control_active`, set once the write button / reserve event
+has driven it) — so the mode flips as the day moves between periods. Inverters
+Predbat has not yet driven are left untouched, so a startup cycle never clobbers
+an inverter before there is a plan. *(The exact interaction with how Predbat's
+`inverter.py` enables the charge vs export windows is a live-validation item.)*
+
 ## Auth (both modes, via OAuthMixin)
 
 - **`app_credentials`** (HA add-on): `POST /account/token?appId=` with
@@ -321,14 +336,17 @@ needed to build**:
 Change detection diffs the freshly-computed payload against the **last-applied
 cached payload** (no read endpoint dependency), rather than a read-back.
 
-**Two items remain empirical** (safe defaults shipped, corrected on first live
-connection):
+**Items to confirm on the first live connection** (safe defaults shipped):
 
 - The exact `device/latest` `dataList[].key` strings for SOC / battery / grid
   / pv / load power, isolated in `deye_const.py:DEYE_TELEMETRY_KEYS`.
 - The `config/battery` field names and units — esp. whether `battCapacity` is
   kWh (directly usable as `soc_max`) or Ah (needing a voltage scale), isolated
   in `deye_const.py:CONFIG_BATTERY_KEYS`.
+- The time-aware work-mode + reconcile behaviour: how Predbat's `inverter.py`
+  actually enables the charge vs export windows (both at once vs only the
+  imminent one), and that `POST /strategy/dynamicControl` accepts a global
+  `workMode` that flips between reconcile cycles without side effects.
 
 ## Out of scope (YAGNI)
 
