@@ -25,6 +25,14 @@ DEYE_TIMEOUT = 30
 DEYE_RETRIES = 3
 TOU_SLOT_COUNT = 6
 FREEZE_EXPORT_SOC = 99
+
+# Distinct, ascending self-use start times used to pad a schedule out to
+# TOU_SLOT_COUNT slots. DEYE's 6 TOU slots are sequential intervals ("from this
+# start until the next slot's start"), so every slot must have a UNIQUE start
+# time — duplicate times create zero-length/ambiguous intervals the API may
+# reject. Seven options guarantee at least TOU_SLOT_COUNT distinct times remain
+# after removing any that collide with the schedule's own window boundaries.
+TOU_FILLER_TIMES = ["00:00", "04:00", "08:00", "12:00", "16:00", "20:00", "23:00"]
 # Number of run() cycles a control order may stay unconfirmed before the applied-payload
 # cache is invalidated and the next apply is forced to re-write.
 DEYE_ORDER_MAX_POLLS = 3

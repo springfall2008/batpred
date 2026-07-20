@@ -21,7 +21,7 @@ import asyncio
 import aiohttp
 from component_base import ComponentBase
 from oauth_mixin import OAuthMixin
-from deye_const import DEYE_BASE_URLS, DEYE_ENDPOINTS, DEYE_TIMEOUT, DEYE_RETRIES, DEYE_TELEMETRY_KEYS, DEYE_LATEST_BODY_KEY, DEYE_WORKMODE, FREEZE_EXPORT_SOC, TOU_FIELD, TOU_SLOT_COUNT, DEYE_ORDER_MAX_POLLS, CONFIG_BATTERY_KEYS
+from deye_const import DEYE_BASE_URLS, DEYE_ENDPOINTS, DEYE_TIMEOUT, DEYE_RETRIES, DEYE_TELEMETRY_KEYS, DEYE_LATEST_BODY_KEY, DEYE_WORKMODE, FREEZE_EXPORT_SOC, TOU_FIELD, TOU_SLOT_COUNT, TOU_FILLER_TIMES, DEYE_ORDER_MAX_POLLS, CONFIG_BATTERY_KEYS
 
 
 class DeyeAPI(ComponentBase, OAuthMixin):
@@ -267,12 +267,18 @@ class DeyeAPI(ComponentBase, OAuthMixin):
                 slots.append(self._action_slot(start_time, state))
             else:
                 slots.append(self._self_use_slot(start_time, reserve))
-        # Normalise to exactly TOU_SLOT_COUNT: pad by repeating the last slot's SoC at spread times, or trim keeping the imminent windows.
-        while len(slots) < TOU_SLOT_COUNT:
-            filler_time = "23:59" if not slots else slots[-1][TOU_FIELD["time"]]
-            slots.append(self._self_use_slot(filler_time, reserve))
-        if len(slots) > TOU_SLOT_COUNT:
-            slots = slots[:TOU_SLOT_COUNT]
+        # Normalise to exactly TOU_SLOT_COUNT slots, each with a DISTINCT ascending
+        # start time (DEYE rejects/mis-applies duplicate slot times). Pad with
+        # self-use slots at filler times not already used by a window boundary,
+        # then sort and trim keeping the earliest (imminent) slots.
+        used = {slot[TOU_FIELD["time"]] for slot in slots}
+        for filler_time in TOU_FILLER_TIMES:
+            if len(slots) >= TOU_SLOT_COUNT:
+                break
+            if filler_time not in used:
+                slots.append(self._self_use_slot(filler_time, reserve))
+                used.add(filler_time)
+        slots = sorted(slots, key=lambda slot: slot[TOU_FIELD["time"]])[:TOU_SLOT_COUNT]
         return slots
 
     def build_dynamic_payload(self, sn, schedule, current_soc):
@@ -340,7 +346,10 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         if not order_id:
             return "success"
         resp = await self._get(f"{DEYE_ENDPOINTS['order_result']}{order_id}")
-        if not resp.get("success", True):
+        # _get() returns {} on a network/auth error; an empty or non-success
+        # response is NOT a confirmation, so treat it as still pending (default
+        # success to False, not True) rather than falsely clearing the order.
+        if not resp.get("success", False):
             return "pending"
         self.pending_orders.pop(sn, None)
         return "success"

@@ -65,6 +65,34 @@ def test_build_tou_slots_charge_window():
     assert not failed, "test_build_tou_slots_charge_window"
 
 
+def test_build_tou_slots_times_are_distinct():
+    """All 6 TOU slot start times must be unique and ascending (DEYE rejects duplicates)."""
+    failed = False
+    d = MockDeye()
+    # A single short charge window leaves several padding slots — the old code
+    # repeated the last slot's time, producing duplicates. Assert they're distinct.
+    sched = {"reserve": 10, "charge": {"enable": True, "soc": 95, "power": 3000, "start": "02:00", "end": "05:00"}, "export": {"enable": False, "soc": 0, "power": 0}}
+    for current_soc in (40, 95):
+        slots = d.build_tou_slots(sched, current_soc=current_soc)
+        times = [s[TOU_FIELD["time"]] for s in slots]
+        if len(times) != TOU_SLOT_COUNT:
+            print(f"ERROR: expected {TOU_SLOT_COUNT} slots got {len(times)}")
+            failed = True
+        if len(set(times)) != len(times):
+            print(f"ERROR: duplicate slot start times: {times}")
+            failed = True
+        if times != sorted(times):
+            print(f"ERROR: slot times not ascending: {times}")
+            failed = True
+    # An idle schedule (no windows) must also yield 6 distinct times.
+    idle = {"reserve": 15, "charge": {"enable": False, "soc": 0, "power": 0}, "export": {"enable": False, "soc": 0, "power": 0}}
+    idle_times = [s[TOU_FIELD["time"]] for s in d.build_tou_slots(idle, current_soc=50)]
+    if len(set(idle_times)) != TOU_SLOT_COUNT:
+        print(f"ERROR: idle schedule produced non-distinct times: {idle_times}")
+        failed = True
+    assert not failed, "test_build_tou_slots_times_are_distinct"
+
+
 def test_build_dynamic_payload_and_equality():
     """Payload carries work mode + on/off actions + 6 slots; equality ignores deviceSn."""
     failed = False
@@ -162,6 +190,27 @@ def test_poll_order_success():
     assert not failed, "test_poll_order_success"
 
 
+def test_poll_order_empty_response_stays_pending():
+    """An empty/error response (network/auth) must NOT falsely confirm the order."""
+    failed = False
+    d = MockDeye()
+    d.pending_orders["INV1"] = 42
+
+    async def fake_get(path):
+        """Simulate _get returning {} on a network/auth error."""
+        return {}
+
+    with patch.object(d, "_get", side_effect=fake_get):
+        status = run_async_local(d.poll_order("INV1"))
+    if status != "pending":
+        print(f"ERROR: empty response should be pending, got {status}")
+        failed = True
+    if d.pending_orders.get("INV1") != 42:
+        print("ERROR: order must NOT be cleared on an empty/error response")
+        failed = True
+    assert not failed, "test_poll_order_empty_response_stays_pending"
+
+
 async def _fake_run_step_sn(sn):
     """No-op stand-in for a per-inverter run() step (fetch_battery_config, fetch_device_data, ...)."""
     return {}
@@ -254,10 +303,12 @@ def run_deye_control_tests(my_predbat):
     for name, fn in [
         ("derive_table", test_derive_control_state_table),
         ("tou_slots", test_build_tou_slots_charge_window),
+        ("tou_slots_distinct", test_build_tou_slots_times_are_distinct),
         ("payload", test_build_dynamic_payload_and_equality),
         ("apply_suppress", test_apply_dynamic_control_suppresses_when_unchanged),
         ("apply_write", test_apply_dynamic_control_writes_and_caches_on_change),
         ("poll_order", test_poll_order_success),
+        ("poll_order_empty_pending", test_poll_order_empty_response_stays_pending),
         ("run_forces_rewrite_after_max_polls", test_run_forces_rewrite_after_max_unconfirmed_polls),
         ("run_clears_on_success", test_run_clears_pending_order_and_count_on_success),
     ]:
