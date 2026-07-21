@@ -7,6 +7,7 @@
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
+from const import PREDICT_STEP
 from tests.test_infra import reset_inverter
 
 
@@ -166,5 +167,110 @@ def test_dynamic_load_car_slot_cancellation(my_predbat):
         print("*** Dynamic load car slot cancellation test PASSED")
     else:
         print("*** Dynamic load car slot cancellation test FAILED")
+
+    return failed
+
+
+def test_dynamic_load_high_load_baseline(my_predbat):
+    """
+    Test the dynamic_load high-load branch which raises the near-term load forecast
+    (dynamic_load_baseline) to match an observed load spike, e.g. a car charging
+    outside any known/planned (including Octopus dispatch) slot.
+    """
+    print("*** Running test: Dynamic load high load baseline")
+    failed = False
+
+    reset_inverter(my_predbat)
+    my_predbat.num_cars = 1
+    my_predbat.minutes_now = 12 * 60  # 12:00 PM, on a plan_interval_minutes boundary
+    my_predbat.battery_rate_max_discharge = 5.0 / 60.0  # 5kW converted to kW per minute
+    my_predbat.car_charging_threshold = 3.0
+    my_predbat.metric_dynamic_load_adjust = True
+    my_predbat.load_last_status = "baseline"
+    my_predbat.load_last_car_slot = False
+    my_predbat.load_last_period = 6.0  # 6kW - above the 5kW battery threshold, so "high"
+
+    minutes_end_slot = my_predbat.minutes_now + my_predbat.plan_interval_minutes
+    interval_minutes = list(range(my_predbat.minutes_now, minutes_end_slot, PREDICT_STEP))
+    expected_value = my_predbat.load_last_period / 60 * PREDICT_STEP  # 0.5kWh per 5-minute step
+
+    # Test 1: Car charging outside all known/Octopus slots - Predbat can't attribute the spike
+    # to a recognised car window, so the whole load should be folded into the near-term baseline.
+    print("Test 1: High load, car charging outside all known/Octopus slots")
+    my_predbat.car_charging_slots = [[], [], [], []]
+    my_predbat.car_energy_reported_load = True
+
+    my_predbat.dynamic_load()
+
+    if set(my_predbat.dynamic_load_baseline.keys()) != set(interval_minutes):
+        print(f"ERROR: Expected baseline keys {interval_minutes}, got {sorted(my_predbat.dynamic_load_baseline.keys())}")
+        failed = True
+    for minute_absolute in interval_minutes:
+        value = my_predbat.dynamic_load_baseline.get(minute_absolute)
+        if value is None or abs(value - expected_value) > 0.001:
+            print(f"ERROR: Expected baseline at {minute_absolute} to be {expected_value}, got {value}")
+            failed = True
+
+    # Test 2: Car recognised in a slot that fully covers the current interval and the load sensor
+    # is known to include car energy - the car's own consumption absorbs the spike so no baseline
+    # floor is needed.
+    print("Test 2: High load, car recognised in a fully-covering slot")
+    my_predbat.load_last_status = "baseline"
+    my_predbat.car_charging_slots[0] = [{"start": my_predbat.minutes_now, "end": minutes_end_slot, "kwh": 3.0}]
+    my_predbat.car_energy_reported_load = True
+
+    my_predbat.dynamic_load()
+
+    if my_predbat.dynamic_load_baseline:
+        print(f"ERROR: Expected no baseline entries when the car slot fully covers the load spike, got {my_predbat.dynamic_load_baseline}")
+        failed = True
+
+    # Test 3: Same recognised car slot, but car_energy_reported_load is off (the default) -
+    # Predbat has no way to know the load sensor includes the car's energy, so it must fall back
+    # to folding in the whole spike, same as when the car is outside any slot.
+    print("Test 3: High load, car recognised in slot but car_energy_reported_load is off")
+    my_predbat.load_last_status = "baseline"
+    my_predbat.car_energy_reported_load = False
+
+    my_predbat.dynamic_load()
+
+    if set(my_predbat.dynamic_load_baseline.keys()) != set(interval_minutes):
+        print(f"ERROR: Expected baseline keys {interval_minutes} when car_energy_reported_load is off, got {sorted(my_predbat.dynamic_load_baseline.keys())}")
+        failed = True
+    for minute_absolute in interval_minutes:
+        value = my_predbat.dynamic_load_baseline.get(minute_absolute)
+        if value is None or abs(value - expected_value) > 0.001:
+            print(f"ERROR: Expected baseline at {minute_absolute} to be {expected_value} when car_energy_reported_load is off, got {value}")
+            failed = True
+
+    # Test 4: Sustained high load over two consecutive checks in a row extends the baseline into
+    # the following slot too, so the plan doesn't lag a whole cycle behind at the slot boundary.
+    print("Test 4: High load sustained over two consecutive checks extends into the next slot")
+    my_predbat.car_charging_slots = [[], [], [], []]
+    my_predbat.car_energy_reported_load = True
+    my_predbat.load_last_status = "baseline"  # First check - establishes the initial "high" reading
+
+    my_predbat.dynamic_load()
+
+    if set(my_predbat.dynamic_load_baseline.keys()) != set(interval_minutes):
+        print(f"ERROR: First high reading should only cover the current slot, expected {interval_minutes}, got {sorted(my_predbat.dynamic_load_baseline.keys())}")
+        failed = True
+
+    my_predbat.dynamic_load()  # Second consecutive high check - should now extend into the next slot
+
+    extended_interval_minutes = list(range(my_predbat.minutes_now, minutes_end_slot + my_predbat.plan_interval_minutes, PREDICT_STEP))
+    if set(my_predbat.dynamic_load_baseline.keys()) != set(extended_interval_minutes):
+        print(f"ERROR: Expected baseline keys {extended_interval_minutes} after two consecutive high checks, got {sorted(my_predbat.dynamic_load_baseline.keys())}")
+        failed = True
+    for minute_absolute in extended_interval_minutes:
+        value = my_predbat.dynamic_load_baseline.get(minute_absolute)
+        if value is None or abs(value - expected_value) > 0.001:
+            print(f"ERROR: Expected baseline at {minute_absolute} to be {expected_value} after two consecutive high checks, got {value}")
+            failed = True
+
+    if not failed:
+        print("*** Dynamic load high load baseline test PASSED")
+    else:
+        print("*** Dynamic load high load baseline test FAILED")
 
     return failed

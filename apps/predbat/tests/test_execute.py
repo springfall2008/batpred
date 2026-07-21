@@ -2154,14 +2154,16 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
+    # Discharge-hold applies regardless of car_energy_reported_load; that switch controls whether EV
+    # energy is included in the CT-clamp house-load model, not whether we enforce the discharge hold.
     failed |= run_execute_test(
         my_predbat,
         "no_discharge_car_demand1b",
         set_charge_window=True,
         set_export_window=True,
         soc_kw=100,
-        assert_status="Demand",
-        assert_pause_discharge=False,
+        assert_status="Hold for car",
+        assert_pause_discharge=True,
         car_slot=charge_window_best_slot,
         assert_immediate_soc_target=100,
         car_charging_from_battery=False,

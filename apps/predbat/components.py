@@ -27,12 +27,15 @@ from temperature import TemperatureAPI
 from axle import AxleAPI
 from solax import SolaxAPI
 from sigenergy import SigenergyAPI
+from teslemetry import TeslemetryAPI
 from solis import SolisAPI
 from alertfeed import AlertFeed
 from web import WebInterface
 from ha import HAInterface, HAHistory
 from db_manager import DatabaseManager
 from fox import FoxAPI
+from deye import DeyeAPI
+from enphase import EnphaseAPI
 from kraken import KrakenAPI
 from web_mcp import PredbatMCPServer
 
@@ -240,6 +243,61 @@ COMPONENT_LIST = {
         },
         "phase": 1,
     },
+    "deye": {
+        "class": DeyeAPI,
+        "name": "DEYE Cloud",
+        "event_filter": "predbat_deye_",
+        "args": {
+            "app_id": {"required": False, "config": "deye_app_id"},
+            "app_secret": {"required": False, "config": "deye_app_secret"},
+            "username": {"required": False, "config": "deye_username"},
+            "password": {"required": False, "config": "deye_password"},
+            "data_center": {"required": False, "default": "eu", "config": "deye_data_center"},
+            "company_id": {"required": False, "config": "deye_company_id"},
+            "auth_method": {"required": False, "default": "app_credentials", "config": "deye_auth_method"},
+            "token_expires_at": {"required": False, "config": "deye_token_expires_at"},
+            "token_hash": {"required": False, "config": "deye_token_hash"},
+            "inverter_sn": {"required": False, "config": "deye_inverter_sn"},
+            "automatic": {"required": False, "default": False, "config": "deye_automatic"},
+            "automatic_ignore_pv": {"required": False, "default": False, "config": "deye_automatic_ignore_pv"},
+        },
+        # Gate activation on having at least one auth path — app credentials (app_id,
+        # self-hosted add-on) OR an injected SaaS token (token_hash). Without this the
+        # component would start for every instance since all individual args are
+        # optional to allow either auth mode.
+        "required_or": ["app_id", "token_hash"],
+        "phase": 1,
+    },
+    "enphase": {
+        "class": EnphaseAPI,
+        "name": "Enphase API",
+        "event_filter": "predbat_enphase_",
+        "args": {
+            "username": {
+                "required": True,
+                "config": "enphase_username",
+            },
+            "password": {
+                "required": True,
+                "config": "enphase_password",
+            },
+            "site_id": {
+                "required": False,
+                "config": "enphase_site_id",
+            },
+            "automatic": {
+                "required": False,
+                "default": False,
+                "config": "enphase_automatic",
+            },
+            "automatic_ignore_pv": {
+                "required": False,
+                "default": False,
+                "config": "enphase_automatic_ignore_pv",
+            },
+        },
+        "phase": 1,
+    },
     "kraken": {
         "class": KrakenAPI,
         "name": "Kraken Energy (EDF/E.ON)",
@@ -362,6 +420,22 @@ COMPONENT_LIST = {
             "client_key": {"required": False, "config": "sigenergy_client_key"},
             "automatic": {"required": False, "config": "sigenergy_automatic", "default": False},
             "enable_controls": {"required": False, "config": "sigenergy_enable_controls", "default": True},
+        },
+        "phase": 1,
+        "can_restart": True,
+    },
+    "teslemetry": {
+        "class": TeslemetryAPI,
+        "name": "Tesla Powerwall (Teslemetry)",
+        "event_filter": "predbat_teslemetry_",
+        "args": {
+            "key": {"required": True, "config": "teslemetry_key"},
+            "site_id": {"required": False, "config": "teslemetry_site_id"},
+            "base_url": {"required": False, "config": "teslemetry_base_url", "default": "https://api.teslemetry.com"},
+            "automatic": {"required": False, "default": False, "config": "teslemetry_automatic"},
+            "auth_method": {"required": False, "config": "teslemetry_auth_method", "default": "api_key"},
+            "token_expires_at": {"required": False, "config": "teslemetry_token_expires_at"},
+            "token_hash": {"required": False, "config": "teslemetry_token_hash"},
         },
         "phase": 1,
         "can_restart": True,

@@ -22,14 +22,28 @@ from oauth_mixin import OAuthMixin
 
 # API Endpoints
 SOLIS_BASE_URL = "https://www.soliscloud.com:13333"
-# OAuth 2.0 host (Bearer auth). Used when auth_method == "oauth"; reads/control use the
-# same cid/value payloads as the HMAC path, just at this host (design #366, approach 1).
+# OAuth 2.0 host (Bearer auth). Used when auth_method == "oauth". Reads/control use the same
+# cid/value payload shapes as the HMAC path, but NOT the same routes — this host serves a
+# different namespace, so paths are translated via SOLIS_OAUTH_ENDPOINTS below. (Design #366
+# approach 1 assumed path parity here; that was verified false against the live gateway.)
 SOLIS_OAUTH_BASE_URL = "https://api-oauth2.soliscloud.com"
 SOLIS_READ_ENDPOINT = "/v2/api/atRead"
 SOLIS_READ_BATCH_ENDPOINT = "/v2/api/atReadBatch"
 SOLIS_CONTROL_ENDPOINT = "/v2/api/control"
 SOLIS_INVERTER_LIST_ENDPOINT = "/v1/api/inverterList"
 SOLIS_INVERTER_DETAIL_ENDPOINT = "/v1/api/inverterDetail"
+
+# The OAuth2 gateway serves a different route namespace to the HMAC host: discovery sits under
+# /api/access_data/, register reads and control under /api/control_device/. Verified against the
+# live gateway 2026-07-21. The HMAC paths return an XML <ForbiddenException> on the OAuth host,
+# which _execute_request mistook for an expired token, refreshing and retrying until it gave up.
+SOLIS_OAUTH_ENDPOINTS = {
+    SOLIS_READ_ENDPOINT: "/api/control_device/atRead",
+    SOLIS_READ_BATCH_ENDPOINT: "/api/control_device/atReadBatch",
+    SOLIS_CONTROL_ENDPOINT: "/api/control_device/control",
+    SOLIS_INVERTER_LIST_ENDPOINT: "/api/access_data/inverterList",
+    SOLIS_INVERTER_DETAIL_ENDPOINT: "/api/access_data/inverterDetail",
+}
 
 # Retry configuration
 SOLIS_MAX_RETRY_TIME = 30  # seconds
@@ -373,6 +387,10 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
     async def _execute_request(self, endpoint, payload):
         """Execute HTTP POST request to Solis API"""
+        # OAuth reads/control live in a different route namespace (see SOLIS_OAUTH_ENDPOINTS).
+        # Translate before building the URL; in api-key mode the paths are used unchanged.
+        if self.auth_method == "oauth":
+            endpoint = SOLIS_OAUTH_ENDPOINTS.get(endpoint, endpoint)
         url = f"{self.base_url}{endpoint}"
         # OAuth: proactively refresh the token before the call (no-op for api-key mode).
         # If the token can't be obtained (refresh failed / needs reauth), fail fast — the
@@ -658,6 +676,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 max_discharge_current_amps = float(self.cached_values.get(inverter_sn, {}).get(SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT, 60.0))
                 charge_current = max_charge_current_amps
                 discharge_current = max_discharge_current_amps
+                slot1_active = False  # Whether slot 1 has any charge/discharge window configured
 
                 # There appears to be charge current limit on the slots which confused as slot 1 has a higher limit than the others,
                 # but the value isn't accepted, find the lowest slot limit
@@ -677,6 +696,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
                     if slot == 1:
                         # Predbat only uses slot 1, so it can indicate current here.
                         charge_current = slot_data.get("charge_current", charge_current)
+                        slot1_active = bool(slot_data.get("charge_enable", 0)) or bool(slot_data.get("discharge_enable", 0))
                         discharge_current = slot_data.get("discharge_current", discharge_current)
 
                     # When a slot is disabled, zero out its times so the inverter shows a clean 00:00-00:00
@@ -797,12 +817,23 @@ class SolisAPI(ComponentBase, OAuthMixin):
                                 success &= result
 
                 # Decide if Solar charges the batter or exports
+                # The inverter only retains the TOU bit on CID 636 when a charge/discharge window is
+                # actually configured on slot 1, so gate the mode choice the same way the V1 branch does
+                # (see the in_charge_slot/in_discharge_slot handling below) to avoid a permanent verify-fail loop.
                 if charge_current == 0:
-                    self.log(f"Solis API: Charge current is 0A for {inverter_sn}, setting storage mode to 'Feed-in priority'")
-                    await self.set_storage_mode_if_needed(inverter_sn, "Feed-in priority")
+                    if slot1_active:
+                        self.log(f"Solis API: Charge current is 0A for {inverter_sn}, setting storage mode to 'Feed-in priority'")
+                        await self.set_storage_mode_if_needed(inverter_sn, "Feed-in priority")
+                    else:
+                        self.log(f"Solis API: Charge current is 0A and no active slot for {inverter_sn}, setting storage mode to 'Feed-in priority - No Timed Charge/Discharge'")
+                        await self.set_storage_mode_if_needed(inverter_sn, "Feed-in priority - No Timed Charge/Discharge")
                 else:
-                    self.log(f"Solis API: Charge current is {charge_current}A for {inverter_sn}, setting storage mode to 'Self-Use'")
-                    await self.set_storage_mode_if_needed(inverter_sn, "Self-Use")
+                    if slot1_active:
+                        self.log(f"Solis API: Charge current is {charge_current}A for {inverter_sn}, setting storage mode to 'Self-Use'")
+                        await self.set_storage_mode_if_needed(inverter_sn, "Self-Use")
+                    else:
+                        self.log(f"Solis API: Charge current is {charge_current}A and no active slot for {inverter_sn}, setting storage mode to 'Self-Use - No Timed Charge/Discharge'")
+                        await self.set_storage_mode_if_needed(inverter_sn, "Self-Use - No Timed Charge/Discharge")
 
                 return success
             else:

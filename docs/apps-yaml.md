@@ -186,6 +186,15 @@ pred_bat:
   forecast_solar_api_key: !secret forecast_solar_api_key  # Forecast.solar API key (if using Forecast.solar)
   ge_cloud_key: !secret ge_cloud_key  # GivEnergy API key (if using GE Cloud)
   fox_key: !secret fox_key  # Fox ESS API key and username (if using Fox Cloud)
+  deye_app_id: !secret deye_app_id  # DeyeCloud developer app id (if using DEYE Cloud)
+  deye_app_secret: !secret deye_app_secret  # DeyeCloud developer app secret (if using DEYE Cloud)
+  deye_username: !secret deye_username  # DeyeCloud account e-mail/username (if using DEYE Cloud)
+  deye_password: !secret deye_password  # DeyeCloud account password (if using DEYE Cloud)
+  enphase_username: !secret enphase_username  # Enphase Enlighten account e-mail (if using Enphase Cloud)
+  enphase_password: !secret enphase_password  # Enphase Enlighten account password (if using Enphase Cloud)
+  enphase_site_id: !secret enphase_site_id  # Enphase Enlighten site id, optional (if using Enphase Cloud)
+  enphase_automatic: True  # Automatically configure Predbat inverter settings (if using Enphase Cloud)
+  enphase_automatic_ignore_pv: False  # Skip PV sensors during automatic configuration (if using Enphase Cloud)
   axle_api_key: !secret axle_api_key  # Axle API key (if using Axle VPP)
   kraken_key: !secret kraken_key  # Kraken API key (if using Kraken component)
   kraken_password: !secret kraken_password  # Kraken password (if using Kraken component)
@@ -758,6 +767,45 @@ If you experience connection issues:
 5. Ensure `soc_max` is set correctly in `apps.yaml` (battery capacity in kWh)
 6. Check that `control_enable` is set appropriately for your needs
 
+### DEYE Cloud API
+
+**EXPERIMENTAL:** This is a new integration and may have issues.
+
+Predbat includes support for DEYE (Sunsynk-family) hybrid inverters via the DeyeCloud OpenAPI, providing direct cloud-based monitoring and battery control - no local Modbus/RS485 access is required.
+
+#### DEYE Cloud Configuration
+
+Create a developer app at [developer.deyecloud.com](https://developer.deyecloud.com) to obtain an App ID and App Secret, then add the following to your `apps.yaml`:
+
+```yaml
+  deye_app_id: !secret deye_app_id
+  deye_app_secret: !secret deye_app_secret
+  deye_username: !secret deye_username
+  deye_password: !secret deye_password
+  deye_data_center: 'eu'
+  deye_automatic: True
+```
+
+**Note:** It's strongly recommended to store `deye_app_id`, `deye_app_secret`, `deye_username` and `deye_password` in `secrets.yaml` and reference them as `!secret deye_app_id` etc - see [Storing secrets](#storing-secrets).
+
+**Configuration options:**
+
+- `deye_app_id` - Your DeyeCloud developer app's App ID (obtained from developer.deyecloud.com)
+- `deye_app_secret` - Your DeyeCloud developer app's App Secret
+- `deye_username` - Your DeyeCloud account e-mail address or username
+- `deye_password` - Your DeyeCloud account password
+- `deye_data_center` - The DeyeCloud region your account is registered in: `'eu'` (default), `'am'` or `'india'`
+- `deye_company_id` - Optional, only needed for installer/business accounts
+- `deye_inverter_sn` - Optional, restrict Predbat to specific inverter serial number(s) - a single string or a list. Default is all battery inverters found on the account
+- `deye_automatic` - Set to `true` to automatically configure Predbat entities (recommended, default: `false`)
+- `deye_automatic_ignore_pv` - Optional, defaults to `false`. When `automatic` is enabled, set to `true` to prevent DEYE Cloud from overwriting the `pv_power` config
+
+`deye_auth_method` defaults to `'app_credentials'` so the self-hosted add-on manages its own DeyeCloud token from the credentials above. On Predbat.com the token is injected and refreshed by the platform instead (`deye_auth_method: 'oauth'`) - self-hosted users should leave this at the default.
+
+When **deye_automatic** is set to `true`, Predbat will discover every battery inverter registered against your DeyeCloud account and automatically create and configure all required sensors and schedule control entities for each one - no manual entity configuration is required.
+
+See [Components - DEYE Cloud API](components.md#deye-cloud-api-deye) for full details.
+
 ### num_inverters
 
 The number of inverters you have. If you increase this above 1 you must provide multiple of each of the inverter entities
@@ -770,6 +818,8 @@ The number of inverters you have. If you increase this above 1 you must provide 
 
 inverter_type defaults to 'GE' (GivEnergy) if not set in `apps.yaml`, or should be set to one of the inverter types that are already pre-programmed into Predbat:
 
+  DeyeCloud: DEYE Cloud API integration (EXPERIMENTAL)
+  EnphaseCloud: Enphase Cloud integration (EXPERIMENTAL)
   FoxCloud: Fox Cloud integration
   FoxESS: FoxESS via modbus
   GE: GivEnergy via GivTCP

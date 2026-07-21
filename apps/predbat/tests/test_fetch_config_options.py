@@ -329,6 +329,33 @@ def test_fetch_config_options(my_predbat):
 
     print("PASS: LoadML config-preservation test passed")
 
+    # Test 13: car_charging_planned/now response matching is case-insensitive
+    print("\n*** Test 13: car_charging_planned/now response case-insensitivity ***")
+
+    # Many EV charger integrations (e.g. myenergi Zappi) report state strings in Title Case
+    # (e.g. "EV Connected"), while apps.yaml examples/templates use lowercase response lists.
+    # Matching must be case-insensitive on both sides, not just the sensor value.
+    mock_config.config["car_charging_planned_response"] = ["Yes", "On", "True", "Connected", "EV Connected"]
+    mock_config.config["car_charging_now_response"] = ["Yes", "On", "True", "Charging"]
+    mock_config.config["car_charging_planned"] = "EV Connected"
+    mock_config.config["car_charging_now"] = "Charging"
+
+    my_predbat.fetch_config_options()
+
+    assert my_predbat.car_charging_planned[0] == True, "car_charging_planned should be True when sensor state matches response list case-insensitively"
+    assert my_predbat.car_charging_now[0] == True, "car_charging_now should be True when sensor state matches response list case-insensitively"
+
+    # A genuinely non-matching state should still be False
+    mock_config.config["car_charging_planned"] = "EV Disconnected"
+    mock_config.config["car_charging_now"] = "Idle"
+
+    my_predbat.fetch_config_options()
+
+    assert my_predbat.car_charging_planned[0] == False, "car_charging_planned should be False when sensor state does not match response list"
+    assert my_predbat.car_charging_now[0] == False, "car_charging_now should be False when sensor state does not match response list"
+
+    print("✓ Case-insensitivity test passed")
+
     # Restore original methods
     my_predbat.get_arg = original_get_arg
     my_predbat.manual_times = original_manual_times

@@ -17,9 +17,12 @@ This document provides a comprehensive overview of all Predbat components, their
     - [Axle Energy VPP (axle)](#axle-energy-vpp-axle)
     - [Ohme Charger (ohme)](#ohme-charger-ohme)
     - [Fox ESS API (fox)](#fox-ess-api-fox)
+    - [Tesla Powerwall Teslemetry API (teslemetry)](#tesla-powerwall-teslemetry-api-teslemetry)
+    - [Enphase API (enphase)](#enphase-api-enphase)
     - [Solax Cloud API (Solax)](#solax-cloud-api-solax)
     - [Solis Cloud API (Solis)](#solis-cloud-api-solis)
     - [Sigenergy Cloud API (Sigenergy)](#sigenergy-cloud-api-sigenergy)
+    - [DEYE Cloud API (deye)](#deye-cloud-api-deye)
     - [Alert Feed (alert_feed)](#alert-feed-alert_feed)
     - [Carbon Intensity API (carbon)](#carbon-intensity-api-carbon)
     - [Temperature API (temperature)](#temperature-api-temperature)
@@ -524,6 +527,115 @@ Integrates with Fox ESS inverters for monitoring and controlling Fox ESS battery
 
 ---
 
+### Tesla Powerwall Teslemetry API (teslemetry)
+
+**Can be restarted:** Yes
+
+!!! warning "Beta"
+    This component is in **beta** and under active development. It is not yet recommended for general use - expect issues and please report them on GitHub. For a proven setup today, use the [manual Home Assistant integration](inverter-setup.md#manual-configuration-via-home-assistant-integrations) instead.
+
+#### What it does (teslemetry)
+
+Integrates a Tesla Powerwall via the [Teslemetry](https://teslemetry.com) REST API (which mirrors Tesla Fleet API paths, so a direct Fleet API connection works by changing the base URL). Publishes live power flows, SOC and daily energy sensors, and exposes fox-style charge/discharge window entities that Predbat programs directly. Because the Powerwall has no native scheduler, the component translates the programmed windows into operation mode, backup reserve, grid-charging and export-rule commands each cycle, including the export tariff-trick needed to force the Powerwall to export.
+
+#### When to enable (teslemetry)
+
+- You have a Tesla Powerwall (developed against Powerwall 3)
+- You want Predbat to control charging and export directly via the Tesla cloud
+- You have a Teslemetry subscription and API token (or Tesla Fleet API access)
+
+#### Important notes (teslemetry)
+
+- Export freeze is not supported by the Powerwall hardware and is disabled automatically
+- The Powerwall has no charge/discharge rate control; rates are modelled from the nameplate power
+- When enabled (and Predbat is not read-only) the component owns the device tariff, publishing Predbat's real import/export rates (quantised into a few time-of-use bands) so they show correctly in the Tesla app, with a synthetic high-price `ON_PEAK` band over the committed discharge window to drive export
+- Export start/stop is driven each cycle by the operation-mode and export-rule commands; the tariff is pushed only when the rates or the discharge window actually change, to conserve Teslemetry's monthly API-call budget
+- The four diagnostic control entities (operation mode, backup reserve, grid charging, allow export) mirror the emulator's asserted state; any manual change made to them is re-asserted away within about a minute while Predbat is not read-only
+
+#### Configuration Options (teslemetry)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `key` | String | Yes | - | `teslemetry_key` | Bearer token. In `api_key` mode this is your static Teslemetry token; in `oauth` mode it is the Tesla Fleet API access token (refreshed automatically) |
+| `site_id` | String or String List | No | First account site | `teslemetry_site_id` | Optional Tesla energy site id (or list of ids) to filter the sites discovered from the account; leave unset to use the first site on the account automatically |
+| `base_url` | String | No | `https://api.teslemetry.com` | `teslemetry_base_url` | REST base URL; for direct Fleet API set this to your regional Fleet endpoint (e.g. `https://fleet-api.prd.eu.vn.cloud.tesla.com`) |
+| `automatic` | Boolean | No | false | `teslemetry_automatic` | Set to `true` to automatically configure Predbat to use the Powerwall (no manual apps.yaml inverter settings required) |
+| `auth_method` | String | No | `api_key` | `teslemetry_auth_method` | `api_key` (static Teslemetry token) or `oauth` (direct Tesla Fleet API). In `oauth` mode the OAuth flow and token refresh are handled for you by predbat.com - the same way the Fox integration works - so `oauth` requires connecting via predbat.com; self-hosted users use `api_key` |
+
+---
+
+### Enphase API (enphase)
+
+**Can be restarted:** Yes
+
+#### What it does (enphase)
+
+Connects Predbat to the Enphase Enlighten cloud for monitoring and battery control of Enphase IQ Battery systems, with no local hardware access required. Predbat logs in through the same web endpoints used by the Enlighten app/web site, publishes monitoring sensors, and can write battery schedules to control charging and discharging.
+
+#### When to enable (enphase)
+
+- You have an Enphase IQ Battery system managed through the Enlighten app
+- You want cloud-based monitoring and control without any local integration
+- Your Enphase account does not have multi-factor authentication (MFA) enabled
+
+#### Important notes (enphase)
+
+- **EXPERIMENTAL**: this uses the unofficial Enlighten web-app API - there is no official Enphase API with battery control, and Enphase may change it without notice
+- Accounts with multi-factor authentication (MFA) enabled are **not supported** - disable MFA on the Enphase account before use
+- Predbat controls the battery by writing Enphase schedules: charge windows become charge-from-grid (CFG) schedules with a target SOC, export windows become discharge-to-grid (DTG) schedules, freeze-export windows use restrict-battery-discharge (RBD) schedules, and the reserve is set through the battery profile. `automatic_config` requires both CFG and DTG support and fails configuration if either is missing
+- On a successful write, Predbat optimistically updates its local cache and moves on rather than waiting to re-read the cloud - the periodic schedule/profile re-read (every 30 minutes) corrects the cache later if a write didn't actually land
+- Repeated login failures back off automatically to protect the Enphase account from lockout: a 5 minute cooldown after each rejection, rising to a 24 hour suspension after 3 consecutive rejections
+
+#### Configuration Options (enphase)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `username` | String | Yes | - | `enphase_username` | Your Enphase Enlighten account e-mail address |
+| `password` | String | Yes | - | `enphase_password` | Your Enphase Enlighten account password |
+| `site_id` | String | No | First site found | `enphase_site_id` | Restrict Predbat to a single Enlighten site id |
+| `automatic` | Boolean | No | false | `enphase_automatic` | Set to `true` to automatically configure Predbat to use the Enphase inverter (no manual apps.yaml sensor updates required) |
+| `automatic_ignore_pv` | Boolean | No | false | `enphase_automatic_ignore_pv` | When `automatic` is enabled, set to `true` to prevent Enphase Cloud from overwriting `pv_power` and `pv_today` config |
+
+#### Published Entities (enphase)
+
+For each site (`{site_id}` in the entity names), the component creates:
+
+**Battery Sensors:**
+
+- Battery SOC (%)
+- Battery available energy (kWh)
+- Battery capacity (kWh)
+- Battery max rate (W)
+- Battery status
+- Battery profile
+- Battery reserve (%)
+- Battery reserve minimum (%)
+
+**Energy Sensors:**
+
+- PV/load/import/export today (kWh)
+- Battery charge/discharge today (kWh)
+
+**Power Sensors (derived from the most recent completed 15-minute energy bucket):**
+
+- PV power, grid power, battery power, load power (W)
+
+**Control Entities (per site):**
+
+- Battery schedule reserve (number, %) - written to Enphase immediately on change, like Fox
+- Charge/export start and end time (select, HH:MM:SS format)
+- Charge/export target SOC (number, %)
+- Charge/export enable (switch)
+- Charge/export write (switch) - triggers the cloud write for that schedule
+
+A configured site always supports both charge and export control - `automatic_config` requires both
+the charge-from-grid (CFG) and discharge-to-grid (DTG) schedule families to be available, so both sets
+of controls are always published. There is no separate freeze control: freeze-export is derived
+automatically (and written as a restrict-battery-discharge schedule) whenever the export target SOC is
+set to exactly 99%; 100% already means export is disabled.
+
+---
+
 ### Solis Cloud API (solis)
 
 **Can be restarted:** Yes
@@ -636,6 +748,48 @@ sigenergy_client_key: |
 ```
 
 See [Sigenergy Cloud setup](inverter-setup.md#sigenergy-cloud) for the full credential-acquisition walkthrough.
+
+---
+
+### DEYE Cloud API (deye)
+
+**Can be restarted:** Yes
+
+#### What it does (deye)
+
+Integrates with DEYE (Sunsynk-family) hybrid inverters via the DeyeCloud OpenAPI, providing direct cloud-based monitoring and battery control - no local Modbus/RS485 access is required. Predbat discovers every battery inverter registered against the account, publishes monitoring sensors, and writes Fox-style schedule control entities that are combined into a single `strategy_dynamic_control` command each cycle.
+
+#### When to enable (deye)
+
+- You have a DEYE (or Sunsynk-family) hybrid inverter with battery storage registered on DeyeCloud
+- You want direct cloud-based monitoring and control without local hardware access
+- You have created a DeyeCloud developer app (App ID/Secret), or you are using Predbat.com
+
+#### Important notes (deye)
+
+- **EXPERIMENTAL**: This is a new integration and may have issues
+- Two deployment modes are supported: the self-hosted Home Assistant add-on manages its own DeyeCloud token from developer app credentials (`deye_auth_method: 'app_credentials'`, the default), while Predbat.com injects and refreshes the token for you (`deye_auth_method: 'oauth'`)
+- DEYE is mode-less like Enphase/Tesla: Predbat only owns the charge window, export window, reserve and target SOCs - the component derives the internal DEYE work mode (`SELLING_FIRST` for export, `ZERO_EXPORT_TO_LOAD` for charge/hold/idle) automatically from that intent (`ZERO_EXPORT_TO_CT` is reserved for CT-metered installs and is not yet selected)
+- Freeze-charge is implemented via the reserve, and freeze-export is signalled by setting the export target SOC to 99% (100% already means export is disabled)
+- Writes are combined into one atomic `strategy_dynamic_control` call per cycle with change detection (no write when the payload is unchanged), and the resulting `orderId` is polled asynchronously until success
+- The reserve control entity writes to DeyeCloud immediately on change, like Fox and Enphase
+
+#### Configuration Options (deye)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `app_id` | String | No | - | `deye_app_id` | Your DeyeCloud developer app's App ID (self-hosted add-on only) |
+| `app_secret` | String | No | - | `deye_app_secret` | Your DeyeCloud developer app's App Secret (self-hosted add-on only) |
+| `username` | String | No | - | `deye_username` | Your DeyeCloud account e-mail address or username (self-hosted add-on only) |
+| `password` | String | No | - | `deye_password` | Your DeyeCloud account password (self-hosted add-on only) |
+| `data_center` | String | No | `eu` | `deye_data_center` | DeyeCloud region: `eu`, `am` or `india` |
+| `company_id` | String | No | - | `deye_company_id` | Optional, only needed for installer/business accounts |
+| `auth_method` | String | No | `app_credentials` | `deye_auth_method` | `app_credentials` (self-managed token, HA add-on) or `oauth` (token injected and refreshed by Predbat.com) |
+| `inverter_sn` | String/List | No | All found | `deye_inverter_sn` | Restrict Predbat to specific inverter serial number(s) - single string or list |
+| `automatic` | Boolean | No | false | `deye_automatic` | Set to `true` to automatically configure Predbat to use the discovered DEYE inverter(s) (no manual apps.yaml sensor updates required) |
+| `automatic_ignore_pv` | Boolean | No | false | `deye_automatic_ignore_pv` | When `automatic` is enabled, set to `true` to prevent DEYE Cloud from overwriting the `pv_power` config |
+
+See [DEYE Cloud setup](inverter-setup.md#deye-cloud) for the full credential-acquisition walkthrough.
 
 ---
 
