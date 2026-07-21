@@ -943,6 +943,9 @@ class Plan:
         def intersects(w, start, end):
             return not (w["end"] <= start or w["start"] >= end)
 
+        # Save original export windows to detect native high-rate overlaps
+        original_export_windows = copy.deepcopy(self.export_window_best)
+
         for block in clipping_blocks:
             peak_start, peak_end = block["start"], block["end"]
 
@@ -1025,6 +1028,14 @@ class Plan:
                 early_start = midnight + clipping_start_override
 
             if early_start < morning_start:
+                # Stop stretching backward if we hit a native export window
+                # to allow charging before profitable export events.
+                for w in sorted(self.export_window_best, key=lambda x: x["end"], reverse=True):
+                    if early_start < w["end"] <= morning_start:
+                        early_start = w["end"]
+                        break
+
+            if early_start < morning_start:
                 morning_start = early_start
             morning_start = max(self.minutes_now, morning_start)
 
@@ -1043,12 +1054,38 @@ class Plan:
             target_soc_pct = max(0.0, min(100.0, target_soc_kwh / self.soc_max * 100.0))
             target_soc_pct = float(int(target_soc_pct))
 
-            new_window = {"start": morning_start, "end": peak_end, "average": self.rate_export.get(morning_start, 0.0), "clipping_target_soc_pct": target_soc_pct}
+            # Split the window based on changes in the export rate
+            # This ensures that high-rate Axle events inside the clipping window
+            # get evaluated correctly with their actual high rates, rather than
+            # the average rate of the start of the block.
+            new_windows = []
+            current_start = morning_start
+            current_rate = self.rate_export.get(morning_start, 0.0)
 
-            # Tag any overlapping native export windows with the target SOC so they don't dump below it
-            for w in self.export_window_best:
-                if (w.get("start") >= morning_start and w.get("start") < peak_end) or (w.get("end") > morning_start and w.get("end") <= peak_end):
-                    w["clipping_target_soc_pct"] = target_soc_pct
+            for m in range(morning_start + 30, peak_end + 30, 30):
+                rate = self.rate_export.get(m, 0.0)
+                if rate != current_rate or m >= peak_end:
+                    # Is this chunk part of a natively highly profitable export window?
+                    # If so, we do not need to force it to act as an anti-clipping window,
+                    # because it will naturally export to create headroom, AND we don't
+                    # want it to cap the charging window that precedes it.
+                    is_native_export = False
+                    for hw in original_export_windows:
+                        if hw["start"] < m and hw["end"] > current_start:
+                            is_native_export = True
+                            break
+
+                    new_window = {
+                        "start": current_start,
+                        "end": min(m, peak_end),
+                        "average": current_rate,
+                    }
+                    if not is_native_export:
+                        new_window["clipping_target_soc_pct"] = target_soc_pct
+
+                    new_windows.append(new_window)
+                    current_start = m
+                    current_rate = rate
 
             # Remove any existing export windows that intersect our new window and keep export_limits_best aligned
             new_export_windows = []
@@ -1060,14 +1097,15 @@ class Plan:
             self.export_window_best = new_export_windows
             self.export_limits_best = new_export_limits
 
-            # Inject our new unified window
-            if not any(w.get("start") <= new_window["start"] and w.get("end") >= new_window["end"] for w in self.export_window_best):
-                self.export_window_best.append(new_window)
-                self.export_limits_best.append(target_soc_pct)
-                if getattr(self, "high_export_rates", None) is not None:
-                    self.high_export_rates.append(copy.deepcopy(new_window))
+            # Inject our new unified windows
+            for new_window in new_windows:
+                if not any(w.get("start") <= new_window["start"] and w.get("end") >= new_window["end"] for w in self.export_window_best):
+                    self.export_window_best.append(new_window)
+                    self.export_limits_best.append(target_soc_pct)
+                    if getattr(self, "high_export_rates", None) is not None:
+                        self.high_export_rates.append(copy.deepcopy(new_window))
 
-                self.log("Injected continuous anti-clipping candidate export window {} to {} to allow spillover absorption (Target SOC: {}%)".format(self.time_abs_str(morning_start), self.time_abs_str(peak_end), target_soc_pct))
+                self.log("Injected anti-clipping candidate export window {} to {} at rate {}p (Target SOC: {}%)".format(self.time_abs_str(new_window["start"]), self.time_abs_str(new_window["end"]), round(new_window["average"], 2), target_soc_pct))
 
     def calculate_plan(self, recompute=True, debug_mode=False, publish=True):
         """
