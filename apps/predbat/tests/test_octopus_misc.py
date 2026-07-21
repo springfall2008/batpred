@@ -1875,11 +1875,11 @@ async def test_octopus_run(my_predbat):
 
     Tests:
     - Test 1: First run with no cache (both fetched_at=None) — all methods called
-    - Test 2: Tariff stale (35 min), device fresh (5 min) — only tariff refreshed
-    - Test 3: Device stale (15 min), tariff fresh (5 min) — only device refreshed
-    - Test 4: Both fresh (1 min) at 2-minute sensor mark — only sensor, no cache save
-    - Test 5: Commands processed forces device refresh even when recently fetched
-    - Test 6: Fast restart (first=True) with fresh timestamps — only sensor, no heavy fetches
+    - Test 2: Tariff stale (35 min), device fresh, sensor fresh — only tariff refreshed
+    - Test 3: Device stale (15 min), tariff and sensor fresh — only saving sessions refreshed (dispatches follow the sensor cadence)
+    - Test 4: Both fresh (1 min), sensor due — dispatch fetch and sensor update, no cache save
+    - Test 5: Commands processed forces device and dispatch refresh even when recently fetched
+    - Test 6: Fast restart (first=True) with fresh timestamps — dispatches and sensor refreshed, no heavy fetches
     - Test 7: Automatic config on first run
     """
     print("\n**** Running Octopus run method tests ****")
@@ -1925,11 +1925,12 @@ async def test_octopus_run(my_predbat):
     else:
         print("PASS: First run calls all expected methods")
 
-    # Test 2: Tariff stale (35 min old), device fresh (5 min old) — only tariff block runs
-    print("\n*** Test 2: Tariff stale, device fresh — only tariff refreshed ***")
+    # Test 2: Tariff stale (35 min old), device and sensor fresh — only tariff block runs
+    print("\n*** Test 2: Tariff stale, device and sensor fresh — only tariff refreshed ***")
     api2 = _mock_run_api(my_predbat, key="test-api-key-2", account_id="test-account-2")
     api2.tariff_fetched_at = datetime(2025, 1, 1, 9, 55, 0)  # 35 min before mock now
     api2.device_fetched_at = datetime(2025, 1, 1, 10, 25, 0)  # 5 min before mock now
+    api2.sensor_updated_at = datetime(2025, 1, 1, 10, 29, 0)  # 1 min before mock now
 
     with patch("octopus.datetime") as mock_datetime:
         mock_datetime.now.return_value = datetime(2025, 1, 1, 10, 30, 0)
@@ -1945,19 +1946,23 @@ async def test_octopus_run(my_predbat):
         print(f"ERROR: Expected async_find_tariffs called (tariff stale), got {api2.async_find_tariffs.call_count}")
         failed = True
     elif api2.async_update_intelligent_devices.call_count != 0:
-        print(f"ERROR: Expected async_update_intelligent_devices NOT called (device fresh), got {api2.async_update_intelligent_devices.call_count}")
+        print(f"ERROR: Expected async_update_intelligent_devices NOT called (sensor fresh), got {api2.async_update_intelligent_devices.call_count}")
+        failed = True
+    elif api2.async_intelligent_update_sensor.call_count != 0:
+        print(f"ERROR: Expected async_intelligent_update_sensor NOT called (sensor fresh), got {api2.async_intelligent_update_sensor.call_count}")
         failed = True
     elif api2.save_octopus_cache.call_count != 1:
         print(f"ERROR: Expected save_octopus_cache called (tariff_due=True), got {api2.save_octopus_cache.call_count}")
         failed = True
     else:
-        print("PASS: Tariff stale, device fresh — only tariff refreshed")
+        print("PASS: Tariff stale, device and sensor fresh — only tariff refreshed")
 
-    # Test 3: Device stale (15 min old), tariff fresh (5 min old) — only device block runs
-    print("\n*** Test 3: Device stale, tariff fresh — only device refreshed ***")
+    # Test 3: Device stale (15 min old), tariff and sensor fresh — only saving sessions refreshed
+    print("\n*** Test 3: Device stale, tariff and sensor fresh — only saving sessions refreshed ***")
     api3 = _mock_run_api(my_predbat, key="test-api-key-3", account_id="test-account-3")
     api3.tariff_fetched_at = datetime(2025, 1, 1, 10, 5, 0)  # 5 min before mock now
     api3.device_fetched_at = datetime(2025, 1, 1, 9, 55, 0)  # 15 min before mock now
+    api3.sensor_updated_at = datetime(2025, 1, 1, 10, 9, 0)  # 1 min before mock now
     api3.tariffs = {}
 
     with patch("octopus.datetime") as mock_datetime:
@@ -1967,8 +1972,8 @@ async def test_octopus_run(my_predbat):
     if api3.async_get_account.call_count != 0:
         print(f"ERROR: Expected async_get_account NOT called (tariff fresh), got {api3.async_get_account.call_count}")
         failed = True
-    elif api3.async_update_intelligent_devices.call_count != 1:
-        print(f"ERROR: Expected async_update_intelligent_devices called (device stale), got {api3.async_update_intelligent_devices.call_count}")
+    elif api3.async_update_intelligent_devices.call_count != 0:
+        print(f"ERROR: Expected async_update_intelligent_devices NOT called (dispatches follow the sensor cadence), got {api3.async_update_intelligent_devices.call_count}")
         failed = True
     elif api3.fetch_tariffs.call_count != 1:
         print(f"ERROR: Expected fetch_tariffs called (device stale), got {api3.fetch_tariffs.call_count}")
@@ -1983,23 +1988,24 @@ async def test_octopus_run(my_predbat):
         print(f"ERROR: Expected save_octopus_cache called (device_due=True), got {api3.save_octopus_cache.call_count}")
         failed = True
     else:
-        print("PASS: Device stale, tariff fresh — only device refreshed")
+        print("PASS: Device stale, tariff and sensor fresh — only saving sessions refreshed")
 
-    # Test 4: Both fresh (1 min) at 2-minute sensor mark — only sensor fires, no cache save
-    print("\n*** Test 4: Both fresh — only sensor update, no cache save ***")
+    # Test 4: Both fresh (1 min), sensor due — dispatch fetch and sensor fire, no cache save
+    print("\n*** Test 4: Both fresh, sensor due — dispatch fetch and sensor update, no cache save ***")
     api4 = _mock_run_api(my_predbat, key="test-api-key-4", account_id="test-account-4")
     api4.tariff_fetched_at = datetime(2025, 1, 1, 10, 1, 0)  # 1 min before mock now
     api4.device_fetched_at = datetime(2025, 1, 1, 10, 1, 0)  # 1 min before mock now
+    api4.sensor_updated_at = datetime(2025, 1, 1, 10, 0, 0)  # 2 min before mock now
 
     with patch("octopus.datetime") as mock_datetime:
-        mock_datetime.now.return_value = datetime(2025, 1, 1, 10, 2, 0)  # 10:02 — even minute
+        mock_datetime.now.return_value = datetime(2025, 1, 1, 10, 2, 0)
         result = await api4.run(seconds=0, first=False)
 
     if api4.async_get_account.call_count != 0:
         print(f"ERROR: Expected async_get_account NOT called (tariff fresh), got {api4.async_get_account.call_count}")
         failed = True
-    elif api4.async_update_intelligent_devices.call_count != 0:
-        print(f"ERROR: Expected async_update_intelligent_devices NOT called (device fresh), got {api4.async_update_intelligent_devices.call_count}")
+    elif api4.async_update_intelligent_devices.call_count != 1:
+        print(f"ERROR: Expected async_update_intelligent_devices called at 2-min mark, got {api4.async_update_intelligent_devices.call_count}")
         failed = True
     elif api4.async_intelligent_update_sensor.call_count != 1:
         print(f"ERROR: Expected async_intelligent_update_sensor called at 2-min mark, got {api4.async_intelligent_update_sensor.call_count}")
@@ -2008,7 +2014,7 @@ async def test_octopus_run(my_predbat):
         print(f"ERROR: Expected save_octopus_cache NOT called (no data refreshed), got {api4.save_octopus_cache.call_count}")
         failed = True
     else:
-        print("PASS: Both fresh — only sensor update, no cache save")
+        print("PASS: Both fresh, sensor due — dispatch fetch and sensor update, no cache save")
 
     # Test 5: Commands processed forces device refresh even when recently fetched
     print("\n*** Test 5: Processing commands triggers device refresh regardless of age ***")
@@ -2016,10 +2022,11 @@ async def test_octopus_run(my_predbat):
     api5.process_commands = AsyncMock(return_value=True)
     api5.tariff_fetched_at = datetime(2025, 1, 1, 10, 4, 0)  # 1 min before mock now
     api5.device_fetched_at = datetime(2025, 1, 1, 10, 4, 0)  # 1 min before mock now (fresh)
+    api5.sensor_updated_at = datetime(2025, 1, 1, 10, 4, 0)  # 1 min before mock now (fresh)
     api5.tariffs = {}
 
     with patch("octopus.datetime") as mock_datetime:
-        mock_datetime.now.return_value = datetime(2025, 1, 1, 10, 5, 0)  # odd minute — sensor not due
+        mock_datetime.now.return_value = datetime(2025, 1, 1, 10, 5, 0)
         result = await api5.run(seconds=0, first=False)
 
     if api5.async_get_account.call_count != 0:
@@ -2037,9 +2044,10 @@ async def test_octopus_run(my_predbat):
     else:
         print("PASS: Processing commands triggers refresh of intelligent device data")
 
-    # Test 6: Fast restart (first=True) with fresh timestamps — API calls skipped but
-    # async_find_tariffs and fetch_tariffs run to rebuild state from cached data
-    print("\n*** Test 6: Fast restart with fresh cache — tariff structure and rates rebuilt, API calls skipped ***")
+    # Test 6: Fast restart (first=True) with fresh timestamps — heavy account/saving-session fetches
+    # skipped but dispatches and sensor refresh, and async_find_tariffs and fetch_tariffs run to
+    # rebuild state from cached data
+    print("\n*** Test 6: Fast restart with fresh cache — tariffs rebuilt, dispatches refreshed, heavy fetches skipped ***")
     api6 = _mock_run_api(my_predbat, key="test-api-key-6", account_id="test-account-6")
     api6.tariff_fetched_at = datetime(2025, 1, 1, 10, 10, 0)  # 5 min before mock now
     api6.device_fetched_at = datetime(2025, 1, 1, 10, 12, 0)  # 3 min before mock now
@@ -2054,8 +2062,8 @@ async def test_octopus_run(my_predbat):
     elif api6.async_find_tariffs.call_count != 1:
         print(f"ERROR: Expected async_find_tariffs called (rebuilds tariff structure from cached account_data), got {api6.async_find_tariffs.call_count}")
         failed = True
-    elif api6.async_update_intelligent_devices.call_count != 0:
-        print(f"ERROR: Expected async_update_intelligent_devices NOT called (device 3 min old < 10), got {api6.async_update_intelligent_devices.call_count}")
+    elif api6.async_update_intelligent_devices.call_count != 1:
+        print(f"ERROR: Expected async_update_intelligent_devices called on first run (dispatches refreshed with the sensor), got {api6.async_update_intelligent_devices.call_count}")
         failed = True
     elif api6.fetch_tariffs.call_count != 1:
         print(f"ERROR: Expected fetch_tariffs called (loads rate data from cache on first run), got {api6.fetch_tariffs.call_count}")
@@ -2067,7 +2075,7 @@ async def test_octopus_run(my_predbat):
         print(f"ERROR: Expected save_octopus_cache NOT called (no API data refreshed), got {api6.save_octopus_cache.call_count}")
         failed = True
     else:
-        print("PASS: Fast restart with fresh cache — tariff structure and rates rebuilt, API calls skipped")
+        print("PASS: Fast restart with fresh cache — tariffs rebuilt, dispatches refreshed, heavy fetches skipped")
 
     # Test 7: Automatic config on first run when automatic=True
     print("\n*** Test 7: Automatic config on first run when automatic=True ***")

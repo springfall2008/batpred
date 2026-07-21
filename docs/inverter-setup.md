@@ -39,6 +39,8 @@ Once you get everything working please share the configuration as a GitHub issue
    | [Givenergy with GE Cloud](#givenergy-with-ge-cloud) | [ge_cloud](https://github.com/springfall2008/ge_cloud) | [givenergy_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_cloud.yaml) |
    | [Givenergy with GE Cloud EMS](#givenergy-with-ge-cloud-ems) | [ge_cloud EMS](https://github.com/springfall2008/ge_cloud) | [givenergy_ems.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_ems.yaml) |
    | [Givenergy/Octopus No Home Assistant](#givenergy-octopus-cloud-direct---no-home-assistant) | n/a | [ge_cloud_octopus_standalone.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ge_cloud_octopus_standalone.yaml) |
+   | [DEYE Cloud](#deye-cloud) | Predbat | See [apps.yaml](apps-yaml.md#deye-cloud-api) |
+   | [Enphase Cloud](#enphase-cloud) | Predbat | [enphase_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/enphase_cloud.yaml) |
    | [Fox](#fox) | [Foxess](https://github.com/nathanmarlor/foxess_modbus/) | [fox.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fox.yaml) |
    | [Fox Cloud](#fox-cloud) | Predbat | [fox_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/fox_cloud.yaml) |
    | [Fronius GEN24](#fronius-gen24) | [Fronius](https://www.home-assistant.io/integrations/fronius/) + [fronius-modbus-control](https://github.com/knackerbrot/fronius-modbus-control) | [fronius.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fronius.yaml) |
@@ -57,6 +59,7 @@ Once you get everything working please share the configuration as a GitHub issue
    | [Solis Hybrid inverters (Firmware FB00 and later)](#solis-inverters-fb00-or-later) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) | [ginlong_solis.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml) |
    | [SunSynk](#sunsynk) | [Sunsynk](https://github.com/kellerza/sunsynk) | [sunsynk.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sunsynk.yaml) |
    | [Tesla Powerwall](#tesla-powerwall) | [Tesla Fleet](https://www.home-assistant.io/integrations/tesla_fleet) or [Teslemetry](https://www.home-assistant.io/integrations/teslemetry) | [tesla_powerwall.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/tesla_powerwall.yaml) |
+   | [Tesla Powerwall via Teslemetry component (beta)](#teslemetry-component-beta) | Predbat built-in | [teslemetry.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/teslemetry.yaml) |
    | [Victron](#victron) | [Victron MQTT](https://github.com/tomer-w/victron_mqtt) | [victron.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/victron.yaml) |
 
 Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on GitHub.
@@ -186,6 +189,58 @@ This is being worked on by the author of GivTCP, e.g. see [GivTCP issue: unable 
 - Review any other configuration settings
 
 Launch Predbat with hass.py (from the Predbat-addon repository) either via a Docker or just on a Linux/MAC/WSL command line shell.
+
+## DEYE Cloud
+
+**Experimental**
+
+Predbat has a built-in DEYE Cloud integration for DEYE (Sunsynk-family) hybrid inverters via the DeyeCloud OpenAPI, providing monitoring and battery control - no local Modbus/RS485 Home Assistant integration is required.
+
+### What you need (self-hosted Home Assistant add-on)
+
+DeyeCloud authentication needs **two separate credential pairs** - it is easy to confuse them:
+
+1. **Developer application** - an *App ID* and *App Secret* that identify the API integration itself. Create a developer app once at [developer.deyecloud.com/app](https://developer.deyecloud.com/app); these become `deye_app_id` and `deye_app_secret`. This is **not** your normal login.
+2. **DeyeCloud account login** - the email/username and password you use in the Deye/Sunsynk mobile app. These become `deye_username` and `deye_password`, and are what scope the connection to *your* stations and inverters.
+
+Both pairs are required together - the token endpoint authenticates the *application* and the *account* in one call, so neither pair works on its own. Your account password is stored in `apps.yaml` and sent SHA-256 hashed by Predbat (never in plain text over the wire).
+
+Also set the **data centre** your DeyeCloud account is registered in - `eu`, `am` or `india` - via `deye_data_center`.
+
+Add the following to `apps.yaml` (all four credentials plus the data centre are required; `deye_company_id` is only needed for installer/business accounts):
+
+```yaml
+  deye_app_id: !secret deye_app_id          # developer App ID (developer.deyecloud.com/app)
+  deye_app_secret: !secret deye_app_secret  # developer App Secret
+  deye_username: !secret deye_username      # your DeyeCloud account email/username
+  deye_password: !secret deye_password      # your DeyeCloud account password
+  deye_data_center: 'eu'                    # eu | am | india
+  deye_automatic: True
+```
+
+### Predbat.com (SaaS)
+
+None of the above credentials are needed - connect your DeyeCloud account through Predbat.com and the token is injected and refreshed by the platform (`deye_auth_method: 'oauth'`).
+
+### Automatic configuration
+
+Set `deye_automatic: True` to have Predbat discover every battery inverter on your DeyeCloud account and wire up all the sensor and schedule control entities automatically - no manual `apps.yaml` sensor configuration is required.
+
+See the components documentation for details [Components - DEYE Cloud API](components.md#deye-cloud-api-deye)
+
+## Enphase Cloud
+
+**Experimental**
+
+Predbat has a built-in Enphase Cloud integration that logs in to the Enphase Enlighten cloud (the same unofficial web endpoints used by the Enlighten app/web site) for monitoring and battery control of Enphase IQ Battery systems - no local Home Assistant integration is required.
+
+**Important**: there is no official Enphase API with battery control, so this relies on the unofficial Enlighten web-app API which Enphase may change without notice. Accounts with multi-factor authentication (MFA) enabled are **not supported** - disable MFA on the Enphase account before use.
+
+- Copy the [enphase_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/enphase_cloud.yaml) template over the top of the supplied `apps.yaml` and set `enphase_username` and `enphase_password` to your Enlighten account credentials.
+- Set `enphase_automatic: True` to have Predbat wire up all the sensor and control entities automatically - no manual `apps.yaml` sensor configuration is required.
+- Predbat controls the battery by writing Enphase schedules: charge windows become charge-from-grid (CFG) schedules, export windows become discharge-to-grid (DTG) schedules, and freeze-export windows use restrict-battery-discharge (RBD) schedules, with the reserve set through the battery profile. `automatic_config` requires the site to support both CFG and DTG and fails configuration otherwise. Writes are cached optimistically and corrected by the next periodic re-read if they didn't land.
+
+See the components documentation for details [Components - Enphase API](components.md#enphase-api-enphase)
 
 ## Fox
 
@@ -2483,6 +2538,23 @@ template:
 
 ## Tesla Powerwall
 
+### Teslemetry component (beta)
+
+!!! warning "Beta"
+    Predbat's built-in Teslemetry component is in **beta** and under active development. It is not yet recommended for general use - expect issues and please report them on GitHub. For a proven setup today, use the [manual configuration](#manual-configuration-via-home-assistant-integrations) below.
+
+The component needs only your token in `apps.yaml` and no Home Assistant Tesla integration (`site_id` is optional - omit it to use the first site on your account):
+
+```yaml
+  teslemetry_key: 'your-teslemetry-token'
+  teslemetry_site_id: 'your-energy-site-id'  # optional: omit to use the first site on your account
+  teslemetry_automatic: True
+```
+
+Copy the template [teslemetry.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/teslemetry.yaml) over the top of your `apps.yaml` and edit for your system. See [Tesla Powerwall Teslemetry API](components.md#tesla-powerwall-teslemetry-api-teslemetry) for details.
+
+### Manual configuration via Home Assistant integrations
+
 Integration of the Tesla Powerwall follows the approach outlined in [Ed Hull's blog](https://edhull.co.uk/blog/2025-08-24/predbat-docker-tesla).
 Ed's setup only covered Predbat controlling charging the Powerwall, the below configuration (thanks @Slee2112) covers both charging and discharging (exporting).
 
@@ -2559,7 +2631,7 @@ input_text:
 
 You then need to obtain an access token for the API. There are two ways - either use the existing Fleet Integration if you have that setup, or manually obtain them.
 
-### Option 1: Tesla Fleet Integration (recommended)
+### Option 1: Tesla Fleet Integration
 
 The Tesla Fleet integration already handles token exchanges for you. You can simply use this token for the REST API calls.
 

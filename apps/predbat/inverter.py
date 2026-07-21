@@ -522,11 +522,11 @@ class Inverter:
 
         if not self.inv_has_reserve_soc:
             self.create_missing_arg("reserve", self.reserve)
-            self.base.args["reserve"][id] = self.create_entity("reserve", self.reserve, device_class="battery", uom="%")
+            self.base.args["reserve"][id] = self.create_entity("reserve", self.reserve, device_class=None, uom="%", icon="mdi:battery-lock")
 
         if not self.inv_has_target_soc:
             self.create_missing_arg("charge_limit", 100)
-            self.base.args["charge_limit"][id] = self.create_entity("charge_limit", 100, device_class="battery", uom="%")
+            self.base.args["charge_limit"][id] = self.create_entity("charge_limit", 100, device_class=None, uom="%", icon="mdi:target")
 
         if self.inv_output_charge_control != "power":
             max_charge = self.battery_rate_max_charge * MINUTE_WATT
@@ -581,13 +581,19 @@ class Inverter:
             self.base.battery_scaling_auto = True
 
         # Run find_battery_size at most once per calendar day, always update the history sensor
-        existing_history = self.base.get_state_wrapper(soc_max_sensor_name, attribute="history", default={})
+        # Use load_previous_value_from_ha so the history survives a Home Assistant restart (the sensor
+        # state is ephemeral and is not restored by HA, but the recorder history is)
+        existing_history = self.base.load_previous_value_from_ha(soc_max_sensor_name, attribute="history") or {}
         if not isinstance(existing_history, dict):
             existing_history = {}
         today_key = str(self.base.now_utc.date())
 
-        # Already calculated today - use stored mean from sensor state
-        trimmed_mean_state = self.base.get_state_wrapper(soc_max_sensor_name)
+        # Already calculated today - use stored mean from sensor state. Use load_previous_value_from_ha
+        # (same recorder fallback as existing_history above) so that after a mid-day HA restart the
+        # trimmed mean is recovered too; otherwise today_key is present in the recovered history (so the
+        # recalculation below is skipped) while the live-only state read returns None, silently disabling
+        # battery_scaling_auto for the rest of the day.
+        trimmed_mean_state = self.base.load_previous_value_from_ha(soc_max_sensor_name)
         try:
             trimmed_mean = float(trimmed_mean_state) if trimmed_mean_state is not None else None
         except (ValueError, TypeError):
@@ -645,7 +651,7 @@ class Inverter:
         else:
             sensor_name = "sensor.{}_soc_max_calculated".format(self.base.prefix)
 
-        history = self.base.get_state_wrapper(sensor_name, attribute="history", default={})
+        history = self.base.load_previous_value_from_ha(sensor_name, attribute="history") or {}
         if not isinstance(history, dict):
             history = {}
 
@@ -1302,7 +1308,7 @@ class Inverter:
             self.log("Warn: Cannot find battery {} curve (settings missing), one of the required settings for {}, {}_rate and battery_power are missing from apps.yaml".format(curve_type, soc_label, curve_type))
         return {}
 
-    def create_entity(self, entity_name, value, uom=None, device_class="None"):
+    def create_entity(self, entity_name, value, uom=None, device_class=None, icon=None):
         """
         Create dummy entities required by non GE inverters to mimic GE behaviour
         """
@@ -1316,6 +1322,8 @@ class Inverter:
             attributes["unit_of_measurement"] = uom
         if device_class is not None:
             attributes["device_class"] = device_class
+        if icon is not None:
+            attributes["icon"] = icon
 
         self.created_attributes[entity_id] = attributes
 

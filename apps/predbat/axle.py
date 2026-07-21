@@ -414,7 +414,6 @@ class AxleAPI(ComponentBase):
 
             self.cleanup_event_history()
             await self.save_event_history()
-            self.publish_axle_event()
             self.log(f"AxleAPI: Successfully fetched event data - {import_export} event from {start_time} to {end_time}" if start_time else "AxleAPI: No scheduled event")
             self.update_success_timestamp()
 
@@ -452,7 +451,6 @@ class AxleAPI(ComponentBase):
         self._process_price_curve(data)
         self.cleanup_event_history()
         await self.save_event_history()
-        self.publish_axle_event()
         self.update_success_timestamp()
         self.log("AxleAPI: Price curve processed successfully (managed mode)")
 
@@ -588,7 +586,12 @@ class AxleAPI(ComponentBase):
         self.set_arg("axle_session", "binary_sensor." + self.prefix + "_axle_event")
 
     async def run(self, seconds, first):
-        """Main run loop — fetch when data is 10+ minutes old, publish state every minute."""
+        """Main run loop — fetch when data is 10+ minutes old, always publish state afterwards.
+
+        Publishing is unconditional so the on/off state keeps reflecting the current time even
+        when fetching is stuck failing (e.g. an expired API key) - otherwise a cached event that
+        has since ended would be reported as active forever.
+        """
         if first:
             await self.load_event_history()
             if self.automatic:
@@ -606,8 +609,8 @@ class AxleAPI(ComponentBase):
             except Exception as e:
                 self.log(f"Warn: AxleAPI: Exception during fetch: {e}")
                 self.failures_total += 1
-        elif (seconds % 60) == 0:  # Every minute, update state to reflect if event is active or not
-            self.publish_axle_event()
+
+        self.publish_axle_event()
 
         return True
 
