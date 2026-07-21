@@ -22,8 +22,10 @@ from oauth_mixin import OAuthMixin
 
 # API Endpoints
 SOLIS_BASE_URL = "https://www.soliscloud.com:13333"
-# OAuth 2.0 host (Bearer auth). Used when auth_method == "oauth"; reads/control use the
-# same cid/value payloads as the HMAC path, just at this host (design #366, approach 1).
+# OAuth 2.0 host (Bearer auth). Used when auth_method == "oauth". Reads/control use the same
+# cid/value payload shapes as the HMAC path, but NOT the same routes — this host serves a
+# different namespace, so paths are translated via SOLIS_OAUTH_ENDPOINTS below. (Design #366
+# approach 1 assumed path parity here; that was verified false against the live gateway.)
 SOLIS_OAUTH_BASE_URL = "https://api-oauth2.soliscloud.com"
 SOLIS_READ_ENDPOINT = "/v2/api/atRead"
 SOLIS_READ_BATCH_ENDPOINT = "/v2/api/atReadBatch"
