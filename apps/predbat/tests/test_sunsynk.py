@@ -6,14 +6,16 @@
 # Test Sunsynk API skeleton + Bearer request layer
 # -----------------------------------------------------------------------------
 
-"""Tests for the SunsynkAPI component (Tasks 8-10).
+"""Tests for the SunsynkAPI component (Tasks 8-11).
 
 Task 8 covers the injected-token Bearer request layer. Task 9 adds device discovery
 (single-plant scoped) and read-only telemetry (flow/battery/grid/input/output). Task 10 adds
-publish_data() - entity publishing with the VERIFIED sign mapping. Control lands in a later
-task and is not tested here.
+publish_data() - entity publishing with the VERIFIED sign mapping. Task 11 adds
+automatic_config() - the set_arg map wiring Predbat to the entities publish_data() emits.
+Control writes land in a later task and are not tested here.
 """
 
+import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
@@ -638,3 +640,124 @@ def test_publish_data_with_no_devices_logs_warning_and_publishes_nothing():
 
     assert api.base.entities == {}
     assert any("no discovered devices" in message for message in logs)
+
+
+# -----------------------------------------------------------------------------
+# Task 11: automatic_config() - set_arg map wiring Predbat to the Task 10 entities
+# -----------------------------------------------------------------------------
+
+
+def test_automatic_config_maps_two_inverters():
+    """automatic_config() discovers devices via get_device_list() and emits a set_arg map
+    whose per-device lists are ordered per the discovered device order, pointing at the
+    EXACT entity ids publish_data() (Task 10) publishes - sensor.{prefix}_sunsynk_{sn}_{leaf}
+    with SN lower-cased."""
+    api = SunsynkAPI(MockBase(), key="t", automatic=True, plant_id=505825)
+    api.request_get = AsyncMock(return_value=INVERTERS_RESPONSE)
+
+    run_async(api.automatic_config())
+
+    assert api.base.args["inverter_type"] == ["SUNSYNK", "SUNSYNK"]
+    assert api.base.args["num_inverters"] == 2
+    assert api.base.args["soc_percent"] == [
+        "sensor.predbat_sunsynk_2504040106_battery_soc",
+        "sensor.predbat_sunsynk_2504040164_battery_soc",
+    ]
+    assert api.base.args["battery_power"] == [
+        "sensor.predbat_sunsynk_2504040106_battery_power",
+        "sensor.predbat_sunsynk_2504040164_battery_power",
+    ]
+    assert api.base.args["grid_power"] == [
+        "sensor.predbat_sunsynk_2504040106_grid_power",
+        "sensor.predbat_sunsynk_2504040164_grid_power",
+    ]
+    assert api.base.args["load_power"] == [
+        "sensor.predbat_sunsynk_2504040106_load_power",
+        "sensor.predbat_sunsynk_2504040164_load_power",
+    ]
+    assert api.base.args["pv_power"] == [
+        "sensor.predbat_sunsynk_2504040106_pv_power",
+        "sensor.predbat_sunsynk_2504040164_pv_power",
+    ]
+    assert api.base.args["battery_temperature"] == [
+        "sensor.predbat_sunsynk_2504040106_battery_temperature",
+        "sensor.predbat_sunsynk_2504040164_battery_temperature",
+    ]
+    assert api.base.args["soc_max"] == [
+        "sensor.predbat_sunsynk_2504040106_soc_max",
+        "sensor.predbat_sunsynk_2504040164_soc_max",
+    ]
+    # A charge control entity - not published yet (Task 15), but must be named consistently.
+    assert api.base.args["charge_start_time"] == [
+        "select.predbat_sunsynk_2504040106_charge_slot1_start_time",
+        "select.predbat_sunsynk_2504040164_charge_slot1_start_time",
+    ]
+    assert api.base.args["scheduled_discharge_enable"] == [
+        "switch.predbat_sunsynk_2504040106_discharge_slot1_enable",
+        "switch.predbat_sunsynk_2504040164_discharge_slot1_enable",
+    ]
+
+
+def test_automatic_config_respects_automatic_ignore_pv():
+    """When automatic_ignore_pv is set, pv_power must NOT be wired (mirrors fox.py/deye.py),
+    leaving any manually configured PV sensor in apps.yaml untouched."""
+    api = SunsynkAPI(MockBase(), key="t", automatic=True, plant_id=505825, automatic_ignore_pv=True)
+    api.request_get = AsyncMock(return_value=INVERTERS_RESPONSE)
+
+    run_async(api.automatic_config())
+
+    assert "pv_power" not in api.base.args
+
+
+def test_automatic_config_logs_one_structured_json_line_with_the_full_map():
+    """The complete arg map must be logged as ONE structured, Loki-greppable line (spec
+    section 3.1, non-optional) - not scattered across many individual set_arg log lines."""
+    api = SunsynkAPI(MockBase(), key="t", automatic=True, plant_id=505825)
+    api.request_get = AsyncMock(return_value=INVERTERS_RESPONSE)
+    logs = []
+    api.log = logs.append
+
+    run_async(api.automatic_config())
+
+    matches = [message for message in logs if message.startswith("Info: SunsynkAPI automatic_config: ")]
+    assert len(matches) == 1
+
+    logged_map = json.loads(matches[0][len("Info: SunsynkAPI automatic_config: ") :])
+    assert logged_map["inverter_type"] == ["SUNSYNK", "SUNSYNK"]
+    assert logged_map["num_inverters"] == 2
+    assert logged_map["soc_percent"] == api.base.args["soc_percent"]
+    assert logged_map["charge_start_time"] == api.base.args["charge_start_time"]
+
+
+def test_automatic_config_no_inverters_warns_and_sets_nothing():
+    """No discovered devices: log a Warn: and set no args at all, rather than emitting an
+    empty-list config that would silently disable Predbat's inverter control."""
+    api = SunsynkAPI(MockBase(), key="t", automatic=True, plant_id=505825)
+    api.request_get = AsyncMock(return_value={"code": 0, "success": True, "data": {"infos": []}})
+    logs = []
+    api.log = logs.append
+
+    run_async(api.automatic_config())
+
+    assert any("SunsynkAPI automatic_config found no inverters" in message for message in logs)
+    assert api.base.args == {}
+
+
+def test_automatic_config_skips_device_with_missing_sn_and_warns():
+    """A device with no SN must be skipped (not crash on sn.lower()) and must log a Warn:,
+    mirroring publish_data()'s Fix 4 discipline (Task 10)."""
+    api = SunsynkAPI(MockBase(), key="t", automatic=True)
+    api.get_device_list = AsyncMock(
+        return_value=[
+            {"sn": None, "model": "SUN-50KW-SG01HP3-EU-BM4", "plant_id": 505825},
+            {"sn": "2504040164", "model": "SUN-50KW-SG01HP3-EU-BM4", "plant_id": 505825},
+        ]
+    )
+    logs = []
+    api.log = logs.append
+
+    run_async(api.automatic_config())
+
+    assert any("skipping device with missing SN" in message for message in logs)
+    assert api.base.args["num_inverters"] == 1
+    assert api.base.args["soc_percent"] == ["sensor.predbat_sunsynk_2504040164_battery_soc"]

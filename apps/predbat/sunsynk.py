@@ -15,8 +15,9 @@ resulting Bearer access token, so ``SunsynkAPI`` never performs RSA signing or l
 itself here - it only issues plain Bearer-authenticated requests and flags
 ``needs_reauth`` when the injected token is rejected, for the SaaS side to notice and
 refresh. Device discovery and read-only telemetry are implemented here (Task 9), along with
-entity publishing via ``publish_data()`` (Task 10); automatic scheduling and control are
-added in later tasks.
+entity publishing via ``publish_data()`` (Task 10) and the automatic-config set_arg wiring via
+``automatic_config()`` (Task 11); the run loop/COMPONENT_LIST registration and control writes
+are added in later tasks.
 """
 
 import asyncio
@@ -640,6 +641,88 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
                     return value
         return None
 
+    async def automatic_config(self):
+        """
+        Automatically configure Predbat's base args to wire up the discovered Sunsynk
+        inverters, fox.py/deye.py/solis.py-style.
+
+        Sensor entity ids MUST exactly match what publish_data() (Task 10) actually publishes
+        - sensor.{prefix}_sunsynk_{sn}_{leaf}, SN lower-cased - a mismatch here means Predbat
+        reads an entity publish_data() never writes, which is a silent broken-wiring bug (not
+        a crash). The charge/discharge slot control entities (select/number/switch.{prefix}_
+        sunsynk_{sn}_*) don't exist yet - device control lands in a later task - this just
+        names them here so they are wired up the moment they appear, mirroring how fox.py/
+        deye.py/solis.py all name control entities ahead of the write path landing.
+
+        battery_power/grid_power already carry the VERIFIED sign (predbat convention:
+        discharge/export +ve - see _flow_signed_powers()) as published by publish_data(), so -
+        unlike solis.py's battery_power_invert or fox.py's grid_power_invert - no invert flag
+        is needed here.
+
+        Callers must gate this on self.automatic themselves, mirroring fox.py/deye.py/
+        solis.py's ``if first and self.automatic: await self.automatic_config()`` in run() -
+        this method does not check it itself. run()'s own gating call is added in a later task.
+
+        Emits a single structured Info: log line with the complete arg map (spec section 3.1)
+        so the automatic-config outcome is Loki-greppable without reconstructing it from many
+        individual set_arg log lines.
+        """
+        devices_raw = await self.get_device_list()
+        if not devices_raw:
+            self.log("Warn: SunsynkAPI automatic_config found no inverters")
+            return
+
+        devices = []
+        for device in devices_raw:
+            sn = device.get("sn")
+            if not sn:
+                self.log("Warn: SunsynkAPI automatic_config: skipping device with missing SN: {}".format(device))
+                continue
+            devices.append(sn.lower())
+
+        if not devices:
+            self.log("Warn: SunsynkAPI automatic_config found no inverters")
+            return
+
+        arg_map = {"inverter_type": ["SUNSYNK" for _ in devices], "num_inverters": len(devices)}
+
+        # Telemetry sensors - MUST match publish_data()'s sensor.{prefix}_sunsynk_{sn}_{leaf}
+        # ids exactly (Task 10).
+        arg_map["soc_percent"] = [f"sensor.{self.prefix}_sunsynk_{sn}_battery_soc" for sn in devices]
+        arg_map["battery_power"] = [f"sensor.{self.prefix}_sunsynk_{sn}_battery_power" for sn in devices]
+        arg_map["grid_power"] = [f"sensor.{self.prefix}_sunsynk_{sn}_grid_power" for sn in devices]
+        arg_map["load_power"] = [f"sensor.{self.prefix}_sunsynk_{sn}_load_power" for sn in devices]
+        if not self.automatic_ignore_pv:
+            arg_map["pv_power"] = [f"sensor.{self.prefix}_sunsynk_{sn}_pv_power" for sn in devices]
+        arg_map["battery_temperature"] = [f"sensor.{self.prefix}_sunsynk_{sn}_battery_temperature" for sn in devices]
+        arg_map["soc_max"] = [f"sensor.{self.prefix}_sunsynk_{sn}_soc_max" for sn in devices]
+
+        # Reserve / minimum SOC control - one entity serves both keys, mirroring solis.py's
+        # dual use of its over_discharge_soc control for both "reserve" and "battery_min_soc"
+        # (there is no separate read-only min-soc sensor). Not published yet - lands with
+        # device control (Task 15).
+        arg_map["battery_min_soc"] = [f"number.{self.prefix}_sunsynk_{sn}_battery_min_soc" for sn in devices]
+        arg_map["reserve"] = [f"number.{self.prefix}_sunsynk_{sn}_battery_min_soc" for sn in devices]
+
+        # Charge/discharge controls - slot 1 of the 6-slot TOU model carries Predbat's primary
+        # control, mirroring solis.py's charge_slot1_*/discharge_slot1_* leaf naming exactly.
+        arg_map["charge_start_time"] = [f"select.{self.prefix}_sunsynk_{sn}_charge_slot1_start_time" for sn in devices]
+        arg_map["charge_end_time"] = [f"select.{self.prefix}_sunsynk_{sn}_charge_slot1_end_time" for sn in devices]
+        arg_map["charge_limit"] = [f"number.{self.prefix}_sunsynk_{sn}_charge_slot1_soc" for sn in devices]
+        arg_map["charge_rate"] = [f"number.{self.prefix}_sunsynk_{sn}_charge_slot1_power" for sn in devices]
+        arg_map["scheduled_charge_enable"] = [f"switch.{self.prefix}_sunsynk_{sn}_charge_slot1_enable" for sn in devices]
+
+        arg_map["discharge_start_time"] = [f"select.{self.prefix}_sunsynk_{sn}_discharge_slot1_start_time" for sn in devices]
+        arg_map["discharge_end_time"] = [f"select.{self.prefix}_sunsynk_{sn}_discharge_slot1_end_time" for sn in devices]
+        arg_map["discharge_target_soc"] = [f"number.{self.prefix}_sunsynk_{sn}_discharge_slot1_soc" for sn in devices]
+        arg_map["discharge_rate"] = [f"number.{self.prefix}_sunsynk_{sn}_discharge_slot1_power" for sn in devices]
+        arg_map["scheduled_discharge_enable"] = [f"switch.{self.prefix}_sunsynk_{sn}_discharge_slot1_enable" for sn in devices]
+
+        for key, value in arg_map.items():
+            self.set_arg(key, value)
+
+        self.log(f"Info: SunsynkAPI automatic_config: {json.dumps(arg_map)}")
+
 
 class MockBase:  # pragma: no cover
     """Mock base class for standalone testing"""
@@ -683,7 +766,9 @@ class MockBase:  # pragma: no cover
         return default
 
     def set_arg(self, key, value):
-        """Print a config argument write for debugging."""
+        """Print a config argument write for debugging, and record it in self.args - matching
+        the real base's set_arg() (userinterface.py), which does `self.args[arg] = value` -
+        so automatic_config() can be asserted against api.base.args in tests."""
         state = None
         if isinstance(value, str) and "." in value:
             state = self.get_state_wrapper(value, default=None)
@@ -696,3 +781,4 @@ class MockBase:  # pragma: no cover
         else:
             state = "n/a"
         print(f"Set arg {key} = {value} (state={state})")
+        self.args[key] = value
