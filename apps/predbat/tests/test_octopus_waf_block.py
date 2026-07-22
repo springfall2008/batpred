@@ -9,7 +9,7 @@ itself blocked, so the component can never recover without a restart.
 
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
-from octopus import OctopusAPI, integration_context_header
+from octopus import OctopusAPI, integration_context_header, EDGE_BLOCK_REFRESH_AFTER
 
 CLOUDFRONT_403_BODY = (
     '<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">\n'
@@ -134,6 +134,42 @@ async def test_octopus_waf_block(my_predbat):
         failed = True
     else:
         print("PASS: HTTP error response was read exactly once")
+
+    # Test 4: persistent edge blocks must eventually force a refresh anyway. A generic
+    # "403 Forbidden" HTML page is indistinguishable from a WAF page, so if a genuinely
+    # revoked credential ever produced one, never refreshing would lock the component out
+    # permanently - the very failure the HTTP 401/403 refresh path was added to fix.
+    print("\n*** Test 4: persistent edge blocks eventually force a refresh ***")
+    api4 = _make_api(my_predbat, _make_response(403, "<html><head><title>403 Forbidden</title></head><body></body></html>"))
+    api4.graphql_token = "token"
+    api4.async_refresh_token = AsyncMock(return_value="token")
+
+    queries = EDGE_BLOCK_REFRESH_AFTER + 1
+    for _ in range(queries):
+        await api4.async_graphql_query("query { test }", "test-query")
+
+    # Without an escape hatch there is exactly one refresh lookup per query and never more
+    if api4.async_refresh_token.call_count <= queries:
+        print("ERROR: {} consecutive edge blocks never forced a refresh - component can lock out permanently".format(queries))
+        failed = True
+    else:
+        print("PASS: persistent edge blocks forced a token refresh")
+
+    # Test 5: callers that pass ignore_errors=True treat the lookup as optional, so an edge
+    # block must not inflate failures_total or emit warnings for them.
+    print("\n*** Test 5: edge block respects ignore_errors ***")
+    api5 = _make_api(my_predbat, _make_response(403, CLOUDFRONT_403_BODY))
+    api5.graphql_token = "token"
+    api5.async_refresh_token = AsyncMock(return_value="token")
+    api5.failures_total = 0
+
+    await api5.async_graphql_query("query { test }", "test-query", ignore_errors=True)
+
+    if api5.failures_total != 0:
+        print("ERROR: edge block incremented failures_total despite ignore_errors=True, got {}".format(api5.failures_total))
+        failed = True
+    else:
+        print("PASS: edge block honoured ignore_errors")
 
     if failed:
         print("**** Octopus WAF/CloudFront 403 tests FAILED ****")

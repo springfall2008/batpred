@@ -82,6 +82,10 @@ def parse_date_time(dt_str):
 
 CDN_BLOCK_MARKERS = ("cloudfront", "request blocked", "the request could not be satisfied")
 HTML_DOCUMENT_PREFIXES = ("<!doctype", "<html")
+# A generic "403 Forbidden" page is indistinguishable from a WAF page, so after this many
+# consecutive edge blocks fall back to refreshing the token in case the credential really
+# was revoked. Without this the component could never recover from a misclassification.
+EDGE_BLOCK_REFRESH_AFTER = 5
 
 
 def is_edge_block_body(text):
@@ -408,6 +412,7 @@ class OctopusAPI(ComponentBase):
         self.account_id = account_id
         self.graphql_token = None
         self.graphql_expiration = None
+        self.consecutive_edge_blocks = 0
         self.account_data = {}
         self.tariffs = {}
         self.saving_sessions = {}
@@ -1649,7 +1654,8 @@ class OctopusAPI(ComponentBase):
                 # Check for HTTP-level 401/403 (transport-level auth failure) and retry once.
                 # This handles cases where the JWT has been revoked server-side and the server
                 # returns a bare 401/403 status rather than a GraphQL error body — which would
-                # otherwise loop forever without ever refreshing the token.
+                # otherwise loop forever without ever refreshing the token. The one exception is
+                # a 403 carrying a CDN/WAF block page, handled immediately below.
                 if response.status in [401, 403] and _retry_count == 0:
                     # A CDN/WAF block is rate limiting, not an auth failure. Re-minting a token
                     # here would be rejected by the same block, leaving the component permanently
@@ -1658,10 +1664,17 @@ class OctopusAPI(ComponentBase):
                     # 200 with a GraphQL errorCode, or as a 401, so a 403 carrying a non-JSON
                     # body comes from the edge rather than the API.
                     if response.status == 403 and is_edge_block_body(await response.text()):
-                        self.log(f"Warn: OctopusAPI: HTTP {response.status} edge/WAF block for graphql query {request_context} - rate limited, keeping cached token")
-                        record_api_call("octopus", False, "rate_limit")
-                        self.failures_total += 1
-                        return None
+                        self.consecutive_edge_blocks += 1
+                        if self.consecutive_edge_blocks <= EDGE_BLOCK_REFRESH_AFTER:
+                            record_api_call("octopus", False, "rate_limit")
+                            if not ignore_errors:
+                                self.log(f"Warn: OctopusAPI: HTTP {response.status} edge/WAF block for graphql query {request_context} - rate limited, keeping cached token")
+                                self.failures_total += 1
+                            return None
+                        # Persistently blocked. The body may be a generic 403 page from a revoked
+                        # credential rather than a WAF, so fall through and refresh the token.
+                        self.log(f"Warn: OctopusAPI: {self.consecutive_edge_blocks} consecutive edge blocks for {request_context} - refreshing token in case the credential was revoked")
+                        self.consecutive_edge_blocks = 0
                     self.log(f"OctopusAPI: HTTP {response.status} for graphql query {request_context}, forcing token refresh and retry")
                     record_api_call("octopus", False, "auth_error")
                     self.graphql_token = None
@@ -1703,6 +1716,7 @@ class OctopusAPI(ComponentBase):
                     return None
 
                 if response_body and ("data" in response_body):
+                    self.consecutive_edge_blocks = 0
                     self.update_success_timestamp()
                     record_api_call("octopus")
                     return response_body["data"]

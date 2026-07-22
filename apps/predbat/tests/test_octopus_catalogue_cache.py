@@ -55,7 +55,11 @@ SETTINGS = {"devices": [{"id": "device-1", "status": {"isSuspended": False}, "ch
 
 
 def _build_api(my_predbat, cache_dir, calls):
-    """Build an OctopusAPI backed by real storage in cache_dir, recording query contexts."""
+    """Build an OctopusAPI backed by real storage in cache_dir, recording query contexts.
+
+    The caller must restore my_predbat.components afterwards - the caller saves it before use -
+    because the test runner shares one my_predbat across the whole registry.
+    """
     api = OctopusAPI(my_predbat, key="test-key", account_id="test-account", automatic=False)
     storage = StorageComponent(api.base)
     storage.backend = StorageLocalFiles(cache_dir, api.base.log)
@@ -96,6 +100,10 @@ async def test_octopus_catalogue_cache(my_predbat):
     if os.path.exists(cache_dir):
         shutil.rmtree(cache_dir)
     os.makedirs(cache_dir, exist_ok=True)
+
+    # The runner shares a single my_predbat across the whole registry, so the injected
+    # components mock must be undone or every later test sees it
+    original_components = my_predbat.components
 
     try:
         # Test 1: repeated polls on one instance must not refetch the catalogue
@@ -140,6 +148,7 @@ async def test_octopus_catalogue_cache(my_predbat):
         else:
             print("PASS: battery size resolved correctly from the cached catalogue")
     finally:
+        my_predbat.components = original_components
         if os.path.exists(cache_dir):
             shutil.rmtree(cache_dir)
 
