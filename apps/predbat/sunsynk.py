@@ -177,9 +177,19 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             return None, False
 
         if status_code in (200, 201):
-            self.needs_reauth = False
             if data is None:
                 data = {}
+            if isinstance(data, dict) and data.get("success") is False:
+                # Sunsynk's API family returns HTTP 200 with {"success": false} on failure
+                # (e.g. stale token, invalid request) rather than a non-2xx status - treat it
+                # the same as a hard failure so a stale-token 200 doesn't silently become an
+                # empty "data" payload that gets cached as if it were fresh. Mirrors deye.py's
+                # `if not data.get("success", True)` discipline.
+                self.failures_total += 1
+                self.log("Warn: Sunsynk: API call to {} returned success=false (code {}): {}".format(url, data.get("code"), data.get("msg")))
+                record_api_call("sunsynk", False, "api_success_false")
+                return None, False
+            self.needs_reauth = False
             self.update_success_timestamp()
             record_api_call("sunsynk")
             return data, False
@@ -320,14 +330,19 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         Shared cache-and-fetch logic for the realtime telemetry endpoints (flow/battery/grid/
         input/output).
 
-        Returns the cached value for ``cache_key`` within ``device_values[bucket]`` when it is
-        already populated and the combined "device_values" cache is still within
-        SUNSYNK_REFRESH_REALTIME; otherwise polls the API, updates the in-memory bucket and
-        persists the whole device_values cache. Returns None on API failure, leaving any
-        existing cached value untouched.
+        Freshness is tracked PER bucket+cache_key (e.g. "device_values:battery:SN1"), NOT via
+        one shared "device_values" clock - a single shared clock would mean fetching any
+        bucket/sn resets the timestamp for every other bucket/sn, so a genuinely-stale entry
+        for a DIFFERENT key would be served from cache without ever being fetched again. Returns
+        the cached value for ``cache_key`` within ``device_values[bucket]`` when it is already
+        populated and still within SUNSYNK_REFRESH_REALTIME for THIS bucket+cache_key pair;
+        otherwise polls the API, updates the in-memory bucket and persists the whole
+        device_values cache. Returns None on API failure, leaving any existing cached value
+        untouched.
         """
         store = self.device_values[bucket]
-        if cache_key in store and not self._needs_refresh("device_values", SUNSYNK_REFRESH_REALTIME):
+        age_key = self._realtime_age_key(bucket, cache_key)
+        if cache_key in store and not self._needs_refresh(age_key, SUNSYNK_REFRESH_REALTIME):
             return store[cache_key]
 
         result = await self.request_get(path, datain=datain)
@@ -336,8 +351,18 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
 
         data = result.get("data") or {}
         store[cache_key] = data
+        self.data_age[age_key] = datetime.now(timezone.utc)
+        # Persists the whole in-memory device_values struct (all buckets/sns together) so a
+        # reboot restores everything at once; _save_cache() also stamps its own "device_values"
+        # bookkeeping key, which is unrelated to (and must not be confused with) the per-entry
+        # age_key freshness tracked above.
         await self._save_cache("device_values", self.device_values)
         return data
+
+    @staticmethod
+    def _realtime_age_key(bucket, cache_key):
+        """Return the per-entry data_age key for a realtime telemetry bucket+cache_key pair."""
+        return "device_values:{}:{}".format(bucket, cache_key)
 
     def _data_age_minutes(self, key):
         """

@@ -13,9 +13,10 @@ Task 8 covers the injected-token Bearer request layer. Task 9 adds device discov
 and control land in later tasks and are not tested here.
 """
 
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
-from sunsynk import SunsynkAPI, MockBase
+from sunsynk import SunsynkAPI, MockBase, SUNSYNK_REFRESH_REALTIME
 from tests.test_infra import run_async, create_aiohttp_mock_response, create_aiohttp_mock_session
 
 # Real captured demo responses (Task 9 brief) - used verbatim as test fixtures so the parsing
@@ -150,6 +151,41 @@ def test_request_get_func_403_sets_needs_reauth():
     assert data is None
     assert allow_retry is False
     assert api.needs_reauth is True
+
+
+def test_request_get_func_200_with_success_false_is_treated_as_failure():
+    """Sunsynk's API family returns HTTP 200 with {"success": false} on failure (e.g. stale
+    token, invalid request) rather than a non-2xx status. This must not be unwrapped into an
+    empty/None 'data' payload as if the call succeeded - mirrors deye.py's
+    `if not data.get("success", True)` discipline."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True)
+
+    mock_response = create_aiohttp_mock_response(status=200, json_data={"code": 1, "success": False, "msg": "token invalid", "data": None})
+    mock_session = create_aiohttp_mock_session(mock_response)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        data, allow_retry = run_async(api.request_get_func("/api/v1/plants"))
+
+    assert data is None
+    assert allow_retry is False
+    assert api.failures_total == 1
+
+
+def test_get_battery_treats_200_success_false_as_failure_and_does_not_cache():
+    """End-to-end: a 200 response with {"success": false} must surface as None all the way up
+    through request_get()/get_battery(), and must NOT populate the battery cache with an
+    empty dict as if it were valid, fresh data."""
+    api = SunsynkAPI(MockBase(), key="stale-token", automatic=True)
+
+    mock_response = create_aiohttp_mock_response(status=200, json_data={"code": 1, "success": False, "msg": "token invalid", "data": None})
+    mock_session = create_aiohttp_mock_session(mock_response)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = run_async(api.get_battery("SN1"))
+
+    assert result is None
+    assert "SN1" not in api.device_values["battery"]
+    assert "device_values:battery:SN1" not in api.data_age
 
 
 # -----------------------------------------------------------------------------
@@ -339,3 +375,32 @@ def test_realtime_reads_are_cached_independently_per_sn():
     run_async(api.get_battery("SN2"))
 
     assert api.request_get.await_count == 2
+
+
+def test_realtime_cache_freshness_is_per_bucket_and_sn_not_a_shared_clock():
+    """Reviewer scenario: all 5 telemetry buckets x all SNs must NOT share one clock.
+
+    Fetch battery(SN1) and grid(SN1) at t0 (2 calls). Advance every data_age entry past
+    SUNSYNK_REFRESH_REALTIME. Refetch grid(SN1) (3rd call) - this must only refresh grid(SN1)'s
+    own age, not reset a shared "device_values" timestamp. Then fetch battery(SN1) again: it
+    must ALSO be recognised as stale and refetch (4th call), not be served stale from cache
+    just because a different bucket/sn was refreshed in between.
+    """
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True)
+    api.request_get = AsyncMock(return_value=BATTERY_RESPONSE)
+
+    run_async(api.get_battery("SN1"))  # call 1
+    run_async(api.get_grid("SN1"))  # call 2
+    assert api.request_get.await_count == 2
+
+    # Clock-injection: age every tracked cache entry past the refresh window, same pattern
+    # used elsewhere in this suite (test_fox_api.py, test_sigenergy.py, test_enphase_api.py).
+    stale = datetime.now(timezone.utc) - timedelta(minutes=SUNSYNK_REFRESH_REALTIME + 1)
+    for key in list(api.data_age.keys()):
+        api.data_age[key] = stale
+
+    run_async(api.get_grid("SN1"))  # call 3 - refetches; must only touch grid(SN1)'s own age
+    assert api.request_get.await_count == 3
+
+    run_async(api.get_battery("SN1"))  # call 4 - must ALSO refetch, not served stale
+    assert api.request_get.await_count == 4
