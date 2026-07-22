@@ -6,20 +6,28 @@
 # Test Sunsynk API skeleton + Bearer request layer
 # -----------------------------------------------------------------------------
 
-"""Tests for the SunsynkAPI component (Tasks 8-12).
+"""Tests for the SunsynkAPI component (Tasks 8-13).
 
 Task 8 covers the injected-token Bearer request layer. Task 9 adds device discovery
 (single-plant scoped) and read-only telemetry (flow/battery/grid/input/output). Task 10 adds
 publish_data() - entity publishing with the VERIFIED sign mapping. Task 11 adds
 automatic_config() - the set_arg map wiring Predbat to the entities publish_data() emits.
-Task 12 adds run() plus COMPONENT_LIST/config.py registration. Control writes land in a later
-task and are not tested here.
+Task 12 adds run() plus COMPONENT_LIST/config.py registration. Task 13 adds the standalone
+CLI harness's RSA login helpers (publicKey -> RSA-encrypt password -> token/new) - tested here
+via the payload/sign construction and the guarded `cryptography` import, NOT a live call (the
+harness itself is exercised manually against a real Sunsynk account). Control writes land in a
+later task and are not tested here.
 """
 
+import base64
+import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
+import sunsynk
 from sunsynk import SunsynkAPI, MockBase, SUNSYNK_REFRESH_REALTIME
 from tests.test_infra import run_async, create_aiohttp_mock_response, create_aiohttp_mock_session
 
@@ -924,3 +932,88 @@ def test_run_uses_cached_device_list_on_transient_api_failure():
 
     assert result is True
     api.publish_data.assert_awaited_once()
+
+
+# --- Task 13: standalone CLI harness RSA login helpers ---------------------------------------
+#
+# These test the payload/sign CONSTRUCTION only (no live network call - the harness itself is
+# exercised manually against a real Sunsynk account, per the task brief). They also prove the
+# `cryptography` import is correctly guarded, so importing sunsynk.py as a SaaS component never
+# requires it.
+
+
+def test_sunsynk_rsa_encrypt_password_round_trips_with_matching_private_key():
+    """_sunsynk_rsa_encrypt_password() must produce a base64 PKCS1v15 ciphertext that decrypts
+    back to the original plaintext with the matching private key - proves the standalone login
+    helper's RSA step is wired correctly (right padding scheme, right PEM wrapping of Sunsynk's
+    raw publicKey body) without ever calling the live Sunsynk API."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import padding, rsa
+
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=1024)
+    public_pem = private_key.public_key().public_bytes(encoding=serialization.Encoding.PEM, format=serialization.PublicFormat.SubjectPublicKeyInfo).decode()
+    # Sunsynk's publicKey response body is the raw base64 key WITHOUT PEM header/footer -
+    # strip them here, mirroring what _sunsynk_rsa_encrypt_password() itself re-wraps.
+    raw_key = "".join(public_pem.strip().splitlines()[1:-1])
+
+    encrypted_b64 = sunsynk._sunsynk_rsa_encrypt_password(raw_key, "hunter2")
+    decrypted = private_key.decrypt(base64.b64decode(encrypted_b64), padding.PKCS1v15())
+
+    assert decrypted == b"hunter2"
+
+
+def test_sunsynk_build_login_payload_shape_and_sign():
+    """_sunsynk_build_login_payload() must build the exact /oauth/token/new payload shape and
+    MD5 sign the verified auth spike (scratchpad/sunsynk_auth_spike.py) uses, for a fixed
+    nonce/raw_key - this is the payload the standalone CLI harness's login step sends."""
+    with patch("sunsynk._sunsynk_rsa_encrypt_password", return_value="ENCRYPTED") as mock_rsa:
+        payload = sunsynk._sunsynk_build_login_payload("RAWKEY1234567890", "user@example.com", "pw", nonce=1700000000000)
+
+    mock_rsa.assert_called_once_with("RAWKEY1234567890", "pw")
+    assert payload == {
+        "username": "user@example.com",
+        "password": "ENCRYPTED",
+        "grant_type": "password",
+        "client_id": "csp-web",
+        "source": "sunsynk",
+        "nonce": 1700000000000,
+        "sign": hashlib.md5("nonce=1700000000000&source=sunsynkRAWKEY12345678904".encode()).hexdigest(),
+    }
+
+
+def test_sunsynk_rsa_encrypt_password_missing_cryptography_raises_clear_error():
+    """When `cryptography` isn't installed, the standalone login helper must raise a clear,
+    actionable RuntimeError (not a bare ImportError/traceback) - the SaaS/component import
+    path is unaffected either way, since it never calls this function."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "cryptography" or name.startswith("cryptography."):
+            raise ImportError("No module named 'cryptography'")
+        return real_import(name, *args, **kwargs)
+
+    with patch("builtins.__import__", side_effect=fake_import):
+        with pytest.raises(RuntimeError, match="pip install cryptography"):
+            sunsynk._sunsynk_rsa_encrypt_password("RAWKEY", "pw")
+
+
+def test_sunsynk_module_has_no_top_level_cryptography_import():
+    """Static guard: `cryptography` must never be imported at module scope in sunsynk.py -
+    only inside _sunsynk_rsa_encrypt_password()'s guarded try/except (Task 13 brief) - so
+    importing sunsynk.py as a SaaS component never requires the dependency. Checked via AST
+    rather than an in-process reload (which would mutate the shared sunsynk module for every
+    other test in this pytest session) - a real "does the guard work end-to-end" run is done
+    separately, outside pytest, against a clean subprocess."""
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(sunsynk))
+    for node in tree.body:  # tree.body is module-level statements only, not nested in defs
+        names = []
+        if isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            names = [node.module or ""]
+        assert not any(name == "cryptography" or name.startswith("cryptography.") for name in names), "cryptography must not be imported at module level"

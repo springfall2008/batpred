@@ -69,6 +69,7 @@ coro
 cprofile
 creds
 crosscharge
+csp
 customisation
 Customise
 cvalue
@@ -189,6 +190,7 @@ hasattr
 hass
 hassapi
 hassio
+hazmat
 heatingactive
 heatingtemp
 heatpump
@@ -329,6 +331,7 @@ peterhaban
 photovoltaics
 pinv
 pitem
+pkcs1v15
 pkwh
 plenticore
 postdata
@@ -361,6 +364,7 @@ pytest
 pytz
 randn
 rarr
+rawkey
 reactivepower
 recp
 redownload

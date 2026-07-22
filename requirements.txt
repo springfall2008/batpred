@@ -2,6 +2,7 @@ aiofiles
 aiohttp
 aiomqtt
 coverage
+cryptography
 matplotlib
 numpy==2.3.5
 pre-commit

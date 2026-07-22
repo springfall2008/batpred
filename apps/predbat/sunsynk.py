@@ -18,14 +18,29 @@ refresh. Device discovery and read-only telemetry are implemented here (Task 9),
 entity publishing via ``publish_data()`` (Task 10), the automatic-config set_arg wiring via
 ``automatic_config()`` (Task 11), and the ``run()`` loop plus ``COMPONENT_LIST``/config
 registration (Task 12); control writes are added in a later task.
+
+The ONE place batpred performs its own Sunsynk login is the standalone CLI harness at the
+bottom of this module (Task 13, after ``MockBase``), for HA add-on / self-managed users who
+supply a Sunsynk Connect username+password directly rather than going through Predbat.com's
+SaaS token injection. That standalone login helper (``_sunsynk_standalone_login()``) does the
+publicKey -> RSA-encrypt-password -> ``/oauth/token/new`` exchange in Python, and is the only
+code path in this module that imports ``cryptography`` - that import is guarded inside
+``_sunsynk_rsa_encrypt_password()`` so importing this module as a SaaS component never
+requires the dependency, only running the CLI harness's login path does.
 """
 
+import argparse
 import asyncio
+import base64
+import hashlib
 import json
+import os
 import random
+import time
 from datetime import datetime, timedelta, timezone
 
 import aiohttp
+import requests
 
 from component_base import ComponentBase
 from oauth_mixin import OAuthMixin
@@ -842,3 +857,163 @@ class MockBase:  # pragma: no cover
             state = "n/a"
         print(f"Set arg {key} = {value} (state={state})")
         self.args[key] = value
+
+
+def _sunsynk_nonce():  # pragma: no cover
+    """Return a millisecond-precision timestamp nonce, as Sunsynk's login flow requires."""
+    return int(time.time() * 1000)
+
+
+def _sunsynk_md5_hex(value):
+    """Return the hex MD5 digest of a string.
+
+    Sunsynk's login flow uses MD5 request signing for API-compatibility with the official
+    Sunsynk Connect web client - it is not a security control.
+    """
+    return hashlib.md5(value.encode()).hexdigest()
+
+
+def _sunsynk_rsa_encrypt_password(raw_key, password):
+    """RSA-PKCS1v15 encrypt a password with Sunsynk's publicKey response body, base64-encoded.
+
+    This is the ONE place in this module that needs the ``cryptography`` package, and the
+    import is guarded here (not at module level) so importing sunsynk.py as a SaaS component
+    - which only ever does plain Bearer requests with a server-injected token, never its own
+    login - does not require the dependency. Only the standalone CLI harness's login path
+    (HA add-on / self-managed users) calls this. Raises RuntimeError with an actionable
+    message if ``cryptography`` isn't installed.
+    """
+    try:
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import padding
+    except ImportError as exc:
+        raise RuntimeError("standalone Sunsynk auth needs `pip install cryptography`") from exc
+
+    pem = "-----BEGIN PUBLIC KEY-----\n{}\n-----END PUBLIC KEY-----".format(raw_key).encode()
+    public_key = serialization.load_pem_public_key(pem)
+    encrypted = public_key.encrypt(password.encode(), padding.PKCS1v15())
+    return base64.b64encode(encrypted).decode()
+
+
+def _sunsynk_build_login_payload(raw_key, username, password, nonce=None):
+    """Build the ``/oauth/token/new`` JSON payload for standalone Sunsynk login.
+
+    Split out from ``_sunsynk_standalone_login()`` so the payload/sign construction can be
+    unit tested against a fixed ``raw_key``/``nonce`` without a live network call - see
+    ``tests/test_sunsynk.py``. ``client_id``/``source`` are Sunsynk's public constants (not
+    per-developer credentials), matching ``scratchpad/sunsynk_auth_spike.py``'s verified flow.
+    """
+    if nonce is None:
+        nonce = _sunsynk_nonce()  # pragma: no cover
+    return {
+        "username": username,
+        "password": _sunsynk_rsa_encrypt_password(raw_key, password),
+        "grant_type": "password",
+        "client_id": "csp-web",
+        "source": "sunsynk",
+        "nonce": nonce,
+        "sign": _sunsynk_md5_hex("nonce={}&source=sunsynk{}".format(nonce, raw_key[:10])),
+    }
+
+
+def _sunsynk_standalone_login(username, password, base_url=SUNSYNK_DOMAIN):  # pragma: no cover
+    """
+    Perform the standalone Sunsynk RSA login (publicKey -> RSA-encrypt password ->
+    ``/oauth/token/new``), for HA add-on / self-managed users who supply a Sunsynk Connect
+    username+password directly - see the module docstring for why this is the ONE place
+    batpred does its own login (SaaS mode never does; the edge function owns that chain
+    server-side and injects a plain Bearer token instead). Mirrors
+    ``scratchpad/sunsynk_auth_spike.py``'s verified flow exactly.
+
+    Synchronous (plain ``requests``, already a core Predbat dependency) rather than
+    ``aiohttp`` - this is a one-off CLI-harness login step outside the async component's
+    event loop, not part of ``SunsynkAPI`` itself.
+
+    Returns the access token string. Raises RuntimeError on any failure (missing
+    ``cryptography``, HTTP error, or an unsuccessful/malformed API response) so the CLI
+    harness can print a clear error instead of a confusing traceback.
+    """
+    key_nonce = _sunsynk_nonce()
+    key_sign = _sunsynk_md5_hex("nonce={}&source=sunsynkPOWER_VIEW".format(key_nonce))
+    key_response = requests.get(
+        "{}/anonymous/publicKey".format(base_url),
+        params={"nonce": key_nonce, "source": "sunsynk", "sign": key_sign},
+        headers={"Content-Type": "application/json"},
+        timeout=TIMEOUT,
+    )
+    key_response.raise_for_status()
+    key_body = key_response.json()
+    if not key_body.get("success") or not key_body.get("data"):
+        raise RuntimeError("Sunsynk publicKey request failed: {}".format(key_body))
+    raw_key = key_body["data"]
+
+    payload = _sunsynk_build_login_payload(raw_key, username, password)
+    login_response = requests.post("{}/oauth/token/new".format(base_url), headers={"Content-Type": "application/json"}, json=payload, timeout=TIMEOUT)
+    login_body = login_response.json()
+    if not (login_response.status_code == 200 and login_body.get("success")):
+        raise RuntimeError("Sunsynk login failed (HTTP {}): {}".format(login_response.status_code, login_body))
+
+    access_token = (login_body.get("data") or {}).get("access_token")
+    if not access_token:
+        raise RuntimeError("Sunsynk login response missing access_token: {}".format(login_body))
+    return access_token
+
+
+async def _test_sunsynk_api(args):  # pragma: no cover
+    """
+    Run one read-only Sunsynk cycle for the CLI harness: log in (standalone RSA, unless
+    ``--token`` was given directly), discover devices, and - with ``--plants`` - publish and
+    dump entities via the MockBase, fox.py/deye.py harness-style.
+    """
+    mock_base = MockBase()
+
+    if args.token:
+        access_token = args.token
+    else:
+        print("Logging in to Sunsynk Connect as {}...".format(args.user))
+        access_token = _sunsynk_standalone_login(args.user, args.password, base_url=args.base_url)
+        print("Login OK - access token acquired")
+
+    api = SunsynkAPI(mock_base, key=access_token, automatic=True, plant_id=args.plant_id)
+
+    devices = await api.get_device_list()
+    if not devices:
+        print("No devices found")
+        return
+    print("Found {} device(s):".format(len(devices)))
+    for device in devices:
+        print("  - {}".format(json.dumps(device)))
+
+    if args.plants:
+        print("Publishing entities...")
+        await api.publish_data()
+        print("Published entities:")
+        for entity_id, record in mock_base.entities.items():
+            print("  {} = {}".format(entity_id, record.get("state")))
+
+
+def main():  # pragma: no cover
+    """
+    Command-line entry point for the standalone Sunsynk CLI harness (HA add-on / self-managed
+    users): logs in with a username+password via the standalone RSA flow (or reuses an
+    existing ``--token``), then lists discovered devices and - with ``--plants`` - publishes
+    and dumps entities.
+    """
+    parser = argparse.ArgumentParser(description="Test the Sunsynk Connect API (read-only, standalone RSA login)")
+    parser.add_argument("--user", default=os.environ.get("SUNSYNK_USER"), help="Sunsynk Connect account username/email")
+    parser.add_argument("--pass", "--password", dest="password", default=os.environ.get("SUNSYNK_PASS"), help="Sunsynk Connect account password")
+    parser.add_argument("--token", default=None, help="Skip login and use an existing Bearer access token directly")
+    parser.add_argument("--plant-id", type=int, default=None, help="Sunsynk plant id (auto-discovered if omitted)")
+    parser.add_argument("--base-url", default=SUNSYNK_DOMAIN, help="Sunsynk Connect API base URL")
+    parser.add_argument("--plants", action="store_true", help="Also publish and dump entities (default: device list only)")
+
+    args = parser.parse_args()
+
+    if not args.token and not (args.user and args.password):
+        parser.error("provide either --token or both --user and --pass/--password")
+
+    asyncio.run(_test_sunsynk_api(args))
+
+
+if __name__ == "__main__":  # pragma: no cover
+    main()
