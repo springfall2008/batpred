@@ -43,6 +43,9 @@ OCTOPUS_NIGHT_RATE_WINDOWS = {
 }
 
 OCTOPUS_MAX_RETRIES = 5
+# The EV/charge-point catalogue is static reference data, so it is refreshed daily
+CATALOGUE_FRESH_MINUTES = 24 * 60
+CATALOGUE_STALE_MINUTES = 25 * 60
 OCTOPUS_SLOT_MAX_DEFAULT = 48  # 24 hours with 30-minute slots
 
 BASE_TIME = datetime.strptime("00:00", "%H:%M")
@@ -75,6 +78,51 @@ def parse_date_time(dt_str):
         return datetime.strptime(dt_str, DATE_TIME_STR_FORMAT)
     except (ValueError, TypeError):
         return None
+
+
+CDN_BLOCK_MARKERS = ("cloudfront", "request blocked", "the request could not be satisfied")
+HTML_DOCUMENT_PREFIXES = ("<!doctype", "<html")
+# A generic "403 Forbidden" page is indistinguishable from a WAF page, so after this many
+# consecutive edge blocks fall back to refreshing the token in case the credential really
+# was revoked. Without this the component could never recover from a misclassification.
+EDGE_BLOCK_REFRESH_AFTER = 5
+
+
+def is_edge_block_body(text):
+    """Return True if a 403 body is positively identifiable as a CDN/WAF error page.
+
+    Kraken reports authentication problems as a JSON GraphQL error body (normally with
+    HTTP 200) or as a 401. A 403 carrying an HTML error page - e.g. CloudFront's
+    "Request blocked" - is edge rate limiting, not a credential problem, so the cached
+    token must be kept rather than discarded and immediately re-minted.
+
+    Two conditions must both hold: the body must not parse as JSON (anything the API
+    itself produces is JSON), and it must look like an HTML document or name a known CDN.
+    Matching on wording alone would misclassify a genuine JSON error that happens to say
+    something like "access denied", which would keep an invalid token forever - the same
+    permanent lockout this check exists to prevent, arrived at from the other direction.
+
+    Detection is deliberately conservative: a 403 we cannot identify as a CDN page keeps
+    the existing "refresh the token and retry" behaviour, which recovers genuinely revoked
+    tokens without needing a restart.
+
+    Args:
+        text: The raw response body.
+
+    Returns:
+        bool: True if the body carries a known CDN/WAF block signature.
+    """
+    if not isinstance(text, str) or not text:
+        return False
+    try:
+        json.loads(text)
+    except (ValueError, TypeError):
+        pass
+    else:
+        # A parseable JSON body came from the API, not from an edge appliance
+        return False
+    stripped = text.lstrip().lower()
+    return stripped.startswith(HTML_DOCUMENT_PREFIXES) or any(marker in stripped for marker in CDN_BLOCK_MARKERS)
 
 
 api_token_query = """mutation {{
@@ -150,21 +198,27 @@ account_query = """query {{
   }}
 }}"""
 
-intelligent_device_query = """query {{
-  electricVehicles {{
+# The vehicle/charge-point catalogue is global reference data - identical for every
+# account and effectively static - so it is queried separately from the per-account
+# device list and cached, rather than being re-downloaded on every device poll.
+intelligent_catalogue_query = """query {
+  electricVehicles {
 		make
-		models {{
+		models {
 			model
 			batterySize
-		}}
-	}}
-	chargePointVariants {{
+		}
+	}
+	chargePointVariants {
 		make
-		models {{
+		models {
 			model
 			powerInKw
-		}}
-	}}
+		}
+	}
+}"""
+
+intelligent_device_query = """query {{
   devices(accountNumber: "{account_id}") {{
 		id
 		provider
@@ -358,6 +412,7 @@ class OctopusAPI(ComponentBase):
         self.account_id = account_id
         self.graphql_token = None
         self.graphql_expiration = None
+        self.consecutive_edge_blocks = 0
         self.account_data = {}
         self.tariffs = {}
         self.saving_sessions = {}
@@ -1477,6 +1532,12 @@ class OctopusAPI(ComponentBase):
             if data_as_json is not None:
                 return data_as_json
             else:
+                # 401/403 are definitive for this response. aiohttp caches the body, so
+                # re-reading the same response cannot change the outcome - it would only
+                # duplicate log lines and sleep through the backoff for nothing.
+                if response.status in [401, 403]:
+                    self.failures_total += 1
+                    return None
                 if attempt < max_retries - 1:
                     self.log(f"OctopusAPI: Retrying read response for {url} (attempt {attempt + 2} of {max_retries})")
                     await asyncio.sleep(2**attempt)  # Exponential backoff
@@ -1593,9 +1654,30 @@ class OctopusAPI(ComponentBase):
                 # Check for HTTP-level 401/403 (transport-level auth failure) and retry once.
                 # This handles cases where the JWT has been revoked server-side and the server
                 # returns a bare 401/403 status rather than a GraphQL error body — which would
-                # otherwise loop forever without ever refreshing the token.
+                # otherwise loop forever without ever refreshing the token. The one exception is
+                # a 403 carrying a CDN/WAF block page, handled immediately below.
                 if response.status in [401, 403] and _retry_count == 0:
-                    self.log(f"OctopusAPI: HTTP {response.status} for graphql query {request_context}, forcing token refresh and retry")
+                    # A CDN/WAF block is rate limiting, not an auth failure. Re-minting a token
+                    # here would be rejected by the same block, leaving the component permanently
+                    # locked out, so keep the cached token and let the caller back off instead.
+                    # Only 403 is treated this way: Kraken reports genuine auth problems as HTTP
+                    # 200 with a GraphQL errorCode, or as a 401, so a 403 carrying a non-JSON
+                    # body comes from the edge rather than the API.
+                    if response.status == 403 and is_edge_block_body(await response.text()):
+                        self.consecutive_edge_blocks += 1
+                        if self.consecutive_edge_blocks <= EDGE_BLOCK_REFRESH_AFTER:
+                            record_api_call("octopus", False, "rate_limit")
+                            if not ignore_errors:
+                                self.log(f"Warn: OctopusAPI: HTTP {response.status} edge/WAF block for graphql query {request_context} - rate limited, keeping cached token")
+                                self.failures_total += 1
+                            return None
+                        # Persistently blocked. The body may be a generic 403 page from a revoked
+                        # credential rather than a WAF, so fall through and refresh the token.
+                        if not ignore_errors:
+                            self.log(f"Warn: OctopusAPI: {self.consecutive_edge_blocks} consecutive edge blocks for {request_context} - refreshing token in case the credential was revoked")
+                        self.consecutive_edge_blocks = 0
+                    if not ignore_errors:
+                        self.log(f"OctopusAPI: HTTP {response.status} for graphql query {request_context}, forcing token refresh and retry")
                     record_api_call("octopus", False, "auth_error")
                     self.graphql_token = None
                     retry_token = await self.async_refresh_token()
@@ -1636,6 +1718,7 @@ class OctopusAPI(ComponentBase):
                     return None
 
                 if response_body and ("data" in response_body):
+                    self.consecutive_edge_blocks = 0
                     self.update_success_timestamp()
                     record_api_call("octopus")
                     return response_body["data"]
@@ -1651,6 +1734,36 @@ class OctopusAPI(ComponentBase):
             record_api_call("octopus", False, "connection_error")
 
         return None
+
+    async def async_get_vehicle_catalogue(self):
+        """
+        Get the global EV / charge-point catalogue, cached across polls and instances.
+
+        The catalogue is static reference data shared by every account, so it is stored
+        under the "octopus" storage module. The SaaS KeyDB backend routes that module to
+        a shared namespace, so a single fetch serves the whole fleet; on a local
+        filesystem backend it simply persists between polls.
+
+        Returns:
+            dict: The catalogue, or an empty dict if it could not be obtained.
+        """
+
+        async def _fetch():
+            """Download the catalogue from the GraphQL API."""
+            return await self.async_graphql_query(intelligent_catalogue_query, "get-vehicle-catalogue", ignore_errors=True)
+
+        if not self.storage:
+            return await _fetch() or {}
+
+        catalogue = await self.storage.fetch_cached(
+            "octopus",
+            "vehicle_catalogue",
+            _fetch,
+            fresh_minutes=CATALOGUE_FRESH_MINUTES,
+            stale_minutes=CATALOGUE_STALE_MINUTES,
+            format="json",
+        )
+        return catalogue or {}
 
     async def async_get_intelligent_devices(self, account_id, device_id):
         """
@@ -1671,8 +1784,9 @@ class OctopusAPI(ComponentBase):
             """
 
             if device_result:
-                chargePointVariants = device_result.get("chargePointVariants", [])
-                electricVehicles = device_result.get("electricVehicles", [])
+                catalogue = await self.async_get_vehicle_catalogue()
+                chargePointVariants = catalogue.get("chargePointVariants", [])
+                electricVehicles = catalogue.get("electricVehicles", [])
                 devices = device_result.get("devices", [])
                 if not devices:
                     return None

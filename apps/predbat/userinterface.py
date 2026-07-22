@@ -991,7 +991,25 @@ class UserInterface:
                 try:
                     # Convert to float first
                     ha_value = float(ha_value)
-                    # For entities with integer step, convert to int to preserve integer format
+
+                    # Clamp to the declared min/max. This is reachable from an apps.yaml override,
+                    # which bypasses the HA input_number entity's own min/max enforcement entirely -
+                    # an out-of-range value here can otherwise silently distort the optimiser (e.g.
+                    # pv_metric10_weight is documented/limited to 0.0-1.0 but a raw apps.yaml value
+                    # of, say, 30 passes straight through unclamped).
+                    item_min = item.get("min", None)
+                    item_max = item.get("max", None)
+                    if item_min is not None and ha_value < item_min:
+                        self.record_status("Warn: Config item {} value {} is below the minimum {} - clamping to {}".format(name, ha_value, item_min, item_min), had_errors=True)
+                        ha_value = float(item_min)
+                    elif item_max is not None and ha_value > item_max:
+                        self.record_status("Warn: Config item {} value {} is above the maximum {} - clamping to {}".format(name, ha_value, item_max, item_max), had_errors=True)
+                        ha_value = float(item_max)
+
+                    # For entities with integer step, convert to int to preserve integer format.
+                    # Done after clamping since min/max can themselves be declared as floats (e.g.
+                    # metric_min_improvement_plan has step=1 but max=250.0) - clamping alone would
+                    # otherwise silently hand back a float and defeat this normalisation.
                     step = item.get("step", 1)
                     if isinstance(step, int) or (isinstance(step, float) and step == int(step)):
                         # Step is an integer (e.g., 1, 2, etc.), so keep value as integer if it has no decimal part

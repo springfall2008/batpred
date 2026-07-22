@@ -57,94 +57,97 @@ def test_component_health_status(my_predbat):
     failed = 0
 
     recorded_statuses = []
+    original_record_status = my_predbat.record_status
     my_predbat.record_status = lambda message, debug="", had_errors=False, notify=False, extra="": recorded_statuses.append((message, had_errors))
 
-    # --- All components healthy: final status should be the plan's own success status ---
-    my_predbat.had_errors = False
-    my_predbat.components = FakeComponents({"octopus": True, "gecloud": True})
-    recorded_statuses.clear()
-    my_predbat.record_final_run_status("Idle", "")
+    try:
+        # --- All components healthy: final status should be the plan's own success status ---
+        my_predbat.had_errors = False
+        my_predbat.components = FakeComponents({"octopus": True, "gecloud": True})
+        recorded_statuses.clear()
+        my_predbat.record_final_run_status("Idle", "")
 
-    if len(recorded_statuses) != 1 or recorded_statuses[0] != ("Idle", False):
-        print("ERROR: Expected a single success status record, got {}".format(recorded_statuses))
-        failed = 1
-    else:
-        print("OK: All components healthy -> success status recorded")
-
-    # --- Octopus component in error (active but not alive): run must be recorded as an error ---
-    my_predbat.had_errors = False
-    my_predbat.components = FakeComponents({"octopus": False, "gecloud": True})
-    recorded_statuses.clear()
-    my_predbat.record_final_run_status("Idle", "")
-
-    if len(recorded_statuses) != 1:
-        print("ERROR: Expected a single status record for a failed component, got {}".format(recorded_statuses))
-        failed = 1
-    else:
-        message, had_errors = recorded_statuses[0]
-        if not had_errors:
-            print("ERROR: Component error did not mark the run as an error")
-            failed = 1
-        elif "Octopus Energy Direct" not in message:
-            print("ERROR: Failed component name not present in recorded status message: {}".format(message))
+        if len(recorded_statuses) != 1 or recorded_statuses[0] != ("Idle", False):
+            print("ERROR: Expected a single success status record, got {}".format(recorded_statuses))
             failed = 1
         else:
-            print("OK: Component error correctly recorded as an error, naming the component")
+            print("OK: All components healthy -> success status recorded")
 
-    # --- Multiple components in error: all should be listed ---
-    my_predbat.had_errors = False
-    my_predbat.components = FakeComponents({"octopus": False, "gecloud": False})
-    recorded_statuses.clear()
-    my_predbat.record_final_run_status("Idle", "")
+        # --- Octopus component in error (active but not alive): run must be recorded as an error ---
+        my_predbat.had_errors = False
+        my_predbat.components = FakeComponents({"octopus": False, "gecloud": True})
+        recorded_statuses.clear()
+        my_predbat.record_final_run_status("Idle", "")
 
-    if len(recorded_statuses) != 1:
-        print("ERROR: Expected a single status record for multiple failed components, got {}".format(recorded_statuses))
-        failed = 1
-    else:
-        message, had_errors = recorded_statuses[0]
-        if not had_errors or "Octopus Energy Direct" not in message or "GivEnergy Cloud" not in message:
-            print("ERROR: Not all failed components listed in status message: {}".format(message))
+        if len(recorded_statuses) != 1:
+            print("ERROR: Expected a single status record for a failed component, got {}".format(recorded_statuses))
             failed = 1
         else:
-            print("OK: All failed components listed in the recorded error status")
+            message, had_errors = recorded_statuses[0]
+            if not had_errors:
+                print("ERROR: Component error did not mark the run as an error")
+                failed = 1
+            elif "Octopus Energy Direct" not in message:
+                print("ERROR: Failed component name not present in recorded status message: {}".format(message))
+                failed = 1
+            else:
+                print("OK: Component error correctly recorded as an error, naming the component")
 
-    # --- LoadML can appear unhealthy during a calculation without failing the run status ---
-    my_predbat.had_errors = False
-    my_predbat.components = FakeComponents({"load_ml": False}, calculating_map={"load_ml": True})
-    recorded_statuses.clear()
-    my_predbat.record_final_run_status("Export", "")
+        # --- Multiple components in error: all should be listed ---
+        my_predbat.had_errors = False
+        my_predbat.components = FakeComponents({"octopus": False, "gecloud": False})
+        recorded_statuses.clear()
+        my_predbat.record_final_run_status("Idle", "")
 
-    if len(recorded_statuses) != 1 or recorded_statuses[0] != ("Export", False):
-        print("ERROR: Calculating LoadML component should not fail the run status: {}".format(recorded_statuses))
-        failed = 1
-    else:
-        print("OK: Calculating LoadML component does not fail the run status")
+        if len(recorded_statuses) != 1:
+            print("ERROR: Expected a single status record for multiple failed components, got {}".format(recorded_statuses))
+            failed = 1
+        else:
+            message, had_errors = recorded_statuses[0]
+            if not had_errors or "Octopus Energy Direct" not in message or "GivEnergy Cloud" not in message:
+                print("ERROR: Not all failed components listed in status message: {}".format(message))
+                failed = 1
+            else:
+                print("OK: All failed components listed in the recorded error status")
 
-    # --- A LoadML failure outside calculation must still fail the run status ---
-    my_predbat.had_errors = False
-    my_predbat.components = FakeComponents({"load_ml": False}, calculating_map={"load_ml": False})
-    recorded_statuses.clear()
-    my_predbat.record_final_run_status("Demand", "")
+        # --- LoadML can appear unhealthy during a calculation without failing the run status ---
+        my_predbat.had_errors = False
+        my_predbat.components = FakeComponents({"load_ml": False}, calculating_map={"load_ml": True})
+        recorded_statuses.clear()
+        my_predbat.record_final_run_status("Export", "")
 
-    if len(recorded_statuses) != 1 or not recorded_statuses[0][1] or "ML Load Forecaster" not in recorded_statuses[0][0]:
-        print("ERROR: Non-calculating failed LoadML component did not fail the run status: {}".format(recorded_statuses))
-        failed = 1
-    else:
-        print("OK: LoadML failure outside calculation still fails the run status")
+        if len(recorded_statuses) != 1 or recorded_statuses[0] != ("Export", False):
+            print("ERROR: Calculating LoadML component should not fail the run status: {}".format(recorded_statuses))
+            failed = 1
+        else:
+            print("OK: Calculating LoadML component does not fail the run status")
 
-    # --- Pre-existing error takes precedence, and is not overwritten by the component check ---
-    my_predbat.had_errors = True
-    my_predbat.components = FakeComponents({"octopus": False})
-    recorded_statuses.clear()
-    my_predbat.record_final_run_status("Idle", "")
+        # --- A LoadML failure outside calculation must still fail the run status ---
+        my_predbat.had_errors = False
+        my_predbat.components = FakeComponents({"load_ml": False}, calculating_map={"load_ml": False})
+        recorded_statuses.clear()
+        my_predbat.record_final_run_status("Demand", "")
 
-    if recorded_statuses:
-        print("ERROR: record_status should not be called again when had_errors was already set: {}".format(recorded_statuses))
-        failed = 1
-    else:
-        print("OK: Pre-existing error state left untouched by the component health check")
+        if len(recorded_statuses) != 1 or not recorded_statuses[0][1] or "ML Load Forecaster" not in recorded_statuses[0][0]:
+            print("ERROR: Non-calculating failed LoadML component did not fail the run status: {}".format(recorded_statuses))
+            failed = 1
+        else:
+            print("OK: LoadML failure outside calculation still fails the run status")
 
-    my_predbat.had_errors = False
-    my_predbat.components = None
+        # --- Pre-existing error takes precedence, and is not overwritten by the component check ---
+        my_predbat.had_errors = True
+        my_predbat.components = FakeComponents({"octopus": False})
+        recorded_statuses.clear()
+        my_predbat.record_final_run_status("Idle", "")
+
+        if recorded_statuses:
+            print("ERROR: record_status should not be called again when had_errors was already set: {}".format(recorded_statuses))
+            failed = 1
+        else:
+            print("OK: Pre-existing error state left untouched by the component health check")
+    finally:
+        my_predbat.had_errors = False
+        my_predbat.components = None
+        my_predbat.record_status = original_record_status
 
     return failed

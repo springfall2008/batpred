@@ -22,6 +22,7 @@ This document provides a comprehensive overview of all Predbat components, their
     - [Solax Cloud API (Solax)](#solax-cloud-api-solax)
     - [Solis Cloud API (Solis)](#solis-cloud-api-solis)
     - [Sigenergy Cloud API (Sigenergy)](#sigenergy-cloud-api-sigenergy)
+    - [DEYE Cloud API (deye)](#deye-cloud-api-deye)
     - [Alert Feed (alert_feed)](#alert-feed-alert_feed)
     - [Carbon Intensity API (carbon)](#carbon-intensity-api-carbon)
     - [Temperature API (temperature)](#temperature-api-temperature)
@@ -747,6 +748,48 @@ sigenergy_client_key: |
 ```
 
 See [Sigenergy Cloud setup](inverter-setup.md#sigenergy-cloud) for the full credential-acquisition walkthrough.
+
+---
+
+### DEYE Cloud API (deye)
+
+**Can be restarted:** Yes
+
+#### What it does (deye)
+
+Integrates with DEYE (Sunsynk-family) hybrid inverters via the DeyeCloud OpenAPI, providing direct cloud-based monitoring and battery control - no local Modbus/RS485 access is required. Predbat discovers every battery inverter registered against the account, publishes monitoring sensors, and writes Fox-style schedule control entities that are combined into a single `strategy_dynamic_control` command each cycle.
+
+#### When to enable (deye)
+
+- You have a DEYE (or Sunsynk-family) hybrid inverter with battery storage registered on DeyeCloud
+- You want direct cloud-based monitoring and control without local hardware access
+- You have created a DeyeCloud developer app (App ID/Secret), or you are using Predbat.com
+
+#### Important notes (deye)
+
+- **EXPERIMENTAL**: This is a new integration and may have issues
+- Two deployment modes are supported: the self-hosted Home Assistant add-on manages its own DeyeCloud token from developer app credentials (`deye_auth_method: 'app_credentials'`, the default), while Predbat.com injects and refreshes the token for you (`deye_auth_method: 'oauth'`)
+- DEYE is mode-less like Enphase/Tesla: Predbat only owns the charge window, export window, reserve and target SOCs - the component derives the internal DEYE work mode (`SELLING_FIRST` for export, `ZERO_EXPORT_TO_LOAD` for charge/hold/idle) automatically from that intent (`ZERO_EXPORT_TO_CT` is reserved for CT-metered installs and is not yet selected)
+- Freeze-charge is implemented via the reserve, and freeze-export is signalled by setting the export target SOC to 99% (100% already means export is disabled)
+- Writes are combined into one atomic `strategy_dynamic_control` call per cycle with change detection (no write when the payload is unchanged), and the resulting `orderId` is polled asynchronously until success
+- The reserve control entity writes to DeyeCloud immediately on change, like Fox and Enphase
+
+#### Configuration Options (deye)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `app_id` | String | No | - | `deye_app_id` | Your DeyeCloud developer app's App ID (self-hosted add-on only) |
+| `app_secret` | String | No | - | `deye_app_secret` | Your DeyeCloud developer app's App Secret (self-hosted add-on only) |
+| `username` | String | No | - | `deye_username` | Your DeyeCloud account e-mail address or username (self-hosted add-on only) |
+| `password` | String | No | - | `deye_password` | Your DeyeCloud account password (self-hosted add-on only) |
+| `data_center` | String | No | `eu` | `deye_data_center` | DeyeCloud region: `eu`, `am` or `india` |
+| `company_id` | String | No | - | `deye_company_id` | Optional, only needed for installer/business accounts |
+| `auth_method` | String | No | `app_credentials` | `deye_auth_method` | `app_credentials` (self-managed token, HA add-on) or `oauth` (token injected and refreshed by Predbat.com) |
+| `inverter_sn` | String/List | No | All found | `deye_inverter_sn` | Restrict Predbat to specific inverter serial number(s) - single string or list |
+| `automatic` | Boolean | No | false | `deye_automatic` | Set to `true` to automatically configure Predbat to use the discovered DEYE inverter(s) (no manual apps.yaml sensor updates required) |
+| `automatic_ignore_pv` | Boolean | No | false | `deye_automatic_ignore_pv` | When `automatic` is enabled, set to `true` to prevent DEYE Cloud from overwriting the `pv_power` config |
+
+See [DEYE Cloud setup](inverter-setup.md#deye-cloud) for the full credential-acquisition walkthrough.
 
 ---
 

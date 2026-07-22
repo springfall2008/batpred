@@ -49,6 +49,7 @@ byok
 cadata
 calib
 Cantarell
+cdn
 cexxxx
 ceyyyy
 chargedischarge
@@ -58,6 +59,7 @@ chargehold
 chargelater
 Chrg
 citem
+cloudfront
 Codespaces
 collapsable
 compareform
@@ -78,6 +80,7 @@ darkred
 darray
 dasharray
 datain
+datalist
 datalog
 datap
 datapoints
@@ -94,6 +97,8 @@ derating
 devcontainer
 devcontainers
 dexport
+deye
+deyecloud
 digestmod
 dimport
 dischargeenergytotal
@@ -108,6 +113,7 @@ dwindow
 eauth
 Eddi
 elif
+EMEA
 emqx
 emszzzz
 Encharge
@@ -206,6 +212,8 @@ INTELLI
 intelligentdevice
 interp
 intraday
+inva
+invb
 invbatpower
 invname
 isinstance
@@ -217,6 +225,7 @@ jedlix
 jsyaml
 kaiming
 keepalive
+keydb
 khtml
 killall
 kopt
@@ -473,6 +482,7 @@ varh
 venv
 Victron
 visibilitychange
+waf
 Wallbox
 weblink
 welink
