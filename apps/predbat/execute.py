@@ -1103,12 +1103,11 @@ class Execute:
                 inverters[this_inverter].adjust_discharge_rate(0, notify=False)
 
         for id in range(num_inverters):
-            min_rate = inverters[id].battery_rate_min * MINUTE_WATT
-            if not balance_reset_charge.get(id, False) and total_charge_rates > 0 and charge_rates[id] <= min_rate:
-                self.log("BALANCE: Inverter {} reset charge rate to {} now balanced (was {}W)".format(id, inverters[id].battery_rate_max_charge * MINUTE_WATT, charge_rates[id]))
+            if not balance_reset_charge.get(id, False) and total_charge_rates > 0 and charge_rates[id] == 0:
+                self.log("BALANCE: Inverter {} reset charge rate to {} now balanced".format(id, inverters[id].battery_rate_max_charge * MINUTE_WATT))
                 inverters[id].adjust_charge_rate(inverters[id].battery_rate_max_charge * MINUTE_WATT, notify=False)
-            if not balance_reset_discharge.get(id, False) and total_discharge_rates != 0 and discharge_rates[id] <= min_rate:
-                self.log("BALANCE: Inverter {} reset discharge rate to {} now balanced (was {}W)".format(id, inverters[id].battery_rate_max_discharge * MINUTE_WATT, discharge_rates[id]))
+            if not balance_reset_discharge.get(id, False) and total_discharge_rates != 0 and discharge_rates[id] == 0:
+                self.log("BALANCE: Inverter {} reset discharge rate to {} now balanced".format(id, inverters[id].battery_rate_max_discharge * MINUTE_WATT))
                 inverters[id].adjust_discharge_rate(inverters[id].battery_rate_max_discharge * MINUTE_WATT, notify=False)
 
         self.log("BALANCE: Completed this run")
