@@ -977,7 +977,7 @@ def test_sunsynk_build_login_payload_shape_and_sign():
         "client_id": "csp-web",
         "source": "sunsynk",
         "nonce": 1700000000000,
-        "sign": hashlib.md5("nonce=1700000000000&source=sunsynkRAWKEY12345678904".encode()).hexdigest(),
+        "sign": hashlib.md5("nonce=1700000000000&source=sunsynkRAWKEY1234".encode()).hexdigest(),
     }
 
 
