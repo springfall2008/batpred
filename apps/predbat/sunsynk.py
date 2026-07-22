@@ -14,13 +14,14 @@ chain server-side; the ``sunsynk_key`` config value handed to this component IS 
 resulting Bearer access token, so ``SunsynkAPI`` never performs RSA signing or login
 itself here - it only issues plain Bearer-authenticated requests and flags
 ``needs_reauth`` when the injected token is rejected, for the SaaS side to notice and
-refresh. Device discovery, publishing and control are added in later tasks.
+refresh. Device discovery and read-only telemetry are implemented here (Task 9); publishing
+and control are added in later tasks.
 """
 
 import asyncio
 import json
 import random
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import aiohttp
 
@@ -32,24 +33,27 @@ SUNSYNK_DOMAIN = "https://api.sunsynk.net"
 TIMEOUT = 60
 SUNSYNK_RETRIES = 10
 
-# Maximum age (minutes) of cached data before an API refresh is triggered. Not yet consumed
-# by this skeleton - device discovery/settings/real-time polling land in later tasks - but
-# defined here now so the refresh cadence is fixed once, matching fox.py's FOX_REFRESH_*
-# constants.
+# Defined locally (rather than imported from const.py) to avoid dependency issues, matching
+# fox.py's TIME_FORMAT_HA approach - components should stay standalone-testable via MockBase.
+SUNSYNK_DATE_FORMAT = "%Y-%m-%d"
+
+# Maximum age (minutes) of cached data before an API refresh is triggered, matching fox.py's
+# FOX_REFRESH_* constants. STATIC and REALTIME are consumed by the read methods below (device
+# list, and flow/battery/grid/input/output telemetry); SETTINGS is not yet used - device
+# settings read/write land in a later task.
 SUNSYNK_REFRESH_STATIC = 24 * 60  # Device/plant list rarely changes
 SUNSYNK_REFRESH_SETTINGS = 60  # Device settings
 SUNSYNK_REFRESH_REALTIME = 5  # Real time monitoring data
 
-# Storage cache keys for device data persisted between reboots. Populated by later tasks
-# (device discovery, settings, real-time values); listed now so the cache key namespace is
-# fixed from the start, matching fox.py's FOX_CACHE_KEYS.
+# Storage cache keys for device data persisted between reboots, matching fox.py's
+# FOX_CACHE_KEYS. "device_settings" is not yet used - device settings land in a later task.
 SUNSYNK_CACHE_KEYS = ["device_list", "device_settings", "device_values"]
 
 
 class SunsynkAPI(ComponentBase, OAuthMixin):
     """Sunsynk Connect API client."""
 
-    def initialize(self, key, automatic, automatic_ignore_pv=False, inverter_sn=None, auth_method=None, token_expires_at=None, token_hash=None, base_url=SUNSYNK_DOMAIN):
+    def initialize(self, key, automatic, automatic_ignore_pv=False, inverter_sn=None, plant_id=None, auth_method=None, token_expires_at=None, token_hash=None, base_url=SUNSYNK_DOMAIN):
         """Initialise the Sunsynk API component."""
         self.key = key
         self.automatic = automatic
@@ -61,10 +65,13 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         # the next successful request. This component never attempts a re-login itself.
         self.needs_reauth = False
 
-        # Cache state for later tasks (device discovery/settings/real-time values) - empty
-        # here since this skeleton does not poll anything yet.
+        # Scopes device discovery to a single plant (config key sunsynk_plant_id, wired by a
+        # later task). Multi-plant Sunsynk accounts are a v1 non-goal - see get_device_list().
+        self.plant_id = plant_id
+
+        # Cache state. device_settings lands in a later task (empty/unused here).
         self.device_list = []
-        self.device_values = {}
+        self.device_values = {"flow": {}, "battery": {}, "grid": {}, "input": {}, "output": {}}
         self.device_settings = {}
         self.data_age = {}
 
@@ -186,6 +193,192 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             return None, True
         record_api_call("sunsynk", False, "server_error")
         return None, False
+
+    async def get_device_list(self):
+        """
+        Discover the inverter device list for the account, scoped to a single plant.
+
+        Predbat.com's SaaS connect handler already rejects multi-plant Sunsynk accounts at
+        onboarding, so multi-plant support is a v1 non-goal here - this always resolves to
+        ONE plant. If ``self.plant_id`` is configured, it is used directly; otherwise the
+        account's plants are listed and the sole plant used (a warning is logged and the
+        first plant used defensively if more than one comes back).
+
+        Real inverters response shape (GET /api/v1/plant/{id}/inverters):
+            {"code": 0, "success": true, "data": {"pageSize": 50, "total": 2, "infos": [
+                {"id": 260047, "sn": "2504040106", "model": "SUN-50KW-SG01HP3-EU-BM4", "status": 1},
+                {"id": 260046, "sn": "2504040164", "model": "SUN-50KW-SG01HP3-EU-BM4", "status": 1}
+            ]}}
+
+        Returns a list of ``{"sn": ..., "model": ..., "plant_id": ...}`` dicts, filtered by
+        ``self.inverter_sn_filter`` when set. Returns None on API/discovery failure - any
+        existing cached list is left untouched so callers can keep using it.
+        """
+        if self.device_list and not self._needs_refresh("device_list", SUNSYNK_REFRESH_STATIC):
+            return self.device_list
+
+        plant_id = self.plant_id
+        if not plant_id:
+            plant_id = await self._discover_plant_id()
+            if plant_id is None:
+                return None
+
+        query = {"page": 1, "limit": 50, "status": -1, "type": -2}
+        result = await self.request_get("/api/v1/plant/{}/inverters".format(plant_id), datain=query)
+        if result is None:
+            return None
+
+        infos = (result.get("data") or {}).get("infos", []) or []
+        devices = [{"sn": info.get("sn"), "model": info.get("model"), "plant_id": plant_id} for info in infos]
+        if self.inverter_sn_filter:
+            devices = [device for device in devices if device.get("sn") in self.inverter_sn_filter]
+
+        self.device_list = devices
+        await self._save_cache("device_list", devices)
+        return devices
+
+    async def _discover_plant_id(self):
+        """
+        Resolve the account's single plant id by listing plants.
+
+        Real response shape (GET /api/v1/plants):
+            {"code": 0, "success": true, "data": {"infos": [
+                {"id": 505825, "name": "Virtual power station", "status": 1}
+            ]}}
+
+        Returns None on API failure or when the account has no plants. Logs a warning and
+        uses the first plant when more than one comes back - the SaaS connect handler already
+        rejects multi-plant accounts at onboarding, so this is a defensive fallback only.
+        """
+        result = await self.request_get("/api/v1/plants", datain={"page": 1, "limit": 100})
+        if result is None:
+            return None
+
+        infos = (result.get("data") or {}).get("infos", []) or []
+        if not infos:
+            self.log("Warn: Sunsynk: No plants found for this account")
+            return None
+        if len(infos) > 1:
+            self.log("Warn: Sunsynk: {} plants found for this account - multi-plant is not supported, using the first".format(len(infos)))
+        return infos[0].get("id")
+
+    async def get_plant_flow(self, plant_id):
+        """
+        Get the live power-flow snapshot for a plant (PV/battery/grid/load).
+
+        Real response shape (GET /api/v1/plant/energy/{id}/flow):
+            {"code": 0, "success": true, "data": {
+                "pvPower": 0, "battPower": 400, "gridOrMeterPower": 3179, "loadOrEpsPower": 3164,
+                "soc": 100, "batTo": true, "toBat": false, "gridTo": true, "toGrid": false,
+                "toLoad": true, "pvTo": false
+            }}
+
+        Returns the parsed 'data' dict, or None on API failure.
+        """
+        date_str = self.midnight_utc.strftime(SUNSYNK_DATE_FORMAT)
+        return await self._get_realtime("flow", plant_id, "/api/v1/plant/energy/{}/flow".format(plant_id), datain={"date": date_str})
+
+    async def get_battery(self, sn):
+        """
+        Get real-time battery telemetry for an inverter.
+
+        Real response shape (GET /api/v1/inverter/battery/{sn}/realtime):
+            {"code": 0, "success": true, "data": {
+                "power": 170, "capacity": "100.0", "soc": "100.0", "temp": "17.0", "voltage": "639.8"
+            }}
+
+        Returns the parsed 'data' dict, or None on API failure.
+        """
+        return await self._get_realtime("battery", sn, "/api/v1/inverter/battery/{}/realtime".format(sn), datain={"sn": sn, "lan": "en"})
+
+    async def get_grid(self, sn):
+        """
+        Get real-time grid telemetry for an inverter.
+
+        Returns the parsed 'data' dict, or None on API failure.
+        """
+        return await self._get_realtime("grid", sn, "/api/v1/inverter/grid/{}/realtime".format(sn), datain={"sn": sn, "lan": "en"})
+
+    async def get_input(self, sn):
+        """
+        Get real-time PV/input telemetry for an inverter.
+
+        Returns the parsed 'data' dict, or None on API failure.
+        """
+        return await self._get_realtime("input", sn, "/api/v1/inverter/{}/realtime/input".format(sn))
+
+    async def get_output(self, sn):
+        """
+        Get real-time output telemetry for an inverter.
+
+        Returns the parsed 'data' dict, or None on API failure.
+        """
+        return await self._get_realtime("output", sn, "/api/v1/inverter/{}/realtime/output".format(sn))
+
+    async def _get_realtime(self, bucket, cache_key, path, datain=None):
+        """
+        Shared cache-and-fetch logic for the realtime telemetry endpoints (flow/battery/grid/
+        input/output).
+
+        Returns the cached value for ``cache_key`` within ``device_values[bucket]`` when it is
+        already populated and the combined "device_values" cache is still within
+        SUNSYNK_REFRESH_REALTIME; otherwise polls the API, updates the in-memory bucket and
+        persists the whole device_values cache. Returns None on API failure, leaving any
+        existing cached value untouched.
+        """
+        store = self.device_values[bucket]
+        if cache_key in store and not self._needs_refresh("device_values", SUNSYNK_REFRESH_REALTIME):
+            return store[cache_key]
+
+        result = await self.request_get(path, datain=datain)
+        if result is None:
+            return None
+
+        data = result.get("data") or {}
+        store[cache_key] = data
+        await self._save_cache("device_values", self.device_values)
+        return data
+
+    def _data_age_minutes(self, key):
+        """
+        Return the age in minutes of the in-memory data for a cache key, or None if unknown.
+        """
+        timestamp = self.data_age.get(key, None)
+        if timestamp is None:
+            return None
+        return (datetime.now(timezone.utc) - timestamp).total_seconds() / 60.0
+
+    def _needs_refresh(self, key, max_age_minutes):
+        """
+        Return True if the data for a cache key is missing or older than max_age_minutes.
+        """
+        age = self._data_age_minutes(key)
+        return age is None or age >= max_age_minutes
+
+    async def _save_cache(self, key, data):
+        """
+        Save data to storage under the sunsynk module and record its update time in memory.
+        """
+        now = datetime.now(timezone.utc)
+        self.data_age[key] = now
+        if self.storage:
+            # Expire after a day so stale data doesn't linger in the cache forever
+            await self.storage.save("sunsynk", key, data, format="json", expiry=now + timedelta(days=1))
+
+    async def _load_cache(self, key):
+        """
+        Load cached data for a key from storage, recording its age. Returns None if absent.
+        """
+        if not self.storage:
+            return None
+        data = await self.storage.load("sunsynk", key)
+        if data is None:
+            return None
+        age = await self.storage.age("sunsynk", key)
+        if age is None:
+            return None
+        self.data_age[key] = datetime.now(timezone.utc) - timedelta(minutes=age)
+        return data
 
 
 class MockBase:  # pragma: no cover

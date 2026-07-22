@@ -6,16 +6,54 @@
 # Test Sunsynk API skeleton + Bearer request layer
 # -----------------------------------------------------------------------------
 
-"""Tests for the SunsynkAPI component skeleton (Task 8).
+"""Tests for the SunsynkAPI component (Tasks 8-9).
 
-Covers the injected-token Bearer request layer only - device discovery, publishing
+Task 8 covers the injected-token Bearer request layer. Task 9 adds device discovery
+(single-plant scoped) and read-only telemetry (flow/battery/grid/input/output) - publishing
 and control land in later tasks and are not tested here.
 """
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from sunsynk import SunsynkAPI, MockBase
 from tests.test_infra import run_async, create_aiohttp_mock_response, create_aiohttp_mock_session
+
+# Real captured demo responses (Task 9 brief) - used verbatim as test fixtures so the parsing
+# logic is checked against the actual Sunsynk Connect API contract, not an invented shape.
+PLANTS_RESPONSE = {"code": 0, "success": True, "data": {"infos": [{"id": 505825, "name": "Virtual power station", "status": 1}]}}
+
+INVERTERS_RESPONSE = {
+    "code": 0,
+    "success": True,
+    "data": {
+        "pageSize": 50,
+        "total": 2,
+        "infos": [
+            {"id": 260047, "sn": "2504040106", "model": "SUN-50KW-SG01HP3-EU-BM4", "status": 1},
+            {"id": 260046, "sn": "2504040164", "model": "SUN-50KW-SG01HP3-EU-BM4", "status": 1},
+        ],
+    },
+}
+
+FLOW_RESPONSE = {
+    "code": 0,
+    "success": True,
+    "data": {
+        "pvPower": 0,
+        "battPower": 400,
+        "gridOrMeterPower": 3179,
+        "loadOrEpsPower": 3164,
+        "soc": 100,
+        "batTo": True,
+        "toBat": False,
+        "gridTo": True,
+        "toGrid": False,
+        "toLoad": True,
+        "pvTo": False,
+    },
+}
+
+BATTERY_RESPONSE = {"code": 0, "success": True, "data": {"power": 170, "capacity": "100.0", "soc": "100.0", "temp": "17.0", "voltage": "639.8"}}
 
 
 def test_get_headers_uses_bearer_token():
@@ -112,3 +150,192 @@ def test_request_get_func_403_sets_needs_reauth():
     assert data is None
     assert allow_retry is False
     assert api.needs_reauth is True
+
+
+# -----------------------------------------------------------------------------
+# Task 9: device discovery + telemetry reads
+# -----------------------------------------------------------------------------
+
+
+def test_get_device_list_uses_configured_plant_id_and_returns_devices():
+    """When plant_id is configured, get_device_list() skips discovery entirely."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True, plant_id=505825)
+    api.request_get = AsyncMock(return_value=INVERTERS_RESPONSE)
+
+    devices = run_async(api.get_device_list())
+
+    assert api.request_get.await_count == 1
+    assert {d["sn"] for d in devices} == {"2504040106", "2504040164"}
+    assert all(d["plant_id"] == 505825 for d in devices)
+    assert all(d["model"] == "SUN-50KW-SG01HP3-EU-BM4" for d in devices)
+
+
+def test_get_device_list_discovers_single_plant_when_plant_id_not_configured():
+    """Without a configured plant_id, GET /api/v1/plants is polled first for the sole plant."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True)
+    api.request_get = AsyncMock(side_effect=[PLANTS_RESPONSE, INVERTERS_RESPONSE])
+
+    devices = run_async(api.get_device_list())
+
+    assert api.request_get.await_count == 2
+    assert api.request_get.await_args_list[0].args[0] == "/api/v1/plants"
+    assert api.request_get.await_args_list[1].args[0] == "/api/v1/plant/505825/inverters"
+    assert {d["sn"] for d in devices} == {"2504040106", "2504040164"}
+    assert all(d["plant_id"] == 505825 for d in devices)
+
+
+def test_get_device_list_uses_first_plant_when_multiple_found():
+    """Multi-plant accounts are defensive-only (SaaS handler rejects them at onboarding) -
+    the first plant returned is used."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True)
+    multi_plant_response = {"code": 0, "success": True, "data": {"infos": [{"id": 111, "name": "Plant A", "status": 1}, {"id": 222, "name": "Plant B", "status": 1}]}}
+    empty_inverters = {"code": 0, "success": True, "data": {"infos": []}}
+    api.request_get = AsyncMock(side_effect=[multi_plant_response, empty_inverters])
+
+    run_async(api.get_device_list())
+
+    assert api.request_get.await_args_list[1].args[0] == "/api/v1/plant/111/inverters"
+
+
+def test_get_device_list_filters_by_inverter_sn_filter():
+    """inverter_sn_filter, when set, restricts the discovered devices."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True, plant_id=505825, inverter_sn="2504040106")
+    api.request_get = AsyncMock(return_value=INVERTERS_RESPONSE)
+
+    devices = run_async(api.get_device_list())
+
+    assert [d["sn"] for d in devices] == ["2504040106"]
+
+
+def test_get_device_list_returns_none_on_api_failure():
+    """A failed inverters poll returns None and leaves any cached device_list untouched."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True, plant_id=505825)
+    api.request_get = AsyncMock(return_value=None)
+
+    result = run_async(api.get_device_list())
+
+    assert result is None
+    assert api.device_list == []
+
+
+def test_get_device_list_returns_none_when_no_plants_found():
+    """When plant discovery finds no plants, get_device_list() fails closed with None."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True)
+    no_plants = {"code": 0, "success": True, "data": {"infos": []}}
+    api.request_get = AsyncMock(return_value=no_plants)
+
+    result = run_async(api.get_device_list())
+
+    assert result is None
+    assert api.request_get.await_count == 1  # never got to the inverters call
+
+
+def test_get_device_list_caches_within_static_refresh_window():
+    """A second call within SUNSYNK_REFRESH_STATIC re-uses the cached list, no new request."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True, plant_id=505825)
+    api.request_get = AsyncMock(return_value=INVERTERS_RESPONSE)
+
+    first = run_async(api.get_device_list())
+    second = run_async(api.get_device_list())
+
+    assert api.request_get.await_count == 1
+    assert second == first
+
+
+def test_get_plant_flow_parses_flow_shape():
+    """get_plant_flow() returns the parsed 'data' dict with the power-flow fields."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True)
+    api.request_get = AsyncMock(return_value=FLOW_RESPONSE)
+
+    data = run_async(api.get_plant_flow(505825))
+
+    assert data["battPower"] == 400
+    assert data["batTo"] is True
+    assert data["gridOrMeterPower"] == 3179
+    assert data["gridTo"] is True
+    assert data["soc"] == 100
+
+    call = api.request_get.await_args
+    assert call.args[0] == "/api/v1/plant/energy/505825/flow"
+    assert "date" in call.kwargs["datain"]
+
+
+def test_get_battery_parses_battery_shape():
+    """get_battery() returns the parsed 'data' dict and requests the documented path/params."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True)
+    api.request_get = AsyncMock(return_value=BATTERY_RESPONSE)
+
+    data = run_async(api.get_battery("2504040106"))
+
+    assert data["power"] == 170
+    assert data["soc"] == "100.0"
+    assert data["capacity"] == "100.0"
+
+    call = api.request_get.await_args
+    assert call.args[0] == "/api/v1/inverter/battery/2504040106/realtime"
+    assert call.kwargs["datain"] == {"sn": "2504040106", "lan": "en"}
+
+
+def test_get_grid_requests_expected_path():
+    """get_grid() hits /inverter/grid/{sn}/realtime with sn+lan query params."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True)
+    api.request_get = AsyncMock(return_value={"code": 0, "success": True, "data": {"gridPower": 123}})
+
+    data = run_async(api.get_grid("SN1"))
+
+    assert data["gridPower"] == 123
+    call = api.request_get.await_args
+    assert call.args[0] == "/api/v1/inverter/grid/SN1/realtime"
+    assert call.kwargs["datain"] == {"sn": "SN1", "lan": "en"}
+
+
+def test_get_input_requests_expected_path():
+    """get_input() hits /inverter/{sn}/realtime/input."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True)
+    api.request_get = AsyncMock(return_value={"code": 0, "success": True, "data": {"pvPower": 5}})
+
+    data = run_async(api.get_input("SN1"))
+
+    assert data["pvPower"] == 5
+    assert api.request_get.await_args.args[0] == "/api/v1/inverter/SN1/realtime/input"
+
+
+def test_get_output_requests_expected_path():
+    """get_output() hits /inverter/{sn}/realtime/output."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True)
+    api.request_get = AsyncMock(return_value={"code": 0, "success": True, "data": {"outputPower": 7}})
+
+    data = run_async(api.get_output("SN1"))
+
+    assert data["outputPower"] == 7
+    assert api.request_get.await_args.args[0] == "/api/v1/inverter/SN1/realtime/output"
+
+
+def test_get_battery_returns_none_on_api_failure():
+    """A failed realtime poll returns None rather than an empty/partial dict."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True)
+    api.request_get = AsyncMock(return_value=None)
+
+    assert run_async(api.get_battery("SN1")) is None
+
+
+def test_realtime_reads_cache_within_refresh_window():
+    """A second call for the same sn within SUNSYNK_REFRESH_REALTIME re-uses the cache."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True)
+    api.request_get = AsyncMock(return_value=BATTERY_RESPONSE)
+
+    run_async(api.get_battery("SN1"))
+    run_async(api.get_battery("SN1"))
+
+    assert api.request_get.await_count == 1
+
+
+def test_realtime_reads_are_cached_independently_per_sn():
+    """Caching a value for one sn must not short-circuit the fetch for a different sn."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True)
+    api.request_get = AsyncMock(return_value=BATTERY_RESPONSE)
+
+    run_async(api.get_battery("SN1"))
+    run_async(api.get_battery("SN2"))
+
+    assert api.request_get.await_count == 2
