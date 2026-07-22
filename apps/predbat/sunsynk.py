@@ -471,7 +471,10 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
 
         if len(devices) == 1:
             sn = devices[0].get("sn")
-            await self._publish_single_inverter(entity_name_sensor, sn, flow)
+            if sn:
+                await self._publish_single_inverter(entity_name_sensor, sn, flow)
+            else:
+                self.log("Warn: Sunsynk: skipping device with missing SN: {}".format(devices[0]))
         else:
             for device in devices:
                 sn = device.get("sn")
@@ -791,10 +794,20 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         device_set_changed = current_sns != self._known_sns
         self._known_sns = current_sns
 
-        await self.publish_data()
+        # publish_data()/automatic_config() are each wrapped so one bad cycle (e.g. a transient
+        # parsing error on a malformed API response) doesn't abort the whole run() and take the
+        # rest of the component down with it - mirrors deye.py's per-poll error-wrapping
+        # discipline (deye.py run()).
+        try:
+            await self.publish_data()
+        except Exception as e:
+            self.log(f"Warn: SunsynkAPI publish_data failed: {e}")
 
         if self.automatic and (first or device_set_changed):
-            await self.automatic_config()
+            try:
+                await self.automatic_config()
+            except Exception as e:
+                self.log(f"Warn: SunsynkAPI automatic_config failed: {e}")
 
         return True
 

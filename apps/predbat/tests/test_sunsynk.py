@@ -594,6 +594,23 @@ def test_multi_inverter_sn_does_not_refetch_battery_that_already_failed():
     assert api.get_battery.await_count == 1
 
 
+def test_publish_data_single_inverter_skips_device_with_missing_sn_and_warns():
+    """Final-review Fix 2: the single-inverter branch must guard a missing SN the same way the
+    multi-inverter branch already does. Before this fix, `devices[0].get("sn")` was passed
+    straight into `_publish_single_inverter` -> `_publish_entity`, which does `sn.lower()` with
+    no None check - an AttributeError if a discovered single device lacks "sn"."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True)
+    api.device_list = [{"sn": None, "model": "SUN-50KW-SG01HP3-EU-BM4", "plant_id": 505825}]
+    api.get_plant_flow = AsyncMock(return_value=dict(FLOW_RESPONSE["data"]))
+    logs = []
+    api.log = logs.append
+
+    run_async(api.publish_data())  # must not raise AttributeError on sn.lower()
+
+    assert any("skipping device with missing SN" in message for message in logs)
+    assert api.base.entities == {}
+
+
 def test_publish_data_multi_inverter_skips_device_with_missing_sn_and_warns():
     """Fix 4: a device with no SN must be skipped (not crash on sn.lower()) AND must log a
     Warn:, rather than silently disappearing from published entities."""
@@ -777,6 +794,32 @@ def test_automatic_config_skips_device_with_missing_sn_and_warns():
 # -----------------------------------------------------------------------------
 
 
+def test_sunsynk_registered_in_inverter_def():
+    """SUNSYNK must be registered in config.py's INVERTER_DEF (final-review Fix 1).
+
+    automatic_config() sets inverter_type="SUNSYNK" (Task 11) but never sets a custom
+    "inverter" arg, so inverter.py's GE-copy fallback (inverter.py:193-195, only triggered when
+    "inverter" is in self.base.args) never runs for it - without a registered entry,
+    Inverter.__init__() falls straight to `raise ValueError("Inverter type SUNSYNK not
+    defined")` (inverter.py:210), crashing Predbat's inverter setup for every
+    sunsynk_automatic customer. Mirrors deye.py's "DeyeCloud" registration, added to guard the
+    exact same gap.
+
+    Imports ``predbat`` first - see test_component_registered()'s docstring below for why
+    (components.py -> web.py -> predbat.py -> components.py circular import)."""
+    import predbat  # noqa: F401 - import order matters, see test_component_registered() docstring
+
+    from config import INVERTER_DEF
+
+    assert "SUNSYNK" in INVERTER_DEF
+    idef = INVERTER_DEF["SUNSYNK"]
+    # These are exactly the keys inverter.py's __init__ reads immediately after inverter_type
+    # is resolved (inverter.py:208, :217-218) - the minimum needed for setup to not crash.
+    assert idef["name"] == "SUNSYNK"
+    assert idef["has_rest_api"] is False
+    assert idef["has_mqtt_api"] is False
+
+
 def test_component_registered():
     """sunsynk is registered in COMPONENT_LIST, wired to SunsynkAPI with the expected
     event_filter, matching how fox/deye/solis register themselves.
@@ -916,6 +959,44 @@ def test_run_reinvokes_automatic_config_when_device_set_changes():
     assert result is True
     api.automatic_config.assert_awaited_once()
     assert api._known_sns == {"SN1", "SN2"}
+
+
+def test_run_continues_when_publish_data_raises():
+    """Final-review Fix 3: an exception from publish_data() must not abort run() - matches
+    deye.py's per-poll error-wrapping discipline so one bad cycle doesn't kill automatic_config
+    (or the component as a whole). Before this fix, publish_data() was awaited with no
+    try/except in run(), so any exception it raised propagated straight out of run()."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True, plant_id=505825)
+    api.get_device_list = AsyncMock(return_value=[{"sn": "SN1", "model": "M", "plant_id": 505825}])
+    api.device_list = [{"sn": "SN1", "model": "M", "plant_id": 505825}]
+    api.publish_data = AsyncMock(side_effect=RuntimeError("boom"))
+    api.automatic_config = AsyncMock()
+    logs = []
+    api.log = logs.append
+
+    result = run_async(api.run(5, True))  # must not raise
+
+    assert result is True
+    api.automatic_config.assert_awaited_once()  # still runs despite the publish_data failure
+    assert any("publish_data failed" in message for message in logs)
+
+
+def test_run_continues_when_automatic_config_raises():
+    """Final-review Fix 3: mirrors the publish_data() case - an exception from
+    automatic_config() must also not abort run() or its return value."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True, plant_id=505825)
+    api.get_device_list = AsyncMock(return_value=[{"sn": "SN1", "model": "M", "plant_id": 505825}])
+    api.device_list = [{"sn": "SN1", "model": "M", "plant_id": 505825}]
+    api.publish_data = AsyncMock()
+    api.automatic_config = AsyncMock(side_effect=RuntimeError("boom"))
+    logs = []
+    api.log = logs.append
+
+    result = run_async(api.run(5, True))  # must not raise
+
+    assert result is True
+    api.publish_data.assert_awaited_once()
+    assert any("automatic_config failed" in message for message in logs)
 
 
 def test_run_uses_cached_device_list_on_transient_api_failure():

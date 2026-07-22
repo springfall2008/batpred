@@ -2004,6 +2004,42 @@ INVERTER_DEF = {
         "charge_discharge_with_rate": False,
         "target_soc_used_for_discharge": True,
     },
+    # Sunsynk-branded hardware is Deye hardware under the skin, and the cloud API shares the
+    # same 6-slot-TOU control model, "HH:MM" time format, and "%" SOC units - so this entry is
+    # copied verbatim from "DeyeCloud" above (only "name" differs). Sunsynk's read path (device
+    # discovery + telemetry publish) ships now; the control-specific fields below
+    # (charge_time_format, support_charge_freeze/support_discharge_freeze, has_timed_pause,
+    # etc.) are inherited placeholders and are inert until control lands (Task 14+) - confirm
+    # each one against Sunsynk's real control API before it is relied upon for writes.
+    "SUNSYNK": {
+        "name": "SUNSYNK",
+        "has_rest_api": False,
+        "has_mqtt_api": False,
+        "output_charge_control": "power",
+        "charge_control_immediate": False,
+        "has_charge_enable_time": True,
+        "has_discharge_enable_time": True,
+        "has_target_soc": True,
+        "has_reserve_soc": True,
+        "has_timed_pause": False,
+        "charge_time_format": "HH:MM",
+        "charge_time_entity_is_option": True,
+        "soc_units": "%",
+        "num_load_entities": 1,
+        "has_ge_inverter_mode": False,
+        "has_ge_eco_toggle": False,
+        "has_fox_inverter_mode": False,
+        "time_button_press": True,
+        "clock_time_format": "%Y-%m-%d %H:%M:%S",
+        "write_and_poll_sleep": 2,
+        "has_time_window": False,
+        "support_charge_freeze": True,
+        "support_discharge_freeze": True,
+        "has_idle_time": False,
+        "can_span_midnight": False,
+        "charge_discharge_with_rate": False,
+        "target_soc_used_for_discharge": True,
+    },
     "SolaxCloud": {
         "name": "SolaxCloud",
         "has_rest_api": False,
