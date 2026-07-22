@@ -3170,7 +3170,7 @@ def _test_async_automatic_config(my_predbat):
         assert ge.config_args.get("pv_today") == ["sensor.predbat_gecloud_battery001_solar_total", "sensor.predbat_gecloud_pv001_solar_total"], "pv_today should include standalone PV inverters when ge_cloud_automatic_split_pv is set"
         assert ge.config_args.get("pv_power") == ["sensor.predbat_gecloud_battery001_solar_power", "sensor.predbat_gecloud_pv001_solar_power"], "pv_power should include standalone PV inverters when ge_cloud_automatic_split_pv is set"
 
-        # Test 3d: Three-phase alternative names should be auto-selected when default names do not exist
+        # Test 3j: Three-phase alternative names should be auto-selected when default names do not exist
         ge.config_args = {}
         ge.settings = {
             "battery003": {
