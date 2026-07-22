@@ -90,6 +90,23 @@ async def test_octopus_waf_block(my_predbat):
     else:
         print("PASS: genuine 401 still triggers a token refresh")
 
+    # Test 2b: a genuine JSON 403 from Kraken must still refresh the token, even when its
+    # message happens to contain wording that also appears on WAF pages. Misclassifying it
+    # would keep an invalid token forever - the same permanent lockout, from the other side.
+    print("\n*** Test 2b: JSON 403 mentioning 'access denied' still refreshes ***")
+    api2b = _make_api(my_predbat, _make_response(403, '{"errors":[{"message":"Access denied for this account"}]}'))
+    api2b.graphql_token = "stale-token"
+    # Must return a token so the query proceeds to the POST and reaches the 403 handling
+    api2b.async_refresh_token = AsyncMock(return_value="fresh-token")
+
+    await api2b.async_graphql_query("query { test }", "test-query")
+
+    if api2b.async_refresh_token.call_count < 2:
+        print("ERROR: a genuine JSON 403 was misclassified as a CDN block, so the token was never refreshed")
+        failed = True
+    else:
+        print("PASS: JSON 403 treated as a real auth failure and refreshed")
+
     # Test 3: an HTTP error response must not be re-read repeatedly.
     # aiohttp caches the body, so re-reading the same response can never change
     # the outcome - it only duplicates logs and sleeps.
