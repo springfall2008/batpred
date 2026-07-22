@@ -14,8 +14,9 @@ chain server-side; the ``sunsynk_key`` config value handed to this component IS 
 resulting Bearer access token, so ``SunsynkAPI`` never performs RSA signing or login
 itself here - it only issues plain Bearer-authenticated requests and flags
 ``needs_reauth`` when the injected token is rejected, for the SaaS side to notice and
-refresh. Device discovery and read-only telemetry are implemented here (Task 9); publishing
-and control are added in later tasks.
+refresh. Device discovery and read-only telemetry are implemented here (Task 9), along with
+entity publishing via ``publish_data()`` (Task 10); automatic scheduling and control are
+added in later tasks.
 """
 
 import asyncio
@@ -404,6 +405,192 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             return None
         self.data_age[key] = datetime.now(timezone.utc) - timedelta(minutes=age)
         return data
+
+    async def publish_data(self):
+        """
+        Publish Sunsynk telemetry as Predbat entities via dashboard_item(), fox.py-style.
+
+        The plant-level flow endpoint (get_plant_flow) is PLANT-AGGREGATED - in a
+        multi-inverter site it already sums every inverter's contribution. Publishing its
+        values under EACH inverter's SN would double-count a multi-inverter site (Task 10
+        brief, Codex Critical 3), so this method branches on the device count:
+
+        - Single-inverter plant: plant flow IS that one inverter's data, so it is safe to
+          derive battery_power/grid_power/battery_soc/pv_power/load_power directly from
+          flow's VERIFIED direction-boolean sign mapping (batTo/toGrid - Risk 5, confirmed
+          against live data at the plant level).
+        - Multi-inverter plant: per-SN entities instead come from the per-SN battery/grid/
+          input endpoints (see _publish_multi_inverter_sn()), and a single plant-level
+          summary (sensor.{prefix}_sunsynk_site_*) is published from flow separately, since
+          that one is plant-aggregate by design and isn't attributed to any single SN.
+
+        battery_temperature and soc_max (from battery.capacity) always come from the per-SN
+        battery/{sn}/realtime endpoint in both branches, since flow carries neither.
+        """
+        devices = self.device_list
+        if not devices:
+            self.log("Warn: Sunsynk: publish_data() called with no discovered devices - nothing to publish")
+            return
+
+        plant_id = devices[0].get("plant_id")
+        flow = await self.get_plant_flow(plant_id) if plant_id else None
+
+        entity_name_sensor = f"sensor.{self.prefix}_sunsynk"
+
+        if len(devices) == 1:
+            sn = devices[0].get("sn")
+            await self._publish_single_inverter(entity_name_sensor, sn, flow)
+        else:
+            for device in devices:
+                sn = device.get("sn")
+                if sn:
+                    await self._publish_multi_inverter_sn(entity_name_sensor, sn)
+            if flow is not None:
+                self._publish_site_summary(entity_name_sensor, flow)
+
+    async def _publish_single_inverter(self, entity_name_sensor, sn, flow):
+        """
+        Publish one SN's entities for a SINGLE-inverter plant.
+
+        battery_power/grid_power/battery_soc/pv_power/load_power are derived from the plant
+        flow endpoint using the VERIFIED sign mapping - safe here because the plant's flow
+        total IS this one inverter's data (no double-counting risk with only one inverter).
+        """
+        if flow is not None:
+            batt_power_raw = flow.get("battPower", 0) or 0
+            battery_power = batt_power_raw if flow.get("batTo") else -batt_power_raw
+            grid_power_raw = flow.get("gridOrMeterPower", 0) or 0
+            grid_power = grid_power_raw if flow.get("toGrid") else -grid_power_raw
+
+            self._publish_entity(entity_name_sensor, sn, "battery_power", battery_power, "W", "power", "mdi:battery-charging")
+            self._publish_entity(entity_name_sensor, sn, "grid_power", grid_power, "W", "power", "mdi:transmission-tower")
+            self._publish_entity(entity_name_sensor, sn, "battery_soc", flow.get("soc"), "%", "battery", "mdi:battery-50")
+            self._publish_entity(entity_name_sensor, sn, "pv_power", flow.get("pvPower"), "W", "power", "mdi:solar-power")
+            self._publish_entity(entity_name_sensor, sn, "load_power", flow.get("loadOrEpsPower"), "W", "power", "mdi:home-lightning-bolt")
+        else:
+            self.log("Warn: Sunsynk: {} - no plant flow data available, skipping flow-derived entities".format(sn))
+
+        await self._publish_battery_extras(entity_name_sensor, sn)
+
+    async def _publish_multi_inverter_sn(self, entity_name_sensor, sn):
+        """
+        Publish one SN's entities for a MULTI-inverter plant, from the PER-SN battery/grid/
+        input endpoints rather than plant flow (see publish_data() docstring for why).
+
+        # TODO(risk5-perSN): the per-SN battery.power / grid power sign convention is
+        # UNCONFIRMED. Risk 5 was only verified at the plant-flow level (the batTo/toGrid
+        # direction booleans) - the demo plant used to develop this was near-idle, so these
+        # per-SN fields' sign couldn't be cross-checked against a known charge/discharge or
+        # import/export state. Confirm against a live, non-idle multi-inverter plant before
+        # relying on these signs for control decisions.
+        """
+        self.log("Warn: Sunsynk: {} - per-SN battery/grid power sign is UNCONFIRMED (only plant-level flow signs are verified) - treat with caution until confirmed against live multi-inverter data".format(sn))
+
+        battery = await self.get_battery(sn)
+        if battery is not None:
+            self._publish_entity(entity_name_sensor, sn, "battery_power", self._to_float(battery.get("power")), "W", "power", "mdi:battery-charging")
+            self._publish_entity(entity_name_sensor, sn, "battery_soc", self._to_float(battery.get("soc")), "%", "battery", "mdi:battery-50")
+
+        await self._publish_battery_extras(entity_name_sensor, sn, battery)
+
+        grid = await self.get_grid(sn)
+        if grid is not None:
+            self._publish_entity(entity_name_sensor, sn, "grid_power", self._sum_phase_power(grid, ("vip", "meters", "phases"), ("power", "pac", "gridPower")), "W", "power", "mdi:transmission-tower")
+
+        pv_input = await self.get_input(sn)
+        if pv_input is not None:
+            self._publish_entity(entity_name_sensor, sn, "pv_power", self._sum_phase_power(pv_input, ("pv", "pvStrings", "strings"), ("power", "pac", "pvPower")), "W", "power", "mdi:solar-power")
+
+    async def _publish_battery_extras(self, entity_name_sensor, sn, battery=None):
+        """
+        Publish battery_temperature and soc_max (from battery.capacity) for one SN.
+
+        Always sourced from the per-SN battery/{sn}/realtime endpoint - plant flow carries
+        neither field. Used by both the single- and multi-inverter publish paths; the
+        multi-inverter path passes its already-fetched battery dict in to avoid a duplicate
+        request, the single-inverter path fetches it here since it has no other need for it.
+        """
+        if battery is None:
+            battery = await self.get_battery(sn)
+        if battery is None:
+            return
+        self._publish_entity(entity_name_sensor, sn, "battery_temperature", self._to_float(battery.get("temp")), "°C", "temperature", "mdi:thermometer")
+        self._publish_entity(entity_name_sensor, sn, "soc_max", self._to_float(battery.get("capacity")), "Ah", None, "mdi:battery-high")
+
+    def _publish_site_summary(self, entity_name_sensor, flow):
+        """
+        Publish a single plant-level summary (sensor.{prefix}_sunsynk_site_*) for a MULTI-
+        inverter plant, from the plant flow endpoint using the VERIFIED sign mapping.
+
+        This is the one place flow's plant-aggregate values are safe to publish directly in
+        a multi-inverter plant - it is attributed to "site", not to any single inverter's SN,
+        so there is no double-counting risk (unlike publishing it per-SN would be).
+        """
+        batt_power_raw = flow.get("battPower", 0) or 0
+        battery_power = batt_power_raw if flow.get("batTo") else -batt_power_raw
+        grid_power_raw = flow.get("gridOrMeterPower", 0) or 0
+        grid_power = grid_power_raw if flow.get("toGrid") else -grid_power_raw
+
+        self._publish_entity(entity_name_sensor, "site", "battery_power", battery_power, "W", "power", "mdi:battery-charging")
+        self._publish_entity(entity_name_sensor, "site", "grid_power", grid_power, "W", "power", "mdi:transmission-tower")
+        self._publish_entity(entity_name_sensor, "site", "battery_soc", flow.get("soc"), "%", "battery", "mdi:battery-50")
+        self._publish_entity(entity_name_sensor, "site", "pv_power", flow.get("pvPower"), "W", "power", "mdi:solar-power")
+        self._publish_entity(entity_name_sensor, "site", "load_power", flow.get("loadOrEpsPower"), "W", "power", "mdi:home-lightning-bolt")
+
+    def _publish_entity(self, entity_name_sensor, sn, leaf, state, unit, device_class, icon):
+        """
+        Publish one sensor.{prefix}_sunsynk_{sn}_{leaf} entity via dashboard_item(), using
+        fox.py/solis.py-style attributes (friendly_name/unit_of_measurement/device_class/
+        state_class/icon).
+        """
+        entity_id = "{}_{}_{}".format(entity_name_sensor, sn.lower(), leaf)
+        attributes = {
+            "friendly_name": "Sunsynk {} {}".format(sn, leaf.replace("_", " ").title()),
+            "unit_of_measurement": unit,
+            "icon": icon,
+        }
+        if device_class:
+            attributes["device_class"] = device_class
+            attributes["state_class"] = "measurement"
+        self.dashboard_item(entity_id, state=state, attributes=attributes, app="sunsynk")
+
+    @staticmethod
+    def _to_float(value):
+        """Best-effort float conversion, returning None (rather than raising) on bad input."""
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _sum_phase_power(data, list_keys, flat_keys):
+        """
+        Sum a 'power' field across a per-phase/per-string breakdown, falling back to the
+        first present flat field when no breakdown list is found.
+
+        # TODO(risk5-perSN): shape AND sign are UNCONFIRMED for the per-SN grid/input
+        # endpoints (see _publish_multi_inverter_sn's TODO) - this is defensive parsing
+        # only, not verified against real API responses.
+        """
+        for key in list_keys:
+            entries = data.get(key)
+            if isinstance(entries, list) and entries:
+                total = 0.0
+                counted = False
+                for entry in entries:
+                    if isinstance(entry, dict) and "power" in entry:
+                        power = SunsynkAPI._to_float(entry.get("power"))
+                        if power is not None:
+                            total += power
+                            counted = True
+                if counted:
+                    return total
+        for flat_key in flat_keys:
+            if flat_key in data:
+                value = SunsynkAPI._to_float(data.get(flat_key))
+                if value is not None:
+                    return value
+        return None
 
 
 class MockBase:  # pragma: no cover

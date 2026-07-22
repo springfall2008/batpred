@@ -6,11 +6,12 @@
 # Test Sunsynk API skeleton + Bearer request layer
 # -----------------------------------------------------------------------------
 
-"""Tests for the SunsynkAPI component (Tasks 8-9).
+"""Tests for the SunsynkAPI component (Tasks 8-10).
 
 Task 8 covers the injected-token Bearer request layer. Task 9 adds device discovery
-(single-plant scoped) and read-only telemetry (flow/battery/grid/input/output) - publishing
-and control land in later tasks and are not tested here.
+(single-plant scoped) and read-only telemetry (flow/battery/grid/input/output). Task 10 adds
+publish_data() - entity publishing with the VERIFIED sign mapping. Control lands in a later
+task and is not tested here.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -404,3 +405,137 @@ def test_realtime_cache_freshness_is_per_bucket_and_sn_not_a_shared_clock():
 
     run_async(api.get_battery("SN1"))  # call 4 - must ALSO refetch, not served stale
     assert api.request_get.await_count == 4
+
+
+# -----------------------------------------------------------------------------
+# Task 10: publish_data() - entity publishing with the VERIFIED sign mapping
+# -----------------------------------------------------------------------------
+
+
+def test_sign_mapping_single_inverter_discharge_and_import():
+    """Single-inverter plant, battery DISCHARGING (batTo=true) and grid IMPORTING
+    (toGrid=false, gridTo=true): battery_power stays positive (discharge +ve), grid_power
+    flips negative (predbat convention: grid +ve = export, so import must be negative)."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True)
+    api.device_list = [{"sn": "2504040106", "model": "SUN-50KW-SG01HP3-EU-BM4", "plant_id": 505825}]
+    api.get_plant_flow = AsyncMock(return_value=dict(FLOW_RESPONSE["data"]))
+    api.get_battery = AsyncMock(return_value=dict(BATTERY_RESPONSE["data"]))
+
+    run_async(api.publish_data())
+
+    assert api.base.entities["sensor.predbat_sunsynk_2504040106_battery_power"]["state"] == 400
+    assert api.base.entities["sensor.predbat_sunsynk_2504040106_grid_power"]["state"] == -3179
+
+
+def test_sign_mapping_single_inverter_charge_and_export():
+    """Single-inverter plant, battery CHARGING (batTo=false, toBat=true) and grid EXPORTING
+    (toGrid=true): battery_power flips negative (charge -ve), grid_power stays positive
+    (export +ve)."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True)
+    api.device_list = [{"sn": "2504040106", "model": "SUN-50KW-SG01HP3-EU-BM4", "plant_id": 505825}]
+    flow = {
+        "pvPower": 5000,
+        "battPower": 500,
+        "batTo": False,
+        "toBat": True,
+        "gridOrMeterPower": 1000,
+        "toGrid": True,
+        "gridTo": False,
+        "soc": 80,
+        "loadOrEpsPower": 2000,
+        "toLoad": True,
+        "pvTo": True,
+    }
+    api.get_plant_flow = AsyncMock(return_value=flow)
+    api.get_battery = AsyncMock(return_value=dict(BATTERY_RESPONSE["data"]))
+
+    run_async(api.publish_data())
+
+    assert api.base.entities["sensor.predbat_sunsynk_2504040106_battery_power"]["state"] == -500
+    assert api.base.entities["sensor.predbat_sunsynk_2504040106_grid_power"]["state"] == 1000
+
+
+def test_publish_data_single_inverter_also_publishes_soc_pv_load_and_battery_extras():
+    """Single-inverter plant also publishes battery_soc/pv_power/load_power straight from
+    flow, plus battery_temperature/soc_max sourced from the per-SN battery endpoint (flow
+    carries neither field)."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True)
+    api.device_list = [{"sn": "2504040106", "model": "SUN-50KW-SG01HP3-EU-BM4", "plant_id": 505825}]
+    api.get_plant_flow = AsyncMock(return_value=dict(FLOW_RESPONSE["data"]))
+    api.get_battery = AsyncMock(return_value=dict(BATTERY_RESPONSE["data"]))
+
+    run_async(api.publish_data())
+
+    entities = api.base.entities
+    assert entities["sensor.predbat_sunsynk_2504040106_battery_soc"]["state"] == 100
+    assert entities["sensor.predbat_sunsynk_2504040106_pv_power"]["state"] == 0
+    assert entities["sensor.predbat_sunsynk_2504040106_load_power"]["state"] == 3164
+    assert entities["sensor.predbat_sunsynk_2504040106_battery_temperature"]["state"] == 17.0
+    assert entities["sensor.predbat_sunsynk_2504040106_soc_max"]["state"] == 100.0
+
+
+def test_publish_data_multi_inverter_avoids_double_count_and_warns_on_per_sn_signs():
+    """Multi-inverter plant: per-SN entities must come from the per-SN battery/grid/input
+    endpoints, NOT from plant flow (flow is plant-aggregated and would double-count a
+    multi-inverter site - Codex Critical 3). Plant flow is fetched exactly once, used only
+    for the site-level summary. A Warn: log must flag that per-SN signs are unconfirmed."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True)
+    api.device_list = [
+        {"sn": "SNA", "model": "SUN-50KW-SG01HP3-EU-BM4", "plant_id": 505825},
+        {"sn": "SNB", "model": "SUN-50KW-SG01HP3-EU-BM4", "plant_id": 505825},
+    ]
+    api.get_plant_flow = AsyncMock(return_value=dict(FLOW_RESPONSE["data"]))
+
+    battery_by_sn = {
+        "SNA": {"power": 170, "capacity": "100.0", "soc": "55.0", "temp": "17.0", "voltage": "639.8"},
+        "SNB": {"power": -220, "capacity": "150.0", "soc": "60.0", "temp": "19.5", "voltage": "640.1"},
+    }
+    grid_by_sn = {
+        "SNA": {"vip": [{"power": 100}, {"power": 200}, {"power": 300}]},
+        "SNB": {"power": 50},
+    }
+    input_by_sn = {
+        "SNA": {"pv": [{"power": 1000}, {"power": 500}]},
+        "SNB": {"pvPower": 750},
+    }
+    api.get_battery = AsyncMock(side_effect=lambda sn: battery_by_sn[sn])
+    api.get_grid = AsyncMock(side_effect=lambda sn: grid_by_sn[sn])
+    api.get_input = AsyncMock(side_effect=lambda sn: input_by_sn[sn])
+
+    logs = []
+    api.log = logs.append
+
+    run_async(api.publish_data())
+
+    entities = api.base.entities
+
+    # Per-SN entities come from the per-SN endpoints, not plant flow (no double-count).
+    assert entities["sensor.predbat_sunsynk_sna_battery_power"]["state"] == 170
+    assert entities["sensor.predbat_sunsynk_snb_battery_power"]["state"] == -220
+    assert entities["sensor.predbat_sunsynk_sna_grid_power"]["state"] == 600  # summed vip phases
+    assert entities["sensor.predbat_sunsynk_snb_grid_power"]["state"] == 50  # flat fallback
+    assert entities["sensor.predbat_sunsynk_sna_pv_power"]["state"] == 1500  # summed pv strings
+    assert entities["sensor.predbat_sunsynk_snb_pv_power"]["state"] == 750  # flat fallback
+    assert entities["sensor.predbat_sunsynk_sna_soc_max"]["state"] == 100.0
+    assert entities["sensor.predbat_sunsynk_snb_soc_max"]["state"] == 150.0
+
+    # Plant flow is used exactly once, for the site-level summary only - never per-SN.
+    assert api.get_plant_flow.await_count == 1
+    assert entities["sensor.predbat_sunsynk_site_battery_power"]["state"] == 400  # batTo=true
+    assert entities["sensor.predbat_sunsynk_site_grid_power"]["state"] == -3179  # toGrid=false
+
+    # Per-SN sign-uncertainty must be surfaced, not silently assumed correct.
+    assert any("UNCONFIRMED" in message for message in logs)
+
+
+def test_publish_data_with_no_devices_logs_warning_and_publishes_nothing():
+    """publish_data() with an empty device_list must not raise, and must publish nothing."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True)
+    api.device_list = []
+    logs = []
+    api.log = logs.append
+
+    run_async(api.publish_data())
+
+    assert api.base.entities == {}
+    assert any("no discovered devices" in message for message in logs)
