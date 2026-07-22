@@ -43,6 +43,9 @@ OCTOPUS_NIGHT_RATE_WINDOWS = {
 }
 
 OCTOPUS_MAX_RETRIES = 5
+# The EV/charge-point catalogue is static reference data, so it is refreshed daily
+CATALOGUE_FRESH_MINUTES = 24 * 60
+CATALOGUE_STALE_MINUTES = 25 * 60
 OCTOPUS_SLOT_MAX_DEFAULT = 48  # 24 hours with 30-minute slots
 
 BASE_TIME = datetime.strptime("00:00", "%H:%M")
@@ -75,6 +78,33 @@ def parse_date_time(dt_str):
         return datetime.strptime(dt_str, DATE_TIME_STR_FORMAT)
     except (ValueError, TypeError):
         return None
+
+
+CDN_BLOCK_MARKERS = ("cloudfront", "request blocked", "the request could not be satisfied", "access denied", "<html")
+
+
+def is_edge_block_body(text):
+    """Return True if a 403 body is positively identifiable as a CDN/WAF error page.
+
+    Kraken reports authentication problems as a JSON GraphQL error body (normally with
+    HTTP 200) or as a 401. A 403 carrying an HTML error page - e.g. CloudFront's
+    "Request blocked" - is edge rate limiting, not a credential problem, so the cached
+    token must be kept rather than discarded and immediately re-minted.
+
+    Detection is deliberately positive: a 403 we cannot identify as a CDN page keeps the
+    existing "refresh the token and retry" behaviour, which recovers genuinely revoked
+    tokens without needing a restart.
+
+    Args:
+        text: The raw response body.
+
+    Returns:
+        bool: True if the body carries a known CDN/WAF block signature.
+    """
+    if not isinstance(text, str) or not text:
+        return False
+    lowered = text.lower()
+    return any(marker in lowered for marker in CDN_BLOCK_MARKERS)
 
 
 api_token_query = """mutation {{
@@ -150,21 +180,27 @@ account_query = """query {{
   }}
 }}"""
 
-intelligent_device_query = """query {{
-  electricVehicles {{
+# The vehicle/charge-point catalogue is global reference data - identical for every
+# account and effectively static - so it is queried separately from the per-account
+# device list and cached, rather than being re-downloaded on every device poll.
+intelligent_catalogue_query = """query {
+  electricVehicles {
 		make
-		models {{
+		models {
 			model
 			batterySize
-		}}
-	}}
-	chargePointVariants {{
+		}
+	}
+	chargePointVariants {
 		make
-		models {{
+		models {
 			model
 			powerInKw
-		}}
-	}}
+		}
+	}
+}"""
+
+intelligent_device_query = """query {{
   devices(accountNumber: "{account_id}") {{
 		id
 		provider
@@ -1477,6 +1513,12 @@ class OctopusAPI(ComponentBase):
             if data_as_json is not None:
                 return data_as_json
             else:
+                # 401/403 are definitive for this response. aiohttp caches the body, so
+                # re-reading the same response cannot change the outcome - it would only
+                # duplicate log lines and sleep through the backoff for nothing.
+                if response.status in [401, 403]:
+                    self.failures_total += 1
+                    return None
                 if attempt < max_retries - 1:
                     self.log(f"OctopusAPI: Retrying read response for {url} (attempt {attempt + 2} of {max_retries})")
                     await asyncio.sleep(2**attempt)  # Exponential backoff
@@ -1595,6 +1637,17 @@ class OctopusAPI(ComponentBase):
                 # returns a bare 401/403 status rather than a GraphQL error body — which would
                 # otherwise loop forever without ever refreshing the token.
                 if response.status in [401, 403] and _retry_count == 0:
+                    # A CDN/WAF block is rate limiting, not an auth failure. Re-minting a token
+                    # here would be rejected by the same block, leaving the component permanently
+                    # locked out, so keep the cached token and let the caller back off instead.
+                    # Only 403 is treated this way: Kraken reports genuine auth problems as HTTP
+                    # 200 with a GraphQL errorCode, or as a 401, so a 403 carrying a non-JSON
+                    # body comes from the edge rather than the API.
+                    if response.status == 403 and is_edge_block_body(await response.text()):
+                        self.log(f"Warn: OctopusAPI: HTTP {response.status} edge/WAF block for graphql query {request_context} - rate limited, keeping cached token")
+                        record_api_call("octopus", False, "rate_limit")
+                        self.failures_total += 1
+                        return None
                     self.log(f"OctopusAPI: HTTP {response.status} for graphql query {request_context}, forcing token refresh and retry")
                     record_api_call("octopus", False, "auth_error")
                     self.graphql_token = None
@@ -1652,6 +1705,36 @@ class OctopusAPI(ComponentBase):
 
         return None
 
+    async def async_get_vehicle_catalogue(self):
+        """
+        Get the global EV / charge-point catalogue, cached across polls and instances.
+
+        The catalogue is static reference data shared by every account, so it is stored
+        under the "octopus" storage module. The SaaS KeyDB backend routes that module to
+        a shared namespace, so a single fetch serves the whole fleet; on a local
+        filesystem backend it simply persists between polls.
+
+        Returns:
+            dict: The catalogue, or an empty dict if it could not be obtained.
+        """
+
+        async def _fetch():
+            """Download the catalogue from the GraphQL API."""
+            return await self.async_graphql_query(intelligent_catalogue_query, "get-vehicle-catalogue", ignore_errors=True)
+
+        if not self.storage:
+            return await _fetch() or {}
+
+        catalogue = await self.storage.fetch_cached(
+            "octopus",
+            "vehicle_catalogue",
+            _fetch,
+            fresh_minutes=CATALOGUE_FRESH_MINUTES,
+            stale_minutes=CATALOGUE_STALE_MINUTES,
+            format="json",
+        )
+        return catalogue or {}
+
     async def async_get_intelligent_devices(self, account_id, device_id):
         """
         Get the intelligent dispatches/device
@@ -1671,8 +1754,9 @@ class OctopusAPI(ComponentBase):
             """
 
             if device_result:
-                chargePointVariants = device_result.get("chargePointVariants", [])
-                electricVehicles = device_result.get("electricVehicles", [])
+                catalogue = await self.async_get_vehicle_catalogue()
+                chargePointVariants = catalogue.get("chargePointVariants", [])
+                electricVehicles = catalogue.get("electricVehicles", [])
                 devices = device_result.get("devices", [])
                 if not devices:
                     return None

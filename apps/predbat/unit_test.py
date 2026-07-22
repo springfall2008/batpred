@@ -94,6 +94,8 @@ from tests.test_octopus_refresh_token import test_octopus_refresh_token_wrapper
 from tests.test_octopus_misc import test_octopus_misc_wrapper
 from tests.test_octopus_read_response import test_octopus_read_response_wrapper
 from tests.test_octopus_read_response_retry import test_octopus_read_response_retry_wrapper
+from tests.test_octopus_waf_block import test_octopus_waf_block_wrapper
+from tests.test_octopus_catalogue_cache import test_octopus_catalogue_cache_wrapper
 from tests.test_octopus_rate_limit import test_octopus_rate_limit_wrapper
 from tests.test_octopus_logging import test_octopus_logging_wrapper
 from tests.test_octopus_fetch_previous_dispatch import test_octopus_fetch_previous_dispatch_wrapper
@@ -150,7 +152,6 @@ from tests.test_marginal_costs import test_marginal_costs
 from tests.test_savings_stability import test_savings_stability
 from tests.test_calculate_yesterday import test_calculate_yesterday
 from tests.test_load_today_comparison import test_load_today_comparison
-
 
 # Mock the components and plugin system
 
@@ -247,6 +248,8 @@ def main():
         ("octopus_misc", test_octopus_misc_wrapper, "Octopus misc API tests (set intelligent schedule, join saving sessions)", False),
         ("octopus_read_response", test_octopus_read_response_wrapper, "Octopus read response tests", False),
         ("octopus_read_response_retry", test_octopus_read_response_retry_wrapper, "Octopus read response retry with exponential backoff tests", False),
+        ("octopus_waf_block", test_octopus_waf_block_wrapper, "Octopus CloudFront/WAF 403 handling tests", False),
+        ("octopus_catalogue_cache", test_octopus_catalogue_cache_wrapper, "Octopus EV catalogue caching tests", False),
         ("octopus_rate_limit", test_octopus_rate_limit_wrapper, "Octopus API rate limit tests", False),
         ("octopus_logging", test_octopus_logging_wrapper, "Octopus GraphQL logging redaction tests", False),
         ("octopus_fetch_previous_dispatch", test_octopus_fetch_previous_dispatch_wrapper, "Octopus fetch previous dispatch tests", False),

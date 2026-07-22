@@ -240,31 +240,37 @@ async def test_octopus_read_response_retry(my_predbat):
         else:
             print("PASS: Rate limit error triggers retry with exponential backoff")
 
-    # Test 8: Auth errors trigger retry with backoff
-    print("\n*** Test 8: Auth errors trigger retry with backoff ***")
+    # Test 8: Auth/blocked responses are definitive and are not re-read.
+    # aiohttp caches the response body, so re-reading the same 401/403 response can only
+    # ever yield the same result. Retrying it just duplicates log lines and sleeps through
+    # the backoff - which is what made a CloudFront 403 emit five identical warnings and
+    # stall for 15s on every query.
+    print("\n*** Test 8: Auth/blocked responses are not re-read ***")
     api = OctopusAPI(my_predbat, key="test-key", account_id="test-account", automatic=False)
     api.failures_total = 0
 
     auth_error_response = create_mock_response(401, "Unauthorized")
-    successful_data = {"data": {"result": "success"}}
 
-    # Mock async_read_response to return None (auth error), then succeed
-    api.async_read_response = AsyncMock(side_effect=[None, successful_data])
+    # A real 401 body cannot change between reads, so async_read_response always returns None
+    api.async_read_response = AsyncMock(return_value=None)
 
     with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
         result = await api.async_read_response_retry(auth_error_response, url, ignore_errors=False)
 
-        if result != successful_data:
-            print(f"ERROR: Expected successful data after auth error retry, got {result}")
+        if result is not None:
+            print(f"ERROR: Expected None for an auth error, got {result}")
             failed = True
-        elif api.async_read_response.call_count != 2:
-            print(f"ERROR: Expected 2 calls (auth error + retry), got {api.async_read_response.call_count}")
+        elif api.async_read_response.call_count != 1:
+            print(f"ERROR: Expected 1 call (no retry on a definitive auth error), got {api.async_read_response.call_count}")
             failed = True
-        elif mock_sleep.call_count != 1:
-            print(f"ERROR: Expected 1 sleep call after auth error, got {mock_sleep.call_count}")
+        elif mock_sleep.call_count != 0:
+            print(f"ERROR: Expected no sleep for a definitive auth error, got {mock_sleep.call_count}")
+            failed = True
+        elif api.failures_total != 1:
+            print(f"ERROR: failures_total should be 1 after an auth error, got {api.failures_total}")
             failed = True
         else:
-            print("PASS: Auth error triggers retry with exponential backoff")
+            print("PASS: Auth error returns immediately without pointless retries")
 
     if failed:
         print("\n**** ❌ Octopus async_read_response_retry tests FAILED ****")
