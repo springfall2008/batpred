@@ -490,8 +490,11 @@ COMPONENT_LIST = {
         "event_filter": "predbat_sunsynk_",
         "phase": 1,
         "can_restart": True,
+        # key required so the component only starts for Sunsynk instances, not fleet-wide -
+        # Sunsynk uses a single injected-token credential (sunsynk_key), like teslemetry's
+        # "key", rather than deye/solis's multiple-auth-path required_or gate.
         "args": {
-            "key": {"required": False, "config": "sunsynk_key"},
+            "key": {"required": True, "config": "sunsynk_key"},
             "inverter_sn": {"required": False, "config": "sunsynk_inverter_sn"},
             "plant_id": {"required": False, "config": "sunsynk_plant_id"},
             "automatic": {"required": False, "default": False, "config": "sunsynk_automatic"},

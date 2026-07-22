@@ -795,6 +795,19 @@ def test_component_registered():
     assert entry["args"]["automatic"]["default"] is False
 
 
+def test_component_registered_key_required_so_it_does_not_start_fleet_wide():
+    """The key arg must be required: True (mirroring teslemetry's single-token gate), not
+    required: False with a required_or fallback (deye/solis's multi-auth-path gate). Sunsynk
+    has only one auth path (an injected sunsynk_key), so without this every individual arg is
+    optional and Components.initialize()'s have_all_args check would be unconditionally True,
+    starting SunsynkAPI for every instance regardless of whether it's a Sunsynk customer."""
+    import predbat  # noqa: F401 - import order matters, see docstring on test_component_registered
+
+    from components import COMPONENT_LIST
+
+    assert COMPONENT_LIST["sunsynk"]["args"]["key"]["required"] is True
+
+
 def test_component_registry_config_schema_has_sunsynk_keys():
     """APPS_SCHEMA declares the sunsynk_* keys, mirroring fox_*/solis_*/deye_*."""
     from config import APPS_SCHEMA
