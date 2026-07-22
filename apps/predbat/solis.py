@@ -22,14 +22,28 @@ from oauth_mixin import OAuthMixin
 
 # API Endpoints
 SOLIS_BASE_URL = "https://www.soliscloud.com:13333"
-# OAuth 2.0 host (Bearer auth). Used when auth_method == "oauth"; reads/control use the
-# same cid/value payloads as the HMAC path, just at this host (design #366, approach 1).
+# OAuth 2.0 host (Bearer auth). Used when auth_method == "oauth". Reads/control use the same
+# cid/value payload shapes as the HMAC path, but NOT the same routes — this host serves a
+# different namespace, so paths are translated via SOLIS_OAUTH_ENDPOINTS below. (Design #366
+# approach 1 assumed path parity here; that was verified false against the live gateway.)
 SOLIS_OAUTH_BASE_URL = "https://api-oauth2.soliscloud.com"
 SOLIS_READ_ENDPOINT = "/v2/api/atRead"
 SOLIS_READ_BATCH_ENDPOINT = "/v2/api/atReadBatch"
 SOLIS_CONTROL_ENDPOINT = "/v2/api/control"
 SOLIS_INVERTER_LIST_ENDPOINT = "/v1/api/inverterList"
 SOLIS_INVERTER_DETAIL_ENDPOINT = "/v1/api/inverterDetail"
+
+# The OAuth2 gateway serves a different route namespace to the HMAC host: discovery sits under
+# /api/access_data/, register reads and control under /api/control_device/. Verified against the
+# live gateway 2026-07-21. The HMAC paths return an XML <ForbiddenException> on the OAuth host,
+# which _execute_request mistook for an expired token, refreshing and retrying until it gave up.
+SOLIS_OAUTH_ENDPOINTS = {
+    SOLIS_READ_ENDPOINT: "/api/control_device/atRead",
+    SOLIS_READ_BATCH_ENDPOINT: "/api/control_device/atReadBatch",
+    SOLIS_CONTROL_ENDPOINT: "/api/control_device/control",
+    SOLIS_INVERTER_LIST_ENDPOINT: "/api/access_data/inverterList",
+    SOLIS_INVERTER_DETAIL_ENDPOINT: "/api/access_data/inverterDetail",
+}
 
 # Retry configuration
 SOLIS_MAX_RETRY_TIME = 30  # seconds
@@ -373,6 +387,10 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
     async def _execute_request(self, endpoint, payload):
         """Execute HTTP POST request to Solis API"""
+        # OAuth reads/control live in a different route namespace (see SOLIS_OAUTH_ENDPOINTS).
+        # Translate before building the URL; in api-key mode the paths are used unchanged.
+        if self.auth_method == "oauth":
+            endpoint = SOLIS_OAUTH_ENDPOINTS.get(endpoint, endpoint)
         url = f"{self.base_url}{endpoint}"
         # OAuth: proactively refresh the token before the call (no-op for api-key mode).
         # If the token can't be obtained (refresh failed / needs reauth), fail fast — the

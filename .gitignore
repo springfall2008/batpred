@@ -108,7 +108,6 @@ it
 
 # Runtime-generated manifest
 apps/predbat/manifest.yaml
-
 # Local development and scratch files
 scratch/
 cases/

@@ -39,6 +39,7 @@ Once you get everything working please share the configuration as a GitHub issue
    | [Givenergy with GE Cloud](#givenergy-with-ge-cloud) | [ge_cloud](https://github.com/springfall2008/ge_cloud) | [givenergy_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_cloud.yaml) |
    | [Givenergy with GE Cloud EMS](#givenergy-with-ge-cloud-ems) | [ge_cloud EMS](https://github.com/springfall2008/ge_cloud) | [givenergy_ems.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_ems.yaml) |
    | [Givenergy/Octopus No Home Assistant](#givenergy-octopus-cloud-direct---no-home-assistant) | n/a | [ge_cloud_octopus_standalone.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ge_cloud_octopus_standalone.yaml) |
+   | [DEYE Cloud](#deye-cloud) | Predbat | See [apps.yaml](apps-yaml.md#deye-cloud-api) |
    | [Enphase Cloud](#enphase-cloud) | Predbat | [enphase_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/enphase_cloud.yaml) |
    | [Fox](#fox) | [Foxess](https://github.com/nathanmarlor/foxess_modbus/) | [fox.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fox.yaml) |
    | [Fox Cloud](#fox-cloud) | Predbat | [fox_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/fox_cloud.yaml) |
@@ -188,6 +189,44 @@ This is being worked on by the author of GivTCP, e.g. see [GivTCP issue: unable 
 - Review any other configuration settings
 
 Launch Predbat with hass.py (from the Predbat-addon repository) either via a Docker or just on a Linux/MAC/WSL command line shell.
+
+## DEYE Cloud
+
+**Experimental**
+
+Predbat has a built-in DEYE Cloud integration for DEYE (Sunsynk-family) hybrid inverters via the DeyeCloud OpenAPI, providing monitoring and battery control - no local Modbus/RS485 Home Assistant integration is required.
+
+### What you need (self-hosted Home Assistant add-on)
+
+DeyeCloud authentication needs **two separate credential pairs** - it is easy to confuse them:
+
+1. **Developer application** - an *App ID* and *App Secret* that identify the API integration itself. Create a developer app once at [developer.deyecloud.com/app](https://developer.deyecloud.com/app); these become `deye_app_id` and `deye_app_secret`. This is **not** your normal login.
+2. **DeyeCloud account login** - the email/username and password you use in the Deye/Sunsynk mobile app. These become `deye_username` and `deye_password`, and are what scope the connection to *your* stations and inverters.
+
+Both pairs are required together - the token endpoint authenticates the *application* and the *account* in one call, so neither pair works on its own. Your account password is stored in `apps.yaml` and sent SHA-256 hashed by Predbat (never in plain text over the wire).
+
+Also set the **data centre** your DeyeCloud account is registered in - `eu`, `am` or `india` - via `deye_data_center`.
+
+Add the following to `apps.yaml` (all four credentials plus the data centre are required; `deye_company_id` is only needed for installer/business accounts):
+
+```yaml
+  deye_app_id: !secret deye_app_id          # developer App ID (developer.deyecloud.com/app)
+  deye_app_secret: !secret deye_app_secret  # developer App Secret
+  deye_username: !secret deye_username      # your DeyeCloud account email/username
+  deye_password: !secret deye_password      # your DeyeCloud account password
+  deye_data_center: 'eu'                    # eu | am | india
+  deye_automatic: True
+```
+
+### Predbat.com (SaaS)
+
+None of the above credentials are needed - connect your DeyeCloud account through Predbat.com and the token is injected and refreshed by the platform (`deye_auth_method: 'oauth'`).
+
+### Automatic configuration
+
+Set `deye_automatic: True` to have Predbat discover every battery inverter on your DeyeCloud account and wire up all the sensor and schedule control entities automatically - no manual `apps.yaml` sensor configuration is required.
+
+See the components documentation for details [Components - DEYE Cloud API](components.md#deye-cloud-api-deye)
 
 ## Enphase Cloud
 

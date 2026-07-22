@@ -145,6 +145,7 @@ This setting will not impact the real calculated costs and is only used for plan
 
 **switch.predbat_metric_dynamic_load_adjust** (default False) is a toggle that when enabled allows Predbat to take into account your energy consumption within the last 5 minutes.
 If the load is above what your battery can deliver the plan is updated to predict this load will continue during the current slot, thus preventing forced export in the plan.
+If the load remains high for two checks in a row, this prediction is extended into the following slot too, so the plan stays up to date across the slot boundary.
 If car charging is planned but the load indicates that the car is not charging then Predbat will assume the car will no longer charge during this slot thus allowing the plan to include potential export.
 
 **input_number.predbat_battery_rate_max_scaling** is a percentage factor to adjust your maximum charge rate from that reported by the inverter.
@@ -189,11 +190,11 @@ See also [PV configuration options in apps.yaml](apps-yaml.md#solcast-solar-fore
 **input_number.predbat_pv_scaling** is a percentage scaling factor applied to PV data, decrease this if you want to be more pessimistic on PV production vs Solcast.<BR>
 Use 1.0 to accurately apply the Solcast forecast generation data. A value of 0.9, for instance, would reduce 10% from the Solcast generation forecast.
 
-**input_number.predbat_pv_metric10_weight** is the percentage weighting given to the Solcast 10% PV scenario in calculating solar generation.
+**input_number.predbat_pv_metric10_weight** is a weighting, expressed as a fraction between 0.0 and 1.0 (not a whole-number percentage), given to the Solcast 10% PV scenario in calculating solar generation.
 Use 0.0 to disable using the PV 10% in Predbat's forecast of solar generation.
 A value of 0.1 assumes that 1 in every 10 times we will get the Solcast 10% scenario, and 9 in every 10 times we will get the 'median' Solcast forecast.<BR>
 Predbat estimates solar generation for each half-hour slot to be a pv_metric10_weight weighting of the Solcast 10% PV forecast to the Solcast Median forecast.<BR>
-A value of 0.15 (the default) is recommended.
+A value of 0.15 (the default) is recommended. Do not enter a value above 1.0 (e.g. 30 for "30%") - Predbat will clamp it back into range and log a warning, but the resulting plan is likely to look very wrong in the meantime.
 
 **switch.predbat_metric_pv_calibration_enable** When turned On (the default), Predbat will use your historical solar generation data to calibrate your PV production estimates on a slot duration (default 30 minute) basis.<BR>
 This can be useful to adjust for your systems real performance.<BR>

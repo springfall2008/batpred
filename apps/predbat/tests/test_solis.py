@@ -18,6 +18,7 @@ from solis import SOLIS_CID_STORAGE_MODE, SOLIS_BIT_GRID_CHARGING, SOLIS_BIT_TOU
 from solis import SOLIS_CID_ALLOW_EXPORT, SOLIS_ALLOW_EXPORT_ON, SOLIS_ALLOW_EXPORT_OFF, SOLIS_CID_BATTERY_RESERVE_SOC
 from solis import SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT
 from solis import SOLIS_CID_POWER_LIMIT, SOLIS_BIT_BACKUP_MODE
+from solis import SOLIS_READ_ENDPOINT, SOLIS_READ_BATCH_ENDPOINT, SOLIS_CONTROL_ENDPOINT, SOLIS_INVERTER_LIST_ENDPOINT, SOLIS_INVERTER_DETAIL_ENDPOINT
 from solis import get_solis_mode_enum, compute_solis_mode_value
 from solis import ENUM_OTHER, ENUM_SELF_USE, ENUM_SELF_USE_NO_GRID_CHARGING, ENUM_FEED_IN_PRIORITY, ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING
 from solis import SOLIS_BIT_SELF_USE, SOLIS_BIT_FEED_IN_PRIORITY, SOLIS_BIT_GRID_CHARGING, SOLIS_BIT_OFF_GRID
@@ -884,6 +885,63 @@ async def test_oauth_execute_request_refreshes_before_call():
     return failed
 
 
+async def _always_valid_token():
+    """Pretend the OAuth token is already valid so no refresh is attempted."""
+    return True
+
+
+async def test_oauth_endpoint_namespace_translation():
+    """OAuth mode must post to the gateway's /api/access_data|control_device routes.
+
+    Regression test for FD#1538: the HMAC host's paths are not served on
+    api-oauth2.soliscloud.com (they return an XML <ForbiddenException>), so an
+    OAuth-only instance never discovered its inverter and published no entities.
+    """
+    failed = False
+
+    expected = {
+        SOLIS_READ_ENDPOINT: "/api/control_device/atRead",
+        SOLIS_READ_BATCH_ENDPOINT: "/api/control_device/atReadBatch",
+        SOLIS_CONTROL_ENDPOINT: "/api/control_device/control",
+        SOLIS_INVERTER_LIST_ENDPOINT: "/api/access_data/inverterList",
+        SOLIS_INVERTER_DETAIL_ENDPOINT: "/api/access_data/inverterDetail",
+    }
+
+    for hmac_path, oauth_path in expected.items():
+        api = MockSolisAPI()
+        api.auth_method = "oauth"
+        api.access_token = "tok"
+        api.base_url = "https://solis.test"
+        api.check_and_refresh_oauth_token = _always_valid_token
+        api.session = _RecordingSession(_FakeResponse(status=200, payload={"code": "0", "data": {}}))
+
+        await api._execute_request(hmac_path, {})
+
+        got = api.session.post_calls[0]["url"]
+        if got != "https://solis.test" + oauth_path:
+            print("ERROR: OAuth {} should post to {}, got {}".format(hmac_path, oauth_path, got))
+            failed = True
+
+    # api-key mode must keep the HMAC paths untouched.
+    api = MockSolisAPI()
+    api.auth_method = "api_key"
+    api.api_key = "key"
+    api.api_secret = "secret"
+    api.base_url = "https://solis.hmac"
+    api.session = _RecordingSession(_FakeResponse(status=200, payload={"code": "0", "data": {}}))
+
+    await api._execute_request(SOLIS_INVERTER_LIST_ENDPOINT, {})
+
+    got = api.session.post_calls[0]["url"]
+    if got != "https://solis.hmac" + SOLIS_INVERTER_LIST_ENDPOINT:
+        print("ERROR: api-key mode must not translate endpoints, got {}".format(got))
+        failed = True
+
+    if not failed:
+        print("PASSED: OAuth endpoint namespace translation (api-key paths unchanged)")
+    return failed
+
+
 async def test_oauth_execute_request_aborts_when_token_missing():
     """In OAuth mode, _execute_request must fail fast (no HTTP) when no access_token is available,
     even if check_and_refresh_oauth_token() reports success (e.g. refresh skipped — missing env)."""
@@ -958,6 +1016,7 @@ def run_solis_tests(my_predbat):
         failed |= test_solis_activated_with_api_key()
         failed |= test_solis_activated_with_oauth_token()
         failed |= asyncio.run(test_oauth_execute_request_refreshes_before_call())
+        failed |= asyncio.run(test_oauth_endpoint_namespace_translation())
         failed |= asyncio.run(test_oauth_execute_request_aborts_when_token_missing())
         failed |= asyncio.run(test_with_retry_aborts_on_oauth_failed())
         failed |= asyncio.run(test_read_cid())

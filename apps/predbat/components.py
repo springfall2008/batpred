@@ -34,6 +34,7 @@ from web import WebInterface
 from ha import HAInterface, HAHistory
 from db_manager import DatabaseManager
 from fox import FoxAPI
+from deye import DeyeAPI
 from enphase import EnphaseAPI
 from kraken import KrakenAPI
 from web_mcp import PredbatMCPServer
@@ -244,6 +245,31 @@ COMPONENT_LIST = {
                 "config": "fox_token_hash",
             },
         },
+        "phase": 1,
+    },
+    "deye": {
+        "class": DeyeAPI,
+        "name": "DEYE Cloud",
+        "event_filter": "predbat_deye_",
+        "args": {
+            "app_id": {"required": False, "config": "deye_app_id"},
+            "app_secret": {"required": False, "config": "deye_app_secret"},
+            "username": {"required": False, "config": "deye_username"},
+            "password": {"required": False, "config": "deye_password"},
+            "data_center": {"required": False, "default": "eu", "config": "deye_data_center"},
+            "company_id": {"required": False, "config": "deye_company_id"},
+            "auth_method": {"required": False, "default": "app_credentials", "config": "deye_auth_method"},
+            "token_expires_at": {"required": False, "config": "deye_token_expires_at"},
+            "token_hash": {"required": False, "config": "deye_token_hash"},
+            "inverter_sn": {"required": False, "config": "deye_inverter_sn"},
+            "automatic": {"required": False, "default": False, "config": "deye_automatic"},
+            "automatic_ignore_pv": {"required": False, "default": False, "config": "deye_automatic_ignore_pv"},
+        },
+        # Gate activation on having at least one auth path — app credentials (app_id,
+        # self-hosted add-on) OR an injected SaaS token (token_hash). Without this the
+        # component would start for every instance since all individual args are
+        # optional to allow either auth mode.
+        "required_or": ["app_id", "token_hash"],
         "phase": 1,
     },
     "enphase": {
