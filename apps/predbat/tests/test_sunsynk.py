@@ -25,8 +25,6 @@ import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
-import pytest
-
 import sunsynk
 from sunsynk import SunsynkAPI, MockBase, SUNSYNK_REFRESH_REALTIME
 from tests.test_infra import run_async, create_aiohttp_mock_response, create_aiohttp_mock_session
@@ -67,6 +65,51 @@ FLOW_RESPONSE = {
 }
 
 BATTERY_RESPONSE = {"code": 0, "success": True, "data": {"power": 170, "capacity": "100.0", "soc": "100.0", "temp": "17.0", "voltage": "639.8"}}
+
+
+class FakeStorage:
+    """In-memory fake of the Storage component, for _save_cache/_load_cache/load_cached_data
+    tests - mirrors test_sigenergy.py's FakeStorage."""
+
+    def __init__(self):
+        """Initialise an empty in-memory store keyed by (module, filename)."""
+        self.data = {}
+
+    async def save(self, module, filename, data, format="yaml", expiry=None):
+        """Store data under (module, filename), mirroring StorageBase.save's signature and return value."""
+        self.data[(module, filename)] = data
+        return True
+
+    async def load(self, module, filename):
+        """Return previously saved data for (module, filename), or None if absent."""
+        return self.data.get((module, filename))
+
+    async def age(self, module, filename):
+        """Return 0 (fresh) if data exists for (module, filename), else None."""
+        return 0 if (module, filename) in self.data else None
+
+
+class _FakeComponents:
+    """Minimal stand-in for Components, resolving get_component("storage") to a fixed FakeStorage -
+    lets a plain SunsynkAPI(MockBase(), ...) pick up a working storage via ComponentBase.storage's
+    real `self.base.components.get_component("storage")` lookup, without a bespoke Mock subclass."""
+
+    def __init__(self, storage):
+        """Bind the FakeStorage instance this fake registry will hand back."""
+        self._storage = storage
+
+    def get_component(self, name):
+        """Return the bound storage component for 'storage', None for anything else."""
+        return self._storage if name == "storage" else None
+
+
+def _sunsynk_api_with_storage(storage=None):
+    """Build a SunsynkAPI wired to a FakeStorage (shared if given) via base.components, for
+    _save_cache/_load_cache/load_cached_data tests. Returns (api, storage)."""
+    storage = storage if storage is not None else FakeStorage()
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True)
+    api.base.components = _FakeComponents(storage)
+    return api, storage
 
 
 def test_get_headers_uses_bearer_token():
@@ -1015,6 +1058,94 @@ def test_run_uses_cached_device_list_on_transient_api_failure():
     api.publish_data.assert_awaited_once()
 
 
+def test_sunsynk_load_cached_data_no_storage_leaves_defaults():
+    """load_cached_data() is a no-op (keeps empty defaults) when there is no storage
+    component wired up - matches _save_cache()/_load_cache()'s own no-storage no-op
+    discipline (both already return early without a storage component)."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True)
+    assert api.storage is None
+
+    run_async(api.load_cached_data())
+
+    assert api.device_list == []
+    assert api.device_values == {"flow": {}, "battery": {}, "grid": {}, "input": {}, "output": {}}
+
+
+def test_sunsynk_save_then_load_cache_restores_state():
+    """Fix 2: load_cached_data() restores device_list/device_values (and their data_age) from
+    a previously-saved cache on a FRESH instance, proving a Predbat restart no longer throws
+    away the persisted cache and cold-re-polls the Sunsynk Connect API immediately - three
+    reviewers flagged that _load_cache() existed but was never called anywhere."""
+    storage = FakeStorage()
+
+    api1, _ = _sunsynk_api_with_storage(storage)
+    api1.device_list = [{"sn": "2504040106", "model": "SUN-50KW-SG01HP3-EU-BM4", "plant_id": 505825}]
+    api1.device_values = {"flow": {}, "battery": {"2504040106": {"soc": "80.0"}}, "grid": {}, "input": {}, "output": {}}
+    run_async(api1._save_cache("device_list", api1.device_list))
+    run_async(api1._save_cache("device_values", api1.device_values))
+
+    # A brand new instance, as a restart would create - starts with the usual empty defaults.
+    api2, _ = _sunsynk_api_with_storage(storage)
+    assert api2.device_list == []
+    assert api2.data_age == {}
+
+    run_async(api2.load_cached_data())
+
+    assert api2.device_list == [{"sn": "2504040106", "model": "SUN-50KW-SG01HP3-EU-BM4", "plant_id": 505825}]
+    assert api2.device_values["battery"]["2504040106"]["soc"] == "80.0"
+    assert "device_list" in api2.data_age
+    assert "device_values" in api2.data_age
+
+
+def test_run_first_calls_load_cached_data_before_get_device_list():
+    """Fix 2: run() must restore cached device data BEFORE the first get_device_list() poll on
+    a cold start (first=True), mirroring fox.py's run(). Without this ordering the cache restore
+    is either never wired in at all, or wired in too late to avoid an immediate re-poll."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True, plant_id=505825)
+    calls = []
+
+    async def fake_load_cached_data():
+        """Record that load_cached_data() ran, in call order."""
+        calls.append("load_cached_data")
+
+    async def fake_get_device_list():
+        """Record that get_device_list() ran, in call order, and return one discovered device."""
+        calls.append("get_device_list")
+        return [{"sn": "SN1", "model": "M", "plant_id": 505825}]
+
+    api.load_cached_data = fake_load_cached_data
+    api.get_device_list = fake_get_device_list
+    api.device_list = [{"sn": "SN1", "model": "M", "plant_id": 505825}]
+    api.publish_data = AsyncMock()
+    api.automatic_config = AsyncMock()
+
+    result = run_async(api.run(5, True))
+
+    assert result is True
+    assert calls == ["load_cached_data", "get_device_list"]
+
+
+def test_run_second_cycle_does_not_call_load_cached_data():
+    """Fix 2: run() must only restore cached data on the FIRST cycle (first=True), not on
+    every subsequent cycle - a restart-only concern, not a per-cycle one."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True, plant_id=505825)
+    devices = [{"sn": "SN1", "model": "M", "plant_id": 505825}]
+    api.get_device_list = AsyncMock(return_value=devices)
+    api.device_list = devices
+    api.publish_data = AsyncMock()
+    api.automatic_config = AsyncMock()
+    api.load_cached_data = AsyncMock()
+
+    run_async(api.run(5, True))
+    api.load_cached_data.assert_awaited_once()
+    api.load_cached_data.reset_mock()
+
+    result = run_async(api.run(5, False))
+
+    assert result is True
+    api.load_cached_data.assert_not_awaited()
+
+
 # --- Task 13: standalone CLI harness RSA login helpers ---------------------------------------
 #
 # These test the payload/sign CONSTRUCTION only (no live network call - the harness itself is
@@ -1071,13 +1202,18 @@ def test_sunsynk_rsa_encrypt_password_missing_cryptography_raises_clear_error():
     real_import = builtins.__import__
 
     def fake_import(name, *args, **kwargs):
+        """Raise ImportError for `cryptography` (and its submodules), else defer to the real import."""
         if name == "cryptography" or name.startswith("cryptography."):
             raise ImportError("No module named 'cryptography'")
         return real_import(name, *args, **kwargs)
 
     with patch("builtins.__import__", side_effect=fake_import):
-        with pytest.raises(RuntimeError, match="pip install cryptography"):
+        try:
             sunsynk._sunsynk_rsa_encrypt_password("RAWKEY", "pw")
+        except RuntimeError as error:
+            assert "pip install cryptography" in str(error)
+        else:
+            raise AssertionError("expected RuntimeError for missing cryptography")
 
 
 def test_sunsynk_module_has_no_top_level_cryptography_import():
@@ -1098,3 +1234,82 @@ def test_sunsynk_module_has_no_top_level_cryptography_import():
         elif isinstance(node, ast.ImportFrom):
             names = [node.module or ""]
         assert not any(name == "cryptography" or name.startswith("cryptography.") for name in names), "cryptography must not be imported at module level"
+
+
+def run_sunsynk_tests(my_predbat):
+    """Run all Sunsynk Connect API component tests (Tasks 8-13, plus cache-restore Fix 2)."""
+    failed = False
+    for name, fn in [
+        ("get_headers_uses_bearer_token", test_get_headers_uses_bearer_token),
+        ("initialize_stores_key_as_access_token_regardless_of_auth_method", test_initialize_stores_key_as_access_token_regardless_of_auth_method),
+        ("initialize_reapplies_token_hash_after_oauth_init", test_initialize_reapplies_token_hash_after_oauth_init),
+        ("initialize_normalizes_inverter_sn", test_initialize_normalizes_inverter_sn),
+        ("is_alive_requires_started_and_token", test_is_alive_requires_started_and_token),
+        ("request_get_func_success_returns_parsed_json", test_request_get_func_success_returns_parsed_json),
+        ("request_get_func_401_sets_needs_reauth_and_does_not_retry", test_request_get_func_401_sets_needs_reauth_and_does_not_retry),
+        ("request_get_func_403_sets_needs_reauth", test_request_get_func_403_sets_needs_reauth),
+        ("request_get_func_200_with_success_false_is_treated_as_failure", test_request_get_func_200_with_success_false_is_treated_as_failure),
+        ("get_battery_treats_200_success_false_as_failure_and_does_not_cache", test_get_battery_treats_200_success_false_as_failure_and_does_not_cache),
+        ("get_device_list_uses_configured_plant_id_and_returns_devices", test_get_device_list_uses_configured_plant_id_and_returns_devices),
+        ("get_device_list_discovers_single_plant_when_plant_id_not_configured", test_get_device_list_discovers_single_plant_when_plant_id_not_configured),
+        ("get_device_list_uses_first_plant_when_multiple_found", test_get_device_list_uses_first_plant_when_multiple_found),
+        ("get_device_list_filters_by_inverter_sn_filter", test_get_device_list_filters_by_inverter_sn_filter),
+        ("get_device_list_returns_none_on_api_failure", test_get_device_list_returns_none_on_api_failure),
+        ("get_device_list_returns_none_when_no_plants_found", test_get_device_list_returns_none_when_no_plants_found),
+        ("get_device_list_caches_within_static_refresh_window", test_get_device_list_caches_within_static_refresh_window),
+        ("get_plant_flow_parses_flow_shape", test_get_plant_flow_parses_flow_shape),
+        ("get_battery_parses_battery_shape", test_get_battery_parses_battery_shape),
+        ("get_grid_requests_expected_path", test_get_grid_requests_expected_path),
+        ("get_input_requests_expected_path", test_get_input_requests_expected_path),
+        ("get_output_requests_expected_path", test_get_output_requests_expected_path),
+        ("get_battery_returns_none_on_api_failure", test_get_battery_returns_none_on_api_failure),
+        ("realtime_reads_cache_within_refresh_window", test_realtime_reads_cache_within_refresh_window),
+        ("realtime_reads_are_cached_independently_per_sn", test_realtime_reads_are_cached_independently_per_sn),
+        ("realtime_cache_freshness_is_per_bucket_and_sn_not_a_shared_clock", test_realtime_cache_freshness_is_per_bucket_and_sn_not_a_shared_clock),
+        ("sign_mapping_single_inverter_discharge_and_import", test_sign_mapping_single_inverter_discharge_and_import),
+        ("sign_mapping_single_inverter_charge_and_export", test_sign_mapping_single_inverter_charge_and_export),
+        ("publish_data_single_inverter_also_publishes_soc_pv_load_and_battery_extras", test_publish_data_single_inverter_also_publishes_soc_pv_load_and_battery_extras),
+        ("publish_data_multi_inverter_avoids_double_count_and_warns_on_per_sn_signs", test_publish_data_multi_inverter_avoids_double_count_and_warns_on_per_sn_signs),
+        ("publish_data_multi_inverter_publishes_load_power_per_sn", test_publish_data_multi_inverter_publishes_load_power_per_sn),
+        ("multi_inverter_sn_does_not_refetch_battery_that_already_failed", test_multi_inverter_sn_does_not_refetch_battery_that_already_failed),
+        ("publish_data_single_inverter_skips_device_with_missing_sn_and_warns", test_publish_data_single_inverter_skips_device_with_missing_sn_and_warns),
+        ("publish_data_multi_inverter_skips_device_with_missing_sn_and_warns", test_publish_data_multi_inverter_skips_device_with_missing_sn_and_warns),
+        ("publish_data_multi_inverter_warns_when_flow_fetch_fails", test_publish_data_multi_inverter_warns_when_flow_fetch_fails),
+        ("publish_data_with_no_devices_logs_warning_and_publishes_nothing", test_publish_data_with_no_devices_logs_warning_and_publishes_nothing),
+        ("automatic_config_maps_two_inverters", test_automatic_config_maps_two_inverters),
+        ("automatic_config_respects_automatic_ignore_pv", test_automatic_config_respects_automatic_ignore_pv),
+        ("automatic_config_logs_one_structured_json_line_with_the_full_map", test_automatic_config_logs_one_structured_json_line_with_the_full_map),
+        ("automatic_config_no_inverters_warns_and_sets_nothing", test_automatic_config_no_inverters_warns_and_sets_nothing),
+        ("automatic_config_skips_device_with_missing_sn_and_warns", test_automatic_config_skips_device_with_missing_sn_and_warns),
+        ("sunsynk_registered_in_inverter_def", test_sunsynk_registered_in_inverter_def),
+        ("component_registered", test_component_registered),
+        ("component_registered_key_required_so_it_does_not_start_fleet_wide", test_component_registered_key_required_so_it_does_not_start_fleet_wide),
+        ("component_registry_config_schema_has_sunsynk_keys", test_component_registry_config_schema_has_sunsynk_keys),
+        ("run_first_publishes_and_runs_automatic_config_when_automatic", test_run_first_publishes_and_runs_automatic_config_when_automatic),
+        ("run_not_automatic_skips_automatic_config", test_run_not_automatic_skips_automatic_config),
+        ("run_no_devices_returns_false_and_skips_publish", test_run_no_devices_returns_false_and_skips_publish),
+        ("run_second_cycle_skips_automatic_config_when_device_set_unchanged", test_run_second_cycle_skips_automatic_config_when_device_set_unchanged),
+        ("run_reinvokes_automatic_config_when_device_set_changes", test_run_reinvokes_automatic_config_when_device_set_changes),
+        ("run_continues_when_publish_data_raises", test_run_continues_when_publish_data_raises),
+        ("run_continues_when_automatic_config_raises", test_run_continues_when_automatic_config_raises),
+        ("run_uses_cached_device_list_on_transient_api_failure", test_run_uses_cached_device_list_on_transient_api_failure),
+        ("sunsynk_load_cached_data_no_storage_leaves_defaults", test_sunsynk_load_cached_data_no_storage_leaves_defaults),
+        ("sunsynk_save_then_load_cache_restores_state", test_sunsynk_save_then_load_cache_restores_state),
+        ("run_first_calls_load_cached_data_before_get_device_list", test_run_first_calls_load_cached_data_before_get_device_list),
+        ("run_second_cycle_does_not_call_load_cached_data", test_run_second_cycle_does_not_call_load_cached_data),
+        ("sunsynk_rsa_encrypt_password_round_trips_with_matching_private_key", test_sunsynk_rsa_encrypt_password_round_trips_with_matching_private_key),
+        ("sunsynk_build_login_payload_shape_and_sign", test_sunsynk_build_login_payload_shape_and_sign),
+        ("sunsynk_rsa_encrypt_password_missing_cryptography_raises_clear_error", test_sunsynk_rsa_encrypt_password_missing_cryptography_raises_clear_error),
+        ("sunsynk_module_has_no_top_level_cryptography_import", test_sunsynk_module_has_no_top_level_cryptography_import),
+    ]:
+        try:
+            if fn():
+                print(f"  FAILED: sunsynk.{name}")
+                failed = True
+        except Exception as e:
+            print(f"  EXCEPTION in sunsynk.{name}: {e}")
+            import traceback
+
+            traceback.print_exc()
+            failed = True
+    return failed

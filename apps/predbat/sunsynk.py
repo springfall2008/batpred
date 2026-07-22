@@ -435,6 +435,32 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         self.data_age[key] = datetime.now(timezone.utc) - timedelta(minutes=age)
         return data
 
+    async def load_cached_data(self):
+        """
+        Restore cached device data (device_list, device_values) from storage on startup.
+
+        Mirrors fox.py's load_cached_data(): reads back each category of data _save_cache()
+        previously persisted, recording its age in self.data_age via _load_cache() so the
+        age-based refresh logic (_needs_refresh()) can decide whether a fresh API poll is
+        still needed. Without this, a Predbat restart silently discarded the persisted cache
+        and cold-re-polled the Sunsynk Connect API on the very next cycle - no reboot-storm
+        protection. device_settings is a listed cache key (SUNSYNK_CACHE_KEYS) but is not yet
+        written by _save_cache() anywhere (device settings read/write land in a later task),
+        so it is deliberately not restored here either - restoring it now would be a no-op.
+        """
+        if not self.storage:
+            return
+
+        device_list = await self._load_cache("device_list")
+        if device_list is not None:
+            self.device_list = device_list
+
+        device_values = await self._load_cache("device_values")
+        if device_values is not None:
+            self.device_values = device_values
+
+        self.log("Sunsynk: Restored cached data from storage for keys {}".format(sorted(self.data_age.keys())))
+
     async def publish_data(self):
         """
         Publish Sunsynk telemetry as Predbat entities via dashboard_item(), fox.py-style.
@@ -781,7 +807,14 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         inverter SNs has changed since the last cycle (e.g. an inverter was added to or removed
         from the Sunsynk account), so newly-discovered inverters get wired up without requiring
         a Predbat restart.
+
+        On the first cycle, cached device data is restored from storage (load_cached_data())
+        BEFORE the first get_device_list() call, fox.py-style, so a quick restart resumes from
+        the persisted cache rather than cold-re-polling the Sunsynk API immediately.
         """
+        if first:
+            await self.load_cached_data()
+
         result = await self.get_device_list()
         if result:
             self.log("Sunsynk: API Found {} devices".format(len(result)))
