@@ -80,7 +80,8 @@ def parse_date_time(dt_str):
         return None
 
 
-CDN_BLOCK_MARKERS = ("cloudfront", "request blocked", "the request could not be satisfied", "access denied", "<html")
+CDN_BLOCK_MARKERS = ("cloudfront", "request blocked", "the request could not be satisfied")
+HTML_DOCUMENT_PREFIXES = ("<!doctype", "<html")
 
 
 def is_edge_block_body(text):
@@ -91,8 +92,14 @@ def is_edge_block_body(text):
     "Request blocked" - is edge rate limiting, not a credential problem, so the cached
     token must be kept rather than discarded and immediately re-minted.
 
-    Detection is deliberately positive: a 403 we cannot identify as a CDN page keeps the
-    existing "refresh the token and retry" behaviour, which recovers genuinely revoked
+    Two conditions must both hold: the body must not parse as JSON (anything the API
+    itself produces is JSON), and it must look like an HTML document or name a known CDN.
+    Matching on wording alone would misclassify a genuine JSON error that happens to say
+    something like "access denied", which would keep an invalid token forever - the same
+    permanent lockout this check exists to prevent, arrived at from the other direction.
+
+    Detection is deliberately conservative: a 403 we cannot identify as a CDN page keeps
+    the existing "refresh the token and retry" behaviour, which recovers genuinely revoked
     tokens without needing a restart.
 
     Args:
@@ -103,8 +110,15 @@ def is_edge_block_body(text):
     """
     if not isinstance(text, str) or not text:
         return False
-    lowered = text.lower()
-    return any(marker in lowered for marker in CDN_BLOCK_MARKERS)
+    try:
+        json.loads(text)
+    except (ValueError, TypeError):
+        pass
+    else:
+        # A parseable JSON body came from the API, not from an edge appliance
+        return False
+    stripped = text.lstrip().lower()
+    return stripped.startswith(HTML_DOCUMENT_PREFIXES) or any(marker in stripped for marker in CDN_BLOCK_MARKERS)
 
 
 api_token_query = """mutation {{
