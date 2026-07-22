@@ -6,13 +6,14 @@
 # Test Sunsynk API skeleton + Bearer request layer
 # -----------------------------------------------------------------------------
 
-"""Tests for the SunsynkAPI component (Tasks 8-11).
+"""Tests for the SunsynkAPI component (Tasks 8-12).
 
 Task 8 covers the injected-token Bearer request layer. Task 9 adds device discovery
 (single-plant scoped) and read-only telemetry (flow/battery/grid/input/output). Task 10 adds
 publish_data() - entity publishing with the VERIFIED sign mapping. Task 11 adds
 automatic_config() - the set_arg map wiring Predbat to the entities publish_data() emits.
-Control writes land in a later task and are not tested here.
+Task 12 adds run() plus COMPONENT_LIST/config.py registration. Control writes land in a later
+task and are not tested here.
 """
 
 import json
@@ -761,3 +762,152 @@ def test_automatic_config_skips_device_with_missing_sn_and_warns():
     assert any("skipping device with missing SN" in message for message in logs)
     assert api.base.args["num_inverters"] == 1
     assert api.base.args["soc_percent"] == ["sensor.predbat_sunsynk_2504040164_battery_soc"]
+
+
+# -----------------------------------------------------------------------------
+# Task 12: run() loop + COMPONENT_LIST/config.py registration
+# -----------------------------------------------------------------------------
+
+
+def test_component_registered():
+    """sunsynk is registered in COMPONENT_LIST, wired to SunsynkAPI with the expected
+    event_filter, matching how fox/deye/solis register themselves.
+
+    Imports ``predbat`` before ``components`` - components.py -> web.py -> predbat.py ->
+    components.py is a genuine circular import, and entering it via a bare
+    `from components import ...` (before anything has imported predbat) fails because
+    Components/COMPONENT_LIST aren't defined yet in the partially-initialised components
+    module when predbat.py re-enters it. unit_test.py's real suite avoids this by importing
+    predbat first (`from predbat import PredBat`) before any test module runs; mirroring
+    that order here keeps this test robust when run standalone via pytest too."""
+    import predbat  # noqa: F401 - import order matters, see docstring above
+
+    from components import COMPONENT_LIST
+
+    assert "sunsynk" in COMPONENT_LIST
+    entry = COMPONENT_LIST["sunsynk"]
+    assert entry["class"] is SunsynkAPI
+    assert entry["event_filter"] == "predbat_sunsynk_"
+    assert entry["phase"] == 1
+    assert entry["args"]["key"]["config"] == "sunsynk_key"
+    assert entry["args"]["plant_id"]["config"] == "sunsynk_plant_id"
+    assert entry["args"]["automatic"]["config"] == "sunsynk_automatic"
+    assert entry["args"]["automatic"]["default"] is False
+
+
+def test_component_registry_config_schema_has_sunsynk_keys():
+    """APPS_SCHEMA declares the sunsynk_* keys, mirroring fox_*/solis_*/deye_*."""
+    from config import APPS_SCHEMA
+
+    assert APPS_SCHEMA["sunsynk_key"] == {"type": "string", "empty": False}
+    assert APPS_SCHEMA["sunsynk_automatic"] == {"type": "boolean"}
+    assert APPS_SCHEMA["sunsynk_plant_id"] == {"type": "string", "empty": False}
+
+
+def test_run_first_publishes_and_runs_automatic_config_when_automatic():
+    """First run: get_device_list() populates devices, publish_data() runs, and
+    automatic_config() fires because first=True and automatic=True."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True, plant_id=505825)
+    api.get_device_list = AsyncMock(return_value=[{"sn": "SN1", "model": "M", "plant_id": 505825}])
+    api.device_list = [{"sn": "SN1", "model": "M", "plant_id": 505825}]
+    api.publish_data = AsyncMock()
+    api.automatic_config = AsyncMock()
+
+    result = run_async(api.run(5, True))
+
+    assert result is True
+    api.publish_data.assert_awaited_once()
+    api.automatic_config.assert_awaited_once()
+    assert api._known_sns == {"SN1"}
+
+
+def test_run_not_automatic_skips_automatic_config():
+    """When self.automatic is False, automatic_config() must never be called, even on first."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=False, plant_id=505825)
+    api.get_device_list = AsyncMock(return_value=[{"sn": "SN1", "model": "M", "plant_id": 505825}])
+    api.device_list = [{"sn": "SN1", "model": "M", "plant_id": 505825}]
+    api.publish_data = AsyncMock()
+    api.automatic_config = AsyncMock()
+
+    result = run_async(api.run(5, True))
+
+    assert result is True
+    api.publish_data.assert_awaited_once()
+    api.automatic_config.assert_not_awaited()
+
+
+def test_run_no_devices_returns_false_and_skips_publish():
+    """No discovered devices (empty self.device_list): run() logs an Error: and returns False
+    without calling publish_data() or automatic_config()."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True)
+    api.get_device_list = AsyncMock(return_value=None)
+    api.device_list = []
+    api.publish_data = AsyncMock()
+    api.automatic_config = AsyncMock()
+    logs = []
+    api.log = logs.append
+
+    result = run_async(api.run(5, True))
+
+    assert result is False
+    api.publish_data.assert_not_awaited()
+    api.automatic_config.assert_not_awaited()
+    assert any("No devices found" in message for message in logs)
+
+
+def test_run_second_cycle_skips_automatic_config_when_device_set_unchanged():
+    """On a later cycle (first=False) with the same discovered SNs as last time,
+    automatic_config() must NOT be re-invoked."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True, plant_id=505825)
+    devices = [{"sn": "SN1", "model": "M", "plant_id": 505825}]
+    api.get_device_list = AsyncMock(return_value=devices)
+    api.device_list = devices
+    api.publish_data = AsyncMock()
+    api.automatic_config = AsyncMock()
+
+    run_async(api.run(5, True))  # first cycle - seeds _known_sns, fires automatic_config
+    api.automatic_config.reset_mock()
+
+    result = run_async(api.run(5, False))  # second cycle - same device set
+
+    assert result is True
+    api.automatic_config.assert_not_awaited()
+
+
+def test_run_reinvokes_automatic_config_when_device_set_changes():
+    """When the discovered device set changes between cycles (e.g. an inverter is added),
+    automatic_config() fires again even though first=False."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True, plant_id=505825)
+    devices_before = [{"sn": "SN1", "model": "M", "plant_id": 505825}]
+    devices_after = [{"sn": "SN1", "model": "M", "plant_id": 505825}, {"sn": "SN2", "model": "M", "plant_id": 505825}]
+    api.get_device_list = AsyncMock(return_value=devices_before)
+    api.device_list = devices_before
+    api.publish_data = AsyncMock()
+    api.automatic_config = AsyncMock()
+
+    run_async(api.run(5, True))
+    api.automatic_config.reset_mock()
+
+    api.get_device_list = AsyncMock(return_value=devices_after)
+    api.device_list = devices_after
+    result = run_async(api.run(5, False))
+
+    assert result is True
+    api.automatic_config.assert_awaited_once()
+    assert api._known_sns == {"SN1", "SN2"}
+
+
+def test_run_uses_cached_device_list_on_transient_api_failure():
+    """Mirrors fox.py's run(): if get_device_list() returns None (transient API failure) but a
+    previously-cached self.device_list is still populated, run() must still publish from the
+    cached list rather than reporting "no devices"."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True, plant_id=505825)
+    api.device_list = [{"sn": "SN1", "model": "M", "plant_id": 505825}]  # pre-populated cache
+    api.get_device_list = AsyncMock(return_value=None)  # this cycle's poll failed
+    api.publish_data = AsyncMock()
+    api.automatic_config = AsyncMock()
+
+    result = run_async(api.run(5, True))
+
+    assert result is True
+    api.publish_data.assert_awaited_once()

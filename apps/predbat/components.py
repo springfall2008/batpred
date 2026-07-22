@@ -35,6 +35,7 @@ from ha import HAInterface, HAHistory
 from db_manager import DatabaseManager
 from fox import FoxAPI
 from deye import DeyeAPI
+from sunsynk import SunsynkAPI
 from enphase import EnphaseAPI
 from kraken import KrakenAPI
 from web_mcp import PredbatMCPServer
@@ -482,6 +483,24 @@ COMPONENT_LIST = {
         "required_or": ["api_key", "access_token"],
         "phase": 1,
         "can_restart": True,
+    },
+    "sunsynk": {
+        "class": SunsynkAPI,
+        "name": "Sunsynk Connect",
+        "event_filter": "predbat_sunsynk_",
+        "phase": 1,
+        "can_restart": True,
+        "args": {
+            "key": {"required": False, "config": "sunsynk_key"},
+            "inverter_sn": {"required": False, "config": "sunsynk_inverter_sn"},
+            "plant_id": {"required": False, "config": "sunsynk_plant_id"},
+            "automatic": {"required": False, "default": False, "config": "sunsynk_automatic"},
+            "automatic_ignore_pv": {"required": False, "default": False, "config": "sunsynk_automatic_ignore_pv"},
+            "auth_method": {"required": False, "config": "sunsynk_auth_method"},
+            "token_expires_at": {"required": False, "config": "sunsynk_token_expires_at"},
+            "token_hash": {"required": False, "config": "sunsynk_token_hash"},
+            "base_url": {"required": False, "default": "https://api.sunsynk.net", "config": "sunsynk_base_url"},
+        },
     },
     "load_ml": {
         "class": LoadMLComponent,

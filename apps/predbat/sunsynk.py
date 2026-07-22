@@ -15,9 +15,9 @@ resulting Bearer access token, so ``SunsynkAPI`` never performs RSA signing or l
 itself here - it only issues plain Bearer-authenticated requests and flags
 ``needs_reauth`` when the injected token is rejected, for the SaaS side to notice and
 refresh. Device discovery and read-only telemetry are implemented here (Task 9), along with
-entity publishing via ``publish_data()`` (Task 10) and the automatic-config set_arg wiring via
-``automatic_config()`` (Task 11); the run loop/COMPONENT_LIST registration and control writes
-are added in later tasks.
+entity publishing via ``publish_data()`` (Task 10), the automatic-config set_arg wiring via
+``automatic_config()`` (Task 11), and the ``run()`` loop plus ``COMPONENT_LIST``/config
+registration (Task 12); control writes are added in a later task.
 """
 
 import asyncio
@@ -83,6 +83,12 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         self.device_values = {"flow": {}, "battery": {}, "grid": {}, "input": {}, "output": {}}
         self.device_settings = {}
         self.data_age = {}
+
+        # Tracks the set of discovered inverter SNs across run() cycles, so run() can tell
+        # apart "device set changed since last cycle" (re-run automatic_config even when
+        # first=False - e.g. a new inverter was added to the account) from "same devices as
+        # last time" (skip automatic_config, first=False already covers the initial wiring).
+        self._known_sns = set()
 
         # Initialise OAuth bookkeeping (expiry tracking, provider_name etc.) for consistency
         # with fox.py/deye.py, even though Sunsynk's injected-token model means refreshing is
@@ -654,14 +660,24 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         names them here so they are wired up the moment they appear, mirroring how fox.py/
         deye.py/solis.py all name control entities ahead of the write path landing.
 
-        battery_power/grid_power already carry the VERIFIED sign (predbat convention:
-        discharge/export +ve - see _flow_signed_powers()) as published by publish_data(), so -
-        unlike solis.py's battery_power_invert or fox.py's grid_power_invert - no invert flag
-        is needed here.
+        battery_power/grid_power carry the VERIFIED sign (predbat convention: discharge/
+        export +ve - see _flow_signed_powers()) ONLY for a single-inverter plant and for the
+        multi-inverter site-level summary - both are sourced from plant flow's batTo/toGrid
+        direction booleans, the one part of Task 10's sign mapping that was actually verified
+        against live data (Risk 5). So - unlike solis.py's battery_power_invert or fox.py's
+        grid_power_invert - no invert flag is needed for THOSE two cases. For a MULTI-inverter
+        plant, though, the per-SN battery_power/grid_power this method wires up instead come
+        from the per-SN battery/grid endpoints (_publish_multi_inverter_sn()), whose sign is
+        UNCONFIRMED (Task 10's open risk5/risk6 - see that method's TODOs); this
+        automatic_config wiring inherits that same open risk for per-SN entities, since it
+        only names whatever publish_data() actually publishes under those ids without
+        re-verifying their sign - do not treat per-SN battery_power/grid_power as verified.
 
         Callers must gate this on self.automatic themselves, mirroring fox.py/deye.py/
         solis.py's ``if first and self.automatic: await self.automatic_config()`` in run() -
-        this method does not check it itself. run()'s own gating call is added in a later task.
+        this method does not check it itself. run() (Task 12) performs this gating, and also
+        re-invokes automatic_config() on any cycle where the discovered device set changes
+        (not just the first run), so a newly-added inverter gets wired up without a restart.
 
         Emits a single structured Info: log line with the complete arg map (spec section 3.1)
         so the automatic-config outcome is Loki-greppable without reconstructing it from many
@@ -722,6 +738,50 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             self.set_arg(key, value)
 
         self.log(f"Info: SunsynkAPI automatic_config: {json.dumps(arg_map)}")
+
+    async def run(self, seconds, first):
+        """
+        Main run loop, fox.py/deye.py-style: refresh the discovered device list, publish
+        telemetry, and (re)wire automatic_config when appropriate.
+
+        Device discovery is polled via get_device_list() every cycle rather than gated here
+        on an explicit interval check, because get_device_list() already caches in-memory
+        (self.device_list, keyed off SUNSYNK_REFRESH_STATIC) and only hits the API once that
+        cache has actually gone stale - so calling it unconditionally here is a cheap no-op
+        on most cycles, and it also means automatic_config()'s own get_device_list() call
+        later in the SAME cycle is served from the cache this call just (re)populated, rather
+        than firing a second API request for the same data.
+
+        Mirrors fox.py's run() in checking self.device_list (not get_device_list()'s return
+        value) for the "no devices" failure path - get_device_list() returns None on API
+        failure but leaves any existing cached self.device_list untouched, so a transient API
+        error does not wrongly report "no devices" when a cached list from a previous cycle is
+        still available to publish from.
+
+        automatic_config() is gated on self.automatic (it does not check it itself - see its
+        own docstring) and is invoked on the first run OR whenever the set of discovered
+        inverter SNs has changed since the last cycle (e.g. an inverter was added to or removed
+        from the Sunsynk account), so newly-discovered inverters get wired up without requiring
+        a Predbat restart.
+        """
+        result = await self.get_device_list()
+        if result:
+            self.log("Sunsynk: API Found {} devices".format(len(result)))
+
+        if not self.device_list:
+            self.log("Error: SunsynkAPI: No devices found, unable to publish or configure")
+            return False
+
+        current_sns = {device.get("sn") for device in self.device_list}
+        device_set_changed = current_sns != self._known_sns
+        self._known_sns = current_sns
+
+        await self.publish_data()
+
+        if self.automatic and (first or device_set_changed):
+            await self.automatic_config()
+
+        return True
 
 
 class MockBase:  # pragma: no cover
