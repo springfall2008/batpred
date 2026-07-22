@@ -326,6 +326,7 @@ perc
 percnt
 peterhaban
 photovoltaics
+pinv
 pitem
 pkwh
 plenticore
@@ -469,6 +470,7 @@ twinx
 tzfile
 tzpath
 unconfigured
+unfetched
 unparseable
 unsmoothed
 unstaged

@@ -501,6 +501,9 @@ def test_publish_data_multi_inverter_avoids_double_count_and_warns_on_per_sn_sig
     api.get_battery = AsyncMock(side_effect=lambda sn: battery_by_sn[sn])
     api.get_grid = AsyncMock(side_effect=lambda sn: grid_by_sn[sn])
     api.get_input = AsyncMock(side_effect=lambda sn: input_by_sn[sn])
+    # Not under test here - the multi-inverter path also fetches per-SN output for load_power
+    # (Fix 1); mocked purely to avoid a real network call from the unmocked get_output().
+    api.get_output = AsyncMock(return_value={"pInv": 0})
 
     logs = []
     api.log = logs.append
@@ -526,6 +529,102 @@ def test_publish_data_multi_inverter_avoids_double_count_and_warns_on_per_sn_sig
 
     # Per-SN sign-uncertainty must be surfaced, not silently assumed correct.
     assert any("UNCONFIRMED" in message for message in logs)
+
+
+def test_publish_data_multi_inverter_publishes_load_power_per_sn():
+    """Multi-inverter plant: per-SN load_power must ALSO be published (Fix 1) - solis.py
+    wires load_power as a per-device entity (solis.py:1273), so without a per-SN
+    sensor.{prefix}_sunsynk_{sn}_load_power, a future automatic_config wiring step would have
+    nothing to map for multi-inverter customers. Sourced from the per-SN output endpoint
+    (inverter AC output), NOT plant flow's loadOrEpsPower (which is plant-aggregate and would
+    double-count here, same as battery/grid/pv)."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True)
+    api.device_list = [
+        {"sn": "SNA", "model": "SUN-50KW-SG01HP3-EU-BM4", "plant_id": 505825},
+        {"sn": "SNB", "model": "SUN-50KW-SG01HP3-EU-BM4", "plant_id": 505825},
+    ]
+    api.get_plant_flow = AsyncMock(return_value=dict(FLOW_RESPONSE["data"]))
+    api.get_battery = AsyncMock(return_value=dict(BATTERY_RESPONSE["data"]))
+    api.get_grid = AsyncMock(return_value={"power": 100})
+    api.get_input = AsyncMock(return_value={"pvPower": 200})
+
+    output_by_sn = {
+        "SNA": {"vip": [{"power": 300}, {"power": 400}]},  # summed per-phase breakdown
+        "SNB": {"pac": 650},  # flat fallback
+    }
+    api.get_output = AsyncMock(side_effect=lambda sn: output_by_sn[sn])
+
+    logs = []
+    api.log = logs.append
+
+    run_async(api.publish_data())
+
+    entities = api.base.entities
+    assert entities["sensor.predbat_sunsynk_sna_load_power"]["state"] == 700
+    assert entities["sensor.predbat_sunsynk_snb_load_power"]["state"] == 650
+
+    # Per-SN load source uncertainty must be surfaced too, same discipline as the sign caveat.
+    assert any("load_power source" in message and "UNCONFIRMED" in message for message in logs)
+
+
+def test_multi_inverter_sn_does_not_refetch_battery_that_already_failed():
+    """Fix 3: _publish_battery_extras() must NOT re-fetch a battery that the multi-inverter
+    path already fetched and failed (None) this cycle - a plain `None` default couldn't tell
+    'not fetched yet' apart from 'already fetched and failed', so a failing battery endpoint
+    was being hit twice per publish cycle."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True)
+    api.get_battery = AsyncMock(return_value=None)
+    api.get_grid = AsyncMock(return_value=None)
+    api.get_input = AsyncMock(return_value=None)
+    api.get_output = AsyncMock(return_value=None)
+
+    run_async(api._publish_multi_inverter_sn("sensor.predbat_sunsynk", "SNA"))
+
+    assert api.get_battery.await_count == 1
+
+
+def test_publish_data_multi_inverter_skips_device_with_missing_sn_and_warns():
+    """Fix 4: a device with no SN must be skipped (not crash on sn.lower()) AND must log a
+    Warn:, rather than silently disappearing from published entities."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True)
+    api.device_list = [
+        {"sn": None, "model": "SUN-50KW-SG01HP3-EU-BM4", "plant_id": 505825},
+        {"sn": "SNB", "model": "SUN-50KW-SG01HP3-EU-BM4", "plant_id": 505825},
+    ]
+    api.get_plant_flow = AsyncMock(return_value=None)
+    api.get_battery = AsyncMock(return_value=None)
+    api.get_grid = AsyncMock(return_value=None)
+    api.get_input = AsyncMock(return_value=None)
+    api.get_output = AsyncMock(return_value=None)
+    logs = []
+    api.log = logs.append
+
+    run_async(api.publish_data())
+
+    assert any("skipping device with missing SN" in message for message in logs)
+    assert api.get_battery.await_count == 1  # only attempted for SNB, never for the missing-sn device
+
+
+def test_publish_data_multi_inverter_warns_when_flow_fetch_fails():
+    """Fix 5: parity with the single-inverter branch - when plant flow fails, the multi-
+    inverter branch must also log a Warn: (not silently skip the site summary)."""
+    api = SunsynkAPI(MockBase(), key="tok123", automatic=True)
+    api.device_list = [
+        {"sn": "SNA", "model": "SUN-50KW-SG01HP3-EU-BM4", "plant_id": 505825},
+        {"sn": "SNB", "model": "SUN-50KW-SG01HP3-EU-BM4", "plant_id": 505825},
+    ]
+    api.get_plant_flow = AsyncMock(return_value=None)
+    api.get_battery = AsyncMock(return_value=None)
+    api.get_grid = AsyncMock(return_value=None)
+    api.get_input = AsyncMock(return_value=None)
+    api.get_output = AsyncMock(return_value=None)
+    logs = []
+    api.log = logs.append
+
+    run_async(api.publish_data())
+
+    assert any("no plant flow data available, skipping site summary" in message for message in logs)
+    assert "sensor.predbat_sunsynk_site_battery_power" not in api.base.entities
 
 
 def test_publish_data_with_no_devices_logs_warning_and_publishes_nothing():
