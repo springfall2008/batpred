@@ -62,8 +62,29 @@ def create_aiohttp_mock_response(status=200, json_data=None, json_exception=None
     return mock_response
 
 
+def _make_mock_context(mock_response):
+    """Wrap a single mock response in an async context manager (as returned by session.get/post)."""
+    mock_context = MagicMock()
+
+    async def aenter(*args, **kwargs):
+        return mock_response
+
+    async def aexit(*args):
+        return None
+
+    mock_context.__aenter__ = aenter
+    mock_context.__aexit__ = aexit
+    return mock_context
+
+
 def create_aiohttp_mock_session(mock_response=None, exception=None):
-    """Helper to create a mock aiohttp ClientSession"""
+    """Helper to create a mock aiohttp ClientSession.
+
+    ``mock_response`` may be a single response (every get/post call returns it) or a
+    list of responses consumed in order across successive get/post calls — useful when
+    the code under test reuses one ``ClientSession`` (or a patched constructor returning
+    the same mock) across a retry loop, e.g. a 401 followed by a successful retry.
+    """
     mock_session = MagicMock()
 
     if exception:
@@ -74,20 +95,16 @@ def create_aiohttp_mock_session(mock_response=None, exception=None):
         if mock_response is None:
             mock_response = create_aiohttp_mock_response()
 
-        mock_context = MagicMock()
+        if isinstance(mock_response, list):
+            # Independent iterators for get/post so either (or both) can be driven in sequence.
+            mock_session.get = MagicMock(side_effect=[_make_mock_context(resp) for resp in mock_response])
+            mock_session.post = MagicMock(side_effect=[_make_mock_context(resp) for resp in mock_response])
+        else:
+            mock_context = _make_mock_context(mock_response)
 
-        async def aenter(*args, **kwargs):
-            return mock_response
-
-        async def aexit(*args):
-            return None
-
-        mock_context.__aenter__ = aenter
-        mock_context.__aexit__ = aexit
-
-        # Setup both GET and POST methods
-        mock_session.get = MagicMock(return_value=mock_context)
-        mock_session.post = MagicMock(return_value=mock_context)
+            # Setup both GET and POST methods
+            mock_session.get = MagicMock(return_value=mock_context)
+            mock_session.post = MagicMock(return_value=mock_context)
 
     async def session_aenter(*args):
         return mock_session

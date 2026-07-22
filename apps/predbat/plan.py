@@ -131,7 +131,8 @@ class Plan:
             minutes_now = self.minutes_now
             minutes_end_slot = int((self.minutes_now + self.plan_interval_minutes) / self.plan_interval_minutes) * self.plan_interval_minutes
             # When dynamic load is enabled we try can do two things
-            # 1. Increase the load prediction in the current self.plan_interval_minutes minute period to match the actual load (if the load is higher than expected)
+            # 1. Increase the load prediction in the current self.plan_interval_minutes minute period to match the actual load (if the load is higher than expected),
+            #    extending into the following period too once the load has been high for two consecutive checks in a row (mirrors the low-load debounce below)
             # 2. If the load is low and car charging is predicted then cancel off future car slots
             # Note never do this just after midnight due to the load sensor reset
             if self.load_last_status == "low" and self.minutes_now > 5:
@@ -146,7 +147,12 @@ class Plan:
 
             if self.load_last_status == "high":
                 have_printed = False
-                for minute_absolute in range(minutes_now, minutes_end_slot, PREDICT_STEP):
+                minutes_end_baseline = minutes_end_slot
+                if prev_last_load_status == "high":
+                    # Load has been high for two consecutive checks, so also predict it will continue
+                    # into the following slot to keep the plan up to date across the slot boundary
+                    minutes_end_baseline = minutes_end_slot + self.plan_interval_minutes
+                for minute_absolute in range(minutes_now, minutes_end_baseline, PREDICT_STEP):
                     if not self.car_energy_reported_load:
                         # If car energy is not reported as load then we should not attempt to adjust the load prediction based on car load.
                         car_load = 0
