@@ -764,8 +764,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                     all_healthy = False
                     error_count += 1
                     component = self.components.get_component(component_name)
-                    is_load_ml_calculating = component_name == "load_ml" and component and component.is_calculating()
-                    if not is_load_ml_calculating:
+                    if not component.is_calculating():
                         failed_components.append(COMPONENT_LIST.get(component_name, {}).get("name", component_name))
                 elif is_active:
                     component_status[component_name] = "running"
