@@ -64,6 +64,8 @@ from tests.test_hainterface_service import run_hainterface_service_tests
 from tests.test_hainterface_lifecycle import run_hainterface_lifecycle_tests
 from tests.test_hainterface_websocket import run_hainterface_websocket_tests
 from tests.test_web_if import run_test_web_if
+from tests.test_web_chart_currency import test_rates_chart_series_names_use_currency_symbol
+from tests.test_metrics_dashboard_soc_refresh import test_soc_chart_center_text_reads_live_data
 from tests.test_web_functions import run_web_functions_tests
 from tests.test_web_history_table import run_web_history_table_tests
 from tests.test_web_charts import run_web_charts_tests
@@ -280,6 +282,8 @@ def main():
         ("manual_times", run_test_manual_times, "Manual times tests", False),
         ("manual_select", run_test_manual_select, "Manual select tests", False),
         ("web_if", run_test_web_if, "Web interface tests", False),
+        ("web_chart_currency", test_rates_chart_series_names_use_currency_symbol, "Rates chart series names follow currency_symbols tests", False),
+        ("metrics_dashboard_soc_refresh", test_soc_chart_center_text_reads_live_data, "Metrics dashboard SoC chart live-refresh tests", False),
         ("web_functions", run_web_functions_tests, "Web function unit tests", False),
         ("web_history_table", run_web_history_table_tests, "Web /entity history table bucketing tests", False),
         ("web_charts", run_web_charts_tests, "Web chart rendering tests (percent/special-character units)", False),

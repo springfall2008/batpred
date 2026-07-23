@@ -1468,9 +1468,13 @@ class Inverter:
                 charge_start_time = time_string_to_stamp(self.base.get_arg("charge_start_time", index=self.id))
                 charge_end_time = time_string_to_stamp(self.base.get_arg("charge_end_time", index=self.id))
             else:
+                # Neither a data source nor a fallback config value is available - log the specific
+                # reason here, but let the shared handling below (which also covers a source that
+                # returned an unusable value) set the status entity and safe defaults, so this
+                # doesn't hard-crash the whole plan for what may just be a temporarily empty feed.
                 self.log("Error: Inverter {} unable to read charge window time as neither REST, charge_start_time or charge_start_hour are set".format(self.id))
-                self.base.record_status("Error: Inverter {} unable to read charge window time as neither REST, charge_start_time or charge_start_hour are set".format(self.id), had_errors=True)
-                raise ValueError
+                charge_start_time = None
+                charge_end_time = None
 
             if charge_start_time is None or charge_end_time is None:
                 self.log("Warn: Inverter {} unable to read charge window time as charge_start_time or charge_end_time is None, will retry next update".format(self.id))
