@@ -28,6 +28,21 @@ from prediction_kernel import kernel_status_summary
 from predbat_metrics import metrics
 import time
 
+# Octopus Intelligent (IOG) charge-skew gradient.
+# io_adjusted (planned-dispatch) slots are at-risk: Octopus may move or remove them later.
+# Instead of a flat penalty we apply a signed per-hour gradient across each contiguous IOG
+# run: the earliest slots are discounted (ranked below equally-priced firm slots, so they
+# are filled first) while the latest slots are penalised (so distant, more-likely-to-vanish
+# IOG slots are not relied upon). Firm slots sit neutrally in the middle at the pivot point.
+# The discount only applies to imminent slots (within IO_ADJUST_DISCOUNT_HORIZON_HOURS of
+# now); distant future dispatch periods keep only the penalty side until they draw closer,
+# which is re-evaluated every optimisation cycle.
+IO_ADJUST_SLOPE = 1.0  # Pence per hour into the IOG run
+IO_ADJUST_PIVOT_HOURS = 1.5  # Hours into the run where the adjustment crosses zero (firm level)
+IO_ADJUST_MAX_DISCOUNT = 3.0  # Maximum pence discount applied to the earliest IOG slots
+IO_ADJUST_MAX_PENALTY = 10.0  # Maximum pence penalty applied to the latest IOG slots
+IO_ADJUST_DISCOUNT_HORIZON_HOURS = 3.0  # Only discount IOG slots that start within this many hours of now
+
 
 def slots_around(target_slots, slot_lengths):
     """
@@ -1921,6 +1936,46 @@ class Plan:
         window_sorted.sort(key=self.window_sort_func_start)
         return window_sorted
 
+    def _io_run_starts(self, windows):
+        """
+        Map each io_adjusted (Octopus Intelligent) window start to the start minute of its
+        contiguous IOG run.
+
+        A run is a maximal sequence of io_adjusted windows that are contiguous in time
+        (each window's start equal to the previous window's end). A firm window or a time
+        gap breaks the run. Firm windows are not included in the result. Input windows may
+        arrive in any order.
+        """
+        io_windows = sorted((w for w in windows if self.io_adjusted.get(w["start"], False)), key=lambda w: w["start"])
+        run_starts = {}
+        run_start = None
+        prev_end = None
+        for window in io_windows:
+            start = window["start"]
+            if run_start is None or start != prev_end:
+                run_start = start
+            run_starts[start] = run_start
+            prev_end = window["end"]
+        return run_starts
+
+    def _io_rate_adjustment(self, window_start, run_start):
+        """
+        Return the signed rate adjustment (pence) for an io_adjusted window.
+
+        Earliest slots in the run are discounted (negative) so they rank below equally-priced
+        firm slots and are filled first; latest slots are penalised (positive) so distant IOG
+        slots are not relied upon. The discount is only applied to imminent slots (starting
+        within IO_ADJUST_DISCOUNT_HORIZON_HOURS of now); the penalty side always applies.
+        """
+        hours_in = (window_start - run_start) / 60.0
+        hours_ahead = max(window_start - self.minutes_now, 0) / 60.0
+        gradient = (hours_in - IO_ADJUST_PIVOT_HOURS) * IO_ADJUST_SLOPE
+        gradient = max(-IO_ADJUST_MAX_DISCOUNT, min(IO_ADJUST_MAX_PENALTY, gradient))
+        if hours_ahead > IO_ADJUST_DISCOUNT_HORIZON_HOURS:
+            # Distant period: suppress the discount but keep any penalty
+            gradient = max(gradient, 0.0)
+        return gradient
+
     def sort_window_by_price_combined(self, charge_windows, export_windows, calculate_import_low_export=False, calculate_export_high_import=False):
         """
         Sort windows into price sets
@@ -1933,6 +1988,7 @@ class Plan:
         pv_forecast_minute_step = self.prediction.pv_forecast_minute_step
 
         # Add charge windows
+        charge_io_run_starts = self._io_run_starts(charge_windows)
         if self.calculate_best_charge:
             id = 0
             for window in charge_windows:
@@ -1941,10 +1997,9 @@ class Plan:
                 if self.carbon_enable:
                     carbon_intensity = self.carbon_intensity.get(max(window["start"] - self.minutes_now, 0), 0)
                     average += dp1(carbon_intensity * self.carbon_metric / 1000.0)
-                is_adjusted = self.io_adjusted.get(window["start"], False)
-                if is_adjusted:
-                    # The risk that IOG adjusted slots will disappear means we should penalise them based on how far in the future they are
-                    average += min((max(window["start"] - self.minutes_now, 0) // 60), 10)
+                if window["start"] in charge_io_run_starts:
+                    # IOG (planned-dispatch) slot: apply the earlier-charge skew gradient
+                    average += self._io_rate_adjustment(window["start"], charge_io_run_starts[window["start"]])
                 average += self.metric_self_sufficiency
                 average = dp2(average)  # Round to nearest 0.01 penny to avoid too many bands
                 if calculate_import_low_export:
@@ -1978,6 +2033,7 @@ class Plan:
                 id += 1
 
         # Add export windows
+        export_io_run_starts = self._io_run_starts(export_windows)
         if self.calculate_best_export:
             id = 0
             for window in export_windows:
@@ -1989,10 +2045,9 @@ class Plan:
                 average = dp1(average)  # Round to nearest 0.01 penny to avoid too many bands
                 if calculate_export_high_import:
                     average_import = dp2((self.rate_import.get(window["start"], 0) + self.rate_import.get(window["end"] - PREDICT_STEP, 0)) / 2)
-                    is_adjusted = self.io_adjusted.get(window["start"], False)
-                    if is_adjusted:
-                        # The risk that IOG adjusted slots will disappear means we should penalise them based on how far in the future they are
-                        average_import += min((max(window["start"] - self.minutes_now, 0) // 60), 10)
+                    if window["start"] in export_io_run_starts:
+                        # IOG (planned-dispatch) slot on the import side: apply the earlier-charge skew gradient
+                        average_import += self._io_rate_adjustment(window["start"], export_io_run_starts[window["start"]])
                 else:
                     average_import = 0
                 window_start = window["start"]
