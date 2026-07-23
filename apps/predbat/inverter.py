@@ -263,6 +263,14 @@ class Inverter:
                         self.rest_v3 = True
                     self.log("Inverter {} GivTCP Version: {}, Firmware: {}, serial {}".format(self.id, self.givtcp_version, self.firmware_version, self.serial_number))
 
+        # Neither a REST API nor a charge_start_time config source is configured, so update_status()
+        # will never be able to determine a charge window - warn once here, at setup, with the exact
+        # condition that gates it (self.rest_api is a static config fact, not self.rest_data which is
+        # refreshed live every update and can legitimately be transiently empty).
+        if not self.rest_api and "charge_start_time" not in self.base.args:
+            self.log("Warn: Inverter {} has neither a REST API (givtcp_rest) nor charge_start_time/charge_end_time configured - unable to determine the charge window".format(self.id))
+            self.base.record_status("Warn: Inverter {} has no charge window source configured (see apps.yaml)".format(self.id), had_errors=True)
+
         # Timed pause support?
         if self.inv_has_timed_pause:
             entity_mode = self.base.get_arg("pause_mode", indirect=False, index=self.id)
