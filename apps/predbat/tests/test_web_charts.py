@@ -56,4 +56,17 @@ def run_web_charts_tests(my_predbat):
         print(f"  ERROR: expected render_heatmap_chart() to call getElementById('chart_%'), got: {html}")
         failed += 1
 
+    # -------------------------------------------------------------------------
+    print("Test: render_heatmap_chart() sanitises chart_id before using it as a JS variable name")
+    for bad_variable_name in ("height_chart_%", "chart_chart_%"):
+        if bad_variable_name in html:
+            print(f"  ERROR: render_heatmap_chart() interpolated an unsanitised chart_id into a JS identifier ('{bad_variable_name}'), which is a syntax error")
+            failed += 1
+    if "height_chart__" not in html:
+        print(f"  ERROR: expected render_heatmap_chart() to declare a sanitised 'height_chart__' variable, got: {html}")
+        failed += 1
+    if "chart_chart__.render()" not in html:
+        print(f"  ERROR: expected render_heatmap_chart() to render via a sanitised 'chart_chart__' variable, got: {html}")
+        failed += 1
+
     return failed
