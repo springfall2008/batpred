@@ -3091,33 +3091,35 @@ class Plan:
         # improvement in an earlier window that a single sweep never revisits - repeating the pair
         # lets those cascade. Acceptance only ever keeps equal-or-better limits so the metric stays
         # monotonic non-increasing and the extra iterations cannot make the plan worse.
-        base_sequence = ["trim", "freeze", "normal", "trim", "low"]
-        refine_sequence = ["trim", "normal"]
+        base_sequence = ["trim_export", "trim_import", "freeze", "normal", "trim_export", "trim_import", "low"]
+        refine_sequence = ["trim_export", "trim_import", "normal"]
         max_refine_iterations = 3
         base_len = len(base_sequence)
         refine_len = len(refine_sequence)
-        price_set_canonical = list(price_set)
         changed_this_iteration = False
 
         for idx, pass_type in enumerate(base_sequence + refine_sequence * max_refine_iterations):
-            # At the start of each refinement pair restore the canonical price band order (the base
-            # "low" sub-pass reverses price_set in place) and stop early once a pair changes nothing.
+            # Stop early once a refinement pair changes nothing. Each pass derives its own iteration order
+            # from price_set (see ordered_price_set below) rather than mutating it, so no restore is needed.
             if idx >= base_len and ((idx - base_len) % refine_len) == 0:
                 if idx > base_len and not changed_this_iteration:
                     break
                 changed_this_iteration = False
-                price_set[:] = price_set_canonical
 
             start_at_low = False
-            if pass_type in ["low"]:
-                price_set.reverse()
+            if pass_type in ["low", "trim_export"]:
+                # Export trim sheds the least valuable (cheapest) export first, so walk price bands low to
+                # high - the high-priced peak is only reduced if the cheaper slots cannot absorb the excess.
+                ordered_price_set = list(reversed(price_set))
                 start_at_low = True
+            else:
+                ordered_price_set = list(price_set)
 
-            for price_key in price_set:
+            for price_key in ordered_price_set:
                 links = price_links[price_key].copy()
 
                 # Freeze/Trim pass should be done in time order (newest first)
-                if pass_type in ["freeze", "trim"]:
+                if pass_type in ["freeze", "trim_export", "trim_import"]:
                     links.reverse()
 
                 printed_set = False
@@ -3132,12 +3134,12 @@ class Plan:
                         window_start = self.charge_window_best[window_n]["start"]
                         price = self.charge_window_best[window_n]["average"]
 
-                        # Freeze pass is just export freeze
-                        if pass_type in ["freeze"]:
+                        # Freeze pass is just export freeze; the export trim pass does not touch charge
+                        if pass_type in ["freeze", "trim_export"]:
                             continue
 
                         # Don't trim a window that is already off
-                        if pass_type in ["trim"] and (self.charge_limit_best[window_n] == 0):
+                        if pass_type in ["trim_import"] and (self.charge_limit_best[window_n] == 0):
                             continue
 
                         # In normal don't do trimming of charge
@@ -3192,7 +3194,9 @@ class Plan:
                                 freeze_only=(typ == "cf"),
                                 allow_freeze=True,
                             )
-                            if n_best_metric < best_metric and n_best_soc != self.charge_limit_best[window_n]:
+                            # The import trim pass may only reduce charge (charge to a lower SoC), never add it
+                            trim_import_ok = pass_type != "trim_import" or n_best_soc < self.charge_limit_best[window_n]
+                            if n_best_metric < best_metric and n_best_soc != self.charge_limit_best[window_n] and trim_import_ok:
                                 # Only a strict improvement drives another full iteration. Equal-metric
                                 # limit flips are still applied once (as before) but must not keep the
                                 # iteration alive - re-running to chase them over-optimises the
@@ -3241,6 +3245,10 @@ class Plan:
                         window_start = self.export_window_best[window_n]["start"]
                         price = self.export_window_best[window_n]["average"]
 
+                        # The import trim pass does not touch export windows
+                        if pass_type in ["trim_import"]:
+                            continue
+
                         # Ignore freeze pass if export freeze disabled
                         if not self.set_export_freeze and pass_type == "freeze":
                             continue
@@ -3250,7 +3258,7 @@ class Plan:
                             continue
 
                         # Don't trim a window that is already off
-                        if pass_type in ["trim"] and (self.export_limits_best[window_n] == 100):
+                        if pass_type in ["trim_export"] and (self.export_limits_best[window_n] == 100):
                             continue
 
                         # In normal don't do trimming of export
@@ -3263,7 +3271,7 @@ class Plan:
                             continue
 
                         # Don't trim freeze, that can be done in the freeze pass
-                        if pass_type == "trim" and self.export_limits_best[window_n] == 99:
+                        if pass_type == "trim_export" and self.export_limits_best[window_n] == 99:
                             continue
 
                         # Ignore prices below the threshold if not already selected during levelling
@@ -3318,7 +3326,11 @@ class Plan:
                                 allow_freeze=True,
                             )
                             self.export_window_best[window_n]["start"] = keep_start
-                            if n_best_metric < best_metric and (n_best_soc != self.export_limits_best[window_n] or n_best_start != self.export_window_best[window_n]["start"]):
+                            # The export trim pass may only reduce export - a higher SoC limit (shallower
+                            # discharge) or a later start (smaller window), never more export. This lets the
+                            # cheapest slots shed any levels over-export before the high-priced peak is touched.
+                            trim_export_ok = pass_type != "trim_export" or (n_best_soc > self.export_limits_best[window_n] or (n_best_soc == self.export_limits_best[window_n] and n_best_start > keep_start))
+                            if n_best_metric < best_metric and (n_best_soc != self.export_limits_best[window_n] or n_best_start != self.export_window_best[window_n]["start"]) and trim_export_ok:
                                 # Only a strict improvement drives another refinement iteration (see
                                 # the charge block above for why equal-metric flips must not).
                                 changed_this_iteration = True
