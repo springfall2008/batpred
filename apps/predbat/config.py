@@ -719,6 +719,13 @@ CONFIG_ITEMS = [
         "enable": "expert_mode",
     },
     {
+        "name": "octopus_intelligent_confirm_slots",
+        "friendly_name": "Only treat confirmed Intelligent dispatch slots as low rate",
+        "type": "switch",
+        "default": False,
+        "enable": "expert_mode",
+    },
+    {
         "name": "octopus_intelligent_consider_full",
         "friendly_name": "Consider car full as part of Intelligent plan",
         "type": "switch",

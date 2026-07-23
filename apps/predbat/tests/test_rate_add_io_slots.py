@@ -330,6 +330,70 @@ def run_rate_add_io_slots_tests(my_predbat):
         expected_rates_17[minute] = 4.0
     failed |= run_rate_add_io_slots_test("test17_dup_does_not_waste_cap", my_predbat, slots_17, True, 2, expected_rates_17)
 
+    # Test 18: a daytime slot that's still Octopus's provisional/revisable plan (provisional=True)
+    # must NOT get the low rate while octopus_intelligent_confirm_slots is on - Octopus can withdraw
+    # it before it's ever delivered.
+    print("\n**** Test 18: Daytime provisional slot is not treated as low rate ****")
+    slot_start_18 = midnight_utc + timedelta(hours=14, minutes=30)  # 14:30
+    slot_end_18 = slot_start_18 + timedelta(minutes=30)  # 15:00
+    slots_18 = [{"start": slot_start_18.strftime(TIME_FORMAT), "end": slot_end_18.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME", "provisional": True}]
+    expected_rates_18 = {}
+    for minute in range(870, 900):
+        expected_rates_18[minute] = 10.0  # Left at the normal rate, not discounted
+    my_predbat.octopus_intelligent_confirm_slots = True
+    failed |= run_rate_add_io_slots_test("test18_daytime_provisional_not_low_rate", my_predbat, slots_18, True, 12, expected_rates_18)
+
+    # Test 19: the same slot, but confirmed (provisional=False, e.g. Octopus now reports it as a
+    # completed/metered dispatch) - should get the low rate. Isolates provenance as the only
+    # variable versus Test 18.
+    print("\n**** Test 19: Daytime confirmed (completed) slot is treated as low rate ****")
+    slots_19 = [{"start": slot_start_18.strftime(TIME_FORMAT), "end": slot_end_18.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "unknown", "location": "AT_HOME", "provisional": False}]
+    expected_rates_19 = {}
+    for minute in range(870, 900):
+        expected_rates_19[minute] = 4.0
+    my_predbat.octopus_intelligent_confirm_slots = True
+    failed |= run_rate_add_io_slots_test("test19_daytime_completed_is_low_rate", my_predbat, slots_19, True, 12, expected_rates_19)
+
+    # Test 20: the same provisional dispatch, plus a car_charging_now-style confirming slot for the
+    # same window appended AFTER it (matching production order - add_now_to_octopus_slot always
+    # appends after the real dispatch entries). Should get the low rate - this specifically exercises
+    # the sort-before-dedup fix in rate_add_io_slots: without sorting confirmed slots first, the
+    # provisional entry would claim these minutes via saved_slots before the confirming entry is ever
+    # processed, silently losing the confirmation.
+    print("\n**** Test 20: car_charging_now confirmation wins over an earlier provisional entry ****")
+    slots_20 = [
+        {"start": slot_start_18.strftime(TIME_FORMAT), "end": slot_end_18.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME", "provisional": True},
+        {"start": slot_start_18.strftime(TIME_FORMAT), "end": slot_end_18.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "car_charging_now", "provisional": False},
+    ]
+    expected_rates_20 = {}
+    for minute in range(870, 900):
+        expected_rates_20[minute] = 4.0
+    my_predbat.octopus_intelligent_confirm_slots = True
+    failed |= run_rate_add_io_slots_test("test20_car_charging_now_confirms_over_provisional", my_predbat, slots_20, True, 12, expected_rates_20)
+
+    # Test 21: a provisional slot inside the fixed 23:30-05:30 off-peak window - should always get
+    # the low rate regardless of provenance, since that window is guaranteed cheap by the tariff
+    # itself, not by the dispatch mechanism. Proves the window carve-out.
+    print("\n**** Test 21: Provisional slot inside the fixed IOG window is still low rate ****")
+    slot_start_21 = midnight_utc + timedelta(hours=2)  # 02:00 - well inside 23:30-05:30
+    slot_end_21 = slot_start_21 + timedelta(minutes=30)
+    slots_21 = [{"start": slot_start_21.strftime(TIME_FORMAT), "end": slot_end_21.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME", "provisional": True}]
+    expected_rates_21 = {}
+    for minute in range(120, 150):
+        expected_rates_21[minute] = 4.0
+    my_predbat.octopus_intelligent_confirm_slots = True
+    failed |= run_rate_add_io_slots_test("test21_fixed_window_always_low_rate", my_predbat, slots_21, True, 12, expected_rates_21)
+
+    # Test 22: Test 18's fixture again, but with octopus_intelligent_confirm_slots off - should get
+    # the low rate, confirming the escape hatch restores the previous (unconditional) behaviour.
+    print("\n**** Test 22: Switch off restores unconditional low rate ****")
+    expected_rates_22 = {}
+    for minute in range(870, 900):
+        expected_rates_22[minute] = 4.0
+    my_predbat.octopus_intelligent_confirm_slots = False
+    failed |= run_rate_add_io_slots_test("test22_switch_off_restores_old_behaviour", my_predbat, slots_18, True, 12, expected_rates_22)
+    my_predbat.octopus_intelligent_confirm_slots = False  # Restore default for any subsequent tests
+
     # Restore original forecast_minutes
     my_predbat.forecast_minutes = original_forecast_minutes
 
