@@ -268,6 +268,30 @@ def split_entities_for_charting(entities, entity_data_fetch):
     return numeric_entries, timeline_entries
 
 
+def resolve_group_unit_and_name(entity_id, dashboard_values, live_unit=None, live_friendly_name=None):
+    """
+    Resolve the unit_of_measurement/friendly_name to group and label an entity by for the
+    /entity charts.
+
+    Prefers Predbat's own dashboard_values cache, falling back to a caller-supplied live HA
+    lookup (mirroring html_get_entity_text's fallback) for entities Predbat doesn't track
+    itself - e.g. inverter control entities that are selectable on this page but were never
+    published via dashboard_item(), which otherwise silently grouped every such entity into
+    "(no unit)" regardless of their real HA unit.
+
+    live_unit/live_friendly_name should only be looked up by the caller when entity_id isn't
+    in dashboard_values, since that's the only case they're used.
+    """
+    attributes = dashboard_values.get(entity_id, {}).get("attributes", {})
+    if entity_id in dashboard_values:
+        unit = attributes.get("unit_of_measurement") or ""
+        friendly_name = attributes.get("friendly_name") or ""
+    else:
+        unit = live_unit or ""
+        friendly_name = live_friendly_name or ""
+    return unit or "(no unit)", friendly_name or entity_id
+
+
 class WebInterface(ComponentBase):
     """Built-in web dashboard server using aiohttp.
 
@@ -1193,13 +1217,16 @@ class WebInterface(ComponentBase):
                 entity_id = selection["entity_id"]
                 attribute = selection["attribute"]
 
-                attributes = self.base.dashboard_values.get(entity_id, {}).get("attributes", {})
-                unit = attributes.get("unit_of_measurement", "") or "(no unit)"
+                live_unit = live_friendly_name = None
+                if entity_id not in self.base.dashboard_values:
+                    live_unit = self.get_state_wrapper(entity_id=entity_id, attribute="unit_of_measurement")
+                    live_friendly_name = self.get_state_wrapper(entity_id=entity_id, attribute="friendly_name")
+                unit, friendly_name = resolve_group_unit_and_name(entity_id, self.base.dashboard_values, live_unit, live_friendly_name)
 
                 if unit not in entity_groups:
                     entity_groups[unit] = []
 
-                entity_groups[unit].append({"id": entity_id, "friendly_name": attributes.get("friendly_name", entity_id), "unit": unit, "attribute": attribute, "available_attrs": entity_attributes_map.get(entity_id, [])})
+                entity_groups[unit].append({"id": entity_id, "friendly_name": friendly_name, "unit": unit, "attribute": attribute, "available_attrs": entity_attributes_map.get(entity_id, [])})
 
             # Display entity details table for first selected entity
             if len(entity_selections) == 1:
