@@ -1844,6 +1844,11 @@ var options = {
             points_js = ", ".join("{{ x: '{}', y: {} }}".format(p["x"], "null" if p["y"] is None else p["y"]) for p in data_points)
             series_js += "    {{ name: '{}', data: [{}] }},\n".format(name, points_js)
 
+        # chart_id is only safe to interpolate as a *string* (DOM id, inside quotes) - it may
+        # contain characters (e.g. "%") that are invalid in a JS identifier, so a separate
+        # sanitised name is used anywhere it needs to appear as a variable name
+        js_id = re.sub(r"[^0-9A-Za-z_]", "_", chart_id)
+
         text = ""
         text += "<script>\n"
         text += "window.onresize = function(){ location.reload(); };\n"
@@ -1852,12 +1857,12 @@ var options = {
         text += "if (width < 400) { width = 400; }\n"
         text += "width = width - 50;\n"
         if fixed_height is not None:
-            text += "var height_{} = {};\n".format(chart_id, fixed_height)
+            text += "var height_{} = {};\n".format(js_id, fixed_height)
         else:
             num_rows = max(len(series_data), 1)
-            text += "var height_{} = {};\n".format(chart_id, num_rows * 80 + 80)
+            text += "var height_{} = {};\n".format(js_id, num_rows * 80 + 80)
         text += "var options = {\n"
-        text += "  chart: {{ type: 'heatmap', width: width, height: height_{}, animations: {{ enabled: false }} }},\n".format(chart_id)
+        text += "  chart: {{ type: 'heatmap', width: width, height: height_{}, animations: {{ enabled: false }} }},\n".format(js_id)
         text += "  plotOptions: {\n"
         text += "    heatmap: {\n"
         text += "      radius: 2,\n"
@@ -1879,8 +1884,8 @@ var options = {
         text += "};\n"
         # getElementById, not a '#id' CSS selector - chart_id may contain characters (e.g. "%") that
         # are invalid in an unescaped CSS identifier and would throw in querySelector
-        text += "var chart_{cid} = new ApexCharts(document.getElementById('{cid}'), options);\n".format(cid=chart_id)
-        text += "chart_{}.render();\n".format(chart_id)
+        text += "var chart_{jid} = new ApexCharts(document.getElementById('{cid}'), options);\n".format(jid=js_id, cid=chart_id)
+        text += "chart_{}.render();\n".format(js_id)
         text += "</script>\n"
         return text
 
