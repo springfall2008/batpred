@@ -186,6 +186,88 @@ def build_entity_history_table_data(entity_selections, entity_data_fetch):
     return entity_filled_30min, entity_filled_5min, sorted_timestamps_30min, all_display_slots_5min
 
 
+def is_data_numerical(history, attribute=None):
+    """
+    Check if history data is numerical (supports both state and attribute checking)
+    Returns True if at least 10% of values are numeric or boolean
+    """
+    count_nums = 0
+    count_total = 0
+
+    if history and len(history) >= 1:
+        for item in history[0]:
+            if attribute:
+                # Check attribute value
+                attr_value = item.get("attributes", {}).get(attribute, None)
+                if attr_value is None:
+                    continue
+                value = str(attr_value)
+            else:
+                # Check state value
+                value = item.get("state", None)
+                if value is None:
+                    continue
+                value = str(value)
+
+            if value.lower() in ["on", "off", "true", "false"]:
+                count_nums += 1
+            else:
+                try:
+                    float(value)
+                    count_nums += 1
+                except (ValueError, TypeError):
+                    pass
+            count_total += 1
+
+    if count_total > 0 and (count_nums / count_total) >= 0.1:
+        return True
+    elif count_total == 0:
+        return True
+    return False
+
+
+def split_entities_for_charting(entities, entity_data_fetch):
+    """
+    Fetch each entity's history and split a unit group into numeric vs non-numeric entries.
+
+    Deciding numeric-vs-timeline per entity (rather than once for the whole group, from
+    whichever entity happened to be processed last) means a numeric entity doesn't end up
+    silently rendered as a broken timeline chart just because another entity sharing the same
+    unit group is non-numerical.
+
+    entities: list of {"id": entity_id, "friendly_name": ..., "attribute": ...}
+    entity_data_fetch: dict of entity_id -> history as returned by get_history_with_now()
+
+    Returns (numeric_entries, timeline_entries), each a list of
+    {"name": display_name, "friendly_name": ..., "entity_id": ..., "data": history_chart}.
+    """
+    numeric_entries = []
+    timeline_entries = []
+
+    for entity_info in entities:
+        entity_id = entity_info["id"]
+        friendly_name = entity_info["friendly_name"]
+        attribute = entity_info.get("attribute")
+
+        history = entity_data_fetch.get(entity_id)
+        is_numerical = is_data_numerical(history, attribute=attribute)
+
+        if attribute:
+            history_chart = history_attribute(history, state_key=attribute, attributes=True, is_numerical=is_numerical)
+            display_name = f"{friendly_name} ({attribute})"
+        else:
+            history_chart = history_attribute(history, is_numerical=is_numerical)
+            display_name = friendly_name
+
+        if not history_chart:
+            continue
+
+        entry = {"name": display_name, "friendly_name": friendly_name, "entity_id": entity_id, "data": history_chart}
+        (numeric_entries if is_numerical else timeline_entries).append(entry)
+
+    return numeric_entries, timeline_entries
+
+
 class WebInterface(ComponentBase):
     """Built-in web dashboard server using aiohttp.
 
@@ -917,45 +999,6 @@ class WebInterface(ComponentBase):
             self.base.log(f"Error in html_api_get_entities: {e}")
             return web.json_response({"error": str(e)}, status=500)
 
-    def is_data_numerical(self, history, attribute=None):
-        """
-        Check if history data is numerical (supports both state and attribute checking)
-        Returns True if at least 10% of values are numeric or boolean
-        """
-        count_nums = 0
-        count_total = 0
-
-        if history and len(history) >= 1:
-            for item in history[0]:
-                if attribute:
-                    # Check attribute value
-                    attr_value = item.get("attributes", {}).get(attribute, None)
-                    if attr_value is None:
-                        continue
-                    value = str(attr_value)
-                else:
-                    # Check state value
-                    value = item.get("state", None)
-                    if value is None:
-                        continue
-                    value = str(value)
-
-                if value.lower() in ["on", "off", "true", "false"]:
-                    count_nums += 1
-                else:
-                    try:
-                        float(value)
-                        count_nums += 1
-                    except (ValueError, TypeError):
-                        pass
-                count_total += 1
-
-        if count_total > 0 and (count_nums / count_total) >= 0.1:
-            return True
-        elif count_total == 0:
-            return True
-        return False
-
     async def get_history_with_now(self, entity_id, days, attribute=None):
         """
         Get history for an entity including the current state
@@ -1189,46 +1232,28 @@ class WebInterface(ComponentBase):
             now_str = self.now_utc.strftime(TIME_FORMAT)
 
             for unit, entities in entity_groups.items():
+                # Numeric and non-numeric entities are split per-entity (not decided once for the
+                # whole group) so a numeric entity sharing a unit with a non-numerical one still
+                # gets a proper line chart instead of being dropped into a broken timeline chart.
+                numeric_entries, timeline_entries = split_entities_for_charting(entities, entity_data_fetch)
+                if not numeric_entries and not timeline_entries:
+                    continue
+
                 text += "<h2>History Chart - {}</h2>\n".format(unit if unit != "(no unit)" else "(no unit)")
-                chart_id = "chart_{}".format(unit.replace("/", "_").replace(" ", "_").replace("(", "").replace(")", ""))
-                text += '<div id="{}"></div>'.format(chart_id)
-                is_numerical = False
+                base_chart_id = "chart_{}".format(unit.replace("/", "_").replace(" ", "_").replace("(", "").replace(")", ""))
 
-                # First, collect all entity data
-                entity_data = []
-                for entity_info in entities:
-                    entity_id = entity_info["id"]
-                    friendly_name = entity_info["friendly_name"]
-                    attribute = entity_info.get("attribute")
-
-                    # Fetch history with attribute if specified
-                    history = entity_data_fetch[entity_id]
-
-                    # Check if data is numerical (supports both state and attribute)
-                    is_numerical = self.is_data_numerical(history, attribute=attribute)
-
-                    # Extract chart data using history_attribute
-                    if attribute:
-                        # Chart attribute data
-                        history_chart = history_attribute(history, state_key=attribute, attributes=True, is_numerical=is_numerical)
-                        display_name = f"{friendly_name} ({attribute})"
-                    else:
-                        # Chart state data (default)
-                        history_chart = history_attribute(history, is_numerical=is_numerical)
-                        display_name = friendly_name
-
-                    if history_chart:
-                        entity_data.append({"name": display_name, "entity_id": entity_id, "data": history_chart})
-
-                # Prepare data for the appropriate chart type
-                if is_numerical:
-                    series_data = [{"name": item["name"], "data": item["data"], "chart_type": "line", "stroke_width": "2", "stroke_curve": "stepline"} for item in entity_data]
+                if numeric_entries:
+                    chart_id = base_chart_id
+                    text += '<div id="{}"></div>'.format(chart_id)
+                    series_data = [{"name": item["name"], "data": item["data"], "chart_type": "line", "stroke_width": "2", "stroke_curve": "stepline"} for item in numeric_entries]
                     chart_unit = unit if unit != "(no unit)" else ""
-                    chart_title = "{} entities".format(len(entities)) if len(entities) > 1 else entities[0]["friendly_name"]
+                    chart_title = "{} entities".format(len(numeric_entries)) if len(numeric_entries) > 1 else numeric_entries[0]["friendly_name"]
                     text += self.render_chart(series_data, chart_unit, chart_title, now_str, tagname=chart_id)
-                else:
-                    # Render timeline chart for non-numerical data
-                    text += self.render_timeline_chart(entity_data, chart_id, days)
+
+                if timeline_entries:
+                    chart_id = base_chart_id + "_timeline" if numeric_entries else base_chart_id
+                    text += '<div id="{}"></div>'.format(chart_id)
+                    text += self.render_timeline_chart(timeline_entries, chart_id, days)
 
             # History table showing all selected entities
             if entity_selections:
