@@ -170,7 +170,7 @@ function mdRenderHealth(d) {
     {label:'Plan',        value: planOk ? 'Valid' : 'Stale',      cls: mdStatusClass(planOk),   sub: mdFmt(d.plan_age_minutes, 0) + ' min old'},
     {label:'Last Update', value: mdAgo(d.last_update_timestamp),  cls: '', sub: ''},
     {label:'Errors',      value: mdFmt(mdSumLabeled(d.errors_total), 0), cls: mdSumLabeled(d.errors_total) > 0 ? 'md-status-warn' : 'md-status-ok', sub: ''},
-    {label:'Data Age',    value: mdFmt(d.data_age_days, 1) + 'd', cls: d.data_age_days > 3 ? 'md-status-warn' : 'md-status-ok', sub: ''},
+    {label:'Data Age',    value: mdFmt(d.data_age_days, 1) + 'd', cls: d.data_age_days < d.data_age_required_days ? 'md-status-warn' : 'md-status-ok', sub: 'need ' + mdFmt(d.data_age_required_days, 0) + 'd'},
   ];
   var h = '';
   cards.forEach(function (c) {
