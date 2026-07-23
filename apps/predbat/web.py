@@ -81,6 +81,111 @@ from marginal import MARGINAL_EXTRA_KWH_LEVEL_NAMES, MARGINAL_EXTRA_KWH_LEVELS, 
 ROOT_YAML_KEY = "pred_bat"
 
 
+def build_entity_history_table_data(entity_selections, entity_data_fetch):
+    """
+    Bucket raw HA history into 5-minute and 30-minute windows for the /entity history table.
+
+    entity_selections: list of {"entity_id": ..., "attribute": ...} (attribute may be None for state)
+    entity_data_fetch: dict of entity_id -> history as returned by get_history_with_now(), i.e. [[record, ...]]
+
+    Each raw record list is oldest-first; it is read (never mutated) in that order so that, when
+    several records round into the same bucket, the bucket keeps the most recent one - the value
+    that was actually in effect by the end of that window and that should carry forward into the
+    next bucket without data.
+
+    Returns (entity_filled_30min, entity_filled_5min, sorted_timestamps_30min, all_display_slots_5min):
+      entity_filled_30min / entity_filled_5min: one dict per selection, {slot: (value, is_known, prev_value)}
+        with unfilled slots carried forward from the last known value ("-" if none yet)
+      sorted_timestamps_30min: all known 30-min bucket timestamps, newest first
+      all_display_slots_5min: the 5-min detail-row slots (offsets -5 to -25) leading up to each 30-min bucket
+    """
+    entity_histories_30min = []
+    entity_histories_5min = []
+    all_timestamps_30min = set()
+
+    for selection in entity_selections:
+        entity_id = selection["entity_id"]
+        attribute = selection["attribute"]
+        history = entity_data_fetch[entity_id]
+        entity_data_30min = {}
+        entity_data_5min = {}
+
+        if history and len(history) >= 1:
+            history = history[0]
+            if history:
+                for item in history:
+                    if "last_updated" not in item:
+                        continue
+                    last_updated_time = item["last_updated"]
+                    last_updated_stamp = str2time(last_updated_time)
+
+                    # Get state or attribute value
+                    if attribute:
+                        state = item.get("attributes", {}).get(attribute, None)
+                    else:
+                        state = item.get("state", None)
+
+                    if state is None:
+                        state = "None"
+
+                    # Store 5-minute interval data
+                    minutes = last_updated_stamp.hour * 60 + last_updated_stamp.minute
+                    rounded_minutes_5 = (minutes // 5) * 5
+                    rounded_stamp_5 = last_updated_stamp.replace(minute=rounded_minutes_5 % 60, hour=rounded_minutes_5 // 60, second=0, microsecond=0)
+                    entity_data_5min[rounded_stamp_5] = state
+
+                    # Round to 30-minute intervals for summary
+                    rounded_minutes_30 = (minutes // 30) * 30
+                    rounded_stamp_30 = last_updated_stamp.replace(minute=rounded_minutes_30 % 60, hour=rounded_minutes_30 // 60, second=0, microsecond=0)
+                    entity_data_30min[rounded_stamp_30] = state
+                    all_timestamps_30min.add(rounded_stamp_30)
+
+        entity_histories_30min.append(entity_data_30min)
+        entity_histories_5min.append(entity_data_5min)
+
+    # Sort timestamps in reverse chronological order
+    sorted_timestamps_30min = sorted(all_timestamps_30min, reverse=True)
+
+    # Collect all display slots so we can precompute carry-forward fill
+    # Detail rows go BACKWARDS from the 30-min parent timestamp (offsets -5 to -25)
+    all_display_slots_5min = set()
+    for ts_30 in sorted_timestamps_30min:
+        for offset in range(-5, -30, -5):
+            all_display_slots_5min.add(ts_30 + timedelta(minutes=offset))
+
+    # Precompute filled dicts: {slot: (value, is_known, prev_value)} per entity using carry-forward
+    entity_filled_30min = []
+    entity_filled_5min = []
+    for data_30min, data_5min in zip(entity_histories_30min, entity_histories_5min):
+        # --- 30-min fill ---
+        sorted_known_30 = sorted(data_30min.keys())
+        filled_30 = {}
+        last_val = None
+        ki = 0
+        for slot in sorted(sorted_timestamps_30min):
+            prev_val = last_val
+            while ki < len(sorted_known_30) and sorted_known_30[ki] <= slot:
+                last_val = data_30min[sorted_known_30[ki]]
+                ki += 1
+            filled_30[slot] = (last_val if last_val is not None else "-", slot in data_30min, prev_val)
+        entity_filled_30min.append(filled_30)
+
+        # --- 5-min fill ---
+        sorted_known_5 = sorted(data_5min.keys())
+        filled_5 = {}
+        last_val = None
+        ki = 0
+        for slot in sorted(all_display_slots_5min):
+            prev_val = last_val
+            while ki < len(sorted_known_5) and sorted_known_5[ki] <= slot:
+                last_val = data_5min[sorted_known_5[ki]]
+                ki += 1
+            filled_5[slot] = (last_val if last_val is not None else "-", slot in data_5min, prev_val)
+        entity_filled_5min.append(filled_5)
+
+    return entity_filled_30min, entity_filled_5min, sorted_timestamps_30min, all_display_slots_5min
+
+
 class WebInterface(ComponentBase):
     """Built-in web dashboard server using aiohttp.
 
@@ -942,51 +1047,16 @@ class WebInterface(ComponentBase):
         days = int(request.query.get("days", 7))  # Default to 7 days if not specified
 
         text = self.get_header("Predbat Entity", refresh=0)
-        text += """
-<script>
-(function() {
-    // Restore scroll position and expanded rows saved before last reload
-    window.addEventListener('load', function() {
-        var savedPos = sessionStorage.getItem('entityScrollPos');
-        if (savedPos) {
-            savedPos = JSON.parse(savedPos);
-            sessionStorage.removeItem('entityScrollPos');
-            window.scrollTo(savedPos.x, savedPos.y);
-        }
-        var savedExpanded = sessionStorage.getItem('entityExpandedRows');
-        if (savedExpanded) {
-            sessionStorage.removeItem('entityExpandedRows');
-            JSON.parse(savedExpanded).forEach(function(rowIndex) {
-                var mainRow = document.getElementById('row_' + rowIndex);
-                if (mainRow) {
-                    var detailRows = document.querySelectorAll('#detail_' + rowIndex);
-                    detailRows.forEach(function(row) { row.style.display = 'table-row'; });
-                    mainRow.classList.add('expanded');
-                    var timeCell = mainRow.cells[0];
-                    timeCell.innerHTML = timeCell.innerHTML.replace('\u25b6', '\u25bc');
-                }
-            });
-        }
-    });
-    // Schedule reload, saving scroll position and expanded rows first
-    setTimeout(function() {
-        var expandedRows = [];
-        document.querySelectorAll('tr.history-row.expanded').forEach(function(row) {
-            expandedRows.push(row.id.replace('row_', ''));
-        });
-        sessionStorage.setItem('entityExpandedRows', JSON.stringify(expandedRows));
-        sessionStorage.setItem('entityScrollPos', JSON.stringify({x: window.scrollX, y: window.scrollY}));
-        location.reload();
-    }, 60000);
-})();
-</script>
-"""
 
-        # Include a back button to return the previous page
+        # Include a back button to return the previous page, and a reload button in case the
+        # entities selected weren't available yet when the page was first loaded
         text += """<div style="margin-bottom: 15px;">
             <a href="{}" class="button" style="display: inline-block; padding: 8px 15px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">
                 <span class="mdi mdi-arrow-left" style="margin-right: 5px;"></span>Back
             </a>
+            <button onclick="location.reload()" style="display: inline-block; margin-left: 10px; padding: 8px 15px; background-color: #2196F3; color: white; border: none; text-decoration: none; border-radius: 4px; font-weight: bold; cursor: pointer;">
+                <span class="mdi mdi-refresh" style="margin-right: 5px;"></span>Reload
+            </button>
         </div>""".format(
             self.default_page
         )
@@ -1192,91 +1262,8 @@ class WebInterface(ComponentBase):
                     text += f"<th>{friendly_name}{attr_display}{unit_display}</th>"
                 text += "</tr>\n"
 
-                # Collect history data for all entities (both 30-min summary and 5-min detail)
-                entity_histories_30min = []
-                entity_histories_5min = []
-                all_timestamps_30min = set()
-
-                for selection in entity_selections:
-                    entity_id = selection["entity_id"]
-                    attribute = selection["attribute"]
-                    history = entity_data_fetch[entity_id]
-                    entity_data_30min = {}
-                    entity_data_5min = {}
-
-                    if history and len(history) >= 1:
-                        history = history[0]
-                        if history:
-                            history.reverse()
-                            for item in history:
-                                if "last_updated" not in item:
-                                    continue
-                                last_updated_time = item["last_updated"]
-                                last_updated_stamp = str2time(last_updated_time)
-
-                                # Get state or attribute value
-                                if attribute:
-                                    state = item.get("attributes", {}).get(attribute, None)
-                                else:
-                                    state = item.get("state", None)
-
-                                if state is None:
-                                    state = "None"
-
-                                # Store 5-minute interval data
-                                minutes = last_updated_stamp.hour * 60 + last_updated_stamp.minute
-                                rounded_minutes_5 = (minutes // 5) * 5
-                                rounded_stamp_5 = last_updated_stamp.replace(minute=rounded_minutes_5 % 60, hour=rounded_minutes_5 // 60, second=0, microsecond=0)
-                                entity_data_5min[rounded_stamp_5] = state
-
-                                # Round to 30-minute intervals for summary
-                                rounded_minutes_30 = (minutes // 30) * 30
-                                rounded_stamp_30 = last_updated_stamp.replace(minute=rounded_minutes_30 % 60, hour=rounded_minutes_30 // 60, second=0, microsecond=0)
-                                entity_data_30min[rounded_stamp_30] = state
-                                all_timestamps_30min.add(rounded_stamp_30)
-
-                    entity_histories_30min.append(entity_data_30min)
-                    entity_histories_5min.append(entity_data_5min)
-
-                # Sort timestamps in reverse chronological order
-                sorted_timestamps_30min = sorted(all_timestamps_30min, reverse=True)
-
-                # Collect all display slots so we can precompute carry-forward fill
-                # Detail rows go BACKWARDS from the 30-min parent timestamp (offsets -5 to -25)
-                all_display_slots_5min = set()
-                for ts_30 in sorted_timestamps_30min:
-                    for offset in range(-5, -30, -5):
-                        all_display_slots_5min.add(ts_30 + timedelta(minutes=offset))
-
-                # Precompute filled dicts: {slot: (value, is_changed, prev_value)} per entity using carry-forward
-                entity_filled_30min = []
-                entity_filled_5min = []
-                for data_30min, data_5min in zip(entity_histories_30min, entity_histories_5min):
-                    # --- 30-min fill ---
-                    sorted_known_30 = sorted(data_30min.keys())
-                    filled_30 = {}
-                    last_val = None
-                    ki = 0
-                    for slot in sorted(sorted_timestamps_30min):
-                        prev_val = last_val
-                        while ki < len(sorted_known_30) and sorted_known_30[ki] <= slot:
-                            last_val = data_30min[sorted_known_30[ki]]
-                            ki += 1
-                        filled_30[slot] = (last_val if last_val is not None else "-", slot in data_30min, prev_val)
-                    entity_filled_30min.append(filled_30)
-
-                    # --- 5-min fill ---
-                    sorted_known_5 = sorted(data_5min.keys())
-                    filled_5 = {}
-                    last_val = None
-                    ki = 0
-                    for slot in sorted(all_display_slots_5min):
-                        prev_val = last_val
-                        while ki < len(sorted_known_5) and sorted_known_5[ki] <= slot:
-                            last_val = data_5min[sorted_known_5[ki]]
-                            ki += 1
-                        filled_5[slot] = (last_val if last_val is not None else "-", slot in data_5min, prev_val)
-                    entity_filled_5min.append(filled_5)
+                # Collect and bucket history data for all entities (both 30-min summary and 5-min detail)
+                entity_filled_30min, entity_filled_5min, sorted_timestamps_30min, _ = build_entity_history_table_data(entity_selections, entity_data_fetch)
 
                 # Pre-compute per-row cell classes so we can decide which rows to show
                 num_cols = len(entity_selections)
@@ -1768,7 +1755,9 @@ var options = {
         text += "   ]\n"
         text += "  }\n"
         text += "}\n"
-        text += "var chart = new ApexCharts(document.querySelector('#{}'), options);\n".format(tagname)
+        # getElementById (not a '#id' CSS selector) - tagname can be unit-derived (e.g. "chart_%")
+        # and '%' is not a valid unescaped CSS identifier character, which would throw in querySelector
+        text += "var chart = new ApexCharts(document.getElementById('{}'), options);\n".format(tagname)
         text += "chart.render();\n"
         text += "</script>\n"
         return text
@@ -1836,7 +1825,9 @@ var options = {
         text += "  title: {{ text: '{}' }},\n".format(title)
         text += "  tooltip: { y: { formatter: function(val) { return val !== null ? val.toFixed(2) : 'N/A'; } } }\n"
         text += "};\n"
-        text += "var chart_{cid} = new ApexCharts(document.querySelector('#{cid}'), options);\n".format(cid=chart_id)
+        # getElementById, not a '#id' CSS selector - chart_id may contain characters (e.g. "%") that
+        # are invalid in an unescaped CSS identifier and would throw in querySelector
+        text += "var chart_{cid} = new ApexCharts(document.getElementById('{cid}'), options);\n".format(cid=chart_id)
         text += "chart_{}.render();\n".format(chart_id)
         text += "</script>\n"
         return text
@@ -2030,7 +2021,7 @@ var options = {
   }
 };
 
-var chart = new ApexCharts(document.querySelector('#"""
+var chart = new ApexCharts(document.getElementById('"""
             + tagname
             + """'), options);
 chart.render();
