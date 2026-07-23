@@ -3148,7 +3148,29 @@ def _test_async_automatic_config(my_predbat):
         assert ge.config_args.get("grid_power") == ["sensor.predbat_gecloud_battery001_grid_power", "sensor.predbat_gecloud_battery002_grid_power"], "split CT should win when both overrides are set"
         assert ge.config_args.get("import_today") == ["sensor.predbat_gecloud_battery001_grid_import_total", "sensor.predbat_gecloud_battery002_grid_import_total"], "import_today should use all batteries when split CT wins"
 
-        # Test 3d: Three-phase alternative names should be auto-selected when default names do not exist
+        # Test 3h: standalone PV inverter present, ge_cloud_automatic_split_pv unset (default False) — PV inverter excluded
+        ge.config_args = {}
+        ge.settings = {"battery001": {"reg1": {"name": "Enable_Eco_Mode"}}}
+
+        devices = {"ems": None, "gateway": None, "battery": ["battery001"], "pv": ["pv001"]}
+
+        await ge.async_automatic_config(devices)
+
+        assert ge.config_args.get("pv_today") == ["sensor.predbat_gecloud_battery001_solar_total"], "pv_today should exclude standalone PV inverters by default"
+        assert ge.config_args.get("pv_power") == ["sensor.predbat_gecloud_battery001_solar_power"], "pv_power should exclude standalone PV inverters by default"
+
+        # Test 3i: standalone PV inverter present, ge_cloud_automatic_split_pv=True — PV inverter included
+        ge.config_args = {"ge_cloud_automatic_split_pv": True}
+        ge.settings = {"battery001": {"reg1": {"name": "Enable_Eco_Mode"}}}
+
+        devices = {"ems": None, "gateway": None, "battery": ["battery001"], "pv": ["pv001"]}
+
+        await ge.async_automatic_config(devices)
+
+        assert ge.config_args.get("pv_today") == ["sensor.predbat_gecloud_battery001_solar_total", "sensor.predbat_gecloud_pv001_solar_total"], "pv_today should include standalone PV inverters when ge_cloud_automatic_split_pv is set"
+        assert ge.config_args.get("pv_power") == ["sensor.predbat_gecloud_battery001_solar_power", "sensor.predbat_gecloud_pv001_solar_power"], "pv_power should include standalone PV inverters when ge_cloud_automatic_split_pv is set"
+
+        # Test 3j: Three-phase alternative names should be auto-selected when default names do not exist
         ge.config_args = {}
         ge.settings = {
             "battery003": {
