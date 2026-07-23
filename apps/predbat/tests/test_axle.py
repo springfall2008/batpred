@@ -166,13 +166,13 @@ def test_axle(my_predbat=None):
         try:
             result = test_func(my_predbat)
             if result:
-                print(f"✗ FAILED: {key}")
+                print(f"FAIL: FAILED: {key}")
                 failed += 1
             else:
-                print(f"✓ PASSED: {key}")
+                print(f"PASS: PASSED: {key}")
                 passed += 1
         except Exception as e:
-            print(f"✗ EXCEPTION in {key}: {e}")
+            print(f"FAIL: EXCEPTION in {key}: {e}")
             import traceback
 
             traceback.print_exc()
@@ -202,7 +202,7 @@ def _test_axle_initialization(my_predbat=None):
     assert axle.event_history == [], "Event history should be empty on init"
     assert axle.history_loaded is False, "History should not be loaded on init"
 
-    print("  ✓ Initialisation successful")
+    print("  PASS: Initialisation successful")
     return False
 
 
@@ -222,7 +222,7 @@ def _test_axle_list_api_key_validation(my_predbat=None):
 
     assert axle2.api_key is None, "Empty list should result in None api_key"
 
-    print("  ✓ List API key validation works correctly")
+    print("  PASS: List API key validation works correctly")
     return False
 
 
@@ -272,7 +272,7 @@ def _test_axle_fetch_with_active_event(my_predbat=None):
 
     assert axle.failures_total == 0, "No failures should be recorded"
 
-    print("  ✓ Active event fetched and published correctly")
+    print("  PASS: Active event fetched and published correctly")
     return False
 
 
@@ -315,7 +315,7 @@ def _test_axle_duplicate_event_detection(my_predbat=None):
     # Check that NO alert was sent for duplicate event
     alert_messages = [msg for msg in axle.log_messages if msg.startswith("Alert:")]
     assert len(alert_messages) == 0, "Should NOT send alert for duplicate event"
-    print("    ✓ No alert sent for duplicate event")
+    print("    PASS: No alert sent for duplicate event")
 
     # Reset log messages
     axle.log_messages = []
@@ -334,7 +334,7 @@ def _test_axle_duplicate_event_detection(my_predbat=None):
     assert len(alert_messages) == 1, "Should send alert for new/different event"
     assert "18:00" in alert_messages[0], "Alert should contain new event time"
     assert "20:00" in alert_messages[0], "Alert should contain new event end time"
-    print("    ✓ Alert sent for new/different event")
+    print("    PASS: Alert sent for new/different event")
 
     # Test 3: Fetch event with different end time - should trigger alert
     print("  Test 3: Same start but different end time")
@@ -350,7 +350,7 @@ def _test_axle_duplicate_event_detection(my_predbat=None):
     alert_messages = [msg for msg in axle.log_messages if msg.startswith("Alert:")]
     assert len(alert_messages) == 1, "Should send alert for event with different end time"
     assert "21:00" in alert_messages[0], "Alert should contain updated end time"
-    print("    ✓ Alert sent for event with different end time")
+    print("    PASS: Alert sent for event with different end time")
 
     # Test 4: No current_event in sensor (empty state) - should trigger alert for new event
     print("  Test 4: Empty sensor state (first event)")
@@ -374,9 +374,9 @@ def _test_axle_duplicate_event_detection(my_predbat=None):
     alert_messages = [msg for msg in axle.log_messages if msg.startswith("Alert:")]
     assert len(alert_messages) == 1, "Should send alert for first event when sensor is empty"
     assert "22:00" in alert_messages[0], "Alert should contain first event time"
-    print("    ✓ Alert sent for first event when sensor empty")
+    print("    PASS: Alert sent for first event when sensor empty")
 
-    print("  ✓ All duplicate event detection tests passed")
+    print("  PASS: All duplicate event detection tests passed")
     return False
 
 
@@ -408,7 +408,7 @@ def _test_axle_fetch_with_notify_config(my_predbat=None):
     alert_messages = [msg for msg in axle.log_messages if msg.startswith("Alert:")]
     assert len(alert_messages) == 1, "Should send notification when set_event_notify=True"
     assert "18:00" in alert_messages[0], "Notification should contain event time"
-    print("    ✓ Notification sent when enabled")
+    print("    PASS: Notification sent when enabled")
 
     # Test 2: set_event_notify disabled - should NOT send notification
     print("  Test 2: Notifications disabled (set_event_notify=False)")
@@ -430,16 +430,16 @@ def _test_axle_fetch_with_notify_config(my_predbat=None):
     # Verify NO notification was sent
     alert_messages2 = [msg for msg in axle2.log_messages if msg.startswith("Alert:")]
     assert len(alert_messages2) == 0, "Should NOT send notification when set_event_notify=False"
-    print("    ✓ Notification blocked when disabled")
+    print("    PASS: Notification blocked when disabled")
 
     # Verify event data was still processed correctly
     assert axle2.current_event["start_time"] == "2025-12-20T18:00:00+0000"
     assert axle2.current_event["import_export"] == "import"
     sensor2 = axle2.dashboard_items["binary_sensor.predbat_axle_event"]
     assert sensor2["state"] == "on", "Sensor should be ON even without notification"
-    print("    ✓ Event data processed correctly without notification")
+    print("    PASS: Event data processed correctly without notification")
 
-    print("  ✓ Notification config tests passed")
+    print("  PASS: Notification config tests passed")
     return False
 
 
@@ -476,7 +476,7 @@ def _test_axle_fetch_with_future_event(my_predbat=None):
     assert len(sensor["attributes"]["event_current"]) == 1, "Should have current event in list"
     assert len(sensor["attributes"]["event_history"]) == 0, "Future event not in history"
 
-    print("  ✓ Future event shows OFF state correctly")
+    print("  PASS: Future event shows OFF state correctly")
     return False
 
 
@@ -510,7 +510,7 @@ def _test_axle_fetch_with_past_event(my_predbat=None):
     assert len(sensor["attributes"]["event_current"]) == 1, "Should have current event"
     assert len(sensor["attributes"]["event_history"]) == 1, "Past event in history"
 
-    print("  ✓ Past event added to history correctly")
+    print("  PASS: Past event added to history correctly")
     return False
 
 
@@ -542,7 +542,7 @@ def _test_axle_fetch_no_event(my_predbat=None):
 
     assert axle.failures_total == 0, "No failures for empty response"
 
-    print("  ✓ No event handled correctly")
+    print("  PASS: No event handled correctly")
     return False
 
 
@@ -567,7 +567,7 @@ def _test_axle_http_error(my_predbat=None):
     assert axle.failures_total == 1, "Failure should be recorded for HTTP error"
     assert any("status code 401" in msg for msg in axle.log_messages), "Error should be logged"
 
-    print("  ✓ HTTP error handled correctly (no retry)")
+    print("  PASS: HTTP error handled correctly (no retry)")
     return False
 
 
@@ -610,7 +610,7 @@ def _test_axle_request_exception(my_predbat=None):
     assert any("Request failed after 3 attempts" in msg for msg in axle.log_messages), "Exception should be logged with retry count"
     assert any("Retrying in" in msg for msg in axle.log_messages), "Retry messages should be logged"
 
-    print("  ✓ Request exception handled correctly with 3 retries and exponential backoff")
+    print("  PASS: Request exception handled correctly with 3 retries and exponential backoff")
     return False
 
 
@@ -662,7 +662,7 @@ def _test_axle_retry_success_after_failure(my_predbat=None):
     assert any("Successfully fetched event data" in msg for msg in axle.log_messages), "Success should be logged"
     assert any("Retrying in" in msg for msg in axle.log_messages), "Retry attempts should be logged"
 
-    print("  ✓ Retry mechanism succeeds after initial failures")
+    print("  PASS: Retry mechanism succeeds after initial failures")
     return False
 
 
@@ -691,7 +691,7 @@ def _test_axle_datetime_parsing_variations(my_predbat=None):
     assert isinstance(axle.current_event["start_time"], str), "Should be stored as string"
     assert isinstance(axle.current_event["end_time"], str), "Should be stored as string"
 
-    print("  ✓ Different datetime formats parsed correctly")
+    print("  PASS: Different datetime formats parsed correctly")
     return False
 
 
@@ -716,7 +716,7 @@ def _test_axle_json_parse_error(my_predbat=None):
     assert axle.failures_total == 1, "Failure should be recorded for JSON parse error"
     assert any("Failed to parse JSON response" in msg for msg in axle.log_messages), "Parse error should be logged"
 
-    print("  ✓ JSON parse error handled correctly (no retry)")
+    print("  PASS: JSON parse error handled correctly (no retry)")
     return False
 
 
@@ -739,7 +739,7 @@ def _test_axle_run_method(my_predbat=None):
     assert result is True, "Run should return True"
     assert axle.history_loaded is True, "Should load history on first run"
     assert len(fetch_called) == 1, "Should fetch when updated_at is None"
-    print("    ✓ Fetches when no previous updated_at")
+    print("    PASS: Fetches when no previous updated_at")
 
     # Test 2: recent updated_at (< 10 min ago) - should NOT fetch
     print("  Test 2: Recent updated_at (5 min ago) - should skip")
@@ -751,7 +751,7 @@ def _test_axle_run_method(my_predbat=None):
     fetch_called.clear()
     result = run_async(axle2.run(seconds=300, first=False))
     assert len(fetch_called) == 0, "Should not fetch when updated_at is < 10 min old"
-    print("    ✓ Skips fetch when data is fresh")
+    print("    PASS: Skips fetch when data is fresh")
 
     # Test 3: stale updated_at (>= 10 min ago) - should fetch
     print("  Test 3: Stale updated_at (11 min ago) - should fetch")
@@ -763,7 +763,7 @@ def _test_axle_run_method(my_predbat=None):
     fetch_called.clear()
     result = run_async(axle3.run(seconds=660, first=False))
     assert len(fetch_called) == 1, "Should fetch when updated_at is 10+ min old"
-    print("    ✓ Fetches when data is stale")
+    print("    PASS: Fetches when data is stale")
 
     # Test 4: restart with recent updated_at (restored from storage) - should NOT fetch
     print("  Test 4: Restart with recent updated_at (2 min ago) - should skip")
@@ -776,7 +776,7 @@ def _test_axle_run_method(my_predbat=None):
     result = run_async(axle4.run(seconds=0, first=True))
     assert axle4.history_loaded is True, "Should still load history on first run"
     assert len(fetch_called) == 0, "Should not fetch on restart when updated_at is still fresh"
-    print("    ✓ Skips fetch on restart when updated_at is still fresh")
+    print("    PASS: Skips fetch on restart when updated_at is still fresh")
 
     # Test 5: exactly 10 minutes - boundary: should fetch
     print("  Test 5: Exactly 10 minutes old - boundary fetch")
@@ -788,9 +788,9 @@ def _test_axle_run_method(my_predbat=None):
     fetch_called.clear()
     run_async(axle5.run(seconds=600, first=False))
     assert len(fetch_called) == 1, "Should fetch at exactly 10 min boundary"
-    print("    ✓ Fetches at exactly 10 min boundary")
+    print("    PASS: Fetches at exactly 10 min boundary")
 
-    print("  ✓ Run method time-based polling logic correct")
+    print("  PASS: Run method time-based polling logic correct")
     return False
 
 
@@ -896,7 +896,7 @@ def _test_axle_history_loading(my_predbat=None):
     assert axle.event_history[0]["import_export"] == "import"
     assert axle.history_loaded is True
 
-    print("  ✓ History loading filters future events correctly")
+    print("  PASS: History loading filters future events correctly")
     return False
 
 
@@ -931,7 +931,7 @@ def _test_axle_history_cleanup(my_predbat=None):
     assert len(axle.event_history) == 1, "Should remove events older than 7 days"
     assert axle.event_history[0]["import_export"] == "export"
 
-    print("  ✓ History cleanup removes old events correctly")
+    print("  PASS: History cleanup removes old events correctly")
     return False
 
 
@@ -1001,7 +1001,7 @@ def _test_axle_fetch_sessions(my_predbat=None):
     assert sessions[2]["start_time"] == "2025-12-18T14:00:00+0000"
     assert sessions[2]["import_export"] == "export"
 
-    print("  ✓ Fetch sessions returns current + history correctly")
+    print("  PASS: Fetch sessions returns current + history correctly")
     return False
 
 
@@ -1089,12 +1089,12 @@ def _test_axle_load_slot_export(my_predbat=None):
     assert base.load_scaling_dynamic.get(end_minutes) is None, "load_scaling_dynamic after event should be unchanged"
 
     # Verify the event was logged
-    print("  ✓ Export rates increased by 100p/kWh for 2-hour period (14:00-16:00)")
-    print(f"  ✓ Rate at 14:00 changed from {original_rate_before} to {base.rate_export[start_minutes]}")
-    print(f"  ✓ Rate at 13:59 unchanged: {base.rate_export[start_minutes - 1]}")
-    print(f"  ✓ Rate at 16:00 unchanged: {base.rate_export[end_minutes]}")
-    print(f"  ✓ {len(rate_replicate)} minutes marked as 'saving' events")
-    print(f"  ✓ load_scaling_saving ({base.load_scaling_saving}) applied to {len(base.load_scaling_dynamic)} minutes in export event")
+    print("  PASS: Export rates increased by 100p/kWh for 2-hour period (14:00-16:00)")
+    print(f"  PASS: Rate at 14:00 changed from {original_rate_before} to {base.rate_export[start_minutes]}")
+    print(f"  PASS: Rate at 13:59 unchanged: {base.rate_export[start_minutes - 1]}")
+    print(f"  PASS: Rate at 16:00 unchanged: {base.rate_export[end_minutes]}")
+    print(f"  PASS: {len(rate_replicate)} minutes marked as 'saving' events")
+    print(f"  PASS: load_scaling_saving ({base.load_scaling_saving}) applied to {len(base.load_scaling_dynamic)} minutes in export event")
 
     return False
 
@@ -1171,12 +1171,12 @@ def _test_axle_load_slot_import(my_predbat=None):
     assert base.load_scaling_dynamic.get(start_minutes - 1) is None, "load_scaling_dynamic before event should be unchanged"
     assert base.load_scaling_dynamic.get(end_minutes) is None, "load_scaling_dynamic after event should be unchanged"
 
-    print("  ✓ Import rates decreased by 10p/kWh for 2-hour period (02:00-04:00)")
-    print(f"  ✓ Rate at 02:00 changed from {original_rate} to {base.rate_import[start_minutes]}")
-    print(f"  ✓ Rate at 01:59 unchanged: {base.rate_import[start_minutes - 1]}")
-    print(f"  ✓ Rate at 04:00 unchanged: {base.rate_import[end_minutes]}")
-    print(f"  ✓ {len(rate_replicate)} minutes marked as 'saving' events")
-    print(f"  ✓ load_scaling_free ({base.load_scaling_free}) applied to {len(base.load_scaling_dynamic)} minutes in import event")
+    print("  PASS: Import rates decreased by 10p/kWh for 2-hour period (02:00-04:00)")
+    print(f"  PASS: Rate at 02:00 changed from {original_rate} to {base.rate_import[start_minutes]}")
+    print(f"  PASS: Rate at 01:59 unchanged: {base.rate_import[start_minutes - 1]}")
+    print(f"  PASS: Rate at 04:00 unchanged: {base.rate_import[end_minutes]}")
+    print(f"  PASS: {len(rate_replicate)} minutes marked as 'saving' events")
+    print(f"  PASS: load_scaling_free ({base.load_scaling_free}) applied to {len(base.load_scaling_dynamic)} minutes in import event")
 
     return False
 
@@ -1230,7 +1230,7 @@ def _test_axle_active_function(my_predbat=None):
     result = fetch_axle_active(test_interface_no_config)
     assert result is False, "fetch_axle_active should return False when axle_session is not configured"
 
-    print("✓ fetch_axle_active function test passed")
+    print("PASS: fetch_axle_active function test passed")
     return False
 
 
@@ -1247,14 +1247,14 @@ def _test_axle_managed_initialization(my_predbat=None):
     assert axle.partner_password == "secret"
     assert axle.api_base_url == "https://api-sandbox.axle.energy"
     assert axle.api_key is None, "api_key should be None in managed mode"
-    print("  ✓ Valid managed mode initialisation")
+    print("  PASS: Valid managed mode initialisation")
 
     # Missing site_id should disable managed mode
     axle2 = MockAxleAPI()
     axle2.initialize(api_key=None, pence_per_kwh=100, automatic=False, managed_mode=True, site_id=None, partner_username="user@test.com", partner_password="secret")
     assert axle2.managed_mode is False, "managed_mode should be False when site_id missing"
     assert any("site_id" in msg for msg in axle2.log_messages), "Should log missing site_id"
-    print("  ✓ Missing site_id disables managed mode")
+    print("  PASS: Missing site_id disables managed mode")
 
     # Missing all managed params
     axle3 = MockAxleAPI()
@@ -1262,7 +1262,7 @@ def _test_axle_managed_initialization(my_predbat=None):
     assert axle3.managed_mode is False, "managed_mode should be False when all params missing"
     assert any("partner_username" in msg for msg in axle3.log_messages)
     assert any("partner_password" in msg for msg in axle3.log_messages)
-    print("  ✓ Missing all params disables managed mode")
+    print("  PASS: Missing all params disables managed mode")
 
     return False
 
@@ -1297,11 +1297,11 @@ def _test_axle_managed_price_curve_processing(my_predbat=None):
     assert len(export_events) == 2
     assert len(import_events) == 2
 
-    # First export: 50 GBP/MWh → 5.0 p/kWh
+    # First export: 50 GBP/MWh -> 5.0 p/kWh
     first_export = [e for e in export_events if "14:00:00" in e["start_time"]][0]
     assert first_export["pence_per_kwh"] == 5.0, f"Expected 5.0, got {first_export['pence_per_kwh']}"
 
-    # First import: negated → -5.0 p/kWh
+    # First import: negated -> -5.0 p/kWh
     first_import = [e for e in import_events if "14:00:00" in e["start_time"]][0]
     assert first_import["pence_per_kwh"] == -5.0, f"Expected -5.0, got {first_import['pence_per_kwh']}"
 
@@ -1316,9 +1316,9 @@ def _test_axle_managed_price_curve_processing(my_predbat=None):
     null_events = [e for e in axle.event_history if "15:00:00" in e.get("start_time", "")]
     assert len(null_events) == 0, "Null price slots should be skipped"
 
-    print("  ✓ Price curve conversion correct (GBP/MWh → p/kWh)")
-    print("  ✓ Export and import sessions created per slot")
-    print("  ✓ Null prices skipped")
+    print("  PASS: Price curve conversion correct (GBP/MWh -> p/kWh)")
+    print("  PASS: Export and import sessions created per slot")
+    print("  PASS: Null prices skipped")
     return False
 
 
@@ -1365,8 +1365,8 @@ def _test_axle_managed_event_dedup(my_predbat=None):
     export_event = [e for e in axle.event_history if e["import_export"] == "export"][0]
     assert export_event["pence_per_kwh"] == 6.0, "Deduped event should have updated price"
 
-    print("  ✓ Different directions at same time are kept separately")
-    print("  ✓ Same direction at same time is deduped with update")
+    print("  PASS: Different directions at same time are kept separately")
+    print("  PASS: Same direction at same time is deduped with update")
     return False
 
 
@@ -1396,8 +1396,8 @@ def _test_axle_managed_future_events(my_predbat=None):
     axle.add_event_to_history(future_event, allow_future=True)
     assert len(axle.event_history) == 1, "Future event should be accepted with allow_future"
 
-    print("  ✓ Future events rejected without allow_future")
-    print("  ✓ Future events accepted with allow_future")
+    print("  PASS: Future events rejected without allow_future")
+    print("  PASS: Future events accepted with allow_future")
     return False
 
 
@@ -1421,7 +1421,7 @@ def _test_axle_managed_publish(my_predbat=None):
     sensor = axle_managed.dashboard_items["binary_sensor.predbat_axle_event"]
     assert sensor["attributes"]["managed_mode"] is True, "Managed should have managed_mode=True"
 
-    print("  ✓ managed_mode attribute correctly set in sensor")
+    print("  PASS: managed_mode attribute correctly set in sensor")
     return False
 
 
@@ -1450,8 +1450,8 @@ def _test_axle_managed_disabled_without_creds(my_predbat=None):
     axle2.initialize(api_key=None, pence_per_kwh=100, automatic=False, managed_mode=False)
     assert any("BYOK" in msg for msg in axle2.log_messages), "Should warn about BYOK needing api_key"
 
-    print("  ✓ Managed mode disabled when credentials missing")
-    print("  ✓ BYOK warning logged when managed_mode=False and no api_key")
+    print("  PASS: Managed mode disabled when credentials missing")
+    print("  PASS: BYOK warning logged when managed_mode=False and no api_key")
     return False
 
 
@@ -1472,7 +1472,7 @@ def _test_axle_managed_get_partner_token(my_predbat=None):
     assert token == "tok_abc123", f"Expected tok_abc123, got {token}"
     assert axle.partner_token == "tok_abc123"
     assert axle.partner_token_expiry is not None
-    print("  ✓ Token fetched successfully")
+    print("  PASS: Token fetched successfully")
 
     # Test 2: Cached token returned without HTTP call
     call_count = [0]
@@ -1489,7 +1489,7 @@ def _test_axle_managed_get_partner_token(my_predbat=None):
 
     assert token2 == "tok_abc123", "Should return cached token"
     assert call_count[0] == 0, "Should not make HTTP call for cached token"
-    print("  ✓ Cached token returned without HTTP call")
+    print("  PASS: Cached token returned without HTTP call")
 
     # Test 3: Auth response missing access_token
     axle2 = MockAxleAPI()
@@ -1504,7 +1504,7 @@ def _test_axle_managed_get_partner_token(my_predbat=None):
     assert token3 is None, "Should return None when access_token missing from response"
     assert axle2.partner_token is None, "Should not cache empty token"
     assert any("missing access_token" in msg for msg in axle2.log_messages), "Should log missing token warning"
-    print("  ✓ Missing access_token handled correctly")
+    print("  PASS: Missing access_token handled correctly")
 
     # Test 4: Auth failure (401)
     axle3 = MockAxleAPI()
@@ -1518,7 +1518,7 @@ def _test_axle_managed_get_partner_token(my_predbat=None):
 
     assert token4 is None, "Should return None on auth failure"
     assert any("auth failed" in msg for msg in axle3.log_messages), "Should log auth failure"
-    print("  ✓ Auth failure returns None")
+    print("  PASS: Auth failure returns None")
 
     return False
 
@@ -1585,9 +1585,9 @@ def _test_axle_managed_fetch_end_to_end(my_predbat=None):
     assert axle.failures_total == 0
     assert any("Price curve processed successfully" in msg for msg in axle.log_messages)
 
-    print("  ✓ Auth + price curve fetch works end-to-end")
-    print("  ✓ Sessions created with correct prices")
-    print("  ✓ Current event set to active export slot")
+    print("  PASS: Auth + price curve fetch works end-to-end")
+    print("  PASS: Sessions created with correct prices")
+    print("  PASS: Current event set to active export slot")
     return False
 
 
@@ -1638,8 +1638,8 @@ def _test_axle_managed_token_retry(my_predbat=None):
     assert call_order[0] == 4, f"Expected 4 HTTP calls (auth, fail, re-auth, success), got {call_order[0]}"
     assert any("Price curve processed successfully" in msg for msg in axle.log_messages)
 
-    print("  ✓ Token invalidated after price curve failure")
-    print("  ✓ Re-auth and retry succeeds")
+    print("  PASS: Token invalidated after price curve failure")
+    print("  PASS: Re-auth and retry succeeds")
 
     # Test 2: Both attempts fail — should record failure
     axle2 = MockAxleAPI()
@@ -1664,6 +1664,6 @@ def _test_axle_managed_token_retry(my_predbat=None):
     assert axle2.failures_total == 1, f"Expected 1 failure, got {axle2.failures_total}"
     assert len(axle2.event_history) == 0, "No events should be created on complete failure"
     assert any("No price curve data after retry" in msg for msg in axle2.log_messages)
-    print("  ✓ Complete failure after retry records failure correctly")
+    print("  PASS: Complete failure after retry records failure correctly")
 
     return False

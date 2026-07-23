@@ -1225,12 +1225,12 @@ def test_temperature(my_predbat=None):
             test_result = test_func(my_predbat)
             if test_result:
                 failed += 1
-                print("  ❌ FAILED")
+                print("  ERROR: FAILED")
             else:
                 passed += 1
-                print("  ✅ PASSED")
+                print("  PASS: PASSED")
         except Exception as e:
-            print("  ❌ EXCEPTION: {}".format(e))
+            print("  ERROR: EXCEPTION: {}".format(e))
             import traceback
             traceback.print_exc()
             failed += 1

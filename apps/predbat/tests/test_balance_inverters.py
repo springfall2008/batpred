@@ -251,7 +251,7 @@ def test_balance_discharge_low_soc(my_predbat):
         print("ERROR: Expected inverter 0 discharge rate to be set to 0")
         return True
 
-    print("✓ Test passed: Low SoC inverter discharge rate set to 0")
+    print("PASS: Test passed: Low SoC inverter discharge rate set to 0")
     return False
 
 
@@ -301,7 +301,7 @@ def test_balance_charge_high_soc(my_predbat):
         print("ERROR: Expected inverter 0 charge rate to be set to 0")
         return True
 
-    print("✓ Test passed: High SoC inverter charge rate set to 0")
+    print("PASS: Test passed: High SoC inverter charge rate set to 0")
     return False
 
 
@@ -351,7 +351,7 @@ def test_balance_cross_charging1(my_predbat):
         print("ERROR: Expected inverter 2 charge rate to be set to 0 to stop cross-charging")
         return True
 
-    print("✓ Test passed: Cross-charging inverter charge rate set to 0")
+    print("PASS: Test passed: Cross-charging inverter charge rate set to 0")
     return False
 
 
@@ -401,7 +401,7 @@ def test_balance_cross_charging2(my_predbat):
         print("ERROR: Expected inverter 1 discharge rate to be set to 0 to stop cross-charging")
         return True
 
-    print("✓ Test passed: Cross-charging inverter discharge rate set to 0")
+    print("PASS: Test passed: Cross-charging inverter discharge rate set to 0")
     return False
 
 
@@ -451,7 +451,7 @@ def test_balance_cross_discharging(my_predbat):
         print("ERROR: Expected inverter 1 discharge rate to be set to 0 to stop cross-discharging")
         return True
 
-    print("✓ Test passed: Cross-discharging inverter discharge rate set to 0")
+    print("PASS: Test passed: Cross-discharging inverter discharge rate set to 0")
     return False
 
 
@@ -498,7 +498,7 @@ def test_balance_already_balanced(my_predbat):
         print("ERROR: Expected no rate adjustments when inverters are balanced")
         return True
 
-    print("✓ Test passed: No adjustments made when already balanced")
+    print("PASS: Test passed: No adjustments made when already balanced")
     return False
 
 
@@ -548,7 +548,7 @@ def test_balance_reset_balanced_charge(my_predbat):
         print("ERROR: Expected rate adjustments when inverters are balanced")
         return True
 
-    print("✓ Test passed: Rate adjustments made when already balanced")
+    print("PASS: Test passed: Rate adjustments made when already balanced")
     return False
 
 
@@ -598,7 +598,7 @@ def test_balance_reset_balanced_discharge(my_predbat):
         print("ERROR: Expected rate adjustments when inverters are balanced")
         return True
 
-    print("✓ Test passed: Rate adjustments made when already balanced")
+    print("PASS: Test passed: Rate adjustments made when already balanced")
     return False
 
 
@@ -644,7 +644,7 @@ def test_balance_below_threshold(my_predbat):
         print("ERROR: Expected no rate adjustments when difference below threshold")
         return True
 
-    print("✓ Test passed: No adjustments made when below threshold")
+    print("PASS: Test passed: No adjustments made when below threshold")
     return False
 
 
@@ -692,7 +692,7 @@ def test_balance_at_reserve(my_predbat):
         print("ERROR: Expected inverter 0 at reserve to have discharge stopped")
         return True
 
-    print("✓ Test passed: Inverter at reserve has discharge stopped")
+    print("PASS: Test passed: Inverter at reserve has discharge stopped")
     return False
 
 
@@ -738,7 +738,7 @@ def test_balance_disabled(my_predbat):
         print("ERROR: Expected no rate adjustments when balancing disabled")
         return True
 
-    print("✓ Test passed: No adjustments made when balancing disabled")
+    print("PASS: Test passed: No adjustments made when balancing disabled")
     return False
 
 
@@ -791,7 +791,7 @@ def test_balance_calibration_mode(my_predbat):
     # Reset calibration mode
     my_predbat.inverters[0].in_calibration = False
 
-    print("✓ Test passed: No adjustments made when in calibration mode")
+    print("PASS: Test passed: No adjustments made when in calibration mode")
     return False
 
 
@@ -840,5 +840,5 @@ def test_balance_insufficient_power(my_predbat):
         print("ERROR: Expected no rate adjustments when power below threshold")
         return True
 
-    print("✓ Test passed: No adjustments made when power insufficient")
+    print("PASS: Test passed: No adjustments made when power insufficient")
     return False

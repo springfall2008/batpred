@@ -323,7 +323,7 @@ def _test_futurerate_auto_disabled_proceeds(my_predbat):
 
 
 def _test_futurerate_auto_no_agile_returns_empty(my_predbat):
-    """futurerate_adjust_auto=True + no Agile detected → return ({}, {}) without hitting the API."""
+    """futurerate_adjust_auto=True + no Agile detected -> return ({}, {}) without hitting the API."""
     base = MockFutureRateBase()
     base.args["futurerate_adjust_auto"] = True
     future = _make_future_rate(base)
@@ -341,7 +341,7 @@ def _test_futurerate_auto_no_agile_returns_empty(my_predbat):
 
 
 def _test_futurerate_auto_import_agile_proceeds(my_predbat):
-    """futurerate_adjust_auto=True + import is Agile → calls futurerate_analysis_new."""
+    """futurerate_adjust_auto=True + import is Agile -> calls futurerate_analysis_new."""
     base = MockFutureRateBase()
     base.args["futurerate_adjust_auto"] = True
     base.args["metric_octopus_import"] = IMPORT_ENTITY
@@ -361,7 +361,7 @@ def _test_futurerate_auto_import_agile_proceeds(my_predbat):
 
 
 def _test_futurerate_auto_export_agile_proceeds(my_predbat):
-    """futurerate_adjust_auto=True + only export is Agile → calls futurerate_analysis_new."""
+    """futurerate_adjust_auto=True + only export is Agile -> calls futurerate_analysis_new."""
     base = MockFutureRateBase()
     base.args["futurerate_adjust_auto"] = True
     base.args["metric_octopus_export"] = EXPORT_ENTITY
@@ -386,7 +386,7 @@ def _test_futurerate_auto_export_agile_proceeds(my_predbat):
 
 
 def _test_futurerate_adjust_auto_import_agile_calibrates_import(my_predbat):
-    """futurerate_adjust_auto=True + import Agile → calibrate import with real rates."""
+    """futurerate_adjust_auto=True + import Agile -> calibrate import with real rates."""
     base = MockFutureRateBase()
     base.args["futurerate_adjust_auto"] = True
     base.args["futurerate_adjust_import"] = False
@@ -432,7 +432,7 @@ def _test_futurerate_adjust_auto_import_agile_calibrates_import(my_predbat):
 
 
 def _test_futurerate_adjust_auto_export_agile_calibrates_export(my_predbat):
-    """futurerate_adjust_auto=True + export Agile → calibrate export with real rates."""
+    """futurerate_adjust_auto=True + export Agile -> calibrate export with real rates."""
     base = MockFutureRateBase()
     base.args["futurerate_adjust_auto"] = True
     base.args["futurerate_adjust_import"] = False
@@ -476,7 +476,7 @@ def _test_futurerate_adjust_auto_export_agile_calibrates_export(my_predbat):
 
 
 def _test_futurerate_adjust_auto_disabled_uses_manual_flags(my_predbat):
-    """futurerate_adjust_auto=False → manual futurerate_adjust_import/export flags respected."""
+    """futurerate_adjust_auto=False -> manual futurerate_adjust_import/export flags respected."""
     base = MockFutureRateBase()
     base.args["futurerate_adjust_auto"] = False
     base.args["futurerate_adjust_import"] = True

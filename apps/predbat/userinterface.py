@@ -1063,10 +1063,9 @@ class UserInterface:
             for item_value in arg_value:
                 item_matched, item_value = self.resolve_arg_re(arg, item_value, state_keys)
                 if not item_matched:
-                    self.log("Warn: Regular argument {} expression {} failed to match - disabling this item".format(arg, item_value))
-                    new_list.append(None)
-                else:
-                    new_list.append(item_value)
+                    self.log("Warn: Regular argument {} expression {} failed to match - will retry".format(arg, item_value))
+                    matched = False
+                new_list.append(item_value)
             arg_value = new_list
         elif isinstance(arg_value, dict):
             new_dict = {}
@@ -1074,10 +1073,9 @@ class UserInterface:
                 item_value = arg_value[item_name]
                 item_matched, item_value = self.resolve_arg_re(arg, item_value, state_keys)
                 if not item_matched:
-                    self.log("Warn: Regular argument {} expression {} failed to match - disabling this item".format(arg, item_value))
-                    new_dict[item_name] = None
-                else:
-                    new_dict[item_name] = item_value
+                    self.log("Warn: Regular argument {} expression {} failed to match - will retry".format(arg, item_value))
+                    matched = False
+                new_dict[item_name] = item_value
             arg_value = new_dict
         elif isinstance(arg_value, str) and arg_value.startswith("re:"):
             matched = False
@@ -1106,10 +1104,13 @@ class UserInterface:
         states = self.get_state_wrapper()
         state_keys = states.keys()
         disabled = []
-        self.unmatched_args = {}
+        enabled = []
+
+        if not hasattr(self, "unmatched_args"):
+            self.unmatched_args = {}
 
         # Find each arg re to match
-        for arg in self.args:
+        for arg in list(self.args.keys()):
             arg_value = self.args[arg]
             matched, arg_value = self.resolve_arg_re(arg, arg_value, state_keys)
             if not matched:
@@ -1119,7 +1120,20 @@ class UserInterface:
             else:
                 self.args[arg] = arg_value
 
-        # Remove unmatched keys
+        # Check previously unmatched args
+        for arg in list(self.unmatched_args.keys()):
+            arg_value = self.unmatched_args[arg]
+            matched, arg_value = self.resolve_arg_re(arg, arg_value, state_keys)
+            if matched:
+                self.args[arg] = arg_value
+                enabled.append(arg)
+                self.log("Info: Regular expression argument: {} matched on retry".format(arg))
+
+        # Remove matched keys from unmatched list
+        for key in enabled:
+            del self.unmatched_args[key]
+
+        # Remove unmatched keys from args
         for key in disabled:
             self.unmatched_args[key] = self.args[key]
             del self.args[key]

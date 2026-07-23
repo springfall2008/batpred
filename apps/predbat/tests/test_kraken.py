@@ -394,8 +394,8 @@ def test_run_refetches_rates_when_stale():
 
     api = make_kraken_api()
     api.current_tariff = {"tariff_code": "E-1R-VAR-01", "product_code": "VAR-01"}
-    api.tariff_fetched_at = datetime.now()  # fresh tariff → no re-discovery
-    api.rates_fetched_at = datetime.now() - timedelta(minutes=KRAKEN_RATES_REFRESH_MINUTES + 5)  # stale → re-fetch
+    api.tariff_fetched_at = datetime.now()  # fresh tariff -> no re-discovery
+    api.rates_fetched_at = datetime.now() - timedelta(minutes=KRAKEN_RATES_REFRESH_MINUTES + 5)  # stale -> re-fetch
     api.async_find_tariffs = AsyncMock(return_value=None)
     api.async_fetch_rates = AsyncMock(return_value=[{"value_inc_vat": 24.5}])
     api.async_fetch_standing_charges = AsyncMock(return_value=53.0)
@@ -546,7 +546,7 @@ def test_standing_charge_converts_pence_to_pounds():
     with patch("aiohttp.ClientSession", return_value=mock_session):
         result = asyncio.run(api.async_fetch_standing_charges())
 
-    # 53.0 pence → 0.53 pounds
+    # 53.0 pence -> 0.53 pounds
     assert result == 0.53
 
 
@@ -644,7 +644,7 @@ def test_fetch_standing_charges_graphql_returns_value():
 
     result = asyncio.run(api.async_fetch_standing_charges_graphql("1900000000456"))
 
-    # 61.95 pence/day → 0.6195 pounds/day
+    # 61.95 pence/day -> 0.6195 pounds/day
     assert result is not None
     assert abs(result - 0.6195) < 1e-6
 
@@ -999,7 +999,7 @@ def test_fetch_rates_graphql_window_derived_from_forecast_hours():
     expected_start = midnight_utc - timedelta(days=1)
     assert abs((start_dt - expected_start).total_seconds()) < 60, f"start_at {start_dt} not close to expected {expected_start}"
 
-    # forecast_hours=72 → forecast_days=3 → end_at must be midnight + 4 days
+    # forecast_hours=72 -> forecast_days=3 -> end_at must be midnight + 4 days
     expected_end = midnight_utc + timedelta(days=4)
     assert abs((end_dt - expected_end).total_seconds()) < 60, f"end_at {end_dt} not close to expected {expected_end}"
 
@@ -1007,7 +1007,7 @@ def test_fetch_rates_graphql_window_derived_from_forecast_hours():
 def test_fetch_rates_graphql_window_default_forecast_hours():
     """async_fetch_rates_graphql() uses forecast_hours default of 48 when not configured.
 
-    forecast_hours=48 → forecast_days=2 → end_at = midnight + 3 days.
+    forecast_hours=48 -> forecast_days=2 -> end_at = midnight + 3 days.
     """
     from datetime import datetime, timedelta, timezone
     import re
@@ -1035,7 +1035,7 @@ def test_fetch_rates_graphql_window_default_forecast_hours():
     now = datetime.now(timezone.utc)
     midnight_utc = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
-    # default forecast_hours=48 → forecast_days=2 → end_at must be midnight + 3 days
+    # default forecast_hours=48 -> forecast_days=2 -> end_at must be midnight + 3 days
     expected_end = midnight_utc + timedelta(days=3)
     assert abs((end_dt - expected_end).total_seconds()) < 60, f"end_at {end_dt} not close to expected {expected_end}"
 
@@ -1296,7 +1296,7 @@ def test_build_rest_auth_uses_basic_auth_for_api_key():
     """_build_rest_auth returns HTTP Basic auth (API key as username) in api_key mode."""
     import aiohttp
 
-    api = make_kraken_api()  # api_key mode → _api_key = "test-key"
+    api = make_kraken_api()  # api_key mode -> _api_key = "test-key"
     auth, headers = asyncio.run(api._build_rest_auth())
     assert isinstance(auth, aiohttp.BasicAuth)
     assert auth.login == "test-key"
@@ -1322,7 +1322,7 @@ def test_fetch_rates_404_retries_authenticated_and_succeeds():
     Reproduces the live EDF case: E-1R-EDF_EXPORT_SEG_12M_HH-B (a private product) 404s
     unauthenticated, so the authenticated retry is what actually recovers the export rates.
     """
-    api = make_kraken_api()  # api_key mode → authenticated retry uses HTTP Basic auth
+    api = make_kraken_api()  # api_key mode -> authenticated retry uses HTTP Basic auth
     export_tariff = {"tariff_code": "E-1R-EDF_EXPORT_SEG_12M_HH-B", "product_code": "EDF_EXPORT_SEG_12M"}
     api.export_tariff = export_tariff
     api.export_mpan = "1170001829927"
@@ -1404,7 +1404,7 @@ def test_connection_nodes_extracts_edges():
     assert KrakenAPI._connection_nodes(conn) == [{"value": 1}, {"value": 2}]
     # Backward-compat: a plain list is returned unchanged.
     assert KrakenAPI._connection_nodes([{"value": 3}]) == [{"value": 3}]
-    # Empty / missing shapes → [].
+    # Empty / missing shapes -> [].
     assert KrakenAPI._connection_nodes(None) == []
     assert KrakenAPI._connection_nodes({}) == []
     assert KrakenAPI._connection_nodes({"edges": []}) == []
@@ -1551,7 +1551,7 @@ def test_run_first_restores_cache_and_skips_fetch():
     result = asyncio.run(api.run(0, True))
 
     assert result is True
-    # Fresh cache → no API calls at all.
+    # Fresh cache -> no API calls at all.
     api.async_find_tariffs.assert_not_called()
     api.async_fetch_rates.assert_not_called()
     api.async_fetch_standing_charges.assert_not_called()
@@ -1603,7 +1603,7 @@ def test_normalize_dispatches_field_mapping():
     planned = api._normalize_dispatches(
         [
             {"start": "2026-07-08T00:00:00Z", "end": "2026-07-08T00:30:00Z", "type": "SMART", "energyAddedKwh": "2.5"},
-            {"start": None, "end": "x"},  # missing start → dropped
+            {"start": None, "end": "x"},  # missing start -> dropped
         ],
         completed=False,
     )
@@ -1627,7 +1627,7 @@ def test_normalize_dispatches_trims_in_progress_planned():
 
     planned = api._normalize_dispatches([{"start": start, "end": end, "type": "SMART", "energyAddedKwh": 10.0}], completed=False)
     assert len(planned) == 1
-    # ~half the window remains → ~half the energy, and start advanced to ~now.
+    # ~half the window remains -> ~half the energy, and start advanced to ~now.
     assert 4.5 < planned[0]["charge_in_kwh"] < 5.5
     trimmed_start = datetime.fromisoformat(planned[0]["start"])
     assert abs((trimmed_start - now).total_seconds()) < 60
@@ -1722,8 +1722,8 @@ def test_run_fetches_and_wires_dispatches():
     api = make_kraken_api()
     api.current_tariff = {"tariff_code": "E-1R-VAR-01", "product_code": "VAR-01"}
     api.import_rates = [{"value_inc_vat": 24.5}]
-    api.tariff_fetched_at = datetime.now()  # fresh → no tariff work / device re-discovery
-    api.rates_fetched_at = datetime.now()  # fresh → no rate work
+    api.tariff_fetched_at = datetime.now()  # fresh -> no tariff work / device re-discovery
+    api.rates_fetched_at = datetime.now()  # fresh -> no rate work
     api.dispatch_fetched_at = None  # dispatch due
     api.intelligent_devices = {"dev-1": {"device_id": "dev-1", "planned_dispatches": [], "completed_dispatches": []}}
     api.async_find_tariffs = AsyncMock(return_value=None)
@@ -1760,7 +1760,7 @@ def test_run_no_devices_does_not_save_cache_every_cycle():
     api.import_rates = [{"value_inc_vat": 24.5}]
     api.tariff_fetched_at = datetime.now()  # fresh
     api.rates_fetched_at = datetime.now()  # fresh
-    api.dispatch_fetched_at = None  # no devices → never set → dispatch_due would be True
+    api.dispatch_fetched_at = None  # no devices -> never set -> dispatch_due would be True
     api.intelligent_devices = {}  # common no-EV account
     api.async_find_tariffs = AsyncMock(return_value=None)
     api.save_kraken_cache = AsyncMock()

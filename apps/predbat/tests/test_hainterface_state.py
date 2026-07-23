@@ -36,7 +36,7 @@ def test_hainterface_get_state_no_entity(my_predbat=None):
         print("ERROR: Should return full state_data dict")
         failed += 1
     else:
-        print("✓ Returned full state_data dict")
+        print("PASS: Returned full state_data dict")
 
     return failed
 
@@ -56,7 +56,7 @@ def test_hainterface_get_state_cached(my_predbat=None):
         print(f"ERROR: Expected '50', got '{result}'")
         failed += 1
     else:
-        print("✓ Retrieved cached state value")
+        print("PASS: Retrieved cached state value")
 
     # Test with attribute
     result = ha_interface.get_state("sensor.battery", attribute="unit")
@@ -64,7 +64,7 @@ def test_hainterface_get_state_cached(my_predbat=None):
         print(f"ERROR: Expected 'kWh', got '{result}'")
         failed += 1
     else:
-        print("✓ Retrieved cached attribute")
+        print("PASS: Retrieved cached attribute")
 
     # Test with default for missing attribute
     result = ha_interface.get_state("sensor.battery", attribute="missing", default="default_value")
@@ -72,7 +72,7 @@ def test_hainterface_get_state_cached(my_predbat=None):
         print(f"ERROR: Expected 'default_value', got '{result}'")
         failed += 1
     else:
-        print("✓ Returned default for missing attribute")
+        print("PASS: Returned default for missing attribute")
 
     # Test raw mode
     result = ha_interface.get_state("sensor.battery", raw=True)
@@ -80,7 +80,7 @@ def test_hainterface_get_state_cached(my_predbat=None):
         print("ERROR: raw=True should return full state dict")
         failed += 1
     else:
-        print("✓ Returned raw state dict")
+        print("PASS: Returned raw state dict")
 
     return failed
 
@@ -99,7 +99,7 @@ def test_hainterface_get_state_missing_entity(my_predbat=None):
         print(f"ERROR: Expected 'default_value', got '{result}'")
         failed += 1
     else:
-        print("✓ Returned default for missing entity")
+        print("PASS: Returned default for missing entity")
 
     return failed
 
@@ -119,7 +119,7 @@ def test_hainterface_get_state_case_insensitive(my_predbat=None):
         print("ERROR: Should be case-insensitive")
         failed += 1
     else:
-        print("✓ Case-insensitive lookup works")
+        print("PASS: Case-insensitive lookup works")
 
     return failed
 
@@ -141,7 +141,7 @@ def test_hainterface_get_state_db_mirror_tracking(my_predbat=None):
         print("ERROR: Entity should be added to db_mirror_list")
         failed += 1
     else:
-        print("✓ Entity tracked in db_mirror_list")
+        print("PASS: Entity tracked in db_mirror_list")
 
     return failed
 
@@ -168,7 +168,7 @@ def test_hainterface_update_state_item_basic(my_predbat=None):
         print("ERROR: State value incorrect")
         failed += 1
     else:
-        print("✓ State cached correctly")
+        print("PASS: State cached correctly")
 
     return failed
 
@@ -199,14 +199,14 @@ def test_hainterface_update_state_item_db_mirror(my_predbat=None):
         print("ERROR: DatabaseManager should be called")
         failed += 1
     else:
-        print("✓ DatabaseManager set_state_db called")
+        print("PASS: DatabaseManager set_state_db called")
 
     # Verify state still cached
     if "sensor.battery" not in ha_interface.state_data:
         print("ERROR: State should also be cached")
         failed += 1
     else:
-        print("✓ State cached alongside DB mirror")
+        print("PASS: State cached alongside DB mirror")
 
     return failed
 
@@ -233,7 +233,7 @@ def test_hainterface_update_state_with_api(my_predbat=None):
             print("ERROR: API should be called")
             failed += 1
         else:
-            print("✓ API called")
+            print("PASS: API called")
 
         # Verify state cached
         if "sensor.battery" not in ha_interface.state_data:
@@ -243,7 +243,7 @@ def test_hainterface_update_state_with_api(my_predbat=None):
             print("ERROR: State value incorrect")
             failed += 1
         else:
-            print("✓ State cached from API")
+            print("PASS: State cached from API")
 
     return failed
 
@@ -271,7 +271,7 @@ def test_hainterface_update_state_db_primary(my_predbat=None):
         print("ERROR: DatabaseManager should be called")
         failed += 1
     else:
-        print("✓ DatabaseManager queried")
+        print("PASS: DatabaseManager queried")
 
     # Verify state cached
     if "sensor.battery" not in ha_interface.state_data:
@@ -281,7 +281,7 @@ def test_hainterface_update_state_db_primary(my_predbat=None):
         print("ERROR: State value incorrect")
         failed += 1
     else:
-        print("✓ State cached from DB")
+        print("PASS: State cached from DB")
 
     return failed
 
@@ -312,7 +312,7 @@ def test_hainterface_update_states_bulk(my_predbat=None):
             print("ERROR: API should be called")
             failed += 1
         else:
-            print("✓ API called")
+            print("PASS: API called")
 
         # Verify both entities cached
         if len(ha_interface.state_data) != 2:
@@ -322,7 +322,7 @@ def test_hainterface_update_states_bulk(my_predbat=None):
             print("ERROR: Missing entities in cache")
             failed += 1
         else:
-            print("✓ All entities cached")
+            print("PASS: All entities cached")
 
     return failed
 
@@ -353,14 +353,14 @@ def test_hainterface_update_states_db_primary(my_predbat=None):
         print("ERROR: DatabaseManager should be called")
         failed += 1
     else:
-        print("✓ DatabaseManager queried")
+        print("PASS: DatabaseManager queried")
 
     # Verify entities cached
     if len(ha_interface.state_data) != 2:
         print(f"ERROR: Expected 2 entities, got {len(ha_interface.state_data)}")
         failed += 1
     else:
-        print("✓ All entities cached from DB")
+        print("PASS: All entities cached from DB")
 
     return failed
 
@@ -388,14 +388,14 @@ def test_hainterface_set_state_basic(my_predbat=None):
             print("ERROR: POST API should be called")
             failed += 1
         else:
-            print("✓ POST API called")
+            print("PASS: POST API called")
 
         # Verify GET called (for update_state)
         if not mock_get.called:
             print("ERROR: GET API should be called for refresh")
             failed += 1
         else:
-            print("✓ GET API called to refresh state")
+            print("PASS: GET API called to refresh state")
 
     return failed
 
@@ -432,14 +432,14 @@ def test_hainterface_set_state_db_mirror(my_predbat=None):
             print("ERROR: Wrong parameters to set_state_db")
             failed += 1
         else:
-            print("✓ DatabaseManager set_state_db called correctly")
+            print("PASS: DatabaseManager set_state_db called correctly")
 
     # Verify state cached
     if "sensor.battery" not in ha_interface.state_data:
         print("ERROR: State should be cached")
         failed += 1
     else:
-        print("✓ State cached")
+        print("PASS: State cached")
 
     return failed
 
@@ -468,14 +468,14 @@ def test_hainterface_set_state_db_primary(my_predbat=None):
             print("ERROR: API should not be called in DB primary mode")
             failed += 1
         else:
-            print("✓ No API call in DB primary mode")
+            print("PASS: No API call in DB primary mode")
 
     # Verify DB called
     if len(mock_db.set_state_calls) == 0:
         print("ERROR: DatabaseManager should be called")
         failed += 1
     else:
-        print("✓ DatabaseManager called")
+        print("PASS: DatabaseManager called")
 
     return failed
 
@@ -499,7 +499,7 @@ def test_hainterface_db_mirror_list_tracking(my_predbat=None):
         print("ERROR: get_state should add to db_mirror_list")
         failed += 1
     else:
-        print("✓ get_state adds to db_mirror_list")
+        print("PASS: get_state adds to db_mirror_list")
 
     # Test update_state adds to list
     ha_interface.db_mirror_list = {}
@@ -509,7 +509,7 @@ def test_hainterface_db_mirror_list_tracking(my_predbat=None):
         print("ERROR: update_state should add to db_mirror_list")
         failed += 1
     else:
-        print("✓ update_state adds to db_mirror_list")
+        print("PASS: update_state adds to db_mirror_list")
 
     # Test set_state adds to list
     ha_interface.db_mirror_list = {}
@@ -523,7 +523,7 @@ def test_hainterface_db_mirror_list_tracking(my_predbat=None):
         print("ERROR: set_state should add to db_mirror_list")
         failed += 1
     else:
-        print("✓ set_state adds to db_mirror_list")
+        print("PASS: set_state adds to db_mirror_list")
 
     return failed
 
@@ -565,9 +565,9 @@ def run_hainterface_state_tests(my_predbat):
 
     print("\n" + "=" * 80)
     if failed == 0:
-        print("✅ All HAInterface state tests passed!")
+        print("PASS: All HAInterface state tests passed!")
     else:
-        print(f"❌ {failed} HAInterface state test(s) failed")
+        print(f"ERROR: {failed} HAInterface state test(s) failed")
     print("=" * 80 + "\n")
 
     return failed

@@ -53,13 +53,13 @@ def test_rate_replicate(my_predbat):
         try:
             test_result = test_func(my_predbat)
             if test_result:
-                print(f"✗ FAILED: {test_name}")
+                print(f"FAIL: FAILED: {test_name}")
                 failed += 1
             else:
-                print(f"✓ PASSED: {test_name}")
+                print(f"PASS: PASSED: {test_name}")
                 passed += 1
         except Exception as e:
-            print(f"✗ EXCEPTION in {test_name}: {e}")
+            print(f"FAIL: EXCEPTION in {test_name}: {e}")
             import traceback
             traceback.print_exc()
             failed += 1
@@ -128,32 +128,32 @@ def _test_missing_slots(my_predbat):
 
     # Expected behavior: 23:00 and 23:30 should be replicated from previous day
     if 1380 not in result:
-        print(f"  ✗ ERROR: Minute 1380 (23:00) is still missing after rate_replicate")
+        print(f"  FAIL: ERROR: Minute 1380 (23:00) is still missing after rate_replicate")
         failed |= 1
     elif result[1380] != rates[-60]:
-        print(f"  ✗ ERROR: Minute 1380 (23:00) should be {rates[-60]} (from minute -60), got {result[1380]}")
+        print(f"  FAIL: ERROR: Minute 1380 (23:00) should be {rates[-60]} (from minute -60), got {result[1380]}")
         failed |= 1
     elif result[1380] == 0.0:
-        print(f"  ✗ ERROR: Minute 1380 (23:00) is 0.0 - this is the BUG we're fixing!")
+        print(f"  FAIL: ERROR: Minute 1380 (23:00) is 0.0 - this is the BUG we're fixing!")
         failed |= 1
 
     if 1410 not in result:
-        print(f"  ✗ ERROR: Minute 1410 (23:30) is still missing after rate_replicate")
+        print(f"  FAIL: ERROR: Minute 1410 (23:30) is still missing after rate_replicate")
         failed |= 1
     elif result[1410] != rates[-30]:
-        print(f"  ✗ ERROR: Minute 1410 (23:30) should be {rates[-30]} (from minute -30), got {result[1410]}")
+        print(f"  FAIL: ERROR: Minute 1410 (23:30) should be {rates[-30]} (from minute -30), got {result[1410]}")
         failed |= 1
     elif result[1410] == 0.0:
-        print(f"  ✗ ERROR: Minute 1410 (23:30) is 0.0 - this is the BUG we're fixing!")
+        print(f"  FAIL: ERROR: Minute 1410 (23:30) is 0.0 - this is the BUG we're fixing!")
         failed |= 1
 
     # Check that replicated type is marked as "copy"
     if result_replicated.get(1380) != "copy":
-        print(f"  ✗ ERROR: Minute 1380 should be marked as 'copy', got {result_replicated.get(1380)}")
+        print(f"  FAIL: ERROR: Minute 1380 should be marked as 'copy', got {result_replicated.get(1380)}")
         failed |= 1
 
     if result_replicated.get(1410) != "copy":
-        print(f"  ✗ ERROR: Minute 1410 should be marked as 'copy', got {result_replicated.get(1410)}")
+        print(f"  FAIL: ERROR: Minute 1410 should be marked as 'copy', got {result_replicated.get(1410)}")
         failed |= 1
     # Restore time context to current time
     my_predbat.now_utc = datetime.now(my_predbat.local_tz)
@@ -190,17 +190,17 @@ def _test_no_previous_day(my_predbat):
     # Without previous day data, the function should fall back to rate_last (last seen rate)
     # which should be rates[1350] = 15.0 (22:30's rate)
     if 1380 not in result:
-        print(f"  ✗ ERROR: Minute 1380 should be filled (even without previous day data)")
+        print(f"  FAIL: ERROR: Minute 1380 should be filled (even without previous day data)")
         failed |= 1
     elif result[1380] == 0.0:
-        print(f"  ✗ ERROR: Minute 1380 should not be 0.0 (should use rate_last fallback)")
+        print(f"  FAIL: ERROR: Minute 1380 should not be 0.0 (should use rate_last fallback)")
         failed |= 1
 
     if 1410 not in result:
-        print(f"  ✗ ERROR: Minute 1410 should be filled (even without previous day data)")
+        print(f"  FAIL: ERROR: Minute 1410 should be filled (even without previous day data)")
         failed |= 1
     elif result[1410] == 0.0:
-        print(f"  ✗ ERROR: Minute 1410 should not be 0.0 (should use rate_last fallback)")
+        print(f"  FAIL: ERROR: Minute 1410 should not be 0.0 (should use rate_last fallback)")
         failed |= 1
 
     # Restore time context to current time
@@ -250,22 +250,22 @@ def _test_zero_rates(my_predbat):
 
     # Expected: 23:00 and 23:30 should be replicated from previous day's 0.0 rates
     if 1380 not in result:
-        print(f"  ✗ ERROR: Minute 1380 (23:00) is missing after rate_replicate")
+        print(f"  FAIL: ERROR: Minute 1380 (23:00) is missing after rate_replicate")
         failed |= 1
     elif result[1380] != 0.0:
-        print(f"  ✗ ERROR: Minute 1380 (23:00) should be 0.0 (from minute -60), got {result[1380]}")
+        print(f"  FAIL: ERROR: Minute 1380 (23:00) should be 0.0 (from minute -60), got {result[1380]}")
         failed |= 1
 
     if 1410 not in result:
-        print(f"  ✗ ERROR: Minute 1410 (23:30) is missing after rate_replicate")
+        print(f"  FAIL: ERROR: Minute 1410 (23:30) is missing after rate_replicate")
         failed |= 1
     elif result[1410] != 0.0:
-        print(f"  ✗ ERROR: Minute 1410 (23:30) should be 0.0 (from minute -30), got {result[1410]}")
+        print(f"  FAIL: ERROR: Minute 1410 (23:30) should be 0.0 (from minute -30), got {result[1410]}")
         failed |= 1
 
     # Also verify that previous day rates with 0 are still present
     if result.get(-60) != 0.0:
-        print(f"  ✗ ERROR: Previous day minute -60 should still be 0.0, got {result.get(-60)}")
+        print(f"  FAIL: ERROR: Previous day minute -60 should still be 0.0, got {result.get(-60)}")
         failed |= 1
     # Restore time context to current time
     my_predbat.now_utc = datetime.now(my_predbat.local_tz)
@@ -317,7 +317,7 @@ def _test_undefined_negative_minutes(my_predbat):
             missing_minutes.append(minute)
 
     if missing_minutes:
-        print(f"  ✗ ERROR: {len(missing_minutes)} negative minutes are undefined after rate_replicate")
+        print(f"  FAIL: ERROR: {len(missing_minutes)} negative minutes are undefined after rate_replicate")
         print(f"    First missing: {missing_minutes[0]}, Last missing: {missing_minutes[-1]}")
         print(f"    This would cause KeyError in publish_rates when iterating from -1440")
 
@@ -328,17 +328,17 @@ def _test_undefined_negative_minutes(my_predbat):
             value = result[test_minute]  # This will raise KeyError
             print(f"    No KeyError at minute {test_minute} (unexpected!)")
         except KeyError as e:
-            print(f"    ✓ Confirmed: KeyError accessing minute {test_minute}: {e}")
+            print(f"    PASS: Confirmed: KeyError accessing minute {test_minute}: {e}")
             failed |= 1
     else:
-        print(f"  ✓ All negative minutes were filled correctly")
+        print(f"  PASS: All negative minutes were filled correctly")
 
     # Also check if any positive minutes were created (there shouldn't be any with only negative input)
     positive_minutes = [m for m in result.keys() if m >= 0]
     if positive_minutes:
         print(f"  Note: {len(positive_minutes)} positive minutes were created despite no input data")
     else:
-        print(f"  ✓ No positive minutes created (expected with only negative input)")
+        print(f"  PASS: No positive minutes created (expected with only negative input)")
 
     # Restore time context to current time
     my_predbat.now_utc = datetime.now(my_predbat.local_tz)
@@ -383,20 +383,20 @@ def _test_rate_io(my_predbat):
     next_day_intelligent_start = 1440 + 120
     if next_day_intelligent_start in result:
         if result[next_day_intelligent_start] == my_predbat.rate_max:
-            print(f"  ✓ Intelligent slot correctly replaced with rate_max: {result[next_day_intelligent_start]}")
+            print(f"  PASS: Intelligent slot correctly replaced with rate_max: {result[next_day_intelligent_start]}")
         else:
-            print(f"  ✗ ERROR: Next day intelligent slot should be {my_predbat.rate_max}, got {result[next_day_intelligent_start]}")
+            print(f"  FAIL: ERROR: Next day intelligent slot should be {my_predbat.rate_max}, got {result[next_day_intelligent_start]}")
             failed |= 1
     else:
-        print(f"  ✗ ERROR: Next day intelligent slot minute {next_day_intelligent_start} missing")
+        print(f"  FAIL: ERROR: Next day intelligent slot minute {next_day_intelligent_start} missing")
         failed |= 1
 
     # Normal rates should still replicate correctly
     normal_minute_next_day = 1440 + 600  # 10:00 next day
     if normal_minute_next_day in result and result[normal_minute_next_day] == 25.0:
-        print(f"  ✓ Normal rates replicate correctly: {result[normal_minute_next_day]}")
+        print(f"  PASS: Normal rates replicate correctly: {result[normal_minute_next_day]}")
     else:
-        print(f"  ✗ ERROR: Normal rate replication failed at minute {normal_minute_next_day}")
+        print(f"  FAIL: ERROR: Normal rate replication failed at minute {normal_minute_next_day}")
         failed |= 1
 
     # Restore context
@@ -443,17 +443,17 @@ def _test_future_rate_adjust_import(my_predbat):
     next_day_minute = 1440 + 600
     if next_day_minute in result:
         if result[next_day_minute] == 20.0:
-            print(f"  ✓ Future rate adjustment applied: {result[next_day_minute]}")
+            print(f"  PASS: Future rate adjustment applied: {result[next_day_minute]}")
             if result_replicated.get(next_day_minute) == "future":
-                print(f"  ✓ Replicated type correctly marked as 'future'")
+                print(f"  PASS: Replicated type correctly marked as 'future'")
             else:
-                print(f"  ✗ ERROR: Should be marked as 'future', got {result_replicated.get(next_day_minute)}")
+                print(f"  FAIL: ERROR: Should be marked as 'future', got {result_replicated.get(next_day_minute)}")
                 failed |= 1
         else:
-            print(f"  ✗ ERROR: Future rate should be 20.0, got {result[next_day_minute]}")
+            print(f"  FAIL: ERROR: Future rate should be 20.0, got {result[next_day_minute]}")
             failed |= 1
     else:
-        print(f"  ✗ ERROR: Future rate minute {next_day_minute} missing")
+        print(f"  FAIL: ERROR: Future rate minute {next_day_minute} missing")
         failed |= 1
 
     # Restore context
@@ -502,17 +502,17 @@ def _test_future_rate_adjust_export(my_predbat):
     next_day_minute = 1440 + 600
     if next_day_minute in result:
         if result[next_day_minute] == 0.0:
-            print(f"  ✓ Negative export rate clamped to 0: {result[next_day_minute]}")
+            print(f"  PASS: Negative export rate clamped to 0: {result[next_day_minute]}")
             if result_replicated.get(next_day_minute) == "future":
-                print(f"  ✓ Replicated type correctly marked as 'future'")
+                print(f"  PASS: Replicated type correctly marked as 'future'")
             else:
-                print(f"  ✗ ERROR: Should be marked as 'future', got {result_replicated.get(next_day_minute)}")
+                print(f"  FAIL: ERROR: Should be marked as 'future', got {result_replicated.get(next_day_minute)}")
                 failed |= 1
         else:
-            print(f"  ✗ ERROR: Negative export rate should be clamped to 0.0, got {result[next_day_minute]}")
+            print(f"  FAIL: ERROR: Negative export rate should be clamped to 0.0, got {result[next_day_minute]}")
             failed |= 1
     else:
-        print(f"  ✗ ERROR: Future rate minute {next_day_minute} missing")
+        print(f"  FAIL: ERROR: Future rate minute {next_day_minute} missing")
         failed |= 1
 
     # Restore context
@@ -553,21 +553,21 @@ def _test_import_offset(my_predbat):
     if next_day_minute in result:
         expected_rate = 15.0 + 5.0
         if result[next_day_minute] == expected_rate:
-            print(f"  ✓ Import offset applied correctly: {result[next_day_minute]}")
+            print(f"  PASS: Import offset applied correctly: {result[next_day_minute]}")
             if result_replicated.get(next_day_minute) == "offset":
-                print(f"  ✓ Replicated type correctly marked as 'offset'")
+                print(f"  PASS: Replicated type correctly marked as 'offset'")
             else:
-                print(f"  ✗ ERROR: Should be marked as 'offset', got {result_replicated.get(next_day_minute)}")
+                print(f"  FAIL: ERROR: Should be marked as 'offset', got {result_replicated.get(next_day_minute)}")
                 failed |= 1
         else:
-            print(f"  ✗ ERROR: Rate should be {expected_rate}, got {result[next_day_minute]}")
+            print(f"  FAIL: ERROR: Rate should be {expected_rate}, got {result[next_day_minute]}")
             failed |= 1
 
     # Current day should not have offset
     if result[600] == 15.0:
-        print(f"  ✓ Current day rate unchanged: {result[600]}")
+        print(f"  PASS: Current day rate unchanged: {result[600]}")
     else:
-        print(f"  ✗ ERROR: Current day should be 15.0, got {result[600]}")
+        print(f"  FAIL: ERROR: Current day should be 15.0, got {result[600]}")
         failed |= 1
 
     # Restore context
@@ -606,14 +606,14 @@ def _test_export_offset_negative(my_predbat):
     next_day_minute = 1440 + 600
     if next_day_minute in result:
         if result[next_day_minute] == 0.0:
-            print(f"  ✓ Export rate with offset clamped to 0: {result[next_day_minute]}")
+            print(f"  PASS: Export rate with offset clamped to 0: {result[next_day_minute]}")
             if result_replicated.get(next_day_minute) == "offset":
-                print(f"  ✓ Replicated type correctly marked as 'offset'")
+                print(f"  PASS: Replicated type correctly marked as 'offset'")
             else:
-                print(f"  ✗ ERROR: Should be marked as 'offset', got {result_replicated.get(next_day_minute)}")
+                print(f"  FAIL: ERROR: Should be marked as 'offset', got {result_replicated.get(next_day_minute)}")
                 failed |= 1
         else:
-            print(f"  ✗ ERROR: Rate should be 0.0 (clamped), got {result[next_day_minute]}")
+            print(f"  FAIL: ERROR: Rate should be 0.0 (clamped), got {result[next_day_minute]}")
             failed |= 1
 
     # Test with higher rate that doesn't go negative
@@ -624,9 +624,9 @@ def _test_export_offset_negative(my_predbat):
     result2, result_replicated2 = my_predbat.rate_replicate(rates2, is_import=False, is_gas=False)
     expected_rate = 15.0 - 8.0
     if next_day_minute in result2 and result2[next_day_minute] == expected_rate:
-        print(f"  ✓ Export rate with offset (not clamped): {result2[next_day_minute]}")
+        print(f"  PASS: Export rate with offset (not clamped): {result2[next_day_minute]}")
     else:
-        print(f"  ✗ ERROR: Rate should be {expected_rate}, got {result2.get(next_day_minute)}")
+        print(f"  FAIL: ERROR: Rate should be {expected_rate}, got {result2.get(next_day_minute)}")
         failed |= 1
 
     # Restore context
@@ -667,9 +667,9 @@ def _test_gas_rates(my_predbat):
     expected_rate = 10.0 + 3.0  # Import offset is applied
     if next_day_minute in result:
         if result[next_day_minute] == expected_rate:
-            print(f"  ✓ Gas import rates get import offset applied: {result[next_day_minute]}")
+            print(f"  PASS: Gas import rates get import offset applied: {result[next_day_minute]}")
         else:
-            print(f"  ✗ ERROR: Gas rate should be {expected_rate} (with import offset), got {result[next_day_minute]}")
+            print(f"  FAIL: ERROR: Gas rate should be {expected_rate} (with import offset), got {result[next_day_minute]}")
             failed |= 1
 
     # Test export gas rates - should NOT get export offset due to is_gas check
@@ -682,9 +682,9 @@ def _test_gas_rates(my_predbat):
     # Export gas rates should replicate WITHOUT export offset (is_gas bypasses export offset)
     if next_day_minute in result2:
         if result2[next_day_minute] == 10.0:
-            print(f"  ✓ Gas export rates replicate without export offset: {result2[next_day_minute]}")
+            print(f"  PASS: Gas export rates replicate without export offset: {result2[next_day_minute]}")
         else:
-            print(f"  ✗ ERROR: Gas export rate should be 10.0 (no export offset due to is_gas), got {result2[next_day_minute]}")
+            print(f"  FAIL: ERROR: Gas export rate should be 10.0 (no export offset due to is_gas), got {result2[next_day_minute]}")
             failed |= 1
 
     # Restore context

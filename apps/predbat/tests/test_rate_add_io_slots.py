@@ -271,7 +271,7 @@ def run_rate_add_io_slots_tests(my_predbat):
 
     # Test 15: Midday-to-midday cap boundary
     # 14 slots starting at 22:00 today (minute 1320) and crossing midnight into the early hours of tomorrow.
-    # All slots fall within the same midday-to-midday period (noon today → noon tomorrow), so the
+    # All slots fall within the same midday-to-midday period (noon today -> noon tomorrow), so the
     # 12-slot cap applies across midnight and only the first 12 slots should be cheap.
     # Under the old midnight-to-midnight logic, today would have 4 cheap slots and tomorrow 10
     # cheap slots (each under the limit), so ALL 14 would be cheap — the opposite of what we want.

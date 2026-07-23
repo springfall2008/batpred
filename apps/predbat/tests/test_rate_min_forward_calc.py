@@ -49,7 +49,7 @@ def test_rate_min_forward_calc(my_predbat):
     result = my_predbat.rate_min_forward_calc(rates)
     failed |= _check_range(result, output_start, output_end, 10.0, "flat rate")
 
-    # --- Test 2: lower rate in the future → every minute sees that future minimum ---
+    # --- Test 2: lower rate in the future -> every minute sees that future minimum ---
     print("*** rate_min_forward_calc test 2: lower rate in future")
     low_minute = my_predbat.minutes_now + 6 * 60   # 6 hours from now
     rates = {m: 10.0 for m in range(0, my_predbat.forecast_minutes + my_predbat.minutes_now + 48 * 60)}
@@ -64,7 +64,7 @@ def test_rate_min_forward_calc(my_predbat):
     # After low_minute back to 10.0
     failed |= _check_range(result, low_minute + 1, output_end, 10.0, "after low_minute")
 
-    # --- Test 3: rates strictly increasing → min forward equals the rate at each minute ---
+    # --- Test 3: rates strictly increasing -> min forward equals the rate at each minute ---
     print("*** rate_min_forward_calc test 3: increasing rates")
     rates = {}
     for m in range(my_predbat.forecast_minutes + my_predbat.minutes_now + 48 * 60):
