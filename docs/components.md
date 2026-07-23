@@ -218,6 +218,7 @@ Connects directly to the GivEnergy Cloud to control your GivEnergy inverter and 
 | `load_today_ignore` | Boolean | No | false | `ge_cloud_load_today_ignore` | Set to `true` to ignore GE Cloud load_today data and use the `load_today` sensor from `apps.yaml` instead |
 | `automatic_shared_ct` | Boolean | No | false | `ge_cloud_automatic_shared_ct` | Set to `true` to force shared CT clamp mode — only the first inverter's grid and load readings are used, preventing double-counting on multi-inverter systems with a single shared CT |
 | `automatic_split_ct` | Boolean | No | false | `ge_cloud_automatic_split_ct` | Set to `true` to force split CT clamp mode — each inverter's readings are summed independently. Takes priority over `ge_cloud_automatic_shared_ct` if both are set |
+| `automatic_split_pv` | Boolean | No | false | `ge_cloud_automatic_split_pv` | Set to `true` to also include standalone PV-only inverters' solar readings in `pv_today`/`pv_power`, in addition to battery inverters |
 
 #### How to get your API key (gecloud)
 
