@@ -179,8 +179,16 @@ def get_entity_js(selected_entities_json, entity_attributes_json):
         // Initialise entity data
 
         document.addEventListener('DOMContentLoaded', function() {
+            // Restore the "Show All" preference across page loads (e.g. after submitting the
+            // entity form to add another entity, which is a full page navigation, not an
+            // in-place update)
+            var showAll = localStorage.getItem('entityShowAllEntities') === 'true';
+            var showAllCheckbox = document.getElementById('showAllEntities');
+            if (showAllCheckbox) {
+                showAllCheckbox.checked = showAll;
+            }
             // Load entity data from API
-            loadEntityData(false);
+            loadEntityData(showAll);
         });
 
         async function loadEntityData(showAll) {
@@ -203,6 +211,7 @@ def get_entity_js(selected_entities_json, entity_attributes_json):
         }
 
         function toggleShowAll(checked) {
+            localStorage.setItem('entityShowAllEntities', checked ? 'true' : 'false');
             loadEntityData(checked).then(function() {
                 if (isDropdownVisible) {
                     filterEntityOptions();
