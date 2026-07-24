@@ -91,20 +91,21 @@ def run_trim_export_tests(my_predbat):
     peak = my_predbat.export_window_best[0]
     peak_limit = my_predbat.export_limits_best[0]
 
-    # The highest-priced peak slot must be exported for its full duration (start not clipped) and enabled.
+    # The highest-priced peak slot must be exported for its full duration (start not clipped) and actually
+    # discharging the battery - a limit of 100 (off) or 99 (freeze export) both mean it is not exporting.
     if peak["start"] != mn:
         print("ERROR: peak export window was clipped to {} (expected full window starting at {})".format(peak["start"], mn))
         failed = True
-    if peak_limit >= 100:
-        print("ERROR: peak export window was disabled (limit {}) - it is the highest-priced slot".format(peak_limit))
+    if peak_limit >= 99:
+        print("ERROR: peak export window is not exporting (limit {}, off/freeze) - it is the highest-priced slot".format(peak_limit))
         failed = True
 
     # The self-consumption buffer must genuinely be retained somewhere cheaper - at least one of the lower
-    # priced windows must be reduced (clipped start or turned off), otherwise nothing was clawed back.
+    # priced windows must be reduced (clipped start, frozen, or turned off), otherwise nothing was clawed back.
     cheaper_reduced = False
     for n in range(1, len(my_predbat.export_window_best)):
         window = my_predbat.export_window_best[n]
-        if my_predbat.export_limits_best[n] >= 100 or window["start"] > (mn + 30 * n):
+        if my_predbat.export_limits_best[n] >= 99 or window["start"] > (mn + 30 * n):
             cheaper_reduced = True
             break
     if not cheaper_reduced:
