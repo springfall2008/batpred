@@ -849,7 +849,8 @@ class Prediction:
             # discharge freeze, reset charge rate by default
             if set_export_freeze:
                 # Freeze mode
-                if (export_window_active) and export_limit_now < 100.0 and (set_export_freeze and (export_limit_now == 99.0 or set_export_freeze_only)):
+                is_anti_clipping_export = export_window_active and "clipping_target_soc_pct" in export_window[export_window_n]
+                if (export_window_active) and not is_anti_clipping_export and export_limit_now < 100.0 and (set_export_freeze and (export_limit_now == 99.0 or set_export_freeze_only)):
                     charge_rate_now = battery_rate_min  # 0
 
             # Set discharge during charge?
@@ -1064,7 +1065,8 @@ class Prediction:
                     if inverter_hybrid:
                         charge_rate_now_dc = battery_rate_max_charge_dc
                         # Freeze mode
-                        if set_export_freeze and export_window_active and export_limit_now < 100.0 and (export_limit_now == 99.0 or set_export_freeze_only):
+                        is_anti_clipping_export = export_window_active and "clipping_target_soc_pct" in export_window[export_window_n]
+                        if set_export_freeze and export_window_active and not is_anti_clipping_export and export_limit_now < 100.0 and (export_limit_now == 99.0 or set_export_freeze_only):
                             charge_rate_now_dc = battery_rate_min  # 0
 
                         charge_rate_now_curve_dc = (
