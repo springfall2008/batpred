@@ -964,7 +964,10 @@ class UserInterface:
 
             # Get from current state, if not from HA directly
             ha_value = item.get("value", None)
-            if ha_value is None:
+            # The update entity is synthesised after release discovery and is explicitly
+            # non-restorable. Looking in history when its current state is absent registers
+            # an empty 30-day query with HAHistory, which then retries every two minutes.
+            if ha_value is None and type != "update":
                 ha_value = self.load_previous_value_from_ha(entity)
 
             # Update drop down menu
