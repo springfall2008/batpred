@@ -567,6 +567,15 @@ class Compare:
             my_predbat.battery_rate_max_charge_dc = save_battery_rate_max_charge_dc
             my_predbat.battery_rate_max_discharge = save_battery_rate_max_discharge
             my_predbat.inverter_limit = save_inverter_limit
+            # Restore config: overrides after each tariff too, for the same reason - otherwise a
+            # tariff's config override stays applied to config_index for every subsequent tariff,
+            # even ones with no config block of their own (issue #4156)
+            if config_snapshot:
+                for key, orig_value in config_snapshot.items():
+                    item = my_predbat.config_index.get(key)
+                    if item is not None:
+                        item["value"] = orig_value
+                my_predbat.fetch_config_options()
             # Save and update comparisons as we go so it is updated in HA
             self.select_best(compare_list, results)
             self.comparisons = results

@@ -344,6 +344,31 @@ def test_compare(my_predbat):
         print("ERROR T11: apply_hardware_overrides raised on bad input: {}".format(e))
         failed += 1
 
+    # ------------------------------------------------------------------
+    # T12: run_all() source actually contains the mid-loop config restore
+    #      (T9/T10 above only prove the pattern works in isolation - this
+    #      closes the gap by checking it's genuinely wired into run_all()
+    #      itself, not just demonstrated as a standalone snippet - #4156)
+    # ------------------------------------------------------------------
+    import inspect
+
+    run_all_source = inspect.getsource(Compare.run_all)
+    # The restore block must appear between the "restore hardware settings" comment (which is
+    # inside the per-tariff loop) and the loop's closing use of publish_data(), otherwise it's
+    # not actually running once per tariff.
+    hardware_restore_idx = run_all_source.find("Restore hardware settings after each tariff")
+    publish_data_idx = run_all_source.find("self.publish_data()")
+    config_restore_idx = run_all_source.find("config_snapshot", hardware_restore_idx + 1) if hardware_restore_idx >= 0 else -1
+
+    if hardware_restore_idx < 0 or publish_data_idx < 0:
+        print("ERROR T12: could not locate expected markers in run_all() source - test may need updating")
+        failed += 1
+    elif not (hardware_restore_idx < config_restore_idx < publish_data_idx):
+        print("ERROR T12: config_snapshot restore is not positioned inside the per-tariff loop in run_all() - the #4156 leak is not actually fixed")
+        failed += 1
+    else:
+        print("PASS T12: run_all() restores config: overrides inside the per-tariff loop, not just once at the end")
+
     if failed:
         print("**** compare tests FAILED: {} errors ****\n".format(failed))
     else:

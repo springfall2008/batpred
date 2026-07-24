@@ -843,6 +843,7 @@ class Fetch:
         m.export_today_kwh.set(self.export_today_now)
         m.pv_today_kwh.set(self.pv_today_now)
         m.data_age_days.set(self.load_minutes_age)
+        m.data_age_required_days.set(max(self.max_days_previous - 1, 0))
 
         if "rates_import_octopus_url" in self.args:
             # Fixed URL for rate import
