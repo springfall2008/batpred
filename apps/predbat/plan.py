@@ -907,6 +907,50 @@ class Plan:
             window_n += 1
         return -1
 
+    def plan_fragmentation(self, charge_window, charge_limit, export_window, export_limits):
+        """Count the contiguous active (charge/export) segments in a plan.
+
+        A slot is active if it discharges the battery (export limit < 99, i.e. not freeze/off) or charges it
+        (charge target above the reserve floor). Time-adjacent active slots of the same mode form one segment; a
+        time gap or a change of mode (charge<->export) starts a new segment. A cleaner plan has fewer segments,
+        so this is used as a tie-break to prefer a single export block over a fragmented staircase when the cost
+        is otherwise equal.
+        """
+        intervals = []
+        for window, limit in zip(export_window, export_limits):
+            if limit < 99:
+                intervals.append((window["start"], window["end"], "export"))
+        for window, limit in zip(charge_window, charge_limit):
+            if limit > self.reserve:
+                intervals.append((window["start"], window["end"], "charge"))
+
+        intervals.sort(key=lambda item: item[0])
+
+        segments = 0
+        prev_end = None
+        prev_mode = None
+        for start, end, mode in intervals:
+            if prev_end is None or start > prev_end or mode != prev_mode:
+                segments += 1
+            prev_end = end if prev_end is None else max(prev_end, end)
+            prev_mode = mode
+        return segments
+
+    def should_replace_plan(self, metric_prev, metric_new, fragmentation_prev, fragmentation_new):
+        """Decide whether to adopt the freshly optimised plan over the incumbent.
+
+        The new plan is adopted when it is better by at least metric_min_improvement_plan (the existing
+        anti-jitter behaviour). On a near-tie within that band it is also adopted when it is no worse on cost
+        and strictly less fragmented, so a cleaner single export block can replace a locked-in split schedule
+        without churning the plan for tiny cost changes. Lower metric is better, so improvement is prev - new.
+        """
+        improvement = metric_prev - metric_new
+        if improvement >= self.metric_min_improvement_plan:
+            return True
+        if improvement >= 0 and fragmentation_new < fragmentation_prev:
+            return True
+        return False
+
     def calculate_plan(self, recompute=True, debug_mode=False, publish=True):
         """
         Calculate the new plan (best)
@@ -1179,14 +1223,18 @@ class Plan:
                 )
 
                 self.log("Previous plan best metric is {} (cost {}) and new plan best metric is {} (cost {})".format(dp2(metric_prev), dp2(cost_prev), dp2(metric), dp2(cost)))
-                if (metric_prev - metric) < self.metric_min_improvement_plan:
+                fragmentation_prev = self.plan_fragmentation(charge_window_best_prev, charge_limit_best_prev, export_window_best_prev, export_limits_best_prev)
+                fragmentation_new = self.plan_fragmentation(self.charge_window_best, self.charge_limit_best, self.export_window_best, self.export_limits_best)
+                if not self.should_replace_plan(metric_prev, metric, fragmentation_prev, fragmentation_new):
                     self.log("New plan metric is not significantly better (metric_min_improvement_plan {}) than previous plan, using previous plan".format(self.metric_min_improvement_plan))
                     self.charge_window_best = copy.deepcopy(charge_window_best_prev)
                     self.charge_limit_best = copy.deepcopy(charge_limit_best_prev)
                     self.export_window_best = copy.deepcopy(export_window_best_prev)
                     self.export_limits_best = copy.deepcopy(export_limits_best_prev)
-                else:
+                elif (metric_prev - metric) >= self.metric_min_improvement_plan:
                     self.log("New plan metric is significantly better from previous plan, using new plan")
+                else:
+                    self.log("New plan is a cost-neutral improvement but less fragmented ({} vs {} segments), using new plan".format(fragmentation_new, fragmentation_prev))
 
             # Plan is now valid
             self.log("Plan valid is now true after recompute was {}".format(self.plan_valid))
