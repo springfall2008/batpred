@@ -1,0 +1,2100 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>DEYE Cloud Inverter Integration Implementation Plan - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "DEYE Cloud Inverter Integration Implementation Plan";
+        var mkdocs_page_input_path = "superpowers/plans/2026-07-19-deye-cloud-inverter-integration.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">DEYE Cloud Inverter Integration Implementation Plan</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="deye-cloud-inverter-integration-implementation-plan">DEYE Cloud Inverter Integration Implementation Plan</h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> Add a full Fox/Enphase-style DEYE Cloud virtual-inverter component to Predbat, giving monitoring and battery charge/export control for DEYE (Sunsynk-family) hybrid inverters via the DeyeCloud OpenAPI, on both the HA add-on and Predbat.com SaaS.</p>
+<p><strong>Architecture:</strong> <code>DeyeAPI(ComponentBase, OAuthMixin)</code> in <code>apps/predbat/deye.py</code> registers each battery inverter as a <code>DeyeCloud</code> Predbat inverter type. Predbat drives published HA schedule entities (charge window, export window, reserve, rates, enables) through the generic <code>Inverter</code> class; all DEYE API knowledge stays inside <code>deye.py</code>. The component derives the DEYE work mode internally (mode-less pattern, like Enphase/Tesla) and writes a combined <code>strategy_dynamic_control</code> payload with change detection and async <code>orderId</code> polling.</p>
+<p><strong>Tech Stack:</strong> Python 3, <code>aiohttp</code>, <code>asyncio</code>, Predbat's <code>ComponentBase</code> / <code>OAuthMixin</code> / Storage, the existing test harness in <code>apps/predbat/tests/test_infra.py</code>.</p>
+<p><strong>Reference design:</strong> <code>docs/superpowers/specs/2026-07-19-deye-cloud-inverter-integration-design.md</code>.
+<strong>Templates to copy patterns from:</strong> <code>apps/predbat/enphase.py</code> (mode-less cloud inverter), <code>apps/predbat/fox.py</code> (schedule compute, caching, run-loop tiers), <code>apps/predbat/tests/test_fox_oauth.py</code> (test style).</p>
+<h2 id="global-constraints">Global Constraints</h2>
+<ul>
+<li><strong>Line length:</strong> ≤ 256 chars (Black), ≤ 250 (Flake8). <strong>Naming:</strong> <code>lower_case_with_underscores</code>.</li>
+<li><strong>Docstrings:</strong> 100% coverage required (<code>interrogate</code>) — every function and class needs a docstring.</li>
+<li><strong>Spelling:</strong> British English (CSpell, <code>en-gb</code>); add unknown words to <code>.cspell/custom-dictionary-workspace.txt</code> (auto-sorted on commit — re-stage after pre-commit).</li>
+<li><strong>Tests:</strong> required for all new code. Tests live in <code>apps/predbat/tests/</code> and are run from <code>coverage/</code> (<code>./run_all --test &lt;name&gt;</code>). <strong>Always save test output to a file, then grep it</strong> — never pipe straight to grep.</li>
+<li><strong>Test style (this repo):</strong> component tests subclass the component and bypass <code>__init__</code> (see <code>MockFoxOAuth</code>), each test <strong>returns a truthy value on failure</strong> and prints an <code>ERROR:</code>/<code>FAILED:</code> line, and a <code>run_&lt;name&gt;_tests(my_predbat)</code> aggregator returns a <code>failed</code> flag. Do <strong>not</strong> use bare <code>pytest</code> asserts for these — follow <code>test_fox_oauth.py</code>.</li>
+<li><strong>API contract values that are spike-verified live in ONE place:</strong> <code>apps/predbat/deye_const.py</code>. All logic references those constants, so Task 0's spike changes values there without touching downstream code or tests.</li>
+<li><strong>Commit after every task</strong> (frequent commits). Branch is <code>feat/deye-cloud-inverter</code> (already created).</li>
+<li><strong>Copyright header</strong> (first lines of every new <code>.py</code>, copied verbatim from <code>fox.py</code>):</li>
+</ul>
+<p><code>python
+  # -----------------------------------------------------------------------------
+  # Predbat Home Battery System
+  # Copyright Trefor Southwell 2026 - All Rights Reserved
+  # This application maybe used for personal use only and not for commercial use
+  # -----------------------------------------------------------------------------</code></p>
+<hr />
+<h2 id="task-0-contract-confirmation-already-resolved-no-live-device-required">Task 0: Contract confirmation (already resolved — no live device required)</h2>
+<p>The API contract was confirmed from the <strong>official</strong> <code>DeyeCloudDevelopers/deye-openapi-client-sample-code</code> repo, so this is <strong>not a blocker</strong> and needs <strong>no credentials to start building</strong>. Confirmed and baked into Task 1 / the task code:</p>
+<ul>
+<li><strong>Token:</strong> <code>POST /account/token?appId=</code> body <code>{appSecret, email|username, password: sha256(pw), companyId}</code> (<code>companyId:"0"</code> = personal). (<code>account/obtain_token.py</code>)</li>
+<li><strong><code>TimeUseSettingItem</code> fields (6 slots):</strong> <code>{time:"HH:MM", power:&lt;W&gt;, soc:&lt;%&gt;, enableGridCharge:bool, enableGeneration:bool}</code>. (<code>commission/sys_tou_update.py</code>)</li>
+<li><strong>Combined control endpoint:</strong> <code>POST /strategy/dynamicControl</code> with <code>{deviceSn, workMode, gridChargeAction, solarSellAction, maxSellPower, maxSolarPower, touAction, touDays[], timeUseSettingItems[6]}</code>. (<code>strategy/dynamic_control_*.py</code>)</li>
+<li><strong>Mode realisation</strong> (matches the spec table): charge = <code>gridChargeAction:on</code> + <code>workMode:ZERO_EXPORT_TO_*</code> + high slot SoC (SELLING_FIRST would stop charging); export = <code>solarSellAction:on</code> + <code>workMode:SELLING_FIRST</code> + low slot SoC; hold/idle = slot SoC set to the hold level ("battery ceases charging and discharging").</li>
+<li><strong>Reserve = slot SoC floor</strong> — there is no dedicated reserve endpoint (<code>battery/parameter/update</code> only sets <code>MAX_CHARGE_CURRENT</code>/<code>MAX_DISCHARGE_CURRENT</code>).</li>
+<li><strong><code>device/latest</code> request:</strong> <code>POST /device/latest</code> body <code>{deviceList:[sn]}</code> (≤10). (<code>device/obtain_device_latest.py</code>)</li>
+<li><strong>Order poll:</strong> <code>GET /order/{orderId}</code>. (<code>commission/get_control_res.py</code>)</li>
+</ul>
+<p><strong>Two items remain empirical</strong> (safe defaults shipped; correct post-first-connection):</p>
+<ul>
+<li>[ ] <strong><code>device/latest</code> keys:</strong> the exact <code>dataList[].key</code> strings for SoC / battery / grid / pv / load power. <code>deye_const.py:DEYE_TELEMETRY_KEYS</code> holds best-known defaults; on the first live connection, log the raw <code>dataList</code> keys and correct that one dict. All logic references the dict, so nothing else changes.</li>
+<li>[ ] <strong><code>config/battery</code> fields and units:</strong> the field names AND units — esp. whether <code>battCapacity</code> is kWh (directly usable as <code>soc_max</code>) or Ah (needing a voltage scale). <code>deye_const.py:CONFIG_BATTERY_KEYS</code> holds best-known defaults; correct against a live <code>/config/battery</code> response.</li>
+</ul>
+<hr />
+<h2 id="task-1-constants-module-deye_constpy">Task 1: Constants module (<code>deye_const.py</code>)</h2>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Create: <code>apps/predbat/deye_const.py</code></li>
+<li>Test: <code>apps/predbat/tests/test_deye_const.py</code></li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>
+<p>Produces: <code>DEYE_BASE_URLS: dict</code>, <code>DEYE_TIMEOUT: int</code>, <code>DEYE_RETRIES: int</code>, <code>DEYE_ENDPOINTS: dict</code>, <code>DEYE_WORKMODE: dict</code> (<code>SELLING_FIRST</code>/<code>ZERO_EXPORT_TO_LOAD</code>/<code>ZERO_EXPORT_TO_CT</code>), <code>DEYE_TELEMETRY_KEYS: dict</code>, <code>TOU_FIELD: dict</code>, <code>TOU_SLOT_COUNT: int</code>, <code>FREEZE_EXPORT_SOC: int</code> (=99).</p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write the failing test</strong></p>
+</li>
+</ul>
+<pre><code class="language-python"># apps/predbat/tests/test_deye_const.py
+from deye_const import DEYE_BASE_URLS, DEYE_ENDPOINTS, DEYE_WORKMODE, DEYE_TELEMETRY_KEYS, TOU_FIELD, TOU_SLOT_COUNT, FREEZE_EXPORT_SOC
+
+
+def test_deye_const_shape():
+    &quot;&quot;&quot;Constants expose the keys the component relies on.&quot;&quot;&quot;
+    failed = False
+    for dc in (&quot;eu&quot;, &quot;am&quot;, &quot;india&quot;):
+        if dc not in DEYE_BASE_URLS or not DEYE_BASE_URLS[dc].startswith(&quot;https://&quot;):
+            print(f&quot;ERROR: base url missing/invalid for {dc}&quot;)
+            failed = True
+    for ep in (&quot;token&quot;, &quot;station_list&quot;, &quot;station_device&quot;, &quot;device_latest&quot;, &quot;config_battery&quot;, &quot;tou_update&quot;, &quot;dynamic_control&quot;, &quot;order_result&quot;):
+        if ep not in DEYE_ENDPOINTS:
+            print(f&quot;ERROR: endpoint {ep} missing&quot;)
+            failed = True
+    for m in (&quot;selling_first&quot;, &quot;zero_export_load&quot;, &quot;zero_export_ct&quot;):
+        if m not in DEYE_WORKMODE:
+            print(f&quot;ERROR: workmode {m} missing&quot;)
+            failed = True
+    for k in (&quot;soc&quot;, &quot;battery_power&quot;, &quot;grid_power&quot;, &quot;pv_power&quot;, &quot;load_power&quot;):
+        if k not in DEYE_TELEMETRY_KEYS:
+            print(f&quot;ERROR: telemetry key {k} missing&quot;)
+            failed = True
+    for f in (&quot;time&quot;, &quot;power&quot;, &quot;soc&quot;, &quot;grid_charge&quot;):
+        if f not in TOU_FIELD:
+            print(f&quot;ERROR: TOU field {f} missing&quot;)
+            failed = True
+    if TOU_SLOT_COUNT != 6:
+        print(&quot;ERROR: TOU_SLOT_COUNT must be 6&quot;)
+        failed = True
+    if FREEZE_EXPORT_SOC != 99:
+        print(&quot;ERROR: FREEZE_EXPORT_SOC must be 99&quot;)
+        failed = True
+    return failed
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run test to verify it fails</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; python -m pytest ../apps/predbat/tests/test_deye_const.py -v &gt; /tmp/deye_const.log 2&gt;&amp;1; grep -E "PASS|FAIL|Error" /tmp/deye_const.log</code>
+Expected: FAIL — <code>ModuleNotFoundError: No module named 'deye_const'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Write minimal implementation</strong></li>
+</ul>
+<pre><code class="language-python"># apps/predbat/deye_const.py  (after the copyright header)
+&quot;&quot;&quot;DEYE Cloud OpenAPI constants.
+
+Values marked ``# VERIFY@SPIKE`` are best-known defaults from the DeyeCloud
+developer docs and the hass-deyecloud reference; confirm against a live
+inverter (see plan Task 0) and correct here. All component logic imports from
+this module so a value change here needs no downstream edits.
+&quot;&quot;&quot;
+
+DEYE_BASE_URLS = {
+    &quot;eu&quot;: &quot;https://eu1-developer.deyecloud.com/v1.0&quot;,
+    &quot;am&quot;: &quot;https://us1-developer.deyecloud.com/v1.0&quot;,
+    &quot;india&quot;: &quot;https://india-developer.deyecloud.com/v1.0&quot;,
+}
+
+DEYE_TIMEOUT = 30
+DEYE_RETRIES = 3
+TOU_SLOT_COUNT = 6
+FREEZE_EXPORT_SOC = 99
+
+# Endpoint paths CONFIRMED against DeyeCloudDevelopers/deye-openapi-client-sample-code.
+DEYE_ENDPOINTS = {
+    &quot;token&quot;: &quot;/account/token&quot;,
+    &quot;station_list&quot;: &quot;/station/list&quot;,
+    &quot;station_device&quot;: &quot;/station/device&quot;,
+    &quot;device_latest&quot;: &quot;/device/latest&quot;,
+    &quot;config_battery&quot;: &quot;/config/battery&quot;,
+    &quot;config_tou&quot;: &quot;/config/tou&quot;,
+    &quot;tou_update&quot;: &quot;/order/sys/tou/update&quot;,
+    &quot;dynamic_control&quot;: &quot;/strategy/dynamicControl&quot;,  # camelCase — confirmed in sample code
+    &quot;order_result&quot;: &quot;/order/&quot;,  # GET {base}/order/{orderId} — confirmed
+}
+
+# device/latest batches serials on this body key (max 10 per call).  # CONFIRMED
+DEYE_LATEST_BODY_KEY = &quot;deviceList&quot;
+
+DEYE_WORKMODE = {
+    &quot;selling_first&quot;: &quot;SELLING_FIRST&quot;,
+    &quot;zero_export_load&quot;: &quot;ZERO_EXPORT_TO_LOAD&quot;,
+    &quot;zero_export_ct&quot;: &quot;ZERO_EXPORT_TO_CT&quot;,
+}
+
+# device/latest dataList[].key spellings — the one item to confirm from a live
+# response (request body/shape is confirmed; exact value keys are not in the
+# sample).  # VERIFY@SPIKE (values only)
+DEYE_TELEMETRY_KEYS = {
+    &quot;soc&quot;: &quot;batterySOC&quot;,
+    &quot;battery_power&quot;: &quot;batteryPower&quot;,
+    &quot;grid_power&quot;: &quot;gridPower&quot;,
+    &quot;pv_power&quot;: &quot;pvPower&quot;,
+    &quot;load_power&quot;: &quot;loadPower&quot;,
+    &quot;temperature&quot;: &quot;batteryTemperature&quot;,
+}
+
+# TimeUseSettingItem per-slot fields — CONFIRMED from official sample
+# clientcode/commission/sys_tou_update.py and the strategy/* samples.
+TOU_FIELD = {
+    &quot;time&quot;: &quot;time&quot;,
+    &quot;power&quot;: &quot;power&quot;,
+    &quot;soc&quot;: &quot;soc&quot;,
+    &quot;grid_charge&quot;: &quot;enableGridCharge&quot;,
+    &quot;generate&quot;: &quot;enableGeneration&quot;,
+}
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run test to verify it passes</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; python -m pytest ../apps/predbat/tests/test_deye_const.py -v &gt; /tmp/deye_const.log 2&gt;&amp;1; grep -E "passed|failed|Error" /tmp/deye_const.log</code>
+Expected: <code>1 passed</code>.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/deye_const.py apps/predbat/tests/test_deye_const.py
+git commit -m &quot;feat(deye): add DEYE Cloud API constants module&quot;
+</code></pre>
+<hr />
+<h2 id="task-2-config-items-apps_schema-and-deyecloud-inverter_def">Task 2: Config items, APPS_SCHEMA and <code>DeyeCloud</code> INVERTER_DEF</h2>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>apps/predbat/config.py</code> (APPS_SCHEMA <code>deye_*</code> block near the <code>fox_*</code> keys ~line 2254; INVERTER_DEF <code>"DeyeCloud"</code> after <code>"EnphaseCloud"</code> ~line 1949)</li>
+<li>Modify: <code>.cspell/custom-dictionary-workspace.txt</code> (add <code>deye</code>, <code>DEYE</code>, <code>Deye</code>, <code>deyecloud</code>, <code>EMEA</code>, <code>Sunsynk</code>)</li>
+<li>Test: <code>apps/predbat/tests/test_deye_config.py</code></li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>
+<p>Produces: <code>INVERTER_DEF["DeyeCloud"]</code> capability dict; APPS_SCHEMA keys <code>deye_app_id</code>, <code>deye_app_secret</code>, <code>deye_username</code>, <code>deye_password</code>, <code>deye_data_center</code>, <code>deye_company_id</code>, <code>deye_auth_method</code>, <code>deye_token_expires_at</code>, <code>deye_token_hash</code>, <code>deye_inverter_sn</code>, <code>deye_automatic</code>, <code>deye_automatic_ignore_pv</code>.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write the failing test</strong></p>
+</li>
+</ul>
+<pre><code class="language-python"># apps/predbat/tests/test_deye_config.py
+from config import INVERTER_DEF, APPS_SCHEMA
+
+
+def test_deyecloud_inverter_def():
+    &quot;&quot;&quot;DeyeCloud is a mode-less inverter with freeze support.&quot;&quot;&quot;
+    failed = False
+    d = INVERTER_DEF.get(&quot;DeyeCloud&quot;)
+    if d is None:
+        print(&quot;ERROR: DeyeCloud INVERTER_DEF missing&quot;)
+        return True
+    expect = {
+        &quot;has_ge_inverter_mode&quot;: False,
+        &quot;has_fox_inverter_mode&quot;: False,
+        &quot;has_ge_eco_toggle&quot;: False,
+        &quot;has_charge_enable_time&quot;: True,
+        &quot;has_discharge_enable_time&quot;: True,
+        &quot;has_target_soc&quot;: True,
+        &quot;has_reserve_soc&quot;: True,
+        &quot;support_charge_freeze&quot;: True,
+        &quot;support_discharge_freeze&quot;: True,
+        &quot;target_soc_used_for_discharge&quot;: True,
+    }
+    for k, v in expect.items():
+        if d.get(k) != v:
+            print(f&quot;ERROR: DeyeCloud[{k}] expected {v} got {d.get(k)}&quot;)
+            failed = True
+    for key in (&quot;deye_app_id&quot;, &quot;deye_auth_method&quot;, &quot;deye_inverter_sn&quot;, &quot;deye_data_center&quot;):
+        if key not in APPS_SCHEMA:
+            print(f&quot;ERROR: APPS_SCHEMA missing {key}&quot;)
+            failed = True
+    return failed
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run test to verify it fails</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; python -m pytest ../apps/predbat/tests/test_deye_config.py -v &gt; /tmp/deye_config.log 2&gt;&amp;1; grep -E "passed|failed|ERROR" /tmp/deye_config.log</code>
+Expected: FAIL — <code>DeyeCloud INVERTER_DEF missing</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Write minimal implementation</strong></li>
+</ul>
+<p>Add to <code>INVERTER_DEF</code> (copy the <code>"EnphaseCloud"</code> block as a base, rename, keep flags as below):</p>
+<pre><code class="language-python">    &quot;DeyeCloud&quot;: {
+        &quot;name&quot;: &quot;DeyeCloud&quot;,
+        &quot;has_rest_api&quot;: False,
+        &quot;has_mqtt_api&quot;: False,
+        &quot;output_charge_control&quot;: &quot;power&quot;,
+        &quot;charge_control_immediate&quot;: False,
+        &quot;has_charge_enable_time&quot;: True,
+        &quot;has_discharge_enable_time&quot;: True,
+        &quot;has_target_soc&quot;: True,
+        &quot;has_reserve_soc&quot;: True,
+        &quot;has_timed_pause&quot;: False,
+        &quot;charge_time_format&quot;: &quot;HH:MM&quot;,
+        &quot;charge_time_entity_is_option&quot;: True,
+        &quot;soc_units&quot;: &quot;%&quot;,
+        &quot;num_load_entities&quot;: 1,
+        &quot;has_ge_inverter_mode&quot;: False,
+        &quot;has_ge_eco_toggle&quot;: False,
+        &quot;has_fox_inverter_mode&quot;: False,
+        &quot;time_button_press&quot;: True,
+        &quot;clock_time_format&quot;: &quot;%Y-%m-%d %H:%M:%S&quot;,
+        &quot;write_and_poll_sleep&quot;: 2,
+        &quot;has_time_window&quot;: False,
+        &quot;support_charge_freeze&quot;: True,
+        &quot;support_discharge_freeze&quot;: True,
+        &quot;has_idle_time&quot;: False,
+        &quot;can_span_midnight&quot;: False,
+        &quot;charge_discharge_with_rate&quot;: False,
+        &quot;target_soc_used_for_discharge&quot;: True,
+    },
+</code></pre>
+<p>Add to <code>APPS_SCHEMA</code> (beside the <code>fox_*</code> keys):</p>
+<pre><code class="language-python">    &quot;deye_app_id&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;empty&quot;: False},
+    &quot;deye_app_secret&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;empty&quot;: False},
+    &quot;deye_username&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;empty&quot;: False},
+    &quot;deye_password&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;empty&quot;: False},
+    &quot;deye_data_center&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;empty&quot;: False},
+    &quot;deye_company_id&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;empty&quot;: False},
+    &quot;deye_auth_method&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;empty&quot;: False},
+    &quot;deye_token_expires_at&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;empty&quot;: False},
+    &quot;deye_token_hash&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;empty&quot;: False},
+    &quot;deye_inverter_sn&quot;: {&quot;type&quot;: &quot;string|string_list&quot;, &quot;empty&quot;: False},
+    &quot;deye_automatic&quot;: {&quot;type&quot;: &quot;boolean&quot;},
+    &quot;deye_automatic_ignore_pv&quot;: {&quot;type&quot;: &quot;boolean&quot;},
+</code></pre>
+<p>Add the words to <code>.cspell/custom-dictionary-workspace.txt</code> (any position; pre-commit re-sorts).</p>
+<ul>
+<li>[ ] <strong>Step 4: Run test to verify it passes</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; python -m pytest ../apps/predbat/tests/test_deye_config.py -v &gt; /tmp/deye_config.log 2&gt;&amp;1; grep -E "passed|failed|ERROR" /tmp/deye_config.log</code>
+Expected: <code>1 passed</code>.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/config.py apps/predbat/tests/test_deye_config.py .cspell/custom-dictionary-workspace.txt
+git commit -m &quot;feat(deye): add DeyeCloud INVERTER_DEF and config schema&quot;
+</code></pre>
+<hr />
+<h2 id="task-3-deyeapi-skeleton-oauth-init-and-component-registration">Task 3: <code>DeyeAPI</code> skeleton, OAuth init and component registration</h2>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Create: <code>apps/predbat/deye.py</code></li>
+<li>Modify: <code>apps/predbat/components.py</code> (import <code>DeyeAPI</code>; add <code>"deye"</code> to <code>COMPONENT_LIST</code> after <code>"fox"</code> ~line 244)</li>
+<li>Test: <code>apps/predbat/tests/test_deye_api.py</code> (created here, grows through later tasks)</li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>
+<p>Produces: <code>class DeyeAPI(ComponentBase, OAuthMixin)</code> with <code>initialise()</code> setting <code>self.data_center</code>, <code>self.company_id</code>, <code>self.inverter_sn_filter (list)</code>, <code>self.automatic</code>, <code>self.automatic_ignore_pv</code>, <code>self.device_list</code>, <code>self.device_values</code>, <code>self.device_battery_config</code>, <code>self.local_schedule</code>, <code>self.pending_orders</code>; helper <code>base_url</code> (property) → <code>DEYE_BASE_URLS[self.data_center]</code>. <code>COMPONENT_LIST["deye"]</code> with <code>event_filter="predbat_deye_"</code>.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write the failing test</strong></p>
+</li>
+</ul>
+<pre><code class="language-python"># apps/predbat/tests/test_deye_api.py
+import pytz
+from datetime import datetime
+from unittest.mock import MagicMock
+from deye import DeyeAPI
+from deye_const import DEYE_BASE_URLS
+
+
+class MockDeye(DeyeAPI):
+    &quot;&quot;&quot;Test double: build a DeyeAPI without the full component lifecycle.&quot;&quot;&quot;
+
+    def __init__(self, auth_method=&quot;app_credentials&quot;, data_center=&quot;eu&quot;, inverter_sn=None):
+        self.prefix = &quot;predbat&quot;
+        self.automatic = False
+        self.automatic_ignore_pv = False
+        self.data_center = data_center
+        self.company_id = &quot;&quot;
+        self.inverter_sn_filter = inverter_sn or []
+        self.device_list = []
+        self.device_values = {}
+        self.device_battery_config = {}
+        self.local_schedule = {}
+        self.pending_orders = {}
+        self.applied_payload = {}
+        self.cached_values = {}
+        self.log_messages = []
+        self.local_tz = pytz.timezone(&quot;Europe/London&quot;)
+        self.base = MagicMock()
+        self.base.args = {&quot;user_id&quot;: &quot;test-deye-1&quot;}
+        self.base.midnight_utc = datetime.now(pytz.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        self._init_oauth(auth_method, &quot;test-token&quot;, None, &quot;deye&quot;)
+
+    def log(self, message):
+        &quot;&quot;&quot;Capture logs.&quot;&quot;&quot;
+        self.log_messages.append(message)
+
+    def update_success_timestamp(self):
+        &quot;&quot;&quot;No-op for tests.&quot;&quot;&quot;
+        pass
+
+
+def test_deye_base_url():
+    &quot;&quot;&quot;base_url resolves from the data centre.&quot;&quot;&quot;
+    failed = False
+    d = MockDeye(data_center=&quot;eu&quot;)
+    if d.base_url != DEYE_BASE_URLS[&quot;eu&quot;]:
+        print(f&quot;ERROR: base_url {d.base_url}&quot;)
+        failed = True
+    return failed
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run test to verify it fails</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; python -m pytest ../apps/predbat/tests/test_deye_api.py -v &gt; /tmp/deye_api.log 2&gt;&amp;1; grep -E "passed|failed|Error" /tmp/deye_api.log</code>
+Expected: FAIL — <code>No module named 'deye'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Write minimal implementation</strong></li>
+</ul>
+<pre><code class="language-python"># apps/predbat/deye.py  (after copyright header)
+&quot;&quot;&quot;DEYE Cloud API integration for Predbat.
+
+Registers each DEYE battery inverter as a ``DeyeCloud`` Predbat inverter,
+publishing monitoring sensors and Fox-style schedule control entities. Predbat
+drives those entities through the generic Inverter class; this module derives
+the DEYE work mode internally and applies a combined ``strategy_dynamic_control``
+payload. Supports HA add-on (self-managed token) and Predbat.com SaaS (injected
+token) auth.
+&quot;&quot;&quot;
+
+import aiohttp
+import asyncio
+import hashlib
+from component_base import ComponentBase
+from oauth_mixin import OAuthMixin
+from deye_const import DEYE_BASE_URLS, DEYE_TIMEOUT, DEYE_RETRIES, DEYE_ENDPOINTS
+
+
+class DeyeAPI(ComponentBase, OAuthMixin):
+    &quot;&quot;&quot;DEYE Cloud API component.&quot;&quot;&quot;
+
+    def initialize(self, app_id=&quot;&quot;, app_secret=&quot;&quot;, username=&quot;&quot;, password=&quot;&quot;, data_center=&quot;eu&quot;, company_id=&quot;&quot;, auth_method=&quot;app_credentials&quot;, token_expires_at=None, token_hash=&quot;&quot;, inverter_sn=None, automatic=False, automatic_ignore_pv=False, **kwargs):
+        &quot;&quot;&quot;Initialise the DEYE component from its resolved config args.
+
+        ComponentBase.__init__ calls initialize(**kwargs); the Components
+        registry has already resolved each arg from its deye_* config key and
+        passes it BY ARG NAME (e.g. data_center &lt;- deye_data_center), exactly
+        like fox/enphase/solax/teslemetry. Consume the kwargs directly — do NOT
+        re-derive with get_arg(&quot;data_center&quot;): that bare name is not in
+        apps.yaml (the key is deye_data_center), so it would always return the
+        default and silently pin every setting.
+        &quot;&quot;&quot;
+        self.log(&quot;Info: DeyeAPI initialising&quot;)
+        self.app_id = app_id
+        self.app_secret = app_secret
+        self.username = username
+        self.password = password
+        self.data_center = data_center or &quot;eu&quot;
+        self.company_id = company_id
+        self.token_hash = token_hash
+        self.automatic = automatic
+        self.automatic_ignore_pv = automatic_ignore_pv
+        self.inverter_sn_filter = inverter_sn if isinstance(inverter_sn, list) else ([inverter_sn] if inverter_sn else [])
+        self.device_list = []
+        self.device_values = {}
+        self.device_battery_config = {}
+        self.local_schedule = {}
+        self.pending_orders = {}
+        self.applied_payload = {}
+        self.cached_values = {}
+        self._init_oauth(
+            auth_method=auth_method,
+            key=app_secret or token_hash,
+            token_expires_at=token_expires_at,
+            provider_name=&quot;deye&quot;,
+        )
+
+    @property
+    def base_url(self):
+        &quot;&quot;&quot;Return the OpenAPI base URL for the configured data centre.&quot;&quot;&quot;
+        return DEYE_BASE_URLS.get(self.data_center, DEYE_BASE_URLS[&quot;eu&quot;])
+</code></pre>
+<p>Modify <code>components.py</code>: add <code>from deye import DeyeAPI</code> beside <code>from fox import FoxAPI</code>, and after the <code>"fox"</code> entry:</p>
+<pre><code class="language-python">    &quot;deye&quot;: {
+        &quot;class&quot;: DeyeAPI,
+        &quot;name&quot;: &quot;DEYE Cloud&quot;,
+        &quot;event_filter&quot;: &quot;predbat_deye_&quot;,
+        &quot;args&quot;: {
+            &quot;app_id&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;deye_app_id&quot;},
+            &quot;app_secret&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;deye_app_secret&quot;},
+            &quot;username&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;deye_username&quot;},
+            &quot;password&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;deye_password&quot;},
+            &quot;data_center&quot;: {&quot;required&quot;: False, &quot;default&quot;: &quot;eu&quot;, &quot;config&quot;: &quot;deye_data_center&quot;},
+            &quot;company_id&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;deye_company_id&quot;},
+            &quot;auth_method&quot;: {&quot;required&quot;: False, &quot;default&quot;: &quot;app_credentials&quot;, &quot;config&quot;: &quot;deye_auth_method&quot;},
+            &quot;token_expires_at&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;deye_token_expires_at&quot;},
+            &quot;token_hash&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;deye_token_hash&quot;},
+            &quot;inverter_sn&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;deye_inverter_sn&quot;},
+            &quot;automatic&quot;: {&quot;required&quot;: False, &quot;default&quot;: False, &quot;config&quot;: &quot;deye_automatic&quot;},
+            &quot;automatic_ignore_pv&quot;: {&quot;required&quot;: False, &quot;default&quot;: False, &quot;config&quot;: &quot;deye_automatic_ignore_pv&quot;},
+        },
+        &quot;phase&quot;: 1,
+    },
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run test to verify it passes</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; python -m pytest ../apps/predbat/tests/test_deye_api.py -v &gt; /tmp/deye_api.log 2&gt;&amp;1; grep -E "passed|failed|Error" /tmp/deye_api.log</code>
+Expected: <code>1 passed</code>.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/deye.py apps/predbat/components.py apps/predbat/tests/test_deye_api.py
+git commit -m &quot;feat(deye): add DeyeAPI skeleton and component registration&quot;
+</code></pre>
+<hr />
+<h2 id="task-4-auth-headers-_post-transport-retry-401-refresh-token-fetch">Task 4: Auth headers, <code>_post</code> transport (retry + 401 refresh), token fetch</h2>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>apps/predbat/deye.py</code> (add <code>_auth_headers</code>, <code>_sha256</code>, <code>_login_payload</code>, <code>fetch_token</code>, <code>_post</code>)</li>
+<li>Test: <code>apps/predbat/tests/test_deye_oauth.py</code></li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>Consumes: <code>MockDeye</code> from <code>test_deye_api.py</code>; <code>create_aiohttp_mock_response</code>, <code>create_aiohttp_mock_session</code>, <code>run_async</code> from <code>tests/test_infra.py</code>.</li>
+<li>
+<p>Produces: <code>async _post(self, endpoint_key, body) -&gt; dict</code>; <code>async fetch_token(self) -&gt; bool</code>; <code>_auth_headers() -&gt; dict</code>; static <code>_sha256(str) -&gt; str</code>; <code>_login_payload(login) -&gt; dict</code>.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write the failing test</strong></p>
+</li>
+</ul>
+<pre><code class="language-python"># apps/predbat/tests/test_deye_oauth.py
+import hashlib
+from unittest.mock import patch
+from tests.test_infra import run_async, create_aiohttp_mock_response, create_aiohttp_mock_session
+from tests.test_deye_api import MockDeye
+
+
+def test_sha256_and_login_payload():
+    &quot;&quot;&quot;Password hashed lower-hex SHA-256; @ picks email key else username.&quot;&quot;&quot;
+    failed = False
+    d = MockDeye()
+    if d._sha256(&quot;secret&quot;) != hashlib.sha256(b&quot;secret&quot;).hexdigest().lower():
+        print(&quot;ERROR: sha256 wrong&quot;)
+        failed = True
+    if d._login_payload(&quot;a@b.com&quot;) != {&quot;email&quot;: &quot;a@b.com&quot;}:
+        print(&quot;ERROR: email payload wrong&quot;)
+        failed = True
+    if d._login_payload(&quot;bob&quot;) != {&quot;username&quot;: &quot;bob&quot;}:
+        print(&quot;ERROR: username payload wrong&quot;)
+        failed = True
+    return failed
+
+
+def test_auth_headers_bearer():
+    &quot;&quot;&quot;Auth header carries the current access token as a Bearer.&quot;&quot;&quot;
+    failed = False
+    d = MockDeye()
+    d.access_token = &quot;tok-123&quot;
+    h = d._auth_headers()
+    if h.get(&quot;Authorization&quot;) != &quot;Bearer tok-123&quot;:
+        print(f&quot;ERROR: header {h}&quot;)
+        failed = True
+    return failed
+
+
+def test_post_401_refreshes_then_retries():
+    &quot;&quot;&quot;A 401 triggers handle_oauth_401 then a successful retry.&quot;&quot;&quot;
+    failed = False
+    d = MockDeye(auth_method=&quot;oauth&quot;)
+    d.access_token = &quot;old&quot;
+    resp_401 = create_aiohttp_mock_response(status=401, json_data={&quot;success&quot;: False})
+    resp_ok = create_aiohttp_mock_response(status=200, json_data={&quot;success&quot;: True, &quot;data&quot;: 1})
+    session = create_aiohttp_mock_session([resp_401, resp_ok])
+
+    async def fake_refresh():
+        d.access_token = &quot;new&quot;
+        return True
+
+    with patch(&quot;aiohttp.ClientSession&quot;, return_value=session):
+        with patch.object(d, &quot;handle_oauth_401&quot;, side_effect=fake_refresh):
+            out = run_async(d._post(&quot;station_list&quot;, {}))
+    if not out.get(&quot;success&quot;):
+        print(f&quot;ERROR: expected success after refresh, got {out}&quot;)
+        failed = True
+    if d.access_token != &quot;new&quot;:
+        print(&quot;ERROR: token not refreshed&quot;)
+        failed = True
+    return failed
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run test to verify it fails</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; python -m pytest ../apps/predbat/tests/test_deye_oauth.py -v &gt; /tmp/deye_oauth.log 2&gt;&amp;1; grep -E "passed|failed|Error" /tmp/deye_oauth.log</code>
+Expected: FAIL — <code>AttributeError: '... _sha256'</code> / <code>_post</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Write minimal implementation</strong> (append to <code>DeyeAPI</code>)</li>
+</ul>
+<pre><code class="language-python">    @staticmethod
+    def _sha256(password):
+        &quot;&quot;&quot;Return the lower-case hex SHA-256 of a password.&quot;&quot;&quot;
+        return hashlib.sha256(password.encode(&quot;utf-8&quot;)).hexdigest().lower()
+
+    @staticmethod
+    def _login_payload(login):
+        &quot;&quot;&quot;Choose the DEYE login key: email if it looks like one, else username.&quot;&quot;&quot;
+        login = (login or &quot;&quot;).strip()
+        return {&quot;email&quot;: login} if &quot;@&quot; in login else {&quot;username&quot;: login}
+
+    def _auth_headers(self):
+        &quot;&quot;&quot;Return JSON + Bearer auth headers for a DEYE request.&quot;&quot;&quot;
+        return {&quot;Content-Type&quot;: &quot;application/json&quot;, &quot;Authorization&quot;: f&quot;Bearer {self.access_token}&quot;}
+
+    async def fetch_token(self):
+        &quot;&quot;&quot;Fetch an access token using app credentials (app_credentials mode).&quot;&quot;&quot;
+        url = f&quot;{self.base_url}{DEYE_ENDPOINTS['token']}?appId={self.app_id}&quot;
+        body = {&quot;appSecret&quot;: self.app_secret, &quot;password&quot;: self._sha256(self.password), **self._login_payload(self.username)}
+        if self.company_id:
+            body[&quot;companyId&quot;] = str(self.company_id)
+        timeout = aiohttp.ClientTimeout(total=DEYE_TIMEOUT)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(url, json=body) as resp:
+                    resp.raise_for_status()
+                    data = await resp.json()
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            self.log(f&quot;Warn: DEYE token fetch failed: {e}&quot;)
+            return False
+        if not data.get(&quot;success&quot;):
+            self.log(f&quot;Warn: DEYE token rejected: {data.get('msg', 'unknown')}&quot;)
+            return False
+        self.access_token = data.get(&quot;accessToken&quot;)
+        return True
+
+    async def _post(self, endpoint_key, body):
+        &quot;&quot;&quot;POST to a DEYE endpoint with retry and 401-refresh. Returns parsed JSON or raises.&quot;&quot;&quot;
+        url = f&quot;{self.base_url}{DEYE_ENDPOINTS[endpoint_key]}&quot;
+        timeout = aiohttp.ClientTimeout(total=DEYE_TIMEOUT)
+        last_err = None
+        for attempt in range(DEYE_RETRIES):
+            try:
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.post(url, headers=self._auth_headers(), json=body) as resp:
+                        if resp.status in (401, 403):
+                            self.log(f&quot;Warn: DEYE 401/403 on {endpoint_key}, attempt {attempt + 1}&quot;)
+                            if await self.handle_oauth_401():
+                                continue
+                            raise RuntimeError(f&quot;DEYE auth failed on {endpoint_key}&quot;)
+                        resp.raise_for_status()
+                        return await resp.json()
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                last_err = e
+                self.log(f&quot;Warn: DEYE network error on {endpoint_key} attempt {attempt + 1}: {e}&quot;)
+                await asyncio.sleep(2 ** attempt)
+        raise RuntimeError(f&quot;DEYE POST failed after {DEYE_RETRIES} retries on {endpoint_key}: {last_err}&quot;)
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run test to verify it passes</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; python -m pytest ../apps/predbat/tests/test_deye_oauth.py -v &gt; /tmp/deye_oauth.log 2&gt;&amp;1; grep -E "passed|failed|ERROR" /tmp/deye_oauth.log</code>
+Expected: <code>3 passed</code>.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/deye.py apps/predbat/tests/test_deye_oauth.py
+git commit -m &quot;feat(deye): add auth headers, token fetch and _post transport&quot;
+</code></pre>
+<hr />
+<h2 id="task-5-device-discovery-stations-inverters-paginated">Task 5: Device discovery (stations → inverters, paginated)</h2>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>apps/predbat/deye.py</code> (add <code>get_station_ids</code>, <code>get_device_list</code>)</li>
+<li>Test: <code>apps/predbat/tests/test_deye_api.py</code> (append)</li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>Consumes: <code>_post</code>.</li>
+<li>
+<p>Produces: <code>async get_station_ids(self) -&gt; list</code>; <code>async get_device_list(self) -&gt; list</code> (populates <code>self.device_list</code> with inverter <code>deviceSn</code> strings, honouring <code>inverter_sn_filter</code>).</p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write the failing test</strong> (append to <code>test_deye_api.py</code>)</p>
+</li>
+</ul>
+<pre><code class="language-python">from unittest.mock import patch
+
+
+def test_get_device_list_filters_inverters():
+    &quot;&quot;&quot;Only INVERTER devices are kept; sn filter is honoured.&quot;&quot;&quot;
+    failed = False
+    d = MockDeye(inverter_sn=[&quot;INV1&quot;])
+
+    async def fake_post(endpoint_key, body):
+        if endpoint_key == &quot;station_list&quot;:
+            return {&quot;success&quot;: True, &quot;stationList&quot;: [{&quot;id&quot;: 10}]}
+        if endpoint_key == &quot;station_device&quot;:
+            return {&quot;success&quot;: True, &quot;total&quot;: 2, &quot;deviceListItems&quot;: [
+                {&quot;deviceType&quot;: &quot;INVERTER&quot;, &quot;deviceSn&quot;: &quot;INV1&quot;},
+                {&quot;deviceType&quot;: &quot;METER&quot;, &quot;deviceSn&quot;: &quot;MET9&quot;},
+            ]}
+        return {&quot;success&quot;: True}
+
+    with patch.object(d, &quot;_post&quot;, side_effect=fake_post):
+        devices = run_async_local(d.get_device_list())
+    if devices != [&quot;INV1&quot;]:
+        print(f&quot;ERROR: devices {devices}&quot;)
+        failed = True
+    return failed
+</code></pre>
+<p>Add this helper import at the top of <code>test_deye_api.py</code> (reuse the shared runner):</p>
+<pre><code class="language-python">from tests.test_infra import run_async as run_async_local
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run test to verify it fails</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; python -m pytest ../apps/predbat/tests/test_deye_api.py::test_get_device_list_filters_inverters -v &gt; /tmp/deye_api.log 2&gt;&amp;1; grep -E "passed|failed|Error" /tmp/deye_api.log</code>
+Expected: FAIL — no attribute <code>get_device_list</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Write minimal implementation</strong> (append to <code>DeyeAPI</code>)</li>
+</ul>
+<pre><code class="language-python">    async def get_station_ids(self):
+        &quot;&quot;&quot;Return station ids visible to the account.&quot;&quot;&quot;
+        data = await self._post(&quot;station_list&quot;, {})
+        if not data.get(&quot;success&quot;, True):
+            self.log(f&quot;Warn: DEYE station/list failed: {data.get('msg', 'unknown')}&quot;)
+            return []
+        stations = data.get(&quot;stationList&quot;) or []
+        return [s.get(&quot;id&quot;) or s.get(&quot;stationId&quot;) for s in stations if s.get(&quot;id&quot;) or s.get(&quot;stationId&quot;)]
+
+    async def get_device_list(self):
+        &quot;&quot;&quot;Discover battery inverter serials across the account's stations.&quot;&quot;&quot;
+        station_ids = await self.get_station_ids()
+        if not station_ids:
+            self.log(&quot;Warn: DEYE no stations found&quot;)
+            self.device_list = []
+            return []
+        devices = []
+        page, size = 1, 100
+        while True:
+            data = await self._post(&quot;station_device&quot;, {&quot;page&quot;: page, &quot;size&quot;: size, &quot;stationIds&quot;: station_ids})
+            if not data.get(&quot;success&quot;, True):
+                self.log(f&quot;Warn: DEYE station/device failed: {data.get('msg', 'unknown')}&quot;)
+                break
+            items = data.get(&quot;deviceListItems&quot;) or []
+            devices.extend(items)
+            total = data.get(&quot;total&quot;)
+            if (total is not None and len(devices) &gt;= int(total)) or len(items) &lt; size:
+                break
+            page += 1
+        serials = [x[&quot;deviceSn&quot;] for x in devices if x.get(&quot;deviceType&quot;) == &quot;INVERTER&quot; and x.get(&quot;deviceSn&quot;)]
+        if self.inverter_sn_filter:
+            wanted = {s.lower() for s in self.inverter_sn_filter}
+            serials = [s for s in serials if s.lower() in wanted]
+        self.device_list = serials
+        return serials
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run test to verify it passes</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; python -m pytest ../apps/predbat/tests/test_deye_api.py::test_get_device_list_filters_inverters -v &gt; /tmp/deye_api.log 2&gt;&amp;1; grep -E "passed|failed|ERROR" /tmp/deye_api.log</code>
+Expected: <code>1 passed</code>.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/deye.py apps/predbat/tests/test_deye_api.py
+git commit -m &quot;feat(deye): add station and inverter device discovery&quot;
+</code></pre>
+<hr />
+<h2 id="task-6-telemetry-parse-devicelatest-and-battery-config">Task 6: Telemetry parse (<code>device/latest</code>) and battery config</h2>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>apps/predbat/deye.py</code> (add <code>_datalist_to_dict</code>, <code>fetch_device_data</code>, <code>fetch_battery_config</code>)</li>
+<li>Test: <code>apps/predbat/tests/test_deye_api.py</code> (append)</li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>Consumes: <code>_post</code>, <code>DEYE_TELEMETRY_KEYS</code>.</li>
+<li>
+<p>Produces: <code>_datalist_to_dict(data_list) -&gt; dict</code> (raw <code>{key: value}</code>); <code>async fetch_device_data(self, sn) -&gt; dict</code> (normalised <code>{soc, battery_power, grid_power, pv_power, load_power, temperature}</code> via <code>DEYE_TELEMETRY_KEYS</code>, cached in <code>self.device_values[sn]</code>); <code>async fetch_battery_config(self, sn) -&gt; dict</code> (cached in <code>self.device_battery_config[sn]</code>).</p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write the failing test</strong> (append)</p>
+</li>
+</ul>
+<pre><code class="language-python">from deye_const import DEYE_TELEMETRY_KEYS
+
+
+def test_fetch_device_data_maps_keys():
+    &quot;&quot;&quot;dataList key/value pairs map to normalised telemetry via the key table.&quot;&quot;&quot;
+    failed = False
+    d = MockDeye()
+    data_list = [
+        {&quot;key&quot;: DEYE_TELEMETRY_KEYS[&quot;soc&quot;], &quot;value&quot;: &quot;57&quot;, &quot;unit&quot;: &quot;%&quot;},
+        {&quot;key&quot;: DEYE_TELEMETRY_KEYS[&quot;grid_power&quot;], &quot;value&quot;: &quot;-1200&quot;, &quot;unit&quot;: &quot;W&quot;},
+    ]
+
+    async def fake_post(endpoint_key, body):
+        return {&quot;success&quot;: True, &quot;deviceDataList&quot;: [{&quot;deviceSn&quot;: &quot;INV1&quot;, &quot;dataList&quot;: data_list}]}
+
+    with patch.object(d, &quot;_post&quot;, side_effect=fake_post):
+        out = run_async_local(d.fetch_device_data(&quot;INV1&quot;))
+    if out.get(&quot;soc&quot;) != 57.0:
+        print(f&quot;ERROR: soc {out.get('soc')}&quot;)
+        failed = True
+    if out.get(&quot;grid_power&quot;) != -1200.0:
+        print(f&quot;ERROR: grid_power {out.get('grid_power')}&quot;)
+        failed = True
+    if d.device_values.get(&quot;INV1&quot;, {}).get(&quot;soc&quot;) != 57.0:
+        print(&quot;ERROR: not cached&quot;)
+        failed = True
+    return failed
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run test to verify it fails</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; python -m pytest ../apps/predbat/tests/test_deye_api.py::test_fetch_device_data_maps_keys -v &gt; /tmp/deye_api.log 2&gt;&amp;1; grep -E "passed|failed|Error" /tmp/deye_api.log</code>
+Expected: FAIL — no attribute <code>fetch_device_data</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Write minimal implementation</strong> (append to <code>DeyeAPI</code>, add <code>from deye_const import DEYE_TELEMETRY_KEYS, DEYE_LATEST_BODY_KEY</code> to the imports)</li>
+</ul>
+<pre><code class="language-python">    @staticmethod
+    def _datalist_to_dict(data_list):
+        &quot;&quot;&quot;Flatten a DEYE dataList of {key,value} pairs into a plain dict.&quot;&quot;&quot;
+        out = {}
+        for item in data_list or []:
+            key = item.get(&quot;key&quot;)
+            if key is not None:
+                out[key] = item.get(&quot;value&quot;)
+        return out
+
+    @staticmethod
+    def _as_float(value, default=0.0):
+        &quot;&quot;&quot;Best-effort float coercion.&quot;&quot;&quot;
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    async def fetch_device_data(self, sn):
+        &quot;&quot;&quot;Fetch and normalise the latest telemetry for one inverter.&quot;&quot;&quot;
+        data = await self._post(&quot;device_latest&quot;, {DEYE_LATEST_BODY_KEY: [sn]})
+        if not data.get(&quot;success&quot;, True):
+            self.log(f&quot;Warn: DEYE device/latest failed for {sn}: {data.get('msg', 'unknown')}&quot;)
+            return {}
+        rows = data.get(&quot;deviceDataList&quot;) or []
+        if not rows:
+            return {}
+        flat = self._datalist_to_dict(rows[0].get(&quot;dataList&quot;))
+        result = {name: self._as_float(flat.get(key)) for name, key in DEYE_TELEMETRY_KEYS.items()}
+        self.device_values[sn] = result
+        return result
+
+    async def fetch_battery_config(self, sn):
+        &quot;&quot;&quot;Fetch and cache battery capability config for one inverter.&quot;&quot;&quot;
+        data = await self._post(&quot;config_battery&quot;, {&quot;deviceSn&quot;: sn})
+        if not data.get(&quot;success&quot;, True):
+            self.log(f&quot;Warn: DEYE config/battery failed for {sn}: {data.get('msg', 'unknown')}&quot;)
+            return {}
+        self.device_battery_config[sn] = data
+        return data
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run test to verify it passes</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; python -m pytest ../apps/predbat/tests/test_deye_api.py::test_fetch_device_data_maps_keys -v &gt; /tmp/deye_api.log 2&gt;&amp;1; grep -E "passed|failed|ERROR" /tmp/deye_api.log</code>
+Expected: <code>1 passed</code>.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/deye.py apps/predbat/tests/test_deye_api.py
+git commit -m &quot;feat(deye): parse device/latest telemetry and battery config&quot;
+</code></pre>
+<hr />
+<h2 id="task-7-behaviour-deye-control-state-derivation-pure-function">Task 7: Behaviour → DEYE control-state derivation (pure function)</h2>
+<p>This is the heart of the spec's mode-less control. It takes the desired per-inverter schedule state (already read from the HA entities) plus current SoC and returns the DEYE control intent (work mode + flags + slot SoC/power) for the imminent window.</p>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>apps/predbat/deye.py</code> (add <code>derive_control_state</code>)</li>
+<li>Test: <code>apps/predbat/tests/test_deye_control.py</code></li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>Consumes: <code>DEYE_WORKMODE</code>, <code>FREEZE_EXPORT_SOC</code>.</li>
+<li>
+<p>Produces: <code>derive_control_state(self, schedule, current_soc) -&gt; dict</code> where <code>schedule</code> is <code>{"reserve": int, "charge": {"enable": bool, "soc": int, "power": int}, "export": {"enable": bool, "soc": int, "power": int}}</code> and the return is <code>{"work_mode": str, "grid_charge": bool, "solar_sell": bool, "slot_soc": int, "power": int, "behaviour": str}</code>. <code>behaviour</code> ∈ <code>{charge, freeze_charge, hold_charge, export, freeze_export, idle}</code>.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write the failing test</strong></p>
+</li>
+</ul>
+<pre><code class="language-python"># apps/predbat/tests/test_deye_control.py
+from deye_const import DEYE_WORKMODE, FREEZE_EXPORT_SOC
+from tests.test_deye_api import MockDeye
+
+
+def _state(reserve=10, charge=None, export=None):
+    return {&quot;reserve&quot;: reserve, &quot;charge&quot;: charge or {&quot;enable&quot;: False, &quot;soc&quot;: 0, &quot;power&quot;: 0}, &quot;export&quot;: export or {&quot;enable&quot;: False, &quot;soc&quot;: 0, &quot;power&quot;: 0}}
+
+
+def test_derive_control_state_table():
+    &quot;&quot;&quot;Each Predbat intent maps to the correct DEYE control state (spec table).&quot;&quot;&quot;
+    failed = False
+    d = MockDeye()
+    cases = [
+        # name, schedule, current_soc, expect(behaviour, work_mode, grid_charge, solar_sell, slot_soc)
+        (&quot;charge&quot;, _state(reserve=10, charge={&quot;enable&quot;: True, &quot;soc&quot;: 90, &quot;power&quot;: 3000}), 50,
+         (&quot;charge&quot;, DEYE_WORKMODE[&quot;zero_export_load&quot;], True, False, 90)),
+        (&quot;freeze_charge&quot;, _state(reserve=50, charge={&quot;enable&quot;: True, &quot;soc&quot;: 50, &quot;power&quot;: 3000}), 50,
+         (&quot;freeze_charge&quot;, DEYE_WORKMODE[&quot;zero_export_load&quot;], True, False, 50)),
+        (&quot;hold_charge&quot;, _state(reserve=50, charge={&quot;enable&quot;: True, &quot;soc&quot;: 40, &quot;power&quot;: 3000}), 50,
+         (&quot;hold_charge&quot;, DEYE_WORKMODE[&quot;zero_export_load&quot;], False, False, 50)),
+        (&quot;export&quot;, _state(reserve=10, export={&quot;enable&quot;: True, &quot;soc&quot;: 20, &quot;power&quot;: 3000}), 80,
+         (&quot;export&quot;, DEYE_WORKMODE[&quot;selling_first&quot;], False, True, 20)),
+        (&quot;freeze_export&quot;, _state(reserve=10, export={&quot;enable&quot;: True, &quot;soc&quot;: FREEZE_EXPORT_SOC, &quot;power&quot;: 3000}), 80,
+         (&quot;freeze_export&quot;, DEYE_WORKMODE[&quot;selling_first&quot;], False, True, FREEZE_EXPORT_SOC)),
+        (&quot;idle&quot;, _state(reserve=15), 60,
+         (&quot;idle&quot;, DEYE_WORKMODE[&quot;zero_export_load&quot;], False, False, 15)),
+    ]
+    for name, sched, soc, exp in cases:
+        r = d.derive_control_state(sched, soc)
+        got = (r[&quot;behaviour&quot;], r[&quot;work_mode&quot;], r[&quot;grid_charge&quot;], r[&quot;solar_sell&quot;], r[&quot;slot_soc&quot;])
+        if got != exp:
+            print(f&quot;ERROR: {name} expected {exp} got {got}&quot;)
+            failed = True
+    return failed
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run test to verify it fails</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; python -m pytest ../apps/predbat/tests/test_deye_control.py -v &gt; /tmp/deye_control.log 2&gt;&amp;1; grep -E "passed|failed|Error" /tmp/deye_control.log</code>
+Expected: FAIL — no attribute <code>derive_control_state</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Write minimal implementation</strong> (append to <code>DeyeAPI</code>; add <code>from deye_const import DEYE_WORKMODE, FREEZE_EXPORT_SOC</code> to imports)</li>
+</ul>
+<pre><code class="language-python">    def derive_control_state(self, schedule, current_soc):
+        &quot;&quot;&quot;Map Predbat's schedule intent to a DEYE control state (see design spec table).&quot;&quot;&quot;
+        reserve = int(schedule.get(&quot;reserve&quot;, 0))
+        charge = schedule.get(&quot;charge&quot;, {})
+        export = schedule.get(&quot;export&quot;, {})
+
+        if export.get(&quot;enable&quot;):
+            export_soc = int(export.get(&quot;soc&quot;, FREEZE_EXPORT_SOC))
+            if export_soc &gt;= FREEZE_EXPORT_SOC:
+                return {&quot;behaviour&quot;: &quot;freeze_export&quot;, &quot;work_mode&quot;: DEYE_WORKMODE[&quot;selling_first&quot;], &quot;grid_charge&quot;: False, &quot;solar_sell&quot;: True, &quot;slot_soc&quot;: FREEZE_EXPORT_SOC, &quot;power&quot;: int(export.get(&quot;power&quot;, 0))}
+            return {&quot;behaviour&quot;: &quot;export&quot;, &quot;work_mode&quot;: DEYE_WORKMODE[&quot;selling_first&quot;], &quot;grid_charge&quot;: False, &quot;solar_sell&quot;: True, &quot;slot_soc&quot;: export_soc, &quot;power&quot;: int(export.get(&quot;power&quot;, 0))}
+
+        if charge.get(&quot;enable&quot;):
+            charge_soc = int(charge.get(&quot;soc&quot;, 0))
+            if charge_soc &gt; current_soc and charge_soc &gt; reserve:
+                return {&quot;behaviour&quot;: &quot;charge&quot;, &quot;work_mode&quot;: DEYE_WORKMODE[&quot;zero_export_load&quot;], &quot;grid_charge&quot;: True, &quot;solar_sell&quot;: False, &quot;slot_soc&quot;: charge_soc, &quot;power&quot;: int(charge.get(&quot;power&quot;, 0))}
+            if charge_soc == reserve:
+                # Freeze charge: &quot;a charge whose target SoC equals the reserve&quot; — hold at reserve (grid charge on).
+                return {&quot;behaviour&quot;: &quot;freeze_charge&quot;, &quot;work_mode&quot;: DEYE_WORKMODE[&quot;zero_export_load&quot;], &quot;grid_charge&quot;: True, &quot;solar_sell&quot;: False, &quot;slot_soc&quot;: reserve, &quot;power&quot;: int(charge.get(&quot;power&quot;, 0))}
+            # Hold charge: target &lt;= current (and != reserve) — held at reserve, no grid charge.
+            return {&quot;behaviour&quot;: &quot;hold_charge&quot;, &quot;work_mode&quot;: DEYE_WORKMODE[&quot;zero_export_load&quot;], &quot;grid_charge&quot;: False, &quot;solar_sell&quot;: False, &quot;slot_soc&quot;: reserve, &quot;power&quot;: int(charge.get(&quot;power&quot;, 0))}
+
+        return {&quot;behaviour&quot;: &quot;idle&quot;, &quot;work_mode&quot;: DEYE_WORKMODE[&quot;zero_export_load&quot;], &quot;grid_charge&quot;: False, &quot;solar_sell&quot;: False, &quot;slot_soc&quot;: reserve, &quot;power&quot;: 0}
+</code></pre>
+<blockquote>
+<p>Note on the freeze/hold split (spec): <strong>freeze charge</strong> = "a charge whose target SoC equals the reserve" → <code>charge_soc &lt;= reserve</code>, grid-charge on, hold at reserve. <strong>hold charge</strong> = "charge amount ≤ current SoC, held with reserve" → target between reserve and current, grid-charge off, held at reserve. <strong>charge</strong> = real grid charge to a target above both current SoC and reserve.</p>
+</blockquote>
+<ul>
+<li>[ ] <strong>Step 4: Run test to verify it passes</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; python -m pytest ../apps/predbat/tests/test_deye_control.py -v &gt; /tmp/deye_control.log 2&gt;&amp;1; grep -E "passed|failed|ERROR" /tmp/deye_control.log</code>
+Expected: <code>1 passed</code>.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/deye.py apps/predbat/tests/test_deye_control.py
+git commit -m &quot;feat(deye): derive DEYE work mode from Predbat schedule intent&quot;
+</code></pre>
+<hr />
+<h2 id="task-8-window-6-slot-tou-schedule-builder">Task 8: Window → 6-slot TOU schedule builder</h2>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>apps/predbat/deye.py</code> (add <code>build_tou_slots</code>)</li>
+<li>Test: <code>apps/predbat/tests/test_deye_control.py</code> (append)</li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>Consumes: <code>derive_control_state</code>, <code>TOU_FIELD</code>, <code>TOU_SLOT_COUNT</code>.</li>
+<li>
+<p>Produces: <code>build_tou_slots(self, schedule, current_soc) -&gt; list</code> — exactly <code>TOU_SLOT_COUNT</code> dicts keyed by <code>TOU_FIELD</code>, in ascending start-time order, each covering a segment of the day. Charge/export windows become their own segments; the remainder is self-use at reserve.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write the failing test</strong> (append)</p>
+</li>
+</ul>
+<pre><code class="language-python">from deye_const import TOU_FIELD, TOU_SLOT_COUNT
+
+
+def test_build_tou_slots_charge_window():
+    &quot;&quot;&quot;A charge window produces exactly 6 ordered slots with a grid-charge segment.&quot;&quot;&quot;
+    failed = False
+    d = MockDeye()
+    sched = {&quot;reserve&quot;: 10,
+             &quot;charge&quot;: {&quot;enable&quot;: True, &quot;soc&quot;: 95, &quot;power&quot;: 3000, &quot;start&quot;: &quot;02:00&quot;, &quot;end&quot;: &quot;05:00&quot;},
+             &quot;export&quot;: {&quot;enable&quot;: False, &quot;soc&quot;: 0, &quot;power&quot;: 0}}
+    slots = d.build_tou_slots(sched, current_soc=40)
+    if len(slots) != TOU_SLOT_COUNT:
+        print(f&quot;ERROR: expected {TOU_SLOT_COUNT} slots got {len(slots)}&quot;)
+        return True
+    times = [s[TOU_FIELD[&quot;time&quot;]] for s in slots]
+    if times != sorted(times):
+        print(f&quot;ERROR: slots not ordered {times}&quot;)
+        failed = True
+    charge_slots = [s for s in slots if s[TOU_FIELD[&quot;grid_charge&quot;]] and s[TOU_FIELD[&quot;soc&quot;]] == 95]
+    if not charge_slots:
+        print(&quot;ERROR: no grid-charge slot at soc 95&quot;)
+        failed = True
+    if slots[0][TOU_FIELD[&quot;time&quot;]] != &quot;00:00&quot;:
+        print(f&quot;ERROR: first slot must start 00:00 got {slots[0][TOU_FIELD['time']]}&quot;)
+        failed = True
+    return failed
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run test to verify it fails</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; python -m pytest ../apps/predbat/tests/test_deye_control.py::test_build_tou_slots_charge_window -v &gt; /tmp/deye_control.log 2&gt;&amp;1; grep -E "passed|failed|Error" /tmp/deye_control.log</code>
+Expected: FAIL — no attribute <code>build_tou_slots</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Write minimal implementation</strong> (append to <code>DeyeAPI</code>; add <code>from deye_const import TOU_FIELD, TOU_SLOT_COUNT</code> to imports)</li>
+</ul>
+<pre><code class="language-python">    def _self_use_slot(self, start_time, reserve):
+        &quot;&quot;&quot;Build a self-use TOU slot holding at the reserve SoC.&quot;&quot;&quot;
+        return {TOU_FIELD[&quot;time&quot;]: start_time, TOU_FIELD[&quot;power&quot;]: 0, TOU_FIELD[&quot;soc&quot;]: int(reserve), TOU_FIELD[&quot;grid_charge&quot;]: False, TOU_FIELD[&quot;generate&quot;]: True}
+
+    def _action_slot(self, start_time, state):
+        &quot;&quot;&quot;Build a TOU slot realising a derived control state.&quot;&quot;&quot;
+        return {TOU_FIELD[&quot;time&quot;]: start_time, TOU_FIELD[&quot;power&quot;]: int(state[&quot;power&quot;]), TOU_FIELD[&quot;soc&quot;]: int(state[&quot;slot_soc&quot;]), TOU_FIELD[&quot;grid_charge&quot;]: bool(state[&quot;grid_charge&quot;]), TOU_FIELD[&quot;generate&quot;]: True}
+
+    def build_tou_slots(self, schedule, current_soc):
+        &quot;&quot;&quot;Build exactly TOU_SLOT_COUNT ordered slots covering 24h from the schedule windows.&quot;&quot;&quot;
+        reserve = int(schedule.get(&quot;reserve&quot;, 0))
+        # Collect (start_time, state) segment boundaries. Baseline self-use at 00:00.
+        segments = {&quot;00:00&quot;: {&quot;behaviour&quot;: &quot;idle&quot;, &quot;power&quot;: 0, &quot;slot_soc&quot;: reserve, &quot;grid_charge&quot;: False, &quot;solar_sell&quot;: False, &quot;work_mode&quot;: None}}
+        for direction in (&quot;charge&quot;, &quot;export&quot;):
+            window = schedule.get(direction, {})
+            if window.get(&quot;enable&quot;) and window.get(&quot;start&quot;) and window.get(&quot;end&quot;):
+                intent = {&quot;reserve&quot;: reserve, &quot;charge&quot;: {&quot;enable&quot;: False}, &quot;export&quot;: {&quot;enable&quot;: False}}
+                intent[direction] = {&quot;enable&quot;: True, &quot;soc&quot;: window.get(&quot;soc&quot;, 0), &quot;power&quot;: window.get(&quot;power&quot;, 0)}
+                state = self.derive_control_state(intent, current_soc)
+                segments[window[&quot;start&quot;]] = state
+                # After the window, return to self-use at reserve.
+                segments.setdefault(window[&quot;end&quot;], {&quot;behaviour&quot;: &quot;idle&quot;, &quot;power&quot;: 0, &quot;slot_soc&quot;: reserve, &quot;grid_charge&quot;: False, &quot;solar_sell&quot;: False, &quot;work_mode&quot;: None})
+        ordered = sorted(segments.items(), key=lambda kv: kv[0])
+        slots = []
+        for start_time, state in ordered:
+            if state.get(&quot;grid_charge&quot;) or state.get(&quot;solar_sell&quot;) or state.get(&quot;power&quot;):
+                slots.append(self._action_slot(start_time, state))
+            else:
+                slots.append(self._self_use_slot(start_time, reserve))
+        # Normalise to exactly TOU_SLOT_COUNT: pad by repeating the last slot's SoC at spread times, or trim keeping the imminent windows.
+        while len(slots) &lt; TOU_SLOT_COUNT:
+            filler_time = &quot;23:59&quot; if not slots else slots[-1][TOU_FIELD[&quot;time&quot;]]
+            slots.append(self._self_use_slot(filler_time, reserve))
+        if len(slots) &gt; TOU_SLOT_COUNT:
+            slots = slots[:TOU_SLOT_COUNT]
+        return slots
+</code></pre>
+<blockquote>
+<p>The pad/trim keeps the plan self-contained and passing; the spike may refine how DEYE expects unused slots expressed (e.g. all six must be distinct times). Adjust <code>build_tou_slots</code> only, leaving <code>derive_control_state</code> untouched.</p>
+</blockquote>
+<ul>
+<li>[ ] <strong>Step 4: Run test to verify it passes</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; python -m pytest ../apps/predbat/tests/test_deye_control.py::test_build_tou_slots_charge_window -v &gt; /tmp/deye_control.log 2&gt;&amp;1; grep -E "passed|failed|ERROR" /tmp/deye_control.log</code>
+Expected: <code>1 passed</code>.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/deye.py apps/predbat/tests/test_deye_control.py
+git commit -m &quot;feat(deye): build 6-slot TOU schedule from charge/export windows&quot;
+</code></pre>
+<hr />
+<h2 id="task-9-combined-control-payload-change-detection">Task 9: Combined control payload + change detection</h2>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>apps/predbat/deye.py</code> (add <code>build_dynamic_payload</code>, <code>payloads_equal</code>)</li>
+<li>Test: <code>apps/predbat/tests/test_deye_control.py</code> (append)</li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>Consumes: <code>build_tou_slots</code>, <code>derive_control_state</code>, <code>TOU_FIELD</code>.</li>
+<li>
+<p>Produces: <code>build_dynamic_payload(self, sn, schedule, current_soc) -&gt; dict</code> (the <code>strategy_dynamic_control</code> body: <code>deviceSn</code>, <code>workMode</code>, <code>gridChargeAction</code>, <code>solarSellAction</code>, <code>touAction</code>, <code>timeUseSettingItems</code>); <code>payloads_equal(self, a, b) -&gt; bool</code> (compares ignoring <code>deviceSn</code>).</p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write the failing test</strong> (append)</p>
+</li>
+</ul>
+<pre><code class="language-python">def test_build_dynamic_payload_and_equality():
+    &quot;&quot;&quot;Payload carries work mode + on/off actions + 6 slots; equality ignores deviceSn.&quot;&quot;&quot;
+    failed = False
+    d = MockDeye()
+    sched = {&quot;reserve&quot;: 10, &quot;charge&quot;: {&quot;enable&quot;: True, &quot;soc&quot;: 95, &quot;power&quot;: 3000, &quot;start&quot;: &quot;02:00&quot;, &quot;end&quot;: &quot;05:00&quot;}, &quot;export&quot;: {&quot;enable&quot;: False, &quot;soc&quot;: 0, &quot;power&quot;: 0}}
+    p1 = d.build_dynamic_payload(&quot;INV1&quot;, sched, current_soc=40)
+    p2 = d.build_dynamic_payload(&quot;INV2&quot;, sched, current_soc=40)
+    if p1.get(&quot;deviceSn&quot;) != &quot;INV1&quot;:
+        print(&quot;ERROR: deviceSn not set&quot;)
+        failed = True
+    if len(p1.get(&quot;timeUseSettingItems&quot;, [])) != 6:
+        print(&quot;ERROR: payload must carry 6 slots&quot;)
+        failed = True
+    if p1.get(&quot;gridChargeAction&quot;) not in (&quot;on&quot;, &quot;off&quot;):
+        print(f&quot;ERROR: gridChargeAction {p1.get('gridChargeAction')}&quot;)
+        failed = True
+    if not d.payloads_equal(p1, p2):
+        print(&quot;ERROR: payloads differing only by deviceSn should be equal&quot;)
+        failed = True
+    return failed
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run test to verify it fails</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; python -m pytest ../apps/predbat/tests/test_deye_control.py::test_build_dynamic_payload_and_equality -v &gt; /tmp/deye_control.log 2&gt;&amp;1; grep -E "passed|failed|Error" /tmp/deye_control.log</code>
+Expected: FAIL — no attribute <code>build_dynamic_payload</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Write minimal implementation</strong> (append to <code>DeyeAPI</code>)</li>
+</ul>
+<pre><code class="language-python">    def build_dynamic_payload(self, sn, schedule, current_soc):
+        &quot;&quot;&quot;Build the strategy_dynamic_control body for one inverter.&quot;&quot;&quot;
+        slots = self.build_tou_slots(schedule, current_soc)
+        # The imminent action drives the top-level work mode / on-off flags.
+        active = self.derive_control_state(schedule, current_soc)
+        return {
+            &quot;deviceSn&quot;: sn,
+            &quot;workMode&quot;: active[&quot;work_mode&quot;],
+            &quot;gridChargeAction&quot;: &quot;on&quot; if active[&quot;grid_charge&quot;] else &quot;off&quot;,
+            &quot;solarSellAction&quot;: &quot;on&quot; if active[&quot;solar_sell&quot;] else &quot;off&quot;,
+            &quot;touAction&quot;: &quot;on&quot;,
+            &quot;timeUseSettingItems&quot;: slots,
+        }
+
+    def payloads_equal(self, a, b):
+        &quot;&quot;&quot;Compare two dynamic-control payloads ignoring deviceSn.&quot;&quot;&quot;
+        def strip(p):
+            return {k: v for k, v in (p or {}).items() if k != &quot;deviceSn&quot;}
+        return strip(a) == strip(b)
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run test to verify it passes</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; python -m pytest ../apps/predbat/tests/test_deye_control.py::test_build_dynamic_payload_and_equality -v &gt; /tmp/deye_control.log 2&gt;&amp;1; grep -E "passed|failed|ERROR" /tmp/deye_control.log</code>
+Expected: <code>1 passed</code>.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/deye.py apps/predbat/tests/test_deye_control.py
+git commit -m &quot;feat(deye): build combined control payload with change detection&quot;
+</code></pre>
+<hr />
+<h2 id="task-10-async-write-order-polling">Task 10: Async write + order polling</h2>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>apps/predbat/deye.py</code> (add <code>apply_dynamic_control</code>, <code>poll_order</code>, <code>_get</code>)</li>
+<li>Test: <code>apps/predbat/tests/test_deye_control.py</code> (append)</li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>Consumes: <code>_post</code>, <code>_get</code>, <code>build_dynamic_payload</code>, <code>payloads_equal</code>, <code>DEYE_ENDPOINTS</code>, <code>self.applied_payload</code> (last-applied payload cache, initialised in Task 3 <code>MockDeye</code>/<code>initialise</code>).</li>
+<li>Produces: <code>async apply_dynamic_control(self, sn, schedule, current_soc, force=False) -&gt; bool</code> (diffs the desired payload against the <strong>last-applied cached payload</strong> — no read endpoint needed — writes only on change or <code>force</code>, caches the applied payload, records <code>orderId</code> in <code>self.pending_orders[sn]</code>); <code>async poll_order(self, sn) -&gt; str</code> (returns <code>"success"</code>/<code>"pending"</code>/<code>"failed"</code> via <code>GET /order/{orderId}</code>); <code>async _get(self, path) -&gt; dict</code>.</li>
+</ul>
+<blockquote>
+<p><strong>Why cache-diff, not read-back:</strong> the official sample code confirms the write endpoint (<code>/strategy/dynamicControl</code>) and the order poll (<code>GET /order/{orderId}</code>) but ships <strong>no</strong> dynamic-read sample, so we do not depend on an unconfirmed read endpoint. Diffing the freshly-computed payload against the last one we successfully applied gives the same write-suppression Fox gets from a read-back. <code>initialise()</code> (Task 3) must add <code>self.applied_payload = {}</code> (and <code>MockDeye</code> already sets it).</p>
+</blockquote>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing test</strong> (append)</li>
+</ul>
+<pre><code class="language-python">def test_apply_dynamic_control_suppresses_when_unchanged():
+    &quot;&quot;&quot;No write when the desired payload equals the last-applied cached payload.&quot;&quot;&quot;
+    failed = False
+    d = MockDeye()
+    sched = {&quot;reserve&quot;: 10, &quot;charge&quot;: {&quot;enable&quot;: True, &quot;soc&quot;: 95, &quot;power&quot;: 3000, &quot;start&quot;: &quot;02:00&quot;, &quot;end&quot;: &quot;05:00&quot;}, &quot;export&quot;: {&quot;enable&quot;: False, &quot;soc&quot;: 0, &quot;power&quot;: 0}}
+    # Seed the cache with what we would compute now, so a re-apply is a no-op.
+    d.applied_payload[&quot;INV1&quot;] = d.build_dynamic_payload(&quot;INV1&quot;, sched, 40)
+    posts = []
+
+    async def fake_post(endpoint_key, body):
+        posts.append(endpoint_key)
+        return {&quot;success&quot;: True, &quot;orderId&quot;: 1}
+
+    with patch.object(d, &quot;_post&quot;, side_effect=fake_post):
+        wrote = run_async_local(d.apply_dynamic_control(&quot;INV1&quot;, sched, 40))
+    if wrote:
+        print(&quot;ERROR: should not write when unchanged&quot;)
+        failed = True
+    if &quot;dynamic_control&quot; in posts:
+        print(&quot;ERROR: dynamic_control was posted despite no change&quot;)
+        failed = True
+    return failed
+
+
+def test_apply_dynamic_control_writes_and_caches_on_change():
+    &quot;&quot;&quot;A changed payload is written, orderId recorded and payload cached.&quot;&quot;&quot;
+    failed = False
+    d = MockDeye()
+    sched = {&quot;reserve&quot;: 10, &quot;charge&quot;: {&quot;enable&quot;: True, &quot;soc&quot;: 95, &quot;power&quot;: 3000, &quot;start&quot;: &quot;02:00&quot;, &quot;end&quot;: &quot;05:00&quot;}, &quot;export&quot;: {&quot;enable&quot;: False, &quot;soc&quot;: 0, &quot;power&quot;: 0}}
+
+    async def fake_post(endpoint_key, body):
+        return {&quot;success&quot;: True, &quot;orderId&quot;: 7}
+
+    with patch.object(d, &quot;_post&quot;, side_effect=fake_post):
+        wrote = run_async_local(d.apply_dynamic_control(&quot;INV1&quot;, sched, 40))
+    if not wrote:
+        print(&quot;ERROR: expected a write on first apply&quot;)
+        failed = True
+    if d.pending_orders.get(&quot;INV1&quot;) != 7:
+        print(f&quot;ERROR: orderId not recorded: {d.pending_orders}&quot;)
+        failed = True
+    if &quot;INV1&quot; not in d.applied_payload:
+        print(&quot;ERROR: applied payload not cached&quot;)
+        failed = True
+    return failed
+
+
+def test_poll_order_success():
+    &quot;&quot;&quot;poll_order clears a successful order via GET /order/{orderId}.&quot;&quot;&quot;
+    failed = False
+    d = MockDeye()
+    d.pending_orders[&quot;INV1&quot;] = 42
+    seen = []
+
+    async def fake_get(path):
+        seen.append(path)
+        return {&quot;success&quot;: True, &quot;connectionStatus&quot;: 1}
+
+    with patch.object(d, &quot;_get&quot;, side_effect=fake_get):
+        status = run_async_local(d.poll_order(&quot;INV1&quot;))
+    if status != &quot;success&quot;:
+        print(f&quot;ERROR: status {status}&quot;)
+        failed = True
+    if not seen or not seen[0].endswith(&quot;/order/42&quot;):
+        print(f&quot;ERROR: wrong poll path {seen}&quot;)
+        failed = True
+    if &quot;INV1&quot; in d.pending_orders:
+        print(&quot;ERROR: successful order should be cleared&quot;)
+        failed = True
+    return failed
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run test to verify it fails</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; python -m pytest ../apps/predbat/tests/test_deye_control.py -k "apply_dynamic or poll_order" -v &gt; /tmp/deye_control.log 2&gt;&amp;1; grep -E "passed|failed|Error" /tmp/deye_control.log</code>
+Expected: FAIL — no attribute <code>apply_dynamic_control</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Write minimal implementation</strong> (append to <code>DeyeAPI</code>)</li>
+</ul>
+<pre><code class="language-python">    async def _get(self, path):
+        &quot;&quot;&quot;GET an absolute DEYE path (used for order status). Returns parsed JSON or {}.&quot;&quot;&quot;
+        url = f&quot;{self.base_url}{path}&quot;
+        timeout = aiohttp.ClientTimeout(total=DEYE_TIMEOUT)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url, headers=self._auth_headers()) as resp:
+                    if resp.status in (401, 403):
+                        if await self.handle_oauth_401():
+                            async with session.get(url, headers=self._auth_headers()) as resp2:
+                                resp2.raise_for_status()
+                                return await resp2.json()
+                        return {}
+                    resp.raise_for_status()
+                    return await resp.json()
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            self.log(f&quot;Warn: DEYE GET {path} failed: {e}&quot;)
+            return {}
+
+    async def apply_dynamic_control(self, sn, schedule, current_soc, force=False):
+        &quot;&quot;&quot;Write the combined control payload, suppressing no-op writes via the applied-payload cache. Returns True if written.&quot;&quot;&quot;
+        desired = self.build_dynamic_payload(sn, schedule, current_soc)
+        if not force and self.payloads_equal(desired, self.applied_payload.get(sn)):
+            self.log(f&quot;Info: DEYE {sn} control unchanged, skipping write&quot;)
+            return False
+        resp = await self._post(&quot;dynamic_control&quot;, desired)
+        if not resp.get(&quot;success&quot;, True):
+            self.log(f&quot;Warn: DEYE dynamic control failed for {sn}: {resp.get('msg', 'unknown')}&quot;)
+            return False
+        self.applied_payload[sn] = desired
+        order_id = resp.get(&quot;orderId&quot;)
+        if order_id:
+            self.pending_orders[sn] = order_id
+            self.log(f&quot;Info: DEYE {sn} control submitted, orderId={order_id}&quot;)
+        return True
+
+    async def poll_order(self, sn):
+        &quot;&quot;&quot;Poll the pending control order via GET /order/{orderId}. Returns success/pending/failed.&quot;&quot;&quot;
+        order_id = self.pending_orders.get(sn)
+        if not order_id:
+            return &quot;success&quot;
+        resp = await self._get(f&quot;{DEYE_ENDPOINTS['order_result']}{order_id}&quot;)
+        if not resp.get(&quot;success&quot;, True):
+            return &quot;pending&quot;
+        self.pending_orders.pop(sn, None)
+        return &quot;success&quot;
+</code></pre>
+<p>Add <code>from deye_const import DEYE_ENDPOINTS</code> if not already imported (it is, from Task 3).</p>
+<ul>
+<li>[ ] <strong>Step 4: Run test to verify it passes</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; python -m pytest ../apps/predbat/tests/test_deye_control.py -k "apply_dynamic or poll_order" -v &gt; /tmp/deye_control.log 2&gt;&amp;1; grep -E "passed|failed|ERROR" /tmp/deye_control.log</code>
+Expected: <code>3 passed</code>.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/deye.py apps/predbat/tests/test_deye_control.py
+git commit -m &quot;feat(deye): async combined-control write with order polling&quot;
+</code></pre>
+<hr />
+<h2 id="task-11-publish-sensors-and-schedule-control-entities">Task 11: Publish sensors and schedule control entities</h2>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>apps/predbat/deye.py</code> (add <code>publish_data</code>, <code>publish_schedule_settings_ha</code>, <code>get_schedule_settings_ha</code>)</li>
+<li>Test: <code>apps/predbat/tests/test_deye_publish.py</code></li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>Consumes: <code>dashboard_item</code>, <code>get_state_wrapper</code>, <code>self.device_values</code>, <code>self.local_schedule</code>.</li>
+<li>
+<p>Produces: <code>async publish_data(self)</code>; <code>async publish_schedule_settings_ha(self, sn)</code>; <code>async get_schedule_settings_ha(self, sn) -&gt; dict</code> (reads the control entities into <code>self.local_schedule[sn]</code> shaped as the <code>schedule</code> dict used by Task 7). Entity naming: <code>sensor|select|number|switch.{prefix}_deye_{sn}_...</code> (mirrors Fox/Enphase).</p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write the failing test</strong></p>
+</li>
+</ul>
+<pre><code class="language-python"># apps/predbat/tests/test_deye_publish.py
+from tests.test_deye_api import MockDeye
+
+
+class RecordingDeye(MockDeye):
+    &quot;&quot;&quot;MockDeye that records dashboard_item calls and serves entity states.&quot;&quot;&quot;
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.published = {}
+        self.entity_states = {}
+
+    def dashboard_item(self, entity, state=None, attributes=None, app=None):
+        &quot;&quot;&quot;Record a published entity.&quot;&quot;&quot;
+        self.published[entity] = state
+
+    def get_state_wrapper(self, entity_id=None, default=None, attribute=None, refresh=False, required_unit=None, raw=False):
+        &quot;&quot;&quot;Serve a canned entity state.&quot;&quot;&quot;
+        return self.entity_states.get(entity_id, default)
+
+
+def test_publish_data_creates_soc_sensor():
+    &quot;&quot;&quot;publish_data emits a SoC sensor for each known inverter.&quot;&quot;&quot;
+    failed = False
+    d = RecordingDeye()
+    d.device_list = [&quot;INV1&quot;]
+    d.device_values = {&quot;INV1&quot;: {&quot;soc&quot;: 63.0, &quot;battery_power&quot;: 100.0, &quot;grid_power&quot;: 0.0, &quot;pv_power&quot;: 500.0, &quot;load_power&quot;: 400.0, &quot;temperature&quot;: 21.0}}
+    import tests.test_infra as ti
+    ti.run_async(d.publish_data())
+    if &quot;sensor.predbat_deye_inv1_soc&quot; not in d.published:
+        print(f&quot;ERROR: soc sensor not published; got {list(d.published)[:5]}&quot;)
+        failed = True
+    elif d.published[&quot;sensor.predbat_deye_inv1_soc&quot;] != 63.0:
+        print(&quot;ERROR: soc value wrong&quot;)
+        failed = True
+    return failed
+
+
+def test_schedule_roundtrip():
+    &quot;&quot;&quot;Published control entities read back into the schedule shape used by control derivation.&quot;&quot;&quot;
+    failed = False
+    d = RecordingDeye()
+    d.device_list = [&quot;INV1&quot;]
+    d.local_schedule = {&quot;INV1&quot;: {&quot;reserve&quot;: 10, &quot;charge&quot;: {&quot;enable&quot;: True, &quot;soc&quot;: 90, &quot;power&quot;: 3000, &quot;start&quot;: &quot;02:00&quot;, &quot;end&quot;: &quot;05:00&quot;}, &quot;export&quot;: {&quot;enable&quot;: False, &quot;soc&quot;: 99, &quot;power&quot;: 0}}}
+    import tests.test_infra as ti
+    ti.run_async(d.publish_schedule_settings_ha(&quot;INV1&quot;))
+    # Feed the published states back as HA state, then read them.
+    for entity, state in list(d.published.items()):
+        d.entity_states[entity] = &quot;on&quot; if state is True else (&quot;off&quot; if state is False else state)
+    got = ti.run_async(d.get_schedule_settings_ha(&quot;INV1&quot;))
+    if got.get(&quot;charge&quot;, {}).get(&quot;soc&quot;) != 90:
+        print(f&quot;ERROR: charge soc round-trip {got.get('charge')}&quot;)
+        failed = True
+    if got.get(&quot;reserve&quot;) != 10:
+        print(f&quot;ERROR: reserve round-trip {got.get('reserve')}&quot;)
+        failed = True
+    return failed
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run test to verify it fails</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; python -m pytest ../apps/predbat/tests/test_deye_publish.py -v &gt; /tmp/deye_publish.log 2&gt;&amp;1; grep -E "passed|failed|Error" /tmp/deye_publish.log</code>
+Expected: FAIL — no attribute <code>publish_data</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Write minimal implementation</strong> (append to <code>DeyeAPI</code>)</li>
+</ul>
+<pre><code class="language-python">    def _sensor_name(self, sn, leaf):
+        &quot;&quot;&quot;Return a namespaced DEYE sensor entity id.&quot;&quot;&quot;
+        return f&quot;sensor.{self.prefix}_deye_{sn.lower()}_{leaf}&quot;
+
+    def _control_name(self, domain, sn, leaf):
+        &quot;&quot;&quot;Return a namespaced DEYE control entity id.&quot;&quot;&quot;
+        return f&quot;{domain}.{self.prefix}_deye_{sn.lower()}_{leaf}&quot;
+
+    async def publish_data(self):
+        &quot;&quot;&quot;Publish monitoring sensors for each inverter.&quot;&quot;&quot;
+        for sn in self.device_list:
+            values = self.device_values.get(sn, {})
+            units = {&quot;soc&quot;: &quot;%&quot;, &quot;battery_power&quot;: &quot;W&quot;, &quot;grid_power&quot;: &quot;W&quot;, &quot;pv_power&quot;: &quot;W&quot;, &quot;load_power&quot;: &quot;W&quot;, &quot;temperature&quot;: &quot;°C&quot;}
+            for leaf, unit in units.items():
+                if leaf in values:
+                    self.dashboard_item(self._sensor_name(sn, leaf), state=values[leaf], attributes={&quot;unit_of_measurement&quot;: unit, &quot;friendly_name&quot;: f&quot;DEYE {sn} {leaf.replace('_', ' ').title()}&quot;}, app=&quot;deye&quot;)
+
+    async def publish_schedule_settings_ha(self, sn):
+        &quot;&quot;&quot;Publish the charge/export schedule control entities for one inverter.&quot;&quot;&quot;
+        local = self.local_schedule.get(sn, {})
+        reserve = int(local.get(&quot;reserve&quot;, 0))
+        self.dashboard_item(self._control_name(&quot;number&quot;, sn, &quot;battery_schedule_reserve&quot;), state=reserve, attributes={&quot;min&quot;: 0, &quot;max&quot;: 100, &quot;step&quot;: 1, &quot;unit_of_measurement&quot;: &quot;%&quot;, &quot;friendly_name&quot;: f&quot;DEYE {sn} Battery Schedule Reserve&quot;, &quot;icon&quot;: &quot;mdi:gauge&quot;}, app=&quot;deye&quot;)
+        for direction in (&quot;charge&quot;, &quot;export&quot;):
+            window = local.get(direction, {})
+            self.dashboard_item(self._control_name(&quot;select&quot;, sn, f&quot;battery_schedule_{direction}_start_time&quot;), state=window.get(&quot;start&quot;, &quot;00:00&quot;), attributes={&quot;friendly_name&quot;: f&quot;DEYE {sn} {direction.title()} Start&quot;, &quot;icon&quot;: &quot;mdi:clock-outline&quot;}, app=&quot;deye&quot;)
+            self.dashboard_item(self._control_name(&quot;select&quot;, sn, f&quot;battery_schedule_{direction}_end_time&quot;), state=window.get(&quot;end&quot;, &quot;00:00&quot;), attributes={&quot;friendly_name&quot;: f&quot;DEYE {sn} {direction.title()} End&quot;, &quot;icon&quot;: &quot;mdi:clock-outline&quot;}, app=&quot;deye&quot;)
+            self.dashboard_item(self._control_name(&quot;number&quot;, sn, f&quot;battery_schedule_{direction}_soc&quot;), state=int(window.get(&quot;soc&quot;, 0)), attributes={&quot;min&quot;: 0, &quot;max&quot;: 100, &quot;step&quot;: 1, &quot;unit_of_measurement&quot;: &quot;%&quot;, &quot;friendly_name&quot;: f&quot;DEYE {sn} {direction.title()} SoC&quot;, &quot;icon&quot;: &quot;mdi:gauge&quot;}, app=&quot;deye&quot;)
+            self.dashboard_item(self._control_name(&quot;number&quot;, sn, f&quot;battery_schedule_{direction}_power&quot;), state=int(window.get(&quot;power&quot;, 0)), attributes={&quot;min&quot;: 0, &quot;max&quot;: 20000, &quot;step&quot;: 100, &quot;unit_of_measurement&quot;: &quot;W&quot;, &quot;friendly_name&quot;: f&quot;DEYE {sn} {direction.title()} Power&quot;, &quot;icon&quot;: &quot;mdi:flash&quot;}, app=&quot;deye&quot;)
+            self.dashboard_item(self._control_name(&quot;switch&quot;, sn, f&quot;battery_schedule_{direction}_enable&quot;), state=&quot;on&quot; if window.get(&quot;enable&quot;) else &quot;off&quot;, attributes={&quot;friendly_name&quot;: f&quot;DEYE {sn} {direction.title()} Enable&quot;, &quot;icon&quot;: &quot;mdi:check-circle-outline&quot;}, app=&quot;deye&quot;)
+        self.dashboard_item(self._control_name(&quot;switch&quot;, sn, &quot;battery_schedule_charge_write&quot;), state=&quot;off&quot;, attributes={&quot;friendly_name&quot;: f&quot;DEYE {sn} Schedule Write&quot;, &quot;icon&quot;: &quot;mdi:content-save&quot;}, app=&quot;deye&quot;)
+
+    async def get_schedule_settings_ha(self, sn):
+        &quot;&quot;&quot;Read the control entities into the schedule shape used by control derivation.
+
+        Numeric reads go through _as_float so a HA entity reporting &quot;unknown&quot; /
+        &quot;unavailable&quot; (e.g. right after a HA restart, before Predbat republishes)
+        falls back to the default instead of raising ValueError and crashing the
+        reconciliation loop — matching Fox's defensive get_schedule_settings_ha.
+        &quot;&quot;&quot;
+        schedule = {&quot;reserve&quot;: int(self._as_float(self.get_state_wrapper(self._control_name(&quot;number&quot;, sn, &quot;battery_schedule_reserve&quot;), default=0), 0))}
+        for direction in (&quot;charge&quot;, &quot;export&quot;):
+            schedule[direction] = {
+                &quot;enable&quot;: self.get_state_wrapper(self._control_name(&quot;switch&quot;, sn, f&quot;battery_schedule_{direction}_enable&quot;), default=&quot;off&quot;) == &quot;on&quot;,
+                &quot;start&quot;: self.get_state_wrapper(self._control_name(&quot;select&quot;, sn, f&quot;battery_schedule_{direction}_start_time&quot;), default=&quot;00:00&quot;),
+                &quot;end&quot;: self.get_state_wrapper(self._control_name(&quot;select&quot;, sn, f&quot;battery_schedule_{direction}_end_time&quot;), default=&quot;00:00&quot;),
+                &quot;soc&quot;: int(self._as_float(self.get_state_wrapper(self._control_name(&quot;number&quot;, sn, f&quot;battery_schedule_{direction}_soc&quot;), default=0), 0)),
+                &quot;power&quot;: int(self._as_float(self.get_state_wrapper(self._control_name(&quot;number&quot;, sn, f&quot;battery_schedule_{direction}_power&quot;), default=0), 0)),
+            }
+        self.local_schedule[sn] = schedule
+        return schedule
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run test to verify it passes</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; python -m pytest ../apps/predbat/tests/test_deye_publish.py -v &gt; /tmp/deye_publish.log 2&gt;&amp;1; grep -E "passed|failed|ERROR" /tmp/deye_publish.log</code>
+Expected: <code>2 passed</code>.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/deye.py apps/predbat/tests/test_deye_publish.py
+git commit -m &quot;feat(deye): publish sensors and schedule control entities&quot;
+</code></pre>
+<hr />
+<h2 id="task-12-event-routing-reserve-live-write">Task 12: Event routing + reserve live-write</h2>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>apps/predbat/deye.py</code> (add <code>select_event</code>, <code>number_event</code>, <code>switch_event</code>, <code>apply_reserve_live</code>, <code>apply_schedule</code>)</li>
+<li>Test: <code>apps/predbat/tests/test_deye_publish.py</code> (append)</li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>Consumes: <code>get_schedule_settings_ha</code>, <code>apply_dynamic_control</code>, <code>device_values</code>.</li>
+<li>
+<p>Produces: overrides of <code>select_event</code>/<code>number_event</code>/<code>switch_event</code> that update local schedule and route; <code>async apply_reserve_live(self, sn, reserve)</code> (immediate write path); <code>async apply_schedule(self, sn, force=True)</code> (called on write-button press).</p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write the failing test</strong> (append)</p>
+</li>
+</ul>
+<pre><code class="language-python">from unittest.mock import patch
+
+
+def test_reserve_event_writes_immediately():
+    &quot;&quot;&quot;A reserve number_event pushes to DEYE at once (freeze-charge relies on it).&quot;&quot;&quot;
+    failed = False
+    d = RecordingDeye()
+    d.device_list = [&quot;INV1&quot;]
+    d.device_values = {&quot;INV1&quot;: {&quot;soc&quot;: 50.0}}
+    calls = []
+
+    async def fake_apply_reserve(sn, reserve):
+        calls.append((sn, reserve))
+        return True
+
+    import tests.test_infra as ti
+    with patch.object(d, &quot;apply_reserve_live&quot;, side_effect=fake_apply_reserve):
+        ti.run_async(d.number_event(&quot;number.predbat_deye_inv1_battery_schedule_reserve&quot;, 25))
+    if calls != [(&quot;INV1&quot;, 25)]:
+        print(f&quot;ERROR: reserve not written immediately: {calls}&quot;)
+        failed = True
+    return failed
+
+
+def test_write_button_applies_schedule():
+    &quot;&quot;&quot;The write switch triggers a forced schedule apply.&quot;&quot;&quot;
+    failed = False
+    d = RecordingDeye()
+    d.device_list = [&quot;INV1&quot;]
+    d.device_values = {&quot;INV1&quot;: {&quot;soc&quot;: 50.0}}
+    applied = []
+
+    async def fake_apply(sn, force=True):
+        applied.append((sn, force))
+        return True
+
+    import tests.test_infra as ti
+    with patch.object(d, &quot;apply_schedule&quot;, side_effect=fake_apply):
+        ti.run_async(d.switch_event(&quot;switch.predbat_deye_inv1_battery_schedule_charge_write&quot;, &quot;turn_on&quot;))
+    if applied != [(&quot;INV1&quot;, True)]:
+        print(f&quot;ERROR: write button did not apply: {applied}&quot;)
+        failed = True
+    return failed
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run test to verify it fails</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; python -m pytest ../apps/predbat/tests/test_deye_publish.py -k "reserve_event or write_button" -v &gt; /tmp/deye_publish.log 2&gt;&amp;1; grep -E "passed|failed|Error" /tmp/deye_publish.log</code>
+Expected: FAIL — <code>apply_reserve_live</code> / <code>apply_schedule</code> missing.</p>
+<ul>
+<li>[ ] <strong>Step 3: Write minimal implementation</strong> (append to <code>DeyeAPI</code>)</li>
+</ul>
+<pre><code class="language-python">    def _sn_from_entity(self, entity_id):
+        &quot;&quot;&quot;Extract the inverter serial embedded in a DEYE entity id.
+
+        Entity ids are always ``{prefix}_deye_{sn}_{leaf}``, so the serial is
+        always followed by ``_``. Match on ``sn + &quot;_&quot;`` (not a bare prefix) so
+        that when one serial is a prefix of another (e.g. INV1 vs INV11) a
+        control event is never mis-routed to the wrong inverter.
+        &quot;&quot;&quot;
+        marker = f&quot;_deye_&quot;
+        if marker not in entity_id:
+            return None
+        tail = entity_id.split(marker, 1)[1]
+        for sn in self.device_list:
+            if tail.startswith(sn.lower() + &quot;_&quot;):
+                return sn
+        return None
+
+    async def apply_reserve_live(self, sn, reserve):
+        &quot;&quot;&quot;Write the reserve immediately via a forced control apply (freeze-charge hold).&quot;&quot;&quot;
+        schedule = self.local_schedule.get(sn, {})
+        schedule[&quot;reserve&quot;] = int(reserve)
+        self.local_schedule[sn] = schedule
+        current_soc = self.device_values.get(sn, {}).get(&quot;soc&quot;, reserve)
+        return await self.apply_dynamic_control(sn, schedule, current_soc, force=True)
+
+    async def apply_schedule(self, sn, force=True):
+        &quot;&quot;&quot;Recompute from HA entities and push the schedule for one inverter.&quot;&quot;&quot;
+        schedule = await self.get_schedule_settings_ha(sn)
+        current_soc = self.device_values.get(sn, {}).get(&quot;soc&quot;, schedule.get(&quot;reserve&quot;, 0))
+        return await self.apply_dynamic_control(sn, schedule, current_soc, force=force)
+
+    async def select_event(self, entity_id, value):
+        &quot;&quot;&quot;Handle a select (time) change: refresh local schedule from HA.&quot;&quot;&quot;
+        sn = self._sn_from_entity(entity_id)
+        if sn:
+            await self.get_schedule_settings_ha(sn)
+
+    async def number_event(self, entity_id, value):
+        &quot;&quot;&quot;Handle a number change: reserve is written live, others just refresh local state.&quot;&quot;&quot;
+        sn = self._sn_from_entity(entity_id)
+        if not sn:
+            return
+        if entity_id.endswith(&quot;battery_schedule_reserve&quot;):
+            await self.apply_reserve_live(sn, int(float(value)))
+        else:
+            await self.get_schedule_settings_ha(sn)
+
+    async def switch_event(self, entity_id, service):
+        &quot;&quot;&quot;Handle a switch: the write button applies the schedule; enables refresh local state.&quot;&quot;&quot;
+        sn = self._sn_from_entity(entity_id)
+        if not sn:
+            return
+        if entity_id.endswith(&quot;_write&quot;) and service in (&quot;turn_on&quot;, &quot;on&quot;):
+            await self.apply_schedule(sn, force=True)
+        else:
+            await self.get_schedule_settings_ha(sn)
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run test to verify it passes</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; python -m pytest ../apps/predbat/tests/test_deye_publish.py -k "reserve_event or write_button" -v &gt; /tmp/deye_publish.log 2&gt;&amp;1; grep -E "passed|failed|ERROR" /tmp/deye_publish.log</code>
+Expected: <code>2 passed</code>.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/deye.py apps/predbat/tests/test_deye_publish.py
+git commit -m &quot;feat(deye): route control events and write reserve live&quot;
+</code></pre>
+<hr />
+<h2 id="task-13-automatic_config-multi-inverter-arg-mapping">Task 13: <code>automatic_config</code> (multi-inverter arg mapping)</h2>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>apps/predbat/deye.py</code> (add <code>automatic_config</code>)</li>
+<li>Test: <code>apps/predbat/tests/test_deye_publish.py</code> (append)</li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>Consumes: <code>set_arg</code>, <code>self.device_list</code>.</li>
+<li>
+<p>Produces: <code>async automatic_config(self)</code> setting <code>inverter_type=["DeyeCloud", …]</code>, <code>num_inverters</code>, and the arg → entity map for every discovered inverter.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write the failing test</strong> (append)</p>
+</li>
+</ul>
+<pre><code class="language-python">def test_automatic_config_maps_all_inverters():
+    &quot;&quot;&quot;automatic_config registers each inverter and maps the core control args.&quot;&quot;&quot;
+    failed = False
+    d = RecordingDeye()
+    d.device_list = [&quot;INVA&quot;, &quot;INVB&quot;]
+    d.set_args = {}
+    d.set_arg = lambda k, v: d.set_args.__setitem__(k, v)
+    import tests.test_infra as ti
+    ti.run_async(d.automatic_config())
+    if d.set_args.get(&quot;num_inverters&quot;) != 2:
+        print(f&quot;ERROR: num_inverters {d.set_args.get('num_inverters')}&quot;)
+        failed = True
+    if d.set_args.get(&quot;inverter_type&quot;) != [&quot;DeyeCloud&quot;, &quot;DeyeCloud&quot;]:
+        print(f&quot;ERROR: inverter_type {d.set_args.get('inverter_type')}&quot;)
+        failed = True
+    cs = d.set_args.get(&quot;charge_start_time&quot;)
+    if not cs or cs[0] != &quot;select.predbat_deye_inva_battery_schedule_charge_start_time&quot;:
+        print(f&quot;ERROR: charge_start_time map {cs}&quot;)
+        failed = True
+    if &quot;inverter_mode&quot; in d.set_args:
+        print(&quot;ERROR: DEYE must not set inverter_mode (mode-less)&quot;)
+        failed = True
+    return failed
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run test to verify it fails</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; python -m pytest ../apps/predbat/tests/test_deye_publish.py::test_automatic_config_maps_all_inverters -v &gt; /tmp/deye_publish.log 2&gt;&amp;1; grep -E "passed|failed|Error" /tmp/deye_publish.log</code>
+Expected: FAIL — no attribute <code>automatic_config</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Write minimal implementation</strong> (append to <code>DeyeAPI</code>)</li>
+</ul>
+<pre><code class="language-python">    async def automatic_config(self):
+        &quot;&quot;&quot;Register every discovered inverter as a DeyeCloud Predbat inverter.&quot;&quot;&quot;
+        devices = [sn.lower() for sn in self.device_list]
+        n = len(devices)
+        if not n:
+            self.log(&quot;Warn: DEYE automatic_config found no inverters&quot;)
+            return
+        self.set_arg(&quot;inverter_type&quot;, [&quot;DeyeCloud&quot; for _ in devices])
+        self.set_arg(&quot;num_inverters&quot;, n)
+        self.set_arg(&quot;soc_percent&quot;, [self._sensor_name(sn, &quot;soc&quot;) for sn in devices])
+        self.set_arg(&quot;battery_power&quot;, [self._sensor_name(sn, &quot;battery_power&quot;) for sn in devices])
+        self.set_arg(&quot;grid_power&quot;, [self._sensor_name(sn, &quot;grid_power&quot;) for sn in devices])
+        self.set_arg(&quot;load_power&quot;, [self._sensor_name(sn, &quot;load_power&quot;) for sn in devices])
+        if not self.automatic_ignore_pv:
+            self.set_arg(&quot;pv_power&quot;, [self._sensor_name(sn, &quot;pv_power&quot;) for sn in devices])
+        self.set_arg(&quot;battery_temperature&quot;, [self._sensor_name(sn, &quot;temperature&quot;) for sn in devices])
+        self.set_arg(&quot;reserve&quot;, [self._control_name(&quot;number&quot;, sn, &quot;battery_schedule_reserve&quot;) for sn in devices])
+        self.set_arg(&quot;charge_start_time&quot;, [self._control_name(&quot;select&quot;, sn, &quot;battery_schedule_charge_start_time&quot;) for sn in devices])
+        self.set_arg(&quot;charge_end_time&quot;, [self._control_name(&quot;select&quot;, sn, &quot;battery_schedule_charge_end_time&quot;) for sn in devices])
+        self.set_arg(&quot;charge_limit&quot;, [self._control_name(&quot;number&quot;, sn, &quot;battery_schedule_charge_soc&quot;) for sn in devices])
+        self.set_arg(&quot;charge_rate&quot;, [self._control_name(&quot;number&quot;, sn, &quot;battery_schedule_charge_power&quot;) for sn in devices])
+        self.set_arg(&quot;scheduled_charge_enable&quot;, [self._control_name(&quot;switch&quot;, sn, &quot;battery_schedule_charge_enable&quot;) for sn in devices])
+        self.set_arg(&quot;discharge_start_time&quot;, [self._control_name(&quot;select&quot;, sn, &quot;battery_schedule_export_start_time&quot;) for sn in devices])
+        self.set_arg(&quot;discharge_end_time&quot;, [self._control_name(&quot;select&quot;, sn, &quot;battery_schedule_export_end_time&quot;) for sn in devices])
+        self.set_arg(&quot;discharge_target_soc&quot;, [self._control_name(&quot;number&quot;, sn, &quot;battery_schedule_export_soc&quot;) for sn in devices])
+        self.set_arg(&quot;discharge_rate&quot;, [self._control_name(&quot;number&quot;, sn, &quot;battery_schedule_export_power&quot;) for sn in devices])
+        self.set_arg(&quot;scheduled_discharge_enable&quot;, [self._control_name(&quot;switch&quot;, sn, &quot;battery_schedule_export_enable&quot;) for sn in devices])
+        self.set_arg(&quot;schedule_write_button&quot;, [self._control_name(&quot;switch&quot;, sn, &quot;battery_schedule_charge_write&quot;) for sn in devices])
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run test to verify it passes</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; python -m pytest ../apps/predbat/tests/test_deye_publish.py::test_automatic_config_maps_all_inverters -v &gt; /tmp/deye_publish.log 2&gt;&amp;1; grep -E "passed|failed|ERROR" /tmp/deye_publish.log</code>
+Expected: <code>1 passed</code>.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/deye.py apps/predbat/tests/test_deye_publish.py
+git commit -m &quot;feat(deye): automatic_config multi-inverter arg mapping&quot;
+</code></pre>
+<hr />
+<h2 id="task-14-run-loop-token-bootstrap-refresh-tiers-and-final">Task 14: <code>run()</code> loop, token bootstrap, refresh tiers and <code>final()</code></h2>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>apps/predbat/deye.py</code> (add <code>run</code>, <code>final</code>)</li>
+<li>Test: <code>apps/predbat/tests/test_deye_api.py</code> (append)</li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>Consumes: everything above.</li>
+<li>
+<p>Produces: <code>async run(self, seconds, first) -&gt; bool</code> (bootstrap token in <code>app_credentials</code> mode; discover devices on first/slow tier; poll telemetry + battery config; publish; <code>automatic_config</code> on first when <code>automatic</code>); <code>async final(self)</code>.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write the failing test</strong> (append)</p>
+</li>
+</ul>
+<pre><code class="language-python">def test_run_first_cycle_publishes_and_configures():
+    &quot;&quot;&quot;First run discovers, publishes and (when automatic) configures.&quot;&quot;&quot;
+    failed = False
+    d = MockDeye(auth_method=&quot;oauth&quot;)
+    d.access_token = &quot;tok&quot;
+    d.automatic = True
+    seq = {&quot;published&quot;: 0, &quot;configured&quot;: 0}
+
+    async def fake_dev_list():
+        d.device_list = [&quot;INV1&quot;]
+        return [&quot;INV1&quot;]
+
+    async def fake_data(sn):
+        d.device_values[sn] = {&quot;soc&quot;: 55.0}
+        return d.device_values[sn]
+
+    async def fake_batt(sn):
+        return {}
+
+    async def fake_publish():
+        seq[&quot;published&quot;] += 1
+
+    async def fake_pub_sched(sn):
+        pass
+
+    async def fake_get_sched(sn):
+        return {}
+
+    async def fake_auto():
+        seq[&quot;configured&quot;] += 1
+
+    from unittest.mock import patch
+    with patch.multiple(d, get_device_list=fake_dev_list, fetch_device_data=fake_data, fetch_battery_config=fake_batt, publish_data=fake_publish, publish_schedule_settings_ha=fake_pub_sched, get_schedule_settings_ha=fake_get_sched, automatic_config=fake_auto):
+        ok = run_async_local(d.run(0, True))
+    if not ok:
+        print(&quot;ERROR: run returned falsy&quot;)
+        failed = True
+    if seq[&quot;published&quot;] == 0 or seq[&quot;configured&quot;] == 0:
+        print(f&quot;ERROR: run did not publish/configure {seq}&quot;)
+        failed = True
+    return failed
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run test to verify it fails</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; python -m pytest ../apps/predbat/tests/test_deye_api.py::test_run_first_cycle_publishes_and_configures -v &gt; /tmp/deye_api.log 2&gt;&amp;1; grep -E "passed|failed|Error" /tmp/deye_api.log</code>
+Expected: FAIL — no attribute <code>run</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Write minimal implementation</strong> (append to <code>DeyeAPI</code>)</li>
+</ul>
+<pre><code class="language-python">    async def run(self, seconds, first):
+        &quot;&quot;&quot;Main component loop: auth, discover, poll, publish, configure.&quot;&quot;&quot;
+        if self.auth_method == &quot;app_credentials&quot; and not getattr(self, &quot;access_token&quot;, None):
+            if not await self.fetch_token():
+                self.log(&quot;Warn: DEYE token unavailable, skipping run&quot;)
+                return False
+        if not await self.check_and_refresh_oauth_token():
+            self.log(&quot;Warn: DEYE OAuth token invalid, skipping run&quot;)
+            return False
+
+        if first or not self.device_list:
+            await self.get_device_list()
+        if not self.device_list:
+            self.log(&quot;Error: DEYE no inverters found&quot;)
+            return False
+
+        for sn in self.device_list:
+            try:
+                await self.fetch_battery_config(sn)
+                await self.fetch_device_data(sn)
+                await self.get_schedule_settings_ha(sn)
+            except Exception as e:
+                self.log(f&quot;Warn: DEYE poll failed for {sn}: {e}&quot;)
+
+        await self.publish_data()
+        for sn in self.device_list:
+            await self.publish_schedule_settings_ha(sn)
+
+        if first and self.automatic:
+            await self.automatic_config()
+        return True
+
+    async def final(self):
+        &quot;&quot;&quot;Cleanup on shutdown.&quot;&quot;&quot;
+        self.log(&quot;Info: DeyeAPI shutdown&quot;)
+</code></pre>
+<blockquote>
+<p><code>self.auth_method</code> is set by <code>_init_oauth</code> (confirmed: <code>oauth_mixin.py</code> stores <code>self.auth_method</code>, values <code>app_credentials</code>/<code>oauth</code>/<code>api_key</code>).</p>
+</blockquote>
+<ul>
+<li>[ ] <strong>Step 4: Run test to verify it passes</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; python -m pytest ../apps/predbat/tests/test_deye_api.py::test_run_first_cycle_publishes_and_configures -v &gt; /tmp/deye_api.log 2&gt;&amp;1; grep -E "passed|failed|ERROR" /tmp/deye_api.log</code>
+Expected: <code>1 passed</code>.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/deye.py apps/predbat/tests/test_deye_api.py
+git commit -m &quot;feat(deye): add run loop, token bootstrap and shutdown&quot;
+</code></pre>
+<hr />
+<h2 id="task-15-register-tests-full-suite-pre-commit-docs-close-pr-3917">Task 15: Register tests, full suite, pre-commit, docs, close PR #3917</h2>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>apps/predbat/unit_test.py</code> (import + <code>TEST_REGISTRY</code> entries)</li>
+<li>Modify: <code>docs/inverter-setup.md</code>, <code>docs/components.md</code>, <code>docs/apps-yaml.md</code></li>
+<li>Test: whole DEYE suite via <code>run_all</code></li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>Consumes: all DEYE test modules.</li>
+<li>
+<p>Produces: registered <code>deye_*</code> test entries; user docs.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Add aggregators to each DEYE test module</strong></p>
+</li>
+</ul>
+<p>Add a <code>run_&lt;name&gt;_tests(my_predbat)</code> aggregator to <code>test_deye_api.py</code>, <code>test_deye_oauth.py</code>, <code>test_deye_control.py</code>, <code>test_deye_publish.py</code>, <code>test_deye_const.py</code>, <code>test_deye_config.py</code>, following <code>test_fox_oauth.py:342</code>. Example for <code>test_deye_control.py</code>:</p>
+<pre><code class="language-python">def run_deye_control_tests(my_predbat):
+    &quot;&quot;&quot;Run all DEYE control-logic tests.&quot;&quot;&quot;
+    failed = False
+    for name, fn in [
+        (&quot;derive_table&quot;, test_derive_control_state_table),
+        (&quot;tou_slots&quot;, test_build_tou_slots_charge_window),
+        (&quot;payload&quot;, test_build_dynamic_payload_and_equality),
+        (&quot;apply_suppress&quot;, test_apply_dynamic_control_suppresses_when_unchanged),
+        (&quot;apply_write&quot;, test_apply_dynamic_control_writes_and_caches_on_change),
+        (&quot;poll_order&quot;, test_poll_order_success),
+    ]:
+        try:
+            if fn():
+                print(f&quot;  FAILED: deye_control.{name}&quot;)
+                failed = True
+        except Exception as e:
+            print(f&quot;  EXCEPTION in deye_control.{name}: {e}&quot;)
+            import traceback
+            traceback.print_exc()
+            failed = True
+    return failed
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Register in <code>unit_test.py</code></strong></li>
+</ul>
+<p>Add imports beside the Fox ones and entries to <code>TEST_REGISTRY</code>:</p>
+<pre><code class="language-python">from tests.test_deye_const import run_deye_const_tests
+from tests.test_deye_config import run_deye_config_tests
+from tests.test_deye_api import run_deye_api_tests
+from tests.test_deye_oauth import run_deye_oauth_tests
+from tests.test_deye_control import run_deye_control_tests
+from tests.test_deye_publish import run_deye_publish_tests
+</code></pre>
+<pre><code class="language-python">        (&quot;deye_const&quot;, run_deye_const_tests, &quot;DEYE constants tests&quot;, False),
+        (&quot;deye_config&quot;, run_deye_config_tests, &quot;DEYE config/INVERTER_DEF tests&quot;, False),
+        (&quot;deye_api&quot;, run_deye_api_tests, &quot;DEYE API tests&quot;, False),
+        (&quot;deye_oauth&quot;, run_deye_oauth_tests, &quot;DEYE auth tests&quot;, False),
+        (&quot;deye_control&quot;, run_deye_control_tests, &quot;DEYE control-logic tests&quot;, False),
+        (&quot;deye_publish&quot;, run_deye_publish_tests, &quot;DEYE publish/config tests&quot;, False),
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 3: Run the DEYE suite via run_all</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all -k deye &gt; /tmp/deye_all.log 2&gt;&amp;1; grep -iE "fail|error|pass|deye_" /tmp/deye_all.log | tail -40</code>
+Expected: all <code>deye_*</code> tests pass, no failures/exceptions.</p>
+<ul>
+<li>
+<p>[ ] <strong>Step 4: Write the docs</strong></p>
+</li>
+<li>
+<p><code>docs/inverter-setup.md</code>: a "DEYE Cloud" section — create a developer app at <code>developer.deyecloud.com</code> (App ID/Secret), pick the data centre (<code>eu</code>/<code>am</code>/<code>india</code>), add-on config (<code>deye_app_id</code>/<code>deye_app_secret</code>/<code>deye_username</code>/<code>deye_password</code>/<code>deye_data_center</code>, optional <code>deye_company_id</code>) vs Predbat.com (token injected), and that Predbat auto-configures the inverter when <code>deye_automatic: True</code>.</p>
+</li>
+<li><code>docs/components.md</code>: add a DEYE Cloud row to the component table (monitoring + battery control, both deployment modes).</li>
+<li>
+<p><code>docs/apps-yaml.md</code>: document the <code>deye_*</code> args with a minimal example block.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 5: Pre-commit and commit</strong></p>
+</li>
+</ul>
+<p>Run: <code>./run_pre_commit &gt; /tmp/deye_precommit.log 2&gt;&amp;1; tail -30 /tmp/deye_precommit.log</code> (re-stage cspell dictionary if auto-sorted).</p>
+<pre><code class="language-bash">git add apps/predbat/unit_test.py apps/predbat/tests/test_deye_*.py docs/inverter-setup.md docs/components.md docs/apps-yaml.md .cspell/custom-dictionary-workspace.txt
+git commit -m &quot;test(deye): register DEYE tests; docs(deye): inverter setup, components, apps.yaml&quot;
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 6: Close PR #3917</strong></li>
+</ul>
+<pre><code class="language-bash">gh pr close 3917 --comment &quot;Superseded by the DEYE Cloud integration built to the design in docs/superpowers/specs/2026-07-19-deye-cloud-inverter-integration-design.md (branch feat/deye-cloud-inverter). The value-injection component change is out of scope and can land separately if wanted.&quot;
+</code></pre>
+<hr />
+<h2 id="self-review">Self-Review</h2>
+<p><strong>Spec coverage:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Spec section</th>
+<th>Task(s)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DeyeCloud</code> INVERTER_DEF, mode-less flags</td>
+<td>2</td>
+</tr>
+<tr>
+<td>Config items / args, both auth modes</td>
+<td>2, 3, 4</td>
+</tr>
+<tr>
+<td>Auth (<code>app_credentials</code> + <code>oauth</code>, sha256, email/username, 401 refresh)</td>
+<td>4</td>
+</tr>
+<tr>
+<td>Data-centre base URLs</td>
+<td>1, 3</td>
+</tr>
+<tr>
+<td>Device discovery (stations → inverters, pagination, filter)</td>
+<td>5</td>
+</tr>
+<tr>
+<td>Telemetry parse (<code>dataList</code> dynamic keys) + battery config</td>
+<td>6</td>
+</tr>
+<tr>
+<td>Internal work-mode derivation table (charge/freeze/hold/export/freeze-export/idle)</td>
+<td>7</td>
+</tr>
+<tr>
+<td>Reserve as freeze-charge mechanism + 99% freeze-export sentinel</td>
+<td>7, 12</td>
+</tr>
+<tr>
+<td>Window → 6-slot mapping</td>
+<td>8</td>
+</tr>
+<tr>
+<td>Combined <code>strategy_dynamic_control</code> write + change detection</td>
+<td>9, 10</td>
+</tr>
+<tr>
+<td>Async order polling (<code>orderId</code> / <code>get_order_result</code>)</td>
+<td>10</td>
+</tr>
+<tr>
+<td>Sensors + schedule control entities, Fox-style naming</td>
+<td>11</td>
+</tr>
+<tr>
+<td>Event routing + reserve live-write</td>
+<td>12</td>
+</tr>
+<tr>
+<td><code>automatic_config</code> multi-inverter</td>
+<td>13</td>
+</tr>
+<tr>
+<td><code>run()</code> loop, caching/refresh tiers, <code>final()</code></td>
+<td>14</td>
+</tr>
+<tr>
+<td>Tests registered + docs + close PR #3917</td>
+<td>15</td>
+</tr>
+<tr>
+<td>Spike-verified contract items</td>
+<td>0 (values isolated in <code>deye_const.py</code>, Task 1)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Placeholder scan:</strong> No <code>TODO</code>/<code>TBD</code>/"handle edge cases"; the <code># VERIFY@SPIKE</code> markers are concrete default values with a named verification task (0), not placeholders.</p>
+<p><strong>Type consistency:</strong> the <code>schedule</code> dict shape (<code>reserve</code>, <code>charge</code>/<code>export</code> → <code>enable/soc/power/start/end</code>) is produced by <code>get_schedule_settings_ha</code> (Task 11) and consumed identically by <code>derive_control_state</code>/<code>build_tou_slots</code>/<code>build_dynamic_payload</code> (Tasks 7–9). The control-state dict (<code>behaviour/work_mode/grid_charge/solar_sell/slot_soc/power</code>) is consistent across Tasks 7–9. Entity-name helpers <code>_sensor_name</code>/<code>_control_name</code> (Task 11) are reused by Tasks 12–13.</p>
+<p><strong>Caveats folded into tasks:</strong> <code>oauth_mixin</code> attribute name (<code>oauth_auth_method</code> vs <code>auth_method</code>) flagged in Task 14; DEYE refresh-token mechanism flagged in Tasks 0/4; per-slot field names and telemetry keys isolated to <code>deye_const.py</code>.</p>
+<h2 id="notes-for-execution">Notes for execution</h2>
+<ul>
+<li>Some tests reference the shared harness (<code>run_async</code>, <code>create_aiohttp_mock_session</code>, <code>create_aiohttp_mock_response</code>) in <code>tests/test_infra.py</code> — confirm those helpers exist and match the signatures used in <code>test_fox_oauth.py</code>; if a helper differs, adapt the test, not the harness.</li>
+<li>After the Task 0 spike, only <code>deye_const.py</code> values should need changing; if a wire contract turns out structurally different (e.g. per-slot grid-charge is a top-level action only), adjust <code>build_tou_slots</code>/<code>build_dynamic_payload</code> in isolation and keep <code>derive_control_state</code> and its table test intact.</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

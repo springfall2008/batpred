@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>DEYE Cloud Inverter Integration — Design - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "DEYE Cloud Inverter Integration \u2014 Design";
+        var mkdocs_page_input_path = "superpowers/specs/2026-07-19-deye-cloud-inverter-integration-design.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">DEYE Cloud Inverter Integration — Design</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="deye-cloud-inverter-integration-design">DEYE Cloud Inverter Integration — Design</h1>
+<p>Date: 2026-07-19
+Status: Approved (design review complete)</p>
+<h2 id="goal">Goal</h2>
+<p>Add a DEYE Cloud component to Predbat, modelled on the existing Fox and Enphase
+cloud integrations (<code>apps/predbat/fox.py</code>, <code>apps/predbat/enphase.py</code>), providing
+full monitoring and battery control for DEYE (Sunsynk-family) hybrid inverters
+via the DeyeCloud OpenAPI, so that a DEYE inverter can be used as a
+Predbat-controlled inverter with no local hardware access, on both the
+self-hosted Home Assistant add-on and the Predbat.com SaaS platform.</p>
+<p>This supersedes and replaces PR #3917 (<code>feat/component-value-injection</code>), which
+was a monitoring stub whose control model (standalone <code>charge()</code>/<code>discharge()</code>
+methods that nothing in Predbat calls, and structured <code>batteryPower.soc</code>
+parsing that does not match the real API) is architecturally incompatible with
+how Predbat drives inverters. That PR will be closed. The unrelated
+<code>components.py</code> "value injection" change it bundled is a separate concern and,
+if wanted, lands as its own PR.</p>
+<h2 id="scope-decisions-agreed">Scope decisions (agreed)</h2>
+<ul>
+<li><strong>Full control in one go</strong> — monitoring and battery control ship together,
+  to full Fox/Enphase parity.</li>
+<li><strong>Both deployment modes</strong> — self-hosted HA add-on (Predbat self-manages the
+  DEYE token from developer app credentials) <em>and</em> Predbat.com SaaS (token
+  injected by the platform). A <code>deye_auth_method</code> arg switches between them,
+  mirroring Fox's <code>api_key</code> / <code>oauth</code>.</li>
+<li><strong>Multi-inverter from the start</strong> — discover all battery inverters in the
+  account's station(s) and register each as a Predbat inverter
+  (<code>num_inverters</code>), like Fox.</li>
+<li><strong>No Predbat-facing work-mode control</strong> — Predbat only owns the charge window
+  and the export window (plus reserve, rates, target SOCs, enables). The
+  component derives the DEYE work mode internally from the desired behaviour
+  (charge / hold / freeze charge / export / freeze export / self-use). This is
+  the Enphase/Tesla mode-less pattern, not the Fox work-mode-select pattern.</li>
+<li><strong>Battery + solar only</strong> — no EV charger, smart-load, grid peak-shaving,
+  micro-storage modes, or station-management (create/alerts) control.</li>
+<li><strong>Write strategy: combined <code>strategy_dynamic_control</code></strong> — one atomic
+  read + diff + write per cycle, with change detection; fall back to granular
+  endpoints per-control only if hardware testing forces it.</li>
+</ul>
+<h2 id="background-the-deyecloud-openapi">Background: the DeyeCloud OpenAPI</h2>
+<p>Two sources were used. Both were scraped during design:</p>
+<ol>
+<li>Reference HA integration
+   <a href="https://github.com/heavenknows1978/hass-deyecloud">https://github.com/heavenknows1978/hass-deyecloud</a> — confirms auth, station
+   / device discovery, and the real-time data shape. It implements <strong>only</strong>
+   monitoring plus a Solar-Sell on/off toggle; it does <strong>not</strong> implement any
+   battery scheduling, so it does not cover the control surface Predbat needs.</li>
+<li>Official developer docs <a href="https://developer.deyecloud.com/api">https://developer.deyecloud.com/api</a> and the
+   bundled "Deye Open MCP" tool catalogue
+   <a href="https://developer.deyecloud.com/openmcp/docs/deye-open-mcp-tools.html">https://developer.deyecloud.com/openmcp/docs/deye-open-mcp-tools.html</a>,
+   which enumerates all 39 OpenAPI capabilities including the control and TOU
+   endpoints Predbat requires.</li>
+</ol>
+<h3 id="base-urls-data-centres">Base URLs / data centres</h3>
+<ul>
+<li>EU: <code>https://eu1-developer.deyecloud.com/v1.0</code></li>
+<li>US/AM: <code>https://us1-developer.deyecloud.com/v1.0</code></li>
+<li>India: <code>https://india-developer.deyecloud.com/v1.0</code></li>
+</ul>
+<p>Selected by a <code>deye_data_center</code> arg (<code>eu</code> / <code>am</code> / <code>india</code>).</p>
+<h3 id="auth">Auth</h3>
+<p><code>POST /account/token?appId={appId}</code> with JSON body
+<code>{appSecret, email|username, password: sha256(pw) [, companyId]}</code> →
+<code>{success, accessToken, refreshToken, expiresIn, scope, tokenType, uid, msg}</code>.
+Bearer token thereafter. <code>companyId</code> is only needed for installer/business
+accounts. <code>password</code> is sent as a lower-case hex SHA-256 digest. Login key is
+<code>email</code> when the value contains <code>@</code>, else <code>username</code>.</p>
+<h3 id="reads">Reads</h3>
+<ul>
+<li><code>POST /station/list</code> (paged) → <code>stationList[]</code>.</li>
+<li><code>POST /station/device</code> (paged <code>{page, size, stationIds}</code>) → <code>deviceListItems[]</code>;
+  filter <code>deviceType == "INVERTER"</code>, key <code>deviceSn</code>.</li>
+<li><code>POST /device/latest</code> → <code>deviceDataList[]</code>, each
+  <code>{deviceSn, deviceType, deviceState, collectionTime, dataList:[{key,value,unit}]}</code>.
+  <strong>Real-time telemetry is a flat key/value/unit list with dynamic keys</strong>
+  (units W / V / A / % / °C / Hz / kWh), not a nested object. <code>batterySOC</code>,
+  <code>chargePower</code>, <code>dischargePower</code> appear as keys; the exact key spelling for
+  each metric is confirmed at the spike from a live <code>/device/latest</code> response
+  and/or <code>/device/measure_points</code>.</li>
+<li><code>POST /device/measure_points</code> → measure-point metadata (key → name/unit).</li>
+<li><code>POST /station/history</code>, <code>/device/history</code>, <code>/device/history/raw</code> → energy
+  totals and history curves.</li>
+<li><code>POST /config/battery</code> → <code>battCapacity</code>, <code>battLowCapacity</code>,
+  <code>battShutDownCapacity</code>, <code>maxChargeCurrent</code>, <code>maxDischargeCurrent</code> (device
+  capability limits).</li>
+<li><code>POST /config/tou</code> → current TOU (<code>timeUseSettingItems[]</code>, <code>touAction</code>).</li>
+</ul>
+<h3 id="control-asynchronous-returns-orderid-poll-for-completion">Control (asynchronous — returns <code>orderId</code>, poll for completion)</h3>
+<ul>
+<li><code>POST /order/sys/tou/update</code> — writes <strong>6 fixed sequential TOU intervals</strong>
+  (<code>{deviceSn, timeUseSettingItems:[TimeUseSettingItem × 6]}</code>). "Have to be
+  passed in sequence."</li>
+<li><code>POST /order/sys/tou/switch</code> — TOU on/off.</li>
+<li><code>POST /order/sys/workMode/update</code> — work mode:
+  <code>SELLING_FIRST</code> / <code>ZERO_EXPORT_TO_LOAD</code> / <code>ZERO_EXPORT_TO_CT</code>.</li>
+<li><code>POST /order/battery/parameter/update</code> — <code>gridChargeAction</code> (on/off),
+  <code>gridChargeAmpere</code>, <code>maxChargeCurrent</code>, <code>maxDischargeCurrent</code>.</li>
+<li><code>POST /strategy/dynamicControl</code> (camelCase — confirmed in sample code) — <strong>the
+  combined control used by this design</strong>: <code>{deviceSn, gridChargeAction,
+  gridChargeAmpere, maxSellPower, maxSolarPower, solarSellAction,
+  timeUseSettingItems[6], touAction, touDays[], workMode, zeroExportPower}</code>.</li>
+<li><code>GET /order/{orderId}</code> — control command status; response carries
+  <code>connectionStatus</code> (0 offline / 1 online), <code>success</code>.</li>
+</ul>
+<p>Every control response is <code>{success, code, msg, orderId, collectionTime,
+connectionStatus, requestId}</code>. <strong>The write is not applied synchronously</strong> — the
+<code>orderId</code> must be polled via <code>get_order_result</code> until success/timeout.</p>
+<blockquote>
+<p>The exact per-slot <code>TimeUseSettingItem</code> field names (start time, SOC target,
+power, grid-charge flag, gen/PV-charge flag) were confirmed from the official
+sample code — see "Contract confirmed from official sample code" below —
+<code>{time, power, soc, enableGridCharge, enableGeneration}</code>.</p>
+</blockquote>
+<h2 id="architecture">Architecture</h2>
+<h3 id="component">Component</h3>
+<p><code>DeyeAPI(ComponentBase, OAuthMixin)</code> in <code>apps/predbat/deye.py</code>, structured like
+<code>enphase.py</code> (leaner than <code>fox.py</code>). Registered in <code>components.py</code> under key
+<code>deye</code> with <code>event_filter: "predbat_deye_"</code>, <code>phase: 1</code>.</p>
+<p><code>run(seconds, first)</code> loop (Fox-shaped, with age-based refresh tiers and a
+midnight counter reset):</p>
+<ol>
+<li>On <code>first</code>, restore cached device data from Storage.</li>
+<li>Discover stations (<code>/station/list</code>) and battery inverters
+   (<code>/station/device</code>), refreshed on a slow tier.</li>
+<li>Poll <code>config_battery</code> (capabilities) on a slow tier; <code>device/latest</code>
+   (telemetry) on a fast tier.</li>
+<li>Read the schedule entities into local state; apply on write-button/diff
+   (change detection is against the last-applied payload cache).</li>
+<li><code>publish_data()</code> (sensors) + <code>publish_schedule_settings_ha()</code> (control
+   entities).</li>
+<li>On <code>first and automatic</code>, <code>automatic_config()</code>.</li>
+</ol>
+<h3 id="files">Files</h3>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Change</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>apps/predbat/deye.py</code></td>
+<td><strong>New</strong> — the component</td>
+</tr>
+<tr>
+<td><code>apps/predbat/components.py</code></td>
+<td>Register <code>deye</code> (event filter <code>predbat_deye_</code>)</td>
+</tr>
+<tr>
+<td><code>apps/predbat/config.py</code></td>
+<td><code>deye_*</code> CONFIG_ITEMS + APPS_SCHEMA; new <code>"DeyeCloud"</code> INVERTER_DEF</td>
+</tr>
+<tr>
+<td><code>apps/predbat/tests/test_deye_api.py</code>, <code>test_deye_oauth.py</code></td>
+<td><strong>New</strong>; registered in <code>unit_test.py</code> <code>TEST_REGISTRY</code></td>
+</tr>
+<tr>
+<td><code>.cspell/custom-dictionary-workspace.txt</code></td>
+<td>DEYE terms</td>
+</tr>
+<tr>
+<td><code>docs/inverter-setup.md</code>, <code>docs/components.md</code>, <code>docs/apps-yaml.md</code></td>
+<td>User docs</td>
+</tr>
+</tbody>
+</table>
+<p>No <code>inverter.py</code> change is expected: with the mode-less pattern Deye rides the
+standard charge/export control path, exactly like <code>EnphaseCloud</code> / <code>TESLA</code>.</p>
+<h3 id="config-items-args">Config items / args</h3>
+<p><code>deye_app_id</code>, <code>deye_app_secret</code>, <code>deye_username</code>, <code>deye_password</code>,
+<code>deye_data_center</code> (<code>eu</code>/<code>am</code>/<code>india</code>), <code>deye_company_id</code> (optional),
+<code>deye_auth_method</code> (<code>app_credentials</code> self-managed vs <code>oauth</code> SaaS-injected),
+<code>deye_token_expires_at</code>, <code>deye_token_hash</code> (SaaS refresh), <code>deye_inverter_sn</code>
+(<code>string|string_list</code>), <code>deye_automatic</code>, <code>deye_automatic_ignore_pv</code>. APPS_SCHEMA
+entries mirror the Fox block.</p>
+<h3 id="deyecloud-inverter_def-mode-less-template-modelled-on-enphasecloud"><code>DeyeCloud</code> INVERTER_DEF (mode-less template, modelled on <code>EnphaseCloud</code>)</h3>
+<p><code>has_ge_inverter_mode: False</code>, <code>has_fox_inverter_mode: False</code>,
+<code>has_ge_eco_toggle: False</code> (no work-mode entity), <code>has_charge_enable_time: True</code>,
+<code>has_discharge_enable_time: True</code>, <code>has_target_soc: True</code>, <code>has_reserve_soc: True</code>,
+<code>support_charge_freeze: True</code>, <code>support_discharge_freeze: True</code>,
+<code>target_soc_used_for_discharge: True</code>, <code>output_charge_control: "power"</code>,
+<code>charge_time_entity_is_option: True</code>, <code>time_button_press: True</code>, <code>soc_units: "%"</code>.
+<code>charge_time_format</code> and the freeze-support flags are confirmed against a real
+inverter at the spike.</p>
+<h2 id="controls-ha-entities-published-per-inverter">Controls — HA entities published (per inverter)</h2>
+<p>Same entity set and naming scheme as Enphase/Fox so <code>inverter.py</code> drives them
+generically. <strong>No work-mode select.</strong></p>
+<ul>
+<li><strong>Sensors:</strong> soc, battery power, grid power, pv power, load power, battery
+  capacity, inverter capacity, battery rate max, reserve min, temperature,
+  energy totals (from <code>device/latest</code> <code>dataList</code> + <code>config_battery</code>).</li>
+<li><strong>Schedule controls:</strong> charge &amp; export <code>start_time</code> / <code>end_time</code> (selects),
+  <code>soc</code> / <code>power</code> / <code>reserve</code> (numbers), <code>enable</code> / <code>write</code> (switches).</li>
+</ul>
+<p><code>automatic_config()</code> discovers all battery inverters and sets
+<code>inverter_type=["DeyeCloud", …]</code>, <code>num_inverters</code>, and the full arg → entity map
+(<code>soc_percent</code>, <code>soc_max</code>, <code>battery_power</code>, <code>grid_power</code>, <code>pv_power</code>,
+<code>load_power</code>, <code>reserve</code>, <code>charge_start_time</code>, <code>charge_end_time</code>, <code>charge_limit</code>,
+<code>scheduled_charge_enable</code>, <code>charge_rate</code>, <code>discharge_start_time</code>,
+<code>discharge_end_time</code>, <code>discharge_target_soc</code>, <code>scheduled_discharge_enable</code>,
+<code>discharge_rate</code>, <code>battery_temperature</code>, <code>inverter_limit</code>, <code>battery_rate_max</code>,
+<code>load_today</code>/<code>import_today</code>/<code>export_today</code>/<code>pv_today</code> where available). It does
+<strong>not</strong> set <code>inverter_mode</code>.</p>
+<h2 id="behaviour-internal-work-mode-derivation">Behaviour: internal work-mode derivation</h2>
+<p>Predbat never sets a DEYE work mode. Each cycle the component reads the schedule
+entities, decides the active behaviour for the imminent window, and picks the
+work mode + flags + slot SOC itself. This matches the proven Enphase precedent
+(reserve-based freeze charge; a 99% export target as the freeze-export
+sentinel).</p>
+<table>
+<thead>
+<tr>
+<th>Predbat intent</th>
+<th>Signal from entities</th>
+<th>DEYE realisation (component-internal)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Charge</strong></td>
+<td>charge enable, target SOC &gt; current</td>
+<td><code>ZERO_EXPORT_TO_LOAD</code>, <code>gridChargeAction=on</code>, slot SOC = charge_limit, power = charge_rate</td>
+</tr>
+<tr>
+<td><strong>Freeze charge</strong></td>
+<td>a charge with target SOC = reserve</td>
+<td><code>gridChargeAction=on</code>, slot SOC = reserve → holds at reserve</td>
+</tr>
+<tr>
+<td><strong>Hold charge</strong></td>
+<td>charge amount ≤ current SOC, held with reserve</td>
+<td><code>gridChargeAction=off</code>, slot SOC = reserve → battery held, no grid charge</td>
+</tr>
+<tr>
+<td><strong>Real export</strong></td>
+<td>export enable, export SOC <strong>&lt; 99</strong></td>
+<td><code>SELLING_FIRST</code>, <code>solarSellAction=on</code>, <code>gridChargeAction=off</code>, slot SOC = export floor, power = discharge_rate</td>
+</tr>
+<tr>
+<td><strong>Freeze export</strong></td>
+<td>export enable, export SOC <strong>= 99</strong></td>
+<td><code>SELLING_FIRST</code>, <code>solarSellAction=on</code>, hold battery at 99% → <strong>solar-only export</strong>, battery not drained</td>
+</tr>
+<tr>
+<td><strong>Idle / self-use</strong></td>
+<td>no active window</td>
+<td><code>ZERO_EXPORT_TO_LOAD</code>, <code>gridChargeAction=off</code>, slot SOC = reserve</td>
+</tr>
+</tbody>
+</table>
+<p>Two consequences:</p>
+<ol>
+<li><strong>Reserve is written live every cycle</strong> — the <code>number_event</code> for the reserve
+   entity pushes it to DEYE immediately (its own path, independent of the
+   schedule write button), because Predbat's freeze-charge relies on the reserve
+   taking effect at once. This mirrors Enphase <code>set_reserve</code> and Fox.</li>
+<li><strong>The 99% export sentinel is preserved end-to-end</strong> so freeze-export maps to
+   solar-only export and never a battery drain.</li>
+</ol>
+<h2 id="window-6-slot-mapping">Window → 6-slot mapping</h2>
+<p>DEYE has 6 fixed sequential TOU slots covering 24h; each slot applies from its
+start time until the next slot's start. <code>compute_schedule()</code> (à la Fox's) takes
+the charge window and export window from the entities, derives the boundary
+times, and fills the 6 slots: a self-use baseline at reserve SOC, one charge
+slot, one export slot, and self-use for the remainder. One charge + one export
+window needs ≤ 6 slots comfortably; if boundaries exceed 6, the imminent windows
+are kept (Predbat only programs near-term windows anyway). Slots are always
+written as a full set of 6 in sequence, as the API requires.</p>
+<h2 id="write-loop-approach-a">Write loop (Approach A)</h2>
+<p>Each cycle: build the desired combined state (work mode + grid-charge +
+solar-sell + 6 TOU items + TOU on) → <strong>diff against the last-applied cached
+payload</strong> (<code>schedules_are_equal</code>-style); if unchanged, no write. On a detected
+diff or a schedule <strong>write-button</strong> press: one atomic <code>POST /strategy/dynamicControl</code>
+call, cache the applied payload, capture <code>orderId</code>, poll <code>GET /order/{orderId}</code>
+until success or timeout with exponential backoff. Pending/failed orders retry
+on the next cycle. The reserve live-write path is separate and immediate.</p>
+<p><strong>Time-aware work mode + reconcile.</strong> DEYE has a <em>single</em> global <code>workMode</code> per
+schedule (unlike Fox, whose scheduler carries per-slot modes), so the top-level
+<code>workMode</code>/<code>gridChargeAction</code>/<code>solarSellAction</code> are derived from the window
+<strong>active at the current time</strong>, not a static export-first precedence — otherwise
+an export window enabled elsewhere in the day would pin the mode to
+<code>SELLING_FIRST</code> and block the charge window's grid charging. The 6 TOU slots
+still encode every window's per-slot config. Because the mode is time-dependent,
+<code>run()</code> <strong>reconciles</strong> each cycle — re-applying (with change-detection, so it
+only writes at a genuine transition) the schedule of every inverter Predbat is
+already controlling (<code>control_active</code>, set once the write button / reserve event
+has driven it) — so the mode flips as the day moves between periods. Inverters
+Predbat has not yet driven are left untouched, so a startup cycle never clobbers
+an inverter before there is a plan. <em>(The exact interaction with how Predbat's
+<code>inverter.py</code> enables the charge vs export windows is a live-validation item.)</em></p>
+<h2 id="auth-both-modes-via-oauthmixin">Auth (both modes, via OAuthMixin)</h2>
+<ul>
+<li><strong><code>app_credentials</code></strong> (HA add-on): <code>POST /account/token?appId=</code> with
+  <code>appSecret</code> + login + <code>sha256(password)</code> (+ <code>companyId</code>); store <code>accessToken</code>
+  / <code>refreshToken</code> / <code>expiresIn</code>; refresh before expiry. Whether refresh uses a
+  dedicated refresh-token grant or a re-login with app credentials is confirmed
+  at the spike (re-login always works as a fallback).</li>
+<li><strong><code>oauth</code></strong> (SaaS): token injected by the platform; <code>handle_oauth_401()</code> on
+  401/403 requests a refresh; this module never calls the token endpoint.</li>
+</ul>
+<p><code>_auth_headers()</code> sets <code>Authorization: Bearer {access_token}</code> and
+<code>Content-Type: application/json</code>. The data-centre arg selects the base URL.</p>
+<h2 id="error-handling-resilience">Error handling / resilience</h2>
+<p>Fox-style throughout: 3-retry exponential backoff on transient errors;
+<code>record_api_call()</code> telemetry; per-request <code>401/403 → refresh → retry</code>; Storage
+caching of device list / detail / config with age-based refresh tiers; midnight
+counter reset; cache-version self-heal after a code change to the cached shape.
+Async control failures and API errors log and are retried on the next cycle;
+they never crash the run loop. DEYE OpenAPI request quotas are respected by the
+change-detection write suppression and the tiered read cadence.</p>
+<h2 id="testing">Testing</h2>
+<p><code>test_deye_api.py</code>:</p>
+<ul>
+<li><code>device/latest</code> <code>dataList</code> → sensor parsing (dynamic keys, unit inference).</li>
+<li><code>publish_data()</code> / <code>publish_schedule_settings_ha()</code> entity creation.</li>
+<li><code>automatic_config()</code> arg → entity map (multi-inverter).</li>
+<li><strong>The behaviour → work-mode derivation table</strong> — one case per row (charge,
+  freeze charge, hold charge, real export, freeze export at 99%, idle), asserting
+  the chosen work mode, <code>gridChargeAction</code>, <code>solarSellAction</code>, and slot SOC.</li>
+<li>Reserve live-write path fires immediately on the reserve <code>number_event</code>.</li>
+<li>Window → 6-slot mapping (boundary derivation, full-6 output, overflow keeps
+  imminent windows).</li>
+<li>Change-detection write suppression (no write when the last-applied payload matches).</li>
+<li>Async order polling (pending → success; failure → retry next cycle).</li>
+</ul>
+<p><code>test_deye_oauth.py</code>: both auth modes; <code>sha256</code> password digest and
+<code>email</code> vs <code>username</code> selection; <code>401 → refresh → retry</code>; token expiry refresh.</p>
+<p>Both registered in <code>unit_test.py</code> <code>TEST_REGISTRY</code>. Per project policy, unit
+tests are added for all new code.</p>
+<h2 id="docs">Docs</h2>
+<p>Add DEYE to <code>docs/inverter-setup.md</code> (setup: developer app, App ID/Secret, data
+centre, add-on vs SaaS), <code>docs/components.md</code> (component entry), and
+<code>docs/apps-yaml.md</code> (the <code>deye_*</code> args).</p>
+<h2 id="contract-confirmed-from-official-sample-code">Contract confirmed from official sample code</h2>
+<p>The design's original spike items were resolved from the <strong>official</strong>
+<code>DeyeCloudDevelopers/deye-openapi-client-sample-code</code> repo — <strong>no live device is
+needed to build</strong>:</p>
+<ul>
+<li><strong><code>TimeUseSettingItem</code> (6 slots):</strong> <code>{time:"HH:MM", power:&lt;W&gt;, soc:&lt;%&gt;,
+  enableGridCharge:bool, enableGeneration:bool}</code> (<code>commission/sys_tou_update.py</code>).</li>
+<li><strong>Combined control:</strong> <code>POST /strategy/dynamicControl</code> (camelCase) with
+  <code>{deviceSn, workMode, gridChargeAction, solarSellAction, maxSellPower,
+  maxSolarPower, touAction, touDays[], timeUseSettingItems[6]}</code>
+  (<code>strategy/dynamic_control_*.py</code>).</li>
+<li><strong>Mode realisation matches the behaviour table:</strong> charge = <code>gridChargeAction:on</code></li>
+<li><code>workMode:ZERO_EXPORT_TO_*</code> + high slot SOC (SELLING_FIRST stops charging);
+  export = <code>solarSellAction:on</code> + <code>workMode:SELLING_FIRST</code> + low slot SOC;
+  hold/idle = slot SOC set to the hold level ("battery ceases charging and
+  discharging").</li>
+<li><strong>Reserve = slot SOC floor</strong> — no dedicated reserve endpoint
+  (<code>battery/parameter/update</code> only sets <code>MAX_CHARGE_CURRENT</code>/<code>MAX_DISCHARGE_CURRENT</code>).</li>
+<li><strong><code>device/latest</code> request</strong> <code>{deviceList:[sn]}</code> (≤10); <strong>order poll</strong>
+  <code>GET /order/{orderId}</code>; <strong>token</strong> <code>POST /account/token?appId=</code> with
+  <code>sha256(password)</code> (+ <code>companyId</code>).</li>
+</ul>
+<p>Change detection diffs the freshly-computed payload against the <strong>last-applied
+cached payload</strong> (no read endpoint dependency), rather than a read-back.</p>
+<p><strong>Items to confirm on the first live connection</strong> (safe defaults shipped):</p>
+<ul>
+<li>The exact <code>device/latest</code> <code>dataList[].key</code> strings for SOC / battery / grid
+  / pv / load power, isolated in <code>deye_const.py:DEYE_TELEMETRY_KEYS</code>.</li>
+<li>The <code>config/battery</code> field names and units — esp. whether <code>battCapacity</code> is
+  kWh (directly usable as <code>soc_max</code>) or Ah (needing a voltage scale), isolated
+  in <code>deye_const.py:CONFIG_BATTERY_KEYS</code>.</li>
+<li>The time-aware work-mode + reconcile behaviour: how Predbat's <code>inverter.py</code>
+  actually enables the charge vs export windows (both at once vs only the
+  imminent one), and that <code>POST /strategy/dynamicControl</code> accepts a global
+  <code>workMode</code> that flips between reconcile cycles without side effects.</li>
+</ul>
+<h2 id="out-of-scope-yagni">Out of scope (YAGNI)</h2>
+<p>EV charger, smart-load, grid peak-shaving, micro-storage work modes
+(<code>GREEN_POWER_MODE</code> / <code>FULL_CHARGE_MODE</code> / <code>CUSTOMIZED_MODE</code>), station
+create/alerts management, and the PR #3917 <code>components.py</code> value-injection
+feature (separate PR if wanted).</p>
+<h2 id="rollout">Rollout</h2>
+<p>New branch off <code>main</code>; <code>deye.py</code> written from the Enphase/Fox template; PR</p>
+<h1 id="3917-closed-with-a-pointer-to-this-design-first-milestone-is-an">3917 closed with a pointer to this design. First milestone is an</h1>
+<p>implementation spike against a live DEYE inverter to resolve the open items,
+then the full component, tests, and docs.</p>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

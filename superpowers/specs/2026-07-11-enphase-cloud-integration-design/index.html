@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Enphase Cloud Integration — Design - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Enphase Cloud Integration \u2014 Design";
+        var mkdocs_page_input_path = "superpowers/specs/2026-07-11-enphase-cloud-integration-design.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Enphase Cloud Integration — Design</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="enphase-cloud-integration-design">Enphase Cloud Integration — Design</h1>
+<p>Date: 2026-07-11
+Status: Approved (design review complete)</p>
+<h2 id="goal">Goal</h2>
+<p>Add an Enphase cloud component to Predbat, modelled on the existing Fox cloud
+integration (<code>apps/predbat/fox.py</code>), providing full monitoring and battery
+control for Enphase IQ Battery (Encharge) systems via the Enphase Enlighten
+cloud, so that an Enphase site can be used as a Predbat-controlled inverter
+with no local hardware access.</p>
+<p>Scope decisions (agreed):</p>
+<ul>
+<li><strong>Full control in one go</strong> — monitoring and battery control ship together.</li>
+<li><strong>Password authentication only</strong> in v1. The unofficial Enlighten API has no
+  OAuth; the official OAuth developer API (api.enphaseenergy.com v4) is
+  read-only, metered and unusable for control. Email-OTP MFA accounts are
+  detected and rejected with a clear error; MFA support may be added later.</li>
+<li><strong>Battery + solar only</strong> — no EV charger, heat pump, tariff, storm guard or
+  grid on/off control.</li>
+<li><strong>Fox-style schedule entities</strong> — Predbat's Inverter class drives published
+  HA entities; all Enphase API knowledge stays inside <code>enphase.py</code>.</li>
+</ul>
+<h2 id="background-the-enphase-enlighten-api">Background: the Enphase Enlighten API</h2>
+<p>Reference implementation: <a href="https://github.com/barneyonline/ha-enphase-energy">https://github.com/barneyonline/ha-enphase-energy</a>
+(HA custom integration <code>enphase_ev</code>, MIT-compatible reference; bespoke aiohttp
+client, no pypi dependency). Key facts verified from its source:</p>
+<ul>
+<li>Base URL <code>https://enlighten.enphaseenergy.com</code> (unofficial web-app API).
+  Browser-mimicry headers (User-Agent, Referer, Origin,
+  <code>X-Requested-With: XMLHttpRequest</code>) are mandatory; wrong headers yield
+  HTTP 406 or an HTML login wall.</li>
+<li><strong>Auth chain</strong>: <code>POST /login/login.json</code> (form body <code>user[email]</code>,
+  <code>user[password]</code>) → Rails session cookie (<code>_enlighten_4_session</code>) and JWT
+  cookie <code>enlighten_manager_token_production</code> → <code>GET /users/self/token</code> →
+  e-auth JWT (sent as both <code>Authorization: Bearer</code> and <code>e-auth-token</code>).
+  No refresh token: on 401, re-run the password login. MFA is signalled by
+  <code>requires_mfa</code> / <code>login_otp_nonce</code>.</li>
+<li><strong>Reads</strong>:<ul>
+<li><code>/pv/settings/&lt;site&gt;/battery_status.json</code> — per-battery and site SOC
+(<code>current_charge</code> %), <code>available_energy</code> kWh, <code>max_capacity</code> kWh,
+<code>available_power</code>/<code>max_power</code> kW, status, live profile label.</li>
+<li><code>/pv/systems/&lt;site&gt;/today</code> — cadence-independent per-channel <code>totals</code>
+(Wh) for the current day plus 15-minute interval energy buckets
+(<code>interval_length</code>, <code>start_time</code>) per channel, including the flow
+decomposition (<code>solar_home</code>, <code>solar_grid</code>, <code>grid_home</code>, <code>battery_home</code>,
+<code>battery_grid</code>, <code>grid_battery</code>, <code>solar_battery</code>) used to derive
+charge/discharge/export totals that have no single channel of their own.
+<strong>Implementation note (superseding this bullet's original research):</strong> an
+earlier iteration read <code>/pv/systems/&lt;site&gt;/lifetime_energy</code> (daily-bucketed
+totals requiring delta-tracking across polls); it was replaced by <code>/today</code>
+because its totals are correct regardless of the site's reporting cadence
+and its interval buckets give a stable instantaneous power estimate with no
+cross-poll state. See <code>EnphaseAPI.get_today()</code>, <code>today_channel_kwh()</code> and
+<code>interval_power()</code> in <code>enphase.py</code>.</li>
+<li><code>/app-api/&lt;site&gt;/get_latest_power</code> — latest real consumption power sample.</li>
+<li><code>/app-api/search_sites.json</code> — site discovery;
+<code>/app-api/&lt;site&gt;/devices.json</code> — device inventory.</li>
+</ul>
+</li>
+<li><strong>Battery control</strong> ("BatteryConfig" microservice,
+  <code>/service/batteryConfig/api/v1/...</code>; needs Bearer JWT +
+  <code>Origin/Referer: https://battery-profile-ui.enphaseenergy.com</code>, <code>username</code>
+  and <code>requestid</code> headers; multiple regional header variants exist):<ul>
+<li><code>PUT /profile/&lt;site&gt;</code> — set profile: <code>self-consumption</code>, <code>cost_savings</code>,
+<code>backup_only</code>, <code>ai_optimisation</code>; body includes <code>batteryBackupPercentage</code>
+(reserve %).</li>
+<li><code>GET/PUT /batterySettings/&lt;site&gt;</code> — <code>chargeFromGrid</code> toggle, shutdown SOC
+(<code>veryLowSoc</code>); <code>POST /batterySettings/acceptDisclaimer/&lt;site&gt;</code> — one-time
+ITC disclaimer required before charge-from-grid.</li>
+<li><code>GET/POST /battery/sites/&lt;site&gt;/schedules</code>, <code>PUT /schedules/&lt;id&gt;</code>,
+<code>POST /schedules/&lt;id&gt;/delete</code> — persistent schedule objects with families:<ul>
+<li><code>cfg</code> (charge from grid): <code>startTime</code>/<code>endTime</code> (HH:MM), <code>days</code>,
+  <code>timezone</code>, <code>enabled</code>, <code>limit</code> = <strong>charge target SOC %</strong> (5–100).</li>
+<li><code>dtg</code> (discharge to grid): same shape; <code>limit</code> = <strong>SOC floor</strong> the
+  battery discharges down to. <strong>Feature-gated per site</strong> — availability
+  flags (<code>scheduleSupported</code>, <code>forceScheduleSupported</code>,
+  <code>forceScheduleOpted</code>, <code>batteryLimitSupport</code>, country/region) come from
+  site settings and the schedule control payload.</li>
+<li><code>rbd</code> (restrict battery discharge): a window in which the battery will
+  not discharge — used for Predbat freeze modes.</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong>Quirks to design for</strong>: writes settle asynchronously (re-read to confirm;
+  profile changes can stay "pending" for minutes); Enlighten rejects logins
+  with "too many active sessions"; OTP/login endpoints 429 aggressively;
+  ms-vs-s timestamps and payload aliases vary by endpoint family.</li>
+</ul>
+<h2 id="architecture">Architecture</h2>
+<h3 id="1-component-appspredbatenphasepy">1. Component: <code>apps/predbat/enphase.py</code></h3>
+<p><code>class EnphaseAPI(ComponentBase)</code> — no <code>OAuthMixin</code> (cookie/JWT auth, not
+OAuth). Same shape as <code>FoxAPI</code>:</p>
+<ul>
+<li><code>initialize(username, password, site_id=None, automatic=False,
+  automatic_ignore_pv=False)</code> — no <code>__init__</code> override (ComponentBase calls
+  <code>initialize(**kwargs)</code>).</li>
+<li><code>async run(seconds, first)</code> — polled every 60 s by <code>ComponentBase.start()</code>,
+  with age-based refresh tiers (constants mirroring <code>FOX_REFRESH_*</code>):<ul>
+<li>static (site discovery, devices, site settings/capability flags): 1440 min</li>
+<li>battery settings + profile + schedules: 5 min</li>
+<li><code>battery_status.json</code> (SOC/power limits): 5 min</li>
+<li><code>lifetime_energy</code> (+ <code>today</code> snapshot): 15 min</li>
+<li><code>get_latest_power</code>: 1 min</li>
+</ul>
+</li>
+<li>Persistent cache through Storage (<code>ENPHASE_CACHE_KEYS</code> +
+  <code>ENPHASE_CACHE_VERSION</code>), restored on first run (<code>load_cached_data()</code>
+  pattern), so restarts do not hammer the API and data survives outages.</li>
+<li><code>is_alive()</code> = <code>api_started</code> and a discovered site with battery data.</li>
+<li>Daily API-call counters and <code>record_api_call("enphase", ...)</code> telemetry,
+  as fox does.</li>
+</ul>
+<h3 id="2-authentication-module-inside-enphasepy-isolated">2. Authentication module (inside enphase.py, isolated)</h3>
+<ul>
+<li>Login flow as above; session cookie jar + both JWTs held in memory and
+  cached (encrypted-at-rest not required — matches existing components that
+  store tokens via Storage).</li>
+<li>One <code>get_headers(family)</code> helper building per-endpoint-family headers
+  (<code>site</code> reads vs <code>batteryConfig</code> control), including browser mimicry.</li>
+<li>BatteryConfig header-variant probing: primary variant first, fall back
+  through the known variants on auth-shaped failures, cache the working
+  variant per site via Storage.</li>
+<li>401 handling: single silent re-login then one retry — behind guard rails
+  copied from the reference implementation: a fresh login is reused for 30 s
+  across concurrent failures; a rejected login triggers a 5-minute cooldown;
+  3 consecutive rejections or a "too many active sessions" response suspends
+  login attempts for 24 h (component reports unhealthy via
+  <code>fatal_error_occurred</code>).</li>
+<li>MFA (<code>requires_mfa</code>) → fatal error with a log message instructing the user
+  to disable MFA on the Enphase account. Documented limitation.</li>
+<li>Login-wall detection: HTML body on a JSON endpoint is treated as an auth
+  failure, never a JSON parse crash.</li>
+<li>Request helper <code>request_get/post</code> with bounded retries, <code>Retry-After</code>
+  honouring, and jittered backoff (fox <code>request_get</code> pattern).</li>
+</ul>
+<h3 id="3-published-entities">3. Published entities</h3>
+<p>Per site, under <code>{prefix}_enphase_{site_id}_</code>:</p>
+<p><strong>Sensors (monitoring)</strong></p>
+<table>
+<thead>
+<tr>
+<th>Entity</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>soc_percent</code></td>
+<td>site <code>current_charge</code> (capacity-weighted per-battery fallback)</td>
+</tr>
+<tr>
+<td><code>soc_kw</code> (available energy)</td>
+<td>site <code>available_energy</code></td>
+</tr>
+<tr>
+<td><code>battery_capacity</code></td>
+<td>site <code>max_capacity</code></td>
+</tr>
+<tr>
+<td><code>battery_rate_max</code></td>
+<td>site <code>max_power</code> (assumed symmetric)</td>
+</tr>
+<tr>
+<td><code>battery_reserve</code></td>
+<td>profile <code>batteryBackupPercentage</code></td>
+</tr>
+<tr>
+<td><code>battery_status</code>, <code>battery_profile</code></td>
+<td>battery_status / profile reads</td>
+</tr>
+<tr>
+<td><code>pv_today</code>, <code>load_today</code>, <code>import_today</code>, <code>export_today</code>, <code>battery_charge_today</code>, <code>battery_discharge_today</code></td>
+<td>today's entries of <code>lifetime_energy</code> arrays (cumulative kWh, intraday-updating)</td>
+</tr>
+<tr>
+<td><code>load_power</code></td>
+<td><code>get_latest_power</code> (real sample)</td>
+</tr>
+<tr>
+<td><code>pv_power</code>, <code>grid_power</code>, <code>battery_power</code></td>
+<td>derived by differentiating the <code>lifetime_energy</code> flow channels over the polling window (the reference integration's method); documented as estimates</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Controls (consumed by Predbat's Inverter class)</strong> — fox naming pattern
+<code>..._battery_schedule_{direction}_{attribute}</code>:</p>
+<ul>
+<li><code>select</code> charge/export window start &amp; end times (<code>OPTIONS_TIME_FULL</code>)</li>
+<li><code>number</code> charge target SOC, export target SOC, reserve</li>
+<li><code>switch</code> charge enable, export enable, and a <code>..._write</code> apply button</li>
+<li>Export controls are only published when the site's capability flags report
+  <code>dtg</code> support; otherwise Predbat is configured without forced-export.</li>
+</ul>
+<h3 id="4-control-mapping-write-path">4. Control mapping (write path)</h3>
+<p>Events (<code>select_event</code>/<code>number_event</code>/<code>switch_event</code>, routed by
+<code>event_filter="predbat_enphase_"</code>) mutate a local schedule model; pressing the
+write switch calls <code>apply_battery_schedule()</code> which diffs desired vs actual
+and issues only the changed calls:</p>
+<table>
+<thead>
+<tr>
+<th>Predbat intent</th>
+<th>Enphase calls</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Self-Use (no active window)</td>
+<td><code>PUT profile</code> → <code>self-consumption</code> + reserve %; cfg/dtg schedules disabled</td>
+</tr>
+<tr>
+<td>Forced Charge window</td>
+<td>ensure <code>chargeFromGrid</code> enabled (accept ITC disclaimer once); create/update <code>cfg</code> schedule: window times, <code>limit</code> = charge target SOC</td>
+</tr>
+<tr>
+<td>Forced Export window</td>
+<td>create/update <code>dtg</code> schedule: window times, <code>limit</code> = export target SOC (only when site supports dtg)</td>
+</tr>
+<tr>
+<td>Charge/discharge freeze</td>
+<td><code>rbd</code> schedule window (battery discharge blocked, SOC held)</td>
+</tr>
+<tr>
+<td>Reserve</td>
+<td><code>batteryBackupPercentage</code> via profile PUT</td>
+</tr>
+</tbody>
+</table>
+<p>Write-settle handling: after a write, bounded re-reads confirm the change
+(writes land asynchronously, sometimes minutes later); a pending flag
+suppresses duplicate PUTs; all writes are change-gated (no-op if the value
+already matches), following fox <code>write_setting_from_event</code>.</p>
+<h3 id="5-predbat-wiring-config-only-no-core-code-changes">5. Predbat wiring (config only — no core-code changes)</h3>
+<ul>
+<li><code>components.py</code>: <code>COMPONENT_LIST["enphase"]</code> — <code>class: EnphaseAPI</code>,
+  <code>name: "Enphase API"</code>, <code>event_filter: "predbat_enphase_"</code>, <code>phase: 1</code>,
+  args: <code>username</code> → <code>enphase_username</code> (required), <code>password</code> →
+  <code>enphase_password</code> (required), <code>site_id</code> → <code>enphase_site_id</code>,
+  <code>automatic</code> → <code>enphase_automatic</code>, <code>automatic_ignore_pv</code> →
+  <code>enphase_automatic_ignore_pv</code>.</li>
+<li><code>config.py</code>: <code>APPS_SCHEMA</code> entries for those keys, and
+  <code>INVERTER_DEF["EnphaseCloud"]</code> modelled on <code>FoxCloud</code>: HA-entity control
+  (<code>has_rest_api: False</code>), <code>time_button_press: True</code>,
+  <code>charge_time_entity_is_option: True</code>, charge target SOC supported (via cfg
+  <code>limit</code>), export target SOC supported where dtg is available, and
+  <code>can_span_midnight: False</code> — Enphase windows are HH:MM within one day, and
+  this flag makes Predbat split midnight-crossing windows automatically
+  (same as FoxCloud).</li>
+<li><code>automatic_config()</code>: sets <code>inverter_type=["EnphaseCloud"]</code> and points
+  <code>soc_percent</code>, <code>soc_max</code>, <code>battery_rate_max</code>, <code>load_today</code>, <code>pv_today</code>,
+  <code>import_today</code>, <code>export_today</code>, charge/export window entities, target SOC
+  numbers, reserve and <code>schedule_write_button</code> at the published entities
+  (fox.py:2204 pattern).</li>
+<li>Template <code>templates/enphase_cloud.yaml</code>.</li>
+</ul>
+<h3 id="6-testing">6. Testing</h3>
+<p><code>apps/predbat/tests/test_enphase_api.py</code> using the fox mock pattern:
+<code>MockEnphaseAPI(EnphaseAPI)</code> overriding <code>request_get</code>/<code>request_post</code>,
+<code>dashboard_item</code>, state wrappers and <code>log</code>, with
+<code>set_http_response(path, status, json_data, ...)</code> to simulate HTTP statuses,
+HTML login walls and Enphase payloads. Coverage targets:</p>
+<ul>
+<li>login happy path (cookie + token extraction), MFA rejection, login-wall
+  detection, "too many sessions" 24 h suspension, 401 → re-login → retry,
+  cooldown behaviour</li>
+<li>header construction per endpoint family; BatteryConfig variant fallback +
+  caching</li>
+<li>parsing: battery_status (per-battery weighting), lifetime_energy (today
+  extraction, aliases), latest power (ms vs s timestamps), derived power</li>
+<li>schedule model: compute/validate/diff, cfg/dtg/rbd payload construction,
+  limit bounds, dtg capability gating, write-settle confirm + pending state</li>
+<li>event handlers (select/number/switch) and <code>apply_battery_schedule</code></li>
+<li><code>automatic_config()</code> arg wiring</li>
+<li>cache save/load and cache-version migration</li>
+</ul>
+<p>Registered in <code>unit_test.py</code> as <code>("enphase_api", run_enphase_api_tests, ...)</code>.
+100% docstring coverage (interrogate) as enforced repo-wide.</p>
+<h3 id="7-documentation">7. Documentation</h3>
+<ul>
+<li><code>docs/components.md</code>: "Enphase API (enphase)" section — what it does,
+  config table, MFA limitation, unofficial-API risk statement.</li>
+<li><code>docs/inverter-setup.md</code>: "Enphase Cloud" section.</li>
+<li><code>docs/apps-yaml.md</code>: <code>enphase_*</code> keys.</li>
+<li><code>.cspell/custom-dictionary-workspace.txt</code>: Enphase, Enlighten, Encharge,
+  Enpower, entrez, etc.</li>
+</ul>
+<h2 id="risks-and-mitigations">Risks and mitigations</h2>
+<table>
+<thead>
+<tr>
+<th>Risk</th>
+<th>Mitigation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Unofficial API changes without notice</td>
+<td>Isolate all endpoint/paths/headers in constants; cache-version gate; health monitoring surfaces breakage quickly</td>
+</tr>
+<tr>
+<td>Account lockout / too-many-sessions</td>
+<td>Login guard rails (30 s reuse, 5 min cooldown, 24 h suspension); never burst password logins</td>
+</tr>
+<tr>
+<td>Writes settle slowly (minutes)</td>
+<td>Predbat already writes schedules ahead of window start (fox <code>time_button_press</code> model); pending-state + confirm re-reads</td>
+</tr>
+<tr>
+<td>dtg unavailable in many regions</td>
+<td>Capability-gated: component publishes export controls only when supported; Predbat plans without forced export otherwise</td>
+</tr>
+<tr>
+<td>Regional header variants</td>
+<td>Variant probing with per-site caching of the working variant</td>
+</tr>
+<tr>
+<td>MFA accounts</td>
+<td>Detected, clear error, documented; future enhancement (OTP entry entity)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="out-of-scope-future-enhancements">Out of scope (future enhancements)</h2>
+<ul>
+<li>Email-OTP MFA support via an OTP input entity</li>
+<li>AWS IoT MQTT livestream for true real-time power</li>
+<li>EV charger (IQ EVSE), heat pump, tariff, storm guard, grid on/off</li>
+<li>Legacy AC Battery (HTML-scraped endpoints)</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

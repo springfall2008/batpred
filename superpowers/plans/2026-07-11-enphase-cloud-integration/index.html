@@ -1,0 +1,2046 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Enphase Cloud Integration Implementation Plan - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Enphase Cloud Integration Implementation Plan";
+        var mkdocs_page_input_path = "superpowers/plans/2026-07-11-enphase-cloud-integration.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Enphase Cloud Integration Implementation Plan</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="enphase-cloud-integration-implementation-plan">Enphase Cloud Integration Implementation Plan</h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> Add an <code>EnphaseAPI</code> component to Predbat giving full monitoring and battery control of Enphase IQ Battery systems via the unofficial Enlighten cloud API, so an Enphase site works as a Predbat-controlled inverter (<code>inverter_type: EnphaseCloud</code>).</p>
+<p><strong>Architecture:</strong> New <code>apps/predbat/enphase.py</code> subclassing <code>ComponentBase</code> (fox.py pattern: <code>initialize()</code> + async <code>run()</code> polled every 60s, age-tiered refresh, Storage-backed cache). It publishes HA entities via <code>dashboard_item()</code>; Predbat's <code>Inverter</code> class drives the published control entities, configured by <code>INVERTER_DEF["EnphaseCloud"]</code> + <code>automatic_config()</code>. Control maps: Self-Use → profile <code>self-consumption</code>; Forced Charge → <code>cfg</code> schedule (limit = target SOC); Forced Export → <code>dtg</code> schedule (limit = SOC floor, capability-gated); freeze → <code>rbd</code> schedule; reserve → <code>batteryBackupPercentage</code>.</p>
+<p><strong>Tech Stack:</strong> Python 3, aiohttp, existing Predbat framework (<code>ComponentBase</code>, Storage, <code>dashboard_item</code>), unit tests via <code>coverage/unit_test.py</code> registry.</p>
+<p><strong>Spec:</strong> <code>docs/superpowers/specs/2026-07-11-enphase-cloud-integration-design.md</code> — read it before starting.</p>
+<h2 id="global-constraints">Global Constraints</h2>
+<ul>
+<li>Work on branch <code>feature/enphase_cloud</code> (created in Task 0), NOT <code>fix/solax_token</code> or <code>main</code>.</li>
+<li>Line length: 256 chars (Black) / 250 (Flake8). Variable naming: <code>lower_case_with_underscores</code>.</li>
+<li><strong>Every function and class needs a docstring</strong> (interrogate enforces 100%).</li>
+<li>British English spellings in comments/docs (CSpell en-gb); add new words (Enphase, Enlighten, Encharge, entrez, enho, enlm) to <code>.cspell/custom-dictionary-workspace.txt</code> (keep it alphabetically sorted).</li>
+<li>Tests: run from <code>coverage/</code> directory. ALWAYS save test output to a file and grep the file, never pipe to grep. Command pattern:
+  <code>cd coverage &amp;&amp; ./run_all --test enphase_api &gt; /tmp/enphase_test.txt 2&gt;&amp;1; grep -E "PASS|FAIL|Error" /tmp/enphase_test.txt</code></li>
+<li>Storage abstraction only — no direct file access for caching.</li>
+<li><code>initialize(**kwargs)</code> is the constructor hook — do NOT override <code>__init__</code> (ComponentBase calls <code>initialize</code>).</li>
+<li>All Enphase writes are change-gated: never PUT a value that already matches the cloud state.</li>
+<li>Commit after every task with a <code>feat:</code>/<code>test:</code>/<code>docs:</code> message ending in the Co-Authored-By line from repo convention.</li>
+</ul>
+<hr />
+<h3 id="task-0-branch-and-spec-commit">Task 0: Branch and spec commit</h3>
+<p><strong>Files:</strong></p>
+<ul>
+<li>
+<p>Commit: <code>docs/superpowers/specs/2026-07-11-enphase-cloud-integration-design.md</code></p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Create the feature branch from main and commit the spec</strong></p>
+</li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/predbat/batpred
+git stash --include-untracked --quiet || true   # only if fix/solax_token has uncommitted work; check git status first
+git checkout main &amp;&amp; git pull
+git checkout -b feature/enphase_cloud
+git add docs/superpowers/specs/2026-07-11-enphase-cloud-integration-design.md
+git commit -m &quot;docs: add Enphase cloud integration design spec
+
+Co-Authored-By: Claude Fable 5 &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<p>Expected: branch <code>feature/enphase_cloud</code> exists with the spec committed. If <code>git status</code> showed unrelated uncommitted changes on <code>fix/solax_token</code>, leave them stashed and note the stash ref in the task report.</p>
+<hr />
+<h3 id="task-1-component-skeleton-registration-config-schema">Task 1: Component skeleton, registration, config schema</h3>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Create: <code>apps/predbat/enphase.py</code></li>
+<li>Modify: <code>apps/predbat/components.py</code> (import near line 35; <code>COMPONENT_LIST</code> entry after the <code>"fox"</code> entry ending at line 242)</li>
+<li>Modify: <code>apps/predbat/config.py</code> (APPS_SCHEMA, after <code>fox_token_hash</code> at line 2202)</li>
+<li>Create: <code>apps/predbat/tests/test_enphase_api.py</code></li>
+<li>Modify: <code>apps/predbat/unit_test.py</code> (import + registry entry — follow the pattern of <code>run_fox_api_tests</code> at lines ~107 and ~283)</li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>Produces: <code>class EnphaseAPI(ComponentBase)</code> with <code>initialize(username, password, site_id=None, automatic=False, automatic_ignore_pv=False)</code>, <code>is_alive()</code>, cache helpers <code>_save_cache(key, data)</code>, <code>_load_cache(key)</code>, <code>_needs_refresh(key, max_age_minutes)</code>, <code>_data_age_minutes(key)</code>, <code>load_cached_data()</code>; module constants <code>ENPHASE_REFRESH_STATIC=1440</code>, <code>ENPHASE_REFRESH_SETTINGS=5</code>, <code>ENPHASE_REFRESH_ENERGY=15</code>, <code>ENPHASE_REFRESH_POWER=1</code>, <code>ENPHASE_CACHE_KEYS</code>, <code>ENPHASE_CACHE_VERSION=1</code>, URL constants.</li>
+<li>
+<p>Produces (tests): <code>MockEnphaseAPI(EnphaseAPI)</code> test double and <code>run_enphase_api_tests(my_predbat)</code> entry point that later tasks extend.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write the failing test file</strong></p>
+</li>
+</ul>
+<p>Create <code>apps/predbat/tests/test_enphase_api.py</code>:</p>
+<pre><code class="language-python"># -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# Test Enphase API functions
+# -----------------------------------------------------------------------------
+
+from datetime import datetime, timedelta, timezone
+import pytz
+from enphase import EnphaseAPI, ENPHASE_CACHE_KEYS, ENPHASE_CACHE_VERSION, ENPHASE_REFRESH_SETTINGS
+from tests.test_infra import run_async
+
+
+class MockBase:
+    &quot;&quot;&quot;Mock base object for ComponentBase properties in Enphase API tests.&quot;&quot;&quot;
+
+    def __init__(self):
+        &quot;&quot;&quot;Initialise MockBase with default config.&quot;&quot;&quot;
+        self.midnight_utc = datetime.now(pytz.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        self.config = {}
+
+    def get_arg(self, key, default=None, **kwargs):
+        &quot;&quot;&quot;Return config value or default.&quot;&quot;&quot;
+        return self.config.get(key, default)
+
+
+class MockEnphaseAPI(EnphaseAPI):
+    &quot;&quot;&quot;Mock EnphaseAPI that avoids ComponentBase construction and real HTTP.&quot;&quot;&quot;
+
+    def __init__(self):
+        &quot;&quot;&quot;Set up the mock without calling ComponentBase.__init__.&quot;&quot;&quot;
+        self.prefix = &quot;predbat&quot;
+        self.base = MockBase()
+        self.local_tz = pytz.timezone(&quot;Europe/London&quot;)
+        self.storage = None
+        self.api_started = False
+        self.initialize(username=&quot;user@example.com&quot;, password=&quot;secret&quot;)
+
+        # Test instrumentation
+        self.http_responses = {}  # path -&gt; dict(status, json_data, text_data)
+        self.request_log = []
+        self.dashboard_items = {}
+        self.mock_ha_states = {}
+        self.args_set = {}
+
+    def log(self, message):
+        &quot;&quot;&quot;Swallow log output in tests.&quot;&quot;&quot;
+        pass
+
+    def record_api_call(self, *args, **kwargs):
+        &quot;&quot;&quot;Swallow telemetry in tests.&quot;&quot;&quot;
+        pass
+
+    def update_success_timestamp(self):
+        &quot;&quot;&quot;Swallow health-tracking in tests.&quot;&quot;&quot;
+        pass
+
+    def dashboard_item(self, entity_id, state, attributes, app=None):
+        &quot;&quot;&quot;Record dashboard items instead of publishing to HA.&quot;&quot;&quot;
+        self.dashboard_items[entity_id] = {&quot;state&quot;: state, &quot;attributes&quot;: attributes, &quot;app&quot;: app}
+
+    def get_state_wrapper(self, entity_id, default=None):
+        &quot;&quot;&quot;Return a mocked HA state.&quot;&quot;&quot;
+        return self.mock_ha_states.get(entity_id, default)
+
+    def set_arg(self, key, value):
+        &quot;&quot;&quot;Record args set by automatic_config.&quot;&quot;&quot;
+        self.args_set[key] = value
+
+    def set_http_response(self, path, status=200, json_data=None, text_data=None):
+        &quot;&quot;&quot;Prime a canned HTTP response for a URL path.&quot;&quot;&quot;
+        self.http_responses[path] = {&quot;status&quot;: status, &quot;json_data&quot;: json_data, &quot;text_data&quot;: text_data}
+
+    async def request_raw(self, method, url, headers=None, data=None, json_body=None, params=None):
+        &quot;&quot;&quot;Return canned responses instead of performing HTTP.&quot;&quot;&quot;
+        path = url.split(&quot;enphaseenergy.com&quot;, 1)[-1].split(&quot;?&quot;)[0]
+        self.request_log.append({&quot;method&quot;: method, &quot;path&quot;: path, &quot;json&quot;: json_body, &quot;data&quot;: data})
+        response = self.http_responses.get(path, {&quot;status&quot;: 404, &quot;json_data&quot;: None, &quot;text_data&quot;: &quot;not found&quot;})
+        return response[&quot;status&quot;], response[&quot;json_data&quot;], response.get(&quot;text_data&quot;) or &quot;&quot;, {}
+
+
+def test_initialize_defaults():
+    &quot;&quot;&quot;initialize() must set all state fields with correct defaults.&quot;&quot;&quot;
+    api = MockEnphaseAPI()
+    assert api.username == &quot;user@example.com&quot;
+    assert api.password == &quot;secret&quot;
+    assert api.site_id is None
+    assert api.automatic is False
+    assert api.sites == []
+    assert api.battery_status == {}
+    assert api.schedules == {}
+    assert api.data_age == {}
+    assert api.login_reject_count == 0
+
+
+def test_needs_refresh():
+    &quot;&quot;&quot;_needs_refresh returns True when data is absent or stale, False when fresh.&quot;&quot;&quot;
+    api = MockEnphaseAPI()
+    assert api._needs_refresh(&quot;battery_status&quot;, ENPHASE_REFRESH_SETTINGS) is True
+    api.data_age[&quot;battery_status&quot;] = datetime.now(timezone.utc)
+    assert api._needs_refresh(&quot;battery_status&quot;, ENPHASE_REFRESH_SETTINGS) is False
+    api.data_age[&quot;battery_status&quot;] = datetime.now(timezone.utc) - timedelta(minutes=ENPHASE_REFRESH_SETTINGS + 1)
+    assert api._needs_refresh(&quot;battery_status&quot;, ENPHASE_REFRESH_SETTINGS) is True
+
+
+def test_is_alive():
+    &quot;&quot;&quot;is_alive requires api_started and at least one discovered site.&quot;&quot;&quot;
+    api = MockEnphaseAPI()
+    assert not api.is_alive()
+    api.api_started = True
+    assert not api.is_alive()
+    api.sites = [{&quot;site_id&quot;: &quot;12345&quot;}]
+    assert api.is_alive()
+
+
+def run_enphase_api_tests(my_predbat):
+    &quot;&quot;&quot;Run all Enphase API tests, returning 0 on success.&quot;&quot;&quot;
+    test_initialize_defaults()
+    test_needs_refresh()
+    test_is_alive()
+    print(&quot;**** Enphase API tests passed ****&quot;)
+    return 0
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Register the test and run it to verify failure</strong></li>
+</ul>
+<p>In <code>apps/predbat/unit_test.py</code>, next to the fox imports (~line 107) add:</p>
+<pre><code class="language-python">from tests.test_enphase_api import run_enphase_api_tests
+</code></pre>
+<p>and in the registry list next to <code>("fox_api", ...)</code> (~line 283) add:</p>
+<pre><code class="language-python">        (&quot;enphase_api&quot;, run_enphase_api_tests, &quot;Enphase API tests&quot;, False),
+</code></pre>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test enphase_api &gt; /tmp/enphase_t1.txt 2&gt;&amp;1; grep -iE "error|fail|passed" /tmp/enphase_t1.txt</code>
+Expected: FAIL with <code>ModuleNotFoundError: No module named 'enphase'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Create <code>apps/predbat/enphase.py</code> skeleton</strong></li>
+</ul>
+<pre><code class="language-python"># -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# Enphase Enlighten cloud component
+#
+# Talks to the unofficial Enphase Enlighten web-app API (the same endpoints the
+# Enlighten web/mobile apps use). There is no official API with battery control.
+# Reference behaviour derived from https://github.com/barneyonline/ha-enphase-energy
+# -----------------------------------------------------------------------------
+
+from datetime import datetime, timedelta, timezone
+import asyncio
+import random
+
+import aiohttp
+
+from component_base import ComponentBase
+from utils import OPTIONS_TIME_FULL  # verify import location: grep &quot;OPTIONS_TIME_FULL&quot; apps/predbat/*.py — fox.py imports it; reuse the same source module
+
+BASE_URL = &quot;https://enlighten.enphaseenergy.com&quot;
+LOGIN_PATH = &quot;/login/login.json&quot;
+SELF_TOKEN_PATH = &quot;/users/self/token&quot;
+SITE_SEARCH_PATH = &quot;/app-api/search_sites.json&quot;
+BATTERY_CONFIG_BASE = &quot;/service/batteryConfig/api/v1&quot;
+
+# Refresh ages in minutes for each data category
+ENPHASE_REFRESH_STATIC = 24 * 60
+ENPHASE_REFRESH_SETTINGS = 5
+ENPHASE_REFRESH_ENERGY = 15
+ENPHASE_REFRESH_POWER = 1
+
+ENPHASE_CACHE_KEYS = [&quot;sites&quot;, &quot;battery_status&quot;, &quot;battery_settings&quot;, &quot;profile&quot;, &quot;schedules&quot;, &quot;site_settings&quot;, &quot;lifetime_energy&quot;, &quot;latest_power&quot;]
+ENPHASE_CACHE_VERSION = 1
+
+# Battery profiles accepted by the profile endpoint
+PROFILE_SELF_CONSUMPTION = &quot;self-consumption&quot;
+PROFILE_COST_SAVINGS = &quot;cost_savings&quot;
+PROFILE_BACKUP_ONLY = &quot;backup_only&quot;
+
+# Schedule families
+SCHEDULE_CHARGE = &quot;CFG&quot;  # charge from grid
+SCHEDULE_EXPORT = &quot;DTG&quot;  # discharge to grid
+SCHEDULE_FREEZE = &quot;RBD&quot;  # restrict battery discharge
+
+ENPHASE_RETRIES = 5
+
+# Browser mimicry - Enlighten rejects non-browser requests with 406/login walls
+ENPHASE_USER_AGENT = &quot;Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15&quot;
+BATTERY_UI_ORIGIN = &quot;https://battery-profile-ui.enphaseenergy.com&quot;
+
+
+class EnphaseAPI(ComponentBase):
+    &quot;&quot;&quot;Enphase Enlighten cloud API client component.&quot;&quot;&quot;
+
+    def initialize(self, username, password, site_id=None, automatic=False, automatic_ignore_pv=False):
+        &quot;&quot;&quot;Initialise the Enphase API component state.&quot;&quot;&quot;
+        self.username = username
+        self.password = password
+        self.site_id = str(site_id) if site_id else None
+        self.automatic = automatic
+        self.automatic_ignore_pv = automatic_ignore_pv
+
+        # Auth state
+        self.cookie_header = &quot;&quot;       # serialised cookie header for Enlighten
+        self.eauth_token = None       # JWT from /users/self/token
+        self.manager_token = None     # enlighten_manager_token_production cookie JWT
+        self.xsrf_token = None
+        self.user_id = None           # decoded from JWT, needed by BatteryConfig
+        self.token_expires_at = None
+
+        # Login guard rails (avoid Enphase account lockout)
+        self.login_last_success = None      # datetime of last successful login
+        self.login_cooldown_until = None    # datetime before which logins are banned
+        self.login_reject_count = 0         # consecutive rejected logins
+
+        # Cloud data
+        self.sites = []
+        self.battery_status = {}
+        self.battery_settings = {}
+        self.profile = {}
+        self.schedules = {}
+        self.site_settings = {}
+        self.lifetime_energy = {}
+        self.latest_power = {}
+
+        # Local (HA-side) schedule model, written by events, applied on write switch
+        self.local_schedule = {}
+
+        # Derived power state: previous cumulative kWh samples per channel
+        self.prev_energy_sample = {}
+
+        # Pending writes awaiting cloud settle confirmation
+        self.pending_writes = {}
+
+        # BatteryConfig header variant: &quot;primary&quot; (e-auth-token + requestid) or
+        # &quot;cookie_eauth&quot; fallback (cookie + XHR header) needed on some regions/firmware
+        self.battery_config_variant = &quot;primary&quot;
+
+        # Age (datetime of last update) per cached data category
+        self.data_age = {}
+        self.failures_total = 0
+        self.requests_today = 0
+        self.last_midnight_utc = None
+
+    def is_alive(self):
+        &quot;&quot;&quot;Return True when the component has started and discovered a site.&quot;&quot;&quot;
+        return self.api_started and bool(self.sites)
+
+    def _data_age_minutes(self, key):
+        &quot;&quot;&quot;Return the age in minutes of the in-memory data for a cache key, or None if unknown.&quot;&quot;&quot;
+        timestamp = self.data_age.get(key, None)
+        if timestamp is None:
+            return None
+        return (datetime.now(timezone.utc) - timestamp).total_seconds() / 60.0
+
+    def _needs_refresh(self, key, max_age_minutes):
+        &quot;&quot;&quot;Return True if the data for a cache key is missing or older than max_age_minutes.&quot;&quot;&quot;
+        age = self._data_age_minutes(key)
+        return age is None or age &gt;= max_age_minutes
+
+    async def _save_cache(self, key, data):
+        &quot;&quot;&quot;Save data to storage under the enphase module and record its update time.&quot;&quot;&quot;
+        now = datetime.now(timezone.utc)
+        self.data_age[key] = now
+        if self.storage:
+            await self.storage.save(&quot;enphase&quot;, key, data, format=&quot;json&quot;, expiry=now + timedelta(days=1))
+
+    async def _load_cache(self, key):
+        &quot;&quot;&quot;Load cached data for a key from storage, recording its age. Returns None if absent.&quot;&quot;&quot;
+        if not self.storage:
+            return None
+        data = await self.storage.load(&quot;enphase&quot;, key)
+        if data is None:
+            return None
+        age = await self.storage.age(&quot;enphase&quot;, key)
+        if age is None:
+            return None
+        self.data_age[key] = datetime.now(timezone.utc) - timedelta(minutes=age)
+        return data
+
+    async def load_cached_data(self):
+        &quot;&quot;&quot;Restore cached cloud data from storage on startup to avoid re-polling after a reboot.&quot;&quot;&quot;
+        if not self.storage:
+            return
+        version = await self.storage.load(&quot;enphase&quot;, &quot;cache_version&quot;)
+        if version != ENPHASE_CACHE_VERSION:
+            self.log(&quot;Enphase: Cache version changed, forcing full refresh&quot;)
+            await self.storage.save(&quot;enphase&quot;, &quot;cache_version&quot;, ENPHASE_CACHE_VERSION, format=&quot;json&quot;)
+            return
+        for key in ENPHASE_CACHE_KEYS:
+            data = await self._load_cache(key)
+            if data is not None:
+                setattr(self, key, data)
+        if self.sites:
+            self.update_success_timestamp()
+
+    async def run(self, seconds, first):
+        &quot;&quot;&quot;Main polling body, invoked every 60 seconds by ComponentBase.&quot;&quot;&quot;
+        if first:
+            await self.load_cached_data()
+        # Later tasks fill in: login, per-tier refresh, publishing
+        return True
+</code></pre>
+<p>Note for the implementer: check where <code>OPTIONS_TIME_FULL</code> actually lives (<code>grep -rn "OPTIONS_TIME_FULL" apps/predbat/fox.py apps/predbat/utils.py apps/predbat/config.py</code>) and import from the same module fox.py uses. If <code>record_api_call</code> in fox is provided by ComponentBase/base, mirror the same call pattern (<code>grep -n "record_api_call" apps/predbat/fox.py apps/predbat/component_base.py</code>).</p>
+<ul>
+<li>[ ] <strong>Step 4: Register the component and config schema</strong></li>
+</ul>
+<p><code>apps/predbat/components.py</code> — add import next to <code>from fox import FoxAPI</code> (line 35):</p>
+<pre><code class="language-python">from enphase import EnphaseAPI
+</code></pre>
+<p>Add to <code>COMPONENT_LIST</code> directly after the <code>"fox"</code> entry (line 242):</p>
+<pre><code class="language-python">    &quot;enphase&quot;: {
+        &quot;class&quot;: EnphaseAPI,
+        &quot;name&quot;: &quot;Enphase API&quot;,
+        &quot;event_filter&quot;: &quot;predbat_enphase_&quot;,
+        &quot;args&quot;: {
+            &quot;username&quot;: {
+                &quot;required&quot;: True,
+                &quot;config&quot;: &quot;enphase_username&quot;,
+            },
+            &quot;password&quot;: {
+                &quot;required&quot;: True,
+                &quot;config&quot;: &quot;enphase_password&quot;,
+            },
+            &quot;site_id&quot;: {
+                &quot;required&quot;: False,
+                &quot;config&quot;: &quot;enphase_site_id&quot;,
+            },
+            &quot;automatic&quot;: {
+                &quot;required&quot;: False,
+                &quot;default&quot;: False,
+                &quot;config&quot;: &quot;enphase_automatic&quot;,
+            },
+            &quot;automatic_ignore_pv&quot;: {
+                &quot;required&quot;: False,
+                &quot;default&quot;: False,
+                &quot;config&quot;: &quot;enphase_automatic_ignore_pv&quot;,
+            },
+        },
+        &quot;phase&quot;: 1,
+    },
+</code></pre>
+<p><code>apps/predbat/config.py</code> — add to <code>APPS_SCHEMA</code> after <code>"fox_token_hash"</code> (line 2202):</p>
+<pre><code class="language-python">    &quot;enphase_username&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;empty&quot;: False},
+    &quot;enphase_password&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;empty&quot;: False},
+    &quot;enphase_site_id&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;empty&quot;: False},
+    &quot;enphase_automatic&quot;: {&quot;type&quot;: &quot;boolean&quot;},
+    &quot;enphase_automatic_ignore_pv&quot;: {&quot;type&quot;: &quot;boolean&quot;},
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 5: Run the test to verify it passes</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test enphase_api &gt; /tmp/enphase_t1.txt 2&gt;&amp;1; grep -iE "error|fail|passed" /tmp/enphase_t1.txt</code>
+Expected: <code>**** Enphase API tests passed ****</code>, exit success.</p>
+<ul>
+<li>[ ] <strong>Step 6: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/enphase.py apps/predbat/components.py apps/predbat/config.py apps/predbat/tests/test_enphase_api.py apps/predbat/unit_test.py
+git commit -m &quot;feat: add Enphase cloud component skeleton and registration
+
+Co-Authored-By: Claude Fable 5 &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h3 id="task-2-authentication-login-flow-headers-guard-rails">Task 2: Authentication — login flow, headers, guard rails</h3>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>apps/predbat/enphase.py</code></li>
+<li>Test: <code>apps/predbat/tests/test_enphase_api.py</code></li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>Consumes: Task 1 skeleton (<code>request_raw</code> overridable seam, auth state fields).</li>
+<li>
+<p>Produces:</p>
+<ul>
+<li><code>async login(self) -&gt; bool</code> — full login chain; sets <code>cookie_header</code>, <code>eauth_token</code>, <code>manager_token</code>, <code>xsrf_token</code>, <code>user_id</code>, <code>token_expires_at</code>, <code>sites</code> (list of dicts with at least <code>site_id</code> and <code>name</code>); respects guard rails; returns True on success.</li>
+<li><code>login_allowed(self) -&gt; bool</code> — guard-rail check.</li>
+<li><code>get_headers(self, family, write=False) -&gt; dict</code> — <code>family</code> in <code>("site", "battery_config")</code>.</li>
+<li><code>async request_raw(self, method, url, headers=None, data=None, json_body=None, params=None) -&gt; (status, json_data, text, cookies)</code> — the only method that touches aiohttp; overridden in tests.</li>
+<li>Module function <code>decode_jwt_claims(token) -&gt; dict</code> (unverified payload decode for <code>exp</code> and user id).</li>
+</ul>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write failing tests</strong></p>
+</li>
+</ul>
+<p>Add to <code>test_enphase_api.py</code> (and call them from <code>run_enphase_api_tests</code>):</p>
+<pre><code class="language-python">def test_login_success():
+    &quot;&quot;&quot;Successful login mints tokens, extracts user id and discovers sites.&quot;&quot;&quot;
+    api = MockEnphaseAPI()
+    # JWT with payload {&quot;user_id&quot;: &quot;9999&quot;, &quot;exp&quot;: 4102444800} (header/sig irrelevant, unverified decode)
+    jwt = &quot;eyJhbGciOiJIUzI1NiJ9.&quot; + _b64({&quot;user_id&quot;: &quot;9999&quot;, &quot;exp&quot;: 4102444800}) + &quot;.sig&quot;
+    api.set_http_response(&quot;/login/login.json&quot;, 200, {&quot;success&quot;: True, &quot;session_id&quot;: &quot;sess1&quot;})
+    api.set_http_response(&quot;/users/self/token&quot;, 200, {&quot;token&quot;: jwt, &quot;expires_at&quot;: 4102444800})
+    api.set_http_response(&quot;/app-api/search_sites.json&quot;, 200, [{&quot;site_id&quot;: 12345, &quot;name&quot;: &quot;Home&quot;}])
+    assert run_async(api.login()) is True
+    assert api.eauth_token == jwt
+    assert api.user_id == &quot;9999&quot;
+    assert api.sites[0][&quot;site_id&quot;] == &quot;12345&quot;
+    assert api.login_reject_count == 0
+
+
+def test_login_mfa_rejected():
+    &quot;&quot;&quot;MFA-required accounts must fail with a fatal error, not retry.&quot;&quot;&quot;
+    api = MockEnphaseAPI()
+    api.set_http_response(&quot;/login/login.json&quot;, 200, {&quot;requires_mfa&quot;: True})
+    assert run_async(api.login()) is False
+    assert api.login_reject_count == 1
+    assert api.login_cooldown_until is not None
+
+
+def test_login_guard_rails():
+    &quot;&quot;&quot;Three consecutive rejections suspend login for 24 hours.&quot;&quot;&quot;
+    api = MockEnphaseAPI()
+    api.set_http_response(&quot;/login/login.json&quot;, 401, None)
+    for _ in range(3):
+        api.login_cooldown_until = None  # expire cooldown to allow next attempt
+        run_async(api.login())
+    assert api.login_reject_count == 3
+    remaining = (api.login_cooldown_until - datetime.now(timezone.utc)).total_seconds()
+    assert remaining &gt; 23 * 3600
+    # While suspended, login() refuses without making a request
+    count = len(api.request_log)
+    assert run_async(api.login()) is False
+    assert len(api.request_log) == count
+
+
+def test_login_reuse_window():
+    &quot;&quot;&quot;A login success within 30 seconds is reused, not repeated.&quot;&quot;&quot;
+    api = MockEnphaseAPI()
+    api.login_last_success = datetime.now(timezone.utc)
+    api.eauth_token = &quot;tok&quot;
+    count = len(api.request_log)
+    assert run_async(api.login()) is True
+    assert len(api.request_log) == count
+
+
+def test_get_headers_site():
+    &quot;&quot;&quot;Site-family headers carry cookie, tokens and browser mimicry.&quot;&quot;&quot;
+    api = MockEnphaseAPI()
+    api.cookie_header = &quot;a=b&quot;
+    api.eauth_token = &quot;tok&quot;
+    api.xsrf_token = &quot;xs&quot;
+    headers = api.get_headers(&quot;site&quot;)
+    assert headers[&quot;Cookie&quot;] == &quot;a=b&quot;
+    assert headers[&quot;e-auth-token&quot;] == &quot;tok&quot;
+    assert headers[&quot;Authorization&quot;] == &quot;Bearer tok&quot;
+    assert headers[&quot;X-CSRF-Token&quot;] == &quot;xs&quot;
+    assert headers[&quot;X-Requested-With&quot;] == &quot;XMLHttpRequest&quot;
+    assert &quot;Mozilla&quot; in headers[&quot;User-Agent&quot;]
+
+
+def test_get_headers_battery_config():
+    &quot;&quot;&quot;BatteryConfig headers use the battery-profile-ui origin, manager token bearer and user id.&quot;&quot;&quot;
+    api = MockEnphaseAPI()
+    api.eauth_token = &quot;etok&quot;
+    api.manager_token = &quot;mtok&quot;
+    api.user_id = &quot;9999&quot;
+    headers = api.get_headers(&quot;battery_config&quot;, write=True)
+    assert headers[&quot;Origin&quot;] == &quot;https://battery-profile-ui.enphaseenergy.com&quot;
+    assert headers[&quot;Authorization&quot;] == &quot;Bearer mtok&quot;
+    assert headers[&quot;e-auth-token&quot;] == &quot;etok&quot;
+    assert headers[&quot;Username&quot;] == &quot;9999&quot;
+    assert &quot;requestid&quot; in headers
+</code></pre>
+<p>Add helper at top of the test file:</p>
+<pre><code class="language-python">import base64
+import json as json_module
+
+
+def _b64(payload):
+    &quot;&quot;&quot;Base64url-encode a dict as a JWT payload segment without padding.&quot;&quot;&quot;
+    raw = json_module.dumps(payload).encode(&quot;utf-8&quot;)
+    return base64.urlsafe_b64encode(raw).decode(&quot;ascii&quot;).rstrip(&quot;=&quot;)
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run tests to verify they fail</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test enphase_api &gt; /tmp/enphase_t2.txt 2&gt;&amp;1; grep -iE "error|fail|passed" /tmp/enphase_t2.txt</code>
+Expected: FAIL — <code>AttributeError</code> (<code>login</code> / <code>get_headers</code> not defined).</p>
+<ul>
+<li>[ ] <strong>Step 3: Implement auth in <code>enphase.py</code></strong></li>
+</ul>
+<pre><code class="language-python">def decode_jwt_claims(token):
+    &quot;&quot;&quot;Decode the payload segment of a JWT without verifying the signature.&quot;&quot;&quot;
+    import base64
+    import json
+
+    try:
+        payload = token.split(&quot;.&quot;)[1]
+        payload += &quot;=&quot; * (-len(payload) % 4)
+        return json.loads(base64.urlsafe_b64decode(payload.encode(&quot;ascii&quot;)))
+    except (IndexError, ValueError):
+        return {}
+</code></pre>
+<p>Methods on <code>EnphaseAPI</code>:</p>
+<pre><code class="language-python">    LOGIN_REUSE_SECONDS = 30
+    LOGIN_COOLDOWN_SECONDS = 300
+    LOGIN_SUSPEND_SECONDS = 24 * 3600
+    LOGIN_MAX_REJECTS = 3
+
+    def login_allowed(self):
+        &quot;&quot;&quot;Return True when a password login attempt is currently permitted by the guard rails.&quot;&quot;&quot;
+        if self.login_cooldown_until and datetime.now(timezone.utc) &lt; self.login_cooldown_until:
+            return False
+        return True
+
+    def _login_rejected(self, reason):
+        &quot;&quot;&quot;Record a rejected login and set the appropriate cooldown.&quot;&quot;&quot;
+        self.login_reject_count += 1
+        if self.login_reject_count &gt;= self.LOGIN_MAX_REJECTS:
+            delay = self.LOGIN_SUSPEND_SECONDS
+        else:
+            delay = self.LOGIN_COOLDOWN_SECONDS
+        self.login_cooldown_until = datetime.now(timezone.utc) + timedelta(seconds=delay)
+        self.log(f&quot;Warn: Enphase: Login rejected ({reason}), cooling down for {delay} seconds (rejection {self.login_reject_count})&quot;)
+        self.fatal_error_occurred(f&quot;Enphase login rejected: {reason}&quot;)
+
+    async def login(self):
+        &quot;&quot;&quot;Authenticate with Enlighten: password login, token mint, site discovery.&quot;&quot;&quot;
+        # Reuse a very recent successful login (coalesces concurrent 401 refreshes)
+        if self.login_last_success and (datetime.now(timezone.utc) - self.login_last_success).total_seconds() &lt; self.LOGIN_REUSE_SECONDS and self.eauth_token:
+            return True
+        if not self.login_allowed():
+            self.log(&quot;Warn: Enphase: Login suppressed by cooldown after previous rejections&quot;)
+            return False
+
+        headers = {
+            &quot;Content-Type&quot;: &quot;application/x-www-form-urlencoded; charset=UTF-8&quot;,
+            &quot;X-Requested-With&quot;: &quot;XMLHttpRequest&quot;,
+            &quot;User-Agent&quot;: ENPHASE_USER_AGENT,
+            &quot;Referer&quot;: BASE_URL + &quot;/&quot;,
+        }
+        status, data, text, cookies = await self.request_raw(&quot;POST&quot;, BASE_URL + LOGIN_PATH, headers=headers, data={&quot;user[email]&quot;: self.username, &quot;user[password]&quot;: self.password})
+
+        if status in (401, 403):
+            self._login_rejected(&quot;invalid credentials&quot;)
+            return False
+        if isinstance(data, dict) and data.get(&quot;requires_mfa&quot;):
+            self._login_rejected(&quot;account requires MFA - disable MFA on the Enphase account to use this component&quot;)
+            return False
+        if isinstance(data, dict) and data.get(&quot;isBlocked&quot;):
+            self._login_rejected(&quot;account is blocked&quot;)
+            return False
+        if status != 200:
+            # Includes &quot;too many active sessions&quot; responses - treat as rejection
+            reason = &quot;too many active sessions&quot; if &quot;session&quot; in str(text).lower() else f&quot;http status {status}&quot;
+            self._login_rejected(reason)
+            return False
+
+        # Persist cookies from the login (session cookie + manager token JWT)
+        self._absorb_cookies(cookies)
+
+        # Mint the e-auth/bearer token; Enlighten may rotate the session cookie here
+        status, token_data, text, cookies = await self.request_raw(&quot;GET&quot;, BASE_URL + SELF_TOKEN_PATH, headers=self.get_headers(&quot;site&quot;))
+        self._absorb_cookies(cookies)
+        if status == 200 and isinstance(token_data, dict):
+            token = token_data.get(&quot;token&quot;) or token_data.get(&quot;auth_token&quot;) or token_data.get(&quot;access_token&quot;)
+            if token:
+                self.eauth_token = token
+                claims = decode_jwt_claims(token)
+                self.user_id = str(claims.get(&quot;user_id&quot;) or claims.get(&quot;userId&quot;) or claims.get(&quot;sub&quot;) or &quot;&quot;) or None
+                self.token_expires_at = token_data.get(&quot;expires_at&quot;) or token_data.get(&quot;expiresAt&quot;) or claims.get(&quot;exp&quot;)
+        if not self.eauth_token:
+            self._login_rejected(&quot;no auth token returned&quot;)
+            return False
+
+        # Discover sites
+        status, sites_data, text, cookies = await self.request_raw(&quot;GET&quot;, BASE_URL + SITE_SEARCH_PATH, headers=self.get_headers(&quot;site&quot;), params={&quot;searchText&quot;: &quot;&quot;, &quot;favourite&quot;: &quot;false&quot;})
+        sites = []
+        if status == 200:
+            entries = sites_data if isinstance(sites_data, list) else (sites_data or {}).get(&quot;sites&quot;, [])
+            for entry in entries:
+                sid = str(entry.get(&quot;site_id&quot;) or entry.get(&quot;id&quot;) or &quot;&quot;)
+                if sid and (not self.site_id or sid == self.site_id):
+                    sites.append({&quot;site_id&quot;: sid, &quot;name&quot;: entry.get(&quot;name&quot;, sid)})
+        if sites:
+            self.sites = sites
+            await self._save_cache(&quot;sites&quot;, sites)
+
+        self.login_last_success = datetime.now(timezone.utc)
+        self.login_reject_count = 0
+        self.login_cooldown_until = None
+        self.log(f&quot;Enphase: Login successful, {len(self.sites)} site(s)&quot;)
+        return True
+
+    def _absorb_cookies(self, cookies):
+        &quot;&quot;&quot;Merge response cookies into the serialised cookie header and pick out special tokens.&quot;&quot;&quot;
+        if not cookies:
+            return
+        current = {}
+        for part in self.cookie_header.split(&quot;; &quot;):
+            if &quot;=&quot; in part:
+                name, value = part.split(&quot;=&quot;, 1)
+                current[name] = value
+        current.update(cookies)
+        self.cookie_header = &quot;; &quot;.join(f&quot;{k}={v}&quot; for k, v in current.items() if v)
+        self.manager_token = current.get(&quot;enlighten_manager_token_production&quot;, self.manager_token)
+        self.xsrf_token = current.get(&quot;XSRF-TOKEN&quot;, current.get(&quot;BP-XSRF-Token&quot;, self.xsrf_token))
+
+    def get_headers(self, family, write=False):
+        &quot;&quot;&quot;Build request headers for an endpoint family ('site' or 'battery_config').&quot;&quot;&quot;
+        import uuid
+
+        if family == &quot;battery_config&quot;:
+            headers = {
+                &quot;Accept&quot;: &quot;application/json, text/plain, */*&quot;,
+                &quot;Origin&quot;: BATTERY_UI_ORIGIN,
+                &quot;Referer&quot;: BATTERY_UI_ORIGIN + &quot;/&quot;,
+                &quot;User-Agent&quot;: ENPHASE_USER_AGENT,
+                &quot;e-auth-token&quot;: self.eauth_token or &quot;&quot;,
+            }
+            if self.battery_config_variant == &quot;cookie_eauth&quot;:
+                # Fallback variant needed on some regions/firmware: cookie-backed with XHR marker
+                headers[&quot;X-Requested-With&quot;] = &quot;XMLHttpRequest&quot;
+                if self.cookie_header:
+                    headers[&quot;Cookie&quot;] = self.cookie_header
+            else:
+                headers[&quot;requestid&quot;] = str(uuid.uuid4())
+            bearer = self.manager_token or self.eauth_token
+            if bearer:
+                headers[&quot;Authorization&quot;] = f&quot;Bearer {bearer}&quot;
+            if self.user_id:
+                headers[&quot;Username&quot;] = self.user_id
+            if write:
+                headers[&quot;Content-Type&quot;] = &quot;application/json&quot;
+                if self.xsrf_token:
+                    headers[&quot;X-XSRF-Token&quot;] = self.xsrf_token
+            return headers
+
+        headers = {
+            &quot;Accept&quot;: &quot;application/json, text/plain, */*&quot;,
+            &quot;User-Agent&quot;: ENPHASE_USER_AGENT,
+            &quot;X-Requested-With&quot;: &quot;XMLHttpRequest&quot;,
+            &quot;Referer&quot;: BASE_URL + &quot;/&quot;,
+        }
+        if self.cookie_header:
+            headers[&quot;Cookie&quot;] = self.cookie_header
+        if self.eauth_token:
+            headers[&quot;Authorization&quot;] = f&quot;Bearer {self.eauth_token}&quot;
+            headers[&quot;e-auth-token&quot;] = self.eauth_token
+        if self.xsrf_token:
+            headers[&quot;X-CSRF-Token&quot;] = self.xsrf_token
+        return headers
+
+    async def request_raw(self, method, url, headers=None, data=None, json_body=None, params=None):
+        &quot;&quot;&quot;Perform one HTTP request, returning (status, json_or_none, text, cookie_dict). Overridden in tests.&quot;&quot;&quot;
+        async with aiohttp.ClientSession() as session:
+            async with session.request(method, url, headers=headers, data=data, json=json_body, params=params, timeout=aiohttp.ClientTimeout(total=60)) as response:
+                text = await response.text()
+                cookies = {key: morsel.value for key, morsel in response.cookies.items()}
+                json_data = None
+                content_type = response.headers.get(&quot;Content-Type&quot;, &quot;&quot;)
+                if &quot;json&quot; in content_type:
+                    try:
+                        json_data = await response.json(content_type=None)
+                    except ValueError:
+                        json_data = None
+                return response.status, json_data, text, cookies
+</code></pre>
+<p>Note: <code>fatal_error_occurred</code> comes from ComponentBase (<code>component_base.py:268</code>); <code>MockEnphaseAPI</code> must stub it — add <code>def fatal_error_occurred(self, message): pass</code> (with docstring) to the mock.</p>
+<ul>
+<li>[ ] <strong>Step 4: Run tests to verify they pass</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test enphase_api &gt; /tmp/enphase_t2.txt 2&gt;&amp;1; grep -iE "error|fail|passed" /tmp/enphase_t2.txt</code>
+Expected: PASS.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/enphase.py apps/predbat/tests/test_enphase_api.py
+git commit -m &quot;feat: Enphase Enlighten login flow with lockout guard rails
+
+Co-Authored-By: Claude Fable 5 &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h3 id="task-3-request-helper-with-retries-and-401-re-login">Task 3: Request helper with retries and 401 re-login</h3>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>apps/predbat/enphase.py</code></li>
+<li>Test: <code>apps/predbat/tests/test_enphase_api.py</code></li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>Consumes: <code>login()</code>, <code>get_headers()</code>, <code>request_raw()</code> from Task 2.</li>
+<li>
+<p>Produces: <code>async request_json(self, method, path, family="site", json_body=None, data=None, params=None) -&gt; data_or_None</code>. Behaviour contract: builds <code>BASE_URL + path</code>; on 401 performs one <code>login()</code> + one retry; detects HTML login walls (text starting <code>&lt;!DOCTYPE</code>/<code>&lt;html</code> on a JSON endpoint) as auth failure; retries transient errors (timeouts, 5xx, 429) up to <code>ENPHASE_RETRIES</code> with jittered sleep, honouring <code>Retry-After</code>; increments <code>requests_today</code>; calls <code>record_api_call</code>; returns parsed JSON or None on failure (sets <code>self.last_error_status</code>).</p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write failing tests</strong></p>
+</li>
+</ul>
+<pre><code class="language-python">def test_request_json_success():
+    &quot;&quot;&quot;request_json returns parsed JSON and counts the request.&quot;&quot;&quot;
+    api = MockEnphaseAPI()
+    api.set_http_response(&quot;/pv/settings/12345/battery_status.json&quot;, 200, {&quot;storages&quot;: []})
+    result = run_async(api.request_json(&quot;GET&quot;, &quot;/pv/settings/12345/battery_status.json&quot;))
+    assert result == {&quot;storages&quot;: []}
+    assert api.requests_today == 1
+
+
+def test_request_json_401_relogin():
+    &quot;&quot;&quot;A 401 triggers one re-login and one retry.&quot;&quot;&quot;
+    api = MockEnphaseAPI()
+    api.eauth_token = &quot;expired&quot;
+    calls = {&quot;n&quot;: 0}
+
+    async def fake_raw(method, url, headers=None, data=None, json_body=None, params=None):
+        &quot;&quot;&quot;Return 401 once then 200, and 200 for the login chain.&quot;&quot;&quot;
+        path = url.split(&quot;enphaseenergy.com&quot;, 1)[-1].split(&quot;?&quot;)[0]
+        api.request_log.append({&quot;method&quot;: method, &quot;path&quot;: path})
+        if path == &quot;/login/login.json&quot;:
+            return 200, {&quot;success&quot;: True, &quot;session_id&quot;: &quot;s&quot;}, &quot;&quot;, {}
+        if path == &quot;/users/self/token&quot;:
+            return 200, {&quot;token&quot;: &quot;newtok&quot;}, &quot;&quot;, {}
+        if path == &quot;/app-api/search_sites.json&quot;:
+            return 200, [{&quot;site_id&quot;: 12345, &quot;name&quot;: &quot;Home&quot;}], &quot;&quot;, {}
+        calls[&quot;n&quot;] += 1
+        if calls[&quot;n&quot;] == 1:
+            return 401, None, &quot;&quot;, {}
+        return 200, {&quot;ok&quot;: True}, &quot;&quot;, {}
+
+    api.request_raw = fake_raw
+    result = run_async(api.request_json(&quot;GET&quot;, &quot;/some/data.json&quot;))
+    assert result == {&quot;ok&quot;: True}
+    assert api.eauth_token == &quot;newtok&quot;
+
+
+def test_request_json_login_wall():
+    &quot;&quot;&quot;An HTML body on a JSON endpoint is treated as auth failure, not a crash.&quot;&quot;&quot;
+    api = MockEnphaseAPI()
+    api.login_cooldown_until = datetime.now(timezone.utc) + timedelta(hours=1)  # block re-login
+    api.set_http_response(&quot;/some/data.json&quot;, 200, None, text_data=&quot;&lt;!DOCTYPE html&gt;&lt;html&gt;login&lt;/html&gt;&quot;)
+    result = run_async(api.request_json(&quot;GET&quot;, &quot;/some/data.json&quot;))
+    assert result is None
+
+
+def test_battery_config_variant_fallback():
+    &quot;&quot;&quot;A BatteryConfig auth failure switches header variant before re-logging in.&quot;&quot;&quot;
+    api = MockEnphaseAPI()
+    api.eauth_token = &quot;tok&quot;
+    calls = {&quot;n&quot;: 0}
+
+    async def fake_raw(method, url, headers=None, data=None, json_body=None, params=None):
+        &quot;&quot;&quot;Reject the primary variant once, accept the cookie variant.&quot;&quot;&quot;
+        calls[&quot;n&quot;] += 1
+        if &quot;requestid&quot; in (headers or {}):
+            return 401, None, &quot;&quot;, {}
+        return 200, {&quot;ok&quot;: True}, &quot;&quot;, {}
+
+    api.request_raw = fake_raw
+    result = run_async(api.request_json(&quot;GET&quot;, &quot;/service/batteryConfig/api/v1/profile/12345&quot;, family=&quot;battery_config&quot;))
+    assert result == {&quot;ok&quot;: True}
+    assert api.battery_config_variant == &quot;cookie_eauth&quot;
+    assert calls[&quot;n&quot;] == 2
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run to verify failure</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test enphase_api &gt; /tmp/enphase_t3.txt 2&gt;&amp;1; grep -iE "error|fail|passed" /tmp/enphase_t3.txt</code>
+Expected: FAIL — <code>request_json</code> not defined.</p>
+<ul>
+<li>[ ] <strong>Step 3: Implement <code>request_json</code></strong></li>
+</ul>
+<pre><code class="language-python">    def _is_login_wall(self, json_data, text):
+        &quot;&quot;&quot;Return True when a JSON endpoint answered with an HTML login page.&quot;&quot;&quot;
+        if json_data is not None:
+            return False
+        stripped = (text or &quot;&quot;).lstrip().lower()
+        return stripped.startswith(&quot;&lt;!doctype&quot;) or stripped.startswith(&quot;&lt;html&quot;)
+
+    async def request_json(self, method, path, family=&quot;site&quot;, json_body=None, data=None, params=None):
+        &quot;&quot;&quot;Perform an authenticated JSON request with retries and single 401 re-login.&quot;&quot;&quot;
+        url = BASE_URL + path
+        relogin_done = False
+        self.last_error_status = None
+        for retry in range(ENPHASE_RETRIES):
+            headers = self.get_headers(family, write=(method != &quot;GET&quot;))
+            try:
+                status, json_data, text, cookies = await self.request_raw(method, url, headers=headers, data=data, json_body=json_body, params=params)
+            except (asyncio.TimeoutError, aiohttp.ClientError) as error:
+                self.log(f&quot;Warn: Enphase: Request error on {path}: {error}&quot;)
+                await asyncio.sleep(1 + retry * random.random() * 5)
+                continue
+            self.requests_today += 1
+            self.record_api_call(&quot;enphase&quot;, path, status)
+
+            auth_failed = status in (401, 403) or self._is_login_wall(json_data, text)
+            if auth_failed:
+                if family == &quot;battery_config&quot; and self.battery_config_variant == &quot;primary&quot;:
+                    # Some regions/firmware reject the primary BatteryConfig header shape;
+                    # switch to the cookie-backed fallback variant before burning a re-login
+                    self.log(&quot;Enphase: BatteryConfig auth failed, switching to cookie header variant&quot;)
+                    self.battery_config_variant = &quot;cookie_eauth&quot;
+                    continue
+                if relogin_done or not await self.login():
+                    self.last_error_status = status
+                    self.failures_total += 1
+                    return None
+                relogin_done = True
+                continue
+            if status == 429 or status &gt;= 500:
+                # Honour Retry-After when present in a headers dict returned via cookies param is not possible;
+                # sleep with jittered backoff instead
+                await asyncio.sleep(min(30, (retry + 1) * (2 + random.random() * 3)))
+                continue
+            if status != 200:
+                self.log(f&quot;Warn: Enphase: HTTP {status} on {path}&quot;)
+                self.last_error_status = status
+                self.failures_total += 1
+                return None
+            self.update_success_timestamp()
+            return json_data
+        self.failures_total += 1
+        return None
+</code></pre>
+<p>Note: if <code>record_api_call</code> is not available on the mock, it is already stubbed in Task 1's <code>MockEnphaseAPI</code>. Verify the real method exists in the codebase (<code>grep -n "def record_api_call" apps/predbat/*.py</code>) and match its signature; fox calls <code>record_api_call("fox", ...)</code> — copy the exact argument shape fox uses.</p>
+<ul>
+<li>[ ] <strong>Step 4: Run tests to verify pass, then commit</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test enphase_api &gt; /tmp/enphase_t3.txt 2&gt;&amp;1; grep -iE "error|fail|passed" /tmp/enphase_t3.txt</code>
+Expected: PASS.</p>
+<pre><code class="language-bash">git add apps/predbat/enphase.py apps/predbat/tests/test_enphase_api.py
+git commit -m &quot;feat: Enphase request helper with retries and 401 re-login
+
+Co-Authored-By: Claude Fable 5 &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h3 id="task-4-cloud-reads-parsers-and-the-run-polling-loop">Task 4: Cloud reads, parsers, and the run() polling loop</h3>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>apps/predbat/enphase.py</code></li>
+<li>Test: <code>apps/predbat/tests/test_enphase_api.py</code></li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>Consumes: <code>request_json()</code> (Task 3), cache helpers (Task 1).</li>
+<li>
+<p>Produces:</p>
+<ul>
+<li><code>async get_battery_status(site_id)</code> → stores normalised dict in <code>self.battery_status[site_id]</code>: <code>{"soc_percent": float, "available_energy": float, "max_capacity": float, "max_power_kw": float, "batteries": [...], "status": str, "profile_label": str}</code> from <code>GET /pv/settings/&lt;site&gt;/battery_status.json</code> (site fields <code>current_charge</code>, <code>available_energy</code>, <code>max_capacity</code>, <code>max_power</code>; per-battery list under <code>storages</code>; aggregate SOC = capacity-weighted <code>available_energy/max_capacity*100</code>, fallback site <code>current_charge</code>).</li>
+<li><code>async get_lifetime_energy(site_id)</code> → stores raw payload; module function <code>energy_today(payload, channel)</code> returns today's kWh (last element of the <code>channel</code> array; today's index = days between <code>start_date</code> and <code>last_report_date</code>, defensively the last element).</li>
+<li><code>async get_latest_power(site_id)</code> → stores <code>{"watts": float, "time": ts}</code> from <code>GET /app-api/&lt;site&gt;/get_latest_power</code> (<code>latest_power.value</code>, <code>latest_power.time</code>; timestamps may be seconds or milliseconds — treat &gt; 10^12 as ms).</li>
+<li><code>async get_profile(site_id)</code> → <code>GET {BATTERY_CONFIG_BASE}/profile/&lt;site&gt;?source=enho&amp;userId=&lt;uid&gt;</code> (family <code>battery_config</code>) → stores <code>{"profile": str, "reserve": int}</code> (keys <code>profile</code>, <code>batteryBackupPercentage</code>).</li>
+<li><code>async get_battery_settings(site_id)</code> → <code>GET {BATTERY_CONFIG_BASE}/batterySettings/&lt;site&gt;?source=enlm</code> → stores <code>chargeFromGrid</code>, <code>veryLowSoc</code>, <code>veryLowSocMin</code>, <code>veryLowSocMax</code>.</li>
+<li><code>async get_schedules(site_id)</code> → <code>GET {BATTERY_CONFIG_BASE}/battery/sites/&lt;site&gt;/schedules</code> → stores per-family (<code>cfg</code>/<code>dtg</code>/<code>rbd</code>) dict: <code>{"id", "startTime", "endTime", "limit", "enabled", "supported"}</code> — parse each family's <code>details</code> list (first entry) plus control flags (<code>scheduleSupported</code>, <code>forceScheduleSupported</code>).</li>
+<li><code>dtg_supported(site_id) -&gt; bool</code> — from schedules control flags / site settings.</li>
+<li><code>run(seconds, first)</code> extended: ensures login when <code>eauth_token</code> is None; refresh tiers — sites daily (<code>ENPHASE_REFRESH_STATIC</code>), battery_status/profile/settings/schedules every <code>ENPHASE_REFRESH_SETTINGS</code>, lifetime_energy every <code>ENPHASE_REFRESH_ENERGY</code>, latest_power every <code>ENPHASE_REFRESH_POWER</code>; midnight counter reset; each successful fetch <code>_save_cache</code>d.</li>
+</ul>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write failing tests</strong> — canned payloads through <code>set_http_response</code>, e.g.:</p>
+</li>
+</ul>
+<pre><code class="language-python">BATTERY_STATUS_PAYLOAD = {
+    &quot;current_charge&quot;: 55,
+    &quot;available_energy&quot;: 5.5,
+    &quot;max_capacity&quot;: 10.0,
+    &quot;max_power&quot;: 3.84,
+    &quot;storages&quot;: [
+        {&quot;id&quot;: 1, &quot;serial_num&quot;: &quot;B1&quot;, &quot;current_charge&quot;: 50, &quot;available_energy&quot;: 2.5, &quot;max_capacity&quot;: 5.0, &quot;status&quot;: &quot;normal&quot;},
+        {&quot;id&quot;: 2, &quot;serial_num&quot;: &quot;B2&quot;, &quot;current_charge&quot;: 60, &quot;available_energy&quot;: 3.0, &quot;max_capacity&quot;: 5.0, &quot;status&quot;: &quot;normal&quot;},
+    ],
+}
+
+
+def test_get_battery_status():
+    &quot;&quot;&quot;battery_status parses site totals and capacity-weighted SOC.&quot;&quot;&quot;
+    api = MockEnphaseAPI()
+    api.set_http_response(&quot;/pv/settings/12345/battery_status.json&quot;, 200, BATTERY_STATUS_PAYLOAD)
+    run_async(api.get_battery_status(&quot;12345&quot;))
+    status = api.battery_status[&quot;12345&quot;]
+    assert status[&quot;max_capacity&quot;] == 10.0
+    assert status[&quot;soc_percent&quot;] == 55.0  # (2.5+3.0)/(5+5)*100
+    assert status[&quot;max_power_kw&quot;] == 3.84
+
+
+def test_energy_today():
+    &quot;&quot;&quot;energy_today returns the final (today's) entry of a channel array.&quot;&quot;&quot;
+    payload = {&quot;start_date&quot;: &quot;2026-07-09&quot;, &quot;last_report_date&quot;: &quot;2026-07-11&quot;, &quot;production&quot;: [10.0, 12.0, 3.5], &quot;consumption&quot;: [8.0, 9.0, 2.2]}
+    from enphase import energy_today
+
+    assert energy_today(payload, &quot;production&quot;) == 3.5
+    assert energy_today(payload, &quot;consumption&quot;) == 2.2
+    assert energy_today(payload, &quot;import&quot;) == 0.0  # missing channel -&gt; 0
+
+
+def test_get_schedules_parses_families():
+    &quot;&quot;&quot;Schedules read stores cfg/dtg/rbd entries and dtg support flag.&quot;&quot;&quot;
+    api = MockEnphaseAPI()
+    payload = {
+        &quot;cfg&quot;: {&quot;scheduleSupported&quot;: True, &quot;details&quot;: [{&quot;id&quot;: &quot;u1&quot;, &quot;startTime&quot;: &quot;02:00&quot;, &quot;endTime&quot;: &quot;05:00&quot;, &quot;limit&quot;: 90, &quot;isEnabled&quot;: True}]},
+        &quot;dtg&quot;: {&quot;scheduleSupported&quot;: False, &quot;details&quot;: []},
+        &quot;rbd&quot;: {&quot;scheduleSupported&quot;: True, &quot;details&quot;: []},
+    }
+    api.set_http_response(&quot;/service/batteryConfig/api/v1/battery/sites/12345/schedules&quot;, 200, payload)
+    run_async(api.get_schedules(&quot;12345&quot;))
+    cfg = api.schedules[&quot;12345&quot;][&quot;cfg&quot;]
+    assert cfg[&quot;id&quot;] == &quot;u1&quot; and cfg[&quot;limit&quot;] == 90 and cfg[&quot;enabled&quot;] is True
+    assert api.dtg_supported(&quot;12345&quot;) is False
+
+
+def test_run_first_polls_all_tiers():
+    &quot;&quot;&quot;First run() logs in, fetches every tier and publishes.&quot;&quot;&quot;
+    api = MockEnphaseAPI()
+    # prime auth short-circuit
+    api.login_last_success = datetime.now(timezone.utc)
+    api.eauth_token = &quot;tok&quot;
+    api.sites = [{&quot;site_id&quot;: &quot;12345&quot;, &quot;name&quot;: &quot;Home&quot;}]
+    api.set_http_response(&quot;/pv/settings/12345/battery_status.json&quot;, 200, BATTERY_STATUS_PAYLOAD)
+    api.set_http_response(&quot;/pv/systems/12345/lifetime_energy&quot;, 200, {&quot;production&quot;: [1.0], &quot;consumption&quot;: [1.0], &quot;import&quot;: [0.5], &quot;export&quot;: [0.2], &quot;charge&quot;: [0.1], &quot;discharge&quot;: [0.1], &quot;start_date&quot;: &quot;2026-07-11&quot;})
+    api.set_http_response(&quot;/app-api/12345/get_latest_power&quot;, 200, {&quot;latest_power&quot;: {&quot;value&quot;: 450, &quot;units&quot;: &quot;w&quot;, &quot;time&quot;: 1760000000}})
+    api.set_http_response(&quot;/service/batteryConfig/api/v1/profile/12345&quot;, 200, {&quot;profile&quot;: &quot;self-consumption&quot;, &quot;batteryBackupPercentage&quot;: 20})
+    api.set_http_response(&quot;/service/batteryConfig/api/v1/batterySettings/12345&quot;, 200, {&quot;chargeFromGrid&quot;: True, &quot;veryLowSoc&quot;: 10, &quot;veryLowSocMin&quot;: 5, &quot;veryLowSocMax&quot;: 25})
+    api.set_http_response(&quot;/service/batteryConfig/api/v1/battery/sites/12345/schedules&quot;, 200, {&quot;cfg&quot;: {&quot;scheduleSupported&quot;: True, &quot;details&quot;: []}, &quot;dtg&quot;: {&quot;scheduleSupported&quot;: True, &quot;details&quot;: []}, &quot;rbd&quot;: {&quot;scheduleSupported&quot;: True, &quot;details&quot;: []}})
+    result = run_async(api.run(0, True))
+    assert result
+    assert api.battery_status[&quot;12345&quot;][&quot;soc_percent&quot;] == 55.0
+    assert api.profile[&quot;12345&quot;][&quot;reserve&quot;] == 20
+    assert api.latest_power[&quot;12345&quot;][&quot;watts&quot;] == 450
+</code></pre>
+<ul>
+<li>
+<p>[ ] <strong>Step 2: Run to verify failure</strong> (same command pattern; expect AttributeError/ImportError).</p>
+</li>
+<li>
+<p>[ ] <strong>Step 3: Implement</strong> the six read methods, <code>energy_today</code>, <code>dtg_supported</code> and the extended <code>run()</code>:</p>
+</li>
+</ul>
+<pre><code class="language-python">def energy_today(payload, channel):
+    &quot;&quot;&quot;Return today's kWh for a lifetime_energy channel (last array entry), 0.0 if absent.&quot;&quot;&quot;
+    values = (payload or {}).get(channel) or []
+    if not values:
+        return 0.0
+    try:
+        return float(values[-1] or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+</code></pre>
+<p><code>run()</code> body after the Task 1 <code>load_cached_data</code> block:</p>
+<pre><code class="language-python">        # Midnight counter reset
+        current_midnight = self.midnight_utc
+        if self.last_midnight_utc is not None and self.last_midnight_utc != current_midnight:
+            self.log(f&quot;Enphase: Midnight reset - requests_today: {self.requests_today}&quot;)
+            self.requests_today = 0
+        self.last_midnight_utc = current_midnight
+
+        # Ensure we are logged in (guard rails inside login())
+        if not self.eauth_token:
+            if not await self.login():
+                return bool(self.sites)  # stay alive on cached data if we have it
+
+        if first or self._needs_refresh(&quot;sites&quot;, ENPHASE_REFRESH_STATIC):
+            if not await self.login():
+                return bool(self.sites)
+
+        for site in self.sites:
+            site_id = site[&quot;site_id&quot;]
+            if self._needs_refresh(&quot;battery_status&quot;, ENPHASE_REFRESH_SETTINGS):
+                await self.get_battery_status(site_id)
+                await self.get_profile(site_id)
+                await self.get_battery_settings(site_id)
+                await self.get_schedules(site_id)
+            if self._needs_refresh(&quot;lifetime_energy&quot;, ENPHASE_REFRESH_ENERGY):
+                await self.get_lifetime_energy(site_id)
+            if self._needs_refresh(&quot;latest_power&quot;, ENPHASE_REFRESH_POWER):
+                await self.get_latest_power(site_id)
+            await self.publish_data(site_id)          # Task 5
+            await self.publish_schedule_settings_ha(site_id)  # Task 6 (no-op until then: guard with hasattr or add stub now)
+        return True
+</code></pre>
+<p>Add stub methods now so run() is complete (filled in Tasks 5/6):</p>
+<pre><code class="language-python">    async def publish_data(self, site_id):
+        &quot;&quot;&quot;Publish monitoring sensors for a site (implemented in a later task).&quot;&quot;&quot;
+        pass
+
+    async def publish_schedule_settings_ha(self, site_id):
+        &quot;&quot;&quot;Publish schedule control entities for a site (implemented in a later task).&quot;&quot;&quot;
+        pass
+</code></pre>
+<p>Each <code>get_*</code> method follows this shape (battery_status shown; the others differ only in path/family/parse):</p>
+<pre><code class="language-python">    async def get_battery_status(self, site_id):
+        &quot;&quot;&quot;Fetch and normalise battery SOC/capacity/power for a site.&quot;&quot;&quot;
+        data = await self.request_json(&quot;GET&quot;, f&quot;/pv/settings/{site_id}/battery_status.json&quot;)
+        if data is None:
+            return None
+        batteries = data.get(&quot;storages&quot;) or []
+        total_capacity = sum(float(b.get(&quot;max_capacity&quot;, 0) or 0) for b in batteries)
+        total_available = sum(float(b.get(&quot;available_energy&quot;, 0) or 0) for b in batteries)
+        if total_capacity &gt; 0:
+            soc_percent = round(total_available / total_capacity * 100.0, 1)
+        else:
+            soc_percent = float(data.get(&quot;current_charge&quot;, 0) or 0)
+        self.battery_status[site_id] = {
+            &quot;soc_percent&quot;: soc_percent,
+            &quot;available_energy&quot;: float(data.get(&quot;available_energy&quot;, total_available) or 0),
+            &quot;max_capacity&quot;: float(data.get(&quot;max_capacity&quot;, total_capacity) or 0),
+            &quot;max_power_kw&quot;: float(data.get(&quot;max_power&quot;, 0) or 0),
+            &quot;status&quot;: str(data.get(&quot;status&quot;, &quot;&quot;)),
+            &quot;batteries&quot;: batteries,
+        }
+        await self._save_cache(&quot;battery_status&quot;, self.battery_status)
+        return self.battery_status[site_id]
+</code></pre>
+<p>Profile GET uses <code>family="battery_config"</code> and params <code>{"source": "enho", "userId": self.user_id}</code>; batterySettings GET params <code>{"source": "enlm"}</code>.</p>
+<ul>
+<li>[ ] <strong>Step 4: Run tests to verify pass, then commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/enphase.py apps/predbat/tests/test_enphase_api.py
+git commit -m &quot;feat: Enphase cloud reads, parsers and polling loop
+
+Co-Authored-By: Claude Fable 5 &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h3 id="task-5-monitoring-sensor-publishing-incl-derived-power">Task 5: Monitoring sensor publishing (incl. derived power)</h3>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>apps/predbat/enphase.py</code> (replace <code>publish_data</code> stub)</li>
+<li>Test: <code>apps/predbat/tests/test_enphase_api.py</code></li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>Consumes: normalised data stores from Task 4.</li>
+<li>Produces: <code>publish_data(site_id)</code> creating (entity ids all prefixed <code>sensor.{prefix}_enphase_{site_id}_</code>): <code>soc_percent</code> (%), <code>soc_kw</code> (kWh available), <code>battery_capacity</code> (kWh), <code>battery_rate_max</code> (W = <code>max_power_kw*1000</code>), <code>battery_reserve</code> (%), <code>battery_reserve_min</code> (% = <code>veryLowSocMin</code> fallback 5), <code>battery_status</code>, <code>battery_profile</code>, <code>pv_today</code>/<code>load_today</code>/<code>import_today</code>/<code>export_today</code>/<code>battery_charge_today</code>/<code>battery_discharge_today</code> (kWh, <code>state_class: total_increasing</code>, <code>device_class: energy</code>), <code>load_power</code> (W from latest_power), <code>pv_power</code>/<code>grid_power</code>/<code>battery_power</code> (W, derived). Also module function <code>derive_power(prev_sample, new_kwh, now_utc) -&gt; (watts, new_sample)</code> where a sample is <code>(kwh, datetime)</code>; watts = <code>(new_kwh - prev_kwh) * 1000 / hours_elapsed</code>, clamped to 0 when the delta is negative (daily reset) or the window is &lt; 60 seconds.</li>
+<li>
+<p>Sign conventions: <code>grid_power</code> positive = import (derive from <code>import</code> minus <code>export</code> deltas); <code>battery_power</code> positive = discharge (<code>discharge</code> minus <code>charge</code> deltas); <code>pv_power</code> from <code>production</code> delta.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write failing tests</strong></p>
+</li>
+</ul>
+<pre><code class="language-python">def test_derive_power():
+    &quot;&quot;&quot;derive_power converts kWh deltas over elapsed time into watts.&quot;&quot;&quot;
+    from enphase import derive_power
+
+    now = datetime.now(timezone.utc)
+    prev = (1.0, now - timedelta(minutes=5))
+    watts, sample = derive_power(prev, 1.1, now)
+    assert abs(watts - 1200.0) &lt; 1.0  # 0.1 kWh in 5 min = 1.2 kW
+    assert sample == (1.1, now)
+    # Negative delta (midnight reset) clamps to zero
+    watts, _ = derive_power((5.0, now - timedelta(minutes=5)), 0.0, now)
+    assert watts == 0.0
+    # No previous sample yields zero
+    watts, _ = derive_power(None, 2.0, now)
+    assert watts == 0.0
+
+
+def test_publish_data_sensors():
+    &quot;&quot;&quot;publish_data creates the full monitoring sensor set.&quot;&quot;&quot;
+    api = MockEnphaseAPI()
+    api.battery_status[&quot;12345&quot;] = {&quot;soc_percent&quot;: 55.0, &quot;available_energy&quot;: 5.5, &quot;max_capacity&quot;: 10.0, &quot;max_power_kw&quot;: 3.84, &quot;status&quot;: &quot;normal&quot;, &quot;batteries&quot;: []}
+    api.profile[&quot;12345&quot;] = {&quot;profile&quot;: &quot;self-consumption&quot;, &quot;reserve&quot;: 20}
+    api.battery_settings[&quot;12345&quot;] = {&quot;chargeFromGrid&quot;: True, &quot;veryLowSoc&quot;: 10, &quot;veryLowSocMin&quot;: 5, &quot;veryLowSocMax&quot;: 25}
+    api.lifetime_energy[&quot;12345&quot;] = {&quot;production&quot;: [3.5], &quot;consumption&quot;: [2.2], &quot;import&quot;: [1.0], &quot;export&quot;: [0.4], &quot;charge&quot;: [0.8], &quot;discharge&quot;: [0.6]}
+    api.latest_power[&quot;12345&quot;] = {&quot;watts&quot;: 450.0, &quot;time&quot;: 1760000000}
+    run_async(api.publish_data(&quot;12345&quot;))
+    items = api.dashboard_items
+    assert items[&quot;sensor.predbat_enphase_12345_soc_percent&quot;][&quot;state&quot;] == 55.0
+    assert items[&quot;sensor.predbat_enphase_12345_battery_capacity&quot;][&quot;state&quot;] == 10.0
+    assert items[&quot;sensor.predbat_enphase_12345_battery_rate_max&quot;][&quot;state&quot;] == 3840.0
+    assert items[&quot;sensor.predbat_enphase_12345_pv_today&quot;][&quot;state&quot;] == 3.5
+    assert items[&quot;sensor.predbat_enphase_12345_load_today&quot;][&quot;state&quot;] == 2.2
+    assert items[&quot;sensor.predbat_enphase_12345_import_today&quot;][&quot;state&quot;] == 1.0
+    assert items[&quot;sensor.predbat_enphase_12345_export_today&quot;][&quot;state&quot;] == 0.4
+    assert items[&quot;sensor.predbat_enphase_12345_load_power&quot;][&quot;state&quot;] == 450.0
+    assert items[&quot;sensor.predbat_enphase_12345_battery_reserve_min&quot;][&quot;state&quot;] == 5
+    assert &quot;sensor.predbat_enphase_12345_pv_power&quot; in items
+</code></pre>
+<ul>
+<li>
+<p>[ ] <strong>Step 2: Run to verify failure.</strong></p>
+</li>
+<li>
+<p>[ ] <strong>Step 3: Implement.</strong> Follow fox <code>publish_data</code> (fox.py:1744) attribute conventions: energy sensors get <code>{"unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total_increasing", "friendly_name": ..., "icon": "mdi:..."}</code>; power sensors <code>{"unit_of_measurement": "W", "device_class": "power", "state_class": "measurement", ...}</code>; percentages <code>{"unit_of_measurement": "%", ...}</code>. <code>derive_power</code>:</p>
+</li>
+</ul>
+<pre><code class="language-python">def derive_power(prev_sample, new_kwh, now_utc):
+    &quot;&quot;&quot;Estimate average watts from the change in a cumulative kWh counter since the previous sample.&quot;&quot;&quot;
+    new_sample = (new_kwh, now_utc)
+    if not prev_sample:
+        return 0.0, new_sample
+    prev_kwh, prev_time = prev_sample
+    seconds = (now_utc - prev_time).total_seconds()
+    if seconds &lt; 60:
+        return 0.0, prev_sample
+    delta = new_kwh - prev_kwh
+    if delta &lt; 0:
+        return 0.0, new_sample
+    return round(delta * 1000.0 * 3600.0 / seconds, 1), new_sample
+</code></pre>
+<p>In <code>publish_data</code>, keep per-site previous samples in <code>self.prev_energy_sample[site_id][channel]</code> and compute: <code>pv_power</code> from <code>production</code>; <code>grid_power</code> = import-watts − export-watts; <code>battery_power</code> = discharge-watts − charge-watts.</p>
+<ul>
+<li>[ ] <strong>Step 4: Run tests to verify pass, then commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/enphase.py apps/predbat/tests/test_enphase_api.py
+git commit -m &quot;feat: Enphase monitoring sensors with derived power estimates
+
+Co-Authored-By: Claude Fable 5 &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h3 id="task-6-control-entities-local-schedule-model-ha-events">Task 6: Control entities, local schedule model, HA events</h3>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>apps/predbat/enphase.py</code> (replace <code>publish_schedule_settings_ha</code> stub; add <code>get_schedule_settings_ha</code>, event handlers)</li>
+<li>Test: <code>apps/predbat/tests/test_enphase_api.py</code></li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>Consumes: <code>self.schedules</code>, <code>self.profile</code>, <code>dtg_supported()</code> (Task 4).</li>
+<li>
+<p>Produces:</p>
+<ul>
+<li><code>publish_schedule_settings_ha(site_id)</code> — entities (pattern <code>{domain}.{prefix}_enphase_{site_id}_battery_schedule_...</code>):<ul>
+<li><code>number ..._reserve</code> (min = <code>veryLowSocMin</code> fallback 5, max 100, step 1, %)</li>
+<li>per direction <code>charge</code> and (only if <code>dtg_supported</code>) <code>export</code>: <code>select ..._{direction}_start_time</code> / <code>..._end_time</code> (options <code>OPTIONS_TIME_FULL</code>, value "HH:MM:SS"), <code>number ..._{direction}_soc</code> (min 5 max 100 step 1 %), <code>switch ..._{direction}_enable</code>, <code>switch ..._{direction}_write</code> (always published "off")</li>
+<li><code>switch ..._freeze_enable</code> plus freeze times reuse the charge window (rbd written during apply when freeze enabled)</li>
+</ul>
+</li>
+<li><code>get_schedule_settings_ha(site_id)</code> — reads entity states back from HA into <code>self.local_schedule[site_id]</code> = <code>{"reserve": int, "charge": {"start_time", "end_time", "soc", "enable"}, "export": {...}, "freeze": {"enable"}}</code>.</li>
+<li><code>select_event(entity_id, value)</code>, <code>number_event(entity_id, value)</code>, <code>switch_event(entity_id, service)</code> — update <code>local_schedule</code>; a <code>turn_on</code> of a <code>_write</code> switch calls <code>apply_battery_schedule(site_id)</code> (Task 7 — stub <code>async def apply_battery_schedule(self, site_id)</code> now, docstring + <code>pass</code>). Entity id parsing: strip <code>{domain}.{prefix}_enphase_</code>, split off <code>site_id</code>, remainder names the attribute. <code>switch</code> services: <code>turn_on</code>/<code>turn_off</code>/<code>toggle</code> (see fox <code>apply_service_to_toggle</code>, fox.py:2004).</li>
+<li>Times: HA selects hold "HH:MM:SS" (<code>OPTIONS_TIME_FULL</code>); Enphase wants "HH:MM" — module functions <code>ha_time_to_enphase(value)</code> (<code>value[:5]</code>) and <code>enphase_time_to_ha(value)</code> (<code>value + ":00"</code>).</li>
+</ul>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write failing tests</strong></p>
+</li>
+</ul>
+<pre><code class="language-python">def test_publish_schedule_entities():
+    &quot;&quot;&quot;Control entities are published for charge, and export only when dtg supported.&quot;&quot;&quot;
+    api = MockEnphaseAPI()
+    api.schedules[&quot;12345&quot;] = {&quot;cfg&quot;: {&quot;supported&quot;: True}, &quot;dtg&quot;: {&quot;supported&quot;: False}, &quot;rbd&quot;: {&quot;supported&quot;: True}}
+    api.battery_settings[&quot;12345&quot;] = {&quot;veryLowSocMin&quot;: 5}
+    run_async(api.publish_schedule_settings_ha(&quot;12345&quot;))
+    items = api.dashboard_items
+    assert &quot;select.predbat_enphase_12345_battery_schedule_charge_start_time&quot; in items
+    assert &quot;number.predbat_enphase_12345_battery_schedule_charge_soc&quot; in items
+    assert &quot;switch.predbat_enphase_12345_battery_schedule_charge_write&quot; in items
+    assert &quot;number.predbat_enphase_12345_battery_schedule_reserve&quot; in items
+    assert &quot;select.predbat_enphase_12345_battery_schedule_export_start_time&quot; not in items
+
+
+def test_event_handlers_update_local_schedule():
+    &quot;&quot;&quot;select/number/switch events mutate the local schedule model.&quot;&quot;&quot;
+    api = MockEnphaseAPI()
+    api.sites = [{&quot;site_id&quot;: &quot;12345&quot;, &quot;name&quot;: &quot;Home&quot;}]
+    api.local_schedule[&quot;12345&quot;] = {&quot;reserve&quot;: 20, &quot;charge&quot;: {&quot;start_time&quot;: &quot;00:00:00&quot;, &quot;end_time&quot;: &quot;00:00:00&quot;, &quot;soc&quot;: 100, &quot;enable&quot;: False}, &quot;export&quot;: {&quot;start_time&quot;: &quot;00:00:00&quot;, &quot;end_time&quot;: &quot;00:00:00&quot;, &quot;soc&quot;: 5, &quot;enable&quot;: False}, &quot;freeze&quot;: {&quot;enable&quot;: False}}
+    run_async(api.select_event(&quot;select.predbat_enphase_12345_battery_schedule_charge_start_time&quot;, &quot;02:30:00&quot;))
+    assert api.local_schedule[&quot;12345&quot;][&quot;charge&quot;][&quot;start_time&quot;] == &quot;02:30:00&quot;
+    run_async(api.number_event(&quot;number.predbat_enphase_12345_battery_schedule_charge_soc&quot;, 85))
+    assert api.local_schedule[&quot;12345&quot;][&quot;charge&quot;][&quot;soc&quot;] == 85
+    run_async(api.switch_event(&quot;switch.predbat_enphase_12345_battery_schedule_charge_enable&quot;, &quot;turn_on&quot;))
+    assert api.local_schedule[&quot;12345&quot;][&quot;charge&quot;][&quot;enable&quot;] is True
+
+
+def test_write_switch_triggers_apply():
+    &quot;&quot;&quot;Turning on the write switch calls apply_battery_schedule for the site.&quot;&quot;&quot;
+    api = MockEnphaseAPI()
+    api.sites = [{&quot;site_id&quot;: &quot;12345&quot;, &quot;name&quot;: &quot;Home&quot;}]
+    api.local_schedule[&quot;12345&quot;] = {&quot;reserve&quot;: 20, &quot;charge&quot;: {&quot;start_time&quot;: &quot;02:00:00&quot;, &quot;end_time&quot;: &quot;05:00:00&quot;, &quot;soc&quot;: 90, &quot;enable&quot;: True}, &quot;export&quot;: {&quot;start_time&quot;: &quot;00:00:00&quot;, &quot;end_time&quot;: &quot;00:00:00&quot;, &quot;soc&quot;: 5, &quot;enable&quot;: False}, &quot;freeze&quot;: {&quot;enable&quot;: False}}
+    applied = []
+
+    async def fake_apply(site_id):
+        &quot;&quot;&quot;Record the applied site.&quot;&quot;&quot;
+        applied.append(site_id)
+
+    api.apply_battery_schedule = fake_apply
+    run_async(api.switch_event(&quot;switch.predbat_enphase_12345_battery_schedule_charge_write&quot;, &quot;turn_on&quot;))
+    assert applied == [&quot;12345&quot;]
+</code></pre>
+<p>Note: check how fox's <code>switch_event</code> schedules async work from a sync event callback (<code>grep -n "def switch_event" -A 15 apps/predbat/fox.py</code>) — it is a <code>async def</code> called by the Components dispatcher, or it uses <code>create_task</code>. Match fox exactly (if fox's event handlers are async, make these async and adapt the tests with <code>run_async</code>).</p>
+<ul>
+<li>
+<p>[ ] <strong>Step 2: Run to verify failure.</strong></p>
+</li>
+<li>
+<p>[ ] <strong>Step 3: Implement.</strong> Entity attribute dicts follow fox.py:1290 conventions (friendly names "Enphase {site} Battery Schedule ..."). Core code:</p>
+</li>
+</ul>
+<pre><code class="language-python">def ha_time_to_enphase(value):
+    &quot;&quot;&quot;Convert an HA 'HH:MM:SS' option time to Enphase 'HH:MM' format.&quot;&quot;&quot;
+    return str(value)[:5]
+
+
+def enphase_time_to_ha(value):
+    &quot;&quot;&quot;Convert an Enphase 'HH:MM' time to the HA 'HH:MM:SS' option format.&quot;&quot;&quot;
+    text = str(value or &quot;00:00&quot;)[:5]
+    return text + &quot;:00&quot;
+</code></pre>
+<p>Methods on <code>EnphaseAPI</code>:</p>
+<pre><code class="language-python">    def _default_local_schedule(self):
+        &quot;&quot;&quot;Return an empty local schedule model.&quot;&quot;&quot;
+        return {&quot;reserve&quot;: 0, &quot;charge&quot;: {&quot;start_time&quot;: &quot;00:00:00&quot;, &quot;end_time&quot;: &quot;00:00:00&quot;, &quot;soc&quot;: 100, &quot;enable&quot;: False}, &quot;export&quot;: {&quot;start_time&quot;: &quot;00:00:00&quot;, &quot;end_time&quot;: &quot;00:00:00&quot;, &quot;soc&quot;: 5, &quot;enable&quot;: False}, &quot;freeze&quot;: {&quot;enable&quot;: False}}
+
+    async def publish_schedule_settings_ha(self, site_id):
+        &quot;&quot;&quot;Publish the schedule control entities for a site.&quot;&quot;&quot;
+        local = self.local_schedule.setdefault(site_id, self._default_local_schedule())
+        reserve_min = int(self.battery_settings.get(site_id, {}).get(&quot;veryLowSocMin&quot;, 5) or 5)
+        base_name = f&quot;{self.prefix}_enphase_{site_id}_battery_schedule&quot;
+
+        self.dashboard_item(
+            f&quot;number.{base_name}_reserve&quot;,
+            state=local.get(&quot;reserve&quot;, 0),
+            attributes={&quot;min&quot;: reserve_min, &quot;max&quot;: 100, &quot;step&quot;: 1, &quot;unit_of_measurement&quot;: &quot;%&quot;, &quot;friendly_name&quot;: f&quot;Enphase {site_id} Battery Schedule Reserve&quot;, &quot;icon&quot;: &quot;mdi:gauge&quot;},
+            app=&quot;enphase&quot;,
+        )
+
+        directions = [&quot;charge&quot;]
+        if self.dtg_supported(site_id):
+            directions.append(&quot;export&quot;)
+        for direction in directions:
+            window = local.get(direction, {})
+            for attribute in [&quot;start_time&quot;, &quot;end_time&quot;]:
+                value = window.get(attribute, &quot;00:00:00&quot;)
+                if value not in OPTIONS_TIME_FULL:
+                    value = &quot;00:00:00&quot;
+                self.dashboard_item(
+                    f&quot;select.{base_name}_{direction}_{attribute}&quot;,
+                    state=value,
+                    attributes={&quot;options&quot;: OPTIONS_TIME_FULL, &quot;friendly_name&quot;: f&quot;Enphase {site_id} Battery Schedule {direction.capitalize()} {attribute.replace('_', ' ').capitalize()}&quot;, &quot;icon&quot;: &quot;mdi:clock-outline&quot;},
+                    app=&quot;enphase&quot;,
+                )
+            self.dashboard_item(
+                f&quot;number.{base_name}_{direction}_soc&quot;,
+                state=int(window.get(&quot;soc&quot;, 100 if direction == &quot;charge&quot; else reserve_min)),
+                attributes={&quot;min&quot;: 5, &quot;max&quot;: 100, &quot;step&quot;: 1, &quot;unit_of_measurement&quot;: &quot;%&quot;, &quot;friendly_name&quot;: f&quot;Enphase {site_id} Battery Schedule {direction.capitalize()} Soc&quot;, &quot;icon&quot;: &quot;mdi:gauge&quot;},
+                app=&quot;enphase&quot;,
+            )
+            self.dashboard_item(
+                f&quot;switch.{base_name}_{direction}_enable&quot;,
+                state=&quot;on&quot; if window.get(&quot;enable&quot;) else &quot;off&quot;,
+                attributes={&quot;friendly_name&quot;: f&quot;Enphase {site_id} Battery Schedule {direction.capitalize()} Enable&quot;, &quot;icon&quot;: &quot;mdi:check-circle-outline&quot;},
+                app=&quot;enphase&quot;,
+            )
+            self.dashboard_item(
+                f&quot;switch.{base_name}_{direction}_write&quot;,
+                state=&quot;off&quot;,
+                attributes={&quot;friendly_name&quot;: f&quot;Enphase {site_id} Battery Schedule {direction.capitalize()} Write&quot;, &quot;icon&quot;: &quot;mdi:upload&quot;},
+                app=&quot;enphase&quot;,
+            )
+        self.dashboard_item(
+            f&quot;switch.{base_name}_freeze_enable&quot;,
+            state=&quot;on&quot; if local.get(&quot;freeze&quot;, {}).get(&quot;enable&quot;) else &quot;off&quot;,
+            attributes={&quot;friendly_name&quot;: f&quot;Enphase {site_id} Battery Schedule Freeze Enable&quot;, &quot;icon&quot;: &quot;mdi:snowflake&quot;},
+            app=&quot;enphase&quot;,
+        )
+
+    async def get_schedule_settings_ha(self, site_id):
+        &quot;&quot;&quot;Read the current schedule control entity states from HA into the local schedule model.&quot;&quot;&quot;
+        local = self.local_schedule.setdefault(site_id, self._default_local_schedule())
+        base_name = f&quot;{self.prefix}_enphase_{site_id}_battery_schedule&quot;
+        local[&quot;reserve&quot;] = int(float(self.get_state_wrapper(f&quot;number.{base_name}_reserve&quot;, local.get(&quot;reserve&quot;, 0)) or 0))
+        for direction in [&quot;charge&quot;, &quot;export&quot;]:
+            window = local.setdefault(direction, {})
+            for attribute in [&quot;start_time&quot;, &quot;end_time&quot;]:
+                value = self.get_state_wrapper(f&quot;select.{base_name}_{direction}_{attribute}&quot;, window.get(attribute, &quot;00:00:00&quot;))
+                if value in OPTIONS_TIME_FULL:
+                    window[attribute] = value
+            window[&quot;soc&quot;] = int(float(self.get_state_wrapper(f&quot;number.{base_name}_{direction}_soc&quot;, window.get(&quot;soc&quot;, 100)) or 0))
+            window[&quot;enable&quot;] = str(self.get_state_wrapper(f&quot;switch.{base_name}_{direction}_enable&quot;, &quot;on&quot; if window.get(&quot;enable&quot;) else &quot;off&quot;)).lower() == &quot;on&quot;
+        local.setdefault(&quot;freeze&quot;, {})[&quot;enable&quot;] = str(self.get_state_wrapper(f&quot;switch.{base_name}_freeze_enable&quot;, &quot;off&quot;)).lower() == &quot;on&quot;
+
+    def _parse_entity(self, entity_id):
+        &quot;&quot;&quot;Split a published entity id into (site_id, attribute_name), or (None, None) if not ours.&quot;&quot;&quot;
+        try:
+            name = entity_id.split(&quot;.&quot;, 1)[1]
+        except IndexError:
+            return None, None
+        marker = f&quot;{self.prefix}_enphase_&quot;
+        if not name.startswith(marker):
+            return None, None
+        remainder = name[len(marker):]
+        for site in self.sites:
+            site_id = site[&quot;site_id&quot;]
+            if remainder.startswith(site_id + &quot;_&quot;):
+                return site_id, remainder[len(site_id) + 1:]
+        return None, None
+
+    def _toggle_to_bool(self, service, current):
+        &quot;&quot;&quot;Convert an HA switch service call into the resulting boolean state.&quot;&quot;&quot;
+        if service == &quot;turn_on&quot;:
+            return True
+        if service == &quot;turn_off&quot;:
+            return False
+        return not current
+
+    async def select_event(self, entity_id, value):
+        &quot;&quot;&quot;Handle a select entity change routed from HA.&quot;&quot;&quot;
+        site_id, attribute = self._parse_entity(entity_id)
+        if not site_id or not attribute.startswith(&quot;battery_schedule_&quot;):
+            return
+        field = attribute[len(&quot;battery_schedule_&quot;):]
+        local = self.local_schedule.setdefault(site_id, self._default_local_schedule())
+        for direction in [&quot;charge&quot;, &quot;export&quot;]:
+            for time_key in [&quot;start_time&quot;, &quot;end_time&quot;]:
+                if field == f&quot;{direction}_{time_key}&quot; and value in OPTIONS_TIME_FULL:
+                    local[direction][time_key] = value
+        await self.publish_schedule_settings_ha(site_id)
+
+    async def number_event(self, entity_id, value):
+        &quot;&quot;&quot;Handle a number entity change routed from HA.&quot;&quot;&quot;
+        site_id, attribute = self._parse_entity(entity_id)
+        if not site_id or not attribute.startswith(&quot;battery_schedule_&quot;):
+            return
+        field = attribute[len(&quot;battery_schedule_&quot;):]
+        local = self.local_schedule.setdefault(site_id, self._default_local_schedule())
+        if field == &quot;reserve&quot;:
+            local[&quot;reserve&quot;] = int(float(value))
+        for direction in [&quot;charge&quot;, &quot;export&quot;]:
+            if field == f&quot;{direction}_soc&quot;:
+                local[direction][&quot;soc&quot;] = int(float(value))
+        await self.publish_schedule_settings_ha(site_id)
+
+    async def switch_event(self, entity_id, service):
+        &quot;&quot;&quot;Handle a switch service call routed from HA.&quot;&quot;&quot;
+        site_id, attribute = self._parse_entity(entity_id)
+        if not site_id or not attribute.startswith(&quot;battery_schedule_&quot;):
+            return
+        field = attribute[len(&quot;battery_schedule_&quot;):]
+        local = self.local_schedule.setdefault(site_id, self._default_local_schedule())
+        if field == &quot;freeze_enable&quot;:
+            local[&quot;freeze&quot;][&quot;enable&quot;] = self._toggle_to_bool(service, local[&quot;freeze&quot;][&quot;enable&quot;])
+        for direction in [&quot;charge&quot;, &quot;export&quot;]:
+            if field == f&quot;{direction}_enable&quot;:
+                local[direction][&quot;enable&quot;] = self._toggle_to_bool(service, local[direction][&quot;enable&quot;])
+            if field == f&quot;{direction}_write&quot; and self._toggle_to_bool(service, False):
+                await self.apply_battery_schedule(site_id)
+        await self.publish_schedule_settings_ha(site_id)
+</code></pre>
+<p>These are async because ComponentBase declares async event handlers (<code>component_base.py:340/352/364</code>) and fox's are async too (<code>fox.py:1985/1994/2000</code>) — the Components dispatcher awaits them.</p>
+<ul>
+<li>[ ] <strong>Step 4: Run tests to verify pass, then commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/enphase.py apps/predbat/tests/test_enphase_api.py
+git commit -m &quot;feat: Enphase schedule control entities and HA event handling
+
+Co-Authored-By: Claude Fable 5 &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h3 id="task-7-write-path-apply_battery_schedule">Task 7: Write path — apply_battery_schedule</h3>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>apps/predbat/enphase.py</code></li>
+<li>Test: <code>apps/predbat/tests/test_enphase_api.py</code></li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>Consumes: <code>local_schedule</code> (Task 6), <code>schedules</code>/<code>profile</code>/<code>battery_settings</code> cloud state (Task 4), <code>request_json</code> (Task 3).</li>
+<li>
+<p>Produces:</p>
+<ul>
+<li><code>async apply_battery_schedule(site_id)</code> — top-level diff-and-write:
+1. Desired state from <code>local_schedule[site_id]</code>.
+2. Reserve/profile: if desired reserve != cloud <code>profile["reserve"]</code>, <code>PUT {BATTERY_CONFIG_BASE}/profile/&lt;site&gt;</code> body <code>{"profile": &lt;current or self-consumption&gt;, "batteryBackupPercentage": reserve}</code> (family <code>battery_config</code>, params <code>{"source": "enho", "userId": self.user_id}</code>).
+3. Charge: if <code>charge.enable</code> — ensure <code>chargeFromGrid</code> true first (if false: <code>POST {BATTERY_CONFIG_BASE}/batterySettings/acceptDisclaimer/&lt;site&gt;</code> body <code>{"disclaimer-type": "itc"}</code> once — track <code>self.disclaimer_accepted</code>; then <code>PUT batterySettings</code> <code>{"chargeFromGrid": True}</code>), then <code>_write_schedule(site_id, "CFG", start, end, limit=charge.soc, enabled=True)</code>. If not enabled and a cloud cfg schedule is enabled → <code>_write_schedule(..., enabled=False)</code>.
+4. Export: same via <code>"DTG"</code> with <code>limit=export.soc</code>, only when <code>dtg_supported(site_id)</code>.
+5. Freeze: <code>freeze.enable</code> → <code>_write_schedule(site_id, "RBD", charge window times, limit=None, enabled=True)</code>; else disable if cloud-enabled.</li>
+<li><code>async _write_schedule(site_id, family, start_time_ha, end_time_ha, limit, enabled)</code> — converts "HH:MM:SS"→"HH:MM"; no-op when the cloud entry already matches (<code>schedules_equal</code>); update by id when the family has an existing schedule (<code>PUT .../schedules/&lt;id&gt;</code>), else create (<code>POST .../schedules</code>); payload <code>{"timezone": tz, "startTime": "HH:MM", "endTime": "HH:MM", "scheduleType": family, "days": [1,2,3,4,5,6,7], "limit": limit, "isEnabled": enabled}</code> (omit <code>limit</code> when None). Timezone from site settings if present else <code>str(self.local_tz)</code>.</li>
+<li>Module function <code>schedules_equal(cloud_entry, start_hm, end_hm, limit, enabled) -&gt; bool</code>.</li>
+<li>Write-settle: after any write, mark <code>self.pending_writes[(site_id, family)] = desired</code>; re-fetch schedules; if the read does not yet reflect the write, keep pending (do not re-PUT) until it confirms or <code>ENPHASE_PENDING_TIMEOUT_MINUTES = 15</code> passes. <code>run()</code> clears confirmed/expired pendings each cycle.</li>
+</ul>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write failing tests</strong></p>
+</li>
+</ul>
+<pre><code class="language-python">def test_schedules_equal():
+    &quot;&quot;&quot;schedules_equal compares window, limit and enable state.&quot;&quot;&quot;
+    from enphase import schedules_equal
+
+    cloud = {&quot;id&quot;: &quot;u1&quot;, &quot;startTime&quot;: &quot;02:00&quot;, &quot;endTime&quot;: &quot;05:00&quot;, &quot;limit&quot;: 90, &quot;enabled&quot;: True}
+    assert schedules_equal(cloud, &quot;02:00&quot;, &quot;05:00&quot;, 90, True)
+    assert not schedules_equal(cloud, &quot;02:00&quot;, &quot;05:30&quot;, 90, True)
+    assert not schedules_equal(cloud, &quot;02:00&quot;, &quot;05:00&quot;, 80, True)
+    assert not schedules_equal(cloud, &quot;02:00&quot;, &quot;05:00&quot;, 90, False)
+    assert not schedules_equal(None, &quot;02:00&quot;, &quot;05:00&quot;, 90, True)
+
+
+def test_apply_charge_schedule_creates():
+    &quot;&quot;&quot;apply writes a CFG schedule via POST when none exists, enabling charge-from-grid first.&quot;&quot;&quot;
+    api = MockEnphaseAPI()
+    api.user_id = &quot;9999&quot;
+    api.sites = [{&quot;site_id&quot;: &quot;12345&quot;, &quot;name&quot;: &quot;Home&quot;}]
+    api.schedules[&quot;12345&quot;] = {&quot;cfg&quot;: {&quot;supported&quot;: True}, &quot;dtg&quot;: {&quot;supported&quot;: True}, &quot;rbd&quot;: {&quot;supported&quot;: True}}
+    api.profile[&quot;12345&quot;] = {&quot;profile&quot;: &quot;self-consumption&quot;, &quot;reserve&quot;: 20}
+    api.battery_settings[&quot;12345&quot;] = {&quot;chargeFromGrid&quot;: False, &quot;veryLowSocMin&quot;: 5}
+    api.local_schedule[&quot;12345&quot;] = {&quot;reserve&quot;: 20, &quot;charge&quot;: {&quot;start_time&quot;: &quot;02:00:00&quot;, &quot;end_time&quot;: &quot;05:00:00&quot;, &quot;soc&quot;: 90, &quot;enable&quot;: True}, &quot;export&quot;: {&quot;start_time&quot;: &quot;00:00:00&quot;, &quot;end_time&quot;: &quot;00:00:00&quot;, &quot;soc&quot;: 5, &quot;enable&quot;: False}, &quot;freeze&quot;: {&quot;enable&quot;: False}}
+    api.set_http_response(&quot;/service/batteryConfig/api/v1/batterySettings/acceptDisclaimer/12345&quot;, 200, {})
+    api.set_http_response(&quot;/service/batteryConfig/api/v1/batterySettings/12345&quot;, 200, {})
+    api.set_http_response(&quot;/service/batteryConfig/api/v1/battery/sites/12345/schedules&quot;, 200, {&quot;cfg&quot;: {&quot;scheduleSupported&quot;: True, &quot;details&quot;: []}, &quot;dtg&quot;: {&quot;scheduleSupported&quot;: True, &quot;details&quot;: []}, &quot;rbd&quot;: {&quot;scheduleSupported&quot;: True, &quot;details&quot;: []}})
+    run_async(api.apply_battery_schedule(&quot;12345&quot;))
+    posts = [r for r in api.request_log if r[&quot;method&quot;] == &quot;POST&quot; and r[&quot;path&quot;].endswith(&quot;/schedules&quot;)]
+    assert len(posts) == 1
+    body = posts[0][&quot;json&quot;]
+    assert body[&quot;scheduleType&quot;] == &quot;CFG&quot; and body[&quot;startTime&quot;] == &quot;02:00&quot; and body[&quot;endTime&quot;] == &quot;05:00&quot; and body[&quot;limit&quot;] == 90 and body[&quot;isEnabled&quot;] is True
+    disclaimers = [r for r in api.request_log if &quot;acceptDisclaimer&quot; in r[&quot;path&quot;]]
+    assert len(disclaimers) == 1
+
+
+def test_apply_updates_existing_by_id():
+    &quot;&quot;&quot;apply uses PUT /schedules/&lt;id&gt; when the family already has a schedule.&quot;&quot;&quot;
+    api = MockEnphaseAPI()
+    api.user_id = &quot;9999&quot;
+    api.sites = [{&quot;site_id&quot;: &quot;12345&quot;, &quot;name&quot;: &quot;Home&quot;}]
+    api.schedules[&quot;12345&quot;] = {&quot;cfg&quot;: {&quot;supported&quot;: True, &quot;id&quot;: &quot;u1&quot;, &quot;startTime&quot;: &quot;01:00&quot;, &quot;endTime&quot;: &quot;04:00&quot;, &quot;limit&quot;: 80, &quot;enabled&quot;: True}, &quot;dtg&quot;: {&quot;supported&quot;: True}, &quot;rbd&quot;: {&quot;supported&quot;: True}}
+    api.profile[&quot;12345&quot;] = {&quot;profile&quot;: &quot;self-consumption&quot;, &quot;reserve&quot;: 20}
+    api.battery_settings[&quot;12345&quot;] = {&quot;chargeFromGrid&quot;: True, &quot;veryLowSocMin&quot;: 5}
+    api.local_schedule[&quot;12345&quot;] = {&quot;reserve&quot;: 20, &quot;charge&quot;: {&quot;start_time&quot;: &quot;02:00:00&quot;, &quot;end_time&quot;: &quot;05:00:00&quot;, &quot;soc&quot;: 90, &quot;enable&quot;: True}, &quot;export&quot;: {&quot;start_time&quot;: &quot;00:00:00&quot;, &quot;end_time&quot;: &quot;00:00:00&quot;, &quot;soc&quot;: 5, &quot;enable&quot;: False}, &quot;freeze&quot;: {&quot;enable&quot;: False}}
+    api.set_http_response(&quot;/service/batteryConfig/api/v1/battery/sites/12345/schedules/u1&quot;, 200, {})
+    api.set_http_response(&quot;/service/batteryConfig/api/v1/battery/sites/12345/schedules&quot;, 200, {&quot;cfg&quot;: {&quot;scheduleSupported&quot;: True, &quot;details&quot;: [{&quot;id&quot;: &quot;u1&quot;, &quot;startTime&quot;: &quot;02:00&quot;, &quot;endTime&quot;: &quot;05:00&quot;, &quot;limit&quot;: 90, &quot;isEnabled&quot;: True}]}, &quot;dtg&quot;: {&quot;scheduleSupported&quot;: True, &quot;details&quot;: []}, &quot;rbd&quot;: {&quot;scheduleSupported&quot;: True, &quot;details&quot;: []}})
+    run_async(api.apply_battery_schedule(&quot;12345&quot;))
+    puts = [r for r in api.request_log if r[&quot;method&quot;] == &quot;PUT&quot; and r[&quot;path&quot;].endswith(&quot;/schedules/u1&quot;)]
+    assert len(puts) == 1
+    # After the confirming re-read matches, no pending write remains
+    assert (&quot;12345&quot;, &quot;CFG&quot;) not in api.pending_writes
+
+
+def test_apply_no_change_no_write():
+    &quot;&quot;&quot;apply issues no schedule writes when cloud already matches the local schedule.&quot;&quot;&quot;
+    api = MockEnphaseAPI()
+    api.user_id = &quot;9999&quot;
+    api.sites = [{&quot;site_id&quot;: &quot;12345&quot;, &quot;name&quot;: &quot;Home&quot;}]
+    api.schedules[&quot;12345&quot;] = {&quot;cfg&quot;: {&quot;supported&quot;: True, &quot;id&quot;: &quot;u1&quot;, &quot;startTime&quot;: &quot;02:00&quot;, &quot;endTime&quot;: &quot;05:00&quot;, &quot;limit&quot;: 90, &quot;enabled&quot;: True}, &quot;dtg&quot;: {&quot;supported&quot;: True}, &quot;rbd&quot;: {&quot;supported&quot;: True}}
+    api.profile[&quot;12345&quot;] = {&quot;profile&quot;: &quot;self-consumption&quot;, &quot;reserve&quot;: 20}
+    api.battery_settings[&quot;12345&quot;] = {&quot;chargeFromGrid&quot;: True, &quot;veryLowSocMin&quot;: 5}
+    api.local_schedule[&quot;12345&quot;] = {&quot;reserve&quot;: 20, &quot;charge&quot;: {&quot;start_time&quot;: &quot;02:00:00&quot;, &quot;end_time&quot;: &quot;05:00:00&quot;, &quot;soc&quot;: 90, &quot;enable&quot;: True}, &quot;export&quot;: {&quot;start_time&quot;: &quot;00:00:00&quot;, &quot;end_time&quot;: &quot;00:00:00&quot;, &quot;soc&quot;: 5, &quot;enable&quot;: False}, &quot;freeze&quot;: {&quot;enable&quot;: False}}
+    run_async(api.apply_battery_schedule(&quot;12345&quot;))
+    writes = [r for r in api.request_log if r[&quot;method&quot;] in (&quot;POST&quot;, &quot;PUT&quot;)]
+    assert writes == []
+
+
+def test_pending_write_suppresses_duplicate():
+    &quot;&quot;&quot;While a write is pending confirmation, apply does not re-issue the same PUT.&quot;&quot;&quot;
+    api = MockEnphaseAPI()
+    api.user_id = &quot;9999&quot;
+    api.sites = [{&quot;site_id&quot;: &quot;12345&quot;, &quot;name&quot;: &quot;Home&quot;}]
+    api.schedules[&quot;12345&quot;] = {&quot;cfg&quot;: {&quot;supported&quot;: True, &quot;id&quot;: &quot;u1&quot;, &quot;startTime&quot;: &quot;01:00&quot;, &quot;endTime&quot;: &quot;04:00&quot;, &quot;limit&quot;: 80, &quot;enabled&quot;: True}, &quot;dtg&quot;: {&quot;supported&quot;: True}, &quot;rbd&quot;: {&quot;supported&quot;: True}}
+    api.profile[&quot;12345&quot;] = {&quot;profile&quot;: &quot;self-consumption&quot;, &quot;reserve&quot;: 20}
+    api.battery_settings[&quot;12345&quot;] = {&quot;chargeFromGrid&quot;: True, &quot;veryLowSocMin&quot;: 5}
+    api.local_schedule[&quot;12345&quot;] = {&quot;reserve&quot;: 20, &quot;charge&quot;: {&quot;start_time&quot;: &quot;02:00:00&quot;, &quot;end_time&quot;: &quot;05:00:00&quot;, &quot;soc&quot;: 90, &quot;enable&quot;: True}, &quot;export&quot;: {&quot;start_time&quot;: &quot;00:00:00&quot;, &quot;end_time&quot;: &quot;00:00:00&quot;, &quot;soc&quot;: 5, &quot;enable&quot;: False}, &quot;freeze&quot;: {&quot;enable&quot;: False}}
+    api.pending_writes[(&quot;12345&quot;, &quot;CFG&quot;)] = {&quot;start&quot;: &quot;02:00&quot;, &quot;end&quot;: &quot;05:00&quot;, &quot;limit&quot;: 90, &quot;enabled&quot;: True, &quot;time&quot;: datetime.now(timezone.utc)}
+    run_async(api.apply_battery_schedule(&quot;12345&quot;))
+    writes = [r for r in api.request_log if r[&quot;method&quot;] in (&quot;POST&quot;, &quot;PUT&quot;) and &quot;/schedules&quot; in r[&quot;path&quot;]]
+    assert writes == []
+</code></pre>
+<ul>
+<li>
+<p>[ ] <strong>Step 2: Run to verify failure.</strong></p>
+</li>
+<li>
+<p>[ ] <strong>Step 3: Implement.</strong> Add module constant <code>ENPHASE_PENDING_TIMEOUT_MINUTES = 15</code>. Core code:</p>
+</li>
+</ul>
+<pre><code class="language-python">def schedules_equal(cloud_entry, start_hm, end_hm, limit, enabled):
+    &quot;&quot;&quot;Return True when a cloud schedule entry already matches the desired window/limit/enable state.&quot;&quot;&quot;
+    if not cloud_entry or &quot;startTime&quot; not in cloud_entry:
+        # No cloud schedule: equal only when we want it disabled
+        return not enabled
+    if bool(cloud_entry.get(&quot;enabled&quot;)) != bool(enabled):
+        return False
+    if not enabled:
+        return True  # both disabled - window/limit are irrelevant
+    if str(cloud_entry.get(&quot;startTime&quot;, &quot;&quot;))[:5] != start_hm or str(cloud_entry.get(&quot;endTime&quot;, &quot;&quot;))[:5] != end_hm:
+        return False
+    if limit is not None and int(cloud_entry.get(&quot;limit&quot;, -1)) != int(limit):
+        return False
+    return True
+</code></pre>
+<p>Methods on <code>EnphaseAPI</code>:</p>
+<pre><code class="language-python">    def _site_timezone(self, site_id):
+        &quot;&quot;&quot;Return the IANA timezone to use for schedule writes.&quot;&quot;&quot;
+        timezone_name = self.site_settings.get(site_id, {}).get(&quot;timezone&quot;)
+        return timezone_name or str(self.local_tz)
+
+    def _pending_active(self, site_id, family):
+        &quot;&quot;&quot;Return True when a write for this family is still awaiting cloud confirmation.&quot;&quot;&quot;
+        pending = self.pending_writes.get((site_id, family))
+        if not pending:
+            return False
+        age_minutes = (datetime.now(timezone.utc) - pending[&quot;time&quot;]).total_seconds() / 60.0
+        if age_minutes &gt; ENPHASE_PENDING_TIMEOUT_MINUTES:
+            self.log(f&quot;Warn: Enphase: Pending {family} write for site {site_id} timed out after {ENPHASE_PENDING_TIMEOUT_MINUTES} minutes&quot;)
+            del self.pending_writes[(site_id, family)]
+            return False
+        return True
+
+    async def _write_schedule(self, site_id, family, start_time_ha, end_time_ha, limit, enabled):
+        &quot;&quot;&quot;Create/update one Enphase schedule family if it differs from the cloud state. Returns True if a write was issued.&quot;&quot;&quot;
+        start_hm = ha_time_to_enphase(start_time_ha)
+        end_hm = ha_time_to_enphase(end_time_ha)
+        family_key = family.lower()
+        cloud_entry = self.schedules.get(site_id, {}).get(family_key, {})
+        if schedules_equal(cloud_entry, start_hm, end_hm, limit, enabled):
+            self.pending_writes.pop((site_id, family), None)  # confirmed
+            return False
+        if self._pending_active(site_id, family):
+            return False  # a matching write is still settling; don't spam duplicates
+
+        payload = {&quot;timezone&quot;: self._site_timezone(site_id), &quot;startTime&quot;: start_hm, &quot;endTime&quot;: end_hm, &quot;scheduleType&quot;: family, &quot;days&quot;: [1, 2, 3, 4, 5, 6, 7], &quot;isEnabled&quot;: bool(enabled)}
+        if limit is not None:
+            payload[&quot;limit&quot;] = int(limit)
+        schedule_id = cloud_entry.get(&quot;id&quot;)
+        if schedule_id:
+            self.log(f&quot;Enphase: Updating {family} schedule {schedule_id} on site {site_id}: {start_hm}-{end_hm} limit={limit} enabled={enabled}&quot;)
+            result = await self.request_json(&quot;PUT&quot;, f&quot;{BATTERY_CONFIG_BASE}/battery/sites/{site_id}/schedules/{schedule_id}&quot;, family=&quot;battery_config&quot;, json_body=payload)
+        else:
+            self.log(f&quot;Enphase: Creating {family} schedule on site {site_id}: {start_hm}-{end_hm} limit={limit} enabled={enabled}&quot;)
+            result = await self.request_json(&quot;POST&quot;, f&quot;{BATTERY_CONFIG_BASE}/battery/sites/{site_id}/schedules&quot;, family=&quot;battery_config&quot;, json_body=payload)
+        # Record as pending regardless of result - Enphase writes can 400 yet still land
+        self.pending_writes[(site_id, family)] = {&quot;start&quot;: start_hm, &quot;end&quot;: end_hm, &quot;limit&quot;: limit, &quot;enabled&quot;: enabled, &quot;time&quot;: datetime.now(timezone.utc)}
+        return result is not None
+
+    async def _ensure_charge_from_grid(self, site_id):
+        &quot;&quot;&quot;Enable the charge-from-grid setting, accepting the one-time ITC disclaimer first.&quot;&quot;&quot;
+        if self.battery_settings.get(site_id, {}).get(&quot;chargeFromGrid&quot;):
+            return
+        self.log(f&quot;Enphase: Enabling charge-from-grid on site {site_id}&quot;)
+        await self.request_json(&quot;POST&quot;, f&quot;{BATTERY_CONFIG_BASE}/batterySettings/acceptDisclaimer/{site_id}&quot;, family=&quot;battery_config&quot;, json_body={&quot;disclaimer-type&quot;: &quot;itc&quot;})
+        await self.request_json(&quot;PUT&quot;, f&quot;{BATTERY_CONFIG_BASE}/batterySettings/{site_id}&quot;, family=&quot;battery_config&quot;, json_body={&quot;chargeFromGrid&quot;: True})
+        self.battery_settings.setdefault(site_id, {})[&quot;chargeFromGrid&quot;] = True
+
+    async def apply_battery_schedule(self, site_id):
+        &quot;&quot;&quot;Diff the local schedule model against the cloud and issue only the changed writes.&quot;&quot;&quot;
+        await self.get_schedule_settings_ha(site_id)
+        local = self.local_schedule.get(site_id, self._default_local_schedule())
+        wrote = False
+
+        # Reserve via profile PUT, preserving the current profile name
+        desired_reserve = int(local.get(&quot;reserve&quot;, 0))
+        cloud = self.profile.get(site_id, {})
+        if desired_reserve and desired_reserve != int(cloud.get(&quot;reserve&quot;, -1)):
+            profile_name = cloud.get(&quot;profile&quot;) or PROFILE_SELF_CONSUMPTION
+            self.log(f&quot;Enphase: Setting reserve to {desired_reserve}% (profile {profile_name}) on site {site_id}&quot;)
+            await self.request_json(&quot;PUT&quot;, f&quot;{BATTERY_CONFIG_BASE}/profile/{site_id}&quot;, family=&quot;battery_config&quot;, params={&quot;source&quot;: &quot;enho&quot;, &quot;userId&quot;: self.user_id}, json_body={&quot;profile&quot;: profile_name, &quot;batteryBackupPercentage&quot;: desired_reserve})
+            wrote = True
+
+        # Forced charge window (CFG)
+        charge = local.get(&quot;charge&quot;, {})
+        if charge.get(&quot;enable&quot;):
+            await self._ensure_charge_from_grid(site_id)
+        wrote |= await self._write_schedule(site_id, SCHEDULE_CHARGE, charge.get(&quot;start_time&quot;, &quot;00:00:00&quot;), charge.get(&quot;end_time&quot;, &quot;00:00:00&quot;), charge.get(&quot;soc&quot;, 100), charge.get(&quot;enable&quot;, False))
+
+        # Forced export window (DTG), only where supported
+        export = local.get(&quot;export&quot;, {})
+        if self.dtg_supported(site_id):
+            wrote |= await self._write_schedule(site_id, SCHEDULE_EXPORT, export.get(&quot;start_time&quot;, &quot;00:00:00&quot;), export.get(&quot;end_time&quot;, &quot;00:00:00&quot;), export.get(&quot;soc&quot;, 5), export.get(&quot;enable&quot;, False))
+
+        # Freeze (RBD) reuses the charge window times
+        freeze_enabled = local.get(&quot;freeze&quot;, {}).get(&quot;enable&quot;, False)
+        wrote |= await self._write_schedule(site_id, SCHEDULE_FREEZE, charge.get(&quot;start_time&quot;, &quot;00:00:00&quot;), charge.get(&quot;end_time&quot;, &quot;00:00:00&quot;), None, freeze_enabled)
+
+        if wrote:
+            # Re-read to confirm; writes settle asynchronously so pendings may persist for minutes
+            await self.get_schedules(site_id)
+            for family in (SCHEDULE_CHARGE, SCHEDULE_EXPORT, SCHEDULE_FREEZE):
+                pending = self.pending_writes.get((site_id, family))
+                if pending and schedules_equal(self.schedules.get(site_id, {}).get(family.lower(), {}), pending[&quot;start&quot;], pending[&quot;end&quot;], pending[&quot;limit&quot;], pending[&quot;enabled&quot;]):
+                    del self.pending_writes[(site_id, family)]
+            await self.get_profile(site_id)
+</code></pre>
+<p>Nuance the tests depend on: <code>schedules_equal(None, ..., enabled=True)</code> is False (test asserts <code>not schedules_equal(None, ...)</code>) but a missing cloud entry with <code>enabled=False</code> desired is equal (no write needed to disable a non-existent schedule) — that is why <code>test_apply_no_change_no_write</code> sees zero writes for export/freeze.</p>
+<ul>
+<li>[ ] <strong>Step 4: Run tests to verify pass, then commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/enphase.py apps/predbat/tests/test_enphase_api.py
+git commit -m &quot;feat: Enphase battery schedule write path with settle confirmation
+
+Co-Authored-By: Claude Fable 5 &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h3 id="task-8-inverter_def-automatic_config-template">Task 8: INVERTER_DEF, automatic_config, template</h3>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>apps/predbat/config.py</code> (add <code>"EnphaseCloud"</code> after the <code>"FoxCloud"</code> dict ending at line 1919)</li>
+<li>Modify: <code>apps/predbat/enphase.py</code> (add <code>automatic_config</code>)</li>
+<li>Create: <code>templates/enphase_cloud.yaml</code> (copy <code>templates/fox_cloud.yaml</code> as the base, swap fox keys for <code>enphase_username</code>/<code>enphase_password</code>/<code>enphase_automatic</code>)</li>
+<li>Test: <code>apps/predbat/tests/test_enphase_api.py</code></li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>Consumes: entity naming from Tasks 5/6.</li>
+<li>
+<p>Produces: <code>INVERTER_DEF["EnphaseCloud"]</code>; <code>automatic_config()</code> setting all inverter args.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write failing test</strong></p>
+</li>
+</ul>
+<pre><code class="language-python">def test_automatic_config():
+    &quot;&quot;&quot;automatic_config points every inverter arg at the published entities.&quot;&quot;&quot;
+    api = MockEnphaseAPI()
+    api.sites = [{&quot;site_id&quot;: &quot;12345&quot;, &quot;name&quot;: &quot;Home&quot;}]
+    api.battery_status[&quot;12345&quot;] = {&quot;soc_percent&quot;: 55.0, &quot;available_energy&quot;: 5.5, &quot;max_capacity&quot;: 10.0, &quot;max_power_kw&quot;: 3.84, &quot;status&quot;: &quot;normal&quot;, &quot;batteries&quot;: []}
+    api.schedules[&quot;12345&quot;] = {&quot;cfg&quot;: {&quot;supported&quot;: True}, &quot;dtg&quot;: {&quot;supported&quot;: True}, &quot;rbd&quot;: {&quot;supported&quot;: True}}
+    run_async(api.automatic_config())
+    args = api.args_set
+    assert args[&quot;inverter_type&quot;] == [&quot;EnphaseCloud&quot;]
+    assert args[&quot;num_inverters&quot;] == 1
+    assert args[&quot;soc_percent&quot;] == [&quot;sensor.predbat_enphase_12345_soc_percent&quot;]
+    assert args[&quot;soc_max&quot;] == [&quot;sensor.predbat_enphase_12345_battery_capacity&quot;]
+    assert args[&quot;battery_rate_max&quot;] == [&quot;sensor.predbat_enphase_12345_battery_rate_max&quot;]
+    assert args[&quot;load_today&quot;] == [&quot;sensor.predbat_enphase_12345_load_today&quot;]
+    assert args[&quot;import_today&quot;] == [&quot;sensor.predbat_enphase_12345_import_today&quot;]
+    assert args[&quot;export_today&quot;] == [&quot;sensor.predbat_enphase_12345_export_today&quot;]
+    assert args[&quot;pv_today&quot;] == [&quot;sensor.predbat_enphase_12345_pv_today&quot;]
+    assert args[&quot;charge_start_time&quot;] == [&quot;select.predbat_enphase_12345_battery_schedule_charge_start_time&quot;]
+    assert args[&quot;charge_limit&quot;] == [&quot;number.predbat_enphase_12345_battery_schedule_charge_soc&quot;]
+    assert args[&quot;scheduled_charge_enable&quot;] == [&quot;switch.predbat_enphase_12345_battery_schedule_charge_enable&quot;]
+    assert args[&quot;scheduled_discharge_enable&quot;] == [&quot;switch.predbat_enphase_12345_battery_schedule_export_enable&quot;]
+    assert args[&quot;discharge_start_time&quot;] == [&quot;select.predbat_enphase_12345_battery_schedule_export_start_time&quot;]
+    assert args[&quot;discharge_target_soc&quot;] == [&quot;number.predbat_enphase_12345_battery_schedule_export_soc&quot;]
+    assert args[&quot;reserve&quot;] == [&quot;number.predbat_enphase_12345_battery_schedule_reserve&quot;]
+    assert args[&quot;battery_min_soc&quot;] == [&quot;sensor.predbat_enphase_12345_battery_reserve_min&quot;]
+    assert args[&quot;schedule_write_button&quot;] == [&quot;switch.predbat_enphase_12345_battery_schedule_charge_write&quot;]
+    assert args[&quot;export_limit&quot;] == [99999]
+
+
+def test_automatic_config_no_dtg():
+    &quot;&quot;&quot;Without dtg support, discharge args are not set.&quot;&quot;&quot;
+    api = MockEnphaseAPI()
+    api.sites = [{&quot;site_id&quot;: &quot;12345&quot;, &quot;name&quot;: &quot;Home&quot;}]
+    api.battery_status[&quot;12345&quot;] = {&quot;soc_percent&quot;: 55.0, &quot;available_energy&quot;: 5.5, &quot;max_capacity&quot;: 10.0, &quot;max_power_kw&quot;: 3.84, &quot;status&quot;: &quot;normal&quot;, &quot;batteries&quot;: []}
+    api.schedules[&quot;12345&quot;] = {&quot;cfg&quot;: {&quot;supported&quot;: True}, &quot;dtg&quot;: {&quot;supported&quot;: False}, &quot;rbd&quot;: {&quot;supported&quot;: True}}
+    run_async(api.automatic_config())
+    assert &quot;discharge_start_time&quot; not in api.args_set
+    assert &quot;scheduled_discharge_enable&quot; not in api.args_set
+</code></pre>
+<p>Also add a config-level check:</p>
+<pre><code class="language-python">def test_inverter_def_enphase():
+    &quot;&quot;&quot;EnphaseCloud INVERTER_DEF exists with the agreed capability flags.&quot;&quot;&quot;
+    from config import INVERTER_DEF
+
+    idef = INVERTER_DEF[&quot;EnphaseCloud&quot;]
+    assert idef[&quot;has_rest_api&quot;] is False
+    assert idef[&quot;has_target_soc&quot;] is True
+    assert idef[&quot;time_button_press&quot;] is True
+    assert idef[&quot;charge_time_entity_is_option&quot;] is True
+    assert idef[&quot;can_span_midnight&quot;] is False
+    assert idef[&quot;target_soc_used_for_discharge&quot;] is True
+    assert idef[&quot;has_fox_inverter_mode&quot;] is False
+</code></pre>
+<ul>
+<li>
+<p>[ ] <strong>Step 2: Run to verify failure.</strong></p>
+</li>
+<li>
+<p>[ ] <strong>Step 3: Implement.</strong> <code>INVERTER_DEF["EnphaseCloud"]</code> (config.py, after FoxCloud):</p>
+</li>
+</ul>
+<pre><code class="language-python">    &quot;EnphaseCloud&quot;: {
+        &quot;name&quot;: &quot;EnphaseCloud&quot;,
+        &quot;has_rest_api&quot;: False,
+        &quot;has_mqtt_api&quot;: False,
+        &quot;output_charge_control&quot;: &quot;none&quot;,
+        &quot;charge_control_immediate&quot;: False,
+        &quot;has_charge_enable_time&quot;: True,
+        &quot;has_discharge_enable_time&quot;: True,
+        &quot;has_target_soc&quot;: True,
+        &quot;has_reserve_soc&quot;: True,
+        &quot;has_timed_pause&quot;: False,
+        &quot;charge_time_format&quot;: &quot;HH:MM:SS&quot;,
+        &quot;charge_time_entity_is_option&quot;: True,
+        &quot;soc_units&quot;: &quot;%&quot;,
+        &quot;num_load_entities&quot;: 1,
+        &quot;has_ge_inverter_mode&quot;: False,
+        &quot;has_ge_eco_toggle&quot;: False,
+        &quot;has_fox_inverter_mode&quot;: False,
+        &quot;time_button_press&quot;: True,
+        &quot;clock_time_format&quot;: &quot;%Y-%m-%d %H:%M:%S&quot;,
+        &quot;write_and_poll_sleep&quot;: 2,
+        &quot;has_time_window&quot;: False,
+        &quot;support_charge_freeze&quot;: True,
+        &quot;support_discharge_freeze&quot;: True,
+        &quot;has_idle_time&quot;: False,
+        &quot;can_span_midnight&quot;: False,
+        &quot;charge_discharge_with_rate&quot;: False,
+        &quot;target_soc_used_for_discharge&quot;: True,
+    },
+</code></pre>
+<p><strong>Check before committing:</strong> <code>grep -n "output_charge_control" apps/predbat/inverter.py | head</code> — confirm <code>"none"</code> is an accepted value (search for how the value is consumed). If only <code>"power"</code>/<code>"current"</code> are handled, use <code>"power"</code> like FoxCloud and simply do not set <code>charge_rate</code>/<code>discharge_rate</code> args in <code>automatic_config</code> (Predbat then uses <code>battery_rate_max</code>). Record which option was chosen in the commit message.</p>
+<p><code>automatic_config</code> (enphase.py) — mirror fox.py:2158 but single-site:</p>
+<pre><code class="language-python">    async def automatic_config(self):
+        &quot;&quot;&quot;Automatically configure Predbat inverter args from the discovered Enphase site.&quot;&quot;&quot;
+        if not self.sites:
+            raise ValueError(&quot;Enphase API: No sites found, cannot configure&quot;)
+        site_id = self.sites[0][&quot;site_id&quot;]
+        status = self.battery_status.get(site_id, {})
+        if not status.get(&quot;max_capacity&quot;):
+            raise ValueError(&quot;Enphase API: No battery found on site, cannot configure&quot;)
+        entity = f&quot;{self.prefix}_enphase_{site_id}&quot;
+        has_dtg = self.dtg_supported(site_id)
+
+        self.set_arg(&quot;inverter_type&quot;, [&quot;EnphaseCloud&quot;])
+        self.set_arg(&quot;num_inverters&quot;, 1)
+        self.set_arg(&quot;load_today&quot;, [f&quot;sensor.{entity}_load_today&quot;])
+        self.set_arg(&quot;import_today&quot;, [f&quot;sensor.{entity}_import_today&quot;])
+        self.set_arg(&quot;export_today&quot;, [f&quot;sensor.{entity}_export_today&quot;])
+        if not self.automatic_ignore_pv:
+            self.set_arg(&quot;pv_today&quot;, [f&quot;sensor.{entity}_pv_today&quot;])
+            self.set_arg(&quot;pv_power&quot;, [f&quot;sensor.{entity}_pv_power&quot;])
+        self.set_arg(&quot;soc_percent&quot;, [f&quot;sensor.{entity}_soc_percent&quot;])
+        self.set_arg(&quot;soc_max&quot;, [f&quot;sensor.{entity}_battery_capacity&quot;])
+        self.set_arg(&quot;battery_rate_max&quot;, [f&quot;sensor.{entity}_battery_rate_max&quot;])
+        self.set_arg(&quot;battery_power&quot;, [f&quot;sensor.{entity}_battery_power&quot;])
+        self.set_arg(&quot;grid_power&quot;, [f&quot;sensor.{entity}_grid_power&quot;])
+        self.set_arg(&quot;load_power&quot;, [f&quot;sensor.{entity}_load_power&quot;])
+        self.set_arg(&quot;reserve&quot;, [f&quot;number.{entity}_battery_schedule_reserve&quot;])
+        self.set_arg(&quot;battery_min_soc&quot;, [f&quot;sensor.{entity}_battery_reserve_min&quot;])
+        self.set_arg(&quot;charge_start_time&quot;, [f&quot;select.{entity}_battery_schedule_charge_start_time&quot;])
+        self.set_arg(&quot;charge_end_time&quot;, [f&quot;select.{entity}_battery_schedule_charge_end_time&quot;])
+        self.set_arg(&quot;charge_limit&quot;, [f&quot;number.{entity}_battery_schedule_charge_soc&quot;])
+        self.set_arg(&quot;scheduled_charge_enable&quot;, [f&quot;switch.{entity}_battery_schedule_charge_enable&quot;])
+        if has_dtg:
+            self.set_arg(&quot;scheduled_discharge_enable&quot;, [f&quot;switch.{entity}_battery_schedule_export_enable&quot;])
+            self.set_arg(&quot;discharge_start_time&quot;, [f&quot;select.{entity}_battery_schedule_export_start_time&quot;])
+            self.set_arg(&quot;discharge_end_time&quot;, [f&quot;select.{entity}_battery_schedule_export_end_time&quot;])
+            self.set_arg(&quot;discharge_target_soc&quot;, [f&quot;number.{entity}_battery_schedule_export_soc&quot;])
+        self.set_arg(&quot;schedule_write_button&quot;, [f&quot;switch.{entity}_battery_schedule_charge_write&quot;])
+        self.set_arg(&quot;export_limit&quot;, [99999])
+</code></pre>
+<p>Call it from <code>run()</code> on first successful data load when <code>self.automatic</code> is true (mirror where fox calls it — <code>grep -n "automatic_config" apps/predbat/fox.py</code>).</p>
+<ul>
+<li>[ ] <strong>Step 4: Run tests to verify pass, then commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/config.py apps/predbat/enphase.py apps/predbat/tests/test_enphase_api.py templates/enphase_cloud.yaml
+git commit -m &quot;feat: EnphaseCloud inverter definition and automatic configuration
+
+Co-Authored-By: Claude Fable 5 &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h3 id="task-9-documentation-spell-dictionary-full-validation">Task 9: Documentation, spell dictionary, full validation</h3>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>docs/components.md</code> (new section after the Fox section ending ~line 523; add TOC entry near line 19)</li>
+<li>Modify: <code>docs/inverter-setup.md</code> (new "Enphase Cloud" section near the "Fox Cloud" section at line 233; template table rows near lines 42-43)</li>
+<li>Modify: <code>docs/apps-yaml.md</code> (<code>enphase_username</code> etc. near fox_key at line 188; <code>EnphaseCloud</code> in the inverter_type list near lines 773-774)</li>
+<li>Modify: <code>.cspell/custom-dictionary-workspace.txt</code></li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>
+<p>Consumes: everything prior; this task gates the branch on repo-wide checks.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write docs</strong></p>
+</li>
+</ul>
+<p><code>docs/components.md</code> section content (adapt formatting to the Fox section's exact style):</p>
+<pre><code class="language-markdown">## Enphase API (enphase)
+
+Connects Predbat to the Enphase Enlighten cloud for monitoring and battery control of
+Enphase IQ Battery systems, with no local hardware access required.
+
+**Important**: this uses the unofficial Enlighten web-app API (there is no official API
+with battery control). Enphase may change it without notice. Accounts with multi-factor
+authentication (MFA) enabled are not supported - disable MFA on the Enphase account.
+
+Predbat controls the battery by writing Enphase schedules: charge windows become
+charge-from-grid (CFG) schedules with a target SOC, export windows become
+discharge-to-grid (DTG) schedules (only in regions where Enphase enables DTG), freeze
+modes use restrict-battery-discharge (RBD) schedules, and the reserve is set via the
+battery profile. Cloud writes can take a few minutes to settle.
+
+| Option | apps.yaml key | Description |
+|--------|---------------|-------------|
+| username | enphase_username | Enlighten account e-mail (required) |
+| password | enphase_password | Enlighten account password (required) |
+| site_id | enphase_site_id | Restrict to one site id (optional, defaults to the first site) |
+| automatic | enphase_automatic | Automatically configure Predbat inverter settings |
+| automatic_ignore_pv | enphase_automatic_ignore_pv | Skip PV sensors during automatic configuration |
+</code></pre>
+<p>Also cover: sensors published, control entities, the login-cooldown behaviour (repeated login failures back off up to 24 h to protect the account).</p>
+<ul>
+<li>[ ] <strong>Step 2: Add dictionary words</strong></li>
+</ul>
+<p>Append to <code>.cspell/custom-dictionary-workspace.txt</code> (file is auto-sorted on commit; re-stage after pre-commit runs): <code>Encharge</code>, <code>Enlighten</code>, <code>Enpower</code>, <code>Enphase</code>, <code>enho</code>, <code>enlm</code>, <code>entrez</code> (skip any already present — check with grep first).</p>
+<ul>
+<li>[ ] <strong>Step 3: Run the full test suite and pre-commit</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --quick &gt; /tmp/enphase_full.txt 2&gt;&amp;1; grep -iE &quot;fail|error&quot; /tmp/enphase_full.txt | head -30
+cd .. &amp;&amp; ./run_pre_commit &gt; /tmp/enphase_precommit.txt 2&gt;&amp;1; tail -30 /tmp/enphase_precommit.txt
+</code></pre>
+<p>Expected: no test failures; pre-commit clean (interrogate 100%, flake8, black, cspell). Fix anything flagged, re-stage auto-fixed files.</p>
+<ul>
+<li>[ ] <strong>Step 4: Commit and push</strong></li>
+</ul>
+<pre><code class="language-bash">git add docs/components.md docs/inverter-setup.md docs/apps-yaml.md .cspell/custom-dictionary-workspace.txt
+git commit -m &quot;docs: Enphase cloud component documentation
+
+Co-Authored-By: Claude Fable 5 &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<p>Do not open a PR yet — the component should first be validated against a real Enphase account (see Verification below).</p>
+<hr />
+<h2 id="verification-post-implementation-needs-a-real-account">Verification (post-implementation, needs a real account)</h2>
+<p>The unofficial API cannot be fully validated by unit tests. Before raising a PR:</p>
+<ol>
+<li>Configure <code>enphase_username</code>/<code>enphase_password</code> in a test apps.yaml with <code>enphase_automatic: true</code>.</li>
+<li>Confirm: login succeeds, sensors appear and update, SOC matches the Enlighten app.</li>
+<li>Trigger a short manual charge window via the published entities and confirm a CFG schedule appears in the Enlighten battery settings UI within ~5 minutes.</li>
+<li>Watch for HTTP 401/406/429 in the logs over 24 h (header variants may need the <code>cookie_eauth_compatible</code> fallback from the reference repo — <code>_battery_config_cookie_eauth_headers</code> shape — if BatteryConfig calls fail with auth errors despite a valid login).</li>
+</ol>
+<h2 id="notes-for-implementers">Notes for implementers</h2>
+<ul>
+<li>The reference implementation is cloned at <code>/private/tmp/claude-501/-Users-treforsouthwell-predbat-batpred/1c6147ca-7c80-4457-95be-562fc8092e24/scratchpad/ha-enphase-energy</code> (custom_components/enphase_ev/api.py, battery_runtime.py). Re-clone from <a href="https://github.com/barneyonline/ha-enphase-energy">https://github.com/barneyonline/ha-enphase-energy</a> if missing. Use it to answer payload-shape questions; do not copy code wholesale (different licence and style).</li>
+<li>Fox reference points: <code>FoxAPI.initialize</code> fox.py:338, <code>run</code> fox.py:407, cache helpers fox.py:565-643, schedule entities fox.py:1290, events fox.py:1985-2116, <code>automatic_config</code> fox.py:2158, registry components.py:204, INVERTER_DEF config.py:1891, schema config.py:2196, mock pattern tests/test_fox_api.py:50.</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

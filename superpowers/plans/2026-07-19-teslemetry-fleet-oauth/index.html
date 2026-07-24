@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Direct Tesla Fleet API via OAuthMixin — Implementation Plan - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Direct Tesla Fleet API via OAuthMixin \u2014 Implementation Plan";
+        var mkdocs_page_input_path = "superpowers/plans/2026-07-19-teslemetry-fleet-oauth.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Direct Tesla Fleet API via OAuthMixin — Implementation Plan</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="direct-tesla-fleet-api-via-oauthmixin-implementation-plan">Direct Tesla Fleet API via OAuthMixin — Implementation Plan</h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: superpowers:subagent-driven-development or executing-plans. Steps use <code>- [ ]</code>.</p>
+</blockquote>
+<p><strong>Goal:</strong> Let the Teslemetry component talk to the Tesla <strong>Fleet API directly</strong> (not just the Teslemetry proxy) using OAuth, with the OAuth flow + token refresh <strong>driven externally by predbat.com</strong> via the existing <code>OAuthMixin</code> — exactly the pattern Fox/Kraken/Solis already use. The Teslemetry static-token path stays as the default; OAuth is a second <code>auth_method</code>.</p>
+<p><strong>Key insight (why this is small):</strong> <code>OAuthMixin</code> does NOT call Tesla's OAuth endpoints. It calls predbat.com's Supabase <code>oauth-refresh</code> edge function with <code>{instance_id (user_id), provider, token_hash}</code>; predbat.com's backend holds the client id/secret, the refresh token, partner registration and the public-key hosting, and returns a fresh <code>access_token</code> + <code>expires_at</code>. The component only: holds <code>access_token</code>/<code>token_expires_at</code>, refreshes-before-call, swaps the bearer token, and retries once on 401. Tesla <strong>energy-site</strong> commands (<code>operation</code>/<code>backup</code>/<code>grid_import_export</code>/<code>time_of_use_settings</code>) use plain REST — the vehicle command-signing protocol does NOT apply — so nothing in the data/control layer changes.</p>
+<p><strong>Tech Stack:</strong> Python 3, <code>aiohttp</code>; <code>OAuthMixin</code> (<code>apps/predbat/oauth_mixin.py</code>); component registry (<code>components.py</code>); config (<code>config.py</code>); tests (<code>tests/test_teslemetry.py</code>).</p>
+<h2 id="global-constraints">Global Constraints</h2>
+<ul>
+<li>Line ≤ 250 (Flake8 250 / Black 256); 100% docstrings (interrogate); British spelling; <code>lower_case_with_underscores</code>.</li>
+<li>Tests run from <code>coverage/</code> (<code>./run_all -k teslemetry &gt; /tmp/x.log 2&gt;&amp;1</code>, then grep the file). New tests registered in the <code>def test_teslemetry()</code> runner at the bottom of the test file.</li>
+<li><strong>Do not change</strong> the tariff/quantise/boost/sync/evaluate/assert logic — this feature is auth-only.</li>
+</ul>
+<h2 id="reference-pattern-mirror-fox-exactly">Reference pattern (mirror Fox exactly)</h2>
+<ul>
+<li><code>class FoxAPI(ComponentBase, OAuthMixin)</code>; <code>initialize(... auth_method=None, token_expires_at=None, token_hash=None)</code> calls <code>self._init_oauth(auth_method, key, token_expires_at, "fox_ess")</code> (<code>fox.py:335,377</code>).</li>
+<li>Request path (<code>fox.py:1633-1691</code>): if <code>auth_method=="oauth"</code> and not a retry → <code>await self.check_and_refresh_oauth_token()</code>; skip the call if it returns False. Build the bearer from <code>self.access_token</code> when oauth else the static key. On HTTP 401 (oauth, not already retried) → <code>await self.handle_oauth_401()</code>; if it returns True, retry the request ONCE with a retry flag.</li>
+<li>Config keys <code>fox_auth_method</code> / <code>fox_token_expires_at</code> / <code>fox_token_hash</code>; in oauth mode <code>fox_key</code> holds the access token. Registered in <code>components.py:206-241</code> as <code>args</code> entries mapping config → <code>initialize</code> kwargs.</li>
+</ul>
+<hr />
+<h3 id="task-1-mix-oauthmixin-into-teslemetryapi-and-initialise-it">Task 1: Mix <code>OAuthMixin</code> into <code>TeslemetryAPI</code> and initialise it</h3>
+<p><strong>Files:</strong> Modify <code>apps/predbat/teslemetry.py</code>; Test <code>apps/predbat/tests/test_teslemetry.py</code>.</p>
+<p><strong>Changes:</strong>
+- Import: <code>from oauth_mixin import OAuthMixin</code>.
+- Class: <code>class TeslemetryAPI(ComponentBase, OAuthMixin):</code>.
+- <code>initialize(...)</code>: make the OAuth kwargs explicit and initialise the mixin. Replace the <code>**kwargs</code> swallow with named params:
+  <code>python
+  def initialize(self, key="", site_id="", base_url=TESLEMETRY_DEFAULT_URL, automatic=False,
+                 auth_method=None, token_expires_at=None, token_hash=None, **kwargs):
+      ...
+      self.api_key = key
+      ...
+      self._init_oauth(auth_method, key, token_expires_at, "tesla")   # provider_name -&gt; see Decision D1
+      if token_hash:
+          self.token_hash = token_hash
+      ...</code>
+  (<code>_init_oauth</code> sets <code>self.auth_method</code>, <code>self.access_token</code> (=key in oauth mode), <code>self.token_expires_at</code>, <code>self.provider_name</code>, <code>self.oauth_failed</code>, <code>self.token_hash</code>.)
+- Add a bearer helper so one place decides which token to send:
+  <code>python
+  def _bearer_token(self):
+      """Return the bearer token: the refreshable OAuth access token in oauth mode, else the static key."""
+      return self.access_token if self.auth_method == "oauth" else self.api_key</code></p>
+<p><strong>Tests:</strong>
+- <code>test_teslemetry_oauth_init_sets_access_token</code>: construct a <code>MockTeslemetryAPI</code>-style instance (or call <code>_init_oauth</code>) with <code>auth_method="oauth"</code>, <code>key="ACCESS"</code>, and assert <code>api.auth_method == "oauth"</code>, <code>api._bearer_token() == "ACCESS"</code>. Default (<code>auth_method=None</code>) → <code>_bearer_token()</code> returns the static key and <code>auth_method == "api_key"</code>.</p>
+<ul>
+<li>[ ] Write the failing test; run (FAIL: no <code>_bearer_token</code>/mixin); implement; run (PASS); commit <code>feat(teslemetry): mix in OAuthMixin, resolve bearer per auth_method</code>.</li>
+</ul>
+<blockquote>
+<p>Note for the mock: <code>MockTeslemetryAPI</code> bypasses <code>initialize</code>. Add a tiny helper in the test that calls <code>TeslemetryAPI._init_oauth(api, ...)</code> (the mixin methods only need <code>self.log</code>, <code>self.base</code>), or set <code>api.auth_method</code>/<code>api.access_token</code> directly for the api_key-default assertions.</p>
+</blockquote>
+<hr />
+<h3 id="task-2-oauth-in-_request-refresh-before-call-bearer-swap-401refreshretry">Task 2: OAuth in <code>_request</code> (refresh-before-call, bearer swap, 401→refresh→retry)</h3>
+<p><strong>Files:</strong> Modify <code>apps/predbat/teslemetry.py</code> (<code>_request</code>); Test <code>tests/test_teslemetry.py</code>.</p>
+<p><strong>Changes — mirror Fox's <code>request_get_func</code>:</strong></p>
+<pre><code class="language-python">async def _request(self, method, path, json_body=None, _retry_after_refresh=False):
+    # Refresh the OAuth token before the call (no-op in api_key mode).
+    if self.auth_method == &quot;oauth&quot; and not _retry_after_refresh:
+        if not await self.check_and_refresh_oauth_token():
+            self.api_auth_failed = True
+            self.log(&quot;Warn: Teslemetry OAuth token refresh failed, skipping API call&quot;)
+            return None
+    url = &quot;{}{}&quot;.format(self.base_url, path)
+    headers = {&quot;Authorization&quot;: &quot;Bearer {}&quot;.format(self._bearer_token()), &quot;Content-Type&quot;: &quot;application/json&quot;}
+    timeout = aiohttp.ClientTimeout(total=TESLEMETRY_TIMEOUT)
+    for attempt in range(TESLEMETRY_RETRIES):
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.request(method, url, headers=headers, json=json_body) as resp:
+                    if resp.status == 401 and self.auth_method == &quot;oauth&quot; and not _retry_after_refresh:
+                        if await self.handle_oauth_401():
+                            return await self._request(method, path, json_body=json_body, _retry_after_refresh=True)
+                    if resp.status in (401, 403):
+                        self.api_auth_failed = True
+                        self.log(&quot;Warn: Teslemetry auth failed ({}) on {}&quot;.format(resp.status, path))
+                        return None
+                    # ... existing 429 / &gt;=400 / success handling unchanged ...
+        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+            ...
+</code></pre>
+<ul>
+<li>The 401→refresh→retry must sit BEFORE the existing <code>401/403 → api_auth_failed</code> branch, and only fire once (<code>_retry_after_refresh</code> guard).</li>
+<li>Everything else in <code>_request</code> (429 backoff, <code>_summarize_for_log</code>, success parse) is unchanged.</li>
+</ul>
+<p><strong>Tests (mock the mixin, not the network):</strong>
+- <code>test_teslemetry_request_refreshes_before_call_oauth</code>: <code>auth_method="oauth"</code>, monkeypatch <code>check_and_refresh_oauth_token</code> to a coroutine that flips <code>access_token</code> to <code>"NEW"</code>; assert the request went out with <code>Authorization: Bearer NEW</code>. (The <code>MockTeslemetryAPI._request</code> is overridden for canned responses, so for this test drive the REAL <code>_request</code> with an <code>aiohttp</code> mock from <code>test_infra</code>, or unit-test the header assembly via a seam — see note.)
+- <code>test_teslemetry_request_401_triggers_single_refresh_retry</code>: first response 401, <code>handle_oauth_401</code> returns True and sets a new token; assert exactly one retry and the second attempt used the new bearer; a still-401 retry sets <code>api_auth_failed</code>.
+- <code>test_teslemetry_request_api_key_mode_unchanged</code>: <code>auth_method="api_key"</code> → no refresh call, bearer is the static key (guards against regressing the Teslemetry path).</p>
+<blockquote>
+<p>Note: <code>MockTeslemetryAPI</code> overrides <code>_request</code> to return canned <code>mock_responses</code>, so these tests exercise the mixin seams (<code>check_and_refresh_oauth_token</code>/<code>handle_oauth_401</code>/<code>_bearer_token</code>) rather than the overridden <code>_request</code>. Prefer testing those seams directly plus one header-assembly test against the real <code>_request</code> using <code>create_aiohttp_mock_session</code> from <code>tests/test_infra.py</code> (as other real-HTTP teslemetry tests do).</p>
+</blockquote>
+<ul>
+<li>[ ] Write failing tests; run (FAIL); implement; run (PASS); commit <code>feat(teslemetry): OAuth refresh-before-call and 401 retry in _request</code>.</li>
+</ul>
+<hr />
+<h3 id="task-3-config-schema-component-registration">Task 3: Config schema + component registration</h3>
+<p><strong>Files:</strong> Modify <code>apps/predbat/config.py</code> (<code>APPS_SCHEMA</code>), <code>apps/predbat/components.py</code> (teslemetry <code>args</code>); Test <code>tests/test_teslemetry.py</code>.</p>
+<p><strong><code>config.py</code> APPS_SCHEMA</strong> — add beside the existing <code>teslemetry_*</code> keys (mirror the <code>fox_*</code> oauth keys):</p>
+<pre><code class="language-python">    &quot;teslemetry_auth_method&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;empty&quot;: False},
+    &quot;teslemetry_token_expires_at&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;empty&quot;: False},
+    &quot;teslemetry_token_hash&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;empty&quot;: False},
+</code></pre>
+<p><strong><code>components.py</code></strong> — add to the <code>teslemetry</code> <code>args</code> block (mirror <code>fox</code>):</p>
+<pre><code class="language-python">    &quot;auth_method&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;teslemetry_auth_method&quot;, &quot;default&quot;: &quot;api_key&quot;},
+    &quot;token_expires_at&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;teslemetry_token_expires_at&quot;},
+    &quot;token_hash&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;teslemetry_token_hash&quot;},
+</code></pre>
+<p>(<code>teslemetry_key</code> continues to hold the access token in oauth mode — no new key.)</p>
+<p><strong>Test:</strong> <code>test_teslemetry_inverter_def_tesla</code>/an APPS_SCHEMA presence test — assert the three new schema keys parse and are optional; a components-wiring test that the <code>auth_method</code> arg reaches <code>initialize</code> (follow any existing components arg-mapping test).</p>
+<ul>
+<li>[ ] Write failing test; run (FAIL); implement; run (PASS); pre-commit (cspell: add <code>teslemetry</code>/oauth words if flagged); commit <code>feat(teslemetry): oauth auth_method/token config wiring</code>.</li>
+</ul>
+<hr />
+<h3 id="task-4-docs-template-and-the-cli-harness">Task 4: Docs, template, and the CLI harness</h3>
+<p><strong>Files:</strong> <code>docs/components.md</code>, <code>docs/inverter-setup.md</code>, <code>templates/teslemetry.yaml</code>, <code>apps/predbat/teslemetry.py</code> (CLI <code>main()</code>).</p>
+<ul>
+<li><strong>components.md</strong> Teslemetry section: document <code>auth_method</code> (<code>api_key</code> default vs <code>oauth</code>), that oauth is provisioned by predbat.com (like Fox), and that in oauth mode <code>base_url</code> must be the <strong>regional Fleet endpoint</strong> (<code>https://fleet-api.prd.&lt;region&gt;.vn.cloud.tesla.com</code>) and <code>key</code> holds the access token. Note token refresh is handled by predbat.com.</li>
+<li><strong>inverter-setup.md / template</strong>: add an oauth example block (commented) alongside the Teslemetry-token one.</li>
+<li>
+<p><strong>CLI harness</strong> (<code>test_teslemetry_api</code>/<code>main</code>): optionally accept <code>--auth-method oauth</code> + <code>--base-url &lt;fleet&gt;</code> for manual testing (low priority; the static-token path already works for local testing).</p>
+</li>
+<li>
+<p>[ ] Update docs + template; run markdownlint/cspell hooks; commit <code>docs(teslemetry): document direct Fleet API via OAuth</code>.</p>
+</li>
+</ul>
+<hr />
+<h2 id="backend-prerequisites-predbatcom-not-in-this-repo">Backend prerequisites (predbat.com — NOT in this repo)</h2>
+<p>These gate whether oauth mode actually works at runtime; the component code is inert without them:
+1. <strong><code>oauth-refresh</code> edge function must support a <code>tesla</code> provider</strong> — a Tesla Fleet OAuth app registered by predbat.com (client id/secret, <strong>partner registration</strong>, hosted public key), holding each user's refresh token and returning <code>{success, access_token, expires_at, token_hash}</code> for <code>provider="tesla"</code>.
+2. Token <strong>scopes</strong>: <code>energy_device_data</code> + <code>energy_cmds</code> (read + control energy sites).
+3. <strong>Region</strong>: predbat.com provisions the correct regional <code>base_url</code> into the user's <code>teslemetry_base_url</code> (or a region → base_url mapping is added). The auth/refresh endpoint is global; only the API base is regional.
+4. The predbat.com connect UI runs the Tesla authorization-code flow and writes <code>teslemetry_auth_method: oauth</code>, <code>teslemetry_key</code> (access token), <code>teslemetry_token_expires_at</code>, <code>teslemetry_token_hash</code>, <code>teslemetry_base_url</code> into the user's config — same as the Fox connect flow.</p>
+<h2 id="decisions-to-confirm">Decisions to confirm</h2>
+<ul>
+<li><strong>D1 — <code>provider_name</code> string.</strong> Plan assumes <code>"tesla"</code>. Must match the identifier the <code>oauth-refresh</code> edge function registers for the Tesla handler. (Fox uses <code>"fox_ess"</code>.)</li>
+<li><strong>D2 — Region/base_url.</strong> Reuse the existing <code>teslemetry_base_url</code> (predbat.com sets it) vs add a <code>teslemetry_region</code> enum that maps to a base_url. Plan assumes reuse <code>base_url</code>.</li>
+<li><strong>D3 — Both modes coexist.</strong> <code>auth_method</code> defaults to <code>api_key</code> (Teslemetry static token) — unchanged for existing users; <code>oauth</code> opts into direct Fleet. (Assumed yes, mirrors Fox/Solis.)</li>
+</ul>
+<h2 id="effort-risk">Effort &amp; risk</h2>
+<ul>
+<li><strong>Component code:</strong> small — ~Task 1–3 are a few dozen lines mirroring Fox; Task 4 docs. Days, not weeks. No change to tariff/control logic or its tests.</li>
+<li><strong>Real effort is backend + onboarding</strong> (predbat.com Tesla Fleet app, partner registration, region provisioning) — outside this repo, and the actual reason to do it this way (self-hosted users can't easily do Fleet OAuth themselves; predbat.com does it for them, exactly like Fox).</li>
+<li><strong>Self-hosted-without-predbat.com</strong> users keep using <code>api_key</code> (Teslemetry) — oauth mode requires the predbat.com edge function, same limitation Fox has.</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

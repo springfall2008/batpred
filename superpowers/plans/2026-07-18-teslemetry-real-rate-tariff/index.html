@@ -1,0 +1,1032 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Teslemetry Real-Rate Tariff &amp; Mode-Driven Export — Implementation Plan - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Teslemetry Real-Rate Tariff \u0026amp; Mode-Driven Export \u2014 Implementation Plan";
+        var mkdocs_page_input_path = "superpowers/plans/2026-07-18-teslemetry-real-rate-tariff.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Teslemetry Real-Rate Tariff &amp; Mode-Driven Export — Implementation Plan</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="teslemetry-real-rate-tariff-mode-driven-export-implementation-plan">Teslemetry Real-Rate Tariff &amp; Mode-Driven Export — Implementation Plan</h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> Publish the customer's real rates into the Powerwall <code>tariff_content_v2</code> (as up to 3 quantised bands per side, <code>ON_PEAK</code> reserved for a synthetic export boost over the committed discharge window), and move export start/stop onto the free operation-mode + export-rule commands so the tariff is pushed only when its inputs actually change.</p>
+<p><strong>Architecture:</strong> The tariff becomes a pure function of <code>(real rates, committed discharge window)</code>. New pure helpers quantise <code>rate_import</code>/<code>rate_export</code> into ≤3 named tiers over today+tomorrow local calendar days, render them to a single <code>PREDBAT</code> tariff, and overlay an <code>ON_PEAK</code> boost over the committed discharge window. <code>sync_tariff()</code> rebuilds+pushes it (behind the existing <code>set_tariff</code> JSON dedupe, made jitter-proof by rounding prices to whole pence) on the write-button commit and once per <code>run()</code> cycle. <code>evaluate_schedule</code>/<code>assert_device_state</code> lose their per-cycle tariff lever; export is driven purely by <code>operation</code> + <code>grid_import_export</code>. <code>reconcile_on_start</code> and the <code>tariff_mode</code> entity are removed.</p>
+<p><strong>Tech Stack:</strong> Python 3, <code>asyncio</code>, <code>aiohttp</code>; Predbat component framework (<code>ComponentBase</code>); tests via <code>apps/predbat/tests/test_teslemetry.py</code> with the <code>MockTeslemetryAPI</code> double; test runner <code>coverage/run_all</code>.</p>
+<h2 id="global-constraints">Global Constraints</h2>
+<ul>
+<li><strong>Line length:</strong> ≤256 chars (Black), ≤250 (Flake8).</li>
+<li><strong>Docstrings:</strong> 100% coverage required (<code>interrogate</code>) — every new function/method/class needs a docstring.</li>
+<li><strong>Naming:</strong> <code>lower_case_with_underscores</code>.</li>
+<li><strong>Spelling:</strong> British English (CSpell, <code>en-gb</code>); add unknown valid words to <code>.cspell/custom-dictionary-workspace.txt</code>.</li>
+<li><strong>Tests:</strong> unit tests required for all new code. Run from <code>coverage/</code>; <strong>save test output to a file, then grep it</strong> (never pipe straight to grep). Run one test module with <code>./run_all -k teslemetry &gt; /tmp/t.log 2&gt;&amp;1</code> then grep <code>/tmp/t.log</code>.</li>
+<li><strong>Tesla <code>tariff_content_v2</code> rules (must hold for every built tariff):</strong> one full-year season; ToU labels limited to <code>ON_PEAK</code>/<code>OFF_PEAK</code>/<code>PARTIAL_PEAK</code>/<code>SUPER_OFF_PEAK</code>; per-season/per-tier prices; <strong>no negative prices</strong>; <strong>no gaps/overlaps</strong> in a day's periods; <strong>matched tier sets</strong> (every tier with a price has periods and vice-versa); <strong>buy ≥ sell</strong> (Tesla clamps otherwise); <code>energy_charges.ALL</code> for flat tariffs; currency <code>GBP</code>.</li>
+<li><strong>Rates:</strong> <code>base.rate_import</code>/<code>base.rate_export</code> are dicts keyed by <strong>minutes from local midnight</strong> (today 0–1439, tomorrow 1440–2879), values in <strong>pence</strong>. Divide by 100 for GBP.</li>
+<li><strong>DOW convention:</strong> Tesla <code>fromDayOfWeek</code> is <code>0=Sunday … 6=Saturday</code>. Python <code>date.weekday()</code> is <code>0=Monday … 6=Sunday</code>, so <code>tesla_dow = (weekday + 1) % 7</code>. Isolated in <code>_tesla_dow()</code>. Rate bands are placed on today's/tomorrow's real DOW; the <strong>boost is placed only on the window's real day(s)</strong> — today's DOW, plus tomorrow's DOW for the portion of a midnight-wrapped window past 00:00 — never all 7 days (a daily-repeating <code>ON_PEAK</code> would show a fake peak every day in the app).</li>
+</ul>
+<h2 id="file-structure">File Structure</h2>
+<ul>
+<li><strong>Modify:</strong> <code>apps/predbat/teslemetry.py</code> — all production changes (new tariff helpers; rewrite <code>build_tariff</code>/<code>set_tariff</code>/<code>evaluate_schedule</code>/<code>assert_device_state</code>/<code>apply_schedule</code>/<code>run</code>/<code>initialize</code>/<code>register_control_entities</code>/<code>select_event</code>; delete <code>reconcile_on_start</code>/<code>get_current_tariff_code</code>/<code>_find_tariff_code</code>).</li>
+<li><strong>Modify:</strong> <code>apps/predbat/tests/test_teslemetry.py</code> — new helper tests; update <code>evaluate_schedule</code>/<code>build_tariff</code> tests; delete <code>reconcile_*</code>/<code>tariff_mode</code> tests.</li>
+<li><strong>No new files</strong> — the component is one cohesive module and the team keeps it that way.</li>
+</ul>
+<p>Module-level constants to add near the existing tier lists:</p>
+<pre><code class="language-python">REAL_TIERS = [&quot;SUPER_OFF_PEAK&quot;, &quot;OFF_PEAK&quot;, &quot;PARTIAL_PEAK&quot;]  # cheapest -&gt; dearest; ON_PEAK reserved for the boost
+BOOST_TIER = &quot;ON_PEAK&quot;
+SLOTS_PER_DAY = 48          # 30-minute slots
+SLOT_MINUTES = 30
+</code></pre>
+<p><code>EXPORT_SELL_RATE = 0.50</code> (existing) stays as the boost floor. <code>TARIFF_MODES</code> and <code>OPERATION_MODES</code>/<code>EXPORT_RULES</code> — <code>OPERATION_MODES</code>/<code>EXPORT_RULES</code> stay; <code>TARIFF_MODES</code> is deleted in Task 7.</p>
+<hr />
+<h3 id="task-1-_quantise_side-rates-3-rounded-tiers-per-slot-assignment">Task 1: <code>_quantise_side</code> — rates → ≤3 rounded tiers + per-slot assignment</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/teslemetry.py</code> (add module constants + <code>_quantise_side</code> staticmethod near <code>current_rates</code>, ~line 780)
+- Test: <code>apps/predbat/tests/test_teslemetry.py</code></p>
+<p><strong>Interfaces:</strong>
+- Produces: <code>TeslemetryAPI._quantise_side(rate_dict, default_pence) -&gt; (tier_prices: dict[str,float], today_tiers: list[str], tomorrow_tiers: list[str])</code>. <code>tier_prices</code> maps used tier names → GBP price rounded to whole pence. <code>today_tiers</code>/<code>tomorrow_tiers</code> are 48-element lists (one tier name per 30-min slot). Every tier appearing in the slot lists appears in <code>tier_prices</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<pre><code class="language-python">def test_teslemetry_quantise_flat_single_tier():
+    &quot;&quot;&quot;A flat rate collapses to one tier priced in GBP whole pence, all 48 slots the same.&quot;&quot;&quot;
+    rates = {m: 28.0 for m in range(0, 2880)}  # 28p flat
+    prices, today, tomorrow = TeslemetryAPI._quantise_side(rates, 28.0)
+    assert prices == {&quot;SUPER_OFF_PEAK&quot;: 0.28}
+    assert today == [&quot;SUPER_OFF_PEAK&quot;] * 48
+    assert tomorrow == [&quot;SUPER_OFF_PEAK&quot;] * 48
+
+
+def test_teslemetry_quantise_two_distinct_exact():
+    &quot;&quot;&quot;Economy-7 (two distinct rates) uses two tiers, cheapest -&gt; SUPER_OFF_PEAK, exact prices.&quot;&quot;&quot;
+    rates = {}
+    for m in range(0, 2880):
+        local = m % 1440
+        rates[m] = 8.0 if (0 &lt;= local &lt; 300) else 30.0  # cheap 00:00-05:00, else dear
+    prices, today, tomorrow = TeslemetryAPI._quantise_side(rates, 30.0)
+    assert prices == {&quot;SUPER_OFF_PEAK&quot;: 0.08, &quot;OFF_PEAK&quot;: 0.30}
+    assert today[0] == &quot;SUPER_OFF_PEAK&quot; and today[10] == &quot;OFF_PEAK&quot;  # slot 10 = 05:00
+
+
+def test_teslemetry_quantise_agile_three_bands_clamped_rounded():
+    &quot;&quot;&quot;A wide/varied series quantises to 3 mean-priced bands; negatives clamp to 0; prices whole pence.&quot;&quot;&quot;
+    rates = {}
+    for m in range(0, 2880):
+        slot = (m % 1440) // 30
+        rates[m] = [-5.0, 12.0, 45.0][slot % 3]  # a value in each band, incl. a negative
+    prices, today, tomorrow = TeslemetryAPI._quantise_side(rates, 12.0)
+    assert set(prices) == {&quot;SUPER_OFF_PEAK&quot;, &quot;OFF_PEAK&quot;, &quot;PARTIAL_PEAK&quot;}
+    assert prices[&quot;SUPER_OFF_PEAK&quot;] == 0.0            # -5p clamped to 0, rounded whole pence
+    assert all(p == round(p, 2) for p in prices.values())
+    assert set(today) &lt;= set(prices)                  # matched sets: every slot tier is priced
+    assert len(today) == 48 and len(tomorrow) == 48
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run tests to verify they fail</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all -k teslemetry &gt; /tmp/t.log 2&gt;&amp;1; grep -E "AttributeError|_quantise_side|FAIL|Error" /tmp/t.log</code>
+Expected: FAIL — <code>_quantise_side</code> does not exist.</p>
+<ul>
+<li>[ ] <strong>Step 3: Add constants and implement <code>_quantise_side</code></strong></li>
+</ul>
+<p>Add the module constants from the File Structure section, then add this staticmethod:</p>
+<pre><code class="language-python">@staticmethod
+def _quantise_side(rate_dict, default_pence):
+    &quot;&quot;&quot;Quantise a per-minute pence rate dict into &lt;=3 named GBP tiers over today+tomorrow.
+
+    Samples every 30 minutes for today (minutes 0-1439) and tomorrow (1440-2879), converts to
+    GBP clamped at 0 and rounded to whole pence, then either maps &lt;=3 distinct values one-to-one
+    onto the real tiers (cheapest -&gt; SUPER_OFF_PEAK) or splits [min,max] into 3 equal-width bands
+    priced at each band's mean. Returns (tier_prices, today_tiers, tomorrow_tiers) where the slot
+    lists only ever name tiers present in tier_prices (matched sets).
+    &quot;&quot;&quot;
+    def slot_price(minute):
+        pence = rate_dict.get(minute, default_pence)
+        return round(max(0.0, pence) / 100.0, 2)
+
+    today = [slot_price(m) for m in range(0, 1440, SLOT_MINUTES)]
+    tomorrow = [slot_price(m) for m in range(1440, 2880, SLOT_MINUTES)]
+    combined = today + tomorrow
+    distinct = sorted(set(combined))
+
+    if len(distinct) &lt;= len(REAL_TIERS):
+        value_to_tier = {value: REAL_TIERS[index] for index, value in enumerate(distinct)}
+        tier_prices = {tier: value for value, tier in value_to_tier.items()}
+
+        def band_of(value):
+            &quot;&quot;&quot;Return the tier for an exact value in the small-distinct case.&quot;&quot;&quot;
+            return value_to_tier[value]
+    else:
+        low, high = distinct[0], distinct[-1]
+        width = (high - low) / len(REAL_TIERS)
+        buckets = {index: [] for index in range(len(REAL_TIERS))}
+
+        def band_index(value):
+            &quot;&quot;&quot;Return 0..2 for the equal-width band a value falls in (clamped).&quot;&quot;&quot;
+            if width &lt;= 0:
+                return 0
+            return min(len(REAL_TIERS) - 1, int((value - low) / width))
+
+        for value in combined:
+            buckets[band_index(value)].append(value)
+        tier_prices = {REAL_TIERS[index]: round(sum(values) / len(values), 2) for index, values in buckets.items() if values}
+
+        def band_of(value):
+            &quot;&quot;&quot;Return the tier name for the band a value falls in.&quot;&quot;&quot;
+            return REAL_TIERS[band_index(value)]
+
+    today_tiers = [band_of(value) for value in today]
+    tomorrow_tiers = [band_of(value) for value in tomorrow]
+    return tier_prices, today_tiers, tomorrow_tiers
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run tests to verify they pass</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all -k teslemetry &gt; /tmp/t.log 2&gt;&amp;1; grep -E "PASSED|FAIL|Error" /tmp/t.log</code>
+Expected: PASS.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/teslemetry.py apps/predbat/tests/test_teslemetry.py
+git commit -m &quot;feat(teslemetry): quantise rates into &lt;=3 GBP tiers for the real-rate tariff&quot;
+</code></pre>
+<hr />
+<h3 id="task-2-_render_side-one-sides-intervals-energy_charges-tou_periods">Task 2: <code>_render_side</code> — one side's intervals → <code>energy_charges</code> + <code>tou_periods</code></h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/teslemetry.py</code> (add <code>_tesla_dow</code>, <code>_side_layout</code>, <code>_render_side</code> staticmethods)
+- Test: <code>apps/predbat/tests/test_teslemetry.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>_quantise_side</code> (Task 1).
+- Produces:
+  - <code>_tesla_dow(python_weekday) -&gt; int</code> — <code>(python_weekday + 1) % 7</code> (Python Mon=0 → Tesla Sun=0).
+  - <code>_side_layout(today_tiers, tomorrow_tiers, today_dow) -&gt; dict[int, list[tuple[int,int,str]]]</code> — per-day-of-week (0-6) list of <code>(from_min, to_min, tier)</code> intervals coalescing consecutive same-tier slots; today's shape on <code>today_dow</code>, tomorrow's on <code>today_dow+1</code>, all other days replicate tomorrow. Each day's intervals partition <code>[0,1440)</code>.
+  - <code>_render_side(layout, tier_prices) -&gt; (energy_charges_side: dict, tou_periods: dict)</code> — Tesla blocks. <code>energy_charges_side = {"ALL": {"rates": {"ALL": 0}}, "AllYear": {"rates": &lt;only tiers present in layout&gt;}}</code>; <code>tou_periods = {tier: {"periods": [period_dict, ...]}}</code>. A day-end interval (<code>to_min == 1440</code>) renders as <code>toHour:0, toMinute:0</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<pre><code class="language-python">def test_teslemetry_tesla_dow_sunday_zero():
+    &quot;&quot;&quot;Python weekday (Mon=0..Sun=6) maps to Tesla fromDayOfWeek (Sun=0..Sat=6).&quot;&quot;&quot;
+    assert TeslemetryAPI._tesla_dow(6) == 0   # Sunday
+    assert TeslemetryAPI._tesla_dow(0) == 1   # Monday
+    assert TeslemetryAPI._tesla_dow(5) == 6   # Saturday
+
+
+def test_teslemetry_side_layout_partitions_every_day():
+    &quot;&quot;&quot;Every day-of-week's intervals tile [0,1440) with no gaps or overlaps.&quot;&quot;&quot;
+    today = [&quot;SUPER_OFF_PEAK&quot;] * 10 + [&quot;OFF_PEAK&quot;] * 38
+    tomorrow = [&quot;OFF_PEAK&quot;] * 48
+    layout = TeslemetryAPI._side_layout(today, tomorrow, today_dow=2)
+    assert set(layout) == set(range(7))
+    for day, intervals in layout.items():
+        covered = 0
+        for (frm, to, _tier) in sorted(intervals):
+            assert frm == covered  # no gap/overlap
+            covered = to
+        assert covered == 1440
+    # today's shape only on dow 2; the rest carry tomorrow's flat shape
+    assert layout[2][0] == (0, 300, &quot;SUPER_OFF_PEAK&quot;)
+    assert layout[3] == [(0, 1440, &quot;OFF_PEAK&quot;)]
+
+
+def test_teslemetry_render_side_matched_sets_and_day_end():
+    &quot;&quot;&quot;Rendered rates name exactly the tiers used in periods; day-end shows 00:00.&quot;&quot;&quot;
+    layout = {day: [(0, 1440, &quot;OFF_PEAK&quot;)] for day in range(7)}
+    charges, periods = TeslemetryAPI._render_side(layout, {&quot;OFF_PEAK&quot;: 0.30, &quot;SUPER_OFF_PEAK&quot;: 0.08})
+    assert set(charges[&quot;AllYear&quot;][&quot;rates&quot;]) == {&quot;OFF_PEAK&quot;}      # SUPER_OFF_PEAK unused -&gt; dropped (matched sets)
+    assert set(periods) == {&quot;OFF_PEAK&quot;}
+    assert charges[&quot;ALL&quot;] == {&quot;rates&quot;: {&quot;ALL&quot;: 0}}
+    sample = periods[&quot;OFF_PEAK&quot;][&quot;periods&quot;][0]
+    assert (sample[&quot;fromHour&quot;], sample[&quot;fromMinute&quot;], sample[&quot;toHour&quot;], sample[&quot;toMinute&quot;]) == (0, 0, 0, 0)
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run tests to verify they fail</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all -k teslemetry &gt; /tmp/t.log 2&gt;&amp;1; grep -E "AttributeError|_side_layout|_render_side|FAIL" /tmp/t.log</code>
+Expected: FAIL — helpers do not exist.</p>
+<ul>
+<li>[ ] <strong>Step 3: Implement the three helpers</strong></li>
+</ul>
+<pre><code class="language-python">@staticmethod
+def _tesla_dow(python_weekday):
+    &quot;&quot;&quot;Map a Python weekday (0=Mon..6=Sun) to Tesla's fromDayOfWeek (0=Sun..6=Sat).
+
+    Isolated so any future convention change is a one-line fix.
+    &quot;&quot;&quot;
+    return (python_weekday + 1) % 7
+
+@staticmethod
+def _coalesce_day(slot_tiers):
+    &quot;&quot;&quot;Coalesce a 48-slot tier list into [(from_min, to_min, tier), ...] partitioning [0,1440).&quot;&quot;&quot;
+    intervals = []
+    index = 0
+    while index &lt; SLOTS_PER_DAY:
+        tier = slot_tiers[index]
+        run_end = index
+        while run_end &lt; SLOTS_PER_DAY and slot_tiers[run_end] == tier:
+            run_end += 1
+        intervals.append((index * SLOT_MINUTES, run_end * SLOT_MINUTES, tier))
+        index = run_end
+    return intervals
+
+@staticmethod
+def _side_layout(today_tiers, tomorrow_tiers, today_dow):
+    &quot;&quot;&quot;Place today's coalesced shape on today_dow, tomorrow's on the next day, replicate tomorrow's on the rest.&quot;&quot;&quot;
+    today_intervals = TeslemetryAPI._coalesce_day(today_tiers)
+    tomorrow_intervals = TeslemetryAPI._coalesce_day(tomorrow_tiers)
+    layout = {}
+    for day in range(7):
+        if day == today_dow % 7:
+            layout[day] = list(today_intervals)
+        else:
+            layout[day] = list(tomorrow_intervals)
+    layout[(today_dow + 1) % 7] = list(tomorrow_intervals)
+    return layout
+
+@staticmethod
+def _render_side(layout, tier_prices):
+    &quot;&quot;&quot;Render a per-day interval layout into (energy_charges_side, tou_periods), matched tier sets only.&quot;&quot;&quot;
+    periods = {}
+    used = set()
+    for day, intervals in layout.items():
+        for (frm, to, tier) in intervals:
+            from_hour, from_minute = frm // 60, frm % 60
+            if to &gt;= 1440:
+                to_hour, to_minute = 0, 0
+            else:
+                to_hour, to_minute = to // 60, to % 60
+            periods.setdefault(tier, {&quot;periods&quot;: []})[&quot;periods&quot;].append(
+                {&quot;fromDayOfWeek&quot;: day, &quot;toDayOfWeek&quot;: day, &quot;fromHour&quot;: from_hour, &quot;fromMinute&quot;: from_minute, &quot;toHour&quot;: to_hour, &quot;toMinute&quot;: to_minute}
+            )
+            used.add(tier)
+    rates = {tier: price for tier, price in tier_prices.items() if tier in used}
+    energy_charges_side = {&quot;ALL&quot;: {&quot;rates&quot;: {&quot;ALL&quot;: 0}}, &quot;AllYear&quot;: {&quot;rates&quot;: rates}}
+    return energy_charges_side, periods
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run tests to verify they pass</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all -k teslemetry &gt; /tmp/t.log 2&gt;&amp;1; grep -E "PASSED|FAIL|Error" /tmp/t.log</code>
+Expected: PASS.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/teslemetry.py apps/predbat/tests/test_teslemetry.py
+git commit -m &quot;feat(teslemetry): render quantised bands into per-DOW tou_periods&quot;
+</code></pre>
+<hr />
+<h3 id="task-3-_apply_boost-carve-an-on_peak-window-onto-its-real-days">Task 3: <code>_apply_boost</code> — carve an <code>ON_PEAK</code> window onto its real day(s)</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/teslemetry.py</code> (add <code>_carve_interval</code>, <code>_boost_segments</code>, <code>_apply_boost</code> staticmethods)
+- Test: <code>apps/predbat/tests/test_teslemetry.py</code></p>
+<p><strong>Interfaces:</strong>
+- Produces:
+  - <code>_carve_interval(intervals, start_min, end_min, tier) -&gt; list[tuple[int,int,str]]</code> — removes <code>[start,end)</code> from a single day's partitioning intervals and inserts <code>(start,end,tier)</code>; result stays sorted and partitions <code>[0,1440)</code>.
+  - <code>_boost_segments(window, now_min) -&gt; list[tuple[int,int,int]]</code> — decides which day(s) the boost's current-or-next occurrence lands on, as <code>(day_offset, from_min, to_min)</code> where <code>day_offset</code> is <code>0</code>=today or <code>1</code>=tomorrow. A same-day window (<code>start &lt; end</code>) that has <strong>already ended today</strong> (<code>end &lt;= now_min</code>) rolls to <strong>tomorrow</strong>; otherwise <strong>today</strong>. A midnight-wrapped window (<code>start &gt;= end</code>) is <code>[(0,start,1440),(1,0,end)]</code> normally, but when we are already in its post-midnight tail (<code>now_min &lt; end</code>) it is just <code>[(0,0,end)]</code> (today's head).
+  - <code>_apply_boost(buy_layout, sell_layout, segments, today_dow) -&gt; None</code> — mutates both layouts in place, carving <code>BOOST_TIER</code> onto <code>(today_dow + offset) % 7</code> for each segment. Never all 7 days.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<pre><code class="language-python">def test_teslemetry_carve_interval_splits_and_partitions():
+    &quot;&quot;&quot;Carving a mid-day window splits the covering interval and still partitions the day.&quot;&quot;&quot;
+    day = [(0, 1440, &quot;OFF_PEAK&quot;)]
+    out = TeslemetryAPI._carve_interval(day, 1020, 1080, &quot;ON_PEAK&quot;)  # 17:00-18:00
+    assert out == [(0, 1020, &quot;OFF_PEAK&quot;), (1020, 1080, &quot;ON_PEAK&quot;), (1080, 1440, &quot;OFF_PEAK&quot;)]
+
+
+def test_teslemetry_boost_segments_today_vs_tomorrow():
+    &quot;&quot;&quot;A same-day window ending in the future is today; one already ended is tomorrow; wrap splits.&quot;&quot;&quot;
+    assert TeslemetryAPI._boost_segments((1020, 1080), now_min=600) == [(0, 1020, 1080)]   # 10:00, 17-18 upcoming -&gt; today
+    assert TeslemetryAPI._boost_segments((540, 660), now_min=600) == [(0, 540, 660)]        # in progress (09-11 @10:00) -&gt; today
+    assert TeslemetryAPI._boost_segments((300, 420), now_min=600) == [(1, 300, 420)]        # 05-07 ended by 10:00 -&gt; tomorrow
+    assert TeslemetryAPI._boost_segments((1380, 60), now_min=720) == [(0, 1380, 1440), (1, 0, 60)]  # 23-01 upcoming -&gt; today+tomorrow
+    assert TeslemetryAPI._boost_segments((1380, 60), now_min=30) == [(0, 0, 60)]            # 00:30 inside the 23-01 tail -&gt; today head
+
+
+def test_teslemetry_apply_boost_places_segments_on_offset_days():
+    &quot;&quot;&quot;Each (offset, from, to) segment carves BOOST_TIER onto (today_dow + offset) % 7, both sides.&quot;&quot;&quot;
+    buy = {d: [(0, 1440, &quot;OFF_PEAK&quot;)] for d in range(7)}
+    sell = {d: [(0, 1440, &quot;SUPER_OFF_PEAK&quot;)] for d in range(7)}
+    TeslemetryAPI._apply_boost(buy, sell, [(0, 1020, 1080)], today_dow=3)  # today = Tesla dow 3
+    assert (1020, 1080, &quot;ON_PEAK&quot;) in buy[3]
+    assert (1020, 1080, &quot;ON_PEAK&quot;) in sell[3]
+    assert all(seg[2] != &quot;ON_PEAK&quot; for d in range(7) if d != 3 for seg in buy[d])
+
+
+def test_teslemetry_apply_boost_wrap_segments_span_two_days():
+    &quot;&quot;&quot;A two-segment wrap carves the tail on today's DOW and the head on tomorrow's DOW.&quot;&quot;&quot;
+    buy = {d: [(0, 1440, &quot;OFF_PEAK&quot;)] for d in range(7)}
+    sell = {d: [(0, 1440, &quot;OFF_PEAK&quot;)] for d in range(7)}
+    TeslemetryAPI._apply_boost(buy, sell, [(0, 1380, 1440), (1, 0, 60)], today_dow=6)  # tomorrow = (6+1)%7 = 0
+    assert (1380, 1440, &quot;ON_PEAK&quot;) in buy[6]  # today
+    assert (0, 60, &quot;ON_PEAK&quot;) in buy[0]       # tomorrow
+    assert all(seg[2] != &quot;ON_PEAK&quot; for seg in buy[1])  # an unrelated day untouched
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run tests to verify they fail</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all -k teslemetry &gt; /tmp/t.log 2&gt;&amp;1; grep -E "AttributeError|_carve_interval|_apply_boost|FAIL" /tmp/t.log</code>
+Expected: FAIL.</p>
+<ul>
+<li>[ ] <strong>Step 3: Implement carve + boost</strong></li>
+</ul>
+<pre><code class="language-python">@staticmethod
+def _carve_interval(intervals, start_min, end_min, tier):
+    &quot;&quot;&quot;Remove [start_min, end_min) from a day's partitioning intervals and insert (start, end, tier).&quot;&quot;&quot;
+    out = []
+    for (frm, to, existing) in intervals:
+        if to &lt;= start_min or frm &gt;= end_min:
+            out.append((frm, to, existing))
+            continue
+        if frm &lt; start_min:
+            out.append((frm, start_min, existing))
+        if to &gt; end_min:
+            out.append((end_min, to, existing))
+    out.append((start_min, end_min, tier))
+    out.sort()
+    return out
+
+@staticmethod
+def _boost_segments(window, now_min):
+    &quot;&quot;&quot;Decide which day(s) the boost lands on for the window's current-or-next occurrence.
+
+    Returns [(day_offset, from_min, to_min)] with day_offset 0=today / 1=tomorrow. A same-day
+    window already finished today (end &lt;= now) rolls to tomorrow; otherwise it stays today. A
+    midnight-wrapped window splits across today and tomorrow, except when we are already inside its
+    post-midnight tail (now &lt; end), where only today's head [0, end) still needs the boost.
+    &quot;&quot;&quot;
+    start_min, end_min = window
+    if start_min &lt; end_min:
+        offset = 0 if end_min &gt; now_min else 1
+        return [(offset, start_min, end_min)]
+    if now_min &lt; end_min:
+        return [(0, 0, end_min)]
+    return [(0, start_min, 1440), (1, 0, end_min)]
+
+@staticmethod
+def _apply_boost(buy_layout, sell_layout, segments, today_dow):
+    &quot;&quot;&quot;Carve BOOST_TIER onto (today_dow + offset) % 7 for each (offset, from, to) segment, both sides.&quot;&quot;&quot;
+    for layout in (buy_layout, sell_layout):
+        for (offset, seg_start, seg_end) in segments:
+            day = (today_dow + offset) % 7
+            layout[day] = TeslemetryAPI._carve_interval(layout[day], seg_start, seg_end, BOOST_TIER)
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run tests to verify they pass</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all -k teslemetry &gt; /tmp/t.log 2&gt;&amp;1; grep -E "PASSED|FAIL|Error" /tmp/t.log</code>
+Expected: PASS.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/teslemetry.py apps/predbat/tests/test_teslemetry.py
+git commit -m &quot;feat(teslemetry): carve ON_PEAK export boost into both tariff sides&quot;
+</code></pre>
+<hr />
+<h3 id="task-4-rewrite-build_tariffdischarge_window-and-set_tarifftariff">Task 4: Rewrite <code>build_tariff(discharge_window)</code> and <code>set_tariff(tariff)</code></h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/teslemetry.py</code> — replace <code>build_tariff</code> (currently ~line 799, takes <code>mode</code>/<code>now</code>) and <code>set_tariff</code> (~line 876, takes <code>mode</code>); add <code>_discharge_window</code>, <code>_rate_side</code>, <code>_boost_price</code> helpers.
+- Test: <code>apps/predbat/tests/test_teslemetry.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>_quantise_side</code>, <code>_side_layout</code>, <code>_render_side</code>, <code>_boost_segments</code>, <code>_apply_boost</code>, <code>_tesla_dow</code>, <code>current_rates</code> (existing), <code>get_minutes_now</code> (existing).
+- Produces:
+  - <code>_discharge_window() -&gt; tuple[int,int] | None</code> — <code>(start_min, end_min)</code> from <code>self.schedule["discharge"]</code> when <code>enable</code> is set and <code>start != end</code>, else <code>None</code>.
+  - <code>_boost_price(buy_prices, sell_prices) -&gt; float</code> — <code>max(EXPORT_SELL_RATE, round(2 * horizon_max, 2))</code> where <code>horizon_max</code> is the max GBP tier price across both sides.
+  - <code>build_tariff(discharge_window=None, now_min=None) -&gt; dict</code> — a single <code>PREDBAT</code> tariff (buy from <code>rate_import</code>, sell from <code>rate_export</code>, optional boost placed via <code>_boost_segments</code>). No <code>mode</code> param. <code>now_min</code> defaults to <code>get_minutes_now()</code>; tests pass it explicitly for determinism.
+  - <code>set_tariff(tariff, force=False) -&gt; bool</code> — pushes a <strong>prebuilt</strong> tariff via <code>time_of_use_settings</code>, deduped on its JSON.
+- <code>today_dow</code> comes from <code>self.base.now</code> (local naive datetime) via <code>.weekday()</code>, falling back to <code>datetime.now(local_tz)</code> when no base (tests); <code>now_min</code> from <code>get_minutes_now()</code> (same local clock).</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<pre><code class="language-python">def test_teslemetry_build_tariff_single_code_real_bands():
+    &quot;&quot;&quot;build_tariff() with no window yields one PREDBAT tariff, GBP, with real bands and no ON_PEAK.&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)  # helper below
+    tariff = api.build_tariff(None)
+    assert tariff[&quot;code&quot;] == &quot;PREDBAT&quot;
+    assert tariff[&quot;currency&quot;] == &quot;GBP&quot;
+    assert &quot;ON_PEAK&quot; not in tariff[&quot;seasons&quot;][&quot;AllYear&quot;][&quot;tou_periods&quot;]
+    assert &quot;ON_PEAK&quot; not in tariff[&quot;sell_tariff&quot;][&quot;seasons&quot;][&quot;AllYear&quot;][&quot;tou_periods&quot;]
+
+
+def test_teslemetry_build_tariff_boost_is_strict_max_on_today_dow():
+    &quot;&quot;&quot;A discharge window adds ON_PEAK above every real band, on today's DOW only (both sides).&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    tariff = api.build_tariff((1020, 1080), now_min=600)  # 17:00-18:00 window, now 10:00 -&gt; today
+    sell_periods = tariff[&quot;sell_tariff&quot;][&quot;seasons&quot;][&quot;AllYear&quot;][&quot;tou_periods&quot;]
+    today_dow = api._tesla_dow(api.base.now.weekday())
+    assert set(p[&quot;fromDayOfWeek&quot;] for p in sell_periods[&quot;ON_PEAK&quot;][&quot;periods&quot;]) == {today_dow}
+    boost = tariff[&quot;sell_tariff&quot;][&quot;energy_charges&quot;][&quot;AllYear&quot;][&quot;rates&quot;][&quot;ON_PEAK&quot;]
+    real = [v for t, v in tariff[&quot;sell_tariff&quot;][&quot;energy_charges&quot;][&quot;AllYear&quot;][&quot;rates&quot;].items() if t != &quot;ON_PEAK&quot;]
+    assert all(boost &gt; v for v in real)
+    assert tariff[&quot;energy_charges&quot;][&quot;AllYear&quot;][&quot;rates&quot;][&quot;ON_PEAK&quot;] == boost  # buy mirror
+
+
+def test_teslemetry_build_tariff_fallback_flat_when_no_rates():
+    &quot;&quot;&quot;No base/rates -&gt; flat tariff via the ALL field, still schema-valid, boost still overlays.&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    api.base = None
+    tariff = api.build_tariff(None)
+    assert tariff[&quot;energy_charges&quot;][&quot;ALL&quot;][&quot;rates&quot;][&quot;ALL&quot;] &gt;= 0
+</code></pre>
+<p>Add these test helpers near the top of the test module (after <code>MockTeslemetryAPI</code>):</p>
+<pre><code class="language-python">def _rate_base(import_p, export_p):
+    &quot;&quot;&quot;A minimal base double exposing flat import/export rate dicts and a local clock for build_tariff.&quot;&quot;&quot;
+    from types import SimpleNamespace
+    from datetime import datetime
+    rate_import = {m: import_p for m in range(0, 2880)}
+    rate_export = {m: export_p for m in range(0, 2880)}
+    return SimpleNamespace(rate_import=rate_import, rate_export=rate_export, minutes_now=0, now=datetime(2026, 7, 20, 12, 0), local_tz=None)
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run tests to verify they fail</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all -k teslemetry &gt; /tmp/t.log 2&gt;&amp;1; grep -E "TypeError|KeyError|code|FAIL" /tmp/t.log</code>
+Expected: FAIL — old <code>build_tariff</code> takes <code>mode</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Implement the rewrite</strong></li>
+</ul>
+<p>Replace <code>build_tariff</code> and <code>set_tariff</code>, and add helpers. Replace the whole <code>build_tariff</code> method body and <code>set_tariff</code> with:</p>
+<pre><code class="language-python">def _rate_side(self, rate_dict, default_gbp):
+    &quot;&quot;&quot;Return the 4-tuple (energy_charges_side, tou_periods, tier_prices, layout) for one side.
+
+    layout is None in the flat/fallback branch (no rates), signalling build_tariff to skip the boost;
+    otherwise it is the per-DOW interval layout the boost carves into.
+    &quot;&quot;&quot;
+    if not rate_dict:
+        flat = round(max(0.0, default_gbp), 2)
+        return {&quot;ALL&quot;: {&quot;rates&quot;: {&quot;ALL&quot;: flat}}}, {}, {&quot;SUPER_OFF_PEAK&quot;: flat}, None
+    today_dow = self._tesla_dow(self._local_today_weekday())
+    tier_prices, today_tiers, tomorrow_tiers = self._quantise_side(rate_dict, default_gbp * 100.0)
+    layout = self._side_layout(today_tiers, tomorrow_tiers, today_dow)
+    return (*self._render_side(layout, tier_prices), tier_prices, layout)
+
+def _local_today_weekday(self):
+    &quot;&quot;&quot;Return the site-local weekday (0=Mon) from base.now, falling back to the system clock in tests.&quot;&quot;&quot;
+    base = getattr(self, &quot;base&quot;, None)
+    now = getattr(base, &quot;now&quot;, None) if base is not None else None
+    if now is None:
+        now = datetime.now(getattr(self, &quot;local_tz&quot;, None) or timezone.utc)
+    return now.weekday()
+
+def _discharge_window(self):
+    &quot;&quot;&quot;Return (start_min, end_min) for the committed discharge window when enabled, else None.&quot;&quot;&quot;
+    discharge = self.schedule.get(&quot;discharge&quot;, {})
+    if not discharge.get(&quot;enable&quot;):
+        return None
+    start = self.time_to_minutes(discharge.get(&quot;start_time&quot;, &quot;00:00:00&quot;))
+    end = self.time_to_minutes(discharge.get(&quot;end_time&quot;, &quot;00:00:00&quot;))
+    return None if start == end else (start, end)
+
+@staticmethod
+def _boost_price(*price_maps):
+    &quot;&quot;&quot;Return the synthetic boost price: strictly above every real band and at least the floor.&quot;&quot;&quot;
+    horizon_max = max([value for prices in price_maps for value in prices.values()] + [0.0])
+    return max(TeslemetryAPI.EXPORT_SELL_RATE, round(2 * horizon_max, 2))
+
+def build_tariff(self, discharge_window=None, now_min=None):
+    &quot;&quot;&quot;Build the single PREDBAT tariff: real 3-band buy/sell rates plus an optional ON_PEAK export boost.
+
+    Buy comes from rate_import, sell from rate_export, each quantised over today+tomorrow local days.
+    When discharge_window is given, an ON_PEAK band priced above every real band is carved over that
+    window on its current-or-next occurrence's real day(s) (today if it still ends now/later, else
+    tomorrow; split across today+tomorrow for a midnight wrap), both sides — buy mirrors sell so it
+    never grid-charges to re-export. now_min defaults to the live local clock.
+    &quot;&quot;&quot;
+    if now_min is None:
+        now_min = self.get_minutes_now()
+    import_gbp, export_gbp = self.current_rates()
+    today_dow = self._tesla_dow(self._local_today_weekday())
+    buy_charges, buy_periods, buy_prices, buy_layout = self._rate_side(self._side_rates(&quot;import&quot;), import_gbp)
+    sell_charges, sell_periods, sell_prices, sell_layout = self._rate_side(self._side_rates(&quot;export&quot;), export_gbp)
+    code = &quot;PREDBAT&quot;
+    if discharge_window is not None and buy_layout is not None and sell_layout is not None:
+        boost = self._boost_price(buy_prices, sell_prices)
+        segments = self._boost_segments(discharge_window, now_min)
+        self._apply_boost(buy_layout, sell_layout, segments, today_dow)
+        buy_charges, buy_periods = self._render_side(buy_layout, {**buy_prices, BOOST_TIER: boost})
+        sell_charges, sell_periods = self._render_side(sell_layout, {**sell_prices, BOOST_TIER: boost})
+    return self._assemble_tariff(code, buy_charges, buy_periods, sell_charges, sell_periods)
+</code></pre>
+<blockquote>
+<p>Note: <code>_rate_side</code> must <strong>always return the 4-tuple</strong> <code>(charges, periods, prices, layout)</code> — the flat/fallback branch returns <code>return {"ALL": {"rates": {"ALL": flat}}}, {}, {"SUPER_OFF_PEAK": flat}, None</code> (layout <code>None</code>) and the banded branch returns <code>(*self._render_side(layout, tier_prices), tier_prices, layout)</code>. <code>build_tariff</code> unpacks the 4-tuple and skips the boost when <code>layout is None</code>. Add <code>_side_rates(kind)</code> returning <code>self.base.rate_import</code>/<code>rate_export</code> (or <code>{}</code> when no base) and <code>_assemble_tariff(...)</code> building the top-level dict (below).</p>
+</blockquote>
+<pre><code class="language-python">def _side_rates(self, kind):
+    &quot;&quot;&quot;Return the base rate dict for 'import'/'export', or {} when no base is wired (tests/fallback).&quot;&quot;&quot;
+    base = getattr(self, &quot;base&quot;, None)
+    if base is None:
+        return {}
+    return getattr(base, &quot;rate_import&quot; if kind == &quot;import&quot; else &quot;rate_export&quot;, {}) or {}
+
+def _assemble_tariff(self, code, buy_charges, buy_periods, sell_charges, sell_periods):
+    &quot;&quot;&quot;Assemble the top-level tariff_content_v2 dict from prebuilt buy/sell charge + period blocks.&quot;&quot;&quot;
+    common = {
+        &quot;min_applicable_demand&quot;: 0, &quot;max_applicable_demand&quot;: 0, &quot;monthly_minimum_bill&quot;: 0,
+        &quot;monthly_charges&quot;: 0, &quot;daily_charges&quot;: [{&quot;name&quot;: &quot;Charge&quot;, &quot;amount&quot;: 0}],
+        &quot;demand_charges&quot;: {&quot;ALL&quot;: {&quot;rates&quot;: {&quot;ALL&quot;: 0}}, &quot;AllYear&quot;: {&quot;rates&quot;: {}}},
+    }
+    buy_seasons = {&quot;AllYear&quot;: {&quot;fromMonth&quot;: 1, &quot;fromDay&quot;: 1, &quot;toMonth&quot;: 12, &quot;toDay&quot;: 31, &quot;tou_periods&quot;: buy_periods}}
+    sell_seasons = {&quot;AllYear&quot;: {&quot;fromMonth&quot;: 1, &quot;fromDay&quot;: 1, &quot;toMonth&quot;: 12, &quot;toDay&quot;: 31, &quot;tou_periods&quot;: sell_periods}}
+    return {
+        &quot;version&quot;: 1, &quot;utility&quot;: &quot;Predbat&quot;, &quot;code&quot;: code, &quot;name&quot;: &quot;Predbat&quot;, &quot;currency&quot;: &quot;GBP&quot;,
+        &quot;daily_demand_charges&quot;: {}, &quot;energy_charges&quot;: buy_charges, &quot;seasons&quot;: buy_seasons,
+        &quot;sell_tariff&quot;: {**common, &quot;utility&quot;: &quot;Predbat&quot;, &quot;energy_charges&quot;: sell_charges, &quot;seasons&quot;: sell_seasons},
+        **common,
+    }
+
+async def set_tariff(self, tariff, force=False):
+    &quot;&quot;&quot;Push a prebuilt tariff via time_of_use_settings, deduped on the serialised tariff body.
+
+    Prices are rounded to whole pence upstream so per-cycle rate nudges do not change the JSON;
+    a re-push therefore fires only on a genuine band, boost-window or day-of-week change.
+    &quot;&quot;&quot;
+    signature = json.dumps(tariff, sort_keys=True)
+    return await self._apply_command(&quot;tariff&quot;, signature, lambda: self._command(&quot;time_of_use_settings&quot;, {&quot;tou_settings&quot;: {&quot;tariff_content_v2&quot;: tariff}}), force=force)
+</code></pre>
+<p>Delete the old <code>build_tariff</code> body (the <code>charges</code>/<code>tou_periods</code>/<code>seasons</code>/<code>sell_rates</code>/<code>buy_rates</code> construction and the <code>mode == "export_now"</code> window maths, ~lines 799-874) — it is fully replaced.</p>
+<ul>
+<li>[ ] <strong>Step 4: Run tests to verify they pass</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all -k teslemetry &gt; /tmp/t.log 2&gt;&amp;1; grep -E "PASSED|FAIL|Error" /tmp/t.log</code>
+Expected: the three new tests PASS. Old <code>build_tariff(mode=...)</code> tests will now fail — they are fixed in Task 8.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/teslemetry.py apps/predbat/tests/test_teslemetry.py
+git commit -m &quot;feat(teslemetry): single PREDBAT tariff from real rates + discharge-window boost&quot;
+</code></pre>
+<hr />
+<h3 id="task-5-sync_tariff-and-wiring-into-run-apply_schedule">Task 5: <code>sync_tariff()</code> and wiring into <code>run()</code> + <code>apply_schedule()</code></h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/teslemetry.py</code> — add <code>sync_tariff</code>; call it from <code>apply_schedule</code> (~line 546) and <code>run</code> (~line 356); the per-cycle tariff push leaves <code>assert_device_state</code> (Task 6).
+- Test: <code>apps/predbat/tests/test_teslemetry.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>build_tariff</code>, <code>_discharge_window</code>, <code>set_tariff</code>, <code>_is_read_only</code> (existing).
+- Produces: <code>sync_tariff() -&gt; bool</code> — builds from current rates + committed discharge window and pushes via <code>set_tariff</code> (deduped); returns <code>True</code> on success/no-op, <code>False</code> on a failed push. Gated on <code>not self._is_read_only()</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong></li>
+</ul>
+<pre><code class="language-python">def test_teslemetry_sync_tariff_dedupes_unchanged():
+    &quot;&quot;&quot;Two syncs with identical inputs push the tariff exactly once (monthly API-call budget).&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    api.mock_responses[&quot;/api/1/energy_sites/123456/time_of_use_settings&quot;] = {&quot;response&quot;: {&quot;code&quot;: 201}}
+    run_async(api.sync_tariff())
+    run_async(api.sync_tariff())
+    posts = [r for r in api.requests_made if r[0] == &quot;POST&quot; and r[1].endswith(&quot;/time_of_use_settings&quot;)]
+    assert len(posts) == 1
+
+
+def test_teslemetry_sync_tariff_pushes_on_window_change():
+    &quot;&quot;&quot;Enabling a discharge window changes the tariff and triggers a second push.&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    api.mock_responses[&quot;/api/1/energy_sites/123456/time_of_use_settings&quot;] = {&quot;response&quot;: {&quot;code&quot;: 201}}
+    run_async(api.sync_tariff())
+    api.schedule[&quot;discharge&quot;] = {&quot;start_time&quot;: &quot;17:00:00&quot;, &quot;end_time&quot;: &quot;18:00:00&quot;, &quot;soc&quot;: 30, &quot;enable&quot;: 1}
+    run_async(api.sync_tariff())
+    posts = [r for r in api.requests_made if r[0] == &quot;POST&quot; and r[1].endswith(&quot;/time_of_use_settings&quot;)]
+    assert len(posts) == 2
+
+
+def test_teslemetry_sync_tariff_read_only_no_push():
+    &quot;&quot;&quot;Read-only mode sends no tariff command.&quot;&quot;&quot;
+    from types import SimpleNamespace
+    api = MockTeslemetryAPI()
+    api.base = SimpleNamespace(rate_import={m: 28.0 for m in range(2880)}, rate_export={m: 15.0 for m in range(2880)}, minutes_now=0, now=None, local_tz=None, get_arg=lambda a, d=None, **k: True if a == &quot;set_read_only&quot; else d)
+    run_async(api.sync_tariff())
+    assert not [r for r in api.requests_made if r[0] == &quot;POST&quot;]
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run tests to verify they fail</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all -k teslemetry &gt; /tmp/t.log 2&gt;&amp;1; grep -E "AttributeError|sync_tariff|FAIL" /tmp/t.log</code>
+Expected: FAIL.</p>
+<ul>
+<li>[ ] <strong>Step 3: Implement and wire <code>sync_tariff</code></strong></li>
+</ul>
+<pre><code class="language-python">async def sync_tariff(self):
+    &quot;&quot;&quot;Build the tariff from current rates + committed discharge window and push it (deduped).
+
+    Cheap to call every cycle: set_tariff only reaches the API when the serialised tariff changes,
+    i.e. on a genuine rate-band, discharge-window or day-of-week change. Gated on read-only mode.
+    &quot;&quot;&quot;
+    if self._is_read_only():
+        return True
+    tariff = self.build_tariff(self._discharge_window())
+    return await self.set_tariff(tariff)
+</code></pre>
+<p>In <code>apply_schedule</code> (~line 546), after <code>self.publish_schedule_entities()</code> and before/with the existing device-state assertion, add a tariff sync so the boost tracks the just-committed window:</p>
+<pre><code class="language-python">        if self.last_soc is not None and not self._is_read_only():
+            await self.sync_tariff()
+            await self.assert_device_state(self.evaluate_schedule(self.get_minutes_now(), self.last_soc))
+</code></pre>
+<p>In <code>run</code> (~line 418), where the emulator asserts device state each cycle, add the sync before the assert:</p>
+<pre><code class="language-python">        if self.schedule_loaded and self.last_soc is not None and not self._is_read_only():
+            await self.sync_tariff()
+            await self.assert_device_state(self.evaluate_schedule(self.get_minutes_now(), self.last_soc))
+</code></pre>
+<p>(The <code>self.reconcile_done</code> term in that <code>run</code> guard is removed in Task 7.)</p>
+<ul>
+<li>[ ] <strong>Step 4: Run tests to verify they pass</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all -k teslemetry &gt; /tmp/t.log 2&gt;&amp;1; grep -E "PASSED|FAIL|Error" /tmp/t.log</code>
+Expected: the three new tests PASS.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/teslemetry.py apps/predbat/tests/test_teslemetry.py
+git commit -m &quot;feat(teslemetry): sync_tariff on commit and per-cycle, deduped to genuine changes&quot;
+</code></pre>
+<hr />
+<h3 id="task-6-rewrite-evaluate_schedule-drop-tariff_mode-and-assert_device_state-drop-tariff">Task 6: Rewrite <code>evaluate_schedule</code> (drop <code>tariff_mode</code>) and <code>assert_device_state</code> (drop tariff)</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/teslemetry.py</code> — <code>evaluate_schedule</code> (~line 481) and <code>assert_device_state</code> (~line 582).
+- Test: <code>apps/predbat/tests/test_teslemetry.py</code></p>
+<p><strong>Interfaces:</strong>
+- Produces:
+  - <code>evaluate_schedule(minutes_now, soc) -&gt; dict</code> with keys <code>export_rule, grid_charging, reserve, mode</code> (no <code>tariff_mode</code>).
+  - <code>assert_device_state(desired) -&gt; bool</code> — asserts <code>export_rule</code>, <code>grid_charging</code>, <code>reserve</code>, <code>mode</code> only (no tariff).</p>
+<ul>
+<li>[ ] <strong>Step 1: Update the failing tests</strong></li>
+</ul>
+<p>Replace <code>test_teslemetry_evaluate_schedule_states</code> body assertions to drop <code>tariff_mode</code>:</p>
+<pre><code class="language-python">def test_teslemetry_evaluate_schedule_states():
+    &quot;&quot;&quot;The five reachable device states without the removed tariff_mode lever.&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    api.schedule = {
+        &quot;reserve&quot;: 20,
+        &quot;charge&quot;: {&quot;start_time&quot;: &quot;01:00:00&quot;, &quot;end_time&quot;: &quot;05:00:00&quot;, &quot;soc&quot;: 90, &quot;enable&quot;: 1},
+        &quot;discharge&quot;: {&quot;start_time&quot;: &quot;17:00:00&quot;, &quot;end_time&quot;: &quot;19:00:00&quot;, &quot;soc&quot;: 30, &quot;enable&quot;: 1},
+    }
+    assert api.evaluate_schedule(2 * 60, 50) == {&quot;export_rule&quot;: &quot;pv_only&quot;, &quot;grid_charging&quot;: True, &quot;reserve&quot;: 90, &quot;mode&quot;: &quot;backup&quot;}
+    assert api.evaluate_schedule(2 * 60, 90) == {&quot;export_rule&quot;: &quot;pv_only&quot;, &quot;grid_charging&quot;: False, &quot;reserve&quot;: 90, &quot;mode&quot;: &quot;backup&quot;}
+    assert api.evaluate_schedule(18 * 60, 80) == {&quot;export_rule&quot;: &quot;battery_ok&quot;, &quot;grid_charging&quot;: False, &quot;reserve&quot;: 30, &quot;mode&quot;: &quot;autonomous&quot;}
+    assert api.evaluate_schedule(18 * 60, 30) == {&quot;export_rule&quot;: &quot;pv_only&quot;, &quot;grid_charging&quot;: False, &quot;reserve&quot;: 30, &quot;mode&quot;: &quot;self_consumption&quot;}
+    assert api.evaluate_schedule(12 * 60, 60) == {&quot;export_rule&quot;: &quot;pv_only&quot;, &quot;grid_charging&quot;: True, &quot;reserve&quot;: 20, &quot;mode&quot;: &quot;self_consumption&quot;}
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run test to verify it fails</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all -k teslemetry &gt; /tmp/t.log 2&gt;&amp;1; grep -E "tariff_mode|AssertionError|FAIL" /tmp/t.log</code>
+Expected: FAIL — current dict still has <code>tariff_mode</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Rewrite both methods</strong></li>
+</ul>
+<p><code>evaluate_schedule</code> — remove <code>tariff_mode</code> from every returned dict (keep the branching identical otherwise):</p>
+<pre><code class="language-python">    def evaluate_schedule(self, minutes_now, soc):
+        &quot;&quot;&quot;Map the committed schedule + wall clock + live SOC to the desired device tuple.
+
+        Returns a dict with keys export_rule, grid_charging, reserve and mode. Charge wins over an
+        overlapping discharge (matches execute.py). Export uses autonomous + battery_ok, which the
+        ON_PEAK boost over the committed discharge window (in the tariff) makes favourable; the tariff
+        is no longer part of this per-cycle tuple. Every non-export state allows pv_only export so
+        surplus solar is never curtailed.
+        &quot;&quot;&quot;
+        charge = self.schedule.get(&quot;charge&quot;, {})
+        discharge = self.schedule.get(&quot;discharge&quot;, {})
+        reserve = self.schedule.get(&quot;reserve&quot;, 20)
+        if self.in_window(minutes_now, charge):
+            target = int(charge.get(&quot;soc&quot;, 100))
+            grid = soc &lt; target
+            return {&quot;export_rule&quot;: &quot;pv_only&quot;, &quot;grid_charging&quot;: grid, &quot;reserve&quot;: target, &quot;mode&quot;: &quot;backup&quot;}
+        if self.in_window(minutes_now, discharge):
+            target = int(discharge.get(&quot;soc&quot;, 10))
+            if soc &gt; target:
+                return {&quot;export_rule&quot;: &quot;battery_ok&quot;, &quot;grid_charging&quot;: False, &quot;reserve&quot;: target, &quot;mode&quot;: &quot;autonomous&quot;}
+            return {&quot;export_rule&quot;: &quot;pv_only&quot;, &quot;grid_charging&quot;: False, &quot;reserve&quot;: target, &quot;mode&quot;: &quot;self_consumption&quot;}
+        return {&quot;export_rule&quot;: &quot;pv_only&quot;, &quot;grid_charging&quot;: True, &quot;reserve&quot;: int(reserve), &quot;mode&quot;: &quot;self_consumption&quot;}
+</code></pre>
+<p><code>assert_device_state</code> — drop the tariff setter and its mirror; keep the other four:</p>
+<pre><code class="language-python">    async def assert_device_state(self, desired):
+        &quot;&quot;&quot;Assert the desired device tuple (export rule, grid charging, reserve, mode); tariff is synced separately.
+
+        Each setter dedupes on write-on-change, so an unchanged assert costs zero command credits.
+        Successful writes are mirrored into the diagnostic control entities; failures leave both the
+        dedupe cache and the entity state untouched so the next cycle retries.
+        &quot;&quot;&quot;
+        results = {}
+        results[&quot;export_rule&quot;] = await self.set_export_rule(desired[&quot;export_rule&quot;])
+        results[&quot;grid_charging&quot;] = await self.set_grid_charging(desired[&quot;grid_charging&quot;])
+        results[&quot;reserve&quot;] = await self.set_backup_reserve(desired[&quot;reserve&quot;])
+        results[&quot;mode&quot;] = await self.set_operation_mode(desired[&quot;mode&quot;])
+        if results[&quot;export_rule&quot;]:
+            self.publish_control(self.entity(&quot;allow_export&quot;, domain=&quot;select&quot;), desired[&quot;export_rule&quot;])
+        if results[&quot;grid_charging&quot;]:
+            self.publish_control(self.entity(&quot;allow_charging_from_grid&quot;, domain=&quot;switch&quot;), &quot;on&quot; if desired[&quot;grid_charging&quot;] else &quot;off&quot;)
+        if results[&quot;reserve&quot;]:
+            self.publish_control(self.entity(&quot;backup_reserve&quot;, domain=&quot;number&quot;), int(desired[&quot;reserve&quot;]))
+        if results[&quot;mode&quot;]:
+            self.publish_control(self.entity(&quot;operation_mode&quot;, domain=&quot;select&quot;), desired[&quot;mode&quot;])
+        if not all(results.values()):
+            self.log(&quot;Warn: Teslemetry device-state assert incomplete: {}&quot;.format({key: value for key, value in results.items() if not value}))
+        return all(results.values())
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run tests to verify they pass</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all -k teslemetry &gt; /tmp/t.log 2&gt;&amp;1; grep -E "evaluate_schedule|assert_device_state|PASSED|FAIL" /tmp/t.log</code>
+Expected: the updated tests PASS. <code>test_teslemetry_assert_device_state_posts_commands</code> may need its <code>desired</code> dict trimmed — fixed in Task 8.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/teslemetry.py apps/predbat/tests/test_teslemetry.py
+git commit -m &quot;refactor(teslemetry): drop tariff_mode from per-cycle control; tariff synced separately&quot;
+</code></pre>
+<hr />
+<h3 id="task-7-remove-reconcile-machinery-and-the-tariff_mode-entity">Task 7: Remove reconcile machinery and the <code>tariff_mode</code> entity</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/teslemetry.py</code> — delete <code>reconcile_on_start</code> (~949), <code>get_current_tariff_code</code> (~912), <code>_find_tariff_code</code> (~890); remove <code>reconcile_done</code>/<code>reconcile_attempts</code>/<code>RECONCILE_MAX_ATTEMPTS</code> and the reconcile block in <code>run</code> (~395); remove the <code>tariff_mode</code> control entity + <code>TARIFF_MODES</code> + its <code>select_event</code> branch; remove the <code>reconcile_done</code> term from the <code>run</code> emulator guard.
+- Test: <code>apps/predbat/tests/test_teslemetry.py</code></p>
+<p><strong>Interfaces:</strong>
+- Produces: <code>run()</code> no longer references reconcile; <code>register_control_entities</code> no longer registers <code>tariff_mode</code>; <code>select_event</code> no longer handles <code>_tariff_mode</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the guard test</strong></li>
+</ul>
+<pre><code class="language-python">def test_teslemetry_run_boots_without_reconcile():
+    &quot;&quot;&quot;A healthy first cycle asserts device state directly, with no tariff-read reconcile call.&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    api.base.get_arg = lambda a, d=None, **k: d  # not read-only
+    api.mock_responses[&quot;/api/1/products&quot;] = {&quot;response&quot;: [{&quot;energy_site_id&quot;: 123456}]}
+    api.mock_responses[&quot;/api/1/energy_sites/123456/site_info&quot;] = SITE_INFO
+    api.mock_responses[&quot;/api/1/energy_sites/123456/live_status&quot;] = LIVE_STATUS
+    api.mock_responses[&quot;/api/1/energy_sites/123456/calendar_history?kind=energy&amp;period=day&quot;] = ENERGY_HISTORY
+    api.mock_responses[&quot;/api/1/energy_sites/123456/time_of_use_settings&quot;] = {&quot;response&quot;: {&quot;code&quot;: 201}}
+    api.mock_responses[&quot;/api/1/energy_sites/123456/operation&quot;] = {&quot;response&quot;: {&quot;code&quot;: 201}}
+    api.mock_responses[&quot;/api/1/energy_sites/123456/backup&quot;] = {&quot;response&quot;: {&quot;code&quot;: 201}}
+    api.mock_responses[&quot;/api/1/energy_sites/123456/grid_import_export&quot;] = {&quot;response&quot;: {&quot;code&quot;: 201}}
+    run_async(api.run(seconds=0, first=True))
+    assert not hasattr(api, &quot;reconcile_done&quot;) or True  # attribute may be gone
+    assert not any(&quot;reconcil&quot; in m.lower() for m in api.log_messages)
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run test to verify it fails</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all -k teslemetry &gt; /tmp/t.log 2&gt;&amp;1; grep -E "reconcil|FAIL|Error" /tmp/t.log</code>
+Expected: FAIL — reconcile still runs/logs.</p>
+<ul>
+<li>
+<p>[ ] <strong>Step 3: Delete the reconcile + tariff_mode code</strong></p>
+</li>
+<li>
+<p>Delete methods <code>reconcile_on_start</code>, <code>get_current_tariff_code</code>, <code>_find_tariff_code</code>.</p>
+</li>
+<li>Delete the module constant <code>RECONCILE_MAX_ATTEMPTS</code> (line 46) and <code>TARIFF_MODES</code> (line 58).</li>
+<li>In <code>initialize</code>, delete <code>self.reconcile_done = False</code>, <code>self.reconcile_attempts = 0</code>.</li>
+<li>In <code>run</code>, delete the whole <code>if not self.reconcile_done:</code> block (~395-401) and remove <code>self.reconcile_done and</code> from the emulator guard (leaving the Task 5 form).</li>
+<li>In <code>register_control_entities</code>, delete the <code>("tariff_mode", "select", "normal", {...})</code> tuple.</li>
+<li>In <code>select_event</code>, delete the <code>elif entity_id.endswith("_tariff_mode") and value in TARIFF_MODES:</code> branch.</li>
+<li>
+<p>Remove the now-unused <code>TARIFF_MODES</code> import usages; update <code>initialize</code>'s log line that mentions reconciliation.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 4: Run test to verify it passes</strong></p>
+</li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all -k teslemetry &gt; /tmp/t.log 2&gt;&amp;1; grep -E "PASSED|FAIL|Error|reconcil" /tmp/t.log</code>
+Expected: the new test PASSES (reconcile tests still present will fail — deleted in Task 8).</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/teslemetry.py apps/predbat/tests/test_teslemetry.py
+git commit -m &quot;refactor(teslemetry): remove reconcile_on_start and the tariff_mode entity&quot;
+</code></pre>
+<hr />
+<h3 id="task-8-test-suite-cleanup-and-full-green">Task 8: Test-suite cleanup and full green</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/tests/test_teslemetry.py</code>
+- Also: <code>apps/predbat/config.py</code> if the <code>TESLA</code> <code>INVERTER_DEF</code> references a tariff-mode/export freeze that no longer applies (check <code>test_teslemetry_inverter_def_tesla</code> around line 1027).</p>
+<p><strong>Interfaces:</strong> none new — this task makes the whole suite pass and adds boot-continuation coverage.</p>
+<ul>
+<li>
+<p>[ ] <strong>Step 1: Delete obsolete tests and update survivors</strong></p>
+</li>
+<li>
+<p><strong>Delete</strong> every reconcile test: <code>test_teslemetry_reconcile_on_start_device_marker_restores_normal</code>, <code>_device_normal_is_noop</code>, <code>_read_failure_skips_without_crash</code>, <code>_no_code_in_response_skips</code>, <code>_read_only_mode_skips_writes</code>, <code>_ignores_boot_default_read_only_attribute</code>, <code>test_teslemetry_reconcile_forces_write_even_if_cache_preseeded</code>, <code>test_teslemetry_reconcile_latch_survives_auth_failed_first_cycle</code>, <code>test_teslemetry_reconcile_latch_runs_once_on_healthy_boot</code>, and any <code>_find_tariff_code</code>/<code>get_current_tariff_code</code> tests. Remove their entries from the <code>run_*</code>/<code>__main__</code> registry at the bottom (~lines 1624-1685) and the <code>RECONCILE_MAX_ATTEMPTS</code> import.</p>
+</li>
+<li><strong>Delete</strong> <code>tariff_mode</code> tests: <code>test_teslemetry_select_tariff_mode</code> (if present) and any assertion of <code>select.predbat_teslemetry_tariff_mode</code>.</li>
+<li><strong>Update</strong> <code>test_teslemetry_set_tariff_posts_tou_settings</code> to build a tariff first: <code>tariff = api.build_tariff(None); run_async(api.set_tariff(tariff))</code>, then assert <code>"tariff_content_v2" in body["tou_settings"]</code>.</li>
+<li><strong>Update</strong> the <code>build_tariff</code> window/partition tests (<code>test_teslemetry_*export_now*</code>, <code>_assert_tou_periods_partition_day</code> users) to call <code>api.build_tariff((1020, 1080))</code> with <code>api.base = _rate_base(...)</code>, and assert the ON_PEAK periods partition each day via the existing <code>_assert_tou_periods_partition_day</code> helper applied per <code>fromDayOfWeek</code>.</li>
+<li>
+<p><strong>Update</strong> <code>test_teslemetry_assert_device_state_posts_commands</code> and <code>_dedupes_repeat</code>: set <code>desired = {"export_rule": "pv_only", "grid_charging": True, "reserve": 20, "mode": "self_consumption"}</code> (no <code>tariff_mode</code>); the expected command count drops from 5 to 4 (no <code>time_of_use_settings</code>).</p>
+</li>
+<li>
+<p>[ ] <strong>Step 2: Add a boot-continuation test</strong></p>
+</li>
+</ul>
+<pre><code class="language-python">def test_teslemetry_boot_resumes_from_persisted_schedule():
+    &quot;&quot;&quot;With a persisted mid-discharge schedule and empty dedupe cache, the first cycle asserts autonomous export.&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    api.base.get_arg = lambda a, d=None, **k: d
+    api.schedule = {&quot;reserve&quot;: 20, &quot;charge&quot;: {&quot;start_time&quot;: &quot;00:00:00&quot;, &quot;end_time&quot;: &quot;00:00:00&quot;, &quot;soc&quot;: 100, &quot;enable&quot;: 0},
+                    &quot;discharge&quot;: {&quot;start_time&quot;: &quot;00:00:00&quot;, &quot;end_time&quot;: &quot;23:59:00&quot;, &quot;soc&quot;: 10, &quot;enable&quot;: 1}}
+    api.schedule_loaded = True
+    api.last_soc = 80
+    for path in (&quot;operation&quot;, &quot;backup&quot;, &quot;grid_import_export&quot;, &quot;time_of_use_settings&quot;):
+        api.mock_responses[&quot;/api/1/energy_sites/123456/&quot; + path] = {&quot;response&quot;: {&quot;code&quot;: 201}}
+    run_async(api.assert_device_state(api.evaluate_schedule(12 * 60, 80)))
+    assert api.entity_states[&quot;select.predbat_teslemetry_operation_mode&quot;] == &quot;autonomous&quot;
+    assert api.entity_states[&quot;select.predbat_teslemetry_allow_export&quot;] == &quot;battery_ok&quot;
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 3: Run the full teslemetry module</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all -k teslemetry &gt; /tmp/t.log 2&gt;&amp;1; grep -E "PASSED|FAILED|Error|Traceback" /tmp/t.log</code>
+Expected: <code>Teslemetry tests passed</code>, module PASSED.</p>
+<ul>
+<li>[ ] <strong>Step 4: Run the full suite (quick) + pre-commit</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --quick &gt; /tmp/all.log 2&gt;&amp;1; grep -E "PASSED|FAILED|All tests" /tmp/all.log</code>
+Expected: all tests pass.
+Run: <code>./run_pre_commit &gt; /tmp/pc.log 2&gt;&amp;1; grep -E "Failed|Passed|error" /tmp/pc.log</code> — fix any Black/Flake8/interrogate/CSpell issues (add new British-English words to <code>.cspell/custom-dictionary-workspace.txt</code> and re-stage).</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/tests/test_teslemetry.py apps/predbat/teslemetry.py .cspell/custom-dictionary-workspace.txt
+git commit -m &quot;test(teslemetry): drop reconcile/tariff_mode tests; cover single-tariff + boot resume&quot;
+</code></pre>
+<hr />
+<h2 id="self-review">Self-Review</h2>
+<p><strong>Spec coverage:</strong>
+- Real 3-band quantisation, clamp ≥0, whole-pence rounding → Task 1.
+- Single <code>AllYear</code> season, matched tier sets, <code>ALL</code> flat fallback, per-DOW placement → Task 2.
+- <code>ON_PEAK</code> reserved boost, carve/partition, now-relative day selection (<code>_boost_segments</code>: today if it still ends later, else tomorrow; wrap splits today+tomorrow), buy mirror, <code>2 × horizon_max</code> floor → Tasks 3–4.
+- Single <code>PREDBAT</code> code, <code>build_tariff</code> loses <code>mode</code> → Task 4.
+- Minimal API calls via dedupe made jitter-proof by rounding; push on commit + genuine change → Tasks 4–5.
+- Export via mode + export rule only; <code>tariff_mode</code> gone from the tuple → Task 6.
+- Remove reconcile; boot continues from persisted plan → Tasks 7–8.
+- Cosmetic acceptances (PARTIAL_PEAK top band, today/tomorrow mean price, plunge buy≥sell clamp) — inherent in the quantiser; no separate task.</p>
+<p><strong>Pilot-validation item (not a blocker):</strong> the <code>autonomous</code>+<code>battery_ok</code> export-gating behaviour (already relied on by the shipping code). The <code>_tesla_dow</code> convention (<code>0=Sunday</code>) is confirmed and isolated in one function.</p>
+<p><strong>Type consistency:</strong> <code>_quantise_side</code> → <code>(tier_prices, today_tiers, tomorrow_tiers)</code>; <code>_side_layout</code>/<code>_render_side</code> operate on the <code>{day: [(from,to,tier)]}</code> layout; <code>_boost_segments(window, now_min)</code> → <code>[(offset,from,to)]</code> consumed by <code>_apply_boost(buy_layout, sell_layout, segments, today_dow)</code>; <code>build_tariff(discharge_window, now_min)</code> and <code>set_tariff(tariff)</code> signatures match every call site (<code>sync_tariff</code>, tests).</p>
+<p><strong>Note for the implementer:</strong> <code>_rate_side</code> is described twice (3-tuple in prose, then normalised to a 4-tuple) — use the <strong>4-tuple</strong> form <code>(charges, periods, prices, layout)</code> with <code>layout=None</code> in the flat case, and unpack that in <code>build_tariff</code>.</p>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

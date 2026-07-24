@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Teslemetry real-rate tariff &amp; mode-driven export control - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Teslemetry real-rate tariff \u0026amp; mode-driven export control";
+        var mkdocs_page_input_path = "superpowers/specs/2026-07-18-teslemetry-real-rate-tariff-design.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Teslemetry real-rate tariff &amp; mode-driven export control</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="teslemetry-real-rate-tariff-mode-driven-export-control">Teslemetry real-rate tariff &amp; mode-driven export control</h1>
+<ul>
+<li><strong>Date:</strong> 2026-07-18</li>
+<li><strong>Component:</strong> <code>apps/predbat/teslemetry.py</code> (Tesla Powerwall via Teslemetry/Fleet API)</li>
+<li><strong>Status:</strong> Design approved, pending implementation plan</li>
+</ul>
+<h2 id="problem">Problem</h2>
+<p>The Powerwall has no native scheduler, so <code>teslemetry.py</code> emulates one by pushing a
+synthetic <code>tariff_content_v2</code> and toggling operation mode. Today it publishes a <strong>flat,
+single-tier</strong> tariff (<code>PREDBAT-NORMAL</code>) in every non-export state, and a single-hour
+boosted-export tariff (<code>PREDBAT-EXPORT-NOW</code>) during export. Two problems:</p>
+<ol>
+<li><strong>The customer's real tariff is clobbered.</strong> Their Tesla app and the Powerwall's own
+   cost/savings reporting show a fake flat rate, not their real time-of-use tariff.</li>
+<li><strong>Export granularity is coarse.</strong> The export trick advances a 30-minute-aligned,
+   60-minute <code>ON_PEAK</code> window and re-pushes the tariff every 30 minutes, so export windows
+   can't be shorter than the slot and the (possibly charged) <code>time_of_use_settings</code> command
+   fires repeatedly.</li>
+</ol>
+<h2 id="goal">Goal</h2>
+<p>Publish the customer's <strong>real rates</strong> into the Powerwall tariff (for reporting accuracy in
+their app), while keeping Predbat in full control of battery behaviour. Decouple export
+start/stop from tariff pushes so it becomes per-cycle precise and cheap.</p>
+<p><strong>Primary goal is reporting accuracy (cosmetic).</strong> Predbat still drives ALL battery
+behaviour via operation modes + the export boost; the Powerwall's own optimiser is not
+relied upon for planning. This sets a <em>low fidelity bar</em> — the tariff must look like the
+customer's rates, not serve as a control-grade signal.</p>
+<h2 id="tesla-tariff_content_v2-rules-constraints">Tesla <code>tariff_content_v2</code> rules (constraints)</h2>
+<p>From the Tesla API documentation, the tariff must satisfy:</p>
+<ul>
+<li>At least one season present; seasons have arbitrary names and are date ranges
+  (<code>fromMonth</code>/<code>fromDay</code> → <code>toMonth</code>/<code>toDay</code>). ToU periods live inside seasons and are
+  day-of-week + hour/minute based.</li>
+<li>Rates are <strong>per-season, per-tier</strong>: <code>energy_charges[season].rates[tier] = price</code>. A tier
+  therefore has <strong>one price per season</strong>.</li>
+<li>ToU labels may be any string, but the mobile app only <em>displays</em>
+  <code>ON_PEAK</code>, <code>OFF_PEAK</code>, <code>PARTIAL_PEAK</code>, <code>SUPER_OFF_PEAK</code> — so we must stay inside those 4.</li>
+<li>Validation: no overlaps/gaps in time periods; no overlapping/gapped seasons; every tier
+  with a price has periods and vice-versa (<strong>matched tier sets</strong>); <strong>no negative prices</strong>
+  (rounded to 0 — use tax-inclusive); <strong>buy price ≥ sell price</strong> at any instant, else buy is
+  clamped up to sell.</li>
+<li><code>energy_charges.ALL</code> applies to all periods — recommended for genuinely flat tariffs
+  instead of fabricating periods.</li>
+<li>Valid currencies include <code>GBP</code>.</li>
+</ul>
+<h2 id="data-source">Data source</h2>
+<p>Predbat stores <code>rate_import</code> / <code>rate_export</code> as per-minute dicts over a ~48h horizon
+(<code>fetch.py:basic_rates</code>, keyed by minutes from local midnight, replicated forward). With
+Agile these differ every half-hour and every calendar day. The Tesla schema cannot express
+48 distinct prices/day, so real rates must be <strong>quantised into ≤3 tiers</strong>.</p>
+<h2 id="design">Design</h2>
+<h3 id="1-tariff-pure-function-of-real-rates-committed-discharge-window-enable">1. Tariff = pure function of <code>(real rates, committed discharge window + enable)</code></h3>
+<p>The published tariff depends on exactly two inputs and nothing else. This is what makes it
+stable and cheap to change-detect (§2).</p>
+<p><strong>Real-rate bands (cosmetic, always present).</strong></p>
+<ul>
+<li>Quantise over <strong>fixed local calendar days</strong> — today (minutes 0–1439) and tomorrow
+  (1440–2879), NOT a rolling <code>now→now+48h</code> window. A stable input within a day means the
+  quantised bands are identical cycle-to-cycle, so the §2 dedupe suppresses re-pushes; the
+  bands only change at <strong>midnight rollover</strong> or when <strong>new rate data lands</strong> (Agile ~16:00).</li>
+<li>Quantise the combined today+tomorrow series into <strong>≤3 tiers</strong> (<code>SUPER_OFF_PEAK</code> / <code>OFF_PEAK</code>
+  / <code>PARTIAL_PEAK</code>, cheapest→dearest), because one season means one price per tier:</li>
+<li>≤3 distinct rates (flat, Economy-7) → use them directly, one tier each (exact).</li>
+<li>otherwise split <code>[min,max]</code> into 3 equal-width bands; each tier price = <strong>mean of the
+    real rates</strong> that fell in it (representative, not a band edge).</li>
+<li>clamp every tier price to <code>max(0, price)</code> (Agile export/plunge can go negative; Tesla
+    would zero it anyway — we do it deterministically), and <strong>round to whole pence</strong>. The
+    rounding both matches app display and stabilises the push trigger (§2) against sub-pence
+    per-cycle rate nudges.</li>
+<li><strong>Placed on the real day-of-week:</strong> today's shape on today's DOW, tomorrow's on tomorrow's,
+  and <strong>tomorrow's replicated onto the other 5 weekdays</strong> so the week is fully tiled (Tesla's
+  no-gaps rule). Publishing today + tomorrow is the whole point — hence DOW matters. Tesla uses
+  <strong><code>0=Sunday</code></strong> (Python <code>weekday()</code> is Mon=0, so <code>tesla_dow = (weekday + 1) % 7</code>), isolated in
+  <code>_tesla_dow</code>. Coalesce consecutive same-tier half-hours into ToU periods per day; assert each
+  day partitions (reuse <code>_assert_tou_periods_partition_day</code>).</li>
+<li><strong>Buy and sell are quantised independently</strong> — buy from <code>rate_import</code>, sell from
+  <code>rate_export</code>, each with its own tiers/periods under its own <code>energy_charges</code> /
+  <code>sell_tariff</code> block.</li>
+<li><strong><code>ON_PEAK</code> is reserved exclusively for the synthetic export boost</strong> — never used for a
+  real band. Cosmetic trade-off (accepted): the customer's dearest real periods label as
+  <code>PARTIAL_PEAK</code>, never <code>ON_PEAK</code>.</li>
+<li><strong>Buy ≥ sell:</strong> normally import &gt; export so this holds. In rare plunge half-hours where the
+  real export rate exceeds import, Tesla clamps the displayed buy up to sell — accepted as a
+  cosmetic blip; it never occurs inside a boosted window (buy = sell = boost) and never
+  affects control (those states use <code>backup</code>/<code>self_consumption</code>, which ignore the tariff).</li>
+</ul>
+<p><strong>Export boost (present only for the committed discharge window).</strong></p>
+<ul>
+<li>If <code>schedule["discharge"]["enable"]</code> is on, overlay an <code>ON_PEAK</code> period covering <strong>exactly
+  the committed discharge window <code>[start_time, end_time]</code></strong> — minute-precise (so sub-30-min
+  windows work, no 30-min alignment forced), placed on the window's <strong>real day(s) only</strong>, chosen
+  by the window's current-or-next occurrence <strong>relative to now</strong>:</li>
+<li>A same-day window (<code>start &lt; end</code>) that still <strong>ends now or later today</strong> → <strong>today's DOW</strong>; one
+    that has <strong>already ended today</strong> (<code>end ≤ now</code>) → <strong>tomorrow's DOW</strong> (its next occurrence).</li>
+<li>A window that <strong>wraps midnight</strong> (<code>start ≥ end</code>) → today's DOW for <code>[start, 24:00)</code> and
+    tomorrow's DOW for <code>[00:00, end)</code>; but if we are already inside its post-midnight tail
+    (<code>now &lt; end</code>), only today's <code>[00:00, end)</code> head is boosted.</li>
+<li><strong>Never all 7 days</strong> — a boost band repeated every day would show a fake daily <code>ON_PEAK</code> peak
+    in the app. (The midnight <code>sync_tariff</code> refresh keeps the chosen day correct as the date rolls.)</li>
+<li>Boost price = <code>max(EXPORT_SELL_RATE £0.50, 2 × horizon_max)</code> where <code>horizon_max</code> is the max
+  across the published import <strong>and</strong> export tier prices. Being the strict maximum anywhere in
+  the tariff, the discharge window is unambiguously the best sell moment and the device's
+  look-ahead can't find a better future peak to wait for.</li>
+<li>Applied to <strong>both</strong> sell (drives export) and buy (mirror — blocks a grid-charge-to-export
+  round-trip and satisfies buy ≥ sell inside the window, both = boost).</li>
+<li><strong>Carve upkeep:</strong> on the affected day(s), remove the window from whichever real band(s)
+  covered it (may split a period → re-coalesce; may empty a band → drop that tier from both
+  rates and periods to keep the sets matched); each affected day still partitions.</li>
+<li>No boost when discharge is disabled — the idle tariff is clean real rates.</li>
+</ul>
+<p><strong>Fallback</strong> (no <code>base</code>, or empty rate dicts — unit tests, pre-first-fetch): build a
+genuinely flat tariff via the <strong><code>ALL</code> field</strong> with the default/current flat rate and no
+fabricated periods. A committed discharge window still overlays its boost so export works
+without real rates.</p>
+<p><strong>One tariff, one code.</strong> There is no longer a normal-vs-export tariff pair — it's a single
+<code>PREDBAT</code> tariff (stable <code>code</code>/<code>name</code>) whose <code>ON_PEAK</code> band merely appears during a committed
+discharge window and disappears afterward. The customer's app shows one consistently-named
+tariff throughout. With <code>reconcile_on_start</code> removed (§4) nothing needs the old
+<code>PREDBAT-EXPORT-NOW</code>/<code>PREDBAT-NORMAL</code> marker split, and the §2 JSON dedupe decides pushes, so
+the <code>code</code> never has to change to trigger one. Drop the <code>mode</code> parameter from
+<code>build_tariff</code> — the presence of the boost is decided solely by the committed discharge window.</p>
+<h3 id="2-when-the-tariff-is-pushed">2. When the tariff is pushed</h3>
+<p><code>time_of_use_settings</code> costs no command credits, <strong>but Teslemetry meters total API calls per
+month</strong>, so a tariff POST must fire only when strictly necessary — never per cycle. The tariff
+is (re)built and pushed on exactly three triggers:</p>
+<ol>
+<li><strong>Committed discharge window changes</strong> — start/end/enable differ from the window baked into
+   the currently-published tariff (detected in <code>apply_schedule()</code> on the write-button commit).</li>
+<li><strong>Rate data changes</strong> — the quantised band layout differs from what's published.</li>
+<li><strong>Local-day rollover</strong> — at local midnight the quantised day advances to the new day's
+   rates, changing the bands (a special case of "rates changed").</li>
+</ol>
+<p><strong>Enforcement — the built tariff <em>is</em> the signature, made stable by rounding.</strong> Rather than a
+bespoke gate, <code>sync_tariff()</code> rebuilds the tariff and pushes it through <code>set_tariff</code>'s existing
+write-on-change dedupe (<code>_apply_command</code> keyed on <code>json.dumps(tariff, sort_keys=True)</code>). The key
+is that the built tariff is <strong>jitter-proof</strong>: band prices are <strong>rounded to whole pence</strong> and both
+the bands and <code>horizon_max</code> (the boost basis) are computed over the <strong>fixed calendar-day</strong> rate
+set, so the small per-cycle nudges Predbat makes to <code>rate_import</code>/<code>rate_export</code> (IO dispatch
+slots, manual overrides, intelligent adjustments) don't change a single byte of the tariff JSON
+unless they genuinely shift a band or the discharge window. Byte-equality of a stabilised tariff
+is therefore a sound change-detector — no separate signature structure needed.</p>
+<p><code>sync_tariff()</code> may be <em>called</em> each <code>run()</code> cycle and from <code>apply_schedule()</code> — the call is a
+cheap local build + JSON compare; it only reaches the API on a real change. Expected cadence:
+~1–2 pushes/day for rates + one per genuine discharge-window change. This is on top of, and far
+smaller than, the existing <code>live_status</code>/energy GET polls, which dominate the monthly call
+budget.</p>
+<h3 id="3-per-cycle-control-operation-mode-export-rule-only">3. Per-cycle control = operation mode + export rule only</h3>
+<p>Both are free commands (<code>operation</code>, <code>grid_import_export</code>), evaluated every cycle, giving
+<strong>per-cycle / sub-30-min</strong> start/stop precision:</p>
+<ul>
+<li><code>evaluate_schedule</code> returns <code>{mode, export_rule, grid_charging, reserve}</code> — <strong><code>tariff_mode</code>
+  is removed</strong> from the per-cycle tuple.</li>
+<li>Charge (SOC &lt; target): <code>backup</code> + grid charging on, <code>reserve = target</code>, <code>export_rule = pv_only</code>.</li>
+<li>Charge hold (SOC ≥ target): <code>backup</code> + grid charging off, <code>export_rule = pv_only</code>.</li>
+<li>Export (in discharge window, SOC &gt; target): <code>autonomous</code> + <code>battery_ok</code> + <code>reserve = target</code>.
+  The boost over that window (already in the tariff) makes autonomous export favourable.</li>
+<li>Export done / floor (SOC ≤ target): <code>self_consumption</code> + <code>pv_only</code> — export stops
+  immediately regardless of the tariff still showing the boost.</li>
+<li>Idle: <code>self_consumption</code> + <code>pv_only</code> + grid charging on, <code>reserve = schedule reserve</code>.</li>
+</ul>
+<p><code>assert_device_state</code> pushes only these free per-cycle commands. The tariff is no longer part
+of the per-cycle assert.</p>
+<h3 id="4-consequent-changes">4. Consequent changes</h3>
+<ul>
+<li>Remove the <code>tariff_mode</code> select entity and the <code>TARIFF_MODES</code> normal/export_now toggle
+  (<code>register_control_entities</code>, <code>select_event</code>, <code>set_tariff</code> per-cycle usage).</li>
+<li><code>evaluate_schedule</code> and <code>assert_device_state</code> drop <code>tariff_mode</code>.</li>
+<li><strong>Remove <code>reconcile_on_start</code> entirely</strong> — along with <code>get_current_tariff_code</code>,
+  <code>_find_tariff_code</code>, the <code>reconcile_done</code> latch and <code>RECONCILE_MAX_ATTEMPTS</code>, and their
+  tests. It is unnecessary in this design (see "Boot behaviour" below).</li>
+</ul>
+<h2 id="boot-behaviour-no-reconcile-needed">Boot behaviour (no reconcile needed)</h2>
+<p>On restart Predbat simply continues where it left off — there is no stale device state to
+detect or repair, for three independent reasons:</p>
+<ol>
+<li><strong>Cold boot re-asserts everything.</strong> <code>_last_sent</code> (the dedupe cache) starts empty, so the
+   first <code>assert_device_state</code> and first <code>sync_tariff</code> actually send — nothing is skipped.
+   The device is fully re-driven from the persisted plan on the first live cycle.</li>
+<li><strong>The plan is persisted.</strong> <code>load_schedule</code> restores the committed charge/discharge windows,
+   and <code>evaluate_schedule</code> re-derives the correct mode/export-rule from the live clock + SOC.
+   If we crashed mid-export and are still inside the window, export resumes; if the window has
+   passed or SOC has reached target, the first per-cycle assert stops it.</li>
+<li><strong>The boost self-expires even if Predbat never restarts.</strong> The <code>ON_PEAK</code> boost is pinned to
+   the planned discharge window, so once the wall clock passes that window's end the export
+   incentive is gone and the device falls back to real-rate behaviour. The reserve floor
+   bounds the worst-case drain before then. (This is strictly safer than the old rolling-window
+   trick, which relied on Predbat staying alive to keep advancing the window.)</li>
+</ol>
+<h2 id="control-behaviour-dependency-validate-on-pilot-hardware">Control-behaviour dependency (validate on pilot hardware)</h2>
+<p>The design assumes — as the current shipping code already does — that:</p>
+<ul>
+<li><code>self_consumption</code> reliably suppresses battery→grid export (stop is safe regardless of
+  tariff), and</li>
+<li><code>autonomous</code> + <code>battery_ok</code> + a boosted-now tariff reliably drives export.</li>
+</ul>
+<p>Stop is inherently safe. The only residual risk is a coarse/committed boost failing to
+trigger start, mitigated by boost = horizon max so "now" is unambiguously the best sell
+moment. Confirm on live hardware during the pilot.</p>
+<h2 id="module-structure">Module structure</h2>
+<p>Keep <code>build_tariff</code> a thin composer; extract testable helpers:</p>
+<ul>
+<li><code>_tesla_dow(python_weekday)</code> → <code>(python_weekday + 1) % 7</code> (Python Mon=0 → Tesla Sun=0).</li>
+<li><code>_quantise_side(rate_dict, default_pence)</code> → <code>(tier_prices, today_tiers, tomorrow_tiers)</code> —
+  today's and tomorrow's 48 slots quantised into ≤3 shared tiers, clamped ≥0, rounded to pence.</li>
+<li><code>_side_layout(today_tiers, tomorrow_tiers, today_dow)</code> → <code>{tesla_dow: [(from,to,tier), …]}</code>
+  for all 7 days: today's coalesced shape on <code>today_dow</code>, tomorrow's on <code>(today_dow+1)%7</code>,
+  tomorrow's replicated on the rest; each day partitions <code>[0,1440)</code>.</li>
+<li><code>_render_side(layout, tier_prices)</code> → one side's <code>energy_charges</code> + per-day <code>tou_periods</code>,
+  matched tier sets; flat input → <code>ALL</code>.</li>
+<li><code>_boost_segments(window, now_min)</code> → <code>[(day_offset, from, to), …]</code> choosing the boost's
+  current-or-next occurrence day(s) (0=today/1=tomorrow) per the now-relative rule above.</li>
+<li><code>_apply_boost(buy_layout, sell_layout, segments, today_dow)</code> → carve <code>ON_PEAK</code> onto
+  <code>(today_dow + offset) % 7</code> for each segment, both sides.</li>
+<li><code>build_tariff(discharge_window_or_none)</code> → compose buy + sell + optional boost + single
+  <code>PREDBAT</code> code (no <code>mode</code> param).</li>
+<li><code>sync_tariff()</code> → build from current rates + committed discharge window and push via
+  <code>set_tariff</code>, whose JSON dedupe (jitter-proofed by the whole-pence rounding) reaches the API
+  only on a genuine change. Called by <code>apply_schedule()</code> and once per <code>run()</code> cycle.</li>
+</ul>
+<h2 id="testing-all-new-helpers-repo-requires-unit-tests-for-new-code">Testing (all new helpers; repo requires unit tests for new code)</h2>
+<ul>
+<li><code>_quantise_side</code>: flat → 1 tier; 2 distinct (Economy-7) → 2 exact tiers; Agile-like → 3
+  mean-priced bands; negative input clamped to 0; today and tomorrow both returned.</li>
+<li><code>_side_layout</code>/DOW placement: today's shape on <code>_tesla_dow(today)</code>, tomorrow's on the next
+  day, other 5 replicate tomorrow; every day partitions <code>[0,1440)</code>.</li>
+<li><code>_boost_segments</code> day selection: same-day window ending later today → today; already ended
+  today → tomorrow; wrap → today+tomorrow, or today's head only when inside the post-midnight tail.</li>
+<li>Boost overlay: <code>ON_PEAK</code> = strictly the max price; carved onto the chosen day(s) only; no
+  gaps/overlaps; emptied band pruned from both rates and periods; buy mirror = sell in-window;
+  minute-precise sub-30-min window; not on the other days; no boost when discharge disabled.</li>
+<li><code>sync_tariff</code> dedupe: unchanged inputs → <strong>zero API calls</strong> across many cycles; sub-pence rate
+  nudges that don't cross a band edge → no push; a changed discharge window (via
+  <code>apply_schedule</code>), a genuine band shift, or a day rollover → exactly one push each.</li>
+<li><code>evaluate_schedule</code>: updated states without <code>tariff_mode</code>; export uses <code>autonomous</code> +
+  <code>battery_ok</code>; stop uses <code>self_consumption</code> + <code>pv_only</code>.</li>
+<li>Boot continuation: with a persisted schedule and an empty dedupe cache, the first cycle
+  re-asserts mode + tariff from the committed plan (no reconcile); mid-window restart resumes
+  export, post-window restart stops it.</li>
+<li>Fallback tariff is schema-valid (flat via <code>ALL</code>); boost still overlays on the flat base.</li>
+<li>Update/replace existing <code>build_tariff</code>, <code>_assert_tou_periods_partition_day</code>, and
+  export-window tests; <strong>delete</strong> the <code>tariff_mode</code> and <code>reconcile_on_start</code> tests.</li>
+</ul>
+<h2 id="out-of-scope">Out of scope</h2>
+<ul>
+<li>Relying on the Powerwall's own optimiser for planning (functional mode) — explicitly not a
+  goal; Predbat remains the planner.</li>
+<li>Multi-season / per-calendar-day tier pricing (rejected: no-gaps-between-seasons rule would
+  force full-year tiling for marginal cosmetic gain).</li>
+<li>Per-day distinct band <em>prices</em> (accepted loss: a band's displayed price is a today/tomorrow
+  mean; the per-day <em>shape</em> is preserved).</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>
