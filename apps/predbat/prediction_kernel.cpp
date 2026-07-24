@@ -582,7 +582,8 @@ int32_t pk_run(int64_t handle, const PkScenario *s, PkResult *out)
 
         // Discharge freeze - prediction.py:764-768
         if (c->set_export_freeze) {
-            if (export_window_active && export_limit_now < 100.0 && (c->set_export_freeze && (export_limit_now == 99.0 || c->set_export_freeze_only))) {
+            bool is_anti_clipping_export = export_window_active && (export_window_n >= 0) && scenario->export_flags[export_window_n];
+            if (export_window_active && !is_anti_clipping_export && export_limit_now < 100.0 && (c->set_export_freeze && (export_limit_now == 99.0 || c->set_export_freeze_only))) {
                 charge_rate_now = battery_rate_min; // 0
             }
         }
@@ -755,7 +756,8 @@ int32_t pk_run(int64_t handle, const PkScenario *s, PkResult *out)
                 if (inverter_hybrid) {
                     double charge_rate_now_dc = battery_rate_max_charge_dc;
                     // Freeze mode - prediction.py:973-975
-                    if (c->set_export_freeze && export_window_active && export_limit_now < 100.0 && (export_limit_now == 99.0 || c->set_export_freeze_only)) {
+                    bool is_anti_clipping_export = export_window_active && (export_window_n >= 0) && scenario->export_flags[export_window_n];
+                    if (c->set_export_freeze && export_window_active && !is_anti_clipping_export && export_limit_now < 100.0 && (export_limit_now == 99.0 || c->set_export_freeze_only)) {
                         charge_rate_now_dc = battery_rate_min; // 0
                     }
                     // Note: Python passes the un-rounded soc for the DC-rate lookup here
