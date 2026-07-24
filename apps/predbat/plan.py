@@ -1080,6 +1080,8 @@ class Plan:
 
             # Full plan
             self.optimise_all_windows(metric, metric_keep, debug_mode)
+            if self.calculate_best_export and self.export_window_best:
+                self.restore_export_windows_above_threshold()
 
             # Update target values, will be refined via clipping
             self.update_target_values()
@@ -1124,6 +1126,7 @@ class Plan:
 
                     # Filter out the windows we disabled during clipping
                     self.export_limits_best, self.export_window_best = self.discard_unused_export_slots(self.export_limits_best, self.export_window_best)
+                    self.export_limits_best, self.export_window_best = self.prune_export_windows_below_threshold(self.export_limits_best, self.export_window_best)
                 self.log("Export windows filtered {}".format(self.window_as_text(self.export_window_best, self.export_limits_best)))
 
             # Filter out any unused charge slots
@@ -1187,6 +1190,9 @@ class Plan:
                     self.export_limits_best = copy.deepcopy(export_limits_best_prev)
                 else:
                     self.log("New plan metric is significantly better from previous plan, using new plan")
+
+            if self.calculate_best_export and self.export_window_best:
+                self.export_limits_best, self.export_window_best = self.prune_export_windows_below_threshold(self.export_limits_best, self.export_window_best)
 
             # Plan is now valid
             self.log("Plan valid is now true after recompute was {}".format(self.plan_valid))
@@ -1822,6 +1828,7 @@ class Plan:
                 )
 
             window_size = try_export_window[window_n]["end"] - start
+            original_window_size = try_export_window[window_n]["end"] - window["start"]
             window_key = str(dp2(this_export_limit)) + "_" + str(window_size)
             window_results[window_key] = [metric, cost]
 
@@ -1834,7 +1841,7 @@ class Plan:
             elif all_n:
                 min_improvement_scaled = self.metric_min_improvement_export * rate_scale * len(all_n)
             else:
-                min_improvement_scaled = self.metric_min_improvement_export * window_size * rate_scale / float(self.plan_interval_minutes)
+                min_improvement_scaled = self.metric_min_improvement_export * original_window_size * rate_scale / float(self.plan_interval_minutes)
 
             # When already exporting within this window keep the export going across planning cycles by
             # relaxing the cost gate (not just the metric above). This only sustains an in-progress forced
@@ -2359,6 +2366,160 @@ class Plan:
                 else:
                     new_best.append(copy.deepcopy(export_window_best[window_n]))
                     new_enable.append(export_limits_best[window_n])
+
+        return new_enable, new_best
+
+    def export_threshold_for_window(self):
+        """
+        Return the final export threshold used to decide if optimiser-selected
+        export windows are still eligible.
+        """
+        if self.rate_best_cost_threshold_export is not None:
+            return self.rate_best_cost_threshold_export
+        if self.rate_export_cost_threshold < 99:
+            return self.rate_export_cost_threshold
+        return None
+
+    def export_window_is_manual(self, window):
+        """
+        Return true when the export window is an explicit manual export/freeze override.
+        """
+        window_start = window["start"]
+        window_start_orig = window.get("start_orig", window_start)
+        return (window_start in self.manual_export_times) or (window_start_orig in self.manual_export_times) or (window_start in self.manual_freeze_export_times) or (window_start_orig in self.manual_freeze_export_times)
+
+    def export_window_above_threshold(self, window, export_limit):
+        """
+        Check if an export window is allowed by the final export rate threshold.
+        """
+        if export_limit >= 100.0:
+            return True
+        if self.export_window_is_manual(window):
+            return True
+
+        threshold = self.export_threshold_for_window()
+        if threshold is None:
+            return True
+
+        export_rate = window.get("average", self.rate_export.get(window["start"], 0))
+        return export_rate >= threshold
+
+    def trim_export_window_to_threshold(self, window, threshold):
+        """
+        Trim below-threshold rate periods from the start/end of an export window.
+        """
+        new_window = copy.deepcopy(window)
+        window_start = new_window["start"]
+        window_end = new_window["end"]
+        rate_minutes = list(range(window_start, window_end, PREDICT_STEP))
+        has_rate_data = any(minute in self.rate_export for minute in rate_minutes)
+
+        if not has_rate_data:
+            export_rate = new_window.get("average", self.rate_export.get(window_start, 0))
+            return new_window if export_rate >= threshold else None
+
+        while window_start < window_end and self.rate_export.get(window_start, 0) < threshold:
+            window_start += PREDICT_STEP
+
+        while window_end > window_start and self.rate_export.get(window_end - PREDICT_STEP, 0) < threshold:
+            window_end -= PREDICT_STEP
+
+        if window_start >= window_end:
+            return None
+
+        if (window_start != new_window["start"]) or (window_end != new_window["end"]):
+            self.log(
+                "Trim export window {} - {} to {} - {} using optimisation threshold {}{}".format(
+                    self.time_abs_str(new_window["start"]),
+                    self.time_abs_str(new_window["end"]),
+                    self.time_abs_str(window_start),
+                    self.time_abs_str(window_end),
+                    dp2(threshold),
+                    self.currency_symbols[1],
+                )
+            )
+
+        new_window["start"] = window_start
+        new_window["end"] = window_end
+        rate_values = [self.rate_export[minute] for minute in range(window_start, window_end, PREDICT_STEP) if minute in self.rate_export]
+        if rate_values:
+            new_window["average"] = dp2(sum(rate_values) / len(rate_values))
+        return new_window
+
+    def restore_export_windows_above_threshold(self):
+        """
+        Undo optimiser tail-trimming for selected export windows when the skipped
+        start of the original window is still above the final export threshold.
+        """
+        threshold = self.export_threshold_for_window()
+        if threshold is None:
+            return
+
+        for window_n in range(len(self.export_window_best)):
+            window = self.export_window_best[window_n]
+            if self.export_limits_best[window_n] >= 100.0:
+                continue
+
+            window_start = window["start"]
+            window_start_orig = window.get("start_orig", window_start)
+            if window_start_orig >= window_start:
+                continue
+
+            rate_minutes = list(range(window_start_orig, window_start, PREDICT_STEP))
+            has_rate_data = any(minute in self.rate_export for minute in rate_minutes)
+            if has_rate_data:
+                skipped_above_threshold = all(self.rate_export.get(minute, 0) >= threshold for minute in rate_minutes)
+            else:
+                skipped_above_threshold = window.get("average", self.rate_export.get(window_start_orig, 0)) >= threshold
+
+            if skipped_above_threshold:
+                self.log(
+                    "Restore export window start {} - {} to {} using optimisation threshold {}{}".format(
+                        self.time_abs_str(window_start),
+                        self.time_abs_str(window["end"]),
+                        self.time_abs_str(window_start_orig),
+                        dp2(threshold),
+                        self.currency_symbols[1],
+                    )
+                )
+                window["start"] = window_start_orig
+                rate_values = [self.rate_export[minute] for minute in range(window["start"], window["end"], PREDICT_STEP) if minute in self.rate_export]
+                if rate_values:
+                    window["average"] = dp2(sum(rate_values) / len(rate_values))
+
+    def prune_export_windows_below_threshold(self, export_limits_best, export_window_best):
+        """
+        Remove optimiser-selected export windows below the final export threshold.
+        """
+        new_best = []
+        new_enable = []
+        threshold = self.export_threshold_for_window()
+
+        for window_n in range(len(export_window_best)):
+            window = export_window_best[window_n]
+            export_limit = export_limits_best[window_n]
+            if threshold is not None and (not self.export_window_is_manual(window)) and export_limit < 100.0:
+                window = self.trim_export_window_to_threshold(window, threshold)
+
+            if (window is None) or (not self.export_window_above_threshold(window, export_limit)):
+                original_window = export_window_best[window_n]
+                if window is None:
+                    export_rate = original_window.get("average", self.rate_export.get(original_window["start"], 0))
+                else:
+                    export_rate = window.get("average", self.rate_export.get(window["start"], 0))
+                self.log(
+                    "Discard export window {} - {} at {}{} below optimisation threshold {}{}".format(
+                        self.time_abs_str(original_window["start"]),
+                        self.time_abs_str(original_window["end"]),
+                        dp2(export_rate),
+                        self.currency_symbols[1],
+                        dp2(threshold),
+                        self.currency_symbols[1],
+                    )
+                )
+                continue
+            new_best.append(window)
+            new_enable.append(export_limit)
 
         return new_enable, new_best
 
