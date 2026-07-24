@@ -369,6 +369,10 @@ class MockConfigProvider:
             "load_filter_modal": True,
             "carbon_enable": False,
             "carbon_metric": 0,
+            "clipping_buffer_enable": False,
+            "clipping_cost_weight": 1.0,
+            "clipping_amplification": 1.0,
+            "clipping_limit_override": 0,
             "iboost_enable": False,
             "iboost_gas": 4.0,
             "iboost_gas_export": 4.0,
@@ -532,6 +536,10 @@ def reset_inverter(my_predbat):
     my_predbat.set_export_window = True
     my_predbat.set_charge_freeze = True
     my_predbat.set_export_freeze = True
+    my_predbat.clipping_buffer_enable = False
+    my_predbat.clipping_cost_weight = 0
+    my_predbat.clipping_amplification = 1.0
+    my_predbat.clipping_limit_override = 0
 
 
 def plot(name, prediction):
@@ -624,6 +632,10 @@ def simple_scenario(
     calculate_export_on_pv=True,
     assert_clipped=0,
     pv_ac_limit=0,
+    clipping_buffer_enable=False,
+    clipping_cost_weight=0,
+    clipping_amplification=1.0,
+    clipping_limit_override=0,
 ):
     """
     No PV, No Load
@@ -721,6 +733,12 @@ def simple_scenario(
     my_predbat.inverter_can_charge_during_export = inverter_can_charge_during_export
     my_predbat.charge_scaling10 = charge_scaling10
 
+    # Clipping peak penalty settings
+    my_predbat.clipping_buffer_enable = clipping_buffer_enable
+    my_predbat.clipping_cost_weight = clipping_cost_weight
+    my_predbat.clipping_amplification = clipping_amplification
+    my_predbat.clipping_limit_override = clipping_limit_override
+
     if my_predbat.iboost_enable and (((not iboost_solar) and (not iboost_charging)) or iboost_smart):
         my_predbat.iboost_plan = my_predbat.plan_iboost_smart()
     else:
@@ -756,6 +774,23 @@ def simple_scenario(
         my_predbat.num_cars = 0
         my_predbat.car_charging_slots[0] = []
 
+    # Build peak PV step data for clipping tests
+    pv_peak_step = None
+    clipping_limit_eff = 0
+    if clipping_buffer_enable:
+        pv_peak_step = {k: v * clipping_amplification for k, v in pv_step.items()}
+        if clipping_limit_override > 0:
+            clipping_limit_eff = clipping_limit_override
+        else:
+            limits = []
+            if my_predbat.inverter_limit > 0:
+                limits.append(my_predbat.inverter_limit)
+            if my_predbat.export_limit > 0:
+                limits.append(my_predbat.export_limit)
+            if my_predbat.pv_ac_limit > 0:
+                limits.append(my_predbat.pv_ac_limit)
+            clipping_limit_eff = (min(limits) * 60.0) if limits else 0
+
     # When the C++ prediction kernel is enabled, run kernel-supported scenarios with save=None so
     # the prediction dispatches to the kernel and the scenario asserts validate the kernel results.
     # Scenarios relying on save-run-only behaviour (low-power charge, standing charge) keep the
@@ -768,7 +803,16 @@ def simple_scenario(
     if prediction_handle:
         prediction = prediction_handle
     else:
-        prediction = Prediction(my_predbat, pv_step, pv10_step, load_step, load10_step)
+        prediction = Prediction(
+            my_predbat,
+            pv_step,
+            pv10_step,
+            load_step,
+            load10_step,
+            pv_forecast_peak_step=pv_peak_step,
+            clipping_limit=clipping_limit_eff,
+            clipping_cost_weight=clipping_cost_weight if clipping_buffer_enable else 0,
+        )
 
     if kernel_eligible and not getattr(prediction, "kernel_handle", 0):
         print("ERROR: Scenario {} expected the C++ prediction kernel but it is not available".format(name))

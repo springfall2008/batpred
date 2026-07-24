@@ -74,6 +74,10 @@ class SolarAPI(ComponentBase):
         pv_forecast_tomorrow,
         pv_forecast_d3,
         pv_forecast_d4,
+        pv_clearsky_today,
+        pv_clearsky_tomorrow,
+        pv_clearsky_d3,
+        pv_clearsky_d4,
         pv_scaling,
         open_meteo_forecast,
         open_meteo_forecast_max_age,
@@ -90,6 +94,10 @@ class SolarAPI(ComponentBase):
         self.pv_forecast_tomorrow = pv_forecast_tomorrow
         self.pv_forecast_d3 = pv_forecast_d3
         self.pv_forecast_d4 = pv_forecast_d4
+        self.pv_clearsky_today = pv_clearsky_today
+        self.pv_clearsky_tomorrow = pv_clearsky_tomorrow
+        self.pv_clearsky_d3 = pv_clearsky_d3
+        self.pv_clearsky_d4 = pv_clearsky_d4
         self.pv_scaling = pv_scaling
         self.open_meteo_forecast = open_meteo_forecast
         self.open_meteo_forecast_max_age = open_meteo_forecast_max_age
@@ -255,21 +263,22 @@ class SolarAPI(ComponentBase):
 
     async def download_open_meteo_ensemble_data(self, lat, lon, tilt, az, kwp, system_loss):
         """
-        Download Open-Meteo ensemble data for P10 solar estimate.
-        Returns a dict mapping ISO timestamp strings to P10 kW values.
+        Download Open-Meteo ensemble data for P10 and P90 solar estimates.
+        Returns a tuple of (p10_dict, p90_dict) mapping ISO timestamp strings to kW values.
         """
         url = "https://ensemble-api.open-meteo.com/v1/ensemble?models=icon_seamless&latitude={lat}&longitude={lon}&hourly=global_tilted_irradiance&tilt={tilt}&azimuth={az}&forecast_days=4&timezone=UTC".format(lat=lat, lon=lon, tilt=tilt, az=az)
         data = await self.cache_get_url(url, params={}, max_age=self.open_meteo_forecast_max_age * 60)
         if not data:
-            return {}
+            return {}, {}
 
         hourly = data.get("hourly", {})
         times = hourly.get("time", [])
         member_keys = [k for k in hourly if k.startswith("global_tilted_irradiance_member")]
         if not member_keys or not times:
-            return {}
+            return {}, {}
 
-        result = {}
+        result_p10 = {}
+        result_p90 = {}
         for idx, ts in enumerate(times):
             values = []
             for k in member_keys:
@@ -277,13 +286,17 @@ class SolarAPI(ComponentBase):
                 if val is not None:
                     values.append(val)
             if not values:
-                result[ts] = 0.0
+                result_p10[ts] = 0.0
+                result_p90[ts] = 0.0
                 continue
             values.sort()
             p10_idx = max(0, math.ceil(len(values) * 0.10) - 1)
+            p90_idx = min(len(values) - 1, math.floor(len(values) * 0.90))
             gti_p10 = values[p10_idx]
-            result[ts] = dp4((gti_p10 / 1000.0) * kwp * (1.0 - system_loss))
-        return result
+            gti_p90 = values[p90_idx]
+            result_p10[ts] = dp4((gti_p10 / 1000.0) * kwp * (1.0 - system_loss))
+            result_p90[ts] = dp4((gti_p90 / 1000.0) * kwp * (1.0 - system_loss))
+        return result_p10, result_p90
 
     async def download_open_meteo_data(self, configs=None):
         """
@@ -341,6 +354,7 @@ class SolarAPI(ComponentBase):
             hourly = data.get("hourly", {})
             times = hourly.get("time", [])
             gti_values = hourly.get("global_tilted_irradiance", [])
+            cs_gti_values = hourly.get("clear_sky_gti", [])
             temp_values = hourly.get("temperature_2m", [])
             wind_values = hourly.get("wind_speed_10m", [])
 
@@ -348,12 +362,12 @@ class SolarAPI(ComponentBase):
                 self.log("Warn: SolarAPI: Open-Meteo data for lat {} lon {} has no hourly data".format(lat, lon))
                 continue
 
-            ensemble_p10 = await self.download_open_meteo_ensemble_data(lat, lon, tilt, az, kwp, system_loss)
+            ensemble_p10, ensemble_p90 = await self.download_open_meteo_ensemble_data(lat, lon, tilt, az, kwp, system_loss)
 
             # Pass 1: compute instantaneous kW at each UTC timestamp sample.
             # Open-Meteo returns point-in-time irradiance (W/m²) at the start of each hour,
             # so we must integrate over the period rather than treating the sample as the period energy.
-            instant_kw = {}  # datetime stamp -> (pv50_kw, pv10_kw)
+            instant_kw = {}  # datetime stamp -> (pv50_kw, pv10_kw, pv_cs_kw)
             instant_stamps = []
             for idx, ts in enumerate(times):
                 if idx >= len(gti_values):
@@ -370,15 +384,24 @@ class SolarAPI(ComponentBase):
                 # Cap at 1.1 (10% above STC) to prevent unrealistic gains at very cold temperatures.
                 eta_temp = max(0.5, min(1.1, 1.0 - 0.004 * (t_cell - 25.0)))
                 pv50_inst = dp4((gti / 1000.0) * kwp * eta_temp * (1.0 - system_loss))
+
                 raw_p10 = ensemble_p10.get(ts)
-                # ensemble_p10 was computed without temperature derating; apply eta_temp now
+                raw_p90 = ensemble_p90.get(ts)
+                # ensemble_p10/p90 were computed without temperature derating; apply eta_temp now
                 pv10_inst = dp4(min(raw_p10 * eta_temp, pv50_inst) if raw_p10 is not None else pv50_inst * 0.7)
+
+                if idx < len(cs_gti_values) and cs_gti_values[idx] is not None:
+                    cs_gti = cs_gti_values[idx]
+                    pv_cs_inst = dp4((cs_gti / 1000.0) * kwp * eta_temp * (1.0 - system_loss))
+                else:
+                    # Fallback to P90 ensemble if Clear Sky GTI is unavailable (which is always true for Open-Meteo right now)
+                    pv_cs_inst = dp4(max(raw_p90 * eta_temp, pv50_inst) if raw_p90 is not None else pv50_inst * 1.3)
                 try:
                     stamp = datetime.strptime(ts, "%Y-%m-%dT%H:%M")
                     stamp = stamp.replace(tzinfo=pytz.utc)
                 except (ValueError, TypeError):
                     continue
-                instant_kw[stamp] = (pv50_inst, pv10_inst)
+                instant_kw[stamp] = (pv50_inst, pv10_inst, pv_cs_inst)
                 instant_stamps.append(stamp)
 
             # Pass 2: trapezoidal integration — energy over [T, T+1h] = 0.5*(kW_at_T + kW_at_T+1h).
@@ -389,21 +412,24 @@ class SolarAPI(ComponentBase):
                 next_stamp = instant_stamps[i + 1]
                 if (next_stamp - stamp) != timedelta(hours=1):
                     continue
-                pv50_start, pv10_start = instant_kw[stamp]
-                pv50_end, pv10_end = instant_kw[next_stamp]
+                pv50_start, pv10_start, pv_cs_start = instant_kw[stamp]
+                pv50_end, pv10_end, pv_cs_end = instant_kw[next_stamp]
                 pv50 = dp4(0.5 * (pv50_start + pv50_end))
                 pv10 = dp4(0.5 * (pv10_start + pv10_end))
+                pv_cs = dp4(0.5 * (pv_cs_start + pv_cs_end))
 
                 # Apply per-month site shading correction from Google Solar API if available
                 if shading_factors and len(shading_factors) == 12:
                     shading_month = shading_factors[stamp.month - 1]
                     pv50 = dp4(pv50 * shading_month)
                     pv10 = dp4(pv10 * shading_month)
+                    pv_cs = dp4(pv_cs * shading_month)
 
-                data_item = {"period_start": stamp.strftime(TIME_FORMAT), "pv_estimate": pv50, "pv_estimate10": pv10}
+                data_item = {"period_start": stamp.strftime(TIME_FORMAT), "pv_estimate": pv50, "pv_estimate10": pv10, "pv_clearsky": pv_cs}
                 if stamp in period_data:
                     period_data[stamp]["pv_estimate"] = dp4(period_data[stamp]["pv_estimate"] + pv50)
                     period_data[stamp]["pv_estimate10"] = dp4(period_data[stamp]["pv_estimate10"] + pv10)
+                    period_data[stamp]["pv_clearsky"] = dp4(period_data[stamp]["pv_clearsky"] + pv_cs)
                 else:
                     period_data[stamp] = data_item
 
@@ -658,12 +684,14 @@ class SolarAPI(ComponentBase):
                             pv50 = forecast.get("pv_estimate", 0) / 60 * period_minutes
                             pv10 = forecast.get("pv_estimate10", forecast.get("pv_estimate", 0)) / 60 * period_minutes
                             pv90 = forecast.get("pv_estimate90", forecast.get("pv_estimate", 0)) / 60 * period_minutes
+                            pv_cs = forecast.get("clearsky_estimate", pv90) / 60 * period_minutes
 
-                            data_item = {"period_start": period_start_stamp.strftime(TIME_FORMAT), "pv_estimate": pv50, "pv_estimate10": pv10, "pv_estimate90": pv90}
+                            data_item = {"period_start": period_start_stamp.strftime(TIME_FORMAT), "pv_estimate": pv50, "pv_estimate10": pv10, "pv_estimate90": pv90, "pv_clearsky": pv_cs}
                             if period_start_stamp in period_data:
                                 period_data[period_start_stamp]["pv_estimate"] += pv50
                                 period_data[period_start_stamp]["pv_estimate10"] += pv10
                                 period_data[period_start_stamp]["pv_estimate90"] += pv90
+                                period_data[period_start_stamp]["pv_clearsky"] += pv_cs
                             else:
                                 period_data[period_start_stamp] = data_item
 
@@ -725,7 +753,7 @@ class SolarAPI(ComponentBase):
             # check the total vs the sum of 30 minute slots and work out scale factor
             if data:
                 for entry in data:
-                    total_data += entry["pv_estimate"]
+                    total_data += entry.get("pv_estimate", entry.get("pv_clearsky", 0.0))
                 total_data = dp2(total_data)
                 total_sensor = self.get_state_wrapper(entity_id=entity_id, default=1.0)
                 try:
@@ -734,6 +762,57 @@ class SolarAPI(ComponentBase):
                     total_sensor = 1.0
 
         return data, total_data, total_sensor
+
+    def overlay_clearsky_data(self, pv_forecast_data, source_data, value_field, source_period, source_divide_by, target_divide_by, target_period):
+        """
+        Overlay clearsky data from source_data into pv_forecast_data,
+        correctly normalising units to kW and mapping between different time alignments/resolutions.
+        """
+        timeline = []
+        for item in source_data:
+            ts_str = item.get("period_start")
+            val = float(item.get(value_field, item.get("pv_estimate", 0.0)))
+            try:
+                start_dt = datetime.strptime(ts_str, TIME_FORMAT)
+                start_dt = start_dt.replace(tzinfo=pytz.utc)
+            except (ValueError, TypeError):
+                continue
+
+            # Calculate source power in kW
+            power_kw = (val / source_divide_by) * 60.0
+            end_dt = start_dt + timedelta(minutes=source_period)
+            timeline.append((start_dt, end_dt, power_kw))
+
+        if not timeline:
+            return
+
+        timeline.sort(key=lambda x: x[0])
+
+        for target_item in pv_forecast_data:
+            ts_str = target_item.get("period_start")
+            try:
+                target_start = datetime.strptime(ts_str, TIME_FORMAT)
+                target_start = target_start.replace(tzinfo=pytz.utc)
+            except (ValueError, TypeError):
+                continue
+            target_end = target_start + timedelta(minutes=target_period)
+
+            # Find all overlapping source intervals
+            weighted_power_sum = 0.0
+            total_overlap_mins = 0.0
+            for src_start, src_end, src_power in timeline:
+                # Check for overlap
+                overlap_start = max(target_start, src_start)
+                overlap_end = min(target_end, src_end)
+                if overlap_start < overlap_end:
+                    overlap_duration = (overlap_end - overlap_start).total_seconds() / 60.0
+                    weighted_power_sum += src_power * overlap_duration
+                    total_overlap_mins += overlap_duration
+
+            if total_overlap_mins > 0:
+                clearsky_kw = weighted_power_sum / total_overlap_mins
+                # Convert clearsky_kw to target's raw unit
+                target_item["pv_clearsky"] = (clearsky_kw / 60.0) * target_divide_by
 
     def publish_pv_stats(self, pv_forecast_data, divide_by, period):
         """
@@ -744,17 +823,20 @@ class SolarAPI(ComponentBase):
         total_left_today10 = 0
         total_left_today90 = 0
         total_left_todayCL = 0
+        total_left_todayCS = 0
         forecast_day = {}
         total_day = {}
         total_day10 = {}
         total_day90 = {}
         total_dayCL = {}
+        total_dayCS = {}
         days = 0
         for day in range(7):
             total_day[day] = 0
             total_day10[day] = 0
             total_day90[day] = 0
             total_dayCL[day] = 0
+            total_dayCS[day] = 0
             forecast_day[day] = []
 
         midnight_today = self.midnight_utc
@@ -765,6 +847,7 @@ class SolarAPI(ComponentBase):
         power_now10 = 0
         power_now90 = 0
         power_nowCL = 0
+        power_nowCS = 0
 
         point_gap = period
         for entry in pv_forecast_data:
@@ -782,6 +865,7 @@ class SolarAPI(ComponentBase):
                     total_day10[day] = 0
                     total_day90[day] = 0
                     total_dayCL[day] = 0
+                    total_dayCS[day] = 0
                     forecast_day[day] = []
                 days = max(days, day + 1)
 
@@ -789,22 +873,26 @@ class SolarAPI(ComponentBase):
                 pv_estimate10 = entry.get("pv_estimate10", pv_estimate)
                 pv_estimate90 = entry.get("pv_estimate90", pv_estimate)
                 pv_estimateCL = entry.get("pv_estimateCL", pv_estimate)
+                pv_clearsky = entry.get("pv_clearsky", pv_estimate90)
 
                 pv_estimate /= divide_by
                 pv_estimate10 /= divide_by
                 pv_estimate90 /= divide_by
                 pv_estimateCL /= divide_by
+                pv_clearsky /= divide_by
 
                 total_day[day] += pv_estimate
                 total_day10[day] += pv_estimate10
                 total_day90[day] += pv_estimate90
                 total_dayCL[day] += pv_estimateCL
+                total_dayCS[day] += pv_clearsky
 
                 if day == 0 and this_point > now:
                     total_left_today += pv_estimate
                     total_left_today10 += pv_estimate10
                     total_left_today90 += pv_estimate90
                     total_left_todayCL += pv_estimateCL
+                    total_left_todayCS += pv_clearsky
 
                 next_point = this_point + timedelta(minutes=point_gap)
                 if this_point <= now and next_point > now:
@@ -812,6 +900,7 @@ class SolarAPI(ComponentBase):
                     power_now10 = pv_estimate10 * power_scale
                     power_now90 = pv_estimate90 * power_scale
                     power_nowCL = pv_estimateCL * power_scale
+                    power_nowCS = pv_clearsky * power_scale
 
                     # Add this slot into the total left today but scaled for the time since this point
                     if day == 0:
@@ -820,6 +909,7 @@ class SolarAPI(ComponentBase):
                         total_left_today10 += pv_estimate10 * left_this_slot_scale
                         total_left_today90 += pv_estimate90 * left_this_slot_scale
                         total_left_todayCL += pv_estimateCL * left_this_slot_scale
+                        total_left_todayCS += pv_clearsky * left_this_slot_scale
 
                 fentry = {
                     "period_start": entry["period_start"],
@@ -827,6 +917,7 @@ class SolarAPI(ComponentBase):
                     "pv_estimate10": dp2(pv_estimate10 * power_scale),
                     "pv_estimate90": dp2(pv_estimate90 * power_scale),
                     "pv_estimateCL": dp2(pv_estimateCL * power_scale),
+                    "pv_clearsky": dp2(pv_clearsky * power_scale),
                 }
                 forecast_day[day].append(fentry)
 
@@ -836,15 +927,17 @@ class SolarAPI(ComponentBase):
         for day in range(days):
             if day == 0:
                 self.log(
-                    "SolarAPI: PV Forecast for today is {} ({} 10%, {} 90%, {} calibrated) kWh, and PV left today is {} ({} 10%, {} 90%, {} calibrated) kWh".format(
+                    "SolarAPI: PV Forecast for today is {} ({} 10%, {} 90%, {} calibrated, {} clearsky) kWh, and PV left today is {} ({} 10%, {} 90%, {} calibrated, {} clearsky) kWh".format(
                         dp2(total_day[day]),
                         dp2(total_day10[day]),
                         dp2(total_day90[day]),
                         dp2(total_dayCL[day]),
+                        dp2(total_dayCS[day]),
                         dp2(total_left_today),
                         dp2(total_left_today10),
                         dp2(total_left_today90),
                         dp2(total_left_todayCL),
+                        dp2(total_left_todayCS),
                     )
                 )
                 self.dashboard_item(
@@ -860,10 +953,12 @@ class SolarAPI(ComponentBase):
                         "total10": dp2(total_day10[day]),
                         "total90": dp2(total_day90[day]),
                         "totalCL": dp2(total_dayCL[day]),
+                        "totalCS": dp2(total_dayCS[day]),
                         "remaining": dp2(total_left_today),
                         "remaining10": dp2(total_left_today10),
                         "remaining90": dp2(total_left_today90),
                         "remainingCL": dp2(total_left_todayCL),
+                        "remainingCS": dp2(total_left_todayCS),
                         "detailedForecast": forecast_day[day],
                     },
                     app="solar",
@@ -881,18 +976,19 @@ class SolarAPI(ComponentBase):
                         "now10": dp2(power_now10),
                         "now90": dp2(power_now90),
                         "nowCL": dp2(power_nowCL),
+                        "nowCS": dp2(power_nowCS),
                         "remaining": dp2(total_left_today),
                         "remaining10": dp2(total_left_today10),
                         "remaining90": dp2(total_left_today90),
                         "remainingCL": dp2(total_left_todayCL),
+                        "remainingCS": dp2(total_left_todayCS),
                     },
                     app="solar",
                 )
             else:
                 day_name = "tomorrow" if day == 1 else "d{}".format(day)
                 day_name_long = day_name if day == 1 else "day {}".format(day)
-                self.log("SolarAPI: PV Forecast for day {} is {} ({} 10%, {} 90%, {} calibrated) kWh".format(day_name, dp2(total_day[day]), dp2(total_day10[day]), dp2(total_day90[day]), dp2(total_dayCL[day])))
-
+                self.log("SolarAPI: PV Forecast for day {} is {} ({} 10%, {} 90%, {} calibrated, {} clearsky) kWh".format(day_name, dp2(total_day[day]), dp2(total_day10[day]), dp2(total_day90[day]), dp2(total_dayCL[day]), dp2(total_dayCS[day])))
                 self.dashboard_item(
                     "sensor." + self.prefix + "_pv_" + day_name,
                     state=dp2(total_dayCL[day] if calibration_on else total_day[day]),
@@ -906,6 +1002,7 @@ class SolarAPI(ComponentBase):
                         "total10": dp2(total_day10[day]),
                         "total90": dp2(total_day90[day]),
                         "totalCL": dp2(total_dayCL[day]),
+                        "totalCS": dp2(total_dayCS[day]),
                         "detailedForecast": forecast_day[day],
                     },
                     app="solar",
@@ -1158,6 +1255,7 @@ class SolarAPI(ComponentBase):
         pv_estimateCL = {}
         pv_estimate10 = {}
         pv_estimate90 = {}
+        pv_historical = {}
         # The after scaling cap will be applied, but remember that the input data is
         # When we have a valid observed peak (from history or forecast history) cap to the lower of
         # the inverter rating and that observed peak. With no valid history (e.g. all days excluded
@@ -1169,6 +1267,10 @@ class SolarAPI(ComponentBase):
             capped_data = min(max_kwh_cap, observed_cap)
         else:
             capped_data = max_kwh_cap
+
+        # Historical max curve
+        peak_hist_avg = max(pv_power_hist_by_slot.values()) if pv_power_hist_by_slot else 0
+        hist_max_scaling = max_pv_power_hist / peak_hist_avg if peak_hist_avg > 0 else 1.0
         for minute in range(0, max(pv_forecast_minute.keys()) + 1, self.plan_interval_minutes):
             pv_value = 0
             for offset in range(0, self.plan_interval_minutes, 1):
@@ -1177,6 +1279,10 @@ class SolarAPI(ComponentBase):
             pv_estimateCL[minute] = dp4(min(pv_value, capped_data))  # Clamp to max_kwh scaled to 30 minute slots
             pv_estimate10[minute] = dp4(min(pv_value * worst_day_scaling, capped_data))
             pv_estimate90[minute] = dp4(min(pv_value * best_day_scaling, capped_data))
+
+            slot = (int(minute / self.plan_interval_minutes) * self.plan_interval_minutes) % (24 * 60)
+            pv_max = pv_power_hist_by_slot.get(slot, 0) * hist_max_scaling
+            pv_historical[minute] = dp4(min(pv_max / 60 * self.plan_interval_minutes, capped_data))
 
         for entry in pv_forecast_data:
             period_start = entry.get("period_start", "")
@@ -1191,9 +1297,11 @@ class SolarAPI(ComponentBase):
                 calibrated = 0
                 calibrated10 = 0
                 calibrated90 = 0
+                calibratedMAX = 0
                 has_calibrated = False
                 has_calibrated10 = False
                 has_calibrated90 = False
+                has_calibratedMAX = False
                 for i in range(slots_per_period):
                     s = slot + i * self.plan_interval_minutes
                     v = pv_estimateCL.get(s, None)
@@ -1208,10 +1316,16 @@ class SolarAPI(ComponentBase):
                     if v90 is not None:
                         calibrated90 += v90
                         has_calibrated90 = True
+                    vMAX = pv_historical.get(s, None)
+                    if vMAX is not None:
+                        calibratedMAX += vMAX
+                        has_calibratedMAX = True
 
                 # When we store the data we have to reverse the divide_by factor
                 if has_calibrated:
                     entry["pv_estimateCL"] = calibrated * divide_by
+                if has_calibratedMAX:
+                    entry["pv_historical"] = calibratedMAX * divide_by
                 if create_pv10 and has_calibrated10:
                     entry["pv_estimate10"] = calibrated10 * divide_by
                 if create_pv10 and has_calibrated90:
@@ -1228,26 +1342,54 @@ class SolarAPI(ComponentBase):
         # Do we use calibrated or raw data?
         if self.get_arg("metric_pv_calibration_enable", default=True):
             self.log("SolarAPI: PV Calibration: Using calibrated PV data")
-            return pv_forecast_minute_adjusted, pv_forecast_minute10, pv_forecast_data
+            return pv_forecast_minute_adjusted, pv_forecast_minute10, pv_forecast_data, pv_historical
         else:
-            return pv_forecast_minute, pv_forecast_minute10, pv_forecast_data
+            return pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, pv_historical
 
-    def pack_and_store_forecast(self, pv_forecast_minute, pv_forecast_minute10):
+    def pack_and_store_forecast(self, pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90=None, pv_clearsky_minute=None, pv_max_minute=None):
         pv_forecast_pack = {}
         pv_forecast_pack10 = {}
-
+        pv_forecast_pack90 = {}
+        pv_forecast_pack_clearsky = {}
+        pv_forecast_pack_historical = {}
         prev_value = -1
         prev_value10 = -1
+        prev_value90 = -1
+        prev_value_clearsky = -1
+        prev_value_historical = -1
+
+        # Pre-fill dictionaries to ensure interpolation for packing
+        def get_interp_val(data, m):
+            if not data:
+                return 0
+            if m in data:
+                return data[m]
+            # Use plan_interval fallback
+            last_tick = (m // self.plan_interval_minutes) * self.plan_interval_minutes
+            return data.get(last_tick, 0)
 
         for minute in range(0, self.forecast_days * 24 * 60):
             current_value = dp4(pv_forecast_minute.get(minute, 0))
             current_value10 = dp4(pv_forecast_minute10.get(minute, 0))
+            current_value90 = dp4(get_interp_val(pv_forecast_minute90, minute))
+            current_value_clearsky = dp4(get_interp_val(pv_clearsky_minute, minute))
+            current_value_historical = dp4(get_interp_val(pv_max_minute, minute))
+
             if current_value != prev_value:
                 pv_forecast_pack[minute] = current_value
                 prev_value = current_value
             if current_value10 != prev_value10:
                 pv_forecast_pack10[minute] = current_value10
                 prev_value10 = current_value10
+            if current_value90 != prev_value90:
+                pv_forecast_pack90[minute] = current_value90
+                prev_value90 = current_value90
+            if current_value_clearsky != prev_value_clearsky:
+                pv_forecast_pack_clearsky[minute] = current_value_clearsky
+                prev_value_clearsky = current_value_clearsky
+            if current_value_historical != prev_value_historical:
+                pv_forecast_pack_historical[minute] = current_value_historical
+                prev_value_historical = current_value_historical
 
         current_pv_power = dp4(pv_forecast_minute.get(self.minutes_now, 0))
 
@@ -1260,6 +1402,9 @@ class SolarAPI(ComponentBase):
                 "relative_time": self.midnight_utc.strftime(TIME_FORMAT),
                 "forecast": pv_forecast_pack,
                 "forecast10": pv_forecast_pack10,
+                "forecast90": pv_forecast_pack90,
+                "forecast_clearsky": pv_forecast_pack_clearsky,
+                "forecast_historical": pv_forecast_pack_historical,
                 "unit_of_measurement": "kW",
                 "device_class": "power",
                 "state_class": "measurement",
@@ -1281,7 +1426,9 @@ class SolarAPI(ComponentBase):
         max_kwh = 9999
         using_ha_data = False
 
-        if self.forecast_solar:
+        pv_forecast_primary = self.get_arg("pv_forecast_primary", "auto", indirect=False)
+
+        if (pv_forecast_primary == "forecast_solar") or (pv_forecast_primary == "auto" and self.forecast_solar):
             self.log("SolarAPI: Obtaining solar forecast from Forecast Solar API")
             pv_forecast_data, max_kwh = await self.download_forecast_solar_data()
             divide_by = 30.0
@@ -1290,12 +1437,12 @@ class SolarAPI(ComponentBase):
                 self.log("SolarAPI: Forecast Solar returned no data, falling back to Open-Meteo backup")
                 backup_configs = self.open_meteo_forecast if self.open_meteo_forecast else self.forecast_solar
                 pv_forecast_data, max_kwh = await self.download_open_meteo_data(configs=backup_configs)
-        elif self.open_meteo_forecast:
+        elif (pv_forecast_primary == "openmeteo") or (pv_forecast_primary == "auto" and self.open_meteo_forecast and self.get_arg("clipping_clearsky_source", "auto", indirect=False) != "openmeteo"):
             self.log("SolarAPI: Obtaining solar forecast from Open-Meteo API")
             pv_forecast_data, max_kwh = await self.download_open_meteo_data()
             divide_by = 30.0
             create_pv10 = True
-        elif self.solcast_host and self.solcast_api_key:
+        elif (pv_forecast_primary == "solcast_api") or (pv_forecast_primary == "auto" and self.solcast_host and self.solcast_api_key):
             self.log("SolarAPI: Obtaining solar forecast from Solcast API")
             pv_forecast_data = await self.download_solcast_data()
             divide_by = 30.0
@@ -1304,7 +1451,7 @@ class SolarAPI(ComponentBase):
             using_ha_data = True
 
             # Fetch data from each sensor
-            for argname in ["pv_forecast_today", "pv_forecast_tomorrow", "pv_forecast_d3", "pv_forecast_d4"]:
+            for argname in ["pv_forecast_today", "pv_forecast_tomorrow", "pv_forecast_d3", "pv_forecast_d4", "pv_forecast_d5", "pv_forecast_d6", "pv_forecast_d7"]:
                 # We have to re-get the arg here as the regexp wouldn't be resolved earlier
                 entity_id = getattr(self, argname, None)
 
@@ -1348,6 +1495,43 @@ class SolarAPI(ComponentBase):
                 except (ValueError, TypeError, KeyError):
                     pass
 
+            # Optional overlay of ClearSky data from a secondary source
+            clipping_clearsky_source = self.get_arg("clipping_clearsky_source", "auto", indirect=False)
+
+            if clipping_clearsky_source == "auto":
+                if any(getattr(self, argname, None) for argname in ["pv_clearsky_today", "pv_clearsky_tomorrow", "pv_clearsky_d3", "pv_clearsky_d4", "pv_clearsky_d5", "pv_clearsky_d6", "pv_clearsky_d7"]):
+                    clipping_clearsky_source = "ha_solcast_clearsky"
+                elif self.solcast_api_key:
+                    clipping_clearsky_source = "solcast_api"
+                elif self.open_meteo_forecast:
+                    clipping_clearsky_source = "openmeteo"
+
+            if clipping_clearsky_source == "openmeteo" and self.open_meteo_forecast:
+                self.log("SolarAPI: Overlaying ClearSky data from Open-Meteo API")
+                om_data, _ = await self.download_open_meteo_data()
+                if om_data:
+                    self.overlay_clearsky_data(pv_forecast_data, om_data, value_field="pv_clearsky", source_period=60, source_divide_by=60.0, target_divide_by=divide_by, target_period=period)
+            elif clipping_clearsky_source == "solcast_api" and self.solcast_api_key:
+                self.log("SolarAPI: Overlaying ClearSky data from Solcast API")
+                sol_data = await self.download_solcast_data()
+                if sol_data:
+                    self.overlay_clearsky_data(pv_forecast_data, sol_data, value_field="pv_clearsky", source_period=30, source_divide_by=30.0, target_divide_by=divide_by, target_period=period)
+            elif clipping_clearsky_source == "ha_solcast_clearsky":
+                self.log("SolarAPI: Overlaying ClearSky data from Home Assistant integration")
+                ha_data = []
+                for argname in ["pv_clearsky_today", "pv_clearsky_tomorrow", "pv_clearsky_d3", "pv_clearsky_d4", "pv_clearsky_d5", "pv_clearsky_d6", "pv_clearsky_d7"]:
+                    entity_id = getattr(self, argname, None)
+                    if entity_id:
+                        data, _, _ = self.fetch_pv_datapoints(argname, entity_id)
+                        if data:
+                            ha_data += data
+                if ha_data:
+                    self.overlay_clearsky_data(pv_forecast_data, ha_data, value_field="pv_clearsky", source_period=period, source_divide_by=divide_by, target_divide_by=divide_by, target_period=period)
+            elif clipping_clearsky_source == "pv90_scaled":
+                self.log("SolarAPI: Overlaying ClearSky data explicitly disabled, PV90 will be scaled and used as base for clipping mitigation")
+            elif clipping_clearsky_source not in ["auto", "base", ""]:
+                self.log("Warn: SolarAPI: clipping_clearsky_source '{}' not configured properly, using base data".format(clipping_clearsky_source))
+
             # For the HA sensor path the divide_by was computed assuming 30-minute periods;
             # recalculate it using the actual detected period so that the per-minute kWh
             # values are correctly scaled regardless of the forecast resolution.
@@ -1357,6 +1541,12 @@ class SolarAPI(ComponentBase):
 
             if period != 30:
                 self.log("SolarAPI: PV Forecast data has {} minute resolution, adjusting calculations".format(period))
+
+            # Universal fallback for ClearSky data
+            # Ensure every item has a clearsky value before we pass to minute_data
+            for item in pv_forecast_data:
+                if "pv_clearsky" not in item:
+                    item["pv_clearsky"] = item.get("pv_estimate90", item.get("pv_estimate", 0.0))
 
             pv_forecast_minute, _ = minute_data(
                 pv_forecast_data,
@@ -1380,11 +1570,33 @@ class SolarAPI(ComponentBase):
                 scale=self.pv_scaling,
                 spreading=period,
             )
+            pv_forecast_minute90, _ = minute_data(
+                pv_forecast_data,
+                self.forecast_days,
+                self.midnight_utc,
+                "pv_estimate90",
+                "period_start",
+                backwards=False,
+                divide_by=divide_by,
+                scale=self.pv_scaling,
+                spreading=period,
+            )
+            pv_clearsky_minute, _ = minute_data(
+                pv_forecast_data,
+                self.forecast_days,
+                self.midnight_utc,
+                "pv_clearsky",
+                "period_start",
+                backwards=False,
+                divide_by=divide_by,
+                scale=self.pv_scaling,
+                spreading=period,
+            )
 
             # Run calibration on the data
-            pv_forecast_minute, pv_forecast_minute10, pv_forecast_data = self.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10, divide_by / period, max_kwh, self.forecast_days, period)
+            pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, pv_max_minute = self.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10, divide_by / period, max_kwh, self.forecast_days, period)
             self.publish_pv_stats(pv_forecast_data, divide_by / period, period)
-            self.pack_and_store_forecast(pv_forecast_minute, pv_forecast_minute10)
+            self.pack_and_store_forecast(pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_clearsky_minute, pv_max_minute)
             self.update_success_timestamp()
             self.last_fetched_timestamp = self.now_utc_exact
         else:

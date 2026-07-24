@@ -2584,6 +2584,24 @@ def run_execute_tests(my_predbat):
         assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
     )
 
+    failed |= run_execute_test(
+        my_predbat,
+        "anti_clipping_force_export_limit",
+        export_window_best=[{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "target": 80, "clipping_target_soc_pct": 80}],
+        export_limits_best=[80],
+        assert_force_export=True,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=8.5,
+        soc_max=10.0,
+        assert_status="Exporting",
+        assert_reserve=80,
+        assert_soc_target=80,
+        assert_immediate_soc_target=80,
+        assert_discharge_start_time_minutes=my_predbat.minutes_now,
+        assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
+    )
+
     # Reset test
     my_predbat.reset_inverter()
     failed |= run_execute_test(

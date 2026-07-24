@@ -140,6 +140,7 @@ class PkScenario(ctypes.Structure):
         ("export_limits", ctypes.POINTER(ctypes.c_double)),
         ("export_start", ctypes.POINTER(ctypes.c_int32)),
         ("export_end", ctypes.POINTER(ctypes.c_int32)),
+        ("export_flags", ctypes.POINTER(ctypes.c_int32)),
         ("soc_out", ctypes.POINTER(ctypes.c_double)),
         ("n_charge", ctypes.c_int32),
         ("n_export", ctypes.c_int32),
@@ -469,6 +470,7 @@ def run_prediction_kernel(pred, charge_limit, charge_window, export_window, expo
     scenario.export_limits = double_array([float(limit) for limit in export_limits])
     scenario.export_start = int32_array([window["start"] for window in export_window])
     scenario.export_end = int32_array([window["end"] for window in export_window])
+    scenario.export_flags = int32_array([1 if "clipping_target_soc_pct" in window else 0 for window in export_window])
     soc_out = (ctypes.c_double * n_steps)()
     scenario.soc_out = soc_out
     scenario.n_charge = len(charge_window)

@@ -351,7 +351,8 @@ class Execute:
                 discharge_soc = max((int(self.export_limits_best[0]) * self.soc_max) / 100.0, self.reserve, self.best_soc_min)
                 self.log("Next export window will be: {} - {} at reserve {}".format(discharge_start_time, discharge_end_time, self.export_limits_best[0]))
                 if (self.minutes_now >= minutes_start) and (self.minutes_now < minutes_end) and (self.export_limits_best[0] < 100.0):
-                    if not self.set_export_freeze_only and self.export_limits_best[0] < 99.0 and (self.soc_kw > discharge_soc):
+                    is_anti_clipping = self.export_window_best[0].get("clipping_target_soc_pct") is not None
+                    if (not self.set_export_freeze_only or is_anti_clipping) and self.export_limits_best[0] < 99.0 and (self.soc_kw > discharge_soc):
                         if self.set_export_low_power:
                             export_rate_adjust = 1 - (self.export_limits_best[0] - int(self.export_limits_best[0]))
                         else:
@@ -362,6 +363,11 @@ class Execute:
                         inverter.adjust_discharge_rate(inverter.battery_rate_max_export * export_rate_adjust * MINUTE_WATT)
                         resetDischarge = False
                         inverter.adjust_force_export(True, discharge_start_time, discharge_end_time)
+
+                        if self.set_reserve_enable and is_anti_clipping:
+                            inverter.adjust_reserve(int(self.export_limits_best[0]))
+                            resetReserve = False
+
                         if inverter.inv_charge_discharge_with_rate:
                             inverter.adjust_charge_rate(0)
                             resetCharge = False
@@ -640,6 +646,13 @@ class Execute:
         Adjust target SoC based on the current SoC of all the inverters accounting for their
         charge rates and battery capacities
         """
+        if self.set_export_window and self.export_window_best:
+            if self.minutes_now >= self.export_window_best[0]["start"] and self.minutes_now < self.export_window_best[0]["end"]:
+                if self.export_window_best[0].get("clipping_target_soc_pct") is not None:
+                    limit_pct = float(self.export_limits_best[0])
+                    if limit_pct < 100.0:
+                        soc = min(soc, limit_pct)
+
         target_kwh = dp2(self.soc_max * (soc / 100.0))
         soc_percent = calc_percent_limit(self.soc_kw, self.soc_max)
 
