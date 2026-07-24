@@ -1256,8 +1256,9 @@ class Output:
             # If both are active, suppress the charge window in the UI so we don't display a fake "Chrg"
             # or a broken split-cell.
             if charge_window_n >= 0 and export_window_n >= 0:
+                exp_window = self.export_window_best[export_window_n]
                 exp_limit = self.export_limits_best[export_window_n]
-                if exp_limit < 99.0:
+                if exp_limit < 99.0 and "clipping_target_soc_pct" not in exp_window:
                     charge_window_n = -1
 
             if charge_window_n >= 0:
