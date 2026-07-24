@@ -3326,10 +3326,13 @@ class Plan:
                                 allow_freeze=True,
                             )
                             self.export_window_best[window_n]["start"] = keep_start
-                            # The export trim pass may only reduce export - a higher SoC limit (shallower
-                            # discharge) or a later start (smaller window), never more export. This lets the
-                            # cheapest slots shed any levels over-export before the high-priced peak is touched.
-                            trim_export_ok = pass_type != "trim_export" or (n_best_soc > self.export_limits_best[window_n] or (n_best_soc == self.export_limits_best[window_n] and n_best_start > keep_start))
+                            # The export trim pass may only reduce export, never add it, so the cheapest slots
+                            # shed any levels over-export before the high-priced peak is touched. A reduction is
+                            # a shallower discharge (higher SoC limit) and/or a smaller window (later start) -
+                            # never a deeper discharge nor an earlier start (a bigger window exports more, even
+                            # when the SoC limit rises). Off/freeze (limit >= 99) export no battery and force the
+                            # start back to the full window, so they are exempt from the earlier-start check.
+                            trim_export_ok = pass_type != "trim_export" or (n_best_soc >= self.export_limits_best[window_n] and (n_best_soc >= 99 or n_best_start >= keep_start))
                             if n_best_metric < best_metric and (n_best_soc != self.export_limits_best[window_n] or n_best_start != self.export_window_best[window_n]["start"]) and trim_export_ok:
                                 # Only a strict improvement drives another refinement iteration (see
                                 # the charge block above for why equal-metric flips must not).
