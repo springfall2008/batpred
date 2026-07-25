@@ -12,7 +12,6 @@ battery without Predbat, and with Predbat. Performs no HTTP itself; the weather
 and tariff modules own all network access.
 """
 
-import copy
 from datetime import date
 
 VALID_SHAPES = ["night", "day", "flat"]
@@ -24,6 +23,9 @@ DEFAULT_DECLINATION = 35
 DEFAULT_AZIMUTH = 180
 DEFAULT_EFFICIENCY = 0.95
 DEFAULT_HYBRID = True
+
+# The Open-Meteo ERA5 archive, which the weather module draws on, starts in 1940.
+MINIMUM_YEAR = 1940
 
 # Substrings that mark a config value as secret and therefore scrubbable
 SECRET_MARKERS = ["_key", "password", "token", "secret"]
@@ -52,6 +54,31 @@ def scrub_secrets(config):
     return config
 
 
+def _require_number(value, field, minimum=None, maximum=None, integer=False, exclusive_minimum=False):
+    """Coerce a config value to a number, raising AnnualConfigError with an actionable message.
+
+    Rejects booleans explicitly (``True`` silently becoming ``1.0`` would be a confusing
+    outcome), converts with ``int()``/``float()`` inside a try/except so a malformed value
+    never escapes as a bare ``ValueError``/``TypeError``, and enforces the optional bounds.
+    ``minimum`` is inclusive unless ``exclusive_minimum`` is set, in which case the value
+    must be strictly greater than it. ``maximum`` is always inclusive.
+    """
+    if isinstance(value, bool):
+        raise AnnualConfigError("{} must be a number, not a boolean (got {})".format(field, value))
+    try:
+        number = int(value) if integer else float(value)
+    except (TypeError, ValueError):
+        raise AnnualConfigError("{} must be a number, got {!r}".format(field, value))
+    if minimum is not None:
+        if exclusive_minimum and number <= minimum:
+            raise AnnualConfigError("{} must be greater than {}, got {}".format(field, minimum, number))
+        if not exclusive_minimum and number < minimum:
+            raise AnnualConfigError("{} must be at least {}, got {}".format(field, minimum, number))
+    if maximum is not None and number > maximum:
+        raise AnnualConfigError("{} must be at most {}, got {}".format(field, maximum, number))
+    return number
+
+
 def _validate_solar(raw):
     """Normalise the solar array list, applying defaults and rejecting arrays without kwp."""
     if raw is None:
@@ -68,10 +95,10 @@ def _validate_solar(raw):
         if "kwp" not in array:
             raise AnnualConfigError("annual.solar[{}] is missing kwp, the array's peak power in kW".format(index))
         normalised = dict(array)
-        normalised["kwp"] = float(array["kwp"])
+        normalised["kwp"] = _require_number(array["kwp"], "annual.solar[{}].kwp".format(index), minimum=0, exclusive_minimum=True)
         normalised["declination"] = array.get("declination", DEFAULT_DECLINATION)
         normalised["azimuth"] = array.get("azimuth", DEFAULT_AZIMUTH)
-        normalised["efficiency"] = float(array.get("efficiency", DEFAULT_EFFICIENCY))
+        normalised["efficiency"] = _require_number(array.get("efficiency", DEFAULT_EFFICIENCY), "annual.solar[{}].efficiency".format(index), minimum=0, exclusive_minimum=True, maximum=1)
         arrays.append(normalised)
     return arrays
 
@@ -87,14 +114,14 @@ def _validate_battery(raw):
     if "inverter_kw" not in raw:
         raise AnnualConfigError("annual.battery is missing inverter_kw")
 
-    inverter_kw = float(raw["inverter_kw"])
+    inverter_kw = _require_number(raw["inverter_kw"], "annual.battery.inverter_kw", minimum=0, exclusive_minimum=True)
     return {
-        "size_kwh": float(raw["size_kwh"]),
+        "size_kwh": _require_number(raw["size_kwh"], "annual.battery.size_kwh", minimum=0, exclusive_minimum=True),
         "inverter_kw": inverter_kw,
-        "export_limit_kw": float(raw.get("export_limit_kw", inverter_kw)),
+        "export_limit_kw": _require_number(raw.get("export_limit_kw", inverter_kw), "annual.battery.export_limit_kw", minimum=0),
         "hybrid": bool(raw.get("hybrid", DEFAULT_HYBRID)),
-        "charge_rate_kw": float(raw.get("charge_rate_kw", inverter_kw)),
-        "discharge_rate_kw": float(raw.get("discharge_rate_kw", inverter_kw)),
+        "charge_rate_kw": _require_number(raw.get("charge_rate_kw", inverter_kw), "annual.battery.charge_rate_kw", minimum=0, exclusive_minimum=True),
+        "discharge_rate_kw": _require_number(raw.get("discharge_rate_kw", inverter_kw), "annual.battery.discharge_rate_kw", minimum=0, exclusive_minimum=True),
     }
 
 
@@ -103,16 +130,17 @@ def _validate_load(raw):
     if not isinstance(raw, dict):
         raise AnnualConfigError("annual.load is required and must be a mapping")
 
+    has_octopus = "octopus" in raw
     octopus = raw.get("octopus")
     has_manual = ("annual_kwh" in raw) or ("car_charging_kwh" in raw)
 
-    if octopus and has_manual:
+    if has_octopus and has_manual:
         raise AnnualConfigError("annual.load.octopus and annual.load.annual_kwh/car_charging_kwh are mutually exclusive: the Octopus consumption series already includes any car charging, so supplying both would double-count it")
 
-    if not octopus and "annual_kwh" not in raw:
+    if not has_octopus and "annual_kwh" not in raw:
         raise AnnualConfigError("annual.load requires either annual_kwh or an octopus block")
 
-    if octopus:
+    if has_octopus:
         if not isinstance(octopus, dict) or not octopus.get("api_key") or not octopus.get("account_id"):
             raise AnnualConfigError("annual.load.octopus requires both api_key and account_id")
         return {"octopus": dict(octopus), "shape": raw.get("shape", "flat"), "car_charging_kwh": 0.0}
@@ -121,7 +149,11 @@ def _validate_load(raw):
     if shape not in VALID_SHAPES:
         raise AnnualConfigError("annual.load.shape must be one of {}, got '{}'".format(VALID_SHAPES, shape))
 
-    return {"annual_kwh": float(raw["annual_kwh"]), "shape": shape, "car_charging_kwh": float(raw.get("car_charging_kwh", 0.0))}
+    return {
+        "annual_kwh": _require_number(raw["annual_kwh"], "annual.load.annual_kwh", minimum=0),
+        "shape": shape,
+        "car_charging_kwh": _require_number(raw.get("car_charging_kwh", 0.0), "annual.load.car_charging_kwh", minimum=0),
+    }
 
 
 def _validate_tariff(raw):
@@ -138,10 +170,10 @@ def _validate_tariff(raw):
 
     templated = [name for name in ["import_octopus_url", "export_octopus_url"] if raw.get(name) and "{dno_region}" in raw[name]]
     if templated and not raw.get("dno_region"):
-        raise AnnualConfigError("annual.tariff.{} uses {{dno_region}} but annual.tariff.dno_region is not set; supply your Octopus region letter, for example 'A' for Eastern England".format(templated[0]))
+        raise AnnualConfigError("annual.tariff.{} uses {{dno_region}} but annual.tariff.dno_region is not set; supply your Octopus region letter, for example 'A' for Eastern England".format(", ".join(templated)))
 
     tariff = dict(raw)
-    tariff["standing_charge_p_per_day"] = float(raw.get("standing_charge_p_per_day", 0.0))
+    tariff["standing_charge_p_per_day"] = _require_number(raw.get("standing_charge_p_per_day", 0.0), "annual.tariff.standing_charge_p_per_day", minimum=0)
     return tariff
 
 
@@ -169,13 +201,11 @@ def validate_config(config, today=None):
     if not solar and battery is None:
         raise AnnualConfigError("annual needs at least one of solar or battery: with neither there is nothing to evaluate")
 
-    samples_per_month = int(raw.get("samples_per_month", DEFAULT_SAMPLES_PER_MONTH))
-    if samples_per_month < 1:
-        raise AnnualConfigError("annual.samples_per_month must be at least 1, got {}".format(samples_per_month))
+    samples_per_month = _require_number(raw.get("samples_per_month", DEFAULT_SAMPLES_PER_MONTH), "annual.samples_per_month", minimum=1, integer=True)
 
     if today is None:
         today = date.today()
-    year = int(raw.get("year", today.year - 1))
+    year = _require_number(raw.get("year", today.year - 1), "annual.year", minimum=MINIMUM_YEAR, maximum=today.year, integer=True)
 
     return {
         "location": dict(location),
@@ -186,6 +216,6 @@ def validate_config(config, today=None):
         "tariff": _validate_tariff(raw.get("tariff")),
         "samples_per_month": samples_per_month,
         "timezone": raw.get("timezone", DEFAULT_TIMEZONE),
-        "pv10_derate_fallback": float(raw.get("pv10_derate_fallback", DEFAULT_PV10_DERATE_FALLBACK)),
-        "raw": scrub_secrets(copy.deepcopy(raw)),
+        "pv10_derate_fallback": _require_number(raw.get("pv10_derate_fallback", DEFAULT_PV10_DERATE_FALLBACK), "annual.pv10_derate_fallback", minimum=0, exclusive_minimum=True, maximum=1),
+        "raw": scrub_secrets(raw),
     }

@@ -40,6 +40,23 @@ def expect_error(label, config, fragment, failed):
     return True
 
 
+def expect_config_error_type(label, config, failed):
+    """Assert that validate_config raises AnnualConfigError specifically, not a bare ValueError/TypeError.
+
+    A malformed numeric field must be caught and re-raised as AnnualConfigError so that a
+    later CLI layer, which only catches that type, never sees a raw traceback.
+    """
+    try:
+        validate_config(config)
+    except AnnualConfigError:
+        return failed
+    except (ValueError, TypeError) as error:
+        print("  ERROR: {} raised a bare {} ('{}') instead of AnnualConfigError".format(label, type(error).__name__, error))
+        return True
+    print("  ERROR: {} should have raised AnnualConfigError".format(label))
+    return True
+
+
 def test_annual_config(my_predbat):
     """Verify annual config defaulting, normalisation and rejection rules."""
     failed = False
@@ -96,6 +113,11 @@ def test_annual_config(my_predbat):
     config["annual"]["load"]["octopus"] = {"api_key": "sk_x", "account_id": "A-1"}
     failed = expect_error("octopus plus car_charging_kwh", config, "mutually exclusive", failed)
 
+    print("Test: an empty octopus block alongside a manual figure is still rejected as mutually exclusive")
+    config = base_config()
+    config["annual"]["load"]["octopus"] = {}
+    failed = expect_error("empty octopus plus annual_kwh", config, "mutually exclusive", failed)
+
     print("Test: an Octopus-only load block validates")
     config = base_config()
     del config["annual"]["load"]["annual_kwh"]
@@ -125,37 +147,37 @@ def test_annual_config(my_predbat):
     config = base_config()
     del config["annual"]["solar"]
     del config["annual"]["battery"]
-    failed = expect_error("neither solar nor battery", config, "at least one", failed)
+    failed = expect_error("neither solar nor battery", config, "at least one of solar or battery", failed)
 
     print("Test: missing location is rejected")
     config = base_config()
     del config["annual"]["location"]
-    failed = expect_error("no location", config, "location", failed)
+    failed = expect_error("no location", config, "annual.location is required", failed)
 
     print("Test: missing load is rejected")
     config = base_config()
     del config["annual"]["load"]
-    failed = expect_error("no load", config, "load", failed)
+    failed = expect_error("no load", config, "annual.load is required", failed)
 
     print("Test: missing tariff is rejected")
     config = base_config()
     del config["annual"]["tariff"]
-    failed = expect_error("no tariff", config, "tariff", failed)
+    failed = expect_error("no tariff", config, "annual.tariff is required", failed)
 
     print("Test: an unknown load shape is rejected")
     config = base_config()
     config["annual"]["load"]["shape"] = "sideways"
-    failed = expect_error("bad shape", config, "shape", failed)
+    failed = expect_error("bad shape", config, "annual.load.shape must be one of", failed)
 
     print("Test: a solar array without kwp is rejected")
     config = base_config()
     config["annual"]["solar"] = [{"declination": 30}]
-    failed = expect_error("array without kwp", config, "kwp", failed)
+    failed = expect_error("array without kwp", config, "is missing kwp", failed)
 
     print("Test: samples_per_month below 1 is rejected")
     config = base_config()
     config["annual"]["samples_per_month"] = 0
-    failed = expect_error("zero samples", config, "samples_per_month", failed)
+    failed = expect_error("zero samples", config, "annual.samples_per_month must be at least", failed)
 
     print("Test: a postcode-only location validates")
     config = base_config()
@@ -168,7 +190,7 @@ def test_annual_config(my_predbat):
     print("Test: a templated tariff URL without dno_region is rejected up front")
     config = base_config()
     config["annual"]["tariff"] = {"import_octopus_url": "https://api.octopus.energy/v1/products/AGILE/electricity-tariffs/E-1R-AGILE-{dno_region}/standard-unit-rates/"}
-    failed = expect_error("templated url without region", config, "dno_region", failed)
+    failed = expect_error("templated url without region", config, "dno_region is not set", failed)
 
     print("Test: a templated tariff URL with dno_region validates and is carried through")
     config = base_config()
@@ -177,6 +199,69 @@ def test_annual_config(my_predbat):
     if result["tariff"].get("dno_region") != "A":
         print("  ERROR: dno_region should survive validation, got {}".format(result["tariff"].get("dno_region")))
         failed = True
+
+    print("Test: both import and export templated URLs without dno_region are both named in the error")
+    config = base_config()
+    config["annual"]["tariff"] = {
+        "import_octopus_url": "https://api.octopus.energy/v1/products/AGILE/electricity-tariffs/E-1R-AGILE-{dno_region}/standard-unit-rates/",
+        "export_octopus_url": "https://api.octopus.energy/v1/products/AGILE-OUTGOING/electricity-tariffs/E-1R-AGILE-OUTGOING-{dno_region}/standard-unit-rates/",
+    }
+    try:
+        validate_config(config, today=date(2026, 7, 25))
+        print("  ERROR: both templated URLs without dno_region should have raised AnnualConfigError")
+        failed = True
+    except AnnualConfigError as error:
+        message = str(error)
+        if "import_octopus_url" not in message or "export_octopus_url" not in message:
+            print("  ERROR: the dno_region error should name both offending fields, got '{}'".format(message))
+            failed = True
+
+    print("Test: a non-numeric kwp raises AnnualConfigError, not a bare ValueError")
+    config = base_config()
+    config["annual"]["solar"] = [{"kwp": "not-a-number"}]
+    failed = expect_config_error_type("non-numeric kwp", config, failed)
+
+    print("Test: a None kwp raises AnnualConfigError, not a bare TypeError")
+    config = base_config()
+    config["annual"]["solar"] = [{"kwp": None}]
+    failed = expect_config_error_type("None kwp", config, failed)
+
+    print("Test: a non-numeric size_kwh raises AnnualConfigError, not a bare ValueError")
+    config = base_config()
+    config["annual"]["battery"]["size_kwh"] = "lots"
+    failed = expect_config_error_type("non-numeric size_kwh", config, failed)
+
+    print("Test: a None size_kwh raises AnnualConfigError, not a bare TypeError")
+    config = base_config()
+    config["annual"]["battery"]["size_kwh"] = None
+    failed = expect_config_error_type("None size_kwh", config, failed)
+
+    print("Test: a negative size_kwh is rejected")
+    config = base_config()
+    config["annual"]["battery"]["size_kwh"] = -5
+    failed = expect_error("negative size_kwh", config, "size_kwh", failed)
+
+    print("Test: a zero kwp is rejected")
+    config = base_config()
+    config["annual"]["solar"] = [{"kwp": 0}]
+    failed = expect_error("zero kwp", config, "kwp", failed)
+
+    print("Test: an efficiency above 1 is rejected")
+    config = base_config()
+    config["annual"]["solar"] = [{"kwp": 5.6, "efficiency": 1.5}]
+    failed = expect_error("efficiency 1.5", config, "efficiency", failed)
+
+    print("Test: a year in the future is rejected")
+    config = base_config()
+    config["annual"]["year"] = 2027
+    try:
+        validate_config(config, today=date(2026, 7, 25))
+        print("  ERROR: future year should have raised AnnualConfigError")
+        failed = True
+    except AnnualConfigError as error:
+        if "annual.year must be at most" not in str(error):
+            print("  ERROR: future year raised '{}', expected it to mention 'annual.year must be at most'".format(error))
+            failed = True
 
     print("Test: scrub_secrets removes API keys without mutating the original")
     config = base_config()
