@@ -1436,6 +1436,13 @@ CONFIG_ITEMS = [
         "enable": "expert_mode",
     },
     {
+        "name": "plan_why_explanations",
+        "friendly_name": "Show plan slot 'why' tooltips",
+        "type": "switch",
+        "default": False,
+        "enable": "expert_mode",
+    },
+    {
         "name": "predheat_enable",
         "friendly_name": "Enable PredHeat",
         "type": "switch",

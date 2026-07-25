@@ -2265,6 +2265,7 @@ class Fetch:
 
         self.debug_enable = self.get_arg("debug_enable")
         self.plan_debug = self.get_arg("plan_debug")
+        self.plan_why_explanations = self.get_arg("plan_why_explanations")
         self.previous_status = self.get_state_wrapper(self.prefix + ".status")
         forecast_hours = max(self.get_arg("forecast_hours", 48), 24)
 
