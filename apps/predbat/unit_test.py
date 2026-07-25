@@ -127,6 +127,7 @@ from tests.test_open_meteo import run_open_meteo_tests
 from tests.test_solar_model import test_solar_model
 from tests.test_annual_profiles import test_annual_profiles
 from tests.test_annual_load import test_annual_load, test_annual_load_octopus
+from tests.test_annual_weather import test_annual_weather
 from tests.test_rate_add_io_slots import run_rate_add_io_slots_tests
 from tests.test_battery_curve_keys import run_battery_curve_keys_tests
 from tests.test_balance_inverters import run_balance_inverters_tests
@@ -323,6 +324,7 @@ def main():
         ("annual_profiles", test_annual_profiles, "Annual prediction load profile table tests", False),
         ("annual_load", test_annual_load, "Annual prediction load profile tests", False),
         ("annual_load_octopus", test_annual_load_octopus, "Annual prediction Octopus consumption tests", False),
+        ("annual_weather", test_annual_weather, "Annual prediction Open-Meteo weather tests", False),
         ("solax", run_solax_tests, "SolaX API tests", False),
         ("sigenergy", run_sigenergy_tests, "Sigenergy Cloud API tests", False),
         ("iboost_smart", run_iboost_smart_tests, "iBoost smart tests", False),
