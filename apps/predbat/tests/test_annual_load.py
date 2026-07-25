@@ -12,7 +12,7 @@
 import calendar
 from datetime import date
 
-from annual_load import SyntheticLoadProfile, build_load_forecast, tilt_shape
+from annual_load import OctopusConsumptionLoadProfile, SyntheticLoadProfile, build_load_forecast, parse_consumption_results, tilt_shape
 from annual_profiles import DAY_BAND_SLOTS, NIGHT_BAND_SLOTS, half_hour_shape
 
 
@@ -112,6 +112,68 @@ def test_annual_load(my_predbat):
     zero_source = SyntheticLoadProfile(annual_kwh=0.0, shape="flat", year=2025)
     if sum(zero_source.minute_profile(day)) != 0.0:
         print("  ERROR: zero annual kWh should give a zero profile")
+        failed = True
+
+    return failed
+
+
+def test_annual_load_octopus(my_predbat):
+    """Verify Octopus consumption parsing and its fallback behaviour."""
+    failed = False
+    print("**** Testing annual_load Octopus source ****")
+
+    print("Test: parse_consumption_results maps half-hourly readings onto dates")
+    results = []
+    for slot in range(48):
+        hour = slot // 2
+        minute = 30 * (slot % 2)
+        results.append(
+            {
+                "consumption": 0.25,
+                "interval_start": "2025-03-10T{:02d}:{:02d}:00Z".format(hour, minute),
+                "interval_end": "2025-03-10T{:02d}:{:02d}:00Z".format(hour, minute),
+            }
+        )
+    parsed = parse_consumption_results(results)
+    target = date(2025, 3, 10)
+    if target not in parsed:
+        print("  ERROR: expected {} in parsed output, got {}".format(target, list(parsed.keys())))
+        failed = True
+    elif len(parsed[target]) != 48:
+        print("  ERROR: expected 48 slots, got {}".format(len(parsed[target])))
+        failed = True
+    elif abs(sum(parsed[target]) - 12.0) > 1e-9:
+        print("  ERROR: expected 12.0 kWh for the day, got {}".format(sum(parsed[target])))
+        failed = True
+
+    print("Test: a partial day is reported as missing rather than silently understated")
+    partial = parse_consumption_results(results[:20])
+    if date(2025, 3, 10) in partial:
+        print("  ERROR: a day with only 20 of 48 slots must not be returned as complete")
+        failed = True
+
+    print("Test: minute_profile falls back to the synthetic source for a missing day")
+    fallback = SyntheticLoadProfile(annual_kwh=3800.0, shape="flat", year=2025)
+    source = OctopusConsumptionLoadProfile(api_key="x", account_id="A-1", log=print, fallback=fallback)
+    source.consumption = parse_consumption_results(results)
+
+    present = source.minute_profile(date(2025, 3, 10))
+    if abs(sum(present) - 12.0) > 1e-9:
+        print("  ERROR: present day should use real data summing to 12.0, got {}".format(sum(present)))
+        failed = True
+
+    absent = source.minute_profile(date(2025, 3, 11))
+    if abs(sum(absent) - fallback.daily_kwh(date(2025, 3, 11))) > 1e-9:
+        print("  ERROR: missing day should fall back to synthetic, got {}".format(sum(absent)))
+        failed = True
+    if date(2025, 3, 11) not in source.missing_days:
+        print("  ERROR: a fallback day must be recorded in missing_days")
+        failed = True
+
+    print("Test: no fallback and no data yields None so the caller can exclude the day")
+    bare = OctopusConsumptionLoadProfile(api_key="x", account_id="A-1", log=print)
+    if bare.minute_profile(date(2025, 3, 11)) is not None:
+        print("  ERROR: with no data and no fallback minute_profile must return None")
         failed = True
 
     return failed

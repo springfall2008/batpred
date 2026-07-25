@@ -11,8 +11,11 @@ Produces the forward cumulative kWh series that Predbat consumes as
 history has to be fabricated.
 """
 
+import base64
 import calendar
-from datetime import timedelta
+from datetime import date, datetime, timedelta
+
+import aiohttp
 
 from annual_profiles import DAY_BAND_SLOTS, MONTH_WEIGHTS, NIGHT_BAND_SLOTS, SHAPE_TILT_FRACTION, half_hour_shape
 
@@ -128,3 +131,150 @@ def build_load_forecast(source, start_day, days):
             running += value
             forecast[base + index + 1] = running
     return forecast
+
+
+OCTOPUS_API_BASE = "https://api.octopus.energy/v1"
+SLOTS_PER_DAY = 48
+
+
+def parse_consumption_results(results):
+    """Turn raw Octopus consumption rows into complete per-day half-hourly kWh lists.
+
+    Only days with all 48 slots present are returned. A partially reported day is
+    omitted entirely rather than returned short, because a half-populated day
+    looks like genuinely low consumption and would silently understate the bill.
+    """
+    by_day = {}
+    for row in results or []:
+        start = row.get("interval_start")
+        consumption = row.get("consumption")
+        if start is None or consumption is None:
+            continue
+        try:
+            stamp = datetime.strptime(start[:16], "%Y-%m-%dT%H:%M")
+        except (ValueError, TypeError):
+            continue
+        slot = stamp.hour * 2 + (1 if stamp.minute >= 30 else 0)
+        day = stamp.date()
+        if day not in by_day:
+            by_day[day] = [None] * SLOTS_PER_DAY
+        by_day[day][slot] = float(consumption)
+
+    complete = {}
+    for day, slots in by_day.items():
+        if all(value is not None for value in slots):
+            complete[day] = slots
+    return complete
+
+
+class OctopusConsumptionLoadProfile(LoadProfileSource):
+    """Load profile taken from the account's real half-hourly Octopus consumption.
+
+    The meter series already includes any EV charging, which is why the config
+    layer rejects an Octopus key alongside a separate car charging figure.
+    """
+
+    def __init__(self, api_key, account_id, log, storage=None, fallback=None):
+        """Set up the Octopus consumption source, optionally backed by a fallback profile."""
+        self.api_key = api_key
+        self.account_id = account_id
+        self.log = log
+        self.storage = storage
+        self.fallback = fallback
+        self.consumption = {}
+        self.missing_days = set()
+        self.mpan = None
+        self.serial = None
+
+    def _auth_header(self):
+        """Return the HTTP Basic auth header Octopus expects, API key as username."""
+        token = base64.b64encode("{}:".format(self.api_key).encode("utf-8")).decode("utf-8")
+        return {"Authorization": "Basic {}".format(token), "accept": "application/json", "user-agent": "predbat/1.0"}
+
+    async def _get_json(self, session, url):
+        """Fetch and decode one JSON page, returning None on any failure."""
+        try:
+            async with session.get(url, headers=self._auth_header(), timeout=aiohttp.ClientTimeout(total=30)) as response:
+                if response.status not in [200, 201]:
+                    self.log("Warn: Annual: Octopus consumption request to {} returned {}".format(url, response.status))
+                    return None
+                return await response.json()
+        except (aiohttp.ClientError, ValueError, TimeoutError) as error:
+            self.log("Warn: Annual: Octopus consumption request to {} failed: {}".format(url, error))
+            return None
+
+    async def resolve_meter(self, session):
+        """Resolve the account's MPAN and meter serial. Returns True on success."""
+        data = await self._get_json(session, "{}/accounts/{}/".format(OCTOPUS_API_BASE, self.account_id))
+        if not data:
+            return False
+        for prop in data.get("properties", []) or []:
+            for point in prop.get("electricity_meter_points", []) or []:
+                if point.get("is_export"):
+                    continue
+                meters = point.get("meters", []) or []
+                if point.get("mpan") and meters:
+                    self.mpan = point["mpan"]
+                    self.serial = meters[-1].get("serial_number")
+                    if self.serial:
+                        self.log("Annual: Octopus resolved MPAN {} meter {}".format(self.mpan, self.serial))
+                        return True
+        self.log("Warn: Annual: Octopus account {} has no usable electricity import meter".format(self.account_id))
+        return False
+
+    async def fetch(self, year):
+        """Download a calendar year of half-hourly consumption. Returns True on success."""
+        cache_key = "consumption_{}_{}".format(self.account_id, year)
+        if self.storage:
+            cached = await self.storage.load("annual", cache_key)
+            if isinstance(cached, dict) and cached:
+                self.consumption = {date.fromisoformat(key): value for key, value in cached.items()}
+                self.log("Annual: Octopus consumption for {} loaded from cache, {} days".format(year, len(self.consumption)))
+                return True
+
+        async with aiohttp.ClientSession() as session:
+            if not await self.resolve_meter(session):
+                return False
+
+            url = "{}/electricity-meter-points/{}/meters/{}/consumption/?period_from={}-01-01T00:00Z&period_to={}-01-01T00:00Z&page_size=25000&order_by=period".format(OCTOPUS_API_BASE, self.mpan, self.serial, year, year + 1)
+            rows = []
+            pages = 0
+            while url and pages < 40:
+                data = await self._get_json(session, url)
+                if not data or "results" not in data:
+                    break
+                rows += data["results"]
+                url = data.get("next", None)
+                pages += 1
+
+        self.consumption = parse_consumption_results(rows)
+        if not self.consumption:
+            self.log("Warn: Annual: Octopus returned no complete days of consumption for {}".format(year))
+            return False
+
+        self.log("Annual: Octopus consumption for {} downloaded, {} complete days".format(year, len(self.consumption)))
+        if self.storage:
+            await self.storage.save("annual", cache_key, {day.isoformat(): slots for day, slots in self.consumption.items()}, format="json")
+        return True
+
+    def daily_kwh(self, day):
+        """Return the total household kWh for the given date."""
+        slots = self.consumption.get(day)
+        if slots is not None:
+            return sum(slots)
+        if self.fallback:
+            return self.fallback.daily_kwh(day)
+        return 0.0
+
+    def minute_profile(self, day):
+        """Return 1440 per-minute kWh values, falling back or returning None when the day is missing."""
+        slots = self.consumption.get(day)
+        if slots is None:
+            self.missing_days.add(day)
+            if self.fallback:
+                return self.fallback.minute_profile(day)
+            return None
+        profile = []
+        for slot_value in slots:
+            profile.extend([slot_value / MINUTES_PER_SLOT] * MINUTES_PER_SLOT)
+        return profile
