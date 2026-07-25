@@ -39,6 +39,9 @@ clean programmatic interface for it.
   validation error.
 - **Car charging is smart under Predbat, timer-driven in the baselines** —
   Predbat is credited only for what it wins over an off-peak timer.
+- **Predbat plans on the archived forecast and is billed on actuals** — it does
+  not get perfect foresight, and P10 comes from measured forecast error rather
+  than a constant.
 
 ## Architecture
 
@@ -48,7 +51,7 @@ convention (no subpackages exist besides `tests/` and `config/`).
 | Module | Responsibility | Depends on |
 |---|---|---|
 | `annual.py` | `AnnualPredictor` orchestrator, public API, config validation | all below, `PredBat` |
-| `annual_weather.py` | Open-Meteo archive client → per-day PV kW series per array | shared GTI helper |
+| `annual_weather.py` | Open-Meteo actuals + forecast archive clients → per-day PV kW series per array, plus monthly P10 ratios | shared GTI helper |
 | `annual_load.py` | `LoadProfileSource`: synthetic and Octopus-consumption implementations | `annual_profiles` |
 | `annual_profiles.py` | Embedded half-hourly domestic shape tables and monthly weights (data only) | nothing |
 | `annual_tariff.py` | Per-date rate resolution: Octopus URL or basic rates | `basic_rates()` |
@@ -61,8 +64,9 @@ render the returned JSON", and lets every module be tested against fixtures
 rather than the network.
 
 HTTP responses are cached through the Storage component's `fetch_cached()`
-(per CLAUDE.md, never direct file access): one cached blob per array-year for
-weather, one per tariff-month for rates.
+(per CLAUDE.md, never direct file access): one cached blob per array-year per
+source for weather — actuals and forecast are separate entries — and one per
+tariff-month for rates.
 
 ### Public interface
 
@@ -135,7 +139,7 @@ annual:
     standing_charge_p_per_day: 60.0
 
   samples_per_month: 2
-  pv10_derate: 0.7               # see "P10 estimate" below
+  pv10_derate_fallback: 0.7      # only used when the forecast archive lacks the year
 ```
 
 ### Input rules
@@ -155,13 +159,21 @@ annual:
   A would quote the wrong prices with no visible symptom.
 - **Secrets are scrubbed** from the results document and any debug output,
   matching the existing `_key` / `password` redaction in `create_debug_yaml()`.
+- **`year` is accepted for any date the actuals archive covers**, but years
+  before the forecast archive begins (around 2021–2022) lose the forecast
+  grounding and fall back as described under "P10 estimate". The default — the
+  most recent complete calendar year — is always within coverage.
 
 ## Data flow
 
 ### 1. Weather
 
-One Open-Meteo **archive** request per array, covering the whole year plus one
-buffer day (the last sampled day needs a following day for its 48h plan):
+**Two** Open-Meteo requests per array, each covering the whole year plus one
+buffer day (the last sampled day needs a following day for its 48h plan). Both
+endpoints serve `global_tilted_irradiance` with `tilt` / `azimuth` and both
+accept `start_date` / `end_date`.
+
+**Actuals** — ERA5 reanalysis, what genuinely happened. Data back to 1940.
 
 ```
 https://archive-api.open-meteo.com/v1/archive?latitude=..&longitude=..
@@ -170,8 +182,19 @@ https://archive-api.open-meteo.com/v1/archive?latitude=..&longitude=..
   &tilt=..&azimuth=..&wind_speed_unit=ms&timezone=UTC
 ```
 
-The field names match the forecast endpoint already used, so the conversion is
-identical.
+**Forecast** — the archived short-range forecast for those same past dates, i.e.
+what Predbat would actually have been looking at. Coverage starts around
+2021–2022 depending on model.
+
+```
+https://historical-forecast-api.open-meteo.com/v1/forecast?latitude=..&longitude=..
+  &start_date=YYYY-01-01&end_date=YYYY+1-01-01
+  &hourly=global_tilted_irradiance,temperature_2m,wind_speed_10m
+  &tilt=..&azimuth=..&wind_speed_unit=ms&timezone=UTC
+```
+
+The field names match the live forecast endpoint already used, so one conversion
+serves all three.
 
 **The GTI→kW conversion is extracted, not copied.** The cell-temperature model,
 the −0.4%/°C derate, the trapezoidal hourly integration, and `convert_azimuth`
@@ -180,12 +203,56 @@ move out of `SolarAPI.download_open_meteo_data()` into a shared helper that both
 two drift; the azimuth convention in particular (Open-Meteo uses 0 = south) is
 easy to get silently wrong and produces plausible-looking but incorrect output.
 
+Open-Meteo's Previous Runs API would give cleaner fixed-lead-time forecasts, but
+it accepts only `past_days` rather than a date range, so it cannot reach an
+arbitrary past year. It is not used.
+
+#### Plan on forecast, bill on actuals
+
+Predbat plans against the **forecast** series and is costed against the
+**actuals** series. Without this the tool would grant Predbat perfect foresight
+and overstate what it can really achieve.
+
+Mechanically: `calculate_plan()` runs with `pv_forecast_minute` set to the
+forecast series; then, before the costing `run_prediction()`, `self.prediction`
+is rebuilt from the actuals step data and the plan's best windows are replayed
+against it. This is the same Prediction-swap that `calculate_yesterday()` and
+`Compare.run_scenario()` already perform.
+
+This applies to scenario 3 only. Scenario 1 has no PV, and scenario 2's charge
+window is derived from rates rather than from the PV forecast, so neither
+depends on forecast quality — both run directly on actuals. `pv_generated_kwh`
+in the results is always taken from the actuals series.
+
 #### P10 estimate
 
-The archive API exposes no ensemble members, so there is no true P10. The tool
-applies a configurable flat derate (`pv10_derate`, default 0.7) — the same
-fallback `solcast.py` already uses when ensemble data is unavailable. This is a
-known approximation and is labelled as such in the results document.
+The archive exposes no ensemble members, so P10 is derived from **measured
+forecast error**. For each month, the daily energy ratio
+`r = actual_kWh / forecast_kWh` is computed across every day of that month; the
+10th percentile of `r` becomes that month's `p10_ratio`, and the planning P10
+series is the forecast series scaled by it (clamped to ≤ 1). Location- and
+season-specific, and grounded in data rather than a constant.
+
+Why this matters more than it looks: because the plan is costed against a fixed
+actuals series, hedging can only ever *add* cost — a pessimistic P10 makes
+Predbat over-charge and understates its own savings, while `P10 = P50` yields a
+perfect-foresight upper bound. P10 is therefore not a free parameter, and it
+must not be derived from within-month climatological spread, which is far wider
+than 24-hour-ahead forecast error and would bias the tool against itself.
+
+Two honest caveats, recorded in the results document:
+
+- The forecast-versus-ERA5 gap includes systematic model bias, not purely
+  forecast error, so measured uncertainty is slightly overstated.
+- P90 is not used. The planner consumes only `pv_forecast_minute` and
+  `pv_forecast_minute10`; P90 reaches no decision, so computing it would be
+  decoration.
+
+**Fallback.** If the forecast archive does not cover the requested year, the
+tool logs a clear warning, plans on actuals, and applies a flat
+`pv10_derate_fallback` (default 0.7 — `solcast.py`'s existing no-ensemble
+fallback). The results document records that the fallback was used, so a
+degraded run is never mistaken for a grounded one.
 
 ### 2. Load
 
@@ -224,8 +291,10 @@ applies. Basic rates go through `basic_rates()` unchanged.
 
 ### 4. Sample selection
 
-Within each month, every day's total PV kWh is summed across all arrays and the
-days sorted ascending. For `N` samples, the day at percentile `(i + 0.5) / N`
+Within each month, every day's total PV kWh from the **actuals** series is
+summed across all arrays and the days sorted ascending — ranking on the forecast
+would select days by what was predicted rather than by what the month really
+contained. For `N` samples, the day at percentile `(i + 0.5) / N`
 is taken for `i` in `0..N-1` — so `N=2` picks the 25th and 75th percentile days,
 each representing exactly half the month. Selection is fully deterministic; the
 same config always yields the same days.
@@ -315,6 +384,8 @@ by default, since 24 retained plans make the payload large.
 | Condition | Behaviour |
 |---|---|
 | Missing archive weather for a sampled day | Substitute the next-nearest day within the same percentile stratum; log it |
+| Forecast archive does not cover the requested year | Plan on actuals with `pv10_derate_fallback`; warn, and record the degradation in the results document |
+| Forecast archive has gaps within a covered year | Exclude those days from the month's `p10_ratio` sample; if fewer than seven days remain, fall back for that month and record it |
 | Missing rate data for a month | Mark the month `"status": "unavailable"`, exclude it from annual totals, and state the exclusion in the printed output |
 | Octopus consumption gap for a sampled date | Fall back to the synthetic profile for that date; log it |
 | Octopus account lookup failure | Fail the run with a clear message rather than silently degrading to synthetic |
@@ -333,6 +404,13 @@ All tests run offline against fixtures and are registered in `TEST_REGISTRY` in
 - **Weather** — fixture GTI converts to known kW; the extracted shared helper
   produces output identical to `solcast.py`'s current path for the same inputs.
   This is what prevents the extraction being a silent regression.
+- **P10 derivation** — a fixture pair of forecast and actual series yields the
+  expected monthly `p10_ratio`; a year outside forecast-archive coverage falls
+  back to `pv10_derate_fallback` and flags the degradation.
+- **Plan-on-forecast, bill-on-actuals** — with a deliberately inflated forecast
+  series, scenario 3's reported cost and `pv_generated_kwh` track the actuals,
+  not the forecast. Without this test the Prediction swap could silently be
+  skipped and every result would quietly assume perfect foresight.
 - **Sample selection** — deterministic percentile picks for a known irradiance
   series; correct handling of a month with missing days.
 - **Config validation** — Octopus key plus manual load is rejected; a missing
@@ -355,4 +433,7 @@ can stream status rather than block on a silent request.
 - The web UI (separate, later work).
 - Heat pump, iBoost, or gas modelling.
 - Multi-year averaging or typical-meteorological-year construction.
+- A P90-based confidence band on the monthly figures. The forecast-error
+  distribution would support one, but nothing consumes it and no decision
+  depends on it.
 - Tariff recommendation — the tool evaluates the tariff it is given.
