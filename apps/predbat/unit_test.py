@@ -163,6 +163,7 @@ from tests.test_marginal_costs import test_marginal_costs
 from tests.test_savings_stability import test_savings_stability
 from tests.test_calculate_yesterday import test_calculate_yesterday
 from tests.test_load_today_comparison import test_load_today_comparison
+from tests.test_annual_config import test_annual_config
 
 # Mock the components and plugin system
 
@@ -404,6 +405,7 @@ def main():
         ("optimise_solar", run_optimise_solar_tests, "Optimise export more solar tests", False),
         ("optimise_swap_charge", run_optimise_swap_charge_tests, "Optimise pairwise charge-window swap tests", False),
         ("debug_cases", run_debug_cases, "Debug case file tests", True),
+        ("annual_config", test_annual_config, "Annual prediction config validation tests", False),
     ]
 
     # Parse command line arguments

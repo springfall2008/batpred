@@ -1,0 +1,195 @@
+# -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# fmt off
+# pylint: disable=consider-using-f-string
+# pylint: disable=line-too-long
+
+"""Tests for annual prediction config validation."""
+
+from datetime import date
+
+from annual import AnnualConfigError, scrub_secrets, validate_config
+
+
+def base_config():
+    """Return a minimal valid annual config."""
+    return {
+        "annual": {
+            "location": {"latitude": 51.5, "longitude": -0.1},
+            "solar": [{"kwp": 5.6}],
+            "battery": {"size_kwh": 9.5, "inverter_kw": 5.0},
+            "load": {"annual_kwh": 3800},
+            "tariff": {"rates_import": [{"rate": 25.0}]},
+        }
+    }
+
+
+def expect_error(label, config, fragment, failed):
+    """Assert that validate_config rejects the config with a message containing fragment."""
+    try:
+        validate_config(config)
+    except AnnualConfigError as error:
+        if fragment.lower() not in str(error).lower():
+            print("  ERROR: {} raised '{}', expected it to mention '{}'".format(label, error, fragment))
+            return True
+        return failed
+    print("  ERROR: {} should have raised AnnualConfigError".format(label))
+    return True
+
+
+def test_annual_config(my_predbat):
+    """Verify annual config defaulting, normalisation and rejection rules."""
+    failed = False
+    print("**** Testing annual config validation ****")
+
+    print("Test: a minimal config validates and gains defaults")
+    result = validate_config(base_config(), today=date(2026, 7, 25))
+    if result["year"] != 2025:
+        print("  ERROR: year should default to the most recent complete calendar year, got {}".format(result["year"]))
+        failed = True
+    if result["samples_per_month"] != 2:
+        print("  ERROR: samples_per_month should default to 2, got {}".format(result["samples_per_month"]))
+        failed = True
+    if result["timezone"] != "Europe/London":
+        print("  ERROR: timezone should default to Europe/London, got {}".format(result["timezone"]))
+        failed = True
+    if abs(result["pv10_derate_fallback"] - 0.7) > 1e-9:
+        print("  ERROR: pv10_derate_fallback should default to 0.7, got {}".format(result["pv10_derate_fallback"]))
+        failed = True
+    if result["load"]["shape"] != "flat":
+        print("  ERROR: load shape should default to flat, got {}".format(result["load"]["shape"]))
+        failed = True
+    if result["solar"][0]["declination"] != 35 or result["solar"][0]["azimuth"] != 180:
+        print("  ERROR: solar defaults should be declination 35 azimuth 180, got {}".format(result["solar"][0]))
+        failed = True
+    if abs(result["solar"][0]["efficiency"] - 0.95) > 1e-9:
+        print("  ERROR: solar efficiency should default to 0.95, got {}".format(result["solar"][0]["efficiency"]))
+        failed = True
+    if result["battery"]["charge_rate_kw"] != 5.0 or result["battery"]["discharge_rate_kw"] != 5.0:
+        print("  ERROR: charge and discharge rates should default to inverter_kw, got {}".format(result["battery"]))
+        failed = True
+    if result["battery"]["export_limit_kw"] != 5.0:
+        print("  ERROR: export_limit_kw should default to inverter_kw, got {}".format(result["battery"]))
+        failed = True
+    if result["battery"]["hybrid"] is not True:
+        print("  ERROR: hybrid should default to True, got {}".format(result["battery"].get("hybrid")))
+        failed = True
+
+    print("Test: an unwrapped config without the 'annual' key is accepted")
+    unwrapped = base_config()["annual"]
+    result = validate_config(unwrapped, today=date(2026, 7, 25))
+    if result["year"] != 2025:
+        print("  ERROR: an unwrapped config should validate the same way")
+        failed = True
+
+    print("Test: Octopus load together with a manual figure is rejected")
+    config = base_config()
+    config["annual"]["load"]["octopus"] = {"api_key": "sk_x", "account_id": "A-1"}
+    failed = expect_error("octopus plus annual_kwh", config, "mutually exclusive", failed)
+
+    config = base_config()
+    del config["annual"]["load"]["annual_kwh"]
+    config["annual"]["load"]["car_charging_kwh"] = 2500
+    config["annual"]["load"]["octopus"] = {"api_key": "sk_x", "account_id": "A-1"}
+    failed = expect_error("octopus plus car_charging_kwh", config, "mutually exclusive", failed)
+
+    print("Test: an Octopus-only load block validates")
+    config = base_config()
+    del config["annual"]["load"]["annual_kwh"]
+    config["annual"]["load"]["octopus"] = {"api_key": "sk_x", "account_id": "A-1"}
+    result = validate_config(config, today=date(2026, 7, 25))
+    if result["load"].get("octopus", {}).get("account_id") != "A-1":
+        print("  ERROR: the Octopus load block should survive validation")
+        failed = True
+
+    print("Test: a missing battery block yields a two-scenario run")
+    config = base_config()
+    del config["annual"]["battery"]
+    result = validate_config(config, today=date(2026, 7, 25))
+    if result["battery"] is not None:
+        print("  ERROR: an omitted battery should normalise to None, got {}".format(result["battery"]))
+        failed = True
+
+    print("Test: a missing solar block is allowed for a battery-only run")
+    config = base_config()
+    del config["annual"]["solar"]
+    result = validate_config(config, today=date(2026, 7, 25))
+    if result["solar"] != []:
+        print("  ERROR: an omitted solar block should normalise to an empty list, got {}".format(result["solar"]))
+        failed = True
+
+    print("Test: omitting both solar and battery is rejected as pointless")
+    config = base_config()
+    del config["annual"]["solar"]
+    del config["annual"]["battery"]
+    failed = expect_error("neither solar nor battery", config, "at least one", failed)
+
+    print("Test: missing location is rejected")
+    config = base_config()
+    del config["annual"]["location"]
+    failed = expect_error("no location", config, "location", failed)
+
+    print("Test: missing load is rejected")
+    config = base_config()
+    del config["annual"]["load"]
+    failed = expect_error("no load", config, "load", failed)
+
+    print("Test: missing tariff is rejected")
+    config = base_config()
+    del config["annual"]["tariff"]
+    failed = expect_error("no tariff", config, "tariff", failed)
+
+    print("Test: an unknown load shape is rejected")
+    config = base_config()
+    config["annual"]["load"]["shape"] = "sideways"
+    failed = expect_error("bad shape", config, "shape", failed)
+
+    print("Test: a solar array without kwp is rejected")
+    config = base_config()
+    config["annual"]["solar"] = [{"declination": 30}]
+    failed = expect_error("array without kwp", config, "kwp", failed)
+
+    print("Test: samples_per_month below 1 is rejected")
+    config = base_config()
+    config["annual"]["samples_per_month"] = 0
+    failed = expect_error("zero samples", config, "samples_per_month", failed)
+
+    print("Test: a postcode-only location validates")
+    config = base_config()
+    config["annual"]["location"] = {"postcode": "SW1A 1AA"}
+    result = validate_config(config, today=date(2026, 7, 25))
+    if result["location"].get("postcode") != "SW1A 1AA":
+        print("  ERROR: a postcode location should survive validation")
+        failed = True
+
+    print("Test: a templated tariff URL without dno_region is rejected up front")
+    config = base_config()
+    config["annual"]["tariff"] = {"import_octopus_url": "https://api.octopus.energy/v1/products/AGILE/electricity-tariffs/E-1R-AGILE-{dno_region}/standard-unit-rates/"}
+    failed = expect_error("templated url without region", config, "dno_region", failed)
+
+    print("Test: a templated tariff URL with dno_region validates and is carried through")
+    config = base_config()
+    config["annual"]["tariff"] = {"import_octopus_url": "https://api.octopus.energy/v1/products/AGILE/electricity-tariffs/E-1R-AGILE-{dno_region}/standard-unit-rates/", "dno_region": "A"}
+    result = validate_config(config, today=date(2026, 7, 25))
+    if result["tariff"].get("dno_region") != "A":
+        print("  ERROR: dno_region should survive validation, got {}".format(result["tariff"].get("dno_region")))
+        failed = True
+
+    print("Test: scrub_secrets removes API keys without mutating the original")
+    config = base_config()
+    config["annual"]["load"]["octopus"] = {"api_key": "sk_live_secret", "account_id": "A-1"}
+    scrubbed = scrub_secrets(config)
+    if scrubbed["annual"]["load"]["octopus"]["api_key"] != "xxx":
+        print("  ERROR: api_key should be scrubbed, got {}".format(scrubbed["annual"]["load"]["octopus"]["api_key"]))
+        failed = True
+    if config["annual"]["load"]["octopus"]["api_key"] != "sk_live_secret":
+        print("  ERROR: scrub_secrets must not mutate its input")
+        failed = True
+    if scrubbed["annual"]["load"]["octopus"]["account_id"] != "A-1":
+        print("  ERROR: non-secret values should survive scrubbing")
+        failed = True
+
+    return failed
