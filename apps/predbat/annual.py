@@ -12,8 +12,9 @@ battery without Predbat, and with Predbat. Performs no HTTP itself; the weather
 and tariff modules own all network access.
 """
 
+import calendar
 import os
-from datetime import date
+from datetime import date, timedelta
 
 from const import MINUTE_WATT
 
@@ -472,3 +473,56 @@ def configure_offline_mode(predbat):
     predbat.carbon_enable = False
     predbat.plan_debug = False
     predbat.debug_enable = False
+
+
+def _percentile_indices(count, samples):
+    """Return ``samples`` distinct indices spread evenly through ``count`` sorted items.
+
+    Index i sits at percentile (i + 0.5) / samples, so two samples land at the 25th
+    and 75th percentiles and each represents an equal share of the month. Collisions
+    are resolved by walking to the nearest unused index, which only matters when the
+    sample count approaches the number of candidate days.
+    """
+    chosen = []
+    used = set()
+    for index in range(samples):
+        target = min(count - 1, int(count * ((index + 0.5) / samples)))
+        while target in used and target < count - 1:
+            target += 1
+        while target in used and target > 0:
+            target -= 1
+        if target in used:
+            continue
+        used.add(target)
+        chosen.append(target)
+    return chosen
+
+
+def select_samples(weather, year, month, samples_per_month, has_solar=True):
+    """Choose the days to plan for one month, with the weight in days each represents.
+
+    Days are ranked by their *actual* PV energy and sampled at even percentiles, so an
+    unlucky sunny or dull draw cannot swing the month. Ranking uses actuals rather than
+    the forecast: the aim is to represent what the month really contained, not what was
+    predicted. Days without a following day are excluded because the 48 hour plan needs one.
+
+    Weights always sum to the number of days in the month, so a month with fewer usable
+    candidates than requested is scaled up rather than silently under-counted.
+    """
+    days_in_month = calendar.monthrange(year, month)[1]
+    all_days = [date(year, month, day) for day in range(1, days_in_month + 1)]
+
+    if has_solar:
+        candidates = [day for day in all_days if weather.has_actual(day) and weather.has_actual(day + timedelta(days=1))]
+        candidates.sort(key=lambda day: (weather.daily_actual_kwh(day), day))
+    else:
+        # With no PV there is nothing to rank by, so fall back to evenly spaced calendar days
+        candidates = all_days
+
+    if not candidates:
+        return []
+
+    indices = _percentile_indices(len(candidates), samples_per_month)
+    chosen = sorted({candidates[index] for index in indices})
+    weight = days_in_month / float(len(chosen))
+    return [(day, weight) for day in chosen]
