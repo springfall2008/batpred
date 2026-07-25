@@ -460,7 +460,10 @@ class Plan:
                                         hit_charge = self.hit_charge_window(self.charge_window_best, export_window[window_n]["start"], export_window[window_n]["end"])
                                         if hit_charge >= 0:
                                             if hit_charge in charge_mods:
-                                                hit_charge_limit = self.reserve if charge_mods[hit_charge] else self.soc_max
+                                                if not charge_mods[hit_charge] and "clipping_target_soc_pct" in charge_window[hit_charge]:
+                                                    hit_charge_limit = charge_window[hit_charge]["clipping_target_soc_pct"]
+                                                else:
+                                                    hit_charge_limit = self.reserve if charge_mods[hit_charge] else self.soc_max
                                             else:
                                                 hit_charge_limit = best_limits_reset[hit_charge]
                                             if hit_charge_limit > 0.0:
@@ -489,7 +492,10 @@ class Plan:
                                 # Materialise the full limit lists only for scenarios that will run predictions
                                 try_charge_limit = best_limits_reset.copy()
                                 for window_n, freeze in charge_mods.items():
-                                    try_charge_limit[window_n] = self.reserve if freeze else self.soc_max
+                                    if not freeze and "clipping_target_soc_pct" in charge_window[window_n]:
+                                        try_charge_limit[window_n] = charge_window[window_n]["clipping_target_soc_pct"]
+                                    else:
+                                        try_charge_limit[window_n] = self.reserve if freeze else self.soc_max
                                 try_export = best_export_limits_reset.copy()
                                 for window_n, freeze in export_mods.items():
                                     if "clipping_target_soc_pct" in export_window[window_n]:
@@ -1113,6 +1119,46 @@ class Plan:
 
                 self.log("Injected anti-clipping candidate export window {} to {} at rate {}p (Target SOC: {}%)".format(self.time_abs_str(new_window["start"]), self.time_abs_str(new_window["end"]), round(new_window["average"], 2), target_soc_pct))
 
+            # Inject candidate charge windows for any negative import rate slots during anti-clipping windows
+            for m in range(morning_start, peak_end, 30):
+                imp_rate = self.rate_import.get(m, 0.0)
+                if imp_rate < 0.0:
+                    m_end = min(m + 30, peak_end)
+                    if m_end <= m:
+                        continue
+                    already_covered = False
+                    for cw in self.charge_window_best:
+                        if cw["start"] <= m and cw["end"] >= m_end:
+                            already_covered = True
+                            break
+                    if not already_covered:
+                        new_cw = {
+                            "start": m,
+                            "end": m_end,
+                            "average": imp_rate,
+                            "clipping_target_soc_pct": target_soc_pct,
+                            "target": target_soc_pct
+                        }
+                        self.charge_window_best.append(new_cw)
+                        self.charge_limit_best.append(target_soc_pct)
+                        self.log(
+                            "Injected negative-rate candidate charge window {} to {} at rate {}p (Target SOC cap: {}%)".format(
+                                self.time_abs_str(m),
+                                self.time_abs_str(m_end),
+                                round(imp_rate, 2),
+                                target_soc_pct,
+                            )
+                        )
+
+            # Re-sort charge_window_best and charge_limit_best chronologically
+            if self.charge_window_best:
+                combined_cw = sorted(
+                    zip(self.charge_window_best, self.charge_limit_best),
+                    key=lambda x: x[0]["start"],
+                )
+                self.charge_window_best = [x[0] for x in combined_cw]
+                self.charge_limit_best = [x[1] for x in combined_cw]
+
     def calculate_plan(self, recompute=True, debug_mode=False, publish=True):
         """
         Calculate the new plan (best)
@@ -1522,6 +1568,20 @@ class Plan:
 
             # Update target values, will be refined via clipping
             self.update_target_values()
+
+            # Enforce strict daily clipping target cap to all preceding charge windows
+            for dwindow in self.export_window_best:
+                if "clipping_target_soc_pct" in dwindow:
+                    target_soc = dwindow["clipping_target_soc_pct"]
+                    dstart = dwindow["start"]
+                    # Cap any charge window that occurs before or during this clipping target (within 18 hours lookback)
+                    for window_n, window in enumerate(self.charge_window_best):
+                        start = window["start"]
+                        if start <= dstart and (dstart - start) <= 18 * 60:
+                            if window.get("clipping_target_soc_pct", 100.0) > target_soc:
+                                window["clipping_target_soc_pct"] = target_soc
+                                window["target"] = target_soc
+                                self.charge_limit_best[window_n] = min(self.charge_limit_best[window_n], target_soc)
 
             # Remove charge windows that overlap with export windows
             self.charge_limit_best, self.charge_window_best = remove_intersecting_windows(self.charge_limit_best, self.charge_window_best, self.export_limits_best, self.export_window_best)
@@ -2786,8 +2846,8 @@ class Plan:
             window_length = window_end - window_start
             window["target"] = limit
 
-            if limit == 100:
-                # Ignore disabled windows
+            if limit == 100 or "clipping_target_soc_pct" in window:
+                # Ignore disabled windows and anti-clipping target SOC windows
                 pass
             elif window_length > 0:
                 predict_minute_start = max(int((window_start - minutes_now) / 5) * 5, 0)
