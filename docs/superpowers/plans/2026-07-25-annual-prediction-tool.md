@@ -22,6 +22,8 @@
 - **Tests:** every new module needs unit tests, registered in `TEST_REGISTRY` in `apps/predbat/unit_test.py`. Test signature is `def test_name(my_predbat):` returning a truthy value on failure. Tests must not perform network I/O.
 - **Run tests from `coverage/`:** `cd coverage && source setup.csh` once, then `./run_all --test <name> > /tmp/out.txt 2>&1` and grep the file. Never pipe test output straight to grep.
 - **Pre-commit:** the script lives at `coverage/run_pre_commit`, NOT the repo root. Run it (or `coverage/venv/bin/pre-commit run --files <files>`) and confirm every hook reports Passed with **no files modified** — the `black` and `file-contents-sorter` hooks rewrite files in place, so a first run that "passes" while rewriting has not passed. Re-stage and re-run until clean.
+- **`git add` your new files BEFORE running pre-commit.** `pre-commit --all-files` enumerates via `git ls-files`, which skips untracked files, so a brand-new module is silently never checked and the run reports a false pass. Two tasks on this branch shipped `black` and `cspell` violations this way. Either `git add` first, or pass the paths explicitly with `--files`.
+- **Report only what you ran.** Never state that a check passed unless you executed the command and read its output. These reports are the review's evidence base.
 
 ---
 
