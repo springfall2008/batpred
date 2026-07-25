@@ -1074,9 +1074,9 @@ class Plan:
             current_start = morning_start
             current_rate = self.rate_export.get(morning_start, 0.0)
 
-            for m in range(morning_start + 30, peak_end + 30, 30):
+            for m in range(morning_start + 30, peak_start + 30, 30):
                 rate = self.rate_export.get(m, 0.0)
-                if rate != current_rate or m >= peak_end:
+                if rate != current_rate or m >= peak_start:
                     # Is this chunk part of a natively highly profitable export window?
                     # If so, we do not need to force it to act as an anti-clipping window,
                     # because it will naturally export to create headroom, AND we don't
@@ -1103,7 +1103,7 @@ class Plan:
             new_export_windows = []
             new_export_limits = []
             for w, limit in zip(self.export_window_best, self.export_limits_best):
-                if not intersects(w, morning_start, peak_end):
+                if not intersects(w, morning_start, peak_start):
                     new_export_windows.append(w)
                     new_export_limits.append(limit)
             self.export_window_best = new_export_windows
@@ -1120,10 +1120,10 @@ class Plan:
                 self.log("Injected anti-clipping candidate export window {} to {} at rate {}p (Target SOC: {}%)".format(self.time_abs_str(new_window["start"]), self.time_abs_str(new_window["end"]), round(new_window["average"], 2), target_soc_pct))
 
             # Inject candidate charge windows for any negative import rate slots during anti-clipping windows
-            for m in range(morning_start, peak_end, 30):
+            for m in range(morning_start, peak_start, 30):
                 imp_rate = self.rate_import.get(m, 0.0)
                 if imp_rate < 0.0:
-                    m_end = min(m + 30, peak_end)
+                    m_end = min(m + 30, peak_start)
                     if m_end <= m:
                         continue
                     already_covered = False
@@ -1574,10 +1574,11 @@ class Plan:
                 if "clipping_target_soc_pct" in dwindow:
                     target_soc = dwindow["clipping_target_soc_pct"]
                     dstart = dwindow["start"]
+                    dend = dwindow["end"]
                     # Cap any charge window that occurs before or during this clipping target (within 18 hours lookback)
                     for window_n, window in enumerate(self.charge_window_best):
                         start = window["start"]
-                        if start <= dstart and (dstart - start) <= 18 * 60:
+                        if start < dend and (dend - start) <= 18 * 60:
                             if window.get("clipping_target_soc_pct", 100.0) > target_soc:
                                 window["clipping_target_soc_pct"] = target_soc
                                 window["target"] = target_soc
