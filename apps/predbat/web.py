@@ -81,34 +81,55 @@ from marginal import MARGINAL_EXTRA_KWH_LEVEL_NAMES, MARGINAL_EXTRA_KWH_LEVELS, 
 ROOT_YAML_KEY = "pred_bat"
 
 
+def state_as_of_slots(records, slots):
+    """
+    Resolve each slot to the state in effect at it - the most recent record at or before the slot.
+
+    records must be a list of (timestamp, value) ordered oldest first. Returns
+    {slot: (value, changed, prev_value)} where value is "-" for slots preceding the first record and
+    changed marks a slot whose value differs from the one shown at the previous slot.
+    """
+    filled = {}
+    last_value = None
+    previous = None
+    index = 0
+
+    for slot in sorted(slots):
+        while index < len(records) and records[index][0] <= slot:
+            last_value = records[index][1]
+            index += 1
+        value = last_value if last_value is not None else "-"
+        filled[slot] = (value, value != "-" and value != previous, previous)
+        previous = value
+
+    return filled
+
+
 def build_entity_history_table_data(entity_selections, entity_data_fetch):
     """
-    Bucket raw HA history into 5-minute and 30-minute windows for the /entity history table.
+    Resolve the /entity history table's 30-minute rows and their 5-minute detail slots.
 
     entity_selections: list of {"entity_id": ..., "attribute": ...} (attribute may be None for state)
     entity_data_fetch: dict of entity_id -> history as returned by get_history_with_now(), i.e. [[record, ...]]
 
-    Each raw record list is oldest-first; it is read (never mutated) in that order so that, when
-    several records round into the same bucket, the bucket keeps the most recent one - the value
-    that was actually in effect by the end of that window and that should carry forward into the
-    next bucket without data.
+    Every slot reports the state as of its own timestamp. Summarising a window by the last sample
+    taken inside it instead let a momentary blip stand for the whole window - one stray "Lost"
+    record at 21:57 made the entire 21:30 row read "Lost" - and that value then carried forward
+    into every later slot that had no sample of its own, turning a blip into hours of downtime.
 
     Returns (entity_filled_30min, entity_filled_5min, sorted_timestamps_30min, all_display_slots_5min):
-      entity_filled_30min / entity_filled_5min: one dict per selection, {slot: (value, is_known, prev_value)}
-        with unfilled slots carried forward from the last known value ("-" if none yet)
-      sorted_timestamps_30min: all known 30-min bucket timestamps, newest first
-      all_display_slots_5min: the 5-min detail-row slots (offsets -5 to -25) leading up to each 30-min bucket
+      entity_filled_30min / entity_filled_5min: one dict per selection, {slot: (value, changed, prev_value)}
+      sorted_timestamps_30min: the 30-min row timestamps, newest first
+      all_display_slots_5min: the 5-min slots covering each 30-min row's own window (offsets 0 to +25)
     """
-    entity_histories_30min = []
-    entity_histories_5min = []
+    entity_records = []
     all_timestamps_30min = set()
 
     for selection in entity_selections:
         entity_id = selection["entity_id"]
         attribute = selection["attribute"]
         history = entity_data_fetch[entity_id]
-        entity_data_30min = {}
-        entity_data_5min = {}
+        records = []
 
         if history and len(history) >= 1:
             history = history[0]
@@ -116,8 +137,10 @@ def build_entity_history_table_data(entity_selections, entity_data_fetch):
                 for item in history:
                     if "last_updated" not in item:
                         continue
-                    last_updated_time = item["last_updated"]
-                    last_updated_stamp = str2time(last_updated_time)
+                    try:
+                        last_updated_stamp = str2time(item["last_updated"])
+                    except (ValueError, TypeError):
+                        continue
 
                     # Get state or attribute value
                     if attribute:
@@ -128,60 +151,33 @@ def build_entity_history_table_data(entity_selections, entity_data_fetch):
                     if state is None:
                         state = "None"
 
-                    # Store 5-minute interval data
+                    records.append((last_updated_stamp, state))
+
+                    # A record makes the window it landed in a row, so activity is always on screen
                     minutes = last_updated_stamp.hour * 60 + last_updated_stamp.minute
-                    rounded_minutes_5 = (minutes // 5) * 5
-                    rounded_stamp_5 = last_updated_stamp.replace(minute=rounded_minutes_5 % 60, hour=rounded_minutes_5 // 60, second=0, microsecond=0)
-                    entity_data_5min[rounded_stamp_5] = state
-
-                    # Round to 30-minute intervals for summary
                     rounded_minutes_30 = (minutes // 30) * 30
-                    rounded_stamp_30 = last_updated_stamp.replace(minute=rounded_minutes_30 % 60, hour=rounded_minutes_30 // 60, second=0, microsecond=0)
-                    entity_data_30min[rounded_stamp_30] = state
-                    all_timestamps_30min.add(rounded_stamp_30)
+                    all_timestamps_30min.add(last_updated_stamp.replace(minute=rounded_minutes_30 % 60, hour=rounded_minutes_30 // 60, second=0, microsecond=0))
 
-        entity_histories_30min.append(entity_data_30min)
-        entity_histories_5min.append(entity_data_5min)
+        # str2time is only reliable for ordering once parsed - the raw strings mix UTC history with
+        # the local-time "now" record get_history_with_now() appends
+        records.sort(key=lambda record: record[0])
+        entity_records.append(records)
 
     # Sort timestamps in reverse chronological order
     sorted_timestamps_30min = sorted(all_timestamps_30min, reverse=True)
 
-    # Collect all display slots so we can precompute carry-forward fill
-    # Detail rows go BACKWARDS from the 30-min parent timestamp (offsets -5 to -25)
+    # Detail slots are the 5-min marks INSIDE each row's own half hour, so expanding a row explains
+    # that row rather than describing the preceding half hour
     all_display_slots_5min = set()
     for ts_30 in sorted_timestamps_30min:
-        for offset in range(-5, -30, -5):
+        for offset in range(0, 30, 5):
             all_display_slots_5min.add(ts_30 + timedelta(minutes=offset))
 
-    # Precompute filled dicts: {slot: (value, is_known, prev_value)} per entity using carry-forward
     entity_filled_30min = []
     entity_filled_5min = []
-    for data_30min, data_5min in zip(entity_histories_30min, entity_histories_5min):
-        # --- 30-min fill ---
-        sorted_known_30 = sorted(data_30min.keys())
-        filled_30 = {}
-        last_val = None
-        ki = 0
-        for slot in sorted(sorted_timestamps_30min):
-            prev_val = last_val
-            while ki < len(sorted_known_30) and sorted_known_30[ki] <= slot:
-                last_val = data_30min[sorted_known_30[ki]]
-                ki += 1
-            filled_30[slot] = (last_val if last_val is not None else "-", slot in data_30min, prev_val)
-        entity_filled_30min.append(filled_30)
-
-        # --- 5-min fill ---
-        sorted_known_5 = sorted(data_5min.keys())
-        filled_5 = {}
-        last_val = None
-        ki = 0
-        for slot in sorted(all_display_slots_5min):
-            prev_val = last_val
-            while ki < len(sorted_known_5) and sorted_known_5[ki] <= slot:
-                last_val = data_5min[sorted_known_5[ki]]
-                ki += 1
-            filled_5[slot] = (last_val if last_val is not None else "-", slot in data_5min, prev_val)
-        entity_filled_5min.append(filled_5)
+    for records in entity_records:
+        entity_filled_30min.append(state_as_of_slots(records, sorted_timestamps_30min))
+        entity_filled_5min.append(state_as_of_slots(records, all_display_slots_5min))
 
     return entity_filled_30min, entity_filled_5min, sorted_timestamps_30min, all_display_slots_5min
 
@@ -1326,18 +1322,16 @@ class WebInterface(ComponentBase):
                     for filled_30, filled_5 in zip(entity_filled_30min, entity_filled_5min):
                         value, is_changed, prev_value = filled_30.get(timestamp_30, ("-", False, None))
                         if is_changed:
-                            if prev_value is None or value != prev_value:
-                                cell_class = ' class="changed-cell"'
+                            cell_class = ' class="changed-cell"'
+                            has_highlight = True
+                        else:
+                            # Flag a row that held its value at both ends but moved somewhere inside its own half hour
+                            sub_vals = [filled_5.get(timestamp_30 + timedelta(minutes=off), ("-", False, None))[0] for off in range(5, 30, 5)]
+                            if any(v != value for v in sub_vals):
+                                cell_class = ' class="reverted-cell"'
                                 has_highlight = True
                             else:
-                                sub_vals = [filled_5.get(timestamp_30 + timedelta(minutes=off), ("-", False, None))[0] for off in range(-5, -26, -5)]
-                                if any(v != value for v in sub_vals):
-                                    cell_class = ' class="reverted-cell"'
-                                    has_highlight = True
-                                else:
-                                    cell_class = ""
-                        else:
-                            cell_class = ""
+                                cell_class = ""
                         cells.append((value, cell_class))
                     row_data.append((timestamp_30, cells, has_highlight))
 
@@ -1376,17 +1370,15 @@ class WebInterface(ComponentBase):
                         text += f"<td{cell_class}>{value}</td>"
                     text += "</tr>\n"
 
-                    # Detail rows: 5-minute slots leading UP TO the parent timestamp
-                    for offset in range(-5, -26, -5):
+                    # Detail rows: the remaining 5-minute slots inside this row's own half hour,
+                    # newest first to match the table's ordering (the row itself covers offset 0)
+                    for offset in range(25, 0, -5):
                         detail_time = timestamp_30 + timedelta(minutes=offset)
                         text += f'<tr class="detail-row" id="detail_{row_index}">'
                         text += f"<td>  {detail_time.strftime(TIME_FORMAT)}</td>"
                         for filled in entity_filled_5min:
                             value, is_changed, prev_value = filled.get(detail_time, ("-", False, None))
-                            if is_changed and (prev_value is None or value != prev_value):
-                                cell_class = ' class="changed-cell"'
-                            else:
-                                cell_class = ""
+                            cell_class = ' class="changed-cell"' if is_changed else ""
                             text += f"<td{cell_class}>{value}</td>"
                         text += "</tr>\n"
 
@@ -1946,47 +1938,44 @@ var options = {
         first_series = True
         all_states = set()
 
+        # A rangeBar data point's "x" is the y-axis category, so entities whose friendly names
+        # collide (every GivEnergy Cloud inverter publishes a "Status" sensor, for instance) would
+        # otherwise share a single unlabelled row with no way to tell which bar is which inverter.
+        name_counts = {}
+        for entity_timeline in timeline_data:
+            name_counts[entity_timeline["name"]] = name_counts.get(entity_timeline["name"], 0) + 1
+
         for entity_timeline in timeline_data:
             entity_name = entity_timeline["name"]
+            if name_counts.get(entity_name, 0) > 1:
+                entity_name = "{} ({})".format(entity_name, entity_timeline.get("entity_id", ""))
             history_chart = entity_timeline["data"]  # Dict with timestamp keys and state values
 
-            # Convert history data to timeline ranges
+            # Sort by the instant each record represents rather than by its raw timestamp text:
+            # HA/DB history is UTC while get_history_with_now() appends the current state stamped
+            # in local time, so a string sort can order records by their offset instead of by time.
+            sorted_items = []
+            for timestamp_str, state in history_chart.items():
+                try:
+                    sorted_items.append((int(str2time(timestamp_str).timestamp() * 1000), str(state)))
+                except (ValueError, TypeError):
+                    continue
+            sorted_items.sort(key=lambda item: item[0])
+
+            # Convert history data to timeline ranges. Every sample is folded into a range: unlike a
+            # numerical series, thinning a state series does not merely lower the resolution, it
+            # rewrites history. Sampling the records by array index used to alias a flapping state
+            # away entirely whenever the step kept landing on one phase of the flap, leaving the
+            # chart asserting a single multi-day run that the history table flatly contradicted.
+            # Only transitions produce a range, so an entity that rarely changes stays cheap.
             ranges = []
             current_state = None
             start_time = None
-
-            # Sort by timestamp - history_chart is a dict
-            sorted_items = sorted(history_chart.items(), key=lambda x: x[0])
-
-            # Downsample if needed - keep max 288 data points
-            max_points = 288
-            if len(sorted_items) > max_points:
-                # Calculate step size to keep approximately max_points
-                step = len(sorted_items) // max_points
-                if step < 1:
-                    step = 1
-                # Keep every Nth item, but always keep first and last
-                downsampled = [sorted_items[0]]  # Always keep first
-                # Add items at regular intervals
-                for i in range(step, len(sorted_items) - 1, step):
-                    downsampled.append(sorted_items[i])
-                # Always keep last if it's not already included
-                if len(sorted_items) > 1 and sorted_items[-1] not in downsampled:
-                    downsampled.append(sorted_items[-1])
-                sorted_items = downsampled
-
             last_timestamp_ms = None
-            for timestamp_str, state in sorted_items:
-                state = str(state)
-                all_states.add(state)
 
-                # Convert timestamp string to milliseconds for ApexCharts
-                try:
-                    timestamp_dt = str2time(timestamp_str)
-                    timestamp_ms = int(timestamp_dt.timestamp() * 1000)
-                    last_timestamp_ms = timestamp_ms  # Track the last valid timestamp
-                except (ValueError, TypeError):
-                    continue
+            for timestamp_ms, state in sorted_items:
+                all_states.add(state)
+                last_timestamp_ms = timestamp_ms
 
                 if current_state is None:
                     # First point
