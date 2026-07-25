@@ -1581,7 +1581,8 @@ class Plan:
                             if window.get("clipping_target_soc_pct", 100.0) > target_soc:
                                 window["clipping_target_soc_pct"] = target_soc
                                 window["target"] = target_soc
-                                self.charge_limit_best[window_n] = min(self.charge_limit_best[window_n], target_soc)
+                                target_soc_kwh = (target_soc / 100.0) * self.soc_max
+                                self.charge_limit_best[window_n] = min(self.charge_limit_best[window_n], target_soc_kwh)
 
             # Remove charge windows that overlap with export windows
             self.charge_limit_best, self.charge_window_best = remove_intersecting_windows(self.charge_limit_best, self.charge_window_best, self.export_limits_best, self.export_window_best)
