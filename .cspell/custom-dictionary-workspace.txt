@@ -59,6 +59,7 @@ chargehold
 chargelater
 Chrg
 citem
+clearsky
 cloudfront
 Codespaces
 collapsable
@@ -315,6 +316,7 @@ oncharge
 oninput
 onmouseout
 onmouseover
+openmeteo
 openweathermap
 overfitting
 overvoltage

@@ -468,6 +468,43 @@ The amount of modulation depends on the standard deviation of your load predicti
 
 You can disable this feature (_expert mode only_) using **switch.metric_load_divergence_enable**.
 
+### Automated Solar Clipping Mitigation
+
+In solar setups where your peak PV generation exceeds your inverter's maximum AC limit (for example, a 6.5kW solar array connected to a 5kW inverter), the excess energy is "clipped" and permanently lost if your battery is already fully charged.
+
+Historically, Predbat's standard planning lacked visibility into the precise magnitude of this expected clipped energy, meaning it could not preemptively create room in the battery to absorb the excess yield.
+
+The **Clipping Buffer** feature introduces an intelligent mitigation layer that calculates the exact energy expected to be lost to inverter clipping, and automatically schedules preemptive battery exports to create the necessary buffer before the peak hits.
+
+#### Key Features
+
+- **Dynamic Clipping Prediction**: Analyzes the raw PV forecast curve against the user's configured `inverter_limit` to calculate the exact volume of energy (in kWh) that will exceed AC capacity.
+- **Preemptive Export Scheduling**: Automatically forces battery export windows prior to peak generation periods, guaranteeing the battery has precisely enough headroom to soak up the excess energy.
+- **Clear-Sky Cloud Modeling**: Includes an optional integration for clear-sky data (e.g., `ha_solcast_clearsky`) and an auto-tuning amplification factor. This generates a theoretical maximum generation envelope, ensuring the clipping buffer is sized safely even when standard forecasts fluctuate due to unpredictable cloud cover.
+
+#### Configuration Settings
+
+These settings can be found in the Home Assistant Predbat Configuration panel, directly beneath the Cloud Model settings.
+
+- **`clipping_buffer_enable`**: The master switch. Turns the entire clipping buffer feature on or off.
+- **`clipping_clearsky_source`**: Determines where Predbat obtains clear‑sky (theoretical maximum) solar data. Options are:
+    - `auto`: Predbat automatically selects the first available source in the following priority order: `ha_solcast_clearsky`, `solcast_api`, `openmeteo`. The selection is based on the presence of a configured integration or valid API credentials.
+    - `ha_solcast_clearsky`: Uses the HACS [Solcast Clearsky integration](https://github.com/autoSteve/ha-solcast-clearsky), which piggybacks on the standard Solcast integration and provides unclipped forecasts.
+    - `solcast_api`: Direct native Solcast API integration (requires a Solcast API key with clear‑sky access).
+    - `openmeteo`: Uses the free Open‑Meteo API as a fallback source.
+- **`clipping_auto_tune`**: Automatically learns the safety buffer margins from past clipping behavior. When enabled, it dynamically tunes and auto-populates `clipping_amplification`, `clipping_buffer_start_offset`, and `clipping_buffer_end_offset` directly on your dashboard entities.
+- **`clipping_amplification`**: A manual multiplier (e.g. `1.5x`) to scale the modeled solar forecast peak. Tuned dynamically if Auto-Tune is ON.
+- **`clipping_cost_weight`**: An internal optimizer multiplier (default `1.0`). If Predbat isn't dumping the battery aggressively enough before a peak, increasing this number adds a harsher financial penalty for clipping, forcing the optimizer to prioritize creating headroom.
+- **`clipping_limit_override`**: Manually define your inverter's AC ceiling in Watts (e.g., `5000W`). If left at `0`, Predbat auto-detects it from your inverter entity.
+
+#### Manual Overrides
+
+If you do not want to use the dynamic cloud-based tracking, you can manually force a static buffer size and time window:
+
+- **`clipping_buffer_max_kwh`**: Manually force the maximum size of the clipping buffer (e.g. `3.0` kWh).
+- **`clipping_buffer_start_time`**: The start time for the fixed buffer window.
+- **`clipping_buffer_end_time`**: The end time for the fixed buffer window.
+
 ## iBoost model options
 
 Predbat has an 'iBoost model' that can be used to model using excess solar energy to heat hot water (or similar) instead of it being exported to the grid.
@@ -715,6 +752,24 @@ The manual SoC target works in conjunction with the [weather alert system](apps-
 **select.predbat_manual_api** enables you to overwrite configuration entries normally set in `apps.yaml`, e.g. from an automation.
 
 This is described in detail in [Manual API](manual-api.md) and is mentioned here just for completeness.
+
+## Clipping Configuration
+
+Predbat includes advanced controls to manage solar clipping scenarios and ensure accurate simulation of your inverter's maximum capabilities. These configurations determine how clipping is modeled and how Predbat should buffer energy.
+
+- **switch.predbat_clipping_buffer_enable** - Enables or disables the use of a clipping buffer in Predbat's modeling (Default is True).
+- **select.predbat_clipping_clearsky_source** - Determines the source used for the clearsky solar forecast (e.g., `ha_solcast_clearsky`), used to model unclipped generation capabilities.
+- **switch.predbat_clipping_auto_tune** - When enabled, Predbat will automatically tune the clipping parameters for better plan optimization.
+- **input_number.predbat_clipping_cost_weight** - Multiplier used to weight the cost of clipped energy in the optimization algorithm.
+- **input_number.predbat_clipping_amplification** - Amplification factor applied to the clipping buffer.
+- **input_number.predbat_clipping_buffer_start_offset** - Allows you to offset the start of the clipping buffer window (in minutes).
+- **input_number.predbat_clipping_buffer_end_offset** - Allows you to offset the end of the clipping buffer window (in minutes).
+- **input_number.predbat_clipping_limit_override** - Can be used to manually override the inverter limit for clipping purposes (in Watts). Set to 0 to disable override.
+- **input_number.predbat_clipping_buffer_max_kwh** - Manual override for the maximum size of the clipping buffer in kWh.
+- **select.predbat_clipping_buffer_start_time** - Specific start time to define the clipping buffer window.
+- **select.predbat_clipping_buffer_end_time** - Specific end time to define the clipping buffer window.
+
+You can view the clipping plan by setting up the appropriate Apex Chart — see [creating the Predbat charts](creating-charts.md) or viewing the clipping chart in the [Predbat web interface](web-interface.md#charts-view).
 
 ## Debug
 

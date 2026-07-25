@@ -165,6 +165,14 @@ class LoadMLComponent(ComponentBase):
                 self.log("ML Component: Failed to load model, reinitialising predictor")
                 self.predictor = LoadPredictor(log_func=self.log, learning_rate=self.ml_learning_rate, max_load_kw=self.ml_max_load_kw, weight_decay=self.ml_weight_decay, dropout_rate=self.ml_dropout_rate)
 
+    def is_alive(self):
+        """
+        Override ComponentBase to prevent Read-Only mode during long initial training.
+        Returns True if we have fully started, OR if we are still starting up but
+        haven't encountered any actual errors yet.
+        """
+        return self.api_started or (self.count_errors == 0 and not self.fatal_error)
+
     def is_calculating(self):
         """Return whether the component is currently calculating predictions."""
         return self.load_ml_calculating
@@ -405,7 +413,7 @@ class LoadMLComponent(ComponentBase):
                 energy = self.get_from_incrementing(pv_data_cumulative, m, PREDICT_STEP, backwards=True)
                 pv_data[m] = dp4(energy)
 
-            pv_forecast_minute, pv_forecast_minute10 = self.base.fetch_pv_forecast()
+            pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_minuteCS, pv_forecast_minuteHIST = self.base.fetch_pv_forecast()
             # Add future PV forecast as per-5-min energy with negative keys (negative = future)
             # key -5 = first future step, -10 = second, etc.
             if pv_forecast_minute:
@@ -823,7 +831,8 @@ class LoadMLComponent(ComponentBase):
             import_rate=dict_to_array(self.import_rates_data),
             export_rate=dict_to_array(self.export_rates_data),
         )
-        np.savez_compressed(self.database_filepath, **save_kwargs)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: np.savez_compressed(self.database_filepath, **save_kwargs))
         self.log("ML Component: Saved {} steps ({} days) of history to {}".format(total_steps, self.load_data_age_days, self.database_filepath))
 
     async def load_database_history(self):
@@ -842,7 +851,8 @@ class LoadMLComponent(ComponentBase):
 
         try:
             # np.load is blocking disk IO - run in executor so the event loop stays alive
-            data = np.load(self.database_filepath, allow_pickle=False)
+            loop = asyncio.get_running_loop()
+            data = await loop.run_in_executor(None, lambda: np.load(self.database_filepath, allow_pickle=False))
             metadata = json.loads(str(data["metadata_json"]))
 
             version = metadata.get("version", 0)
@@ -930,40 +940,48 @@ class LoadMLComponent(ComponentBase):
         # Lock released - event loop is free during training
 
         try:
+            loop = asyncio.get_running_loop()
             if is_initial:
                 # Curriculum: progressively expand the training window from oldest week
                 # forward so the model learns gradually from historical structure.
-                val_mae = self.predictor.train_curriculum(
-                    load_data_snap,
-                    now_utc_snap,
-                    pv_minutes=pv_data_snap,
-                    temp_minutes=temp_data_snap,
-                    import_rates=import_rates_snap,
-                    export_rates=export_rates_snap,
-                    epochs=epochs,
-                    time_decay_days=time_decay,
-                    validation_holdout_hours=holdout_hours,
-                    patience=patience,
-                    curriculum_window_days=window_days,
-                    curriculum_step_days=5,
-                    max_intermediate_passes=8,
+                val_mae = await loop.run_in_executor(
+                    None,
+                    lambda: self.predictor.train_curriculum(
+                        load_data_snap,
+                        now_utc_snap,
+                        pv_minutes=pv_data_snap,
+                        temp_minutes=temp_data_snap,
+                        import_rates=import_rates_snap,
+                        export_rates=export_rates_snap,
+                        epochs=epochs,
+                        time_decay_days=time_decay,
+                        validation_holdout_hours=holdout_hours,
+                        patience=patience,
+                        curriculum_window_days=window_days,
+                        curriculum_step_days=5,
+                        max_intermediate_passes=8,
+                    ),
                 )
-            # Even if initial was done we need to do one fine tuned curriculum pass too.
-            val_mae = self.predictor.train_curriculum(
-                load_data_snap,
-                now_utc_snap,
-                pv_minutes=pv_data_snap,
-                temp_minutes=temp_data_snap,
-                import_rates=import_rates_snap,
-                export_rates=export_rates_snap,
-                epochs=epochs,
-                time_decay_days=time_decay,
-                validation_holdout_hours=holdout_hours,
-                patience=patience,
-                curriculum_window_days=window_days,
-                curriculum_step_days=step_days,
-                max_intermediate_passes=max_intermediate_passes,
-            )
+            else:
+                # Even if initial was done we need to do one fine tuned curriculum pass too.
+                val_mae = await loop.run_in_executor(
+                    None,
+                    lambda: self.predictor.train_curriculum(
+                        load_data_snap,
+                        now_utc_snap,
+                        pv_minutes=pv_data_snap,
+                        temp_minutes=temp_data_snap,
+                        import_rates=import_rates_snap,
+                        export_rates=export_rates_snap,
+                        epochs=epochs,
+                        time_decay_days=time_decay,
+                        validation_holdout_hours=holdout_hours,
+                        patience=patience,
+                        curriculum_window_days=window_days,
+                        curriculum_step_days=step_days,
+                        max_intermediate_passes=max_intermediate_passes,
+                    ),
+                )
 
             if val_mae is not None:
                 self.last_train_time = datetime.now(timezone.utc)

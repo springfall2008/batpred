@@ -1004,7 +1004,6 @@ def remove_intersecting_windows(charge_limit_best, charge_window_best, export_li
             window = charge_window_best[window_n]
             start = window["start"]
             end = window["end"]
-            average = window["average"]
             limit = charge_limit_best[window_n]
             clipped = False
 
@@ -1017,33 +1016,67 @@ def remove_intersecting_windows(charge_limit_best, charge_window_best, export_li
 
                 # Overlapping window with enabled discharge?
                 if (limit > 0.0) and (dlimit < 100.0) and (dstart < end) and (dend >= start):
-                    if dstart <= start:
-                        if start != dend:
+                    if "clipping_target_soc_pct" in dwindow:
+                        target_soc = dwindow["clipping_target_soc_pct"]
+                        # If the window isn't already capped to this target, we must split and cap the intersection
+                        if window.get("clipping_target_soc_pct") != target_soc:
+                            # Part 1: Before the anti-clipping window
+                            if dstart > start and (dstart - start) >= 5:
+                                new_window1 = window.copy()
+                                new_window1["start"] = start
+                                new_window1["end"] = dstart
+                                new_window_best.append(new_window1)
+                                new_limit_best.append(limit)
+                            
+                            # Part 2: The intersection
+                            inter_start = max(start, dstart)
+                            inter_end = min(end, dend)
+                            if (inter_end - inter_start) >= 5:
+                                new_window2 = window.copy()
+                                new_window2["start"] = inter_start
+                                new_window2["end"] = inter_end
+                                new_window2["clipping_target_soc_pct"] = target_soc
+                                new_window2["target"] = target_soc
+                                new_window_best.append(new_window2)
+                                new_limit_best.append(limit)
+                            
+                            # Remaining part after the anti-clipping window will be handled in the next loop pass
+                            start = max(start, dend)
+                            clipped = True
+                            if (end - start) >= 5:
+                                clip_again = True
+                            break # Break out of dwindow loop to process the split windows properly
+                        else:
+                            # Already capped, so we just let it overlap
+                            continue
+                    else:
+                        # Standard export window, remove the intersection entirely
+                        if dstart <= start:
+                            if start != dend:
+                                start = dend
+                                clipped = True
+                        elif dend >= end:
+                            if end != dstart:
+                                end = dstart
+                                clipped = True
+                        else:
+                            # Two segments
+                            if (dstart - start) >= 5:
+                                new_window = window.copy()
+                                new_window["start"] = start
+                                new_window["end"] = dstart
+                                new_window_best.append(new_window)
+                                new_limit_best.append(limit)
                             start = dend
                             clipped = True
-                    elif dend >= end:
-                        if end != dstart:
-                            end = dstart
-                            clipped = True
-                    else:
-                        # Two segments
-                        if (dstart - start) >= 5:
-                            new_window = {}
-                            new_window["start"] = start
-                            new_window["end"] = dstart
-                            new_window["average"] = average
-                            new_window_best.append(new_window)
-                            new_limit_best.append(limit)
-                        start = dend
-                        clipped = True
-                        if (end - start) >= 5:
-                            clip_again = True
+                            if (end - start) >= 5:
+                                clip_again = True
+                                break # Break out of dwindow loop to process the new `start` cleanly
 
             if not clipped or ((end - start) >= 5):
-                new_window = {}
+                new_window = window.copy()
                 new_window["start"] = start
                 new_window["end"] = end
-                new_window["average"] = average
                 new_window_best.append(new_window)
                 new_limit_best.append(limit)
 
