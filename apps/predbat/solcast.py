@@ -23,26 +23,11 @@ import aiohttp
 import pytz
 from datetime import datetime, timedelta, timezone
 
-# PVWatts / SAPM cell temperature model constants (glass/glass, open rack)
-# Equivalent to pvlib.temperature.sapm_cell with open_rack_glass_glass parameters
-_SAPM_A = -3.47
-_SAPM_B = -0.0594
-_SAPM_DELTA_T = 3.0
-
-
-def pvwatts_cell_temperature(poa_global, temp_air, wind_speed):
-    """Compute PV cell temperature using the SAPM (PVWatts) model.
-
-    Parameters correspond to a glass/glass module on an open rack (the most
-    common residential case). Formula: T_cell = T_air + GTI*exp(a + b*wind) + (GTI/1000)*deltaT
-    """
-    return temp_air + poa_global * math.exp(_SAPM_A + _SAPM_B * wind_speed) + (poa_global / 1000.0) * _SAPM_DELTA_T
-
-
 from const import TIME_FORMAT, TIME_FORMAT_SOLCAST
 from utils import dp2, dp4, history_attribute_to_minute_data, minute_data, history_attribute, prune_today
 from predbat_metrics import record_api_call, metrics
 from component_base import ComponentBase
+from solar_model import convert_azimuth, gti_hourly_to_period_kwh, pvwatts_cell_temperature  # noqa: F401 - re-exported for tests/test_open_meteo.py parity checks
 
 """
 Solcast class deals with fetching solar predictions, processing the data and publishing the results.
@@ -240,19 +225,6 @@ class SolarAPI(ComponentBase):
     URL_PERSONAL = "https://api.forecast.solar/{api_key}/estimate/{lat}/{lon}/{dec}/{az}/{kwp}?time=utc"
     URL_PERSONAL_DUAL = "https://api.forecast.solar/{api_key}/estimate/{lat}/{lon}/{dec1}/{az1}/{kwp1}/{dec2}/{az2}/{kwp2}?time=utc"
 
-    def convert_azimuth(self, az):
-        """
-        Convert azimuth from Predbat/Solcast convention to Forecast.solar/Open-Meteo convention.
-        Predbat/Solcast convention:         0 = North, -90 = East, 90 = West, 180 = South
-        Forecast.solar/Open-Meteo convention: 0 = South, -90 = East, 90 = West, ±180 = North
-        """
-        if az >= 0:
-            az = 180 - az
-        else:
-            az = -180 - az
-
-        return az
-
     async def download_open_meteo_ensemble_data(self, lat, lon, tilt, az, kwp, system_loss):
         """
         Download Open-Meteo ensemble data for P10 solar estimate.
@@ -309,7 +281,7 @@ class SolarAPI(ComponentBase):
             tilt = config.get("declination", 35.0)
             az = config.get("azimuth", 180.0)
             if not config.get("azimuth_zero_south", False):
-                az = self.convert_azimuth(az)
+                az = convert_azimuth(az)
             kwp = config.get("kwp", 3.0)
             system_loss = 1.0 - config.get("efficiency", 0.95)
             shading_factors = config.get("shading_factors", None)
@@ -350,62 +322,24 @@ class SolarAPI(ComponentBase):
 
             ensemble_p10 = await self.download_open_meteo_ensemble_data(lat, lon, tilt, az, kwp, system_loss)
 
-            # Pass 1: compute instantaneous kW at each UTC timestamp sample.
-            # Open-Meteo returns point-in-time irradiance (W/m²) at the start of each hour,
-            # so we must integrate over the period rather than treating the sample as the period energy.
-            instant_kw = {}  # datetime stamp -> (pv50_kw, pv10_kw)
-            instant_stamps = []
-            for idx, ts in enumerate(times):
-                if idx >= len(gti_values):
-                    break
-                gti = gti_values[idx]
-                if gti is None:
-                    gti = 0.0
-                temp = temp_values[idx] if idx < len(temp_values) and temp_values[idx] is not None else 25.0
-                wind = wind_values[idx] if idx < len(wind_values) and wind_values[idx] is not None else 1.0
-                # Cell temperature via SAPM/PVWatts model: irradiance heats the cell above ambient
-                t_cell = pvwatts_cell_temperature(gti, temp, wind)
-                # c-Si temperature coefficient: -0.4%/°C relative to STC (25°C)
-                # No lower clamp on (t_cell - 25): cool cells genuinely produce more power.
-                # Cap at 1.1 (10% above STC) to prevent unrealistic gains at very cold temperatures.
-                eta_temp = max(0.5, min(1.1, 1.0 - 0.004 * (t_cell - 25.0)))
-                pv50_inst = dp4((gti / 1000.0) * kwp * eta_temp * (1.0 - system_loss))
-                raw_p10 = ensemble_p10.get(ts)
-                # ensemble_p10 was computed without temperature derating; apply eta_temp now
-                pv10_inst = dp4(min(raw_p10 * eta_temp, pv50_inst) if raw_p10 is not None else pv50_inst * 0.7)
-                try:
-                    stamp = datetime.strptime(ts, "%Y-%m-%dT%H:%M")
-                    stamp = stamp.replace(tzinfo=pytz.utc)
-                except (ValueError, TypeError):
-                    continue
-                instant_kw[stamp] = (pv50_inst, pv10_inst)
-                instant_stamps.append(stamp)
-
-            # Pass 2: trapezoidal integration — energy over [T, T+1h] = 0.5*(kW_at_T + kW_at_T+1h).
-            # This correctly accounts for sunrise/sunset transitions where irradiance changes rapidly
-            # within the hour, e.g. the first post-sunrise hour contains only partial sunshine.
-            for i in range(len(instant_stamps) - 1):
-                stamp = instant_stamps[i]
-                next_stamp = instant_stamps[i + 1]
-                if (next_stamp - stamp) != timedelta(hours=1):
-                    continue
-                pv50_start, pv10_start = instant_kw[stamp]
-                pv50_end, pv10_end = instant_kw[next_stamp]
-                pv50 = dp4(0.5 * (pv50_start + pv50_end))
-                pv10 = dp4(0.5 * (pv10_start + pv10_end))
-
-                # Apply per-month site shading correction from Google Solar API if available
-                if shading_factors and len(shading_factors) == 12:
-                    shading_month = shading_factors[stamp.month - 1]
-                    pv50 = dp4(pv50 * shading_month)
-                    pv10 = dp4(pv10 * shading_month)
-
-                data_item = {"period_start": stamp.strftime(TIME_FORMAT), "pv_estimate": pv50, "pv_estimate10": pv10}
+            array_periods = gti_hourly_to_period_kwh(
+                times,
+                gti_values,
+                temp_values,
+                wind_values,
+                kwp=kwp,
+                system_loss=system_loss,
+                shading_factors=shading_factors,
+                p10_instant=ensemble_p10,
+            )
+            for stamp, values in array_periods.items():
+                pv50 = values["pv_estimate"]
+                pv10 = values["pv_estimate10"]
                 if stamp in period_data:
                     period_data[stamp]["pv_estimate"] = dp4(period_data[stamp]["pv_estimate"] + pv50)
                     period_data[stamp]["pv_estimate10"] = dp4(period_data[stamp]["pv_estimate10"] + pv10)
                 else:
-                    period_data[stamp] = data_item
+                    period_data[stamp] = {"period_start": stamp.strftime(TIME_FORMAT), "pv_estimate": pv50, "pv_estimate10": pv10}
 
         sorted_data = []
         if period_data:
@@ -452,7 +386,7 @@ class SolarAPI(ComponentBase):
             dec = config.get("declination", 35.0)
             az = config.get("azimuth", 180.0)
             if not config.get("azimuth_zero_south", False):
-                az = self.convert_azimuth(az)
+                az = convert_azimuth(az)
             kwp = config.get("kwp", 3.0)
             efficiency = config.get("efficiency", 0.95)
             api_key = config.get("api_key", None)
