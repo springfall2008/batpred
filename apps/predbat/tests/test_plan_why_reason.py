@@ -11,6 +11,7 @@
 from prediction import Prediction
 from tests.test_infra import reset_inverter, reset_rates, update_rates_import
 from utils import calc_percent_limit
+from web_helper import get_plan_renderer_js
 
 
 def _setup_baseline(my_predbat):
@@ -236,6 +237,19 @@ def run_test_plan_why_reason(my_predbat):
 
     # Clean up
     my_predbat.plan_why_explanations = False
+
+    # --- Test 11: client-side renderer wires row.reason into a title= tooltip ---
+    print("Test renderStateCell wires row.reason into a title attribute")
+    renderer_js = get_plan_renderer_js()
+    if "escapeAttr" not in renderer_js:
+        print("ERROR: expected an escapeAttr() helper in the plan renderer JS")
+        failed = True
+    if "row.reason" not in renderer_js:
+        print("ERROR: expected renderStateCell to reference row.reason")
+        failed = True
+    if "title=" not in renderer_js:
+        print("ERROR: expected renderStateCell to emit a title= attribute")
+        failed = True
 
     if not failed:
         print("All plan why-reason tests passed")
