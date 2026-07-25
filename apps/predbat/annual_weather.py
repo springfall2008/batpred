@@ -143,41 +143,62 @@ class AnnualWeather:
             base, self.latitude, self.longitude, year, year + 1, HOURLY_VARIABLES, array.get("declination", 35.0), azimuth
         )
 
+    @staticmethod
+    def _payload_problem(data):
+        """Return why a payload cannot be trusted, or None when it is complete and usable.
+
+        Shared by the cache-write gate, the cache-read gate and the fetch failure log, so a
+        missing, empty or mid-year-truncated response is described identically wherever it
+        is encountered, and a poisoned cache entry is described the same way a bad live
+        download would be.
+        """
+        if not data:
+            return "no data"
+        hourly = data.get("hourly", {})
+        times = hourly.get("time", [])
+        gti_values = hourly.get("global_tilted_irradiance", [])
+        if not times or not gti_values:
+            return "no hourly values"
+        if len(gti_values) < len(times):
+            return "truncated ({} stamps, {} values)".format(len(times), len(gti_values))
+        return None
+
     async def _fetch_series(self, base, year, cache_tag):
-        """Fetch one source for every array and return the summed hourly period energy."""
+        """Fetch one source for every array and return the summed hourly period energy.
+
+        Every configured array must produce a usable payload for the series to count as
+        available. If any array fails or returns an unusable payload, the whole series is
+        abandoned (an empty dict) rather than silently blending a partial result for one
+        array with complete results for the others, which would understate the true forecast
+        error and let the P10 derate collapse to an artificially optimistic value.
+        """
         totals = {}
-        any_data = False
         for index, array in enumerate(self.arrays):
             url = self._build_url(base, array, year)
-            data = None
             cache_key = "weather_{}_{}_{}_{}_{}".format(cache_tag, year, index, self.latitude, self.longitude)
+            data = None
             if self.storage:
-                data = await self.storage.load("annual", cache_key)
+                cached = await self.storage.load("annual", cache_key)
+                if self._payload_problem(cached) is None:
+                    data = cached
+                # A cache entry written before this guard existed, or poisoned by a past
+                # rate-limit/error page, is discarded here and re-fetched below rather than
+                # trusted forever.
             if not data:
-                data = await self.fetch_json(url)
-                # Only cache a response that actually carries the hourly block we need,
-                # so a rate-limit or error page is never pinned as this array's weather
-                if data and data.get("hourly", {}).get("global_tilted_irradiance") and self.storage:
-                    await self.storage.save("annual", cache_key, data, format="json")
-            if not data:
-                self.log("Warn: Annual: no {} data for array {}".format(cache_tag, index))
-                continue
+                fetched = await self.fetch_json(url)
+                problem = self._payload_problem(fetched)
+                if problem is None:
+                    data = fetched
+                    if self.storage:
+                        await self.storage.save("annual", cache_key, data, format="json")
+                else:
+                    self.log("Warn: Annual: {} data for array {} is unusable ({}); abandoning the {} series for {}".format(cache_tag, index, problem, cache_tag, year))
+                    return {}
 
-            hourly = data.get("hourly", {})
-            times = hourly.get("time", [])
-            gti_values = hourly.get("global_tilted_irradiance", [])
-            if not times or not gti_values:
-                self.log("Warn: Annual: {} data for array {} has no hourly values".format(cache_tag, index))
-                continue
-            if len(gti_values) < len(times):
-                # A response truncated mid-year would otherwise be cached and read back
-                # as a genuinely dark second half of the year
-                self.log("Warn: Annual: {} data for array {} is truncated ({} stamps, {} values); discarding".format(cache_tag, index, len(times), len(gti_values)))
-                continue
-
+            hourly = data["hourly"]
             periods = gti_hourly_to_period_kwh(
-                times,
-                gti_values,
+                hourly["time"],
+                hourly["global_tilted_irradiance"],
                 hourly.get("temperature_2m", []),
                 hourly.get("wind_speed_10m", []),
                 kwp=array.get("kwp", 3.0),
@@ -186,9 +207,8 @@ class AnnualWeather:
             )
             for stamp, values in periods.items():
                 totals[stamp] = totals.get(stamp, 0.0) + values["pv_estimate"]
-            any_data = True
 
-        return totals if any_data else {}
+        return totals
 
     def _derive_p10_ratios(self, actual_periods, forecast_periods, forecast_available):
         """Derive each month's P10 ratio from the measured actual/forecast daily energy error."""
