@@ -1,0 +1,117 @@
+# -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# fmt off
+# pylint: disable=consider-using-f-string
+# pylint: disable=line-too-long
+
+"""Tests for the annual prediction load profile sources."""
+
+import calendar
+from datetime import date
+
+from annual_load import SyntheticLoadProfile, build_load_forecast, tilt_shape
+from annual_profiles import DAY_BAND_SLOTS, NIGHT_BAND_SLOTS, half_hour_shape
+
+
+def test_annual_load(my_predbat):
+    """Verify the synthetic load profile preserves totals and tilts correctly."""
+    failed = False
+    print("**** Testing annual_load ****")
+
+    print("Test: tilt_shape preserves the daily total exactly")
+    base = half_hour_shape()
+    for direction in ["night", "day", "flat"]:
+        tilted = tilt_shape(base, direction)
+        total = sum(tilted)
+        if abs(total - 1.0) > 1e-9:
+            print("  ERROR: tilt '{}' changed the total to {}".format(direction, total))
+            failed = True
+        if any(value < 0 for value in tilted):
+            print("  ERROR: tilt '{}' produced a negative slot".format(direction))
+            failed = True
+
+    print("Test: tilt 'night' moves energy into the night band")
+    night_tilted = tilt_shape(base, "night")
+    base_night = sum(base[slot] for slot in NIGHT_BAND_SLOTS)
+    tilted_night = sum(night_tilted[slot] for slot in NIGHT_BAND_SLOTS)
+    if tilted_night <= base_night:
+        print("  ERROR: night tilt should raise the night band from {} to more, got {}".format(base_night, tilted_night))
+        failed = True
+
+    print("Test: tilt 'day' moves energy into the day band")
+    day_tilted = tilt_shape(base, "day")
+    base_day = sum(base[slot] for slot in DAY_BAND_SLOTS)
+    tilted_day = sum(day_tilted[slot] for slot in DAY_BAND_SLOTS)
+    if tilted_day <= base_day:
+        print("  ERROR: day tilt should raise the day band from {} to more, got {}".format(base_day, tilted_day))
+        failed = True
+
+    print("Test: tilt 'flat' is a no-op")
+    flat_tilted = tilt_shape(base, "flat")
+    if flat_tilted != base:
+        print("  ERROR: flat tilt should leave the shape unchanged")
+        failed = True
+
+    print("Test: the twelve monthly totals sum to annual_kwh")
+    annual_kwh = 3800.0
+    source = SyntheticLoadProfile(annual_kwh=annual_kwh, shape="flat", year=2025)
+    year_total = 0.0
+    for month in range(1, 13):
+        days_in_month = calendar.monthrange(2025, month)[1]
+        month_total = sum(source.daily_kwh(date(2025, month, day)) for day in range(1, days_in_month + 1))
+        year_total += month_total
+    if abs(year_total - annual_kwh) > 1e-6:
+        print("  ERROR: twelve months summed to {}, expected {}".format(year_total, annual_kwh))
+        failed = True
+
+    print("Test: January daily consumption exceeds July")
+    january = source.daily_kwh(date(2025, 1, 15))
+    july = source.daily_kwh(date(2025, 7, 15))
+    if january <= july:
+        print("  ERROR: January daily {} should exceed July daily {}".format(january, july))
+        failed = True
+
+    print("Test: minute_profile has 1440 entries summing to the day's kWh")
+    day = date(2025, 3, 10)
+    profile = source.minute_profile(day)
+    if len(profile) != 1440:
+        print("  ERROR: expected 1440 minutes, got {}".format(len(profile)))
+        failed = True
+    if abs(sum(profile) - source.daily_kwh(day)) > 1e-9:
+        print("  ERROR: minute profile sums to {}, expected {}".format(sum(profile), source.daily_kwh(day)))
+        failed = True
+
+    print("Test: build_load_forecast produces a cumulative series Predbat can difference")
+    forecast = build_load_forecast(source, date(2025, 3, 10), 2)
+    if forecast.get(0) != 0.0:
+        print("  ERROR: cumulative series must start at 0, got {}".format(forecast.get(0)))
+        failed = True
+    if 2 * 1440 not in forecast:
+        print("  ERROR: cumulative series must include the final boundary minute {}".format(2 * 1440))
+        failed = True
+    for minute in range(1, 2 * 1440 + 1):
+        if forecast[minute] < forecast[minute - 1] - 1e-12:
+            print("  ERROR: cumulative series decreased at minute {}".format(minute))
+            failed = True
+            break
+    expected_two_days = source.daily_kwh(date(2025, 3, 10)) + source.daily_kwh(date(2025, 3, 11))
+    if abs(forecast[2 * 1440] - expected_two_days) > 1e-9:
+        print("  ERROR: two-day total {} expected {}".format(forecast[2 * 1440], expected_two_days))
+        failed = True
+
+    print("Test: differencing the cumulative series recovers the per-minute profile")
+    first_minute = forecast[1] - forecast[0]
+    if abs(first_minute - profile[0]) > 1e-12:
+        print("  ERROR: differenced minute 0 gave {}, expected {}".format(first_minute, profile[0]))
+        failed = True
+
+    print("Test: a zero annual figure produces a zero profile rather than dividing by zero")
+    zero_source = SyntheticLoadProfile(annual_kwh=0.0, shape="flat", year=2025)
+    if sum(zero_source.minute_profile(day)) != 0.0:
+        print("  ERROR: zero annual kWh should give a zero profile")
+        failed = True
+
+    return failed
