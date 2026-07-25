@@ -52,6 +52,7 @@
 - Modify: `apps/predbat/solcast.py` (lines ~20-40 for the constants, ~243-255 for `convert_azimuth`, ~356-408 for the two-pass conversion)
 - Create: `apps/predbat/tests/test_solar_model.py`
 - Modify: `apps/predbat/unit_test.py`
+- Do **not** modify: `apps/predbat/tests/test_open_meteo.py` — it is the parity guard for this refactor
 
 **Interfaces:**
 - Consumes: nothing (first task).
@@ -60,56 +61,17 @@
   - `solar_model.convert_azimuth(az) -> float`
   - `solar_model.gti_hourly_to_period_kwh(times, gti_values, temp_values, wind_values, kwp, system_loss, shading_factors=None, p10_instant=None, p10_fallback=0.7) -> dict[datetime, dict]` where each value is `{"pv_estimate": float, "pv_estimate10": float}` keyed by a tz-aware UTC hour-start stamp, giving kWh generated during that hour for **one** array.
 
-- [ ] **Step 1: Capture a golden snapshot of current behaviour before touching anything**
+- [ ] **Step 1: Record the current behaviour baseline**
 
-This is a refactor of live forecasting code. The parity fixture must be generated from the *current* implementation, before any edit, or it proves nothing.
+This refactor touches live forecasting code. Parity is proven by the *existing* suite in `apps/predbat/tests/test_open_meteo.py`, which calls the real `download_open_meteo_data()` against mocked responses and asserts on its output, including temperature derating and multi-array summing. Capture its result now, before any edit:
 
-Create `apps/predbat/tests/golden_open_meteo.py` as a throwaway generator and run it from `coverage/`:
+Run: `cd coverage && ./run_all -k open_meteo > /tmp/t1_before.txt 2>&1; tail -20 /tmp/t1_before.txt`
 
-```python
-"""Throwaway generator for the Open-Meteo conversion golden fixture."""
-import json
-import math
-
-_SAPM_A = -3.47
-_SAPM_B = -0.0594
-_SAPM_DELTA_T = 3.0
-
-TIMES = ["2025-06-01T{:02d}:00".format(h) for h in range(24)]
-GTI = [0, 0, 0, 0, 12, 88, 210, 355, 495, 610, 700, 755, 770, 742, 668, 560, 425, 275, 130, 30, 0, 0, 0, 0]
-TEMP = [9, 9, 8, 8, 9, 11, 13, 15, 17, 19, 20, 21, 22, 22, 22, 21, 20, 18, 16, 14, 12, 11, 10, 10]
-WIND = [1.5] * 24
-
-def main():
-    """Emit the golden fixture as JSON."""
-    kwp = 5.6
-    system_loss = 0.05
-    out = []
-    for idx, ts in enumerate(TIMES):
-        gti = GTI[idx]
-        t_cell = TEMP[idx] + gti * math.exp(_SAPM_A + _SAPM_B * WIND[idx]) + (gti / 1000.0) * _SAPM_DELTA_T
-        eta_temp = max(0.5, min(1.1, 1.0 - 0.004 * (t_cell - 25.0)))
-        pv50 = round((gti / 1000.0) * kwp * eta_temp * (1.0 - system_loss), 4)
-        out.append(pv50)
-    periods = []
-    for i in range(len(out) - 1):
-        pv50 = round(0.5 * (out[i] + out[i + 1]), 4)
-        periods.append({"time": TIMES[i], "pv_estimate": pv50, "pv_estimate10": round(min(pv50 * 0.7, pv50), 4)})
-    print(json.dumps(periods, indent=2))
-
-if __name__ == "__main__":
-    main()
-```
-
-Run: `cd coverage && python3 ../apps/predbat/tests/golden_open_meteo.py > tests_golden.json`
-
-Copy the output to `apps/predbat/tests/fixtures/open_meteo_golden.json` (create the `fixtures` directory), then delete `golden_open_meteo.py` and `coverage/tests_golden.json`.
-
-This mirrors the exact arithmetic in `solcast.py:356-396` — instantaneous kW per sample, then trapezoidal integration across each hour pair, then the `pv50 * 0.7` P10 fallback used when no ensemble data exists.
+Expected: the suite passes. Record which tests ran — Step 8 re-runs exactly these and they must still pass, unchanged. Do **not** modify `test_open_meteo.py` at any point in this task; a refactor that requires editing the test that guards it is not a refactor.
 
 - [ ] **Step 2: Write the failing test**
 
-Create `apps/predbat/tests/test_solar_model.py`:
+Create `apps/predbat/tests/test_solar_model.py`. The expected values are hand-derived from the documented model rather than snapshotted, so a wrong constant fails the test instead of being baked into a fixture:
 
 ```python
 # -----------------------------------------------------------------------------
@@ -123,82 +85,129 @@ Create `apps/predbat/tests/test_solar_model.py`:
 
 """Tests for the shared solar GTI to kW conversion model."""
 
-import json
-import os
 from datetime import datetime
 
 import pytz
 
 from solar_model import convert_azimuth, gti_hourly_to_period_kwh, pvwatts_cell_temperature
 
-FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "fixtures")
+FLAT_TIMES = ["2025-06-01T{:02d}:00".format(hour) for hour in range(4)]
 
-TIMES = ["2025-06-01T{:02d}:00".format(h) for h in range(24)]
-GTI = [0, 0, 0, 0, 12, 88, 210, 355, 495, 610, 700, 755, 770, 742, 668, 560, 425, 275, 130, 30, 0, 0, 0, 0]
-TEMP = [9, 9, 8, 8, 9, 11, 13, 15, 17, 19, 20, 21, 22, 22, 22, 21, 20, 18, 16, 14, 12, 11, 10, 10]
-WIND = [1.5] * 24
+
+def stamp_for(text):
+    """Return the tz-aware UTC datetime for an Open-Meteo timestamp string."""
+    return pytz.utc.localize(datetime.strptime(text, "%Y-%m-%dT%H:%M"))
 
 
 def test_solar_model(my_predbat):
-    """Verify the extracted solar model matches the golden snapshot of the original solcast.py logic."""
+    """Verify the shared solar model against hand-derived values."""
     failed = False
     print("**** Testing solar_model ****")
 
-    print("Test: convert_azimuth round trips the Predbat/Open-Meteo conventions")
+    print("Test: convert_azimuth maps the Predbat convention onto the Open-Meteo one")
     for predbat_az, expected in [(180, 0), (90, 90), (270, -90), (0, 180)]:
         result = convert_azimuth(predbat_az)
         if result != expected:
             print("  ERROR: convert_azimuth({}) expected {}, got {}".format(predbat_az, expected, result))
             failed = True
 
-    print("Test: pvwatts_cell_temperature raises cell temperature above ambient under irradiance")
-    cool = pvwatts_cell_temperature(0.0, 20.0, 1.5)
-    hot = pvwatts_cell_temperature(800.0, 20.0, 1.5)
-    if cool != 20.0:
-        print("  ERROR: zero irradiance should give ambient, got {}".format(cool))
+    print("Test: pvwatts_cell_temperature matches the SAPM formula")
+    # T_cell = 25 + 1000*exp(-3.47 + -0.0594*0) + (1000/1000)*3.0
+    #        = 25 + 1000*0.031117 + 3 = 59.117
+    hot = pvwatts_cell_temperature(1000.0, 25.0, 0.0)
+    if abs(hot - 59.117) > 0.001:
+        print("  ERROR: cell temperature expected 59.117, got {}".format(hot))
         failed = True
-    if hot <= cool:
-        print("  ERROR: 800 W/m2 should raise cell temperature above ambient, got {}".format(hot))
-        failed = True
-
-    print("Test: gti_hourly_to_period_kwh matches the golden snapshot")
-    with open(os.path.join(FIXTURE_DIR, "open_meteo_golden.json"), "r") as handle:
-        golden = json.load(handle)
-
-    result = gti_hourly_to_period_kwh(TIMES, GTI, TEMP, WIND, kwp=5.6, system_loss=0.05)
-
-    if len(result) != len(golden):
-        print("  ERROR: expected {} periods, got {}".format(len(golden), len(result)))
+    if pvwatts_cell_temperature(0.0, 20.0, 1.5) != 20.0:
+        print("  ERROR: zero irradiance should give ambient temperature")
         failed = True
 
-    for entry in golden:
-        stamp = pytz.utc.localize(datetime.strptime(entry["time"], "%Y-%m-%dT%H:%M"))
-        got = result.get(stamp)
-        if got is None:
-            print("  ERROR: missing period {}".format(entry["time"]))
-            failed = True
-            continue
-        if abs(got["pv_estimate"] - entry["pv_estimate"]) > 0.0001:
-            print("  ERROR: {} pv_estimate expected {}, got {}".format(entry["time"], entry["pv_estimate"], got["pv_estimate"]))
-            failed = True
-        if abs(got["pv_estimate10"] - entry["pv_estimate10"]) > 0.0001:
-            print("  ERROR: {} pv_estimate10 expected {}, got {}".format(entry["time"], entry["pv_estimate10"], got["pv_estimate10"]))
-            failed = True
+    print("Test: a constant-irradiance hour converts to the hand-derived energy")
+    # eta = 1 - 0.004*(59.117 - 25) = 0.863532; pv = (1000/1000) * 1 kWp * eta * 1.0
+    # Both endpoints are equal so the trapezoid returns the same value.
+    flat_gti = [1000.0] * 4
+    flat_temp = [25.0] * 4
+    flat_wind = [0.0] * 4
+    result = gti_hourly_to_period_kwh(FLAT_TIMES, flat_gti, flat_temp, flat_wind, kwp=1.0, system_loss=0.0)
+    if len(result) != 3:
+        print("  ERROR: 4 samples should yield 3 integrated periods, got {}".format(len(result)))
+        failed = True
+    first = result.get(stamp_for(FLAT_TIMES[0]))
+    if first is None:
+        print("  ERROR: missing the first period")
+        failed = True
+    elif abs(first["pv_estimate"] - 0.8635) > 0.0001:
+        print("  ERROR: expected 0.8635 kWh, got {}".format(first["pv_estimate"]))
+        failed = True
 
-    print("Test: p10_fallback scales the P10 series")
-    scaled = gti_hourly_to_period_kwh(TIMES, GTI, TEMP, WIND, kwp=5.6, system_loss=0.05, p10_fallback=0.5)
-    stamp = pytz.utc.localize(datetime.strptime("2025-06-01T12:00", "%Y-%m-%dT%H:%M"))
-    expected_p10 = round(scaled[stamp]["pv_estimate"] * 0.5, 4)
-    if abs(scaled[stamp]["pv_estimate10"] - expected_p10) > 0.0001:
-        print("  ERROR: p10_fallback 0.5 expected {}, got {}".format(expected_p10, scaled[stamp]["pv_estimate10"]))
+    print("Test: cold panels are allowed to exceed their STC rating")
+    # T_cell = 0 + 200*exp(-3.47 - 0.0594) + 0.6 = 6.4645; eta = 1.074142 (above 1.0)
+    cold = gti_hourly_to_period_kwh(FLAT_TIMES, [200.0] * 4, [0.0] * 4, [1.0] * 4, kwp=1.0, system_loss=0.0)
+    cold_first = cold[stamp_for(FLAT_TIMES[0])]
+    if abs(cold_first["pv_estimate"] - 0.2148) > 0.0001:
+        print("  ERROR: expected 0.2148 kWh for cold panels, got {}".format(cold_first["pv_estimate"]))
+        failed = True
+
+    print("Test: the trapezoid integrates a rising ramp to the mean of its endpoints")
+    ramp = gti_hourly_to_period_kwh(FLAT_TIMES, [0.0, 1000.0, 1000.0, 0.0], [25.0] * 4, [0.0] * 4, kwp=1.0, system_loss=0.0)
+    # Endpoints 0.0 and 0.8635 average to 0.43175, rounded to 4 places
+    if abs(ramp[stamp_for(FLAT_TIMES[0])]["pv_estimate"] - 0.4318) > 0.0001:
+        print("  ERROR: expected 0.4318 kWh across the sunrise hour, got {}".format(ramp[stamp_for(FLAT_TIMES[0])]["pv_estimate"]))
+        failed = True
+
+    print("Test: zero irradiance produces zero energy")
+    dark = gti_hourly_to_period_kwh(FLAT_TIMES, [0.0] * 4, [15.0] * 4, [1.0] * 4, kwp=5.0, system_loss=0.05)
+    if any(entry["pv_estimate"] != 0.0 for entry in dark.values()):
+        print("  ERROR: zero irradiance should give zero energy, got {}".format(dark))
+        failed = True
+
+    print("Test: system_loss and kwp scale the output linearly")
+    scaled = gti_hourly_to_period_kwh(FLAT_TIMES, flat_gti, flat_temp, flat_wind, kwp=2.0, system_loss=0.5)
+    if abs(scaled[stamp_for(FLAT_TIMES[0])]["pv_estimate"] - first["pv_estimate"]) > 0.0001:
+        print("  ERROR: doubling kwp and halving efficiency should cancel out, got {}".format(scaled[stamp_for(FLAT_TIMES[0])]["pv_estimate"]))
+        failed = True
+
+    print("Test: p10_fallback scales the P10 series and defaults to 0.7")
+    if abs(first["pv_estimate10"] - round(first["pv_estimate"] * 0.7, 4)) > 0.0001:
+        print("  ERROR: the default P10 fallback should be 0.7, got {}".format(first["pv_estimate10"]))
+        failed = True
+    half = gti_hourly_to_period_kwh(FLAT_TIMES, flat_gti, flat_temp, flat_wind, kwp=1.0, system_loss=0.0, p10_fallback=0.5)
+    half_first = half[stamp_for(FLAT_TIMES[0])]
+    if abs(half_first["pv_estimate10"] - round(half_first["pv_estimate"] * 0.5, 4)) > 0.0001:
+        print("  ERROR: p10_fallback 0.5 not applied, got {}".format(half_first["pv_estimate10"]))
+        failed = True
+
+    print("Test: p10_instant overrides the fallback and is capped at P50")
+    ensemble = {FLAT_TIMES[index]: 0.1 for index in range(4)}
+    with_ensemble = gti_hourly_to_period_kwh(FLAT_TIMES, flat_gti, flat_temp, flat_wind, kwp=1.0, system_loss=0.0, p10_instant=ensemble)
+    ensemble_first = with_ensemble[stamp_for(FLAT_TIMES[0])]
+    if ensemble_first["pv_estimate10"] >= ensemble_first["pv_estimate"]:
+        print("  ERROR: an ensemble P10 below P50 should stay below it, got {}".format(ensemble_first["pv_estimate10"]))
+        failed = True
+    huge = {FLAT_TIMES[index]: 99.0 for index in range(4)}
+    capped = gti_hourly_to_period_kwh(FLAT_TIMES, flat_gti, flat_temp, flat_wind, kwp=1.0, system_loss=0.0, p10_instant=huge)
+    capped_first = capped[stamp_for(FLAT_TIMES[0])]
+    if abs(capped_first["pv_estimate10"] - capped_first["pv_estimate"]) > 0.0001:
+        print("  ERROR: an ensemble P10 above P50 should be capped at P50, got {}".format(capped_first["pv_estimate10"]))
         failed = True
 
     print("Test: shading_factors apply the correct month")
-    shading = [0.5] * 12
-    shaded = gti_hourly_to_period_kwh(TIMES, GTI, TEMP, WIND, kwp=5.6, system_loss=0.05, shading_factors=shading)
-    unshaded = result[stamp]["pv_estimate"]
-    if abs(shaded[stamp]["pv_estimate"] - round(unshaded * 0.5, 4)) > 0.0001:
-        print("  ERROR: shading 0.5 expected {}, got {}".format(round(unshaded * 0.5, 4), shaded[stamp]["pv_estimate"]))
+    shaded = gti_hourly_to_period_kwh(FLAT_TIMES, flat_gti, flat_temp, flat_wind, kwp=1.0, system_loss=0.0, shading_factors=[0.5] * 12)
+    if abs(shaded[stamp_for(FLAT_TIMES[0])]["pv_estimate"] - round(first["pv_estimate"] * 0.5, 4)) > 0.0001:
+        print("  ERROR: a 0.5 shading factor was not applied, got {}".format(shaded[stamp_for(FLAT_TIMES[0])]["pv_estimate"]))
+        failed = True
+
+    print("Test: a gap in the timestamps is not integrated across")
+    gapped_times = ["2025-06-01T00:00", "2025-06-01T01:00", "2025-06-01T05:00"]
+    gapped = gti_hourly_to_period_kwh(gapped_times, [1000.0] * 3, [25.0] * 3, [0.0] * 3, kwp=1.0, system_loss=0.0)
+    if len(gapped) != 1:
+        print("  ERROR: only the contiguous hour pair should integrate, got {} periods".format(len(gapped)))
+        failed = True
+
+    print("Test: a None irradiance sample is treated as zero rather than raising")
+    with_none = gti_hourly_to_period_kwh(FLAT_TIMES, [None, 1000.0, 1000.0, None], [25.0] * 4, [0.0] * 4, kwp=1.0, system_loss=0.0)
+    if abs(with_none[stamp_for(FLAT_TIMES[0])]["pv_estimate"] - 0.4318) > 0.0001:
+        print("  ERROR: a None sample should behave as zero, got {}".format(with_none[stamp_for(FLAT_TIMES[0])]["pv_estimate"]))
         failed = True
 
     return failed
@@ -403,15 +412,15 @@ Note `math` may now be unused in `solcast.py` — check before removing the impo
 
 - [ ] **Step 8: Run the full existing solar test suites to confirm no regression**
 
-Run: `cd coverage && ./run_all -k solcast > /tmp/t1b.txt 2>&1; ./run_all -k pv_forecast >> /tmp/t1b.txt 2>&1; ./run_all --test open_meteo >> /tmp/t1b.txt 2>&1; grep -E "ERROR|FAILED|Traceback" /tmp/t1b.txt`
+Run: `cd coverage && ./run_all -k open_meteo > /tmp/t1b.txt 2>&1; ./run_all -k solcast >> /tmp/t1b.txt 2>&1; ./run_all -k pv_forecast >> /tmp/t1b.txt 2>&1; grep -E "ERROR|FAILED|Traceback" /tmp/t1b.txt`
 
-Expected: no output from the grep. If `--test open_meteo` reports an unknown name, run `./run_all --list` and use the actual registered name for `tests/test_open_meteo.py`.
+Expected: no output from the grep, and the `open_meteo` tests must pass exactly as they did in Step 1 with `test_open_meteo.py` unedited. That suite calls the real `download_open_meteo_data()` end to end and is the parity guarantee for this whole refactor — if it fails, the extraction changed behaviour and the extraction is wrong, not the test.
 
 - [ ] **Step 9: Run pre-commit and commit**
 
 ```bash
 ./run_pre_commit
-git add apps/predbat/solar_model.py apps/predbat/solcast.py apps/predbat/unit_test.py apps/predbat/tests/test_solar_model.py apps/predbat/tests/fixtures/open_meteo_golden.json
+git add apps/predbat/solar_model.py apps/predbat/solcast.py apps/predbat/unit_test.py apps/predbat/tests/test_solar_model.py
 git commit -m "refactor(solar): extract the shared GTI to kW conversion model"
 ```
 
