@@ -21,7 +21,7 @@
 - **Storage:** all caching goes through the Storage abstraction, never direct file access.
 - **Tests:** every new module needs unit tests, registered in `TEST_REGISTRY` in `apps/predbat/unit_test.py`. Test signature is `def test_name(my_predbat):` returning a truthy value on failure. Tests must not perform network I/O.
 - **Run tests from `coverage/`:** `cd coverage && source setup.csh` once, then `./run_all --test <name> > /tmp/out.txt 2>&1` and grep the file. Never pipe test output straight to grep.
-- **Pre-commit:** `./run_pre_commit` must pass before any commit is considered done.
+- **Pre-commit:** the script lives at `coverage/run_pre_commit`, NOT the repo root. Run it (or `coverage/venv/bin/pre-commit run --files <files>`) and confirm every hook reports Passed with **no files modified** — the `black` and `file-contents-sorter` hooks rewrite files in place, so a first run that "passes" while rewriting has not passed. Re-stage and re-run until clean.
 
 ---
 
@@ -419,7 +419,7 @@ Expected: no output from the grep, and the `open_meteo` tests must pass exactly 
 - [ ] **Step 9: Run pre-commit and commit**
 
 ```bash
-./run_pre_commit
+coverage/run_pre_commit
 git add apps/predbat/solar_model.py apps/predbat/solcast.py apps/predbat/unit_test.py apps/predbat/tests/test_solar_model.py
 git commit -m "refactor(solar): extract the shared GTI to kW conversion model"
 ```
@@ -641,7 +641,7 @@ Expected: no output.
 - [ ] **Step 5: Run pre-commit and commit**
 
 ```bash
-./run_pre_commit
+coverage/run_pre_commit
 git add apps/predbat/annual_profiles.py apps/predbat/tests/test_annual_profiles.py apps/predbat/unit_test.py
 git commit -m "feat(annual): add domestic load profile data tables"
 ```
@@ -949,7 +949,7 @@ Expected: no output.
 - [ ] **Step 5: Run pre-commit and commit**
 
 ```bash
-./run_pre_commit
+coverage/run_pre_commit
 git add apps/predbat/annual_load.py apps/predbat/tests/test_annual_load.py apps/predbat/unit_test.py
 git commit -m "feat(annual): add synthetic load profile source"
 ```
@@ -1231,7 +1231,7 @@ Expected: no output.
 - [ ] **Step 5: Run pre-commit and commit**
 
 ```bash
-./run_pre_commit
+coverage/run_pre_commit
 git add apps/predbat/annual_load.py apps/predbat/tests/test_annual_load.py apps/predbat/unit_test.py
 git commit -m "feat(annual): add Octopus consumption load profile source"
 ```
@@ -1676,7 +1676,7 @@ Expected: no output.
 - [ ] **Step 5: Run pre-commit and commit**
 
 ```bash
-./run_pre_commit
+coverage/run_pre_commit
 git add apps/predbat/annual_weather.py apps/predbat/tests/test_annual_weather.py apps/predbat/unit_test.py
 git commit -m "feat(annual): add Open-Meteo actuals and forecast archive weather module"
 ```
@@ -2070,7 +2070,7 @@ Expected: no output. If `minute_data` returns fewer minutes than expected, check
 - [ ] **Step 5: Run pre-commit and commit**
 
 ```bash
-./run_pre_commit
+coverage/run_pre_commit
 git add apps/predbat/annual_tariff.py apps/predbat/tests/test_annual_tariff.py apps/predbat/unit_test.py
 git commit -m "feat(annual): add historical tariff resolution module"
 ```
@@ -2516,7 +2516,7 @@ Expected: no output.
 - [ ] **Step 5: Run pre-commit and commit**
 
 ```bash
-./run_pre_commit
+coverage/run_pre_commit
 git add apps/predbat/annual.py apps/predbat/tests/test_annual_config.py apps/predbat/unit_test.py
 git commit -m "feat(annual): add annual prediction config validation"
 ```
@@ -2954,7 +2954,7 @@ Expected: prints a `soc_max` and `forecast_minutes` line with no traceback. If `
 - [ ] **Step 6: Run pre-commit and commit**
 
 ```bash
-./run_pre_commit
+coverage/run_pre_commit
 git add apps/predbat/annual.py apps/predbat/tests/test_annual_bootstrap.py apps/predbat/unit_test.py
 git commit -m "feat(annual): add headless PredBat bootstrap and per-sample state reset"
 ```
@@ -3183,7 +3183,7 @@ Expected: no output.
 - [ ] **Step 5: Run pre-commit and commit**
 
 ```bash
-./run_pre_commit
+coverage/run_pre_commit
 git add apps/predbat/annual.py apps/predbat/tests/test_annual_sampling.py apps/predbat/unit_test.py
 git commit -m "feat(annual): add irradiance-stratified sample day selection"
 ```
@@ -3616,7 +3616,7 @@ Expected: no output.
 - [ ] **Step 5: Run pre-commit and commit**
 
 ```bash
-./run_pre_commit
+coverage/run_pre_commit
 git add apps/predbat/annual.py apps/predbat/tests/test_annual_scenarios.py apps/predbat/unit_test.py
 git commit -m "feat(annual): add three-scenario day runner"
 ```
@@ -4105,7 +4105,7 @@ Expected: no output.
 - [ ] **Step 7: Run pre-commit and commit**
 
 ```bash
-./run_pre_commit
+coverage/run_pre_commit
 git add apps/predbat/annual.py apps/predbat/annual_weather.py apps/predbat/tests/test_annual_integration.py apps/predbat/unit_test.py
 git commit -m "feat(annual): add AnnualPredictor orchestration and results document"
 ```
@@ -4369,7 +4369,7 @@ Expected: `Config error: annual.location is required...` and `exit=2`, with no t
 - [ ] **Step 6: Run pre-commit and commit**
 
 ```bash
-./run_pre_commit
+coverage/run_pre_commit
 git add apps/predbat/annual_cli.py apps/predbat/tests/test_annual_cli.py apps/predbat/unit_test.py
 git commit -m "feat(annual): add annual prediction command line interface"
 ```
@@ -4545,7 +4545,7 @@ Expected: no `ERROR`/`FAILED` lines. This is the last gate — the `solcast.py` 
 - [ ] **Step 6: Run pre-commit and commit**
 
 ```bash
-./run_pre_commit
+coverage/run_pre_commit
 git add docs/annual-prediction.md mkdocs.yml .cspell/custom-dictionary-workspace.txt
 git commit -m "docs: add annual prediction tool documentation"
 ```
