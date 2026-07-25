@@ -61,6 +61,7 @@ Chrg
 citem
 cloudfront
 Codespaces
+COEFF
 collapsable
 compareform
 configform
@@ -93,6 +94,7 @@ dedup
 dedupe
 dend
 denorm
+derate
 derating
 devcontainer
 devcontainers
@@ -463,6 +465,7 @@ timezone
 tmrw
 tojson
 tottime
+trapezoidally
 trapz
 Trefor
 treforsiphone
