@@ -1140,6 +1140,7 @@ class Output:
             raw_state = "Demand"
             raw_state_target = ""
             raw_state_override = ""
+            reason_parts = [] if self.plan_why_explanations else None
 
             soc_sym = ""
             if abs(soc_change) < 0.05:
@@ -1154,6 +1155,15 @@ class Output:
             if minute in self.manual_demand_times:
                 state += " &#8526;"
                 raw_state_override = "Manual demand"
+
+            demand_reason = None
+            if reason_parts is not None:
+                if soc_sym == "&nearr;":
+                    demand_reason = "Battery level is expected to rise from solar generation; no charging or exporting is scheduled this slot."
+                elif soc_sym == "&searr;":
+                    demand_reason = "Battery is expected to discharge to cover house demand; no charging or exporting is scheduled this slot."
+                else:
+                    demand_reason = "Battery level is expected to stay steady; no charging or exporting is scheduled this slot."
 
             pv_color = "#FFFFFF"
             load_color = "#FFFFFF"
@@ -1235,21 +1245,31 @@ class Output:
                         state_color = "#EEEEEE"
                         raw_state = "FrzChrg"
                         limit_percent = soc_percent
+                        if reason_parts is not None:
+                            reason_parts.append("Freeze charging — the charge target for this window is set to the reserve level, so no significant charging happens here.")
                     elif limit_percent <= soc_percent_min_window:
                         state = "HoldChrg&rarr;"
                         state_color = "#34DBEB"
                         raw_state = "HoldChrg"
+                        if reason_parts is not None:
+                            reason_parts.append("Holding — the battery is already predicted to be at or above the {}% target for this window without charging further.".format(limit_percent))
                     else:
                         state = "Chrg&nearr;"
                         state_color = "#3AEE85"
                         raw_state = "Chrg"
+                        if reason_parts is not None:
+                            reason_parts.append("Charging up to {}% because the import rate this slot ({:.2f}p/kWh) is low enough to be worth it before a more expensive period.".format(limit_percent, rate_value_import))
 
                     if self.charge_window_best[charge_window_n]["start"] in self.manual_charge_times:
                         state += " &#8526;"
                         raw_state_override = "Manual charge"
+                        if reason_parts is not None:
+                            reason_parts.append("You manually set this slot to charge.")
                     elif self.charge_window_best[charge_window_n]["start"] in self.manual_freeze_charge_times:
                         state += " &#8526;"
                         raw_state_override = "Manual charge freeze"
+                        if reason_parts is not None:
+                            reason_parts.append("You manually set this slot to freeze charging.")
                     show_limit = str(limit_percent)
                     had_state = True
                     if plan_debug:
@@ -1287,6 +1307,8 @@ class Output:
                     state += "FrzExp&rarr;"
                     raw_state = "FrzExp"
                     show_limit = ""  # suppress displaying the limit (of 99) when freeze exporting as its a meaningless number
+                    if reason_parts is not None:
+                        reason_parts.append("Freezing export — the battery holds its charge in reserve rather than selling it back to the grid this slot.")
                 elif limit < 100:
                     if not had_state:
                         state = ""
@@ -1298,9 +1320,13 @@ class Output:
                     if limit > soc_percent_max_window:
                         state += "HoldExp&searr;"
                         raw_state = "HoldExp"
+                        if reason_parts is not None:
+                            reason_parts.append("Export window active but not triggered — the battery isn't predicted to reach the {}% level needed to export this slot.".format(dp2(target)))
                     else:
                         state += "Exp&searr;"
                         raw_state = "Exp"
+                        if reason_parts is not None:
+                            reason_parts.append("Exporting down to {}% because the export rate this slot ({:.2f}p/kWh) is high enough to be worth selling stored energy back to the grid.".format(dp2(target), rate_value_export))
                     show_limit = str(dp2(target))
                     raw_state_target = str(dp2(target))
 
@@ -1314,9 +1340,13 @@ class Output:
                 if self.export_window_best[export_window_n]["start"] in self.manual_export_times:
                     state += " &#8526;"
                     raw_state_override = "Manual export"
+                    if reason_parts is not None:
+                        reason_parts.append("You manually set this slot to export.")
                 elif self.export_window_best[export_window_n]["start"] in self.manual_freeze_export_times:
                     state += " &#8526;"
                     raw_state_override = "Manual export freeze"
+                    if reason_parts is not None:
+                        reason_parts.append("You manually set this slot to freeze exporting.")
 
             # Alert
             if in_alert:
@@ -1511,6 +1541,9 @@ class Output:
             json_row["state_target"] = raw_state_target
             json_row["state_override"] = raw_state_override
             json_row["state_html"] = state
+
+            if reason_parts is not None:
+                json_row["reason"] = " ".join(reason_parts) if reason_parts else demand_reason
 
             # Parse state_html to extract structured data for client-side rendering
             if split and "</td><td" in state:
