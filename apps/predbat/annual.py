@@ -480,9 +480,14 @@ def _percentile_indices(count, samples):
 
     Index i sits at percentile (i + 0.5) / samples, so two samples land at the 25th
     and 75th percentiles and each represents an equal share of the month. Collisions
-    are resolved by walking to the nearest unused index, which only matters when the
-    sample count approaches the number of candidate days.
+    are resolved by scanning forward toward the end of the array and, failing that,
+    backward from the target, which only matters when the sample count approaches
+    the number of candidate days. With no candidates at all there is nothing to
+    index, so this returns an empty list rather than the meaningless index -1.
     """
+    if count <= 0:
+        return []
+
     chosen = []
     used = set()
     for index in range(samples):
@@ -506,8 +511,9 @@ def select_samples(weather, year, month, samples_per_month, has_solar=True):
     the forecast: the aim is to represent what the month really contained, not what was
     predicted. Days without a following day are excluded because the 48 hour plan needs one.
 
-    Weights always sum to the number of days in the month, so a month with fewer usable
-    candidates than requested is scaled up rather than silently under-counted.
+    Weights sum to the number of days in the month, up to ordinary floating-point
+    rounding, so a month with fewer usable candidates than requested is scaled up
+    rather than silently under-counted.
     """
     days_in_month = calendar.monthrange(year, month)[1]
     all_days = [date(year, month, day) for day in range(1, days_in_month + 1)]
@@ -516,13 +522,20 @@ def select_samples(weather, year, month, samples_per_month, has_solar=True):
         candidates = [day for day in all_days if weather.has_actual(day) and weather.has_actual(day + timedelta(days=1))]
         candidates.sort(key=lambda day: (weather.daily_actual_kwh(day), day))
     else:
-        # With no PV there is nothing to rank by, so fall back to evenly spaced calendar days
+        # With no PV there is nothing to rank by, so fall back to evenly spaced calendar days.
+        # Deliberately no following-day filter here: that guard exists solely to keep the
+        # sample within the weather series, and a battery-only run has no weather series to
+        # run past the end of. Day 2's rates come from the tariff module (which fetches the
+        # month plus a 2-day buffer, and the orchestrator additionally fetches the next month)
+        # and its load is synthetic and unbounded, so the last day of the month is a
+        # legitimate sample and must not be filtered out.
         candidates = all_days
 
     if not candidates:
         return []
 
+    # _percentile_indices() already guarantees distinct indices, so no set() is needed here.
     indices = _percentile_indices(len(candidates), samples_per_month)
-    chosen = sorted({candidates[index] for index in indices})
+    chosen = sorted(candidates[index] for index in indices)
     weight = days_in_month / float(len(chosen))
     return [(day, weight) for day in chosen]

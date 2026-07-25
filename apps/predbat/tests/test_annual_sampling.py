@@ -11,7 +11,7 @@
 
 from datetime import date, timedelta
 
-from annual import select_samples
+from annual import _percentile_indices, select_samples
 
 
 class FakeWeather:
@@ -40,10 +40,59 @@ def build_january(kwh_by_day, extra_days=1):
     return FakeWeather(daily)
 
 
+def build_december(kwh_by_day, extra_days=1):
+    """Build a FakeWeather covering December plus a buffer into January of the following year."""
+    daily = {}
+    for day_number, kwh in kwh_by_day.items():
+        daily[date(2025, 12, day_number)] = kwh
+    for offset in range(extra_days):
+        daily[date(2026, 1, 1) + timedelta(days=offset)] = 1.0
+    return FakeWeather(daily)
+
+
+def _check_indices(indices, count, samples, label, failed):
+    """Assert that indices from _percentile_indices() are distinct and within range.
+
+    Shared by the degenerate-case checks below so each one only has to state its
+    inputs and let this helper verify the two invariants every case must satisfy.
+    Returns the (possibly updated) ``failed`` flag.
+    """
+    if len(set(indices)) != len(indices):
+        print("  ERROR: {} produced duplicate indices, got {}".format(label, indices))
+        failed = True
+    if any(index < 0 or index >= count for index in indices):
+        print("  ERROR: {} produced an out-of-range index, got {} for count {}".format(label, indices, count))
+        failed = True
+    return failed
+
+
 def test_annual_sampling(my_predbat):
-    """Verify percentile sampling, weighting, determinism and degraded months."""
+    """Verify percentile sampling, weighting, determinism, degraded months and year boundaries."""
     failed = False
     print("**** Testing annual sample selection ****")
+
+    print("Test: _percentile_indices with no candidates returns nothing")
+    if _percentile_indices(0, 2) != []:
+        print("  ERROR: expected no indices for a candidate count of 0, got {}".format(_percentile_indices(0, 2)))
+        failed = True
+
+    print("Test: _percentile_indices with a single candidate always picks index 0")
+    for requested in (1, 2, 5):
+        single = _percentile_indices(1, requested)
+        if single != [0]:
+            print("  ERROR: expected [0] for count=1, samples={}, got {}".format(requested, single))
+            failed = True
+
+    print("Test: _percentile_indices with more samples requested than candidates stays in range")
+    over_requested = _percentile_indices(3, 7)
+    failed = _check_indices(over_requested, 3, 7, "samples > count", failed)
+
+    print("Test: _percentile_indices with samples equal to count selects every index")
+    exact = _percentile_indices(5, 5)
+    if sorted(exact) != list(range(5)):
+        print("  ERROR: expected every index 0-4 when samples == count, got {}".format(sorted(exact)))
+        failed = True
+    failed = _check_indices(exact, 5, 5, "samples == count", failed)
 
     # January: day N generates N kWh, so the sorted order is simply day order
     weather = build_january({day: float(day) for day in range(1, 32)})
@@ -113,6 +162,36 @@ def test_annual_sampling(my_predbat):
         failed = True
     elif [day.day for day in [entry[0] for entry in no_solar]] != [8, 24]:
         print("  ERROR: expected evenly spaced days [8, 24], got {}".format([entry[0].day for entry in no_solar]))
+        failed = True
+
+    print("Test: a battery-only run still includes the last day of the month when requested")
+    # samples_per_month == days_in_month so every calendar day, including the last, is chosen;
+    # weather has no data at all, confirming the no-solar branch never needs a following-day check
+    no_solar_full_month = select_samples(FakeWeather({}), 2025, 12, 31, has_solar=False)
+    if len(no_solar_full_month) != 31:
+        print("  ERROR: expected all 31 December calendar days, got {}".format(len(no_solar_full_month)))
+        failed = True
+    else:
+        last_day, last_weight = no_solar_full_month[-1]
+        if last_day != date(2025, 12, 31):
+            print("  ERROR: expected the last sample to be 31 December, got {}".format(last_day))
+            failed = True
+        if abs(last_weight - 1.0) > 1e-9:
+            print("  ERROR: expected a weight of 1.0 for 31 December, got {}".format(last_weight))
+            failed = True
+
+    print("Test: a December selection with solar consults 1 January of the following year")
+    december = build_december({day: float(day) for day in range(1, 32)})
+    december_days = [day for day, _ in select_samples(december, 2025, 12, 31)]
+    if date(2025, 12, 31) not in december_days:
+        print("  ERROR: 31 December should be included when 1 January of the following year has data")
+        failed = True
+
+    print("Test: a December selection with solar excludes 31 December when the new year has no data")
+    december_truncated = build_december({day: float(day) for day in range(1, 32)}, extra_days=0)
+    december_truncated_days = [day for day, _ in select_samples(december_truncated, 2025, 12, 31)]
+    if date(2025, 12, 31) in december_truncated_days:
+        print("  ERROR: 31 December has no following day in the next year and must not be sampled")
         failed = True
 
     return failed
