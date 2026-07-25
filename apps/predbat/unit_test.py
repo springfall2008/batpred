@@ -166,6 +166,7 @@ from tests.test_load_today_comparison import test_load_today_comparison
 from tests.test_annual_config import test_annual_config
 from tests.test_annual_bootstrap import test_annual_bootstrap
 from tests.test_annual_sampling import test_annual_sampling
+from tests.test_annual_scenarios import test_annual_scenarios
 
 # Mock the components and plugin system
 
@@ -410,6 +411,7 @@ def main():
         ("annual_config", test_annual_config, "Annual prediction config validation tests", False),
         ("annual_bootstrap", test_annual_bootstrap, "Annual prediction bootstrap and state reset tests", False),
         ("annual_sampling", test_annual_sampling, "Annual prediction sample selection tests", False),
+        ("annual_scenarios", test_annual_scenarios, "Annual prediction scenario helper tests", False),
     ]
 
     # Parse command line arguments

@@ -16,7 +16,9 @@ import calendar
 import os
 from datetime import date, timedelta
 
+from annual_load import build_load_forecast
 from const import MINUTE_WATT
+from prediction import Prediction
 
 VALID_SHAPES = ["night", "day", "flat"]
 
@@ -539,3 +541,305 @@ def select_samples(weather, year, month, samples_per_month, has_solar=True):
     chosen = sorted(candidates[index] for index in indices)
     weight = days_in_month / float(len(chosen))
     return [(day, weight) for day in chosen]
+
+
+DAY_MINUTES = 24 * 60
+PLAN_MINUTES = 48 * 60
+
+# Every sample starts from an empty battery. The compute_metric correction values
+# whatever charge is left at the end, so the starting level does not bias the cost.
+START_SOC_KWH = 0.0
+
+# Cars are charged at this rate when the config gives no explicit figure
+DEFAULT_CAR_RATE_KW = 7.4
+
+# Maximum charge slots the dumb-battery baseline is allowed, matching the
+# calculate_savings_max_charge_slots convention in calculate_yesterday()
+BASELINE_MAX_CHARGE_SLOTS = 1
+
+# The smart car in scenario 3 must be ready by this time, matching the
+# "car_charging_plan_time" default in config.py. Only the first day of the 48
+# hour plan is billed (see run_day()'s end_record), so a single morning ready
+# time is enough to give Predbat a fair one-shot charging decision to make.
+DEFAULT_CAR_READY_TIME = "07:00:00"
+
+
+def build_step_data(predbat, pv_minute, pv_minute10):
+    """Build the 5-minute step arrays the Prediction engine consumes.
+
+    Mirrors the calls ``calculate_plan()`` makes in ``plan.py``. Because
+    ``load_forecast_only`` is set, the historical branch of ``step_data_history``
+    contributes nothing and the whole load profile comes from ``load_forecast``.
+    """
+    load_step = predbat.step_data_history(
+        predbat.load_minutes,
+        predbat.minutes_now,
+        forward=False,
+        scale_today=1.0,
+        scale_fixed=1.0,
+        type_load=True,
+        load_forecast=predbat.load_forecast,
+        load_scaling_dynamic=None,
+        cloud_factor=None,
+        load_adjust={},
+        load_baseline={},
+    )
+    pv_step = predbat.step_data_history(pv_minute, predbat.minutes_now, forward=True, cloud_factor=None)
+    pv10_step = predbat.step_data_history(pv_minute10, predbat.minutes_now, forward=True, cloud_factor=None, flip=True)
+    return load_step, pv_step, pv10_step
+
+
+def timer_charge_window(rate_import, car_kwh, car_rate_kw):
+    """Return the fixed off-peak timer windows a non-Predbat household would use.
+
+    Finds the cheapest contiguous band of each day and starts the charge there,
+    extending past the band if the car needs longer than the cheap rate lasts.
+    Returns one window per day of the 48 hour plan so the second day matches the first.
+    """
+    if car_kwh <= 0 or car_rate_kw <= 0:
+        return []
+
+    minutes_needed = int(round((car_kwh / car_rate_kw) * 60.0))
+    if minutes_needed <= 0:
+        return []
+
+    windows = []
+    for day_offset in range(2):
+        base = day_offset * DAY_MINUTES
+        day_rates = {minute: rate_import.get(base + minute, 0.0) for minute in range(DAY_MINUTES)}
+        if not day_rates:
+            continue
+        cheapest = min(day_rates.values())
+        # The first minute of the longest run at the cheapest rate
+        start = None
+        best_start = 0
+        best_length = 0
+        for minute in range(DAY_MINUTES + 1):
+            at_cheapest = minute < DAY_MINUTES and day_rates[minute] <= cheapest + 1e-9
+            if at_cheapest and start is None:
+                start = minute
+            elif not at_cheapest and start is not None:
+                if minute - start > best_length:
+                    best_length = minute - start
+                    best_start = start
+                start = None
+        windows.append({"start": base + best_start, "end": base + best_start + minutes_needed})
+    return windows
+
+
+def add_car_to_load(load_forecast, windows, car_kwh):
+    """Return a copy of the cumulative load series with the car's energy inserted.
+
+    Used by the two baseline scenarios, where the car is simply extra load in a
+    fixed timer window rather than something Predbat schedules.
+    """
+    if not windows or car_kwh <= 0:
+        return dict(load_forecast)
+
+    per_window = car_kwh / float(len(windows))
+    additions = {}
+    for window in windows:
+        length = max(1, window["end"] - window["start"])
+        per_minute = per_window / length
+        for minute in range(window["start"], window["end"]):
+            additions[minute] = additions.get(minute, 0.0) + per_minute
+
+    result = {}
+    running_extra = 0.0
+    for minute in sorted(load_forecast.keys()):
+        result[minute] = load_forecast[minute] + running_extra
+        running_extra += additions.get(minute, 0.0)
+    return result
+
+
+def _apply_rates(predbat, rate_import, rate_export):
+    """Install the day's rates and run the scans the planner depends on."""
+    predbat.rate_import = rate_import
+    predbat.rate_export = rate_export
+    predbat.rate_low_threshold = 0
+    predbat.rate_high_threshold = 0
+
+    if predbat.rate_import:
+        predbat.rate_scan(predbat.rate_import, print=False)
+        predbat.rate_import, predbat.rate_import_replicated = predbat.rate_replicate(predbat.rate_import, is_import=True)
+        predbat.rate_scan(predbat.rate_import, print=False)
+    if predbat.rate_export:
+        predbat.rate_scan_export(predbat.rate_export, print=False)
+        predbat.rate_export, predbat.rate_export_replicated = predbat.rate_replicate(predbat.rate_export, is_import=False)
+        predbat.rate_scan_export(predbat.rate_export, print=False)
+
+    predbat.set_rate_thresholds()
+
+    if predbat.rate_export:
+        predbat.high_export_rates, export_lowest, _ = predbat.rate_scan_window(predbat.rate_export, 5, predbat.rate_export_cost_threshold, True)
+        if predbat.rate_high_threshold == 0 and export_lowest <= predbat.rate_export_max:
+            predbat.rate_export_cost_threshold = export_lowest
+    else:
+        predbat.high_export_rates = []
+
+    if predbat.rate_import:
+        predbat.low_rates, _, highest = predbat.rate_scan_window(predbat.rate_import, 5, predbat.rate_import_cost_threshold, False)
+        if predbat.rate_low_threshold == 0 and highest >= predbat.rate_min:
+            predbat.rate_import_cost_threshold = highest
+    else:
+        predbat.low_rates = []
+
+
+def _baseline_charge_window(predbat):
+    """Return the dumb battery's charge windows: the cheapest static band, charged to full.
+
+    Mirrors the baseline in ``calculate_yesterday()`` — a household without Predbat
+    that sets a timer for the cheapest rate and charges to 100%.
+    """
+    if not predbat.rate_import or predbat.soc_max <= 0:
+        return [], []
+    day_values = [value for minute, value in predbat.rate_import.items() if minute < DAY_MINUTES]
+    if not day_values or min(day_values) == max(day_values):
+        return [], []
+
+    combine = predbat.combine_charge_slots
+    predbat.combine_charge_slots = True
+    windows, _, _ = predbat.rate_scan_window(predbat.rate_import, 5, min(day_values), False, return_raw=True)
+    predbat.combine_charge_slots = combine
+
+    windows = [window for window in windows if window["start"] < PLAN_MINUTES][:BASELINE_MAX_CHARGE_SLOTS]
+    return windows, [predbat.soc_max for _ in windows]
+
+
+def _billed_result(predbat, end_record, pv_step):
+    """Run one scenario to completion and return its billed figures.
+
+    The battery-value correction (metric_end minus metric_start) values whatever
+    charge is left at the end, so a scenario cannot look cheap simply by finishing
+    on an empty battery. This is the same correction ``Compare.run_scenario()`` applies.
+    """
+    cost, import_kwh_battery, import_kwh_house, export_kwh, _, final_soc, _, battery_cycle, metric_keep, final_iboost, final_carbon_g = predbat.run_prediction(
+        predbat.charge_limit_best, predbat.charge_window_best, predbat.export_window_best, predbat.export_limits_best, False, end_record=end_record
+    )
+    metric_start, _ = predbat.compute_metric(end_record, predbat.soc_kw, predbat.soc_kw, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    metric_end, _ = predbat.compute_metric(end_record, final_soc, final_soc, cost, cost, final_iboost, final_iboost, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
+
+    pv_generated = sum(value for minute, value in pv_step.items() if minute < end_record)
+    return {
+        "cost_p": metric_end - metric_start,
+        "import_kwh": import_kwh_battery + import_kwh_house,
+        "export_kwh": export_kwh,
+        "pv_generated_kwh": pv_generated,
+        "battery_throughput_kwh": battery_cycle,
+    }
+
+
+def prepare_sample(predbat, config, weather, tariff, load_source, day, midnight_utc):
+    """Inject every per-day input into the PredBat instance for one sampled day."""
+    reset_sample_state(predbat)
+
+    predbat.midnight_utc = midnight_utc
+    predbat.now_utc = midnight_utc
+    predbat.minutes_now = 0
+    predbat.forecast_plan_hours = 48
+    predbat.forecast_minutes = PLAN_MINUTES
+    predbat.forecast_days = 2
+    predbat.end_record = PLAN_MINUTES
+
+    predbat.load_minutes = {}
+    predbat.load_minutes_age = 0
+    predbat.load_forecast = build_load_forecast(load_source, day, 2)
+
+    rate_import, rate_export = tariff.rates_for(midnight_utc, PLAN_MINUTES)
+    _apply_rates(predbat, rate_import, rate_export)
+
+    apply_hardware(predbat, config["battery"], config["solar"])
+    predbat.soc_kw = START_SOC_KWH
+
+
+def _plan_smart_car(predbat):
+    """Configure a single smart-charged car and return its planned charging slots.
+
+    ``calculate_plan()`` never calls ``plan_car_charging()`` itself — that only
+    happens in the real fetch cycle (``fetch_sensor_data_car_planning()`` in
+    ``fetch.py``) or in ``Compare.recompute_car_charging()``, both of which this
+    headless tool bypasses. Without calling it here, ``car_charging_slots`` would
+    stay at whatever empty placeholder scenario setup left it as, ``in_car_slot()``
+    would report zero load for every minute, and the car would silently cost
+    nothing at all in the "with Predbat" scenario — a much bigger and more
+    misleading error than merely losing Predbat's optimisation credit. The
+    ready-by time and max price mirror ``config.py``'s defaults for a car with no
+    explicit user override.
+    """
+    predbat.car_charging_now = [False]
+    predbat.car_charging_plan_time = [DEFAULT_CAR_READY_TIME]
+    predbat.car_charging_plan_max_price = [0]
+    return predbat.plan_car_charging(0, predbat.low_rates)
+
+
+def run_day(predbat, config, weather, tariff, load_source, day, midnight_utc):
+    """Run all three scenarios against one sampled day and return their billed figures."""
+    car_kwh = config["load"].get("car_charging_kwh", 0.0) / 365.0
+    car_rate_kw = config["load"].get("car_rate_kw", DEFAULT_CAR_RATE_KW)
+
+    prepare_sample(predbat, config, weather, tariff, load_source, day, midnight_utc)
+
+    actual_pv = weather.pv_minutes("actual", midnight_utc, PLAN_MINUTES) if config["solar"] else {}
+    forecast_pv = weather.pv_minutes("forecast", midnight_utc, PLAN_MINUTES) if config["solar"] else {}
+    p10_pv = weather.pv_minutes_p10(midnight_utc, PLAN_MINUTES, day.month) if config["solar"] else {}
+
+    timer_windows = timer_charge_window(predbat.rate_import, car_kwh, car_rate_kw)
+    baseline_load = add_car_to_load(predbat.load_forecast, timer_windows, car_kwh)
+
+    results = {}
+
+    # Scenario 1: no PV, no battery. The car still charges on the same timer, so the
+    # only difference between the scenarios is the system being evaluated.
+    predbat.num_cars = 0
+    predbat.load_forecast = baseline_load
+    load_step, actual_step, _ = build_step_data(predbat, actual_pv, actual_pv)
+    zero_step = {minute: 0.0 for minute in actual_step}
+    predbat.charge_limit_best = []
+    predbat.charge_window_best = []
+    predbat.export_window_best = []
+    predbat.export_limits_best = []
+    predbat.prediction = Prediction(predbat, zero_step, zero_step, load_step, load_step, soc_kw=0, soc_max=0)
+    results["no_pvbat"] = _billed_result(predbat, DAY_MINUTES, zero_step)
+
+    # Scenario 2: PV and battery on a dumb cheapest-rate timer, no export optimisation
+    apply_hardware(predbat, config["battery"], config["solar"])
+    predbat.soc_kw = START_SOC_KWH
+    charge_window, charge_limit = _baseline_charge_window(predbat)
+    predbat.charge_window_best = charge_window
+    predbat.charge_limit_best = charge_limit
+    predbat.export_window_best = []
+    predbat.export_limits_best = []
+    predbat.prediction = Prediction(predbat, actual_step, actual_step, load_step, load_step, soc_kw=START_SOC_KWH)
+    results["without_predbat"] = _billed_result(predbat, DAY_MINUTES, actual_step)
+
+    # Scenario 3: Predbat plans on the FORECAST, then is costed against the ACTUALS.
+    # Skipping the Prediction swap below would hand Predbat perfect foresight.
+    predbat.load_forecast = build_load_forecast(load_source, day, 2)
+    if car_kwh > 0:
+        predbat.num_cars = 1
+        predbat.car_charging_planned = [True]
+        predbat.car_charging_plan_smart = [True]
+        predbat.car_charging_battery_size = [max(car_kwh * 2, 50.0)]
+        predbat.car_charging_limit = [car_kwh]
+        predbat.car_charging_soc = [0.0]
+        predbat.car_charging_rate = [car_rate_kw]
+        predbat.car_charging_from_battery = False
+        # low_rates was computed from this day's rates in prepare_sample() and untouched
+        # since, so it is safe to use for planning the car here.
+        predbat.car_charging_slots = [_plan_smart_car(predbat)]
+    else:
+        predbat.num_cars = 0
+        predbat.car_charging_slots = []
+
+    apply_hardware(predbat, config["battery"], config["solar"])
+    predbat.soc_kw = START_SOC_KWH
+    predbat.pv_forecast_minute = forecast_pv
+    predbat.pv_forecast_minute10 = p10_pv
+    predbat.calculate_plan(recompute=True, debug_mode=False, publish=False)
+
+    # Swap in the actuals before costing
+    forecast_load_step, _, _ = build_step_data(predbat, forecast_pv, p10_pv)
+    predbat.prediction = Prediction(predbat, actual_step, actual_step, forecast_load_step, forecast_load_step, soc_kw=START_SOC_KWH)
+    results["with_predbat"] = _billed_result(predbat, DAY_MINUTES, actual_step)
+
+    return results
