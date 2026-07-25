@@ -14,7 +14,7 @@ import tempfile
 
 import yaml
 
-from annual import AnnualNullHA, apply_hardware, reset_sample_state, write_minimal_apps_yaml
+from annual import AnnualNullHA, apply_hardware, configure_offline_mode, create_headless_predbat, reset_sample_state, write_minimal_apps_yaml
 from const import MINUTE_WATT
 
 
@@ -72,6 +72,9 @@ def test_annual_bootstrap(my_predbat):
     if abs(my_predbat.soc_max - 9.5) > 1e-9:
         print("  ERROR: soc_max expected 9.5, got {}".format(my_predbat.soc_max))
         failed = True
+    if abs(my_predbat.soc_kw - 9.5) > 1e-9:
+        print("  ERROR: soc_kw should be set deterministically to soc_max, got {}".format(my_predbat.soc_kw))
+        failed = True
     if abs(my_predbat.inverter_limit - (5.0 * 1000 / MINUTE_WATT)) > 1e-9:
         print("  ERROR: inverter_limit should be in kW per minute, got {}".format(my_predbat.inverter_limit))
         failed = True
@@ -84,6 +87,9 @@ def test_annual_bootstrap(my_predbat):
     if abs(my_predbat.battery_rate_max_discharge - (4.2 * 1000 / MINUTE_WATT)) > 1e-9:
         print("  ERROR: battery_rate_max_discharge should be in kW per minute, got {}".format(my_predbat.battery_rate_max_discharge))
         failed = True
+    if abs(my_predbat.battery_rate_max_export - (4.2 * 1000 / MINUTE_WATT)) > 1e-9:
+        print("  ERROR: battery_rate_max_export should equal the discharge rate, got {}".format(my_predbat.battery_rate_max_export))
+        failed = True
     if my_predbat.inverter_hybrid is not True:
         print("  ERROR: inverter_hybrid should be True")
         failed = True
@@ -93,10 +99,36 @@ def test_annual_bootstrap(my_predbat):
     if my_predbat.soc_max != 0.0 or my_predbat.soc_kw != 0.0:
         print("  ERROR: a battery-less run should have soc_max and soc_kw of 0, got {} / {}".format(my_predbat.soc_max, my_predbat.soc_kw))
         failed = True
+    if my_predbat.battery_rate_max_charge != 0.0 or my_predbat.battery_rate_max_charge_dc != 0.0 or my_predbat.battery_rate_max_discharge != 0.0 or my_predbat.battery_rate_max_export != 0.0:
+        print("  ERROR: a battery-less run should zero every rate field")
+        failed = True
+    if my_predbat.battery_rate_min != 0.0:
+        print("  ERROR: a zero-capacity battery should have battery_rate_min of 0, got {}".format(my_predbat.battery_rate_min))
+        failed = True
+    if my_predbat.export_limit != my_predbat.inverter_limit:
+        print("  ERROR: export_limit should match inverter_limit when there is no battery")
+        failed = True
+    if my_predbat.inverter_hybrid is not False:
+        print("  ERROR: a battery-less run should not be a hybrid inverter")
+        failed = True
 
-    print("Test: reset_sample_state clears every field a previous sample could have left behind")
+    print("Test: apply_hardware with no battery sums kwp across every solar array, not just the first")
+    apply_hardware(my_predbat, None, [{"kwp": 5.6}, {"kwp": 4.0}])
+    expected_limit = (5.6 + 4.0) * 1000 / MINUTE_WATT
+    if abs(my_predbat.inverter_limit - expected_limit) > 1e-9:
+        print("  ERROR: inverter_limit should sum kwp across all arrays, expected {}, got {}".format(expected_limit, my_predbat.inverter_limit))
+        failed = True
+    if abs(my_predbat.export_limit - expected_limit) > 1e-9:
+        print("  ERROR: export_limit should track the summed inverter_limit, got {}".format(my_predbat.export_limit))
+        failed = True
+
+    print("Test: reset_sample_state clears the leaked fields but leaves apply_hardware's output alone")
+    apply_hardware(my_predbat, battery, [{"kwp": 5.6}])
+    configured_battery_rate_max_export = my_predbat.battery_rate_max_export
+    configured_inverter_limit = my_predbat.inverter_limit
+
     my_predbat.dynamic_load_baseline = {5: 1.0}
-    my_predbat.battery_rate_max_export = 99.0
+    my_predbat.soc_kw = 3.3
     my_predbat.manual_charge_times = [1, 2, 3]
     my_predbat.manual_export_times = [4]
     my_predbat.manual_all_times = [5]
@@ -112,12 +144,23 @@ def test_annual_bootstrap(my_predbat):
     my_predbat.export_window_best = [{"start": 0, "end": 30}]
     my_predbat.export_limits_best = [50.0]
     my_predbat.plan_valid = True
+    my_predbat.low_rates = [{"start": 0, "end": 30}]
+    my_predbat.high_export_rates = [{"start": 0, "end": 30}]
+    my_predbat.rate_import = {0: 25.0}
+    my_predbat.rate_export = {0: 15.0}
+    my_predbat.rate_import_replicated = {0: 25.0}
+    my_predbat.rate_export_replicated = {0: 15.0}
+    my_predbat.rate_import_cost_threshold = 1.0
+    my_predbat.rate_export_cost_threshold = 2.0
+    my_predbat.rate_min = 5.0
+    my_predbat.rate_max = 6.0
+    my_predbat.rate_average = 7.0
 
     reset_sample_state(my_predbat)
 
     checks = [
         ("dynamic_load_baseline", {}),
-        ("battery_rate_max_export", 0.0333),
+        ("soc_kw", 0.0),
         ("manual_charge_times", []),
         ("manual_export_times", []),
         ("manual_all_times", []),
@@ -133,6 +176,17 @@ def test_annual_bootstrap(my_predbat):
         ("export_window_best", []),
         ("export_limits_best", []),
         ("plan_valid", False),
+        ("low_rates", []),
+        ("high_export_rates", []),
+        ("rate_import", {}),
+        ("rate_export", {}),
+        ("rate_import_replicated", {}),
+        ("rate_export_replicated", {}),
+        ("rate_import_cost_threshold", 99),
+        ("rate_export_cost_threshold", 99),
+        ("rate_min", 0),
+        ("rate_max", 0),
+        ("rate_average", 0),
     ]
     for name, expected in checks:
         actual = getattr(my_predbat, name)
@@ -140,12 +194,73 @@ def test_annual_bootstrap(my_predbat):
             print("  ERROR: reset_sample_state left {} as {}, expected {}".format(name, actual, expected))
             failed = True
 
-    print("Test: reset_sample_state disables the live-system behaviours that make no sense offline")
-    if my_predbat.octopus_intelligent_charging is not False:
-        print("  ERROR: octopus_intelligent_charging should be disabled")
+    print("Test: reset_sample_state must not clobber the hardware-derived fields apply_hardware owns")
+    if my_predbat.battery_rate_max_export != configured_battery_rate_max_export:
+        print("  ERROR: reset_sample_state changed battery_rate_max_export from {} to {}; it must be apply_hardware's alone".format(configured_battery_rate_max_export, my_predbat.battery_rate_max_export))
         failed = True
-    if my_predbat.load_forecast_only is not True:
-        print("  ERROR: load_forecast_only must be True so the load profile is taken from load_forecast")
+    if my_predbat.inverter_limit != configured_inverter_limit:
+        print("  ERROR: reset_sample_state changed inverter_limit from {} to {}; it must be apply_hardware's alone".format(configured_inverter_limit, my_predbat.inverter_limit))
         failed = True
+
+    print("Test: configure_offline_mode applies the deliberate offline choices, separately from reset_sample_state")
+    my_predbat.octopus_intelligent_charging = True
+    my_predbat.load_forecast_only = False
+    my_predbat.load_scaling = 0.5
+    my_predbat.load_scaling10 = 0.5
+    my_predbat.iboost_enable = True
+    my_predbat.carbon_enable = True
+    my_predbat.plan_debug = True
+    my_predbat.debug_enable = True
+
+    configure_offline_mode(my_predbat)
+
+    offline_checks = [
+        ("octopus_intelligent_charging", False),
+        ("load_forecast_only", True),
+        ("load_scaling", 1.0),
+        ("load_scaling10", 1.0),
+        ("iboost_enable", False),
+        ("carbon_enable", False),
+        ("plan_debug", False),
+        ("debug_enable", False),
+    ]
+    for name, expected in offline_checks:
+        actual = getattr(my_predbat, name)
+        if actual != expected:
+            print("  ERROR: configure_offline_mode left {} as {}, expected {}".format(name, actual, expected))
+            failed = True
+
+    print("Test: reset_sample_state must not re-apply configure_offline_mode's choices")
+    my_predbat.octopus_intelligent_charging = True
+    my_predbat.debug_enable = True
+    reset_sample_state(my_predbat)
+    if my_predbat.octopus_intelligent_charging is not True:
+        print("  ERROR: reset_sample_state should not touch octopus_intelligent_charging any more")
+        failed = True
+    if my_predbat.debug_enable is not True:
+        print("  ERROR: reset_sample_state should not touch debug_enable any more")
+        failed = True
+
+    print("Test: create_headless_predbat restores PREDBAT_APPS_FILE afterwards, even if it was previously unset")
+    saved_env = os.environ.get("PREDBAT_APPS_FILE")
+    try:
+        os.environ["PREDBAT_APPS_FILE"] = "/tmp/should-not-leak-annual-bootstrap-test.yaml"
+        with tempfile.TemporaryDirectory() as work_dir:
+            create_headless_predbat(work_dir, "Europe/London", print)
+        if os.environ.get("PREDBAT_APPS_FILE") != "/tmp/should-not-leak-annual-bootstrap-test.yaml":
+            print("  ERROR: PREDBAT_APPS_FILE was not restored to its prior value, got {}".format(os.environ.get("PREDBAT_APPS_FILE")))
+            failed = True
+
+        os.environ.pop("PREDBAT_APPS_FILE", None)
+        with tempfile.TemporaryDirectory() as work_dir:
+            create_headless_predbat(work_dir, "Europe/London", print)
+        if "PREDBAT_APPS_FILE" in os.environ:
+            print("  ERROR: PREDBAT_APPS_FILE should be unset again, got {}".format(os.environ.get("PREDBAT_APPS_FILE")))
+            failed = True
+    finally:
+        if saved_env is None:
+            os.environ.pop("PREDBAT_APPS_FILE", None)
+        else:
+            os.environ["PREDBAT_APPS_FILE"] = saved_env
 
     return failed

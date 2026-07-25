@@ -225,12 +225,14 @@ def validate_config(config, today=None):
 
 
 # Minimal apps.yaml for a headless run. PredBat's Hass base class reads this at
-# construction time; nothing here talks to Home Assistant.
+# construction time; nothing here talks to Home Assistant. timezone is quoted since it
+# is interpolated raw into YAML and a value containing ':' or '#' would otherwise be
+# invalid or reparsed as something other than a plain string.
 MINIMAL_APPS_YAML = """pred_bat:
   module: predbat
   class: PredBat
   prefix: predbat
-  timezone: {timezone}
+  timezone: "{timezone}"
   currency_symbols:
   - '£'
   - 'p'
@@ -248,10 +250,6 @@ MINIMAL_APPS_YAML = """pred_bat:
   forecast_hours: 48
 """
 
-# The default discharge power cap. A leaked full-precision value from a previous
-# sample can flip a plan at a decision boundary, so it is reset explicitly.
-DEFAULT_BATTERY_RATE_MAX_EXPORT = 0.0333
-
 
 class AnnualNullHA:
     """A no-op Home Assistant interface for headless annual runs.
@@ -266,8 +264,6 @@ class AnnualNullHA:
         """Create an empty in-memory state store."""
         self.history_enable = False
         self.dummy_items = {}
-        self.service_store_enable = False
-        self.service_store = []
         self.db_primary = False
 
     def get_state(self, entity_id, default=None, attribute=None, refresh=False, raw=False):
@@ -296,18 +292,12 @@ class AnnualNullHA:
         """Accept and discard a service call."""
         return None
 
-    def get_service_store(self):
-        """Return and clear the recorded service calls."""
-        stored = self.service_store
-        self.service_store = []
-        return stored
-
 
 def write_minimal_apps_yaml(work_dir, timezone):
     """Write the headless apps.yaml into ``work_dir`` and return its path."""
     os.makedirs(work_dir, exist_ok=True)
     path = os.path.join(work_dir, "apps.yaml")
-    with open(path, "w") as handle:
+    with open(path, "w", encoding="utf-8") as handle:
         handle.write(MINIMAL_APPS_YAML.format(timezone=timezone))
     return path
 
@@ -315,28 +305,39 @@ def write_minimal_apps_yaml(work_dir, timezone):
 def create_headless_predbat(work_dir, timezone, log):
     """Construct a PredBat instance with no Home Assistant connection.
 
-    PredBat's Hass base class reads apps.yaml from ``$PREDBAT_APPS_FILE`` at
-    construction time, so the environment variable is set before the import-time
-    construction happens. The predbat import is deliberately local to this
-    function so merely importing ``annual`` does not drag in the whole engine.
+    ``Hass.__init__`` is the only place that reads ``$PREDBAT_APPS_FILE``, and it does so
+    synchronously while ``PredBat()`` is constructed below, so the environment variable only
+    needs to be set for the duration of that one call. It is restored to whatever it held
+    before (unset if it was unset) in a ``finally`` block, so a later ``PredBat()`` in the
+    same process — including ``unit_test.py``'s own ``create_predbat()`` — never silently
+    picks up this work directory's apps.yaml. The predbat import is deliberately local to
+    this function so merely importing ``annual`` does not drag in the whole engine.
     """
     path = write_minimal_apps_yaml(work_dir, timezone)
+    previous_apps_file = os.environ.get("PREDBAT_APPS_FILE")
     os.environ["PREDBAT_APPS_FILE"] = path
+    try:
+        import predbat
 
-    import predbat
+        instance = predbat.PredBat()
+    finally:
+        if previous_apps_file is None:
+            os.environ.pop("PREDBAT_APPS_FILE", None)
+        else:
+            os.environ["PREDBAT_APPS_FILE"] = previous_apps_file
 
-    instance = predbat.PredBat()
     instance.states = {}
+    instance.log = log
     instance.reset()
     instance.update_time()
     instance.ha_interface = AnnualNullHA()
     instance.auto_config()
     instance.load_user_config()
     instance.fetch_config_options()
+    configure_offline_mode(instance)
     instance.config_root = work_dir
     instance.save_restore_dir = work_dir
     instance.args["threads"] = 0
-    instance.log = log
     return instance
 
 
@@ -345,25 +346,44 @@ def apply_hardware(predbat, battery, solar):
 
     Rates are stored internally as kW per minute, matching
     ``Compare.apply_hardware_overrides()``. With no battery block the system is
-    given zero capacity, which is how the no-battery scenario is expressed.
+    given zero capacity, which is how the no-battery scenario is expressed. This
+    function is the sole owner of ``battery_rate_max_export``: unlike the other
+    accumulators, it is hardware-derived rather than per-sample state, so
+    ``reset_sample_state()`` must never overwrite it. ``soc_kw``, the prediction's
+    starting SOC, is set deterministically here rather than clamped against
+    whatever it happened to hold before, since clamping only makes sense when a
+    caller has deliberately set a starting SOC first — a later task does that
+    explicitly, after calling this function.
     """
     if battery is None:
         predbat.soc_max = 0.0
         predbat.soc_kw = 0.0
         predbat.battery_rate_max_charge = 0.0
+        # Synthetic configs have no separate DC figure to scale proportionally (unlike
+        # compare.py's apply_hardware_overrides(), which scales an inherited DC/AC ratio),
+        # so the DC rate is simply set equal to the AC rate.
         predbat.battery_rate_max_charge_dc = 0.0
         predbat.battery_rate_max_discharge = 0.0
         predbat.battery_rate_max_export = 0.0
-        predbat.inverter_limit = (solar[0]["kwp"] if solar else 5.0) * 1000 / MINUTE_WATT
+        # A zero-capacity battery has no meaningful minimum reserve either.
+        predbat.battery_rate_min = 0.0
+        # Sum kWp across every array, not just the first: a PV-only run's export limit
+        # must match what the battery run would see from the same solar array(s), or the
+        # difference between scenarios - this tool's whole output - is computed against
+        # two different caps.
+        predbat.inverter_limit = (sum(array["kwp"] for array in solar) if solar else 5.0) * 1000 / MINUTE_WATT
         predbat.export_limit = predbat.inverter_limit
         predbat.inverter_hybrid = False
         return
 
     predbat.soc_max = battery["size_kwh"]
-    predbat.soc_kw = min(predbat.soc_kw, predbat.soc_max)
+    predbat.soc_kw = predbat.soc_max
     predbat.inverter_limit = battery["inverter_kw"] * 1000 / MINUTE_WATT
     predbat.export_limit = battery["export_limit_kw"] * 1000 / MINUTE_WATT
     predbat.battery_rate_max_charge = battery["charge_rate_kw"] * 1000 / MINUTE_WATT
+    # Synthetic configs have no separate DC figure to scale proportionally (unlike
+    # compare.py's apply_hardware_overrides(), which scales an inherited DC/AC ratio), so
+    # the DC rate is simply set equal to the AC rate.
     predbat.battery_rate_max_charge_dc = predbat.battery_rate_max_charge
     predbat.battery_rate_max_discharge = battery["discharge_rate_kw"] * 1000 / MINUTE_WATT
     predbat.battery_rate_max_export = predbat.battery_rate_max_discharge
@@ -375,11 +395,20 @@ def reset_sample_state(predbat):
 
     Without this, a month's result silently depends on what ran before it: the
     numbers stay plausible while becoming order-dependent. The list covers the
-    accumulators, the previous plan, the manual overrides, and the two fields
-    ``tests/test_single_debug.py`` documents as leaking between debug cases.
+    accumulators, the previous plan, the manual overrides, the starting SOC, the
+    full rate-derived family that ``calculate_plan`` seeds its best windows from,
+    and the field ``tests/test_single_debug.py`` documents as leaking between
+    debug cases (``dynamic_load_baseline``).
+
+    Deliberately excluded: ``battery_rate_max_export`` is hardware-derived and
+    owned solely by ``apply_hardware()``, not reset here; the offline-mode
+    choices (Octopus intelligent charging disabled, load taken from
+    load_forecast, iBoost/carbon disabled, debug off) are one-shot configuration
+    handled by ``configure_offline_mode()``, not per-sample leaks.
     """
     predbat.dynamic_load_baseline = {}
-    predbat.battery_rate_max_export = DEFAULT_BATTERY_RATE_MAX_EXPORT
+
+    predbat.soc_kw = 0.0
 
     predbat.cost_today_sofar = 0
     predbat.carbon_today_sofar = 0
@@ -406,17 +435,40 @@ def reset_sample_state(predbat):
     predbat.export_limits = []
     predbat.plan_valid = False
 
+    # The rate-derived family calculate_plan() reads to seed the best charge/export
+    # windows (plan.py). Clearing rate_import_replicated/rate_export_replicated but
+    # leaving these downstream products in place would look handled while still leaking.
+    predbat.low_rates = []
+    predbat.high_export_rates = []
+    predbat.rate_import = {}
+    predbat.rate_export = {}
+    predbat.rate_import_replicated = {}
+    predbat.rate_export_replicated = {}
+    predbat.rate_import_cost_threshold = 99
+    predbat.rate_export_cost_threshold = 99
+    predbat.rate_min = 0
+    predbat.rate_max = 0
+    predbat.rate_average = 0
+
+    predbat.load_inday_adjustment = 1.0
+    predbat.load_scaling_dynamic = None
+    predbat.manual_load_adjust = {}
+    predbat.savings_last_updated = None
+
+
+def configure_offline_mode(predbat):
+    """Apply the one-shot configuration choices that make sense only for an offline run.
+
+    These are deliberate choices, not per-sample leaks: they are set once, after
+    ``fetch_config_options()`` has populated its own defaults, and are not part of
+    ``reset_sample_state()`` because re-applying them every sample would silently
+    override whatever ``fetch_config_options()`` or a scenario override set.
+    """
     predbat.octopus_intelligent_charging = False
     predbat.load_forecast_only = True
     predbat.load_scaling = 1.0
     predbat.load_scaling10 = 1.0
-    predbat.load_inday_adjustment = 1.0
-    predbat.load_scaling_dynamic = None
-    predbat.manual_load_adjust = {}
     predbat.iboost_enable = False
     predbat.carbon_enable = False
     predbat.plan_debug = False
     predbat.debug_enable = False
-    predbat.rate_import_replicated = {}
-    predbat.rate_export_replicated = {}
-    predbat.savings_last_updated = None
