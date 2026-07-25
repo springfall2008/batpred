@@ -14,6 +14,25 @@ from datetime import date
 
 from annual_load import OctopusConsumptionLoadProfile, SyntheticLoadProfile, build_load_forecast, parse_consumption_results, tilt_shape
 from annual_profiles import DAY_BAND_SLOTS, NIGHT_BAND_SLOTS, half_hour_shape
+from tests.test_infra import run_async
+
+
+class FakeAnnualStorage:
+    """Minimal in-memory storage stub with async save/load, used to prove nothing is cached on a truncated download."""
+
+    def __init__(self):
+        """Start with an empty in-memory store and no recorded saves."""
+        self.store = {}
+        self.saved = False
+
+    async def load(self, namespace, key):
+        """Return the previously saved value for a key, or None if nothing was saved."""
+        return self.store.get((namespace, key))
+
+    async def save(self, namespace, key, value, format="json"):
+        """Record that a save happened and remember the value under the given key."""
+        self.saved = True
+        self.store[(namespace, key)] = value
 
 
 def test_annual_load(my_predbat):
@@ -174,6 +193,43 @@ def test_annual_load_octopus(my_predbat):
     bare = OctopusConsumptionLoadProfile(api_key="x", account_id="A-1", log=print)
     if bare.minute_profile(date(2025, 3, 11)) is not None:
         print("  ERROR: with no data and no fallback minute_profile must return None")
+        failed = True
+
+    print("Test: daily_kwh records a missing day in missing_days, consistent with minute_profile")
+    bare_daily = OctopusConsumptionLoadProfile(api_key="x", account_id="A-1", log=print)
+    bare_daily.daily_kwh(date(2025, 3, 12))
+    if date(2025, 3, 12) not in bare_daily.missing_days:
+        print("  ERROR: daily_kwh must record a missing day in missing_days just like minute_profile does")
+        failed = True
+
+    print("Test: a slot reported twice (e.g. the autumn clock-change day) discards that day entirely")
+    duplicate_slot_results = list(results) + [dict(results[0])]
+    duplicate_slot_parsed = parse_consumption_results(duplicate_slot_results)
+    if date(2025, 3, 10) in duplicate_slot_parsed:
+        print("  ERROR: a day with a slot reported twice must be discarded, not silently undercounted")
+        failed = True
+
+    print("Test: a page request failing mid-download is not cached and fetch() reports failure")
+    calls = []
+
+    async def fake_get_json(session, url):
+        """Return a canned meter resolution, one good consumption page with a next link, then a failure."""
+        calls.append(url)
+        if len(calls) == 1:
+            return {"properties": [{"electricity_meter_points": [{"mpan": "1200000000000", "is_export": False, "meters": [{"serial_number": "S1"}]}]}]}
+        if len(calls) == 2:
+            return {"results": results, "next": "https://api.octopus.energy/v1/electricity-meter-points/x/meters/y/consumption/?page=2"}
+        return None
+
+    fake_storage = FakeAnnualStorage()
+    truncated_source = OctopusConsumptionLoadProfile(api_key="x", account_id="A-2", log=print, storage=fake_storage)
+    truncated_source._get_json = fake_get_json
+    fetch_result = run_async(truncated_source.fetch(2025))
+    if fetch_result is not False:
+        print("  ERROR: a download that fails mid-pagination must return False, got {}".format(fetch_result))
+        failed = True
+    if fake_storage.saved:
+        print("  ERROR: a truncated download must not be written to storage")
         failed = True
 
     return failed

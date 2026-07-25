@@ -137,14 +137,24 @@ OCTOPUS_API_BASE = "https://api.octopus.energy/v1"
 SLOTS_PER_DAY = 48
 
 
-def parse_consumption_results(results):
+def parse_consumption_results(results, log=None):
     """Turn raw Octopus consumption rows into complete per-day half-hourly kWh lists.
 
-    Only days with all 48 slots present are returned. A partially reported day is
-    omitted entirely rather than returned short, because a half-populated day
-    looks like genuinely low consumption and would silently understate the bill.
+    Only days with all 48 slots present, each written exactly once, are returned.
+    A partially reported day is omitted entirely rather than returned short,
+    because a half-populated day looks like genuinely low consumption and would
+    silently understate the bill.
+
+    The autumn clock-change day gets 50 real half-hourly readings (local
+    01:00-02:00 happens twice), but the slot index only has 48 possible values,
+    so the second pair of readings would silently overwrite the first and leave
+    an undercounted-but-"complete" day. Any day where a slot is written more than
+    once is therefore discarded too, exactly like a partial day, so the autumn
+    transition is handled symmetrically with the spring one (which already comes
+    in short at 46/48 and is rejected as partial).
     """
     by_day = {}
+    duplicate_slot_days = set()
     for row in results or []:
         start = row.get("interval_start")
         consumption = row.get("consumption")
@@ -158,10 +168,17 @@ def parse_consumption_results(results):
         day = stamp.date()
         if day not in by_day:
             by_day[day] = [None] * SLOTS_PER_DAY
+        if by_day[day][slot] is not None:
+            duplicate_slot_days.add(day)
+            continue
         by_day[day][slot] = float(consumption)
 
     complete = {}
     for day, slots in by_day.items():
+        if day in duplicate_slot_days:
+            if log:
+                log("Warn: Annual: Octopus discarded {} - a half-hourly slot was reported more than once, likely a clock-change day".format(day))
+            continue
         if all(value is not None for value in slots):
             complete[day] = slots
     return complete
@@ -239,15 +256,24 @@ class OctopusConsumptionLoadProfile(LoadProfileSource):
             url = "{}/electricity-meter-points/{}/meters/{}/consumption/?period_from={}-01-01T00:00Z&period_to={}-01-01T00:00Z&page_size=25000&order_by=period".format(OCTOPUS_API_BASE, self.mpan, self.serial, year, year + 1)
             rows = []
             pages = 0
+            fetch_failed = False
             while url and pages < 40:
                 data = await self._get_json(session, url)
                 if not data or "results" not in data:
+                    fetch_failed = True
                     break
                 rows += data["results"]
                 url = data.get("next", None)
                 pages += 1
 
-        self.consumption = parse_consumption_results(rows)
+        # A run only reaches its natural end when `url` runs out on its own. If a page request
+        # failed, or the safety cap was hit while pages remained, `rows` is a truncated
+        # download - it must not be parsed, used, or cached as if it were complete.
+        if fetch_failed or url:
+            self.log("Warn: Annual: Octopus consumption download for {} did not complete, discarding the partial download rather than caching it".format(year))
+            return False
+
+        self.consumption = parse_consumption_results(rows, log=self.log)
         if not self.consumption:
             self.log("Warn: Annual: Octopus returned no complete days of consumption for {}".format(year))
             return False
@@ -258,10 +284,11 @@ class OctopusConsumptionLoadProfile(LoadProfileSource):
         return True
 
     def daily_kwh(self, day):
-        """Return the total household kWh for the given date."""
+        """Return the total household kWh for the given date, recording a missing day like minute_profile does."""
         slots = self.consumption.get(day)
         if slots is not None:
             return sum(slots)
+        self.missing_days.add(day)
         if self.fallback:
             return self.fallback.daily_kwh(day)
         return 0.0
