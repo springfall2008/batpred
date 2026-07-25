@@ -1598,7 +1598,9 @@ class AnnualWeather:
                 data = await self.storage.load("annual", cache_key)
             if not data:
                 data = await self.fetch_json(url)
-                if data and self.storage:
+                # Only cache a response that actually carries the hourly block we need,
+                # so a rate-limit or error page is never pinned as this array's weather
+                if data and data.get("hourly", {}).get("global_tilted_irradiance") and self.storage:
                     await self.storage.save("annual", cache_key, data, format="json")
             if not data:
                 self.log("Warn: Annual: no {} data for array {}".format(cache_tag, index))
@@ -1609,6 +1611,11 @@ class AnnualWeather:
             gti_values = hourly.get("global_tilted_irradiance", [])
             if not times or not gti_values:
                 self.log("Warn: Annual: {} data for array {} has no hourly values".format(cache_tag, index))
+                continue
+            if len(gti_values) < len(times):
+                # A response truncated mid-year would otherwise be cached and read back
+                # as a genuinely dark second half of the year
+                self.log("Warn: Annual: {} data for array {} is truncated ({} stamps, {} values); discarding".format(cache_tag, index, len(times), len(gti_values)))
                 continue
 
             periods = gti_hourly_to_period_kwh(
@@ -1963,14 +1970,21 @@ class AnnualTariff:
         url = build_period_url(base_url, start_utc, end_utc)
         rows = []
         pages = 0
+        truncated = False
         while url and pages < 10:
             data = await self.fetch_json(url)
             if not data or "results" not in data:
+                # A failed page means we do not know what we are missing. Caching a
+                # partial month would permanently pin wrong rates for that month.
+                self.log("Warn: Annual: rate download for {} stopped early at page {}; not caching a partial result".format(cache_key, pages))
+                truncated = True
                 break
             rows += data["results"]
             url = data.get("next", None)
             pages += 1
 
+        if truncated:
+            return []
         if rows and self.storage:
             await self.storage.save("annual", cache_key, rows, format="json")
         return rows
