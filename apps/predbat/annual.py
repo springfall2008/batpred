@@ -12,7 +12,10 @@ battery without Predbat, and with Predbat. Performs no HTTP itself; the weather
 and tariff modules own all network access.
 """
 
+import os
 from datetime import date
+
+from const import MINUTE_WATT
 
 VALID_SHAPES = ["night", "day", "flat"]
 
@@ -219,3 +222,201 @@ def validate_config(config, today=None):
         "pv10_derate_fallback": _require_number(raw.get("pv10_derate_fallback", DEFAULT_PV10_DERATE_FALLBACK), "annual.pv10_derate_fallback", minimum=0, exclusive_minimum=True, maximum=1),
         "raw": scrub_secrets(raw),
     }
+
+
+# Minimal apps.yaml for a headless run. PredBat's Hass base class reads this at
+# construction time; nothing here talks to Home Assistant.
+MINIMAL_APPS_YAML = """pred_bat:
+  module: predbat
+  class: PredBat
+  prefix: predbat
+  timezone: {timezone}
+  currency_symbols:
+  - '£'
+  - 'p'
+  threads: 0
+  db_enable: false
+  db_mirror_ha: false
+  db_primary: false
+  web_enable: false
+  mcp_enable: false
+  notify_devices: []
+  days_previous:
+  - 1
+  days_previous_weight:
+  - 1
+  forecast_hours: 48
+"""
+
+# The default discharge power cap. A leaked full-precision value from a previous
+# sample can flip a plan at a decision boundary, so it is reset explicitly.
+DEFAULT_BATTERY_RATE_MAX_EXPORT = 0.0333
+
+
+class AnnualNullHA:
+    """A no-op Home Assistant interface for headless annual runs.
+
+    Provides the subset of the interface PredBat touches during ``auto_config()``,
+    ``load_user_config()`` and ``fetch_config_options()``. Nothing is published and
+    no history exists, which is correct: every input the annual tool needs is
+    injected directly.
+    """
+
+    def __init__(self):
+        """Create an empty in-memory state store."""
+        self.history_enable = False
+        self.dummy_items = {}
+        self.service_store_enable = False
+        self.service_store = []
+        self.db_primary = False
+
+    def get_state(self, entity_id, default=None, attribute=None, refresh=False, raw=False):
+        """Return a stored state, the supplied default, or all states when no entity is given."""
+        if not entity_id:
+            return {}
+        if entity_id in self.dummy_items:
+            result = self.dummy_items[entity_id]
+            if raw:
+                return result
+            if isinstance(result, dict):
+                return result.get(attribute, "") if attribute else result.get("state", default)
+            return default if attribute else result
+        return default
+
+    def set_state(self, entity_id, state, attributes=None):
+        """Store a state locally so subsequent reads round trip."""
+        self.dummy_items[entity_id] = state
+        return state
+
+    def get_history(self, entity_id, now=None, days=30):
+        """Return None: a headless annual run has no Home Assistant history."""
+        return None
+
+    def call_service(self, service, **kwargs):
+        """Accept and discard a service call."""
+        return None
+
+    def get_service_store(self):
+        """Return and clear the recorded service calls."""
+        stored = self.service_store
+        self.service_store = []
+        return stored
+
+
+def write_minimal_apps_yaml(work_dir, timezone):
+    """Write the headless apps.yaml into ``work_dir`` and return its path."""
+    os.makedirs(work_dir, exist_ok=True)
+    path = os.path.join(work_dir, "apps.yaml")
+    with open(path, "w") as handle:
+        handle.write(MINIMAL_APPS_YAML.format(timezone=timezone))
+    return path
+
+
+def create_headless_predbat(work_dir, timezone, log):
+    """Construct a PredBat instance with no Home Assistant connection.
+
+    PredBat's Hass base class reads apps.yaml from ``$PREDBAT_APPS_FILE`` at
+    construction time, so the environment variable is set before the import-time
+    construction happens. The predbat import is deliberately local to this
+    function so merely importing ``annual`` does not drag in the whole engine.
+    """
+    path = write_minimal_apps_yaml(work_dir, timezone)
+    os.environ["PREDBAT_APPS_FILE"] = path
+
+    import predbat
+
+    instance = predbat.PredBat()
+    instance.states = {}
+    instance.reset()
+    instance.update_time()
+    instance.ha_interface = AnnualNullHA()
+    instance.auto_config()
+    instance.load_user_config()
+    instance.fetch_config_options()
+    instance.config_root = work_dir
+    instance.save_restore_dir = work_dir
+    instance.args["threads"] = 0
+    instance.log = log
+    return instance
+
+
+def apply_hardware(predbat, battery, solar):
+    """Map the config's battery block onto the PredBat instance.
+
+    Rates are stored internally as kW per minute, matching
+    ``Compare.apply_hardware_overrides()``. With no battery block the system is
+    given zero capacity, which is how the no-battery scenario is expressed.
+    """
+    if battery is None:
+        predbat.soc_max = 0.0
+        predbat.soc_kw = 0.0
+        predbat.battery_rate_max_charge = 0.0
+        predbat.battery_rate_max_charge_dc = 0.0
+        predbat.battery_rate_max_discharge = 0.0
+        predbat.battery_rate_max_export = 0.0
+        predbat.inverter_limit = (solar[0]["kwp"] if solar else 5.0) * 1000 / MINUTE_WATT
+        predbat.export_limit = predbat.inverter_limit
+        predbat.inverter_hybrid = False
+        return
+
+    predbat.soc_max = battery["size_kwh"]
+    predbat.soc_kw = min(predbat.soc_kw, predbat.soc_max)
+    predbat.inverter_limit = battery["inverter_kw"] * 1000 / MINUTE_WATT
+    predbat.export_limit = battery["export_limit_kw"] * 1000 / MINUTE_WATT
+    predbat.battery_rate_max_charge = battery["charge_rate_kw"] * 1000 / MINUTE_WATT
+    predbat.battery_rate_max_charge_dc = predbat.battery_rate_max_charge
+    predbat.battery_rate_max_discharge = battery["discharge_rate_kw"] * 1000 / MINUTE_WATT
+    predbat.battery_rate_max_export = predbat.battery_rate_max_discharge
+    predbat.inverter_hybrid = battery["hybrid"]
+
+
+def reset_sample_state(predbat):
+    """Reset every field a previous sample could have left behind.
+
+    Without this, a month's result silently depends on what ran before it: the
+    numbers stay plausible while becoming order-dependent. The list covers the
+    accumulators, the previous plan, the manual overrides, and the two fields
+    ``tests/test_single_debug.py`` documents as leaking between debug cases.
+    """
+    predbat.dynamic_load_baseline = {}
+    predbat.battery_rate_max_export = DEFAULT_BATTERY_RATE_MAX_EXPORT
+
+    predbat.cost_today_sofar = 0
+    predbat.carbon_today_sofar = 0
+    predbat.iboost_today = 0
+    predbat.import_today_now = 0
+    predbat.export_today_now = 0
+    predbat.load_minutes_now = 0
+    predbat.pv_today_now = 0
+
+    predbat.manual_charge_times = []
+    predbat.manual_export_times = []
+    predbat.manual_freeze_charge_times = []
+    predbat.manual_freeze_export_times = []
+    predbat.manual_demand_times = []
+    predbat.manual_all_times = []
+
+    predbat.charge_limit_best = []
+    predbat.charge_window_best = []
+    predbat.export_window_best = []
+    predbat.export_limits_best = []
+    predbat.charge_limit = []
+    predbat.charge_window = []
+    predbat.export_window = []
+    predbat.export_limits = []
+    predbat.plan_valid = False
+
+    predbat.octopus_intelligent_charging = False
+    predbat.load_forecast_only = True
+    predbat.load_scaling = 1.0
+    predbat.load_scaling10 = 1.0
+    predbat.load_inday_adjustment = 1.0
+    predbat.load_scaling_dynamic = None
+    predbat.manual_load_adjust = {}
+    predbat.iboost_enable = False
+    predbat.carbon_enable = False
+    predbat.plan_debug = False
+    predbat.debug_enable = False
+    predbat.rate_import_replicated = {}
+    predbat.rate_export_replicated = {}
+    predbat.savings_last_updated = None

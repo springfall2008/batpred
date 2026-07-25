@@ -164,6 +164,7 @@ from tests.test_savings_stability import test_savings_stability
 from tests.test_calculate_yesterday import test_calculate_yesterday
 from tests.test_load_today_comparison import test_load_today_comparison
 from tests.test_annual_config import test_annual_config
+from tests.test_annual_bootstrap import test_annual_bootstrap
 
 # Mock the components and plugin system
 
@@ -406,6 +407,7 @@ def main():
         ("optimise_swap_charge", run_optimise_swap_charge_tests, "Optimise pairwise charge-window swap tests", False),
         ("debug_cases", run_debug_cases, "Debug case file tests", True),
         ("annual_config", test_annual_config, "Annual prediction config validation tests", False),
+        ("annual_bootstrap", test_annual_bootstrap, "Annual prediction bootstrap and state reset tests", False),
     ]
 
     # Parse command line arguments
