@@ -163,6 +163,7 @@ def _validate_load(raw):
         "annual_kwh": _require_number(raw["annual_kwh"], "annual.load.annual_kwh", minimum=0),
         "shape": shape,
         "car_charging_kwh": _require_number(raw.get("car_charging_kwh", 0.0), "annual.load.car_charging_kwh", minimum=0),
+        "car_rate_kw": _require_number(raw.get("car_rate_kw", DEFAULT_CAR_RATE_KW), "annual.load.car_rate_kw", minimum=0, exclusive_minimum=True),
     }
 
 

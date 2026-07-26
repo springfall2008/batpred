@@ -48,6 +48,18 @@ def test_annual_scenarios(my_predbat):
         print("  ERROR: a 10 hour charge should extend past the 5 hour cheap band, got {} minutes".format(long_window[0]["end"] - long_window[0]["start"]))
         failed = True
 
+    print("Test: a slower car_rate_kw produces a roughly proportionally longer window for the same energy")
+    # Guards the annual.py config-validation fix that lets a configured car_rate_kw actually
+    # reach timer_charge_window (previously validate_config() silently dropped it and every
+    # run used the 7.4 kW default regardless of what was configured).
+    fast_window = timer_charge_window(rates, car_kwh=14.8, car_rate_kw=7.4)
+    slow_window = timer_charge_window(rates, car_kwh=14.8, car_rate_kw=3.7)
+    fast_length = fast_window[0]["end"] - fast_window[0]["start"]
+    slow_length = slow_window[0]["end"] - slow_window[0]["start"]
+    if abs(slow_length - 2 * fast_length) > 5:
+        print("  ERROR: halving car_rate_kw from 7.4 to 3.7 should roughly double the window length ({} minutes), got {} minutes for the fast case and {} minutes for the slow case".format(2 * fast_length, fast_length, slow_length))
+        failed = True
+
     print("Test: zero car energy produces no window")
     if timer_charge_window(rates, car_kwh=0.0, car_rate_kw=7.4) != []:
         print("  ERROR: no car energy should produce no window")

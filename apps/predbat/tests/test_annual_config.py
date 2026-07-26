@@ -127,6 +127,16 @@ def test_annual_config(my_predbat):
         print("  ERROR: the Octopus load block should survive validation")
         failed = True
 
+    print("Test: car_rate_kw is meaningless on an Octopus load (no separate car energy to rate) and is simply ignored")
+    config = base_config()
+    del config["annual"]["load"]["annual_kwh"]
+    config["annual"]["load"]["octopus"] = {"api_key": "sk_x", "account_id": "A-1"}
+    config["annual"]["load"]["car_rate_kw"] = 3.7
+    result = validate_config(config, today=date(2026, 7, 25))
+    if "car_rate_kw" in result["load"]:
+        print("  ERROR: car_rate_kw should not appear in an Octopus load block, got {}".format(result["load"]))
+        failed = True
+
     print("Test: a missing battery block yields a two-scenario run")
     config = base_config()
     del config["annual"]["battery"]
@@ -163,6 +173,31 @@ def test_annual_config(my_predbat):
     config = base_config()
     del config["annual"]["tariff"]
     failed = expect_error("no tariff", config, "annual.tariff is required", failed)
+
+    print("Test: car_rate_kw defaults to 7.4 kW when omitted")
+    config = base_config()
+    result = validate_config(config, today=date(2026, 7, 25))
+    if result["load"]["car_rate_kw"] != 7.4:
+        print("  ERROR: car_rate_kw should default to 7.4, got {}".format(result["load"]["car_rate_kw"]))
+        failed = True
+
+    print("Test: an explicit car_rate_kw survives validation")
+    config = base_config()
+    config["annual"]["load"]["car_rate_kw"] = 3.7
+    result = validate_config(config, today=date(2026, 7, 25))
+    if result["load"]["car_rate_kw"] != 3.7:
+        print("  ERROR: car_rate_kw should survive validation as 3.7, got {}".format(result["load"]["car_rate_kw"]))
+        failed = True
+
+    print("Test: a zero car_rate_kw is rejected")
+    config = base_config()
+    config["annual"]["load"]["car_rate_kw"] = 0
+    failed = expect_error("zero car_rate_kw", config, "car_rate_kw", failed)
+
+    print("Test: a negative car_rate_kw is rejected")
+    config = base_config()
+    config["annual"]["load"]["car_rate_kw"] = -3.7
+    failed = expect_error("negative car_rate_kw", config, "car_rate_kw", failed)
 
     print("Test: an unknown load shape is rejected")
     config = base_config()

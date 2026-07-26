@@ -59,6 +59,7 @@ annual:
     annual_kwh: 3800
     shape: flat                  # night | day | flat
     car_charging_kwh: 2500       # annual, 0 to disable
+    car_rate_kw: 7.4             # charger power, default 7.4, must be greater than 0
 
   tariff:
     import_octopus_url: "https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-{dno_region}/standard-unit-rates/"
@@ -99,7 +100,15 @@ These two forms are **mutually exclusive** and supplying both is rejected. The O
 consumption series already includes any EV charging, so accepting both would
 double-count it. The trade-off is that a car baked into the meter data cannot be
 smart-planned separately. A day missing from the downloaded consumption falls back to a
-synthetic UK-average profile rather than being billed as zero.
+synthetic UK-average profile rather than being billed as zero. `car_rate_kw` has no
+effect on an Octopus load and is ignored there — there is no separately-tracked car
+energy to apply a charging rate to.
+
+`car_rate_kw` is the charger's power, used to size both the dumb timer's charge window
+(scenario 2) and the smart plan's charging rate (scenario 3): a smaller number (say 3.0
+for a granny charger) spreads the same annual `car_charging_kwh` over a longer window
+each day, while a larger one (up to a three-phase charger's 22 kW) charges it faster. It
+must be greater than zero.
 
 Instead of an Octopus URL you may give a fixed rate structure:
 
