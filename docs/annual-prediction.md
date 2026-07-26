@@ -106,9 +106,36 @@ energy to apply a charging rate to.
 
 `car_rate_kw` is the charger's power, used to size both the dumb timer's charge window
 (scenario 2) and the smart plan's charging rate (scenario 3): a smaller number (say 3.0
-for a granny charger) spreads the same annual `car_charging_kwh` over a longer window
-each day, while a larger one (up to a three-phase charger's 22 kW) charges it faster. It
-must be greater than zero.
+for a granny charger) spreads the same energy over a longer window, while a larger one
+(up to a three-phase charger's 22 kW) charges it faster. It must be greater than zero.
+
+### How car charging is spread across the year
+
+The car does **not** charge a little every day. Spreading an annual figure evenly across
+365 days would make every top-up short enough to fit inside the cheapest overnight
+window, so a dumb timer would price just as well as Predbat and the car would contribute
+almost nothing to the measured saving. Real sessions are large enough to overflow a short
+cheap band, and that overflow is where smart charging earns its money.
+
+The schedule is derived from `car_charging_kwh` and `car_rate_kw` rather than configured
+directly:
+
+- One session a week, carrying the whole week's energy.
+- If that session would run longer than **six hours** at the configured rate, the week's
+  energy is split across as many sessions as needed to bring each under six hours, up to
+  a maximum of one a day.
+
+Each sampled day is then planned **twice** — once carrying a full session, once with no
+car — and the two results are blended by how often charging actually happens that week.
+Blending each sampled day, rather than setting aside separate "car" and "no car" sample
+days, keeps the irradiance stratification intact instead of tying charging state to how
+sunny the sampled day happened to be.
+
+Two consequences worth knowing. A configuration with a car doubles the number of plan
+runs, so it takes roughly twice as long. And if even one session a day cannot get under
+six hours (a very low charge rate against very high mileage), the tool still uses seven
+sessions but logs a warning: the sessions run long, so the overflow effect — and
+therefore Predbat's advantage — is understated.
 
 Instead of an Octopus URL you may give a fixed rate structure:
 

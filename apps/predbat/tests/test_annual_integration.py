@@ -115,6 +115,31 @@ def run_one(my_predbat, config, weather, day):
     return run_day(my_predbat, config, weather, StubTariff(), load_source, day, midnight)
 
 
+def _count_calculate_plan_calls(my_predbat, action):
+    """Run ``action`` and return how many times it called ``calculate_plan``.
+
+    run_day() plans a sampled day once when no car is configured and twice - a with-car
+    leg and a without-car leg it blends against - when one is. Counting the calls is the
+    only externally visible way to tell those two paths apart, since the blended result
+    of two identical no-car legs would be indistinguishable from a single leg's.
+    """
+    calls = {"n": 0}
+    original = my_predbat.calculate_plan
+
+    def counting_calculate_plan(*args, **kwargs):
+        """Count the call, then delegate to the real planner."""
+        calls["n"] += 1
+        return original(*args, **kwargs)
+
+    my_predbat.calculate_plan = counting_calculate_plan
+    try:
+        action()
+    finally:
+        # my_predbat is the shared suite fixture, so the patch must not outlive this call
+        del my_predbat.calculate_plan
+    return calls["n"]
+
+
 def test_annual_integration(my_predbat):
     """Verify scenario ordering, the forecast/actuals split, and state isolation."""
     failed = False
@@ -204,9 +229,27 @@ def test_annual_integration(my_predbat):
                 print("  ERROR: {}.{} changed from {} to {} depending on what ran before it".format(scenario, field, first, second))
                 failed = True
 
-    print("Test: a car charging config still produces an ordered result")
+    print("Test: a config with no car plans a single leg (one calculate_plan call), not two")
+    # Guards run_day()'s dispatch: a config with no car must take the cheap, single-leg path
+    # rather than always running both the with-car and without-car legs.
+    plan_calls = _count_calculate_plan_calls(my_predbat, lambda: run_one(my_predbat, config, weather, day))
+    if plan_calls != 1:
+        print("  ERROR: a config with no car should call calculate_plan exactly once, got {}".format(plan_calls))
+        failed = True
+
+    print("Test: a car charging config plans TWICE (a with-car leg and a without-car leg) and blends the two")
     car_config = make_config(with_car=True)
-    car_results = run_one(my_predbat, car_config, weather, day)
+    car_results = {}
+
+    def _run_car_config():
+        car_results.update(run_one(my_predbat, car_config, weather, day))
+
+    plan_calls = _count_calculate_plan_calls(my_predbat, _run_car_config)
+    if plan_calls != 2:
+        print("  ERROR: a config with a car should call calculate_plan exactly twice (with-car and without-car legs), got {}".format(plan_calls))
+        failed = True
+
+    print("Test: a car charging config still produces an ordered result")
     if car_results["with_predbat"]["cost_p"] > car_results["without_predbat"]["cost_p"] + 1e-6:
         print("  ERROR: with a car, Predbat cost {} should not exceed the timer baseline {}".format(car_results["with_predbat"]["cost_p"], car_results["without_predbat"]["cost_p"]))
         failed = True

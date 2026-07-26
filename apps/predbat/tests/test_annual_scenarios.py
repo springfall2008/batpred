@@ -9,7 +9,7 @@
 
 """Tests for the annual prediction three-scenario day runner."""
 
-from annual import DAY_MINUTES, PLAN_MINUTES, add_car_to_load, timer_charge_window
+from annual import DAY_MINUTES, PLAN_MINUTES, SCENARIO_FIELDS, SCENARIO_KEYS, _blend_results, add_car_to_load, car_charging_schedule, timer_charge_window
 
 
 def flat_rates(cheap_start, cheap_end, cheap_rate, peak_rate):
@@ -110,5 +110,76 @@ def test_annual_scenarios(my_predbat):
     if not second_day:
         print("  ERROR: the timer should also charge on day two of the 48 hour window")
         failed = True
+
+    print("Test: car_charging_schedule gives a modest annual figure a single weekly session")
+    # 1500 kWh/year at 7.4 kW is a 28.8 kWh/week session, under the 6 hour cap (3.9 hours).
+    sessions, session_kwh = car_charging_schedule(annual_kwh=1500, car_rate_kw=7.4)
+    if sessions != 1:
+        print("  ERROR: expected 1 session/week for a modest annual figure, got {}".format(sessions))
+        failed = True
+    if abs(session_kwh - 1500 / 52.0) > 1e-9:
+        print("  ERROR: a single weekly session should carry the whole week's energy ({}), got {}".format(1500 / 52.0, session_kwh))
+        failed = True
+
+    print("Test: a session that would exceed 6 hours splits into enough sessions that each is under 6 hours")
+    # 2500 kWh/year at 7.4 kW is a 48.08 kWh/week need - 6.50 hours as one session, so it must split.
+    sessions, session_kwh = car_charging_schedule(annual_kwh=2500, car_rate_kw=7.4)
+    if sessions <= 1:
+        print("  ERROR: a session over 6 hours should have split into more than 1 session/week, got {}".format(sessions))
+        failed = True
+    session_hours = session_kwh / 7.4
+    if session_hours > 6.0 + 1e-9:
+        print("  ERROR: every split session should be under 6 hours, got {:.3f} hours across {} sessions".format(session_hours, sessions))
+        failed = True
+
+    print("Test: the session count caps at 7 even when that still exceeds 6 hours per session")
+    # 8000 kWh/year at 3.0 kW is a 153.8 kWh/week need - 51.3 hours as one session. Even 7
+    # sessions (7.3 hours each) cannot get under the 6 hour cap, so the cap must still hold at 7
+    # rather than climbing past a session a day.
+    sessions, session_kwh = car_charging_schedule(annual_kwh=8000, car_rate_kw=3.0)
+    if sessions != 7:
+        print("  ERROR: expected the session count to cap at 7/week, got {}".format(sessions))
+        failed = True
+    if session_kwh / 3.0 <= 6.0:
+        print("  ERROR: expected this case to still exceed 6 hours per session even at the cap, got {:.3f} hours".format(session_kwh / 3.0))
+        failed = True
+
+    print("Test: sessions_per_week * session_kwh * 52 recovers the annual total")
+    for annual_kwh, car_rate_kw in [(1500, 7.4), (2500, 7.4), (8000, 7.4), (1500, 3.0), (2500, 3.0), (8000, 3.0)]:
+        sessions, session_kwh = car_charging_schedule(annual_kwh, car_rate_kw)
+        recovered = sessions * session_kwh * 52.0
+        if abs(recovered - annual_kwh) > 1e-6:
+            print("  ERROR: {} kWh/year at {} kW should recover to {} annual kWh, got {} ({} sessions of {:.3f} kWh)".format(annual_kwh, car_rate_kw, annual_kwh, recovered, sessions, session_kwh))
+            failed = True
+
+    print("Test: no annual energy produces no sessions")
+    sessions, session_kwh = car_charging_schedule(annual_kwh=0, car_rate_kw=7.4)
+    if sessions != 0 or session_kwh != 0.0:
+        print("  ERROR: zero annual energy should produce 0 sessions of 0 kWh, got {} sessions of {} kWh".format(sessions, session_kwh))
+        failed = True
+
+    print("Test: _blend_results blends every field of every scenario as fraction * with + (1 - fraction) * without")
+    with_car_results = {key: {field: 10.0 for field in SCENARIO_FIELDS} for key in SCENARIO_KEYS}
+    without_car_results = {key: {field: 2.0 for field in SCENARIO_FIELDS} for key in SCENARIO_KEYS}
+    with_car_results["with_predbat"]["cost_p"] = 100.0
+    without_car_results["with_predbat"]["cost_p"] = 20.0
+    fraction = 3.0 / 7.0
+    blended = _blend_results(with_car_results, without_car_results, fraction)
+    expected_cost = fraction * 100.0 + (1 - fraction) * 20.0
+    if abs(blended["with_predbat"]["cost_p"] - expected_cost) > 1e-9:
+        print("  ERROR: expected blended with_predbat cost_p {}, got {}".format(expected_cost, blended["with_predbat"]["cost_p"]))
+        failed = True
+    expected_other = fraction * 10.0 + (1 - fraction) * 2.0
+    if abs(blended["no_pvbat"]["import_kwh"] - expected_other) > 1e-9:
+        print("  ERROR: expected blended no_pvbat import_kwh {}, got {}".format(expected_other, blended["no_pvbat"]["import_kwh"]))
+        failed = True
+
+    print("Test: _blend_results is a no-op for a field identical in both legs (pv_generated_kwh)")
+    identical = {key: {field: 5.0 for field in SCENARIO_FIELDS} for key in SCENARIO_KEYS}
+    blended = _blend_results(identical, identical, fraction=0.4)
+    for key in SCENARIO_KEYS:
+        if blended[key]["pv_generated_kwh"] != 5.0:
+            print("  ERROR: blending identical legs should be a no-op, got {} for {}".format(blended[key]["pv_generated_kwh"], key))
+            failed = True
 
     return failed

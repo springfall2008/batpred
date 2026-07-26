@@ -13,6 +13,7 @@ and tariff modules own all network access.
 """
 
 import calendar
+import math
 import os
 from datetime import date, datetime, timedelta
 
@@ -584,6 +585,53 @@ BASELINE_MAX_CHARGE_SLOTS = 1
 # time is enough to give Predbat a fair one-shot charging decision to make.
 DEFAULT_CAR_READY_TIME = "07:00:00"
 
+# A charging session longer than this will not reliably fit inside a typical cheap
+# overnight band (Flux, Cosy), so car_charging_schedule() splits into more, shorter
+# sessions per week once a single weekly session would exceed it.
+CAR_SESSION_MAX_HOURS = 6.0
+
+# However many sessions a week would be needed to keep every session under
+# CAR_SESSION_MAX_HOURS, never plan more than one a day.
+MAX_SESSIONS_PER_WEEK = 7
+
+
+def car_charging_schedule(annual_kwh, car_rate_kw):
+    """Derive how often, and how much, a car charges per week from its annual energy.
+
+    Smearing an annual car figure evenly across 365 days is wrong in a way that
+    matters: a 2,500 kWh/year smear is 6.85 kWh/day, under an hour at 7.4 kW, which
+    fits trivially inside any cheap overnight window. A dumb timer would then get the
+    cheap rate just as easily as Predbat, and the EV would contribute almost nothing
+    to the measured saving. Real owners charge in sessions of tens of kWh that can
+    overflow a short cheap band, forcing part of the session onto an expensive rate
+    under a timer while Predbat spreads it across the cheapest half-hours instead -
+    that overflow is where smart charging earns its keep, and smearing deletes it.
+
+    The schedule is derived from the annual energy and the charger's power, not
+    configured directly: one session a week carries the whole week's energy unless
+    that session would run longer than ``CAR_SESSION_MAX_HOURS`` at the given rate, in
+    which case the week's energy is split across as many sessions as needed to bring
+    each under the cap, capped at ``MAX_SESSIONS_PER_WEEK`` (one a day). When even a
+    daily session cannot get under the cap (a very low charge rate against a very high
+    annual figure), seven sessions are still returned, but each will run long - the
+    caller is responsible for logging that the overflow this model is meant to capture
+    is then understated.
+
+    Returns (sessions_per_week, session_kwh). ``sessions_per_week * session_kwh``
+    always equals ``annual_kwh / 52.0`` exactly (division and its inverse), so summing
+    the week's sessions recovers the annual total.
+    """
+    weekly_kwh = annual_kwh / 52.0
+    if weekly_kwh <= 0 or car_rate_kw <= 0:
+        return 0, 0.0
+
+    session_hours = weekly_kwh / car_rate_kw
+    if session_hours <= CAR_SESSION_MAX_HOURS:
+        return 1, weekly_kwh
+
+    sessions_per_week = min(MAX_SESSIONS_PER_WEEK, math.ceil(session_hours / CAR_SESSION_MAX_HOURS))
+    return sessions_per_week, weekly_kwh / sessions_per_week
+
 
 def build_step_data(predbat, pv_minute, pv_minute10):
     """Build the 5-minute step arrays the Prediction engine consumes.
@@ -661,10 +709,11 @@ def add_car_to_load(load_forecast, windows, car_kwh):
 
     Used by the two baseline scenarios, where the car is simply extra load in a
     fixed timer window rather than something Predbat schedules. ``car_kwh`` is
-    already the day's energy (``run_day`` divides the annual figure by 365) and
-    ``windows`` holds one window per day of the plan, each independently sized by
+    already the energy this leg is charging - a full weekly session, or zero on the
+    without-car leg ``run_day()`` blends against (see ``car_charging_schedule()``) -
+    and ``windows`` holds one window per day of the plan, each independently sized by
     ``timer_charge_window`` to hold the full ``car_kwh`` — so every window gets
-    the full daily amount, not a share of it. Dividing by ``len(windows)`` here
+    the full session amount, not a share of it. Dividing by ``len(windows)`` here
     would silently bill only half the car's energy on the one day that matters
     (day 1 is the only one ``_billed_result`` costs).
     """
@@ -775,8 +824,13 @@ def _billed_result(predbat, end_record, pv_step):
     }
 
 
-def prepare_sample(predbat, config, weather, tariff, load_source, day, midnight_utc):
-    """Inject every per-day input into the PredBat instance for one sampled day."""
+def prepare_sample(predbat, config, weather, tariff, load_source, day, midnight_utc, car_kwh):
+    """Inject every per-day input into the PredBat instance for one sampled day.
+
+    ``car_kwh`` is the energy this specific leg is charging (a full weekly session, or
+    zero for the without-car leg run_day() blends against - see run_day()), not the raw
+    annual config figure, so num_cars below reflects what this leg actually models.
+    """
     reset_sample_state(predbat)
 
     # calculate_plan() spins up a multiprocessing Pool sized from args["threads"] (plan.py)
@@ -803,11 +857,11 @@ def prepare_sample(predbat, config, weather, tariff, load_source, day, midnight_
 
     # set_rate_thresholds() (called from _apply_rates() below) reads num_cars to decide
     # whether to widen rate_import_cost_threshold for car charging (fetch.py). num_cars is
-    # not part of reset_sample_state()'s leaked-state list — it is a value this day's config
-    # determines, not a scenario override to merely clear — so it is set here, from config,
-    # before _apply_rates() runs rather than left at whatever the previous sample's scenario 3
-    # happened to leave it as (or the headless bootstrap's own default of 1).
-    predbat.num_cars = 1 if config["load"].get("car_charging_kwh", 0.0) > 0 else 0
+    # not part of reset_sample_state()'s leaked-state list — it is a value this leg's car_kwh
+    # determines, not a scenario override to merely clear — so it is set here, from the leg's
+    # own car_kwh, before _apply_rates() runs rather than left at whatever the previous
+    # sample's scenario 3 happened to leave it as (or the headless bootstrap's own default of 1).
+    predbat.num_cars = 1 if car_kwh > 0 else 0
 
     rate_import, rate_export = tariff.rates_for(midnight_utc, PLAN_MINUTES)
     _apply_rates(predbat, rate_import, rate_export)
@@ -850,12 +904,15 @@ def _plan_smart_car(predbat, day, car_kwh):
     return slots
 
 
-def run_day(predbat, config, weather, tariff, load_source, day, midnight_utc):
-    """Run all three scenarios against one sampled day and return their billed figures."""
-    car_kwh = config["load"].get("car_charging_kwh", 0.0) / 365.0
-    car_rate_kw = config["load"].get("car_rate_kw", DEFAULT_CAR_RATE_KW)
+def _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_utc, car_kwh, car_rate_kw):
+    """Run all three scenarios against one sampled day at a fixed car charging energy.
 
-    prepare_sample(predbat, config, weather, tariff, load_source, day, midnight_utc)
+    ``car_kwh`` is the actual energy this leg charges - either a full weekly charging
+    session or zero, never the smeared daily average an earlier version of this tool
+    used (see ``car_charging_schedule()``). ``run_day()`` calls this once when no car is
+    configured, or twice (once per leg) and blends the two sets of results when one is.
+    """
+    prepare_sample(predbat, config, weather, tariff, load_source, day, midnight_utc, car_kwh)
 
     actual_pv = weather.pv_minutes("actual", midnight_utc, PLAN_MINUTES) if config["solar"] else {}
     forecast_pv = weather.pv_minutes("forecast", midnight_utc, PLAN_MINUTES) if config["solar"] else {}
@@ -938,6 +995,52 @@ def run_day(predbat, config, weather, tariff, load_source, day, midnight_utc):
 SCENARIO_KEYS = ["no_pvbat", "without_predbat", "with_predbat"]
 
 SCENARIO_FIELDS = ["cost_p", "import_kwh", "export_kwh", "pv_generated_kwh", "battery_throughput_kwh"]
+
+
+def _blend_results(with_car, without_car, fraction):
+    """Blend two full three-scenario result dicts field by field.
+
+    ``fraction`` is the share of the week charging actually happens
+    (``sessions_per_week / 7`` - see ``car_charging_schedule()``), so every field of
+    every scenario blends linearly: ``fraction * with_car + (1 - fraction) *
+    without_car``. ``pv_generated_kwh`` is identical between the two legs (the car has
+    no effect on solar generation), so its blend is a no-op - a useful self-check that
+    the two legs really are the same sampled day underneath.
+    """
+    return {key: {field: fraction * with_car[key][field] + (1 - fraction) * without_car[key][field] for field in SCENARIO_FIELDS} for key in SCENARIO_KEYS}
+
+
+def run_day(predbat, config, weather, tariff, load_source, day, midnight_utc):
+    """Run all three scenarios against one sampled day and return their billed figures.
+
+    A configured car charges in weekly sessions, not a daily smear (see
+    ``car_charging_schedule()``), so the sampled day is planned TWICE when a car is
+    configured: once carrying a full session, once with no car at all, and the two are
+    blended by how often a session actually happens that week. Blending per sampled day,
+    rather than dedicating separate sample days to "car" and "no car", keeps the
+    irradiance-percentile stratification of the sampled days intact instead of
+    confounding solar percentile with charging state. A config with no car runs a
+    single leg, exactly as before this blending was introduced.
+    """
+    car_charging_kwh = config["load"].get("car_charging_kwh", 0.0)
+    car_rate_kw = config["load"].get("car_rate_kw", DEFAULT_CAR_RATE_KW)
+
+    if car_charging_kwh <= 0:
+        return _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_utc, car_kwh=0.0, car_rate_kw=car_rate_kw)
+
+    sessions_per_week, session_kwh = car_charging_schedule(car_charging_kwh, car_rate_kw)
+    if sessions_per_week >= MAX_SESSIONS_PER_WEEK and session_kwh > car_rate_kw * CAR_SESSION_MAX_HOURS + 1e-6:
+        predbat.log(
+            "Warn: Annual: {} car charging needs {:.1f} kWh/week at {:.1f} kW, which cannot fit into {} sessions of {:.0f} hours or less; sessions are running long ({:.1f} hours), so the timer/Predbat overflow this model is meant to capture is understated".format(
+                day, sessions_per_week * session_kwh, car_rate_kw, MAX_SESSIONS_PER_WEEK, CAR_SESSION_MAX_HOURS, session_kwh / car_rate_kw
+            )
+        )
+
+    with_car = _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_utc, car_kwh=session_kwh, car_rate_kw=car_rate_kw)
+    without_car = _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_utc, car_kwh=0.0, car_rate_kw=car_rate_kw)
+
+    fraction = sessions_per_week / float(MAX_SESSIONS_PER_WEEK)
+    return _blend_results(with_car, without_car, fraction)
 
 
 def average_rate(rates, minutes):
