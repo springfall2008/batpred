@@ -78,6 +78,30 @@ def test_annual_scenarios(my_predbat):
         print("  ERROR: the window start should be aligned to a 5 minute boundary, got {}".format(quantised_window[0]["start"]))
         failed = True
 
+    print("Test: a cheapest band late in the day is pulled back so the billed day still gets the FULL car session")
+    # Regression guard for the bug where a day-0 window could run past DAY_MINUTES: the
+    # cheapest half-hour here is at 23:00 (minute 1380), and a 34 kWh session at 7.4 kW needs
+    # about 4.6 hours - far more than the 60 minutes left in the day from 23:00. Without
+    # clamping, the window would end at 1380 + ~280 = ~1660, so _billed_result (which only
+    # costs minutes < DAY_MINUTES) would bill the baselines for only the ~60 minutes that fall
+    # before midnight while scenario 3 (with_predbat) is always billed for the full session -
+    # phantom baseline saving that can invert a month's headline predbat_vs_baseline_p.
+    late_rates = flat_rates(cheap_start=1380, cheap_end=1410, cheap_rate=7.0, peak_rate=30.0)
+    late_car_kwh = 34.0
+    late_window = timer_charge_window(late_rates, car_kwh=late_car_kwh, car_rate_kw=7.4)
+    day_zero_window = late_window[0]
+    if day_zero_window["start"] < 0:
+        print("  ERROR: the day-0 window start must never go negative, got {}".format(day_zero_window["start"]))
+        failed = True
+    if day_zero_window["end"] > DAY_MINUTES:
+        print("  ERROR: the day-0 window must end within the billed day (< {}), got end={} (start={})".format(DAY_MINUTES, day_zero_window["end"], day_zero_window["start"]))
+        failed = True
+    late_baseline_load = add_car_to_load({minute: 0.0 for minute in range(DAY_MINUTES + 1)}, late_window, car_kwh=late_car_kwh)
+    billed_day_energy = late_baseline_load[DAY_MINUTES]
+    if abs(billed_day_energy - late_car_kwh) > 1e-6:
+        print("  ERROR: the billed day should receive the full {} kWh session (matching what scenario 3 is always billed for), got {} kWh".format(late_car_kwh, billed_day_energy))
+        failed = True
+
     print("Test: add_car_to_load inserts the car's full energy on EACH day, not split across the plan, and stays cumulative")
     base = {minute: 0.01 * minute for minute in range(PLAN_MINUTES + 1)}
     with_car = add_car_to_load(base, window, car_kwh=14.8)

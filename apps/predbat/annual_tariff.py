@@ -14,9 +14,9 @@ structure. Fetching is done a month at a time and sliced per sampled day.
 import calendar
 from datetime import datetime, timedelta
 
-import aiohttp
 import pytz
 
+from annual_http import fetch_json
 from utils import minute_data
 
 MINUTES_PER_DAY = 24 * 60
@@ -79,16 +79,7 @@ class AnnualTariff:
 
     async def _default_fetch_json(self, url):
         """Download and decode one JSON document, returning None on any failure."""
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers={"accept": "application/json", "user-agent": "predbat/1.0"}, timeout=aiohttp.ClientTimeout(total=60)) as response:
-                    if response.status not in [200, 201]:
-                        self.log("Warn: Annual: Octopus rate request to {} returned {}".format(url, response.status))
-                        return None
-                    return await response.json()
-        except (aiohttp.ClientError, ValueError, TimeoutError) as error:
-            self.log("Warn: Annual: Octopus rate request to {} failed: {}".format(url, error))
-            return None
+        return await fetch_json(url, self.log, "Octopus rate request", {"accept": "application/json", "user-agent": "predbat/1.0"}, 60)
 
     async def _download_octopus(self, base_url, start_utc, end_utc, cache_key):
         """Download every page of Octopus rates for a date range, returning raw result rows."""

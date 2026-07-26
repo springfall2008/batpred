@@ -139,7 +139,11 @@ def main(argv=None):
     storage = StorageLocalFiles(args.work_dir, print)
 
     try:
-        predictor = AnnualPredictor(config, log=print if not args.quiet else lambda *a, **k: None, storage=storage, work_dir=args.work_dir)
+        # --quiet suppresses only the per-month progress lines (make_progress() below), never
+        # the warnings AnnualPredictor.log emits: P10 fallbacks, missing rate data, failed
+        # sample days and car-charging shortfalls must stay visible even in a quiet run, per
+        # the "failures are visible, never silent" contract.
+        predictor = AnnualPredictor(config, log=print, storage=storage, work_dir=args.work_dir)
         results = asyncio.run(predictor.run(progress=make_progress(args.quiet)))
     except AnnualConfigError as error:
         sys.stderr.write("Config error: {}\n".format(error))

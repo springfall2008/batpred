@@ -9,7 +9,34 @@
 
 """Tests for the annual prediction command line output."""
 
+import io
+import os
+import tempfile
+from contextlib import redirect_stderr, redirect_stdout
+
+import annual_cli
 from annual_cli import format_table
+
+
+class _StubPredictor:
+    """Stands in for AnnualPredictor so main()'s argument wiring can be tested in isolation.
+
+    Records the ``log`` callable it was constructed with rather than doing any real work,
+    so a test can assert what main() actually passes through under --quiet without needing
+    a real config, the network, or a headless PredBat instance.
+    """
+
+    captured_log = None
+
+    def __init__(self, config, log=None, storage=None, work_dir=None):
+        """Record the log callable and discard everything else."""
+        _StubPredictor.captured_log = log
+
+    async def run(self, progress=None):
+        """Report one fake progress step (if asked) and return canned results."""
+        if progress:
+            progress(0, 1, "stub")
+        return sample_results()
 
 
 def sample_results():
@@ -164,6 +191,27 @@ def test_annual_cli(my_predbat):
         failed = True
     if "0.00" in empty_table:
         print("  ERROR: the table must not render the missing annual total as a zero cost, got:\n{}".format(empty_table))
+        failed = True
+
+    print("Test: --quiet suppresses only progress output, never AnnualPredictor's warnings")
+    # Regression guard: --quiet used to pass log=lambda *a, **k: None, silencing the
+    # P10-fallback/missing-rate/failed-day/car-shortfall warnings along with progress, which
+    # broke the "failures are visible, never silent" contract. main() must still pass
+    # log=print through under --quiet, suppressing only make_progress()'s per-month lines.
+    original_predictor = annual_cli.AnnualPredictor
+    annual_cli.AnnualPredictor = _StubPredictor
+    with tempfile.TemporaryDirectory() as work_dir:
+        config_path = os.path.join(work_dir, "annual.yaml")
+        with open(config_path, "w") as handle:
+            handle.write("annual: {}\n")
+        try:
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                annual_cli.main(["--config", config_path, "--work-dir", os.path.join(work_dir, "work"), "--quiet"])
+        finally:
+            annual_cli.AnnualPredictor = original_predictor
+
+    if _StubPredictor.captured_log is not print:
+        print("  ERROR: --quiet should still construct AnnualPredictor with log=print, got {}".format(_StubPredictor.captured_log))
         failed = True
 
     return failed

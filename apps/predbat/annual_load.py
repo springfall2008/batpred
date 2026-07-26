@@ -17,6 +17,7 @@ from datetime import date, datetime, timedelta
 
 import aiohttp
 
+from annual_http import fetch_json
 from annual_profiles import DAY_BAND_SLOTS, MONTH_WEIGHTS, NIGHT_BAND_SLOTS, SHAPE_TILT_FRACTION, half_hour_shape
 
 MINUTES_PER_DAY = 24 * 60
@@ -210,15 +211,7 @@ class OctopusConsumptionLoadProfile(LoadProfileSource):
 
     async def _get_json(self, session, url):
         """Fetch and decode one JSON page, returning None on any failure."""
-        try:
-            async with session.get(url, headers=self._auth_header(), timeout=aiohttp.ClientTimeout(total=30)) as response:
-                if response.status not in [200, 201]:
-                    self.log("Warn: Annual: Octopus consumption request to {} returned {}".format(url, response.status))
-                    return None
-                return await response.json()
-        except (aiohttp.ClientError, ValueError, TimeoutError) as error:
-            self.log("Warn: Annual: Octopus consumption request to {} failed: {}".format(url, error))
-            return None
+        return await fetch_json(url, self.log, "Octopus consumption request", self._auth_header(), 30, session=session)
 
     async def resolve_meter(self, session):
         """Resolve the account's MPAN and meter serial. Returns True on success."""

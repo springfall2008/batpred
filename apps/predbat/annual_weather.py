@@ -15,8 +15,7 @@ error, from which each month's P10 ratio is derived.
 import math
 from datetime import timedelta
 
-import aiohttp
-
+from annual_http import fetch_json
 from solar_model import convert_azimuth, gti_hourly_to_period_kwh
 
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
@@ -119,16 +118,7 @@ class AnnualWeather:
 
     async def _default_fetch_json(self, url):
         """Download and decode one JSON document, returning None on any failure."""
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers={"accept": "application/json", "user-agent": "predbat/1.0"}, timeout=aiohttp.ClientTimeout(total=120)) as response:
-                    if response.status not in [200, 201]:
-                        self.log("Warn: Annual: Open-Meteo request to {} returned {}".format(url, response.status))
-                        return None
-                    return await response.json()
-        except (aiohttp.ClientError, ValueError, TimeoutError) as error:
-            self.log("Warn: Annual: Open-Meteo request to {} failed: {}".format(url, error))
-            return None
+        return await fetch_json(url, self.log, "Open-Meteo request", {"accept": "application/json", "user-agent": "predbat/1.0"}, 120)
 
     def _build_url(self, base, array, year):
         """Build one Open-Meteo request URL for a single array and calendar year.

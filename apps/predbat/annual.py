@@ -217,7 +217,12 @@ def validate_config(config, today=None):
 
     if today is None:
         today = date.today()
-    year = _require_number(raw.get("year", today.year - 1), "annual.year", minimum=MINIMUM_YEAR, maximum=today.year, integer=True)
+    # Capped at the most recent COMPLETE calendar year, not the current (in-progress) one:
+    # Open-Meteo answers a mid-year request with short but internally-consistent arrays, so
+    # _payload_problem() cannot tell a truncated current-year download from a genuinely
+    # complete one, and it gets cached with no expiry - permanently pinning the remaining
+    # months as "unavailable" until the work dir is deleted by hand. See annual_weather.py.
+    year = _require_number(raw.get("year", today.year - 1), "annual.year", minimum=MINIMUM_YEAR, maximum=today.year - 1, integer=True)
 
     return {
         "location": dict(location),
@@ -752,6 +757,20 @@ def timer_charge_window(rate_import, car_kwh, car_rate_kw):
                     best_start = start
                 start = None
         aligned_start = base + (best_start // PREDICT_STEP) * PREDICT_STEP
+
+        # _billed_result only costs minutes < DAY_MINUTES of the billed day (day_offset 0), so a
+        # window that runs past its own day's boundary gets only partially billed there: the
+        # baselines (scenarios 1/2) would then be charged for less car energy than scenario 3,
+        # which always bills the full session, making Predbat's saving look bigger than it is (or,
+        # on a day whose cheap band happens to run low, even negative). Pull the start back so the
+        # window still ends inside its own day whenever the session fits in a day at all. When
+        # minutes_needed itself exceeds a whole day, day_end - minutes_needed is before the day
+        # even starts, so clamp to the day's start instead of producing a negative offset - the
+        # window still overflows into the next day, which is unavoidable for a session that long.
+        day_end = base + DAY_MINUTES
+        if aligned_start + minutes_needed > day_end:
+            aligned_start = max(base, day_end - minutes_needed)
+
         windows.append({"start": aligned_start, "end": aligned_start + minutes_needed})
     return windows
 

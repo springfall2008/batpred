@@ -85,7 +85,10 @@ rather than silently producing a nonsense result: `kwp`, `size_kwh`, `inverter_k
 `charge_rate_kw` and `discharge_rate_kw` must all be greater than zero; `efficiency` and
 `pv10_derate_fallback` must be greater than zero and at most one; `samples_per_month`
 must be a whole number of at least one; and `year` must be between 1940 (the start of
-the Open-Meteo ERA5 archive) and the current year.
+the Open-Meteo ERA5 archive) and the most recently completed calendar year - the current,
+still-in-progress year is rejected, since Open-Meteo answers a mid-year request with
+short but internally-consistent data that looks complete, and it would then be cached
+permanently as if it were.
 
 Instead of `annual_kwh`, `shape` and `car_charging_kwh` you may supply real consumption:
 
@@ -161,9 +164,11 @@ python3 annual_cli.py --config annual.yaml --out results.json
 ```
 
 Other options: `--work-dir` (default `./annual_work`) sets where the headless Predbat
-instance and the download cache live, and `--quiet` suppresses the per-month progress
-lines written to stderr. A human-readable table is always printed to stdout; `--out`
-additionally writes the full results document as JSON.
+instance and the download cache live, and `--quiet` suppresses only the per-month
+progress lines written to stderr. Warnings - a P10 fallback, missing rate data, a failed
+sample day, a car-charging shortfall - are never suppressed, `--quiet` or not: failures
+stay visible. A human-readable table is always printed to stdout; `--out` additionally
+writes the full results document as JSON.
 
 A run takes roughly one to three minutes with the default two samples per month: 24 plan
 calculations (12 months × 2 samples) plus the weather, tariff and (if configured)
@@ -202,6 +207,19 @@ figures: `pv_battery_vs_none_p` (PV and battery vs. no system) and
 `predbat_vs_baseline_p` (Predbat vs. the dumb timer baseline). If no month produced a
 usable result, `annual.scenarios` and `annual.standing_charge_p` are `null` and
 `annual.savings` is an empty object (`{}`), rather than a fabricated zero-cost year.
+
+**`predbat_vs_baseline_p` is not equally hard to beat on every tariff.** The "without
+Predbat" baseline charges in the cheapest contiguous band of the day (mirroring
+Predbat's own `calculate_yesterday()` savings baseline, deliberately kept consistent with
+it rather than made tariff-aware here). On a banded tariff such as Economy 7, Cosy or
+Flux, where the cheap rate holds for several contiguous hours, that band is almost the
+whole cheap period, so the baseline is a strong comparator and Predbat's measured saving
+mostly reflects genuine optimisation. On a half-hourly tariff such as Agile, where the
+day's single cheapest rate is often just one 30 minute slot, the same rule yields a much
+narrower baseline window - a comparator that is easier to beat - so `predbat_vs_baseline_p`
+reads more flattering on Agile than the equivalent system would on a banded tariff. This
+is a property of the comparator, not of Predbat performing differently; treat cross-tariff
+comparisons of this figure with that in mind.
 
 The `caveats` list in the results document records anything that could affect how much
 to trust the numbers — a P10 fallback, a missing month's rate data, and the

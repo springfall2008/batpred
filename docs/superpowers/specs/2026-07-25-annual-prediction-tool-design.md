@@ -57,11 +57,18 @@ convention (no subpackages exist besides `tests/` and `config/`).
 | `annual_tariff.py` | Per-date rate resolution: Octopus URL or basic rates | `basic_rates()` |
 | `annual_cli.py` | Argument parsing, progress output, JSON and table writing | `annual` |
 
-The boundary that matters: **`annual.py` performs no HTTP, and
-`annual_weather.py` / `annual_tariff.py` never touch `PredBat`.** That keeps the
-web UI's future job to "build a config dict, call `AnnualPredictor.run()`,
+The boundary that matters: **`annual.py` performs no HTTP.** All network access
+lives in `annual_weather.py`, `annual_tariff.py` and `annual_load.py`. That keeps
+the web UI's future job to "build a config dict, call `AnnualPredictor.run()`,
 render the returned JSON", and lets every module be tested against fixtures
 rather than the network.
+
+`annual_weather.py` never touches `PredBat`. `annual_tariff.py` does hold a
+`PredBat` reference, legitimately: it calls `resolve_arg()` to expand a
+templated Octopus URL and `basic_rates()` to expand a static rate structure -
+both listed as its dependency above - rather than reimplementing either. That
+reference is used only for those two calls, never to drive a plan or touch
+live state, so it does not compromise the no-HTTP boundary above.
 
 HTTP responses are cached through the Storage component's `fetch_cached()`
 (per CLAUDE.md, never direct file access): one cached blob per array-year per
