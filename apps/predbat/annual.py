@@ -1231,6 +1231,9 @@ class AnnualPredictor:
             self.caveats.append("The forecast-versus-ERA5 gap includes systematic model bias as well as forecast error, so measured solar uncertainty is slightly overstated.")
         self.caveats.append("self_consumed_kwh is approximate: when the battery exports grid-charged energy it is understated.")
         self.caveats.append("export_credit_p_estimate is money ALREADY included inside cost_p (which prices every export minute at its real rate); it is informational only - adding it to cost_p double-counts export income.")
+        self.caveats.append(
+            "The without_predbat baseline charges in the single cheapest contiguous band of each day, mirroring Predbat's own savings baseline. On a half-hourly tariff such as Agile the cheapest band is often one 30 minute slot, so the baseline is a more pessimistic comparator there than on a banded tariff (Economy 7, Cosy, Flux) where it covers the whole cheap period. Compare predbat_vs_baseline_p across tariffs with that in mind."
+        )
 
         # A static property of the config, not of any one sampled day, so this is checked and
         # logged exactly once here rather than inside run_day(), which runs once per sampled
