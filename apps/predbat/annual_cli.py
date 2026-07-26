@@ -14,6 +14,7 @@ Usage:
 import argparse
 import asyncio
 import calendar
+import contextlib
 import json
 import os
 import sys
@@ -107,6 +108,20 @@ def format_table(results, currency="p"):
     return "\n".join(lines)
 
 
+def _stderr_log(message):
+    """Write a log message to stderr, so machine mode's stdout stays pure JSON.
+
+    ``StorageLocalFiles`` and ``AnnualPredictor`` are normally given ``log=print``, which
+    writes to stdout. Under ``--machine`` that would interleave plain-text warnings - P10
+    fallbacks, missing rate data, failed sample days, car-charging shortfalls, postcode
+    resolution notices - ahead of the final JSON document, so a parent reading stdout would
+    see garbage-then-JSON and fail to parse it. Routing those same warnings to stderr instead
+    keeps them visible without ever touching stdout.
+    """
+    sys.stderr.write("{}\n".format(message))
+    sys.stderr.flush()
+
+
 def make_progress(quiet, machine=False):
     """Return a progress callback writing to stderr, or None when quiet.
 
@@ -152,15 +167,33 @@ def main(argv=None):
         sys.stderr.write("Could not read config {}: {}\n".format(args.config, error))
         return 2
 
-    storage = StorageLocalFiles(args.work_dir, print)
+    # Under --machine, the engine's log must go to stderr rather than the default print()
+    # (stdout): predictor.run() can log warnings - P10 fallbacks, missing rate data, failed
+    # sample days, car-charging shortfalls, postcode resolution - and any of those landing on
+    # stdout ahead of the final json.dump() would corrupt the one-JSON-object contract a parent
+    # process depends on. The default (non-machine) path keeps log=print unchanged.
+    log = _stderr_log if args.machine else print
 
+    storage = StorageLocalFiles(args.work_dir, log)
+
+    # predictor.run() lazily imports the full Predbat engine (predbat.py) on its first call
+    # to create_headless_predbat(); that module's top-level self-update check
+    # (download.check_install()) writes plain text straight to real stdout via a bare
+    # print(), bypassing the log callable entirely. Routing our own log calls to stderr
+    # (above) cannot catch that, so in machine mode stdout itself is redirected to stderr for
+    # the duration of construction and run() - any stray print(), from this code or anything
+    # it pulls in, lands on stderr instead of corrupting the one-JSON-object stdout contract.
+    # The messages stay visible, just on the correct stream; only json.dump() below writes to
+    # the real stdout.
+    stdout_guard = contextlib.redirect_stdout(sys.stderr) if args.machine else contextlib.nullcontext()
     try:
-        # --quiet suppresses only the per-month progress lines (make_progress() below), never
-        # the warnings AnnualPredictor.log emits: P10 fallbacks, missing rate data, failed
-        # sample days and car-charging shortfalls must stay visible even in a quiet run, per
-        # the "failures are visible, never silent" contract.
-        predictor = AnnualPredictor(config, log=print, storage=storage, work_dir=args.work_dir)
-        results = asyncio.run(predictor.run(progress=make_progress(args.quiet, machine=args.machine)))
+        with stdout_guard:
+            # --quiet suppresses only the per-month progress lines (make_progress() below), never
+            # the warnings AnnualPredictor.log emits: P10 fallbacks, missing rate data, failed
+            # sample days and car-charging shortfalls must stay visible even in a quiet run, per
+            # the "failures are visible, never silent" contract.
+            predictor = AnnualPredictor(config, log=log, storage=storage, work_dir=args.work_dir)
+            results = asyncio.run(predictor.run(progress=make_progress(args.quiet, machine=args.machine)))
     except AnnualConfigError as error:
         sys.stderr.write("Config error: {}\n".format(error))
         return 2
@@ -170,6 +203,10 @@ def main(argv=None):
         try:
             with open(args.out, "w", encoding="utf-8") as handle:
                 json.dump(results, handle, indent=2)
+            # stderr, not stdout, so this confirmation is safe in both modes: --machine's
+            # stdout purity only concerns stdout, and stderr already carries plain text
+            # (config errors, progress) in machine mode.
+            sys.stderr.write("Results written to {}\n".format(args.out))
         except (OSError, TypeError, ValueError) as error:
             # The projection just took several minutes to compute; a failed write to
             # --out must not throw the results away. The table (or JSON, in machine mode)

@@ -39,6 +39,27 @@ class _StubPredictor:
         return sample_results()
 
 
+class _WarningPredictor:
+    """Stub predictor whose run() logs a warning before returning results.
+
+    Mirrors a real mid-run warning (a P10 fallback, missing rate data, a failed sample day) so a
+    test can check where that warning lands: on stderr, never on stdout, in machine mode. The
+    regression this guards against is a stray warning-turned-print inside ``main()``'s machine
+    branch, which ``test_annual_cli_machine``'s unit-level checks of ``make_progress`` alone
+    cannot see, since that warning is emitted by the engine, not by the progress callback.
+    """
+
+    def __init__(self, config, log=None, storage=None, work_dir=None):
+        """Record the log callable so run() can use it."""
+        self._log = log
+
+    async def run(self, progress=None):
+        """Emit one warning through the recorded log callable, then return canned results."""
+        if self._log:
+            self._log("Warn: stub P10 fallback warning")
+        return sample_results()
+
+
 def sample_results():
     """Return a small results document covering an ok month and an unavailable one."""
     scenarios = {
@@ -265,6 +286,89 @@ def test_annual_cli_machine(my_predbat):
         failed = True
     if make_progress(quiet=True, machine=True) is not None:
         print("  ERROR: quiet should give no progress callback in machine mode either")
+        failed = True
+
+    return failed
+
+
+def test_annual_cli_machine_end_to_end(my_predbat):
+    """Verify main() itself, not just make_progress(), keeps stdout pure JSON under --machine.
+
+    Two checks that unit-testing make_progress() alone cannot make:
+
+    1. A real subprocess invocation with a config that fails validation before
+       predictor.run() is ever reached - confirming exit code, empty stdout and a readable
+       stderr message hold end-to-end, not just when main() is called in-process.
+    2. An in-process call to main() with AnnualPredictor stubbed to log a warning from inside
+       run() (mirroring a P10 fallback or similar engine warning) - confirming that warning
+       lands on stderr and never on stdout, and that stdout still parses as exactly one JSON
+       object. This is the actual regression risk: a stray print() reachable only once
+       predictor.run() executes, which a bad-config-only check cannot exercise.
+    """
+    import io
+    import json
+    import subprocess
+    import sys
+
+    failed = False
+    print("**** Testing annual CLI machine mode end-to-end (main()) ****")
+
+    print("Test: a real subprocess run with --machine and a bad config emits nothing on stdout")
+    with tempfile.TemporaryDirectory() as work_dir:
+        config_path = os.path.join(work_dir, "bad.yaml")
+        with open(config_path, "w") as handle:
+            handle.write("annual: {}\n")
+        completed = subprocess.run(
+            [sys.executable, annual_cli.__file__, "--config", config_path, "--work-dir", os.path.join(work_dir, "work"), "--machine"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    if completed.returncode != 2:
+        print("  ERROR: expected exit code 2 for a config error, got {}".format(completed.returncode))
+        failed = True
+    if completed.stdout != "":
+        print("  ERROR: stdout must be empty on a config error, got {!r}".format(completed.stdout))
+        failed = True
+    if "annual.location" not in completed.stderr:
+        print("  ERROR: expected a readable config error on stderr, got {!r}".format(completed.stderr))
+        failed = True
+
+    print("Test: a warning logged mid-run() lands on stderr, never on stdout, alongside clean JSON")
+    original_predictor = annual_cli.AnnualPredictor
+    annual_cli.AnnualPredictor = _WarningPredictor
+    stdout_capture = io.StringIO()
+    stderr_capture = io.StringIO()
+    try:
+        with tempfile.TemporaryDirectory() as work_dir:
+            config_path = os.path.join(work_dir, "annual.yaml")
+            with open(config_path, "w") as handle:
+                handle.write("annual: {}\n")
+            with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                exit_code = annual_cli.main(["--config", config_path, "--work-dir", os.path.join(work_dir, "work"), "--machine"])
+    finally:
+        annual_cli.AnnualPredictor = original_predictor
+
+    if exit_code != 0:
+        print("  ERROR: a successful run should exit 0, got {}".format(exit_code))
+        failed = True
+
+    stdout_text = stdout_capture.getvalue()
+    if "stub P10 fallback warning" in stdout_text:
+        print("  ERROR: the engine's warning leaked onto stdout, got {!r}".format(stdout_text))
+        failed = True
+    try:
+        parsed = json.loads(stdout_text)
+    except ValueError:
+        print("  ERROR: stdout should be exactly one JSON object even when the engine logs mid-run, got {!r}".format(stdout_text))
+        parsed = None
+        failed = True
+    if parsed is not None and parsed != sample_results():
+        print("  ERROR: stdout's JSON should match the results document exactly, got {}".format(parsed))
+        failed = True
+
+    if "stub P10 fallback warning" not in stderr_capture.getvalue():
+        print("  ERROR: the engine's warning should still be visible, on stderr, got {!r}".format(stderr_capture.getvalue()))
         failed = True
 
     return failed
