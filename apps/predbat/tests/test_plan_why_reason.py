@@ -251,6 +251,26 @@ def run_test_plan_why_reason(my_predbat):
         print("ERROR: expected renderStateCell to emit a title= attribute")
         failed = True
 
+    # --- Test 12: plan_why_explanations forces the Python prediction engine ---
+    # plan_why_explanations is a CONFIG_ITEMS (HA-exposed) switch, so it's read via
+    # config_index rather than self.args - prediction_kernel_enable is apps.yaml-only
+    # so self.args is sufficient for that one.
+    print("Test plan_why_explanations forces the Python prediction engine off the C++ kernel")
+    my_predbat.args["prediction_kernel_enable"] = True
+    my_predbat.config_index["plan_why_explanations"]["value"] = True
+    my_predbat.fetch_config_options()
+    if my_predbat.prediction_kernel_enable:
+        print("ERROR: expected prediction_kernel_enable to be forced False when plan_why_explanations is on")
+        failed = True
+
+    print("Test plan_why_explanations off leaves the C++ kernel setting alone")
+    my_predbat.args["prediction_kernel_enable"] = True
+    my_predbat.config_index["plan_why_explanations"]["value"] = False
+    my_predbat.fetch_config_options()
+    if not my_predbat.prediction_kernel_enable:
+        print("ERROR: expected prediction_kernel_enable to stay True when plan_why_explanations is off")
+        failed = True
+
     if not failed:
         print("All plan why-reason tests passed")
     return failed

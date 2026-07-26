@@ -1440,7 +1440,6 @@ CONFIG_ITEMS = [
         "friendly_name": "Show plan slot 'why' tooltips",
         "type": "switch",
         "default": False,
-        "enable": "expert_mode",
     },
     {
         "name": "predheat_enable",
