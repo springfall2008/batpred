@@ -170,6 +170,7 @@ from tests.test_annual_scenarios import test_annual_scenarios
 from tests.test_annual_results import test_annual_results
 from tests.test_annual_integration import test_annual_integration
 from tests.test_annual_cli import test_annual_cli
+from tests.test_tariff_catalogue import test_tariff_catalogue
 
 # Mock the components and plugin system
 
@@ -418,6 +419,7 @@ def main():
         ("annual_results", test_annual_results, "Annual prediction results assembly tests", False),
         ("annual_integration", test_annual_integration, "Annual prediction integration tests", True),
         ("annual_cli", test_annual_cli, "Annual prediction CLI output tests", False),
+        ("tariff_catalogue", test_tariff_catalogue, "Tariff catalogue tests", False),
     ]
 
     # Parse command line arguments
