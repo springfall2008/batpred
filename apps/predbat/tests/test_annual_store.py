@@ -178,6 +178,13 @@ def test_annual_store(my_predbat):
         print("  ERROR: a sparse config should still produce a label")
         failed = True
 
+    print("Test: build_label tolerates a config that is not a dict at all")
+    for not_a_config in [None, "not-a-dict", 42, [], [1, 2, 3], {"tariff": "also-not-a-dict"}]:
+        label = build_label(not_a_config)
+        if not label:
+            print("  ERROR: build_label should still return a non-empty string for {!r}, got {!r}".format(not_a_config, label))
+            failed = True
+
     print("Test: the index survives a corrupt stored value")
     storage = FakeStorage()
     storage.store[(STORAGE_MODULE, INDEX_NAME)] = "not a list"
