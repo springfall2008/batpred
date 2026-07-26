@@ -317,10 +317,38 @@ against the same day:
 
 The car, where configured, charges in scenarios 1 and 2 on a fixed timer: the
 same cheapest static window scenario 2 derives for the battery, extended as
-needed to fit the day's car kWh at the configured charge rate. Scenario 1 uses
+needed to fit the session's kWh at the configured charge rate. Scenario 1 uses
 that identical window even though it has no battery, so the only difference
 between the three scenarios is the system being evaluated. Only scenario 3
 plans the car smartly.
+
+#### Charging is episodic, not a daily trickle
+
+Spreading the annual car figure evenly across 365 days is wrong in a way that
+matters. A 2,500 kWh/year smear is 6.85 kWh/day — under an hour at 7.4 kW —
+which fits trivially inside any cheap overnight window, so the dumb timer gets
+the cheap rate too and the gap between it and Predbat collapses to nothing. Real
+owners charge in sessions of 20-40 kWh that can overflow a short cheap band
+(Flux, Cosy), forcing part onto expensive rates under a timer while Predbat
+splits the load across the cheapest half-hours. That overflow is where smart
+charging earns its money, and smearing deletes it.
+
+The schedule is derived, not configured:
+
+- One session per week by default, carrying the whole week's energy.
+- If that session would exceed **six hours** at the configured charge rate, split
+  into as many sessions per week as needed to bring each under six hours,
+  capped at seven (daily).
+
+Each sampled day is then planned **twice** — once carrying a full session, once
+with no car — and the two results are blended by how often charging actually
+happens: `cost = f × with_car + (1 − f) × without_car`, where
+`f = sessions_per_week / 7`. Blending per sampled day rather than dedicating
+separate sample days keeps the irradiance stratification intact; every cost and
+energy field blends linearly, and `pv_generated_kwh` is identical in both legs.
+
+This doubles the plan count for configs with a car (24 → 48 runs/year). Configs
+without one are unaffected.
 3. **With Predbat** — `calculate_plan(recompute=True, publish=False)` then
    `run_prediction(charge_limit_best, charge_window_best, export_window_best,
    export_limits_best)`. The car uses real smart slot planning.
