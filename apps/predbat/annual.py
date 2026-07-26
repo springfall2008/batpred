@@ -1000,6 +1000,24 @@ class AnnualPredictor:
             raise AnnualConfigError("Octopus consumption data could not be downloaded for {}; check the API key and account id".format(year))
         return source
 
+    def _reweight_survivors(self, surviving_samples, days_in_month):
+        """Rescale surviving samples so they still represent a full month between them.
+
+        ``select_samples()`` gives every chosen sample an equal weight of
+        ``days_in_month / len(chosen)``, on the assumption all of them get planned
+        successfully. When one or more are dropped after a ``run_day()`` failure, keeping
+        their original weight would under-represent the month by the dropped days' share -
+        a month that lost half its samples would silently contribute about half its true
+        cost to the annual total, even though ``standing_charge_p`` and ``days`` still
+        reflect the full month. Recomputing the weight from the surviving count alone
+        keeps the total weight equal to ``days_in_month``; the caller still records
+        ``"degraded"``/``failed_days`` so the reduced sample count remains visible.
+        """
+        if not surviving_samples:
+            return surviving_samples
+        reweighted = days_in_month / float(len(surviving_samples))
+        return [(day, reweighted) for day, _ in surviving_samples]
+
     def _month_scenarios(self, samples, day_results):
         """Weight each sample's daily figures into monthly totals per scenario."""
         totals = {key: {field: 0.0 for field in SCENARIO_FIELDS} for key in SCENARIO_KEYS}
@@ -1035,6 +1053,7 @@ class AnnualPredictor:
         if has_solar:
             self.caveats.append("The forecast-versus-ERA5 gap includes systematic model bias as well as forecast error, so measured solar uncertainty is slightly overstated.")
         self.caveats.append("self_consumed_kwh is approximate: when the battery exports grid-charged energy it is understated.")
+        self.caveats.append("export_credit_p_estimate is money ALREADY included inside cost_p (which prices every export minute at its real rate); it is informational only - adding it to cost_p double-counts export income.")
 
         self.predbat = create_headless_predbat(self.work_dir, self.config["timezone"], self.log)
         self.load_source = await self._build_load_source()
@@ -1089,6 +1108,9 @@ class AnnualPredictor:
                 completed += 1
                 continue
 
+            if failed_days:
+                surviving_samples = self._reweight_survivors(surviving_samples, days_in_month)
+
             totals = self._month_scenarios(surviving_samples, day_results)
             first_midnight = zone.localize(datetime(surviving_samples[0][0].year, surviving_samples[0][0].month, surviving_samples[0][0].day)).astimezone(pytz.utc)
             _, rate_export = self.tariff.rates_for(first_midnight, DAY_MINUTES)
@@ -1097,6 +1119,12 @@ class AnnualPredictor:
             scenarios = {}
             for key in SCENARIO_KEYS:
                 entry = {field: totals[key][field] for field in SCENARIO_FIELDS}
+                # An approximation, not a second income stream: cost_p already prices export at
+                # the real per-minute export rate for every minute it happened, so the export
+                # credit is already inside it. This is a cruder second estimate of the same
+                # money (a single day's flat average export rate), kept only for a human-
+                # readable "how much of that came from export" figure. Adding it to cost_p
+                # double-counts the export income - see the results-document caveat below.
                 entry["export_credit_p_estimate"] = entry["export_kwh"] * export_rate
                 self_consumed = entry["pv_generated_kwh"] - entry["export_kwh"]
                 entry["self_consumed_kwh"] = max(0.0, self_consumed)

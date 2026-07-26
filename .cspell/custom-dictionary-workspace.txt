@@ -377,6 +377,8 @@ remotecontrol
 resetmidnight
 resultid
 resultmid
+reweight
+reweighted
 rname
 Roboto
 rowspan

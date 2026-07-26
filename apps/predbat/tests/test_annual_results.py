@@ -152,6 +152,24 @@ def test_annual_results(my_predbat):
         print("  ERROR: expected weighted with_predbat import_kwh {}, got {}".format(expected_with_predbat, totals["with_predbat"]["import_kwh"]))
         failed = True
 
+    print("Test: a degraded month's survivor is reweighted to represent the full month, not its original share")
+    # select_samples() would have given each of an original two samples in a 31 day month a
+    # weight of 31/2 = 15.5. One of them failed run_day() and was dropped. Naively summing the
+    # survivor at its original 15.5 weight would silently under-count the month by half; the
+    # fix must recompute the survivor's weight from the surviving count (31/1 = 31) so the
+    # month's total still represents all 31 days, using the ONE plan that actually ran.
+    predictor = make_predictor()
+    original_samples = [(date(2025, 3, 10), 15.5), (date(2025, 3, 24), 15.5)]
+    surviving_samples = original_samples[:1]
+    day_result = {key: {field: 2.0 for field in SCENARIO_FIELDS} for key in SCENARIO_KEYS}
+    reweighted_samples = predictor._reweight_survivors(surviving_samples, days_in_month=31)
+    totals = predictor._month_scenarios(reweighted_samples, [day_result])
+    expected_reweighted = 2.0 * 31
+    wrong_if_unweighted = 2.0 * 15.5
+    if totals["no_pvbat"]["cost_p"] != expected_reweighted:
+        print("  ERROR: expected the degraded month's total to be the survivor's figure times the full 31 days ({}), got {} (original-weight total would have been {})".format(expected_reweighted, totals["no_pvbat"]["cost_p"], wrong_if_unweighted))
+        failed = True
+
     print("Test: average_rate")
     full_rates = {0: 10.0, 1: 20.0, 2: 30.0}
     if average_rate(full_rates, 3) != 20.0:

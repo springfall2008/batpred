@@ -242,15 +242,27 @@ def test_annual_bootstrap(my_predbat):
             failed = True
 
     print("Test: reset_sample_state must not re-apply configure_offline_mode's choices")
-    my_predbat.octopus_intelligent_charging = True
-    my_predbat.debug_enable = True
-    reset_sample_state(my_predbat)
-    if my_predbat.octopus_intelligent_charging is not True:
-        print("  ERROR: reset_sample_state should not touch octopus_intelligent_charging any more")
-        failed = True
-    if my_predbat.debug_enable is not True:
-        print("  ERROR: reset_sample_state should not touch debug_enable any more")
-        failed = True
+    # my_predbat is the shared suite fixture, so anything set here outlives this test.
+    # debug_enable in particular must be put back: kernel_supported() in
+    # prediction_kernel.py requires `not pred.debug_enable`, so leaving it True makes every
+    # later prediction in the whole suite bypass the C++ kernel and fall back to the Python
+    # engine - roughly 8x slower per plan, which looks like a hang in the slow tests rather
+    # than a leak from here.
+    previous_octopus_intelligent = my_predbat.octopus_intelligent_charging
+    previous_debug_enable = my_predbat.debug_enable
+    try:
+        my_predbat.octopus_intelligent_charging = True
+        my_predbat.debug_enable = True
+        reset_sample_state(my_predbat)
+        if my_predbat.octopus_intelligent_charging is not True:
+            print("  ERROR: reset_sample_state should not touch octopus_intelligent_charging any more")
+            failed = True
+        if my_predbat.debug_enable is not True:
+            print("  ERROR: reset_sample_state should not touch debug_enable any more")
+            failed = True
+    finally:
+        my_predbat.octopus_intelligent_charging = previous_octopus_intelligent
+        my_predbat.debug_enable = previous_debug_enable
 
     print("Test: create_headless_predbat leaves the planner switched on, not the Monitor-mode default")
     with tempfile.TemporaryDirectory() as work_dir:
