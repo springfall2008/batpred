@@ -105,9 +105,25 @@ effect on an Octopus load and is ignored there — there is no separately-tracke
 energy to apply a charging rate to.
 
 `car_rate_kw` is the charger's power, used to size both the dumb timer's charge window
-(scenario 2) and the smart plan's charging rate (scenario 3): a smaller number (say 3.0
-for a granny charger) spreads the same energy over a longer window, while a larger one
-(up to a three-phase charger's 22 kW) charges it faster. It must be greater than zero.
+(scenarios 1 and 2, which share the same fixed timer) and the smart plan's charging rate
+(scenario 3): a smaller number (say 3.0 for a granny charger) spreads the same energy over
+a longer window, while a larger one (up to a three-phase charger's 22 kW) charges it
+faster. It must be greater than zero.
+
+Instead of an Octopus URL you may give a fixed rate structure:
+
+```yaml
+  tariff:
+    rates_import:
+      - start: "00:30:00"
+        end: "05:30:00"
+        rate: 7.0
+      - start: "05:30:00"
+        end: "00:30:00"
+        rate: 28.0
+    rates_export:
+      - rate: 15.0
+```
 
 ### How car charging is spread across the year
 
@@ -136,21 +152,6 @@ runs, so it takes roughly twice as long. And if even one session a day cannot ge
 six hours (a very low charge rate against very high mileage), the tool still uses seven
 sessions but logs a warning: the sessions run long, so the overflow effect — and
 therefore Predbat's advantage — is understated.
-
-Instead of an Octopus URL you may give a fixed rate structure:
-
-```yaml
-  tariff:
-    rates_import:
-      - start: "00:30:00"
-        end: "05:30:00"
-        rate: 7.0
-      - start: "05:30:00"
-        end: "00:30:00"
-        rate: 28.0
-    rates_export:
-      - rate: 15.0
-```
 
 ## Running it
 
@@ -199,8 +200,8 @@ figure should not be trusted there.
 The top-level `annual` block sums the included months' scenarios and reports two savings
 figures: `pv_battery_vs_none_p` (PV and battery vs. no system) and
 `predbat_vs_baseline_p` (Predbat vs. the dumb timer baseline). If no month produced a
-usable result, `annual.scenarios`, `annual.standing_charge_p` and `annual.savings` are
-empty rather than a fabricated zero-cost year.
+usable result, `annual.scenarios` and `annual.standing_charge_p` are `null` and
+`annual.savings` is an empty object (`{}`), rather than a fabricated zero-cost year.
 
 The `caveats` list in the results document records anything that could affect how much
 to trust the numbers — a P10 fallback, a missing month's rate data, and the

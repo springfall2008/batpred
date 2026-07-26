@@ -406,7 +406,8 @@ def reset_sample_state(predbat):
     numbers stay plausible while becoming order-dependent. The list covers the
     accumulators, the previous plan, the manual overrides, the starting SOC, the
     full rate-derived family that ``calculate_plan`` seeds its best windows from,
-    and the field ``tests/test_single_debug.py`` documents as leaking between
+    the scenario-3 smart-car overrides ``_run_scenarios()`` sets on the with-car
+    leg, and the field ``tests/test_single_debug.py`` documents as leaking between
     debug cases (``dynamic_load_baseline``).
 
     Deliberately excluded: ``battery_rate_max_export`` is hardware-derived and
@@ -463,6 +464,19 @@ def reset_sample_state(predbat):
     predbat.load_scaling_dynamic = None
     predbat.manual_load_adjust = {}
     predbat.savings_last_updated = None
+
+    # Scenario 3's smart-car overrides (_run_scenarios()). Reset here rather than relying on
+    # every consumer being gated on num_cars (prediction.py, plan.py) - that guarantee is
+    # fragile in a file that has already had several state-leak bugs. Safe to reset even
+    # though _run_scenarios() sets these on the with-car leg: prepare_sample() calls this
+    # function BEFORE that leg sets them, never after.
+    predbat.car_charging_planned = [False]
+    predbat.car_charging_limit = [0.0]
+    predbat.car_charging_soc = [0.0]
+    predbat.car_charging_rate = [DEFAULT_CAR_RATE_KW]
+    predbat.car_charging_battery_size = [50.0]
+    predbat.car_charging_plan_smart = [False]
+    predbat.car_charging_from_battery = False
 
 
 def configure_offline_mode(predbat):
@@ -617,12 +631,29 @@ def car_charging_schedule(annual_kwh, car_rate_kw):
     caller is responsible for logging that the overflow this model is meant to capture
     is then understated.
 
-    Returns (sessions_per_week, session_kwh). ``sessions_per_week * session_kwh``
-    always equals ``annual_kwh / 52.0`` exactly (division and its inverse), so summing
-    the week's sessions recovers the annual total.
+    Returns (sessions_per_week, session_kwh). ``sessions_per_week * session_kwh`` equals
+    ``annual_kwh / 52.0`` to within floating-point rounding (division and its inverse),
+    so summing the week's sessions recovers the annual total.
+
+    Note a deliberate 52-vs-7 mismatch: a session is sized here as ``annual_kwh / 52.0``
+    per week, but ``run_day()`` blends it back in at ``sessions_per_week / 7`` of each
+    sampled day - and 52 weeks * 7 days = 364, one short of a real (365 or 366 day) year.
+    So the car energy actually modelled over a year is ``annual_kwh * 365 / 364``, about
+    +0.27% high. Harmless at that size, but it is a real error hiding behind two numbers
+    that look interchangeable: "fixing" only one of the 52 here or the 7 in ``run_day()``
+    (e.g. switching this to weeks-per-365-days) without the matching change to the other
+    would turn a harmless 0.27% into a much larger one. Keep the two divisors paired if
+    either is ever revisited.
     """
     weekly_kwh = annual_kwh / 52.0
     if weekly_kwh <= 0 or car_rate_kw <= 0:
+        # A configured car (annual_kwh > 0) with an unusable rate is silently dropped here:
+        # (0, 0.0) reads to a caller exactly like "no car configured" at all. Not reachable
+        # through _validate_load() today (car_rate_kw is validated greater than zero there),
+        # but a caller reaching this function some other way gets no signal that a real car
+        # was discarded. Not raised, since this guard is defensive rather than a real
+        # validation boundary - see car_charging_overflow_warning() below for the one
+        # warning this module does emit about the schedule it derives.
         return 0, 0.0
 
     session_hours = weekly_kwh / car_rate_kw
@@ -631,6 +662,27 @@ def car_charging_schedule(annual_kwh, car_rate_kw):
 
     sessions_per_week = min(MAX_SESSIONS_PER_WEEK, math.ceil(session_hours / CAR_SESSION_MAX_HOURS))
     return sessions_per_week, weekly_kwh / sessions_per_week
+
+
+def car_charging_overflow_warning(car_charging_kwh, car_rate_kw):
+    """Return a warning message if the car's sessions cannot fit under the six-hour cap.
+
+    This is a static property of ``car_charging_kwh``/``car_rate_kw`` alone, not of any
+    particular sampled day, so a caller should log it once per run (``AnnualPredictor.run()``
+    does) rather than once per sampled day - the same condition would otherwise repeat
+    identically for every one of the roughly two dozen days a run samples. Returns None
+    when there is nothing to warn about, including when no car is configured at all.
+    """
+    if car_charging_kwh <= 0:
+        return None
+    sessions_per_week, session_kwh = car_charging_schedule(car_charging_kwh, car_rate_kw)
+    if sessions_per_week >= MAX_SESSIONS_PER_WEEK and session_kwh > car_rate_kw * CAR_SESSION_MAX_HOURS + 1e-6:
+        return (
+            "Annual: car charging needs {:.1f} kWh/week at {:.1f} kW, which cannot fit into {} sessions of {:.0f} hours or less; sessions are running long ({:.1f} hours), so the timer/Predbat overflow this model is meant to capture is understated".format(
+                sessions_per_week * session_kwh, car_rate_kw, MAX_SESSIONS_PER_WEEK, CAR_SESSION_MAX_HOURS, session_kwh / car_rate_kw
+            )
+        )
+    return None
 
 
 def build_step_data(predbat, pv_minute, pv_minute10):
@@ -1028,17 +1080,19 @@ def run_day(predbat, config, weather, tariff, load_source, day, midnight_utc):
     if car_charging_kwh <= 0:
         return _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_utc, car_kwh=0.0, car_rate_kw=car_rate_kw)
 
+    # The "sessions running long" overflow warning is a static property of the config
+    # (car_charging_kwh, car_rate_kw), not of this particular day, so it is emitted once
+    # per run by AnnualPredictor.run() (via car_charging_overflow_warning()) rather than
+    # here, where it would otherwise repeat once per sampled day.
     sessions_per_week, session_kwh = car_charging_schedule(car_charging_kwh, car_rate_kw)
-    if sessions_per_week >= MAX_SESSIONS_PER_WEEK and session_kwh > car_rate_kw * CAR_SESSION_MAX_HOURS + 1e-6:
-        predbat.log(
-            "Warn: Annual: {} car charging needs {:.1f} kWh/week at {:.1f} kW, which cannot fit into {} sessions of {:.0f} hours or less; sessions are running long ({:.1f} hours), so the timer/Predbat overflow this model is meant to capture is understated".format(
-                day, sessions_per_week * session_kwh, car_rate_kw, MAX_SESSIONS_PER_WEEK, CAR_SESSION_MAX_HOURS, session_kwh / car_rate_kw
-            )
-        )
 
     with_car = _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_utc, car_kwh=session_kwh, car_rate_kw=car_rate_kw)
     without_car = _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_utc, car_kwh=0.0, car_rate_kw=car_rate_kw)
 
+    # sessions_per_week / 7, not / 52: this is a fraction of a WEEK (how many of its 7 days
+    # actually carry a session), independent of car_charging_schedule()'s own 52-weeks-per-year
+    # sizing above. See car_charging_schedule()'s docstring for the harmless ~+0.27% this
+    # 52-vs-7 pairing produces, and why the two must be changed together if either is.
     fraction = sessions_per_week / float(MAX_SESSIONS_PER_WEEK)
     return _blend_results(with_car, without_car, fraction)
 
@@ -1158,6 +1212,14 @@ class AnnualPredictor:
             self.caveats.append("The forecast-versus-ERA5 gap includes systematic model bias as well as forecast error, so measured solar uncertainty is slightly overstated.")
         self.caveats.append("self_consumed_kwh is approximate: when the battery exports grid-charged energy it is understated.")
         self.caveats.append("export_credit_p_estimate is money ALREADY included inside cost_p (which prices every export minute at its real rate); it is informational only - adding it to cost_p double-counts export income.")
+
+        # A static property of the config, not of any one sampled day, so this is checked and
+        # logged exactly once here rather than inside run_day(), which runs once per sampled
+        # day (roughly two dozen times per year at the default samples_per_month).
+        car_overflow_warning = car_charging_overflow_warning(self.config["load"].get("car_charging_kwh", 0.0), self.config["load"].get("car_rate_kw", DEFAULT_CAR_RATE_KW))
+        if car_overflow_warning:
+            self.log("Warn: {}".format(car_overflow_warning))
+            self.caveats.append(car_overflow_warning)
 
         self.predbat = create_headless_predbat(self.work_dir, self.config["timezone"], self.log)
         self.load_source = await self._build_load_source()

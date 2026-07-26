@@ -14,7 +14,7 @@ import tempfile
 
 import yaml
 
-from annual import AnnualNullHA, apply_hardware, configure_offline_mode, create_headless_predbat, reset_sample_state, write_minimal_apps_yaml
+from annual import DEFAULT_CAR_RATE_KW, AnnualNullHA, apply_hardware, configure_offline_mode, create_headless_predbat, reset_sample_state, write_minimal_apps_yaml
 from const import MINUTE_WATT
 
 
@@ -156,6 +156,16 @@ def test_annual_bootstrap(my_predbat):
     my_predbat.rate_max = 6.0
     my_predbat.rate_average = 7.0
 
+    # Scenario 3's smart-car overrides (_run_scenarios() in annual.py), leaked here the way a
+    # previous sample's with-car leg would leave them.
+    my_predbat.car_charging_planned = [True]
+    my_predbat.car_charging_limit = [20.0]
+    my_predbat.car_charging_soc = [10.0]
+    my_predbat.car_charging_rate = [22.0]
+    my_predbat.car_charging_battery_size = [100.0]
+    my_predbat.car_charging_plan_smart = [True]
+    my_predbat.car_charging_from_battery = True
+
     reset_sample_state(my_predbat)
 
     checks = [
@@ -187,6 +197,13 @@ def test_annual_bootstrap(my_predbat):
         ("rate_min", 0),
         ("rate_max", 0),
         ("rate_average", 0),
+        ("car_charging_planned", [False]),
+        ("car_charging_limit", [0.0]),
+        ("car_charging_soc", [0.0]),
+        ("car_charging_rate", [DEFAULT_CAR_RATE_KW]),
+        ("car_charging_battery_size", [50.0]),
+        ("car_charging_plan_smart", [False]),
+        ("car_charging_from_battery", False),
     ]
     for name, expected in checks:
         actual = getattr(my_predbat, name)

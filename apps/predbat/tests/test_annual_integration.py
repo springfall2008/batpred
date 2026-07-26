@@ -16,7 +16,7 @@ from datetime import date, datetime
 
 import pytz
 
-from annual import DAY_MINUTES, PLAN_MINUTES, run_day, validate_config
+from annual import DAY_MINUTES, MAX_SESSIONS_PER_WEEK, PLAN_MINUTES, SCENARIO_FIELDS, SCENARIO_KEYS, _blend_results, _run_scenarios, car_charging_schedule, run_day, validate_config
 from annual_load import SyntheticLoadProfile
 from tests.test_infra import reset_inverter
 
@@ -242,6 +242,7 @@ def test_annual_integration(my_predbat):
     car_results = {}
 
     def _run_car_config():
+        """Run the car-charging config for one day and record its blended result."""
         car_results.update(run_one(my_predbat, car_config, weather, day))
 
     plan_calls = _count_calculate_plan_calls(my_predbat, _run_car_config)
@@ -256,5 +257,34 @@ def test_annual_integration(my_predbat):
     if car_results["no_pvbat"]["import_kwh"] <= results["no_pvbat"]["import_kwh"]:
         print("  ERROR: adding a car should raise the no-system import, got {} vs {}".format(car_results["no_pvbat"]["import_kwh"], results["no_pvbat"]["import_kwh"]))
         failed = True
+
+    print("Test: the blended result equals f * with-car leg + (1 - f) * standalone no-car leg")
+    # Proves two things at once: the blend arithmetic itself, and that the with-car leg
+    # does not contaminate the without-car leg it runs alongside (run_day() runs the
+    # with-car leg first, then the without-car leg, on the SAME predbat instance with no
+    # reset_inverter() between them - only reset_sample_state() separates them, exactly as
+    # reproduced below). If reset_sample_state() ever stopped clearing the scenario-3 car
+    # overrides (car_charging_planned, car_charging_limit, etc.), the without-car leg run
+    # here would silently inherit them and this comparison would drift outside tolerance.
+    car_annual_kwh = car_config["load"]["car_charging_kwh"]
+    car_rate_kw = car_config["load"]["car_rate_kw"]
+    sessions_per_week, session_kwh = car_charging_schedule(car_annual_kwh, car_rate_kw)
+    fraction = sessions_per_week / float(MAX_SESSIONS_PER_WEEK)
+
+    reset_inverter(my_predbat)
+    midnight = pytz.utc.localize(datetime(day.year, day.month, day.day))
+    car_load_source = SyntheticLoadProfile(annual_kwh=car_config["load"]["annual_kwh"], shape=car_config["load"]["shape"], year=car_config["year"])
+    with_car_leg = _run_scenarios(my_predbat, car_config, weather, StubTariff(), car_load_source, day, midnight, car_kwh=session_kwh, car_rate_kw=car_rate_kw)
+    standalone_no_car_leg = _run_scenarios(my_predbat, car_config, weather, StubTariff(), car_load_source, day, midnight, car_kwh=0.0, car_rate_kw=car_rate_kw)
+
+    expected_blend = _blend_results(with_car_leg, standalone_no_car_leg, fraction)
+    run_day_blend = run_one(my_predbat, car_config, weather, day)
+    for key in SCENARIO_KEYS:
+        for field in SCENARIO_FIELDS:
+            expected_value = expected_blend[key][field]
+            actual_value = run_day_blend[key][field]
+            if abs(expected_value - actual_value) > 1e-6:
+                print("  ERROR: blended {}.{} = {}, expected f * with_car_leg + (1 - f) * standalone_no_car_leg = {}".format(key, field, actual_value, expected_value))
+                failed = True
 
     return failed
