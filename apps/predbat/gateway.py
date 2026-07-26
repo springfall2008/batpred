@@ -19,6 +19,7 @@ from utils import calc_percent_limit
 import pytz as _pytz
 
 from component_base import ComponentBase
+from lattice_topology import LatticeTopologyStore, TopologyValidationError
 
 try:
     import gateway_status_pb2 as pb
@@ -171,7 +172,18 @@ class GatewayMQTT(ComponentBase):
     Instance methods handle MQTT lifecycle and ComponentBase integration.
     """
 
-    def initialize(self, gateway_device_id=None, mqtt_host=None, mqtt_port=8883, mqtt_token=None, gateway_inverter_serial=None, gateway_evc_automatic=False, gateway_evc_control=False, **kwargs):
+    def initialize(
+        self,
+        gateway_device_id=None,
+        mqtt_host=None,
+        mqtt_port=8883,
+        mqtt_token=None,
+        gateway_inverter_serial=None,
+        gateway_evc_automatic=False,
+        gateway_evc_control=False,
+        lattice_projection_enable=False,
+        **kwargs,
+    ):
         """Initialize gateway configuration and build MQTT topic strings.
 
         Args:
@@ -188,11 +200,14 @@ class GatewayMQTT(ComponentBase):
                 the current time falls inside a planned car-charging window and send RemoteStartTransaction
                 plus SetChargingProfile on window entry, or RemoteStopTransaction on window exit. When
                 enabled, car_charging_now is omitted from auto-config to prevent a feedback loop.
+            lattice_projection_enable: Enable read-only retained topology ingestion and shadow diagnostics.
+                Off by default. This does not publish Lattice control messages or alter legacy commands.
             **kwargs: Additional keyword arguments (ignored).
         """
         self.gateway_device_id = gateway_device_id
         self.gateway_evc_automatic = bool(gateway_evc_automatic)
         self.gateway_evc_control = bool(gateway_evc_control)
+        self.lattice_projection_enable = bool(lattice_projection_enable)
         self.mqtt_host = mqtt_host
         self.mqtt_port = mqtt_port
         self.mqtt_token = mqtt_token
@@ -223,6 +238,7 @@ class GatewayMQTT(ComponentBase):
         self.topic_schedule = f"{self._topic_base}/schedule"
         self.topic_command = f"{self._topic_base}/command"
         self.topic_ev_command = f"{self._topic_base}/ev/command"
+        self.topic_topology = f"{self._topic_base}/topology"
 
         # Runtime state
         self._mqtt_client = None
@@ -240,6 +256,7 @@ class GatewayMQTT(ComponentBase):
         self._plan_version = 0
         self._refresh_in_progress = False
         self._error_count = 0
+        self._lattice_topology = LatticeTopologyStore()
 
         # Entity naming prefix
         self.prefix = "predbat"
@@ -603,10 +620,15 @@ class GatewayMQTT(ComponentBase):
                     backoff = 5  # Reset backoff on successful connection
                     self.log(f"Info: GatewayMQTT: Connected to {self.mqtt_host}:{self.mqtt_port}")
 
-                    # Subscribe to status and LWT topics
+                    # Subscribe to status and LWT topics. The retained Lattice topology is
+                    # read only and remains completely absent while the shadow flag is off.
                     await client.subscribe(self.topic_status, qos=1)
                     await client.subscribe(self.topic_online, qos=1)
-                    self.log(f"Info: GatewayMQTT: Subscribed to {self.topic_status} and {self.topic_online}")
+                    subscribed_topics = [self.topic_status, self.topic_online]
+                    if self.lattice_projection_enable:
+                        await client.subscribe(self.topic_topology, qos=1)
+                        subscribed_topics.append(self.topic_topology)
+                    self.log("Info: GatewayMQTT: Subscribed to {}".format(", ".join(subscribed_topics)))
 
                     async for message in client.messages:
                         if self.api_stop:
@@ -649,6 +671,8 @@ class GatewayMQTT(ComponentBase):
         try:
             if topic == self.topic_status:
                 self._process_telemetry(message.payload)
+            elif topic == self.topic_topology and self.lattice_projection_enable:
+                self._process_lattice_topology(message.payload)
             elif topic == self.topic_online:
                 payload = message.payload.decode("utf-8", errors="replace").strip()
                 was_online = self._gateway_online
@@ -665,6 +689,35 @@ class GatewayMQTT(ComponentBase):
             self._error_count += 1
             self.log(f"Warn: GatewayMQTT: Error handling message on {topic}: {e}")
             self.log(f"Warn: {traceback.format_exc()}")
+
+    def _process_lattice_topology(self, payload):
+        """Replace one provider topology and report read-only shadow diagnostics."""
+        try:
+            changed = self._lattice_topology.ingest(payload)
+        except TopologyValidationError as exc:
+            self._error_count += 1
+            self.log("Warn: GatewayMQTT: Ignoring invalid Lattice topology: {}".format(exc))
+            return False
+        if not changed:
+            return False
+        snapshot = self._lattice_topology.snapshot
+        self.log(
+            "Info: GatewayMQTT: Lattice shadow topology v{} doc {}: {} node(s), {} source binding(s)".format(
+                snapshot.site["topologyVersion"],
+                snapshot.site["docVersion"],
+                len(snapshot.site.get("nodes", [])),
+                len(snapshot.provenance),
+            )
+        )
+        for warning in snapshot.warnings:
+            self.log("Warn: GatewayMQTT: Lattice shadow: {}".format(warning))
+        return True
+
+    def lattice_source_ref(self, node_id, capability, access_path=None):
+        """Return provider-local topology coordinates for a future dispatcher."""
+        if not self.lattice_projection_enable:
+            return None
+        return self._lattice_topology.source_ref(node_id, capability, access_path)
 
     def _debug_dump(self, label, message=None, raw=None, message_type=None):
         """Log a protobuf message as readable text when debug logging is enabled.

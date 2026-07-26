@@ -511,6 +511,7 @@ if HAS_GATEWAY:
             "gateway_inverter_serial": {"required": False, "config": "gateway_inverter_serial", "default": None},
             "gateway_evc_automatic": {"required": False, "config": "gateway_evc_automatic", "default": False},
             "gateway_evc_control": {"required": False, "config": "gateway_evc_control", "default": False},
+            "lattice_projection_enable": {"required": False, "config": "lattice_projection_enable", "default": False},
         },
         "phase": 1,
         "can_restart": True,
