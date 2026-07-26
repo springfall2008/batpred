@@ -170,6 +170,7 @@ from tests.test_annual_scenarios import test_annual_scenarios
 from tests.test_annual_results import test_annual_results
 from tests.test_annual_integration import test_annual_integration
 from tests.test_annual_cli import test_annual_cli, test_annual_cli_machine, test_annual_cli_machine_end_to_end
+from tests.test_annual_job import test_annual_job
 from tests.test_tariff_catalogue import test_tariff_catalogue
 
 # Mock the components and plugin system
@@ -421,6 +422,7 @@ def main():
         ("annual_cli", test_annual_cli, "Annual prediction CLI output tests", False),
         ("annual_cli_machine", test_annual_cli_machine, "Annual CLI machine mode tests", False),
         ("annual_cli_machine_end_to_end", test_annual_cli_machine_end_to_end, "Annual CLI machine mode end-to-end tests", False),
+        ("annual_job", test_annual_job, "Annual subprocess job control tests", False),
         ("tariff_catalogue", test_tariff_catalogue, "Tariff catalogue tests", False),
     ]
 
