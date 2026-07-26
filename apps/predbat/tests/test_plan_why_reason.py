@@ -67,6 +67,10 @@ def _get_row(raw_plan, slot_minute):
     return None
 
 
+def _codes(row):
+    return [entry["code"] for entry in row.get("reason_details", [])]
+
+
 def run_test_plan_why_reason(my_predbat):
     """
     Test the per-slot "why" reason text in the JSON plan output (json_row["reason"]),
@@ -103,8 +107,8 @@ def run_test_plan_why_reason(my_predbat):
     if row is None:
         print("ERROR: could not find row for minutes_now")
         failed = True
-    elif "reason" in row:
-        print("ERROR: reason key should be absent when plan_why_explanations is off")
+    elif "reason" in row or "reason_details" in row:
+        print("ERROR: reason/reason_details keys should be absent when plan_why_explanations is off")
         failed = True
 
     my_predbat.plan_why_explanations = True
@@ -124,6 +128,12 @@ def run_test_plan_why_reason(my_predbat):
     elif "Charging up to 80" not in row["reason"]:
         print("ERROR: Chrg reason unexpected: {}".format(row.get("reason")))
         failed = True
+    if row and _codes(row) != ["charge_low_rate"]:
+        print("ERROR: Chrg reason_details codes unexpected: {}".format(_codes(row)))
+        failed = True
+    elif row and row["reason_details"][0]["params"] != {"target_percent": 80, "rate": row["import_rate"]}:
+        print("ERROR: Chrg reason_details params unexpected: {}".format(row["reason_details"][0]["params"]))
+        failed = True
 
     # --- Test 3: HoldChrg ---
     print("Test HoldChrg reason")
@@ -135,6 +145,12 @@ def run_test_plan_why_reason(my_predbat):
         failed = True
     elif "Holding" not in row["reason"]:
         print("ERROR: HoldChrg reason unexpected: {}".format(row.get("reason")))
+        failed = True
+    if row and _codes(row) != ["hold_charge_at_target"]:
+        print("ERROR: HoldChrg reason_details codes unexpected: {}".format(_codes(row)))
+        failed = True
+    elif row and row["reason_details"][0]["params"] != {"target_percent": 80}:
+        print("ERROR: HoldChrg reason_details params unexpected: {}".format(row["reason_details"][0]["params"]))
         failed = True
 
     # --- Test 4: FrzChrg ---
@@ -149,6 +165,12 @@ def run_test_plan_why_reason(my_predbat):
     elif "Freeze charging" not in row["reason"]:
         print("ERROR: FrzChrg reason unexpected: {}".format(row.get("reason")))
         failed = True
+    if row and _codes(row) != ["freeze_charge_reserve"]:
+        print("ERROR: FrzChrg reason_details codes unexpected: {}".format(_codes(row)))
+        failed = True
+    elif row and set(row["reason_details"][0]["params"]) != {"rate", "threshold"}:
+        print("ERROR: FrzChrg reason_details params unexpected: {}".format(row["reason_details"][0]["params"]))
+        failed = True
 
     # --- Test 5: manual charge override ---
     print("Test manual charge override reason")
@@ -162,6 +184,12 @@ def run_test_plan_why_reason(my_predbat):
         failed = True
     elif "You manually set this slot to charge" not in row["reason"]:
         print("ERROR: manual charge reason unexpected: {}".format(row.get("reason")))
+        failed = True
+    if row and _codes(row) != ["charge_low_rate", "manual_override"]:
+        print("ERROR: manual charge reason_details codes unexpected: {}".format(_codes(row)))
+        failed = True
+    elif row and row["reason_details"][1]["params"] != {"action": "charge"}:
+        print("ERROR: manual charge reason_details params unexpected: {}".format(row["reason_details"][1]["params"]))
         failed = True
     my_predbat.manual_charge_times = []
 
@@ -180,6 +208,12 @@ def run_test_plan_why_reason(my_predbat):
     elif "Exporting down to" not in row["reason"]:
         print("ERROR: Exp reason unexpected: {}".format(row.get("reason")))
         failed = True
+    if row and _codes(row) != ["export_high_rate"]:
+        print("ERROR: Exp reason_details codes unexpected: {}".format(_codes(row)))
+        failed = True
+    elif row and row["reason_details"][0]["params"] != {"target_percent": 50.0, "rate": row["export_rate"]}:
+        print("ERROR: Exp reason_details params unexpected: {}".format(row["reason_details"][0]["params"]))
+        failed = True
 
     # --- Test 7: HoldExp ---
     print("Test HoldExp reason")
@@ -193,6 +227,12 @@ def run_test_plan_why_reason(my_predbat):
     elif "not triggered" not in row["reason"]:
         print("ERROR: HoldExp reason unexpected: {}".format(row.get("reason")))
         failed = True
+    if row and _codes(row) != ["hold_export_unreachable"]:
+        print("ERROR: HoldExp reason_details codes unexpected: {}".format(_codes(row)))
+        failed = True
+    elif row and row["reason_details"][0]["params"] != {"target_percent": 95.0}:
+        print("ERROR: HoldExp reason_details params unexpected: {}".format(row["reason_details"][0]["params"]))
+        failed = True
 
     # --- Test 8: FrzExp ---
     print("Test FrzExp reason")
@@ -204,6 +244,12 @@ def run_test_plan_why_reason(my_predbat):
         failed = True
     elif "Freezing export" not in row["reason"]:
         print("ERROR: FrzExp reason unexpected: {}".format(row.get("reason")))
+        failed = True
+    if row and _codes(row) != ["freeze_export_below_threshold"]:
+        print("ERROR: FrzExp reason_details codes unexpected: {}".format(_codes(row)))
+        failed = True
+    elif row and set(row["reason_details"][0]["params"]) != {"rate", "threshold"}:
+        print("ERROR: FrzExp reason_details params unexpected: {}".format(row["reason_details"][0]["params"]))
         failed = True
 
     # --- Test 9: manual export override ---
@@ -218,6 +264,12 @@ def run_test_plan_why_reason(my_predbat):
         failed = True
     elif "You manually set this slot to export" not in row["reason"]:
         print("ERROR: manual export reason unexpected: {}".format(row.get("reason")))
+        failed = True
+    if row and _codes(row) != ["export_high_rate", "manual_override"]:
+        print("ERROR: manual export reason_details codes unexpected: {}".format(_codes(row)))
+        failed = True
+    elif row and row["reason_details"][1]["params"] != {"action": "export"}:
+        print("ERROR: manual export reason_details params unexpected: {}".format(row["reason_details"][1]["params"]))
         failed = True
     my_predbat.manual_export_times = []
 
@@ -234,6 +286,32 @@ def run_test_plan_why_reason(my_predbat):
     elif "steady" not in row["reason"]:
         print("ERROR: Demand reason unexpected: {}".format(row.get("reason")))
         failed = True
+    if row and _codes(row) != ["demand"]:
+        print("ERROR: Demand reason_details codes unexpected: {}".format(_codes(row)))
+        failed = True
+    elif row and row["reason_details"][0]["params"] != {"direction": "steady", "manual_override": False}:
+        print("ERROR: Demand reason_details params unexpected: {}".format(row["reason_details"][0]["params"]))
+        failed = True
+
+    # --- Test 10b: manual demand override (parity gap found while restructuring - previously
+    # the only override type with no note in the reason text at all) ---
+    print("Test manual demand override reason")
+    my_predbat.manual_demand_times = [minutes_now]
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or "reason" not in row:
+        print("ERROR: manual demand scenario missing reason")
+        failed = True
+    elif "You manually set this slot to demand mode" not in row["reason"]:
+        print("ERROR: manual demand reason unexpected: {}".format(row.get("reason")))
+        failed = True
+    if row and _codes(row) != ["demand"]:
+        print("ERROR: manual demand reason_details codes unexpected: {}".format(_codes(row)))
+        failed = True
+    elif row and row["reason_details"][0]["params"] != {"direction": "steady", "manual_override": True}:
+        print("ERROR: manual demand reason_details params unexpected: {}".format(row["reason_details"][0]["params"]))
+        failed = True
+    my_predbat.manual_demand_times = []
 
     # Clean up
     my_predbat.plan_why_explanations = False
