@@ -53,12 +53,29 @@ def test_annual_scenarios(my_predbat):
         print("  ERROR: no car energy should produce no window")
         failed = True
 
-    print("Test: add_car_to_load inserts exactly the car's energy and stays cumulative")
+    print("Test: timer_charge_window rounds the duration up to a 5 minute grid, never under-delivering")
+    # 81 minutes of raw need at 60kW/hr rate: 81/60*60 = 81.0 kWh, not a multiple of 5 minutes.
+    # step_data_history() only samples load_forecast every 5 minutes, so an unaligned window
+    # would be billed at a quantised (and here shorter) length than the car actually needs.
+    quantised_window = timer_charge_window(rates, car_kwh=81.0, car_rate_kw=60.0)
+    quantised_length = quantised_window[0]["end"] - quantised_window[0]["start"]
+    if quantised_length != 85:
+        print("  ERROR: an 81 minute need should round up to 85 minutes (next multiple of 5), got {}".format(quantised_length))
+        failed = True
+    if quantised_window[0]["start"] % 5 != 0:
+        print("  ERROR: the window start should be aligned to a 5 minute boundary, got {}".format(quantised_window[0]["start"]))
+        failed = True
+
+    print("Test: add_car_to_load inserts the car's full energy on EACH day, not split across the plan, and stays cumulative")
     base = {minute: 0.01 * minute for minute in range(PLAN_MINUTES + 1)}
     with_car = add_car_to_load(base, window, car_kwh=14.8)
-    added = with_car[PLAN_MINUTES] - base[PLAN_MINUTES]
-    if abs(added - 14.8) > 1e-6:
-        print("  ERROR: expected 14.8 kWh added over the window, got {}".format(added))
+    added_total = with_car[PLAN_MINUTES] - base[PLAN_MINUTES]
+    if abs(added_total - 14.8 * 2) > 1e-6:
+        print("  ERROR: expected 14.8 kWh added on each of the two days ({} total), got {}".format(14.8 * 2, added_total))
+        failed = True
+    added_day_one = with_car[DAY_MINUTES] - base[DAY_MINUTES]
+    if abs(added_day_one - 14.8) > 1e-6:
+        print("  ERROR: the billed first day (minutes 0..{}) should receive the full 14.8 kWh, not a share of it, got {}".format(DAY_MINUTES - 1, added_day_one))
         failed = True
     for minute in range(1, PLAN_MINUTES + 1):
         if with_car[minute] < with_car[minute - 1] - 1e-12:

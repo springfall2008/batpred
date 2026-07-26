@@ -211,6 +211,10 @@ def test_annual_bootstrap(my_predbat):
     my_predbat.carbon_enable = True
     my_predbat.plan_debug = True
     my_predbat.debug_enable = True
+    my_predbat.calculate_best_charge = False
+    my_predbat.calculate_best_export = False
+    my_predbat.set_charge_window = False
+    my_predbat.set_export_window = False
 
     configure_offline_mode(my_predbat)
 
@@ -223,6 +227,13 @@ def test_annual_bootstrap(my_predbat):
         ("carbon_enable", False),
         ("plan_debug", False),
         ("debug_enable", False),
+        # Without these, calculate_plan()'s charge/export-window branches never fire (they are
+        # gated on calculate_best_charge/set_charge_window and the export equivalent), and the
+        # "with Predbat" scenario would silently plan no charging or exporting at all.
+        ("calculate_best_charge", True),
+        ("calculate_best_export", True),
+        ("set_charge_window", True),
+        ("set_export_window", True),
     ]
     for name, expected in offline_checks:
         actual = getattr(my_predbat, name)
@@ -240,6 +251,21 @@ def test_annual_bootstrap(my_predbat):
     if my_predbat.debug_enable is not True:
         print("  ERROR: reset_sample_state should not touch debug_enable any more")
         failed = True
+
+    print("Test: create_headless_predbat leaves the planner switched on, not the Monitor-mode default")
+    with tempfile.TemporaryDirectory() as work_dir:
+        headless = create_headless_predbat(work_dir, "Europe/London", print)
+    planner_checks = [
+        ("calculate_best_charge", True),
+        ("calculate_best_export", True),
+        ("set_charge_window", True),
+        ("set_export_window", True),
+    ]
+    for name, expected in planner_checks:
+        actual = getattr(headless, name)
+        if actual != expected:
+            print("  ERROR: create_headless_predbat left {} as {}, expected {} (the headless apps.yaml has no 'mode' key, so fetch_config_options() defaults to Monitor mode, which sets all four False)".format(name, actual, expected))
+            failed = True
 
     print("Test: create_headless_predbat restores PREDBAT_APPS_FILE afterwards, even if it was previously unset")
     saved_env = os.environ.get("PREDBAT_APPS_FILE")

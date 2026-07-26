@@ -17,7 +17,7 @@ import os
 from datetime import date, timedelta
 
 from annual_load import build_load_forecast
-from const import MINUTE_WATT
+from const import MINUTE_WATT, PREDICT_STEP
 from prediction import Prediction
 
 VALID_SHAPES = ["night", "day", "flat"]
@@ -466,6 +466,18 @@ def configure_offline_mode(predbat):
     ``fetch_config_options()`` has populated its own defaults, and are not part of
     ``reset_sample_state()`` because re-applying them every sample would silently
     override whatever ``fetch_config_options()`` or a scenario override set.
+
+    ``fetch_config_options()`` derives ``calculate_best_charge``, ``calculate_best_export``,
+    ``set_charge_window`` and ``set_export_window`` from ``predbat_mode`` (``fetch.py``), and
+    the minimal headless ``apps.yaml`` has no ``mode`` key, so ``get_arg("mode")`` returns the
+    "Monitor" default — which sets all four False. With all four False, ``calculate_plan()``'s
+    charge- and export-window branches (``plan.py``, gated on
+    ``self.low_rates and self.calculate_best_charge and self.set_charge_window`` and the export
+    equivalent) never fire, ``charge_window_best``/``export_window_best`` fall back to the
+    (empty) live ``charge_window``/``export_window``, and the "with Predbat" scenario would plan
+    no charging or exporting at all — a silent demand-only system indistinguishable from
+    scenario 1. These four are therefore forced on here, matching what
+    ``PREDBAT_MODE_CONTROL_CHARGEDISCHARGE`` sets in a live install with full control enabled.
     """
     predbat.octopus_intelligent_charging = False
     predbat.load_forecast_only = True
@@ -475,6 +487,10 @@ def configure_offline_mode(predbat):
     predbat.carbon_enable = False
     predbat.plan_debug = False
     predbat.debug_enable = False
+    predbat.calculate_best_charge = True
+    predbat.calculate_best_export = True
+    predbat.set_charge_window = True
+    predbat.set_export_window = True
 
 
 def _percentile_indices(count, samples):
@@ -603,6 +619,13 @@ def timer_charge_window(rate_import, car_kwh, car_rate_kw):
     if minutes_needed <= 0:
         return []
 
+    # fetch.py's step_data_history() samples load_forecast once every PREDICT_STEP (5) minutes,
+    # so a window whose length or start is not on that grid is billed at a quantised length
+    # rather than its true one (e.g. an 81 minute need would be billed as 85 minutes, +5%).
+    # Round the duration UP so the car is never under-delivered, and align the start DOWN to
+    # the grid.
+    minutes_needed = -(-minutes_needed // PREDICT_STEP) * PREDICT_STEP
+
     windows = []
     for day_offset in range(2):
         base = day_offset * DAY_MINUTES
@@ -623,7 +646,8 @@ def timer_charge_window(rate_import, car_kwh, car_rate_kw):
                     best_length = minute - start
                     best_start = start
                 start = None
-        windows.append({"start": base + best_start, "end": base + best_start + minutes_needed})
+        aligned_start = base + (best_start // PREDICT_STEP) * PREDICT_STEP
+        windows.append({"start": aligned_start, "end": aligned_start + minutes_needed})
     return windows
 
 
@@ -631,12 +655,18 @@ def add_car_to_load(load_forecast, windows, car_kwh):
     """Return a copy of the cumulative load series with the car's energy inserted.
 
     Used by the two baseline scenarios, where the car is simply extra load in a
-    fixed timer window rather than something Predbat schedules.
+    fixed timer window rather than something Predbat schedules. ``car_kwh`` is
+    already the day's energy (``run_day`` divides the annual figure by 365) and
+    ``windows`` holds one window per day of the plan, each independently sized by
+    ``timer_charge_window`` to hold the full ``car_kwh`` — so every window gets
+    the full daily amount, not a share of it. Dividing by ``len(windows)`` here
+    would silently bill only half the car's energy on the one day that matters
+    (day 1 is the only one ``_billed_result`` costs).
     """
     if not windows or car_kwh <= 0:
         return dict(load_forecast)
 
-    per_window = car_kwh / float(len(windows))
+    per_window = car_kwh
     additions = {}
     for window in windows:
         length = max(1, window["end"] - window["start"])
@@ -711,13 +741,24 @@ def _billed_result(predbat, end_record, pv_step):
 
     The battery-value correction (metric_end minus metric_start) values whatever
     charge is left at the end, so a scenario cannot look cheap simply by finishing
-    on an empty battery. This is the same correction ``Compare.run_scenario()`` applies.
+    on an empty battery. This is exactly the correction ``Compare.run_scenario()``
+    applies (``compare.py``), including passing zero for ``battery_cycle``,
+    ``metric_keep``, ``final_carbon_g``, ``import_kwh_battery``, ``import_kwh_house``
+    and ``export_kwh`` in the end-of-period ``compute_metric()`` call, matching what
+    the start-of-period call already zeroes. Passing the real values there instead
+    (an earlier version of this function did) would leak the optimiser's internal
+    planning heuristics into a reported billed cost: ``metric_keep`` in particular
+    is added into ``compute_metric()``'s "metric" unconditionally, not gated by a
+    zero-default weight the way the carbon/self-sufficiency/cycle terms are, so it
+    would inflate ``cost_p`` for any scenario whose plan happens to accrue it —
+    typically the battery scenarios, never the no-battery baseline — for a reason
+    that has nothing to do with money actually billed.
     """
-    cost, import_kwh_battery, import_kwh_house, export_kwh, _, final_soc, _, battery_cycle, metric_keep, final_iboost, final_carbon_g = predbat.run_prediction(
+    cost, import_kwh_battery, import_kwh_house, export_kwh, _, final_soc, _, battery_cycle, _, final_iboost, _ = predbat.run_prediction(
         predbat.charge_limit_best, predbat.charge_window_best, predbat.export_window_best, predbat.export_limits_best, False, end_record=end_record
     )
     metric_start, _ = predbat.compute_metric(end_record, predbat.soc_kw, predbat.soc_kw, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-    metric_end, _ = predbat.compute_metric(end_record, final_soc, final_soc, cost, cost, final_iboost, final_iboost, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
+    metric_end, _ = predbat.compute_metric(end_record, final_soc, final_soc, cost, cost, final_iboost, final_iboost, 0, 0, 0, 0, 0, 0)
 
     pv_generated = sum(value for minute, value in pv_step.items() if minute < end_record)
     return {
@@ -745,6 +786,14 @@ def prepare_sample(predbat, config, weather, tariff, load_source, day, midnight_
     predbat.load_minutes_age = 0
     predbat.load_forecast = build_load_forecast(load_source, day, 2)
 
+    # set_rate_thresholds() (called from _apply_rates() below) reads num_cars to decide
+    # whether to widen rate_import_cost_threshold for car charging (fetch.py). num_cars is
+    # not part of reset_sample_state()'s leaked-state list — it is a value this day's config
+    # determines, not a scenario override to merely clear — so it is set here, from config,
+    # before _apply_rates() runs rather than left at whatever the previous sample's scenario 3
+    # happened to leave it as (or the headless bootstrap's own default of 1).
+    predbat.num_cars = 1 if config["load"].get("car_charging_kwh", 0.0) > 0 else 0
+
     rate_import, rate_export = tariff.rates_for(midnight_utc, PLAN_MINUTES)
     _apply_rates(predbat, rate_import, rate_export)
 
@@ -752,7 +801,7 @@ def prepare_sample(predbat, config, weather, tariff, load_source, day, midnight_
     predbat.soc_kw = START_SOC_KWH
 
 
-def _plan_smart_car(predbat):
+def _plan_smart_car(predbat, day, car_kwh):
     """Configure a single smart-charged car and return its planned charging slots.
 
     ``calculate_plan()`` never calls ``plan_car_charging()`` itself — that only
@@ -765,11 +814,25 @@ def _plan_smart_car(predbat):
     misleading error than merely losing Predbat's optimisation credit. The
     ready-by time and max price mirror ``config.py``'s defaults for a car with no
     explicit user override.
+
+    Unlike ``timer_charge_window()`` (which always extends past the cheap band
+    until the car's full energy fits), ``plan_car_charging()`` stops at the
+    ready time and can therefore return a plan short of ``car_kwh`` if the
+    cheap-rate windows before then cannot hold it all. A shortfall here would
+    make scenario 3 look artificially cheap for delivering less car energy than
+    the other two scenarios are billed for — inflating Predbat's apparent
+    saving, the mirror image of ``add_car_to_load()``'s bug where the baseline
+    scenarios were billed for too little and Predbat's saving looked smaller
+    than it was — so a shortfall is logged rather than left to pass unnoticed.
     """
     predbat.car_charging_now = [False]
     predbat.car_charging_plan_time = [DEFAULT_CAR_READY_TIME]
     predbat.car_charging_plan_max_price = [0]
-    return predbat.plan_car_charging(0, predbat.low_rates)
+    slots = predbat.plan_car_charging(0, predbat.low_rates)
+    planned_kwh = sum(slot.get("kwh", 0.0) for slot in slots)
+    if planned_kwh < car_kwh - 1e-6:
+        predbat.log("Warn: Annual: {} smart car plan only fitted {:.2f} of {:.2f} kWh into the cheap-rate windows before the {} ready time".format(day, planned_kwh, car_kwh, DEFAULT_CAR_READY_TIME))
+    return slots
 
 
 def run_day(predbat, config, weather, tariff, load_source, day, midnight_utc):
@@ -823,10 +886,15 @@ def run_day(predbat, config, weather, tariff, load_source, day, midnight_utc):
         predbat.car_charging_limit = [car_kwh]
         predbat.car_charging_soc = [0.0]
         predbat.car_charging_rate = [car_rate_kw]
-        predbat.car_charging_from_battery = False
+        # In scenarios 1 and 2 the car's energy is baked into ordinary house load
+        # (add_car_to_load()), which the battery may serve freely. Leaving this False would
+        # pin discharge_rate_now to battery_rate_min for every car-charging minute
+        # (prediction.py), forcing scenario 3's battery idle exactly when the other two
+        # scenarios let it help — the same physics must apply to both sides of the comparison.
+        predbat.car_charging_from_battery = True
         # low_rates was computed from this day's rates in prepare_sample() and untouched
         # since, so it is safe to use for planning the car here.
-        predbat.car_charging_slots = [_plan_smart_car(predbat)]
+        predbat.car_charging_slots = [_plan_smart_car(predbat, day, car_kwh)]
     else:
         predbat.num_cars = 0
         predbat.car_charging_slots = []
@@ -837,9 +905,11 @@ def run_day(predbat, config, weather, tariff, load_source, day, midnight_utc):
     predbat.pv_forecast_minute10 = p10_pv
     predbat.calculate_plan(recompute=True, debug_mode=False, publish=False)
 
-    # Swap in the actuals before costing
-    forecast_load_step, _, _ = build_step_data(predbat, forecast_pv, p10_pv)
-    predbat.prediction = Prediction(predbat, actual_step, actual_step, forecast_load_step, forecast_load_step, soc_kw=START_SOC_KWH)
+    # Swap in the actuals before costing. There is no forecast/actual split for load (only PV
+    # has one) — predbat_load_step is just the household load re-sampled onto the PREDICT_STEP
+    # grid, identical regardless of which PV series build_step_data() was called with.
+    predbat_load_step, _, _ = build_step_data(predbat, forecast_pv, p10_pv)
+    predbat.prediction = Prediction(predbat, actual_step, actual_step, predbat_load_step, predbat_load_step, soc_kw=START_SOC_KWH)
     results["with_predbat"] = _billed_result(predbat, DAY_MINUTES, actual_step)
 
     return results
