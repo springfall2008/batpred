@@ -251,3 +251,17 @@ class AnnualWeather:
 
         ratios, fallback_months = self._derive_p10_ratios(actual_periods, forecast_periods, forecast_available)
         return WeatherYear(actual_periods, forecast_periods, ratios, forecast_available, fallback_months)
+
+
+POSTCODE_URL = "https://api.postcodes.io/postcodes/{}"
+
+
+async def resolve_postcode(postcode, fetch_json, log):
+    """Resolve a UK postcode to (latitude, longitude), or None when it cannot be resolved."""
+    data = await fetch_json(POSTCODE_URL.format(postcode))
+    result = (data or {}).get("result", {}) if isinstance(data, dict) else {}
+    if "latitude" in result and "longitude" in result:
+        log("Annual: postcode {} resolved to latitude {} longitude {}".format(postcode, result["latitude"], result["longitude"]))
+        return result["latitude"], result["longitude"]
+    log("Warn: Annual: postcode {} could not be resolved".format(postcode))
+    return None

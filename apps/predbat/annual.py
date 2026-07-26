@@ -14,9 +14,13 @@ and tariff modules own all network access.
 
 import calendar
 import os
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
-from annual_load import build_load_forecast
+import pytz
+
+from annual_load import build_load_forecast, OctopusConsumptionLoadProfile, SyntheticLoadProfile
+from annual_tariff import AnnualTariff
+from annual_weather import AnnualWeather, resolve_postcode
 from const import MINUTE_WATT, PREDICT_STEP
 from prediction import Prediction
 
@@ -774,6 +778,16 @@ def prepare_sample(predbat, config, weather, tariff, load_source, day, midnight_
     """Inject every per-day input into the PredBat instance for one sampled day."""
     reset_sample_state(predbat)
 
+    # calculate_plan() spins up a multiprocessing Pool sized from args["threads"] (plan.py)
+    # unless it is exactly 0. The annual tool plans hundreds of individual days per run, each a
+    # small, fast calculation, so per-day pool creation is both wasted overhead and, on a
+    # spawn-based multiprocessing start method, unsafe: pool workers read the module-level
+    # PRED_GLOBAL dict in prediction.py, which is only populated in the parent process. This
+    # matches create_headless_predbat()'s own choice for a fully offline run; it is forced here
+    # too so run_day() behaves the same way against a caller-supplied PredBat instance (such as
+    # the standard unit test fixture) that has not gone through that bootstrap.
+    predbat.args["threads"] = 0
+
     predbat.midnight_utc = midnight_utc
     predbat.now_utc = midnight_utc
     predbat.minutes_now = 0
@@ -897,7 +911,12 @@ def run_day(predbat, config, weather, tariff, load_source, day, midnight_utc):
         predbat.car_charging_slots = [_plan_smart_car(predbat, day, car_kwh)]
     else:
         predbat.num_cars = 0
-        predbat.car_charging_slots = []
+        # A single empty slot list, not an empty outer list: fetch_config_options() always
+        # sizes car_charging_slots for at least the configured car count (fetch.py), and
+        # other code (including the standard test fixture's reset_inverter()) indexes
+        # car_charging_slots[0] unconditionally. num_cars=0 already keeps every car-planning
+        # loop from iterating it, so this is a shape placeholder rather than a live car.
+        predbat.car_charging_slots = [[]]
 
     apply_hardware(predbat, config["battery"], config["solar"])
     predbat.soc_kw = START_SOC_KWH
@@ -913,3 +932,191 @@ def run_day(predbat, config, weather, tariff, load_source, day, midnight_utc):
     results["with_predbat"] = _billed_result(predbat, DAY_MINUTES, actual_step)
 
     return results
+
+
+SCENARIO_KEYS = ["no_pvbat", "without_predbat", "with_predbat"]
+
+SCENARIO_FIELDS = ["cost_p", "import_kwh", "export_kwh", "pv_generated_kwh", "battery_throughput_kwh"]
+
+
+def average_rate(rates, minutes):
+    """Return the mean rate across the first ``minutes`` of a rate dict."""
+    values = [rates[minute] for minute in range(minutes) if minute in rates]
+    return (sum(values) / len(values)) if values else 0.0
+
+
+class AnnualPredictor:
+    """Projects a year of electricity costs under three scenarios using the Predbat engine."""
+
+    def __init__(self, config, log=None, storage=None, work_dir="./annual_work"):
+        """Validate the config and prepare the run."""
+        self.log = log or print
+        self.config = validate_config(config)
+        self.storage = storage
+        self.work_dir = work_dir
+        self.predbat = None
+        self.weather = None
+        self.tariff = None
+        self.load_source = None
+        self.caveats = []
+
+    async def _resolve_location(self, weather_fetch):
+        """Return (latitude, longitude) from the config, resolving a postcode if needed."""
+        location = self.config["location"]
+        if "latitude" in location and "longitude" in location:
+            return location["latitude"], location["longitude"]
+        resolved = await resolve_postcode(location["postcode"], weather_fetch, self.log)
+        if not resolved:
+            raise AnnualConfigError("annual.location.postcode '{}' could not be resolved; supply latitude and longitude instead".format(location["postcode"]))
+        return resolved
+
+    async def _build_load_source(self):
+        """Build the load profile source, falling back to synthetic if Octopus data fails."""
+        load_config = self.config["load"]
+        year = self.config["year"]
+
+        if "octopus" not in load_config:
+            return SyntheticLoadProfile(annual_kwh=load_config["annual_kwh"], shape=load_config["shape"], year=year)
+
+        # A synthetic profile at the UK average backs the real data so an isolated
+        # missing day does not silently become zero consumption
+        fallback = SyntheticLoadProfile(annual_kwh=2700.0, shape="flat", year=year)
+        source = OctopusConsumptionLoadProfile(
+            api_key=load_config["octopus"]["api_key"],
+            account_id=load_config["octopus"]["account_id"],
+            log=self.log,
+            storage=self.storage,
+            fallback=fallback,
+        )
+        if not await source.fetch(year):
+            raise AnnualConfigError("Octopus consumption data could not be downloaded for {}; check the API key and account id".format(year))
+        return source
+
+    def _month_scenarios(self, samples, day_results):
+        """Weight each sample's daily figures into monthly totals per scenario."""
+        totals = {key: {field: 0.0 for field in SCENARIO_FIELDS} for key in SCENARIO_KEYS}
+        for (_, weight), result in zip(samples, day_results):
+            for key in SCENARIO_KEYS:
+                for field in SCENARIO_FIELDS:
+                    totals[key][field] += result[key][field] * weight
+        return totals
+
+    async def run(self, progress=None):
+        """Run the full annual projection and return the results document."""
+        year = self.config["year"]
+        samples_per_month = self.config["samples_per_month"]
+        has_solar = bool(self.config["solar"])
+
+        weather_client = AnnualWeather(
+            self.config["solar"],
+            latitude=0.0,
+            longitude=0.0,
+            log=self.log,
+            storage=self.storage,
+            p10_fallback=self.config["pv10_derate_fallback"],
+        )
+        latitude, longitude = await self._resolve_location(weather_client.fetch_json)
+        weather_client.latitude = latitude
+        weather_client.longitude = longitude
+
+        self.weather = await weather_client.fetch(year) if has_solar else None
+        if has_solar and not self.weather.forecast_available:
+            self.caveats.append("The Open-Meteo forecast archive did not cover {}, so Predbat planned against actuals and P10 used the flat {} derate. Savings are likely overstated.".format(year, self.config["pv10_derate_fallback"]))
+        elif has_solar and self.weather.fallback_months:
+            self.caveats.append("Months {} had too few forecast/actual day pairs, so their P10 used the flat {} derate.".format(sorted(self.weather.fallback_months), self.config["pv10_derate_fallback"]))
+        if has_solar:
+            self.caveats.append("The forecast-versus-ERA5 gap includes systematic model bias as well as forecast error, so measured solar uncertainty is slightly overstated.")
+        self.caveats.append("self_consumed_kwh is approximate: when the battery exports grid-charged energy it is understated.")
+
+        self.predbat = create_headless_predbat(self.work_dir, self.config["timezone"], self.log)
+        self.load_source = await self._build_load_source()
+        self.tariff = AnnualTariff(self.config["tariff"], log=self.log, predbat=self.predbat, storage=self.storage)
+
+        zone = pytz.timezone(self.config["timezone"])
+        months = []
+        total_units = 12
+        completed = 0
+
+        for month in range(1, 13):
+            if progress:
+                progress(completed, total_units, "Month {:02d}/{}".format(month, year))
+
+            days_in_month = calendar.monthrange(year, month)[1]
+            standing_charge_p = self.tariff.standing_charge_p_per_day * days_in_month
+
+            if not await self.tariff.fetch_month(year, month):
+                months.append({"month": month, "status": "unavailable", "reason": "no rate data available", "days": days_in_month, "standing_charge_p": standing_charge_p})
+                completed += 1
+                continue
+            # The 48 hour plan for the last sampled day can spill into the next month
+            next_year, next_month = (year, month + 1) if month < 12 else (year + 1, 1)
+            await self.tariff.fetch_month(next_year, next_month)
+
+            samples = select_samples(self.weather, year, month, samples_per_month, has_solar=has_solar) if has_solar else select_samples(None, year, month, samples_per_month, has_solar=False)
+            if not samples:
+                months.append({"month": month, "status": "unavailable", "reason": "no usable weather days", "days": days_in_month, "standing_charge_p": standing_charge_p})
+                completed += 1
+                continue
+
+            day_results = []
+            for day, _ in samples:
+                midnight_utc = zone.localize(datetime(day.year, day.month, day.day)).astimezone(pytz.utc)
+                day_results.append(run_day(self.predbat, self.config, self.weather, self.tariff, self.load_source, day, midnight_utc))
+
+            totals = self._month_scenarios(samples, day_results)
+            first_midnight = zone.localize(datetime(samples[0][0].year, samples[0][0].month, samples[0][0].day)).astimezone(pytz.utc)
+            _, rate_export = self.tariff.rates_for(first_midnight, DAY_MINUTES)
+            export_rate = average_rate(rate_export, DAY_MINUTES)
+
+            scenarios = {}
+            for key in SCENARIO_KEYS:
+                entry = {field: totals[key][field] for field in SCENARIO_FIELDS}
+                entry["export_credit_p"] = entry["export_kwh"] * export_rate
+                entry["self_consumed_kwh"] = max(0.0, entry["pv_generated_kwh"] - entry["export_kwh"])
+                scenarios[key] = {name: round(value, 3) for name, value in entry.items()}
+
+            months.append(
+                {
+                    "month": month,
+                    "status": "ok",
+                    "days": days_in_month,
+                    "sampled_days": [day.isoformat() for day, _ in samples],
+                    "standing_charge_p": round(standing_charge_p, 3),
+                    "scenarios": scenarios,
+                }
+            )
+            completed += 1
+
+        if progress:
+            progress(total_units, total_units, "Complete")
+
+        return self._build_results(months)
+
+    def _build_results(self, months):
+        """Assemble the final results document from the per-month rows."""
+        included = [entry for entry in months if entry["status"] == "ok"]
+        excluded = [entry["month"] for entry in months if entry["status"] != "ok"]
+
+        annual_scenarios = {}
+        for key in SCENARIO_KEYS:
+            annual_scenarios[key] = {field: round(sum(entry["scenarios"][key][field] for entry in included), 3) for field in SCENARIO_FIELDS + ["export_credit_p", "self_consumed_kwh"]}
+        standing_total = round(sum(entry["standing_charge_p"] for entry in included), 3)
+
+        savings = {}
+        if annual_scenarios:
+            savings["pv_battery_vs_none_p"] = round(annual_scenarios["no_pvbat"]["cost_p"] - annual_scenarios["without_predbat"]["cost_p"], 3)
+            savings["predbat_vs_baseline_p"] = round(annual_scenarios["without_predbat"]["cost_p"] - annual_scenarios["with_predbat"]["cost_p"], 3)
+
+        return {
+            "year": self.config["year"],
+            "config": self.config["raw"],
+            "months": months,
+            "annual": {
+                "scenarios": annual_scenarios,
+                "standing_charge_p": standing_total,
+                "savings": savings,
+                "months_included": len(included),
+                "months_excluded": excluded,
+            },
+            "caveats": self.caveats,
+        }
