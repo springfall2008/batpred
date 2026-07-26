@@ -343,21 +343,52 @@ def run_test_plan_why_reason(my_predbat):
     if "title=" not in renderer_js:
         print("ERROR: expected renderStateCell to emit a title= attribute")
         failed = True
-    if "state2_color || '#FFFFFF'}${titleAttr}" not in renderer_js:
-        print("ERROR: expected the split (state2) cell to also carry the title= tooltip, not just the first half")
+    # Scoped to renderStateCell's own body (not a whole-file count) since the read-only path
+    # (Test 13 below) has its own, separate titleAttr usage with the same variable name.
+    state_cell_fn_start = renderer_js.index("function renderStateCell(")
+    state_cell_fn_end = renderer_js.index("function renderRateCell(", state_cell_fn_start)
+    state_cell_fn_src = renderer_js[state_cell_fn_start:state_cell_fn_end]
+    if state_cell_fn_src.count("${titleAttr}") != 2:
+        print("ERROR: expected both the first and split (state2) cells to carry the title= tooltip, found {} references".format(state_cell_fn_src.count("${titleAttr}")))
         failed = True
 
-    # --- Test 13: the read-only (History / Yesterday Without Predbat) state cells also get tooltips ---
+    # --- Test 13a: tap/focus disclosure for touch and keyboard users, alongside title= for mouse
+    # hover - a touch interaction can't trigger :hover/title at all, so the two mechanisms never
+    # fire together and there's nothing to reconcile between them (see PR discussion). ---
+    print("Test renderStateCell also wires a tap/focus disclosure panel, not just hover")
+    if "toggleForceDropdown" not in renderer_js:
+        print("ERROR: expected renderStateCell to reuse the existing toggleForceDropdown() tap-to-toggle mechanism")
+        failed = True
+    if "clickable-state-cell" not in renderer_js:
+        print("ERROR: expected renderStateCell to mark reason cells with the clickable-state-cell class")
+        failed = True
+    if "reason-text" not in renderer_js:
+        print("ERROR: expected renderStateCell to render the reason panel content with the reason-text class")
+        failed = True
+    if renderer_js.count("dropdown-content") < 2:  # at least the CSS rule plus renderStateCell's own usage
+        print("ERROR: expected renderStateCell to reuse the existing .dropdown-content panel mechanism")
+        failed = True
+    if 'tabindex="0"' not in renderer_js or "onkeydown" not in renderer_js:
+        print("ERROR: expected the reason cell to be keyboard-focusable and keyboard-operable, not just tap/click - a bare <td onclick> isn't reachable by keyboard")
+        failed = True
+
+    # --- Test 13b: the read-only (History / Yesterday Without Predbat) state cells also get tooltips ---
     print("Test the non-editable state cell path also emits a title= tooltip")
     if "function reasonTitleAttr" not in renderer_js:
         print("ERROR: expected a shared reasonTitleAttr() helper used by both state-cell paths")
         failed = True
-    if "state_color || '#FFFFFF'}${titleAttr}" not in renderer_js:
+    # Scoped to the read-only branch specifically (between its own reasonTitleAttr() call and the
+    # next cell section) - the editable path (renderStateCell, Test 12 above) builds its split-cell
+    # HTML differently (extra tap/focus attributes sit between the bgcolor and titleAttr), so a
+    # single literal substring can no longer match both paths' shapes.
+    readonly_branch_start = renderer_js.index("const titleAttr = reasonTitleAttr(row, reasonTemplates);")
+    readonly_branch_end = renderer_js.index("// Limit cell", readonly_branch_start)
+    readonly_branch_src = renderer_js[readonly_branch_start:readonly_branch_end]
+    if "state_color || '#FFFFFF'}${titleAttr}" not in readonly_branch_src:
         print("ERROR: expected the read-only state cell (editable=false) to carry the title= tooltip")
         failed = True
-    # Both the editable and read-only paths render a split second half, so the tooltip appears twice
-    if renderer_js.count("state2_color || '#FFFFFF'}${titleAttr}") != 2:
-        print("ERROR: expected both the editable and read-only split cells to carry the title= tooltip")
+    if "state2_color || '#FFFFFF'}${titleAttr}" not in readonly_branch_src:
+        print("ERROR: expected the read-only split (state2) cell to carry the title= tooltip")
         failed = True
     # Templates must come from the dataset being rendered, not the plan view's global - otherwise
     # the History/Yesterday views would render against the wrong (or a missing) template table
