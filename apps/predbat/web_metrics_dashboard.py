@@ -170,7 +170,7 @@ function mdRenderHealth(d) {
     {label:'Plan',        value: planOk ? 'Valid' : 'Stale',      cls: mdStatusClass(planOk),   sub: mdFmt(d.plan_age_minutes, 0) + ' min old'},
     {label:'Last Update', value: mdAgo(d.last_update_timestamp),  cls: '', sub: ''},
     {label:'Errors',      value: mdFmt(mdSumLabeled(d.errors_total), 0), cls: mdSumLabeled(d.errors_total) > 0 ? 'md-status-warn' : 'md-status-ok', sub: ''},
-    {label:'Data Age',    value: mdFmt(d.data_age_days, 1) + 'd', cls: d.data_age_days > 3 ? 'md-status-warn' : 'md-status-ok', sub: ''},
+    {label:'Data Age',    value: mdFmt(d.data_age_days, 1) + 'd', cls: d.data_age_days < d.data_age_required_days ? 'md-status-warn' : 'md-status-ok', sub: 'need ' + mdFmt(d.data_age_required_days, 0) + 'd'},
   ];
   var h = '';
   cards.forEach(function (c) {
@@ -209,16 +209,21 @@ function mdInitSOCChart(d) {
     options: { cutout: '72%', responsive: false, plugins: { legend: {display:false}, tooltip: {enabled:false} } },
     plugins: [{
       id: 'md-center-text',
+      // Read live values (chart's own current data, and the always-current MD_DATA global) rather
+      // than the pct/d closed over at chart creation time - mdUpdateSOCChart only mutates the
+      // chart's data array on refresh, it doesn't recreate the chart, so a closure over the
+      // original values here would freeze this text at whatever it was on first load.
       afterDraw: function (chart) {
         var w = chart.width, h = chart.height, c2 = chart.ctx;
+        var livePct = chart.data.datasets[0].data[0] || 0;
         c2.save();
         c2.fillStyle = mdVar('--md-text');
         c2.font = 'bold 2rem sans-serif';
         c2.textAlign = 'center'; c2.textBaseline = 'middle';
-        c2.fillText(mdFmt(pct, 0) + '%', w / 2, h / 2 - 10);
+        c2.fillText(mdFmt(livePct, 0) + '%', w / 2, h / 2 - 10);
         c2.font = '0.85rem sans-serif';
         c2.fillStyle = mdVar('--md-muted');
-        c2.fillText(mdFmt(d.battery_soc_kwh, 1) + ' / ' + mdFmt(d.battery_max_kwh, 1) + ' kWh', w / 2, h / 2 + 18);
+        c2.fillText(mdFmt(MD_DATA.battery_soc_kwh, 1) + ' / ' + mdFmt(MD_DATA.battery_max_kwh, 1) + ' kWh', w / 2, h / 2 + 18);
         c2.restore();
       }
     }]

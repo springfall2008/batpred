@@ -81,6 +81,213 @@ from marginal import MARGINAL_EXTRA_KWH_LEVEL_NAMES, MARGINAL_EXTRA_KWH_LEVELS, 
 ROOT_YAML_KEY = "pred_bat"
 
 
+def state_as_of_slots(records, slots):
+    """
+    Resolve each slot to the state in effect at it - the most recent record at or before the slot.
+
+    records must be a list of (timestamp, value) ordered oldest first. Returns
+    {slot: (value, changed, prev_value)} where value is "-" for slots preceding the first record and
+    changed marks a slot whose value differs from the one shown at the previous slot.
+    """
+    filled = {}
+    last_value = None
+    previous = None
+    index = 0
+
+    for slot in sorted(slots):
+        while index < len(records) and records[index][0] <= slot:
+            last_value = records[index][1]
+            index += 1
+        value = last_value if last_value is not None else "-"
+        filled[slot] = (value, value != "-" and value != previous, previous)
+        previous = value
+
+    return filled
+
+
+def build_entity_history_table_data(entity_selections, entity_data_fetch):
+    """
+    Resolve the /entity history table's 30-minute rows and their 5-minute detail slots.
+
+    entity_selections: list of {"entity_id": ..., "attribute": ...} (attribute may be None for state)
+    entity_data_fetch: dict of entity_id -> history as returned by get_history_with_now(), i.e. [[record, ...]]
+
+    Every slot reports the state as of its own timestamp. Summarising a window by the last sample
+    taken inside it instead let a momentary blip stand for the whole window - one stray "Lost"
+    record at 21:57 made the entire 21:30 row read "Lost" - and that value then carried forward
+    into every later slot that had no sample of its own, turning a blip into hours of downtime.
+
+    Returns (entity_filled_30min, entity_filled_5min, sorted_timestamps_30min, all_display_slots_5min):
+      entity_filled_30min / entity_filled_5min: one dict per selection, {slot: (value, changed, prev_value)}
+      sorted_timestamps_30min: the 30-min row timestamps, newest first
+      all_display_slots_5min: the 5-min slots covering each 30-min row's own window (offsets 0 to +25)
+    """
+    entity_records = []
+    all_timestamps_30min = set()
+
+    for selection in entity_selections:
+        entity_id = selection["entity_id"]
+        attribute = selection["attribute"]
+        history = entity_data_fetch[entity_id]
+        records = []
+
+        if history and len(history) >= 1:
+            history = history[0]
+            if history:
+                for item in history:
+                    if "last_updated" not in item:
+                        continue
+                    try:
+                        last_updated_stamp = str2time(item["last_updated"])
+                    except (ValueError, TypeError):
+                        continue
+
+                    # Get state or attribute value
+                    if attribute:
+                        state = item.get("attributes", {}).get(attribute, None)
+                    else:
+                        state = item.get("state", None)
+
+                    if state is None:
+                        state = "None"
+
+                    records.append((last_updated_stamp, state))
+
+                    # A record makes the window it landed in a row, so activity is always on screen
+                    minutes = last_updated_stamp.hour * 60 + last_updated_stamp.minute
+                    rounded_minutes_30 = (minutes // 30) * 30
+                    all_timestamps_30min.add(last_updated_stamp.replace(minute=rounded_minutes_30 % 60, hour=rounded_minutes_30 // 60, second=0, microsecond=0))
+
+        # str2time is only reliable for ordering once parsed - the raw strings mix UTC history with
+        # the local-time "now" record get_history_with_now() appends
+        records.sort(key=lambda record: record[0])
+        entity_records.append(records)
+
+    # Sort timestamps in reverse chronological order
+    sorted_timestamps_30min = sorted(all_timestamps_30min, reverse=True)
+
+    # Detail slots are the 5-min marks INSIDE each row's own half hour, so expanding a row explains
+    # that row rather than describing the preceding half hour
+    all_display_slots_5min = set()
+    for ts_30 in sorted_timestamps_30min:
+        for offset in range(0, 30, 5):
+            all_display_slots_5min.add(ts_30 + timedelta(minutes=offset))
+
+    entity_filled_30min = []
+    entity_filled_5min = []
+    for records in entity_records:
+        entity_filled_30min.append(state_as_of_slots(records, sorted_timestamps_30min))
+        entity_filled_5min.append(state_as_of_slots(records, all_display_slots_5min))
+
+    return entity_filled_30min, entity_filled_5min, sorted_timestamps_30min, all_display_slots_5min
+
+
+def is_data_numerical(history, attribute=None):
+    """
+    Check if history data is numerical (supports both state and attribute checking)
+    Returns True if at least 10% of values are numeric or boolean
+    """
+    count_nums = 0
+    count_total = 0
+
+    if history and len(history) >= 1:
+        for item in history[0]:
+            if attribute:
+                # Check attribute value
+                attr_value = item.get("attributes", {}).get(attribute, None)
+                if attr_value is None:
+                    continue
+                value = str(attr_value)
+            else:
+                # Check state value
+                value = item.get("state", None)
+                if value is None:
+                    continue
+                value = str(value)
+
+            if value.lower() in ["on", "off", "true", "false"]:
+                count_nums += 1
+            else:
+                try:
+                    float(value)
+                    count_nums += 1
+                except (ValueError, TypeError):
+                    pass
+            count_total += 1
+
+    if count_total > 0 and (count_nums / count_total) >= 0.1:
+        return True
+    elif count_total == 0:
+        return True
+    return False
+
+
+def split_entities_for_charting(entities, entity_data_fetch):
+    """
+    Fetch each entity's history and split a unit group into numeric vs non-numeric entries.
+
+    Deciding numeric-vs-timeline per entity (rather than once for the whole group, from
+    whichever entity happened to be processed last) means a numeric entity doesn't end up
+    silently rendered as a broken timeline chart just because another entity sharing the same
+    unit group is non-numerical.
+
+    entities: list of {"id": entity_id, "friendly_name": ..., "attribute": ...}
+    entity_data_fetch: dict of entity_id -> history as returned by get_history_with_now()
+
+    Returns (numeric_entries, timeline_entries), each a list of
+    {"name": display_name, "friendly_name": ..., "entity_id": ..., "data": history_chart}.
+    """
+    numeric_entries = []
+    timeline_entries = []
+
+    for entity_info in entities:
+        entity_id = entity_info["id"]
+        friendly_name = entity_info["friendly_name"]
+        attribute = entity_info.get("attribute")
+
+        history = entity_data_fetch.get(entity_id)
+        is_numerical = is_data_numerical(history, attribute=attribute)
+
+        if attribute:
+            history_chart = history_attribute(history, state_key=attribute, attributes=True, is_numerical=is_numerical)
+            display_name = f"{friendly_name} ({attribute})"
+        else:
+            history_chart = history_attribute(history, is_numerical=is_numerical)
+            display_name = friendly_name
+
+        if not history_chart:
+            continue
+
+        entry = {"name": display_name, "friendly_name": friendly_name, "entity_id": entity_id, "data": history_chart}
+        (numeric_entries if is_numerical else timeline_entries).append(entry)
+
+    return numeric_entries, timeline_entries
+
+
+def resolve_group_unit_and_name(entity_id, dashboard_values, live_unit=None, live_friendly_name=None):
+    """
+    Resolve the unit_of_measurement/friendly_name to group and label an entity by for the
+    /entity charts.
+
+    Prefers Predbat's own dashboard_values cache, falling back to a caller-supplied live HA
+    lookup (mirroring html_get_entity_text's fallback) for entities Predbat doesn't track
+    itself - e.g. inverter control entities that are selectable on this page but were never
+    published via dashboard_item(), which otherwise silently grouped every such entity into
+    "(no unit)" regardless of their real HA unit.
+
+    live_unit/live_friendly_name should only be looked up by the caller when entity_id isn't
+    in dashboard_values, since that's the only case they're used.
+    """
+    attributes = dashboard_values.get(entity_id, {}).get("attributes", {})
+    if entity_id in dashboard_values:
+        unit = attributes.get("unit_of_measurement") or ""
+        friendly_name = attributes.get("friendly_name") or ""
+    else:
+        unit = live_unit or ""
+        friendly_name = live_friendly_name or ""
+    return unit or "(no unit)", friendly_name or entity_id
+
+
 class WebInterface(ComponentBase):
     """Built-in web dashboard server using aiohttp.
 
@@ -812,45 +1019,6 @@ class WebInterface(ComponentBase):
             self.base.log(f"Error in html_api_get_entities: {e}")
             return web.json_response({"error": str(e)}, status=500)
 
-    def is_data_numerical(self, history, attribute=None):
-        """
-        Check if history data is numerical (supports both state and attribute checking)
-        Returns True if at least 10% of values are numeric or boolean
-        """
-        count_nums = 0
-        count_total = 0
-
-        if history and len(history) >= 1:
-            for item in history[0]:
-                if attribute:
-                    # Check attribute value
-                    attr_value = item.get("attributes", {}).get(attribute, None)
-                    if attr_value is None:
-                        continue
-                    value = str(attr_value)
-                else:
-                    # Check state value
-                    value = item.get("state", None)
-                    if value is None:
-                        continue
-                    value = str(value)
-
-                if value.lower() in ["on", "off", "true", "false"]:
-                    count_nums += 1
-                else:
-                    try:
-                        float(value)
-                        count_nums += 1
-                    except (ValueError, TypeError):
-                        pass
-                count_total += 1
-
-        if count_total > 0 and (count_nums / count_total) >= 0.1:
-            return True
-        elif count_total == 0:
-            return True
-        return False
-
     async def get_history_with_now(self, entity_id, days, attribute=None):
         """
         Get history for an entity including the current state
@@ -942,51 +1110,16 @@ class WebInterface(ComponentBase):
         days = int(request.query.get("days", 7))  # Default to 7 days if not specified
 
         text = self.get_header("Predbat Entity", refresh=0)
-        text += """
-<script>
-(function() {
-    // Restore scroll position and expanded rows saved before last reload
-    window.addEventListener('load', function() {
-        var savedPos = sessionStorage.getItem('entityScrollPos');
-        if (savedPos) {
-            savedPos = JSON.parse(savedPos);
-            sessionStorage.removeItem('entityScrollPos');
-            window.scrollTo(savedPos.x, savedPos.y);
-        }
-        var savedExpanded = sessionStorage.getItem('entityExpandedRows');
-        if (savedExpanded) {
-            sessionStorage.removeItem('entityExpandedRows');
-            JSON.parse(savedExpanded).forEach(function(rowIndex) {
-                var mainRow = document.getElementById('row_' + rowIndex);
-                if (mainRow) {
-                    var detailRows = document.querySelectorAll('#detail_' + rowIndex);
-                    detailRows.forEach(function(row) { row.style.display = 'table-row'; });
-                    mainRow.classList.add('expanded');
-                    var timeCell = mainRow.cells[0];
-                    timeCell.innerHTML = timeCell.innerHTML.replace('\u25b6', '\u25bc');
-                }
-            });
-        }
-    });
-    // Schedule reload, saving scroll position and expanded rows first
-    setTimeout(function() {
-        var expandedRows = [];
-        document.querySelectorAll('tr.history-row.expanded').forEach(function(row) {
-            expandedRows.push(row.id.replace('row_', ''));
-        });
-        sessionStorage.setItem('entityExpandedRows', JSON.stringify(expandedRows));
-        sessionStorage.setItem('entityScrollPos', JSON.stringify({x: window.scrollX, y: window.scrollY}));
-        location.reload();
-    }, 60000);
-})();
-</script>
-"""
 
-        # Include a back button to return the previous page
+        # Include a back button to return the previous page, and a reload button in case the
+        # entities selected weren't available yet when the page was first loaded
         text += """<div style="margin-bottom: 15px;">
             <a href="{}" class="button" style="display: inline-block; padding: 8px 15px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">
                 <span class="mdi mdi-arrow-left" style="margin-right: 5px;"></span>Back
             </a>
+            <button onclick="location.reload()" style="display: inline-block; margin-left: 10px; padding: 8px 15px; background-color: #2196F3; color: white; border: none; text-decoration: none; border-radius: 4px; font-weight: bold; cursor: pointer;">
+                <span class="mdi mdi-refresh" style="margin-right: 5px;"></span>Reload
+            </button>
         </div>""".format(
             self.default_page
         )
@@ -1080,13 +1213,16 @@ class WebInterface(ComponentBase):
                 entity_id = selection["entity_id"]
                 attribute = selection["attribute"]
 
-                attributes = self.base.dashboard_values.get(entity_id, {}).get("attributes", {})
-                unit = attributes.get("unit_of_measurement", "") or "(no unit)"
+                live_unit = live_friendly_name = None
+                if entity_id not in self.base.dashboard_values:
+                    live_unit = self.get_state_wrapper(entity_id=entity_id, attribute="unit_of_measurement")
+                    live_friendly_name = self.get_state_wrapper(entity_id=entity_id, attribute="friendly_name")
+                unit, friendly_name = resolve_group_unit_and_name(entity_id, self.base.dashboard_values, live_unit, live_friendly_name)
 
                 if unit not in entity_groups:
                     entity_groups[unit] = []
 
-                entity_groups[unit].append({"id": entity_id, "friendly_name": attributes.get("friendly_name", entity_id), "unit": unit, "attribute": attribute, "available_attrs": entity_attributes_map.get(entity_id, [])})
+                entity_groups[unit].append({"id": entity_id, "friendly_name": friendly_name, "unit": unit, "attribute": attribute, "available_attrs": entity_attributes_map.get(entity_id, [])})
 
             # Display entity details table for first selected entity
             if len(entity_selections) == 1:
@@ -1119,46 +1255,28 @@ class WebInterface(ComponentBase):
             now_str = self.now_utc.strftime(TIME_FORMAT)
 
             for unit, entities in entity_groups.items():
+                # Numeric and non-numeric entities are split per-entity (not decided once for the
+                # whole group) so a numeric entity sharing a unit with a non-numerical one still
+                # gets a proper line chart instead of being dropped into a broken timeline chart.
+                numeric_entries, timeline_entries = split_entities_for_charting(entities, entity_data_fetch)
+                if not numeric_entries and not timeline_entries:
+                    continue
+
                 text += "<h2>History Chart - {}</h2>\n".format(unit if unit != "(no unit)" else "(no unit)")
-                chart_id = "chart_{}".format(unit.replace("/", "_").replace(" ", "_").replace("(", "").replace(")", ""))
-                text += '<div id="{}"></div>'.format(chart_id)
-                is_numerical = False
+                base_chart_id = "chart_{}".format(unit.replace("/", "_").replace(" ", "_").replace("(", "").replace(")", ""))
 
-                # First, collect all entity data
-                entity_data = []
-                for entity_info in entities:
-                    entity_id = entity_info["id"]
-                    friendly_name = entity_info["friendly_name"]
-                    attribute = entity_info.get("attribute")
-
-                    # Fetch history with attribute if specified
-                    history = entity_data_fetch[entity_id]
-
-                    # Check if data is numerical (supports both state and attribute)
-                    is_numerical = self.is_data_numerical(history, attribute=attribute)
-
-                    # Extract chart data using history_attribute
-                    if attribute:
-                        # Chart attribute data
-                        history_chart = history_attribute(history, state_key=attribute, attributes=True, is_numerical=is_numerical)
-                        display_name = f"{friendly_name} ({attribute})"
-                    else:
-                        # Chart state data (default)
-                        history_chart = history_attribute(history, is_numerical=is_numerical)
-                        display_name = friendly_name
-
-                    if history_chart:
-                        entity_data.append({"name": display_name, "entity_id": entity_id, "data": history_chart})
-
-                # Prepare data for the appropriate chart type
-                if is_numerical:
-                    series_data = [{"name": item["name"], "data": item["data"], "chart_type": "line", "stroke_width": "2", "stroke_curve": "stepline"} for item in entity_data]
+                if numeric_entries:
+                    chart_id = base_chart_id
+                    text += '<div id="{}"></div>'.format(chart_id)
+                    series_data = [{"name": item["name"], "data": item["data"], "chart_type": "line", "stroke_width": "2", "stroke_curve": "stepline"} for item in numeric_entries]
                     chart_unit = unit if unit != "(no unit)" else ""
-                    chart_title = "{} entities".format(len(entities)) if len(entities) > 1 else entities[0]["friendly_name"]
+                    chart_title = "{} entities".format(len(numeric_entries)) if len(numeric_entries) > 1 else numeric_entries[0]["friendly_name"]
                     text += self.render_chart(series_data, chart_unit, chart_title, now_str, tagname=chart_id)
-                else:
-                    # Render timeline chart for non-numerical data
-                    text += self.render_timeline_chart(entity_data, chart_id, days)
+
+                if timeline_entries:
+                    chart_id = base_chart_id + "_timeline" if numeric_entries else base_chart_id
+                    text += '<div id="{}"></div>'.format(chart_id)
+                    text += self.render_timeline_chart(timeline_entries, chart_id, days)
 
             # History table showing all selected entities
             if entity_selections:
@@ -1192,91 +1310,8 @@ class WebInterface(ComponentBase):
                     text += f"<th>{friendly_name}{attr_display}{unit_display}</th>"
                 text += "</tr>\n"
 
-                # Collect history data for all entities (both 30-min summary and 5-min detail)
-                entity_histories_30min = []
-                entity_histories_5min = []
-                all_timestamps_30min = set()
-
-                for selection in entity_selections:
-                    entity_id = selection["entity_id"]
-                    attribute = selection["attribute"]
-                    history = entity_data_fetch[entity_id]
-                    entity_data_30min = {}
-                    entity_data_5min = {}
-
-                    if history and len(history) >= 1:
-                        history = history[0]
-                        if history:
-                            history.reverse()
-                            for item in history:
-                                if "last_updated" not in item:
-                                    continue
-                                last_updated_time = item["last_updated"]
-                                last_updated_stamp = str2time(last_updated_time)
-
-                                # Get state or attribute value
-                                if attribute:
-                                    state = item.get("attributes", {}).get(attribute, None)
-                                else:
-                                    state = item.get("state", None)
-
-                                if state is None:
-                                    state = "None"
-
-                                # Store 5-minute interval data
-                                minutes = last_updated_stamp.hour * 60 + last_updated_stamp.minute
-                                rounded_minutes_5 = (minutes // 5) * 5
-                                rounded_stamp_5 = last_updated_stamp.replace(minute=rounded_minutes_5 % 60, hour=rounded_minutes_5 // 60, second=0, microsecond=0)
-                                entity_data_5min[rounded_stamp_5] = state
-
-                                # Round to 30-minute intervals for summary
-                                rounded_minutes_30 = (minutes // 30) * 30
-                                rounded_stamp_30 = last_updated_stamp.replace(minute=rounded_minutes_30 % 60, hour=rounded_minutes_30 // 60, second=0, microsecond=0)
-                                entity_data_30min[rounded_stamp_30] = state
-                                all_timestamps_30min.add(rounded_stamp_30)
-
-                    entity_histories_30min.append(entity_data_30min)
-                    entity_histories_5min.append(entity_data_5min)
-
-                # Sort timestamps in reverse chronological order
-                sorted_timestamps_30min = sorted(all_timestamps_30min, reverse=True)
-
-                # Collect all display slots so we can precompute carry-forward fill
-                # Detail rows go BACKWARDS from the 30-min parent timestamp (offsets -5 to -25)
-                all_display_slots_5min = set()
-                for ts_30 in sorted_timestamps_30min:
-                    for offset in range(-5, -30, -5):
-                        all_display_slots_5min.add(ts_30 + timedelta(minutes=offset))
-
-                # Precompute filled dicts: {slot: (value, is_changed, prev_value)} per entity using carry-forward
-                entity_filled_30min = []
-                entity_filled_5min = []
-                for data_30min, data_5min in zip(entity_histories_30min, entity_histories_5min):
-                    # --- 30-min fill ---
-                    sorted_known_30 = sorted(data_30min.keys())
-                    filled_30 = {}
-                    last_val = None
-                    ki = 0
-                    for slot in sorted(sorted_timestamps_30min):
-                        prev_val = last_val
-                        while ki < len(sorted_known_30) and sorted_known_30[ki] <= slot:
-                            last_val = data_30min[sorted_known_30[ki]]
-                            ki += 1
-                        filled_30[slot] = (last_val if last_val is not None else "-", slot in data_30min, prev_val)
-                    entity_filled_30min.append(filled_30)
-
-                    # --- 5-min fill ---
-                    sorted_known_5 = sorted(data_5min.keys())
-                    filled_5 = {}
-                    last_val = None
-                    ki = 0
-                    for slot in sorted(all_display_slots_5min):
-                        prev_val = last_val
-                        while ki < len(sorted_known_5) and sorted_known_5[ki] <= slot:
-                            last_val = data_5min[sorted_known_5[ki]]
-                            ki += 1
-                        filled_5[slot] = (last_val if last_val is not None else "-", slot in data_5min, prev_val)
-                    entity_filled_5min.append(filled_5)
+                # Collect and bucket history data for all entities (both 30-min summary and 5-min detail)
+                entity_filled_30min, entity_filled_5min, sorted_timestamps_30min, _ = build_entity_history_table_data(entity_selections, entity_data_fetch)
 
                 # Pre-compute per-row cell classes so we can decide which rows to show
                 num_cols = len(entity_selections)
@@ -1287,18 +1322,16 @@ class WebInterface(ComponentBase):
                     for filled_30, filled_5 in zip(entity_filled_30min, entity_filled_5min):
                         value, is_changed, prev_value = filled_30.get(timestamp_30, ("-", False, None))
                         if is_changed:
-                            if prev_value is None or value != prev_value:
-                                cell_class = ' class="changed-cell"'
+                            cell_class = ' class="changed-cell"'
+                            has_highlight = True
+                        else:
+                            # Flag a row that held its value at both ends but moved somewhere inside its own half hour
+                            sub_vals = [filled_5.get(timestamp_30 + timedelta(minutes=off), ("-", False, None))[0] for off in range(5, 30, 5)]
+                            if any(v != value for v in sub_vals):
+                                cell_class = ' class="reverted-cell"'
                                 has_highlight = True
                             else:
-                                sub_vals = [filled_5.get(timestamp_30 + timedelta(minutes=off), ("-", False, None))[0] for off in range(-5, -26, -5)]
-                                if any(v != value for v in sub_vals):
-                                    cell_class = ' class="reverted-cell"'
-                                    has_highlight = True
-                                else:
-                                    cell_class = ""
-                        else:
-                            cell_class = ""
+                                cell_class = ""
                         cells.append((value, cell_class))
                     row_data.append((timestamp_30, cells, has_highlight))
 
@@ -1337,17 +1370,15 @@ class WebInterface(ComponentBase):
                         text += f"<td{cell_class}>{value}</td>"
                     text += "</tr>\n"
 
-                    # Detail rows: 5-minute slots leading UP TO the parent timestamp
-                    for offset in range(-5, -26, -5):
+                    # Detail rows: the remaining 5-minute slots inside this row's own half hour,
+                    # newest first to match the table's ordering (the row itself covers offset 0)
+                    for offset in range(25, 0, -5):
                         detail_time = timestamp_30 + timedelta(minutes=offset)
                         text += f'<tr class="detail-row" id="detail_{row_index}">'
                         text += f"<td>  {detail_time.strftime(TIME_FORMAT)}</td>"
                         for filled in entity_filled_5min:
                             value, is_changed, prev_value = filled.get(detail_time, ("-", False, None))
-                            if is_changed and (prev_value is None or value != prev_value):
-                                cell_class = ' class="changed-cell"'
-                            else:
-                                cell_class = ""
+                            cell_class = ' class="changed-cell"' if is_changed else ""
                             text += f"<td{cell_class}>{value}</td>"
                         text += "</tr>\n"
 
@@ -1768,7 +1799,9 @@ var options = {
         text += "   ]\n"
         text += "  }\n"
         text += "}\n"
-        text += "var chart = new ApexCharts(document.querySelector('#{}'), options);\n".format(tagname)
+        # getElementById (not a '#id' CSS selector) - tagname can be unit-derived (e.g. "chart_%")
+        # and '%' is not a valid unescaped CSS identifier character, which would throw in querySelector
+        text += "var chart = new ApexCharts(document.getElementById('{}'), options);\n".format(tagname)
         text += "chart.render();\n"
         text += "</script>\n"
         return text
@@ -1803,6 +1836,11 @@ var options = {
             points_js = ", ".join("{{ x: '{}', y: {} }}".format(p["x"], "null" if p["y"] is None else p["y"]) for p in data_points)
             series_js += "    {{ name: '{}', data: [{}] }},\n".format(name, points_js)
 
+        # chart_id is only safe to interpolate as a *string* (DOM id, inside quotes) - it may
+        # contain characters (e.g. "%") that are invalid in a JS identifier, so a separate
+        # sanitised name is used anywhere it needs to appear as a variable name
+        js_id = re.sub(r"[^0-9A-Za-z_]", "_", chart_id)
+
         text = ""
         text += "<script>\n"
         text += "window.onresize = function(){ location.reload(); };\n"
@@ -1811,12 +1849,12 @@ var options = {
         text += "if (width < 400) { width = 400; }\n"
         text += "width = width - 50;\n"
         if fixed_height is not None:
-            text += "var height_{} = {};\n".format(chart_id, fixed_height)
+            text += "var height_{} = {};\n".format(js_id, fixed_height)
         else:
             num_rows = max(len(series_data), 1)
-            text += "var height_{} = {};\n".format(chart_id, num_rows * 80 + 80)
+            text += "var height_{} = {};\n".format(js_id, num_rows * 80 + 80)
         text += "var options = {\n"
-        text += "  chart: {{ type: 'heatmap', width: width, height: height_{}, animations: {{ enabled: false }} }},\n".format(chart_id)
+        text += "  chart: {{ type: 'heatmap', width: width, height: height_{}, animations: {{ enabled: false }} }},\n".format(js_id)
         text += "  plotOptions: {\n"
         text += "    heatmap: {\n"
         text += "      radius: 2,\n"
@@ -1836,8 +1874,10 @@ var options = {
         text += "  title: {{ text: '{}' }},\n".format(title)
         text += "  tooltip: { y: { formatter: function(val) { return val !== null ? val.toFixed(2) : 'N/A'; } } }\n"
         text += "};\n"
-        text += "var chart_{cid} = new ApexCharts(document.querySelector('#{cid}'), options);\n".format(cid=chart_id)
-        text += "chart_{}.render();\n".format(chart_id)
+        # getElementById, not a '#id' CSS selector - chart_id may contain characters (e.g. "%") that
+        # are invalid in an unescaped CSS identifier and would throw in querySelector
+        text += "var chart_{jid} = new ApexCharts(document.getElementById('{cid}'), options);\n".format(jid=js_id, cid=chart_id)
+        text += "chart_{}.render();\n".format(js_id)
         text += "</script>\n"
         return text
 
@@ -1898,47 +1938,44 @@ var options = {
         first_series = True
         all_states = set()
 
+        # A rangeBar data point's "x" is the y-axis category, so entities whose friendly names
+        # collide (every GivEnergy Cloud inverter publishes a "Status" sensor, for instance) would
+        # otherwise share a single unlabelled row with no way to tell which bar is which inverter.
+        name_counts = {}
+        for entity_timeline in timeline_data:
+            name_counts[entity_timeline["name"]] = name_counts.get(entity_timeline["name"], 0) + 1
+
         for entity_timeline in timeline_data:
             entity_name = entity_timeline["name"]
+            if name_counts.get(entity_name, 0) > 1:
+                entity_name = "{} ({})".format(entity_name, entity_timeline.get("entity_id", ""))
             history_chart = entity_timeline["data"]  # Dict with timestamp keys and state values
 
-            # Convert history data to timeline ranges
+            # Sort by the instant each record represents rather than by its raw timestamp text:
+            # HA/DB history is UTC while get_history_with_now() appends the current state stamped
+            # in local time, so a string sort can order records by their offset instead of by time.
+            sorted_items = []
+            for timestamp_str, state in history_chart.items():
+                try:
+                    sorted_items.append((int(str2time(timestamp_str).timestamp() * 1000), str(state)))
+                except (ValueError, TypeError):
+                    continue
+            sorted_items.sort(key=lambda item: item[0])
+
+            # Convert history data to timeline ranges. Every sample is folded into a range: unlike a
+            # numerical series, thinning a state series does not merely lower the resolution, it
+            # rewrites history. Sampling the records by array index used to alias a flapping state
+            # away entirely whenever the step kept landing on one phase of the flap, leaving the
+            # chart asserting a single multi-day run that the history table flatly contradicted.
+            # Only transitions produce a range, so an entity that rarely changes stays cheap.
             ranges = []
             current_state = None
             start_time = None
-
-            # Sort by timestamp - history_chart is a dict
-            sorted_items = sorted(history_chart.items(), key=lambda x: x[0])
-
-            # Downsample if needed - keep max 288 data points
-            max_points = 288
-            if len(sorted_items) > max_points:
-                # Calculate step size to keep approximately max_points
-                step = len(sorted_items) // max_points
-                if step < 1:
-                    step = 1
-                # Keep every Nth item, but always keep first and last
-                downsampled = [sorted_items[0]]  # Always keep first
-                # Add items at regular intervals
-                for i in range(step, len(sorted_items) - 1, step):
-                    downsampled.append(sorted_items[i])
-                # Always keep last if it's not already included
-                if len(sorted_items) > 1 and sorted_items[-1] not in downsampled:
-                    downsampled.append(sorted_items[-1])
-                sorted_items = downsampled
-
             last_timestamp_ms = None
-            for timestamp_str, state in sorted_items:
-                state = str(state)
-                all_states.add(state)
 
-                # Convert timestamp string to milliseconds for ApexCharts
-                try:
-                    timestamp_dt = str2time(timestamp_str)
-                    timestamp_ms = int(timestamp_dt.timestamp() * 1000)
-                    last_timestamp_ms = timestamp_ms  # Track the last valid timestamp
-                except (ValueError, TypeError):
-                    continue
+            for timestamp_ms, state in sorted_items:
+                all_states.add(state)
+                last_timestamp_ms = timestamp_ms
 
                 if current_state is None:
                     # First point
@@ -2030,7 +2067,7 @@ var options = {
   }
 };
 
-var chart = new ApexCharts(document.querySelector('#"""
+var chart = new ApexCharts(document.getElementById('"""
             + tagname
             + """'), options);
 chart.render();
@@ -2916,8 +2953,8 @@ chart.render();
                 {"name": "Import", "data": rates, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline"},
                 {"name": "Export", "data": rates_export, "opacity": "0.2", "stroke_width": "2", "stroke_curve": "stepline", "chart_type": "area"},
                 {"name": "Gas", "data": rates_gas, "opacity": "0.2", "stroke_width": "2", "stroke_curve": "stepline", "chart_type": "area"},
-                {"name": "Hourly p/kWh", "data": cost_pkwh_hour, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline"},
-                {"name": "Today p/kWh", "data": cost_pkwh_today, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline"},
+                {"name": "Hourly {}/kWh".format(self.currency_symbols[1]), "data": cost_pkwh_hour, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline"},
+                {"name": "Today {}/kWh".format(self.currency_symbols[1]), "data": cost_pkwh_today, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline"},
             ]
             text += self.render_chart(series_data, self.currency_symbols[1], "Energy Rates", now_str)
         elif chart == "InDay":

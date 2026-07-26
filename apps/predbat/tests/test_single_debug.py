@@ -53,6 +53,16 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
 
     print("**** Test {} ****".format(test_name))
     reset_inverter(my_predbat)
+    # Some derived state is neither saved in the debug yaml (so read_debug_yaml cannot restore it) nor
+    # reset by reset_inverter, so inside the full suite it leaks from a previous test and makes the debug
+    # plan depend on test ordering. Reset these to their standalone-run defaults so each case is
+    # deterministic regardless of what ran before:
+    #   - dynamic_load_baseline feeds the load model calculate_plan rebuilds (normally produced by
+    #     dynamic_load(), which only runs from update_pred, not the debug harness).
+    #   - battery_rate_max_export is the discharge power cap used in prediction; a leaked full-precision
+    #     value (vs the 0.0333 default) can flip the plan at a decision boundary.
+    my_predbat.dynamic_load_baseline = {}
+    my_predbat.battery_rate_max_export = 0.0333
     my_predbat.read_debug_yaml(debug_file)
     my_predbat.config_root = "./"
     my_predbat.save_restore_dir = "./"
