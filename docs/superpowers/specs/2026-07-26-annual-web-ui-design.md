@@ -27,6 +27,10 @@ adds no modelling; it exposes what is there.
   UK system so a visitor can run it immediately.
 - **A tariff dropdown**, built from a curated catalogue merged with the user's
   own `compare_list` if they have one.
+- **The last five runs are kept**, in Storage, with a selector to switch between
+  them.
+- **Same branch, one PR** — this builds on `feat/annual-prediction-tool`, since
+  the UI cannot work without the engine.
 
 ## Why a subprocess
 
@@ -78,12 +82,35 @@ where the bugs will be.
 
 ### Persistence
 
-Two files in `config_root`, alongside `comparisons.yaml`:
+**The config** is `annual.yaml` in `config_root`, alongside `comparisons.yaml` —
+handed to the subprocess as `--config`, hand-editable, and surviving restarts.
 
-- `annual.yaml` — the config the form edits, handed to the subprocess as
-  `--config`. Hand-editable, survives restarts.
-- `annual_results.json` — the last completed run, so revisiting the tab shows
-  results with a timestamp rather than an empty page.
+**The results go to Storage**, not a bare file, per CLAUDE.md. The Storage
+component is reached the way the rest of the codebase reaches it:
+`self.base.components.get_component("storage")`.
+
+The **last five runs** are kept:
+
+| Storage key | Contents |
+|---|---|
+| `annual` / `runs_index` | Newest-first list of `{id, timestamp, label, months_included, status}` |
+| `annual` / `run_<id>` | That run's full results document |
+
+Saving appends to the index and deletes the blob of anything falling off the
+end, so the ring never leaks entries.
+
+`id` is timestamp-derived. `label` is generated from the config that produced the
+run — for example *"9.5 kWh battery · 5.6 kWp · Agile"* — because a selector
+listing five bare timestamps tells the user nothing about which run was which.
+
+**The subprocess still writes a plain file.** `annual_cli.py` keeps its `--out`
+path, writing to a temporary file; the parent reads that on completion and saves
+it into Storage. The CLI stays usable standalone and knows nothing about
+Storage or run history.
+
+**Forward compatibility.** A stable `id` and a human label in the index are
+exactly what a later *compare runs* feature needs, so it can be added without
+migrating stored results. That feature is out of scope here.
 
 ### Progress protocol
 
@@ -108,7 +135,26 @@ collapsed **Advanced** holding `year`, `samples_per_month`,
 
 Each value is read from the live instance where available and falls back to a
 typical-UK default otherwise, **independently**. A half-configured Predbat gets
-its real battery size alongside example solar, rather than all-or-nothing.
+its real inverter limits alongside example solar, rather than all-or-nothing.
+
+**Read from the in-memory args dictionary, never from `apps.yaml` on disk.**
+`self.base.args` is already the parsed configuration; the file itself may not
+exist at all in some deployments, so re-reading it would fail exactly where the
+unconfigured case matters most. Use `get_arg()` so indirection and defaults
+behave as they do everywhere else in Predbat.
+
+| Form field | Source |
+|---|---|
+| Solar arrays | `open_meteo_forecast`, else `forecast_solar` — both are already lists of `{kwp, declination, azimuth, efficiency}`, a direct shape match |
+| Location | `latitude`/`longitude` or `postcode` from the same solar entries |
+| Inverter and export limits | `inverter_limit`, `export_limit` |
+| Hybrid or AC coupled | `inverter_type` |
+| Tariff URLs and region | `rates_import_octopus_url`, `rates_export_octopus_url`, `dno_region` |
+| Tariff dropdown extras | `compare_list` |
+| Battery capacity | Not reliably in args — it is discovered from the inverter at runtime. Use the live `soc_max` when the instance has one, otherwise the default |
+
+Anything absent falls back to the typical-UK value. No field is required to be
+present for the form to render.
 
 When the live instance supplied neither a battery nor a solar array — the two
 that signal a configured system — a banner says so:
@@ -228,7 +274,13 @@ Three properties carry through from the engine and must survive into the UI:
 - **`self_consumed_kwh` is greyed with its reason** when
   `self_consumed_kwh_meaningful` is false, rather than showing a bare 0.
 
-Plus a "last run" timestamp and a link to download the raw JSON.
+Above all three sits a **run selector** listing the stored runs newest-first by
+their generated label and timestamp, so a user can flip between "with a 5 kWh
+battery" and "with a 10 kWh battery" without re-running either. Selecting a run
+re-renders the totals, chart and table from that run's stored document.
+
+Plus a "last run" timestamp and a link to download the raw JSON of the selected
+run.
 
 ## Failure handling
 
@@ -253,6 +305,9 @@ is driven with a stub script.
 - **`annual_job`** — progress lines parse; malformed lines do not crash the
   parser; cancel terminates; a non-zero exit is reported as failed; a second Run
   while running is refused.
+- **Run history** — saving a sixth run evicts the oldest and deletes its blob;
+  the index stays newest-first; a corrupt or missing run blob is reported rather
+  than rendering an empty chart; labels are generated from the config.
 - **`web_annual`** — **the form renders and validates against a completely
   unconfigured PredBat.** That is the acceptance criterion for the unconfigured
   requirement, and the one most likely to regress silently. Plus: prefill falls
@@ -264,5 +319,7 @@ is driven with a stub script.
 - Predbat.com multi-user support — no queue, tenancy or quotas. Revisit when
   that becomes the target.
 - Changes to the Compare tab, including making it read `tariff_catalogue.py`.
-- Run history. The tab keeps the last result only.
+- Comparing two stored runs side by side. The selector switches between them;
+  it does not overlay them. The index is designed so this can be added later
+  without migrating stored results.
 - Any change to the prediction model itself.
