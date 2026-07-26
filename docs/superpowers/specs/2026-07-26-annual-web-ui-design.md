@@ -57,11 +57,10 @@ best-effort — which is what makes the unconfigured case work at all.
 | `apps/predbat/tariff_catalogue.py` | **New.** The curated tariff list as data, plus the mapping from Compare's key names to the annual engine's. No logic beyond lookup and merge. |
 | `apps/predbat/web_annual.py` | **New.** The tab: form rendering, config load/save, results rendering. |
 | `apps/predbat/annual_job.py` | **New.** Subprocess lifecycle only — spawn, parse progress, track state, cancel, reap. No HTML. |
-| `apps/predbat/annual_store.py` | **New.** The run ring: save, list, load, evict, and label generation. Storage-backed, shared by the CLI and the web tab so there is one implementation. |
+| `apps/predbat/annual_store.py` | **New.** The run ring: save, list, load, evict, and label generation. Takes a Storage object; used by the web tab. |
 | `apps/predbat/web.py` | **Modify.** Five route registrations delegating to `web_annual.py`. |
 | `apps/predbat/web_helper.py` | **Modify.** One nav link, alongside the others at the `<a href='./compare'>Compare</a>` block. |
-| `apps/predbat/annual_cli.py` | **Modify.** Add `--progress-json`; construct a Storage backend and stop writing results with a bare `open()`. |
-| `apps/predbat/annual.py` | **Modify.** Write the results document through Storage rather than returning it for a caller to dump. |
+| `apps/predbat/annual_cli.py` | **Modify.** Add a `--machine` mode: results JSON on stdout, progress JSON on stderr, no human table. |
 
 `web.py` is already 5,730 lines and `web_helper.py` 8,903, so the tab gets its
 own module rather than growing either — following the `web_metrics_dashboard.py`
@@ -105,25 +104,28 @@ end, so the ring never leaks entries.
 run — for example *"9.5 kWh battery · 5.6 kWp · Agile"* — because a selector
 listing five bare timestamps tells the user nothing about which run was which.
 
-**Nothing writes results to the filesystem directly.** There may be no
-filesystem at all, so results go through Storage on both paths:
+**The simulation returns its results; persisting them is the wrapper's job.**
+`AnnualPredictor.run()` keeps returning the results document, as it does today.
+It does not write them anywhere. Its `storage=` argument stays, but only for
+what it was always for — caching weather and rate downloads, which is an input
+concern.
 
-- **Integrated:** the web tab passes the live Storage component down.
-- **Command line:** `annual_cli.py` imports Storage and constructs a backend
-  itself.
+The subprocess hands the results back over the pipe:
 
-`AnnualPredictor` already accepts a `storage=` argument; it now uses it to write
-the results, instead of handing a dict back for the caller to `json.dump`.
-`annual_cli.py`'s current `open(args.out, "w")` goes away as the mechanism —
-`--out` survives only as an explicit opt-in for a human who wants a JSON file on
-disk.
+| Stream | Carries |
+|---|---|
+| stdout | The results document, one JSON object, on completion |
+| stderr | Progress, one JSON object per line, as it runs |
 
-Because parent and child share the same Storage, the web tab reads a completed
-run straight out of Storage. No temporary file changes hands, and the progress
-stream over stdout stays the only thing crossing the process boundary.
+Each wrapper then decides where results go. The web tab parses stdout and saves
+through `annual_store.py` into the live Storage component. A human running
+`annual_cli.py` gets the table on stdout as before, or `--out` to write a file.
 
-`annual_store.py` owns the ring for both callers, so the CLI builds run history
-too rather than the web tab being the only thing that remembers.
+**This is why the child never needs reach into the parent's Storage** — the
+process boundary carries everything, so no filesystem or shared backend is
+assumed on either side. A results document without `--debug` is tens of
+kilobytes, which is unremarkable over a pipe; `--debug` retains per-sample HTML
+plans and is deliberately not used by the web path.
 
 **Forward compatibility.** A stable `id` and a human label in the index are
 exactly what a later *compare runs* feature needs, so it can be added without
@@ -131,16 +133,21 @@ migrating stored results. That feature is out of scope here.
 
 ### Progress protocol
 
-`annual_cli.py` currently writes progress to stderr as `[3/12] Month 03/2025`.
-That is parseable, but parsing prose couples the parent to wording that will be
-reworded. `--progress-json` emits one JSON object per line instead:
+`annual_cli.py` currently writes progress to stderr as `[3/12] Month 03/2025`
+and a human-readable table to stdout. Parsing prose would couple the parent to
+wording that will get reworded, and the results cannot simply join the table on
+stdout.
 
-```json
-{"completed": 3, "total": 12, "message": "Month 03/2025"}
-```
+A single `--machine` flag switches both streams at once, rather than two flags
+that interact:
 
-The human-readable form stays the default so the CLI remains pleasant to use by
-hand.
+| Stream | Default | Under `--machine` |
+|---|---|---|
+| stdout | Human-readable table | The results document as one JSON object |
+| stderr | `[3/12] Month 03/2025` | `{"completed": 3, "total": 12, "message": "..."}` per line |
+
+The human-readable behaviour stays the default so the CLI remains pleasant by
+hand, and the web tab always passes `--machine`.
 
 ## The form
 
@@ -257,13 +264,8 @@ The page polls `GET /annual_status` once a second for
 navigating away and back shows a run still in progress. Cancel sends `SIGTERM`,
 then `SIGKILL` if the child does not exit.
 
-### Three limitations, stated rather than hidden
+### Two limitations, stated rather than hidden
 
-- **A subprocess needs reach into the same Storage as its parent.** With the
-  local-files backend both sides share `config_root` and this is free. A
-  non-filesystem backend would have to pass its connection details to the child,
-  which is unsolved here and is a real consideration whenever Predbat.com
-  becomes the target.
 - **A Predbat restart orphans a running child.** Job state resets to idle and
   the tab reports that the last run did not complete, rather than showing a
   progress bar stuck forever.
