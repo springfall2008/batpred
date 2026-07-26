@@ -288,6 +288,12 @@ BUILTIN_TARIFFS = [
         "export_octopus_url": "{}/OUTGOING-VAR-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-24-10-26-{{dno_region}}/standard-unit-rates/".format(_OCTOPUS),
     },
     {
+        "id": "go_agile",
+        "name": "GO import / Agile export",
+        "import_octopus_url": "{}/GO-VAR-22-10-14/electricity-tariffs/E-1R-GO-VAR-22-10-14-{{dno_region}}/standard-unit-rates/".format(_OCTOPUS),
+        "export_octopus_url": "{}/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-{{dno_region}}/standard-unit-rates/".format(_OCTOPUS),
+    },
+    {
         "id": "agile_fixed",
         "name": "Agile import / Fixed export",
         "import_octopus_url": "{}/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-{{dno_region}}/standard-unit-rates/".format(_OCTOPUS),
@@ -327,7 +333,10 @@ BUILTIN_TARIFFS = [
         "id": "iflux",
         "name": "Intelligent Flux import / export",
         "import_octopus_url": "{}/INTELLI-FLUX-IMPORT-23-07-14/electricity-tariffs/E-1R-INTELLI-FLUX-IMPORT-23-07-14-{{dno_region}}/standard-unit-rates/".format(_OCTOPUS),
-        "export_octopus_url": "{}/INTELLI-FLUX-EXPORT-23-07-14/electricity-tariffs/E-1R-INTELLI-FLUX-EXPORT-23-07-14-{{dno_region}}/standard-unit-rates/".format(_OCTOPUS),
+        # Not a copy-paste slip: the Octopus products API lists only
+        # INTELLI-FLUX-IMPORT-23-07-14, and the export rates live under that same
+        # product code. There is no INTELLI-FLUX-EXPORT product to point at.
+        "export_octopus_url": "{}/INTELLI-FLUX-IMPORT-23-07-14/electricity-tariffs/E-1R-INTELLI-FLUX-IMPORT-23-07-14-{{dno_region}}/standard-unit-rates/".format(_OCTOPUS),
     },
 ]
 
